@@ -1,0 +1,26 @@
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+dist/
+build/
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Editor — recordings and test bundles
+*.aero/
+recordings/
+output/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
