@@ -361,6 +361,8 @@ mod tests {
         assert_eq!(physical.height, 360);
     }
 
+    // Needs the native Swift preview view.
+    #[cfg(target_os = "macos")]
     #[test]
     fn stale_layout_and_generation_are_rejected() {
         let mut owner = PreviewOwner::new();
@@ -394,6 +396,8 @@ mod tests {
         assert!(!owner.status().attached);
     }
 
+    // Needs the native Swift preview view.
+    #[cfg(target_os = "macos")]
     #[test]
     fn circle_hit_mode_passes_transparent_corners() {
         let mut owner = PreviewOwner::new();
