@@ -3,16 +3,50 @@ import {
   Palette,
   Sliders,
   Camera,
+  Monitor,
 } from "lucide-react";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import {
+  BACKGROUND_PRESETS,
   CameraBubblePosition,
   CameraBubbleSize,
   LAYOUT_UNSUPPORTED,
+  ScreenCrop,
+  WEBCAM_SIZE_PRESET_PCT,
   layoutFromSettings,
+  presetBackgroundCss,
 } from "../../lib/types";
+
+const RangeRow: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit: string;
+  onChange: (value: number) => void;
+}> = ({ label, value, min, max, step = 1, unit, onChange }) => (
+  <div className="space-y-1.5">
+    <div className="flex justify-between text-xs">
+      <span className="text-studio-400">{label}</span>
+      <span className="font-mono text-studio-300">
+        {Math.round(value * 10) / 10}
+        {unit}
+      </span>
+    </div>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+    />
+  </div>
+);
 
 export const InspectorPanel: React.FC = () => {
   const {
@@ -96,8 +130,8 @@ export const InspectorPanel: React.FC = () => {
 
         <div className="space-y-1.5">
           <label className="text-xs text-studio-400">Background</label>
-          <div className="grid grid-cols-3 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
-            {(["solid", "gradient", "wallpaper"] as const).map((kind) => (
+          <div className="grid grid-cols-4 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
+            {(["solid", "gradient", "preset", "wallpaper"] as const).map((kind) => (
               <button
                 key={kind}
                 type="button"
@@ -143,7 +177,7 @@ export const InspectorPanel: React.FC = () => {
                     : "text-studio-400 hover:text-studio-200"
                 }`}
               >
-                {kind === "wallpaper" ? "Image" : kind}
+                {kind === "wallpaper" ? "Image" : kind === "preset" ? "Built-in" : kind}
               </button>
             ))}
           </div>
@@ -152,6 +186,24 @@ export const InspectorPanel: React.FC = () => {
               Stored in the project bundle. Export never reads an external URL.
             </p>
           )}
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {BACKGROUND_PRESETS.map((preset) => (
+            <button
+              key={preset.key}
+              type="button"
+              onClick={() => setCanvas({ backgroundType: "preset", backgroundPreset: preset.key })}
+              className={`h-12 rounded-lg border text-left p-2 flex flex-col justify-end transition-all ${
+                canvas.backgroundType === "preset" && canvas.backgroundPreset === preset.key
+                  ? "border-indigo-500 shadow-md shadow-indigo-500/20"
+                  : "border-studio-750 hover:border-studio-600"
+              }`}
+              style={{ background: presetBackgroundCss(preset.key) }}
+            >
+              <span className="text-[10px] font-medium text-white/90 drop-shadow">{preset.label}</span>
+            </button>
+          ))}
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -166,7 +218,9 @@ export const InspectorPanel: React.FC = () => {
                 })
               }
               className={`h-12 rounded-lg border text-left p-2 flex flex-col justify-end transition-all ${
-                canvas.colorStart === preset.start && canvas.colorEnd === preset.end
+                canvas.backgroundType === "gradient" &&
+                canvas.colorStart === preset.start &&
+                canvas.colorEnd === preset.end
                   ? "border-indigo-500 shadow-md shadow-indigo-500/20"
                   : "border-studio-750 hover:border-studio-600"
               }`}
@@ -273,6 +327,60 @@ export const InspectorPanel: React.FC = () => {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400">
+            <Monitor className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Screen</span>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              setCanvas({ screenScalePct: 100, screenCrop: { left: 0, top: 0, right: 0, bottom: 0 } })
+            }
+            className="text-[11px] text-studio-400 hover:text-studio-200"
+          >
+            Reset
+          </button>
+        </div>
+
+        <RangeRow
+          label="Screen Size"
+          value={canvas.screenScalePct}
+          min={40}
+          max={100}
+          unit="%"
+          onChange={(screenScalePct) => setCanvas({ screenScalePct })}
+        />
+
+        <div className="space-y-2">
+          <label className="text-xs text-studio-400">Crop</label>
+          {(
+            [
+              { key: "left", label: "Left" },
+              { key: "right", label: "Right" },
+              { key: "top", label: "Top" },
+              { key: "bottom", label: "Bottom" },
+            ] as const
+          ).map(({ key, label }) => (
+            <RangeRow
+              key={key}
+              label={label}
+              value={canvas.screenCrop[key]}
+              min={0}
+              max={45}
+              step={0.5}
+              unit="%"
+              onChange={(value) =>
+                setCanvas({ screenCrop: { ...canvas.screenCrop, [key]: value } as ScreenCrop })
+              }
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="h-px bg-studio-800" />
+
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400">
             <Camera className="w-3.5 h-3.5 text-indigo-400" />
             <span>Webcam Bubble</span>
           </div>
@@ -323,15 +431,37 @@ export const InspectorPanel: React.FC = () => {
               )}
             </div>
 
+            {cameraBubble.shape === "rect" && (
+              <RangeRow
+                label="Roundness"
+                value={cameraBubble.roundnessPct}
+                min={0}
+                max={50}
+                unit="%"
+                onChange={(roundnessPct) => setCamera({ roundnessPct })}
+              />
+            )}
+
             <div className="space-y-1.5">
-              <label className="text-xs text-studio-400">Size</label>
+              <RangeRow
+                label="Size"
+                value={cameraBubble.sizePct}
+                min={5}
+                max={60}
+                step={0.5}
+                unit="%"
+                onChange={(sizePct) => setCamera({ sizePct })}
+              />
               <div className="grid grid-cols-4 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
                 {(["sm", "md", "lg", "xl"] as const).map((size) => (
                   <button
                     key={size}
-                    onClick={() => setCamera({ size: size as CameraBubbleSize })}
+                    type="button"
+                    onClick={() =>
+                      setCamera({ size: size as CameraBubbleSize, sizePct: WEBCAM_SIZE_PRESET_PCT[size] })
+                    }
                     className={`py-1 text-xs uppercase font-mono rounded transition-colors ${
-                      cameraBubble.size === size
+                      cameraBubble.sizePct === WEBCAM_SIZE_PRESET_PCT[size]
                         ? "bg-indigo-600 text-white font-medium"
                         : "text-studio-400 hover:text-studio-200"
                     }`}

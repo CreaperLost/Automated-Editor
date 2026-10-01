@@ -22,6 +22,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     enabled: true,
     shape: "rect",
     size: "md",
+    sizePct: 20,
+    roundnessPct: 0,
     position: "bottom-right",
     customX: 80,
     customY: 80,
@@ -33,8 +35,11 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
 
   canvas: {
     backgroundType: "gradient",
+    backgroundPreset: "aurora",
     colorStart: "#312e81",
     colorEnd: "#0f172a",
+    screenCrop: { left: 0, top: 0, right: 0, bottom: 0 },
+    screenScalePct: 100,
     paddingPx: 32,
     cornerRadiusPx: 16,
     shadowBlurPx: 24,

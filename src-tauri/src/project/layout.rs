@@ -11,6 +11,18 @@ pub const MAX_SHADOW_BLUR_PX: u32 = 40;
 pub const MAX_BORDER_WIDTH: u32 = 8;
 pub const MAX_WALLPAPER_BYTES: u64 = 8 * 1024 * 1024;
 pub const SUPPORTED_ASPECTS: [&str; 4] = ["16:9", "9:16", "4:3", "1:1"];
+/// Pixel values (padding, radius, shadow, border) are authored against this canvas short side
+/// and scale with the real canvas, so a 1280px preview matches a 1080p or 4K export.
+pub const REFERENCE_SHORT_SIDE_PX: f32 = 1080.0;
+/// Each screen crop edge, as a percent of the source width or height.
+pub const MAX_SCREEN_CROP_PCT: f32 = 45.0;
+pub const MIN_SCREEN_SCALE_PCT: f32 = 40.0;
+pub const MIN_WEBCAM_SIZE_PCT: f32 = 5.0;
+pub const MAX_WEBCAM_SIZE_PCT: f32 = 60.0;
+/// Webcam roundness, as a percent of the bubble's short side; 50 is a pill or circle.
+pub const MAX_WEBCAM_ROUNDNESS_PCT: f32 = 50.0;
+/// Built-in backgrounds rendered by the compositor, so they need no project asset.
+pub const BACKGROUND_PRESETS: [&str; 6] = ["aurora", "sunset", "ocean", "forest", "candy", "graphite"];
 
 fn default_aspect() -> String {
     "16:9".into()
@@ -52,6 +64,24 @@ fn default_border_color() -> String {
     "#6366f1".into()
 }
 
+fn default_hundred() -> f32 {
+    100.0
+}
+
+fn default_background_preset() -> String {
+    "aurora".into()
+}
+
+/// The webcam size slider value a legacy S/M/L/XL preset maps to.
+pub fn webcam_size_preset_pct(size: &str) -> f32 {
+    match size {
+        "sm" => 12.5,
+        "lg" => 28.0,
+        "xl" => 36.0,
+        _ => 20.0,
+    }
+}
+
 fn default_custom_x() -> f32 {
     80.0
 }
@@ -81,12 +111,32 @@ pub struct EditLayout {
     pub shadow_opacity: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallpaper_asset: Option<String>,
+    #[serde(default = "default_background_preset")]
+    pub background_preset: String,
+    /// Percent of the source trimmed from each screen edge.
+    #[serde(default)]
+    pub screen_crop_left: f32,
+    #[serde(default)]
+    pub screen_crop_top: f32,
+    #[serde(default)]
+    pub screen_crop_right: f32,
+    #[serde(default)]
+    pub screen_crop_bottom: f32,
+    /// Screen size as a percent of the padded content area.
+    #[serde(default = "default_hundred")]
+    pub screen_scale_pct: f32,
     #[serde(default = "default_true")]
     pub webcam_enabled: bool,
     #[serde(default = "default_webcam_shape")]
     pub webcam_shape: String,
     #[serde(default = "default_webcam_size")]
     pub webcam_size: String,
+    /// Bubble long side as a percent of the canvas short side. Overrides `webcam_size`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webcam_size_pct: Option<f32>,
+    /// Corner radius of a rect webcam, as a percent of the bubble's short side.
+    #[serde(default)]
+    pub webcam_roundness_pct: f32,
     #[serde(default = "default_webcam_position")]
     pub webcam_position: String,
     #[serde(default = "default_custom_x")]
@@ -115,9 +165,17 @@ impl Default for EditLayout {
             shadow_blur_px: 0,
             shadow_opacity: default_shadow_opacity(),
             wallpaper_asset: None,
+            background_preset: default_background_preset(),
+            screen_crop_left: 0.0,
+            screen_crop_top: 0.0,
+            screen_crop_right: 0.0,
+            screen_crop_bottom: 0.0,
+            screen_scale_pct: default_hundred(),
             webcam_enabled: true,
             webcam_shape: default_webcam_shape(),
             webcam_size: default_webcam_size(),
+            webcam_size_pct: None,
+            webcam_roundness_pct: 0.0,
             webcam_position: default_webcam_position(),
             webcam_custom_x: default_custom_x(),
             webcam_custom_y: default_custom_y(),
@@ -177,8 +235,35 @@ impl EditLayout {
         if !self.shadow_opacity.is_finite() || !(0.0..=1.0).contains(&self.shadow_opacity) {
             return Err("Shadow opacity is out of range".into());
         }
+        let in_range = |value: f32, min: f32, max: f32| value.is_finite() && (min..=max).contains(&value);
+        for (edge, value) in [
+            ("left", self.screen_crop_left),
+            ("top", self.screen_crop_top),
+            ("right", self.screen_crop_right),
+            ("bottom", self.screen_crop_bottom),
+        ] {
+            if !in_range(value, 0.0, MAX_SCREEN_CROP_PCT) {
+                return Err(format!("Screen crop {edge} is out of range"));
+            }
+        }
+        if !in_range(self.screen_scale_pct, MIN_SCREEN_SCALE_PCT, 100.0) {
+            return Err("Screen scale is out of range".into());
+        }
+        if let Some(pct) = self.webcam_size_pct {
+            if !in_range(pct, MIN_WEBCAM_SIZE_PCT, MAX_WEBCAM_SIZE_PCT) {
+                return Err("Webcam size is out of range".into());
+            }
+        }
+        if !in_range(self.webcam_roundness_pct, 0.0, MAX_WEBCAM_ROUNDNESS_PCT) {
+            return Err("Webcam roundness is out of range".into());
+        }
         match self.background_type.as_str() {
             "solid" | "gradient" => {}
+            "preset" => {
+                if !BACKGROUND_PRESETS.contains(&self.background_preset.as_str()) {
+                    return Err(format!("Unknown background preset: {}", self.background_preset));
+                }
+            }
             "wallpaper" => {
                 let asset = self
                     .wallpaper_asset
@@ -213,6 +298,25 @@ impl EditLayout {
         }
         parse_hex_rgb(&self.webcam_border_color)?;
         Ok(())
+    }
+
+    /// The visible screen source rectangle after cropping, as normalized (x, y, w, h).
+    pub fn screen_crop_uv(&self) -> (f32, f32, f32, f32) {
+        let pct = |v: f32| v.clamp(0.0, MAX_SCREEN_CROP_PCT) / 100.0;
+        let (l, t, r, b) = (
+            pct(self.screen_crop_left),
+            pct(self.screen_crop_top),
+            pct(self.screen_crop_right),
+            pct(self.screen_crop_bottom),
+        );
+        (l, t, 1.0 - l - r, 1.0 - t - b)
+    }
+
+    pub fn webcam_size_fraction(&self) -> f32 {
+        self.webcam_size_pct
+            .unwrap_or_else(|| webcam_size_preset_pct(&self.webcam_size))
+            .clamp(MIN_WEBCAM_SIZE_PCT, MAX_WEBCAM_SIZE_PCT)
+            / 100.0
     }
 
     pub fn background_rgba(&self) -> Result<([f32; 4], Option<[f32; 4]>), String> {
@@ -364,6 +468,37 @@ mod tests {
         layout = EditLayout::default();
         layout.color_start = "blue".into();
         assert!(layout.validate().unwrap_err().contains("Color"));
+    }
+
+    #[test]
+    fn crop_scale_and_webcam_controls_validate_and_default() {
+        let legacy: EditLayout = serde_json::from_str(r#"{"aspectRatio":"16:9","paddingPx":0,"webcamSize":"lg"}"#).unwrap();
+        assert_eq!(legacy.screen_crop_uv(), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(legacy.screen_scale_pct, 100.0);
+        assert!((legacy.webcam_size_fraction() - 0.28).abs() < 1e-6);
+        legacy.validate().unwrap();
+
+        let mut layout = EditLayout::default();
+        layout.screen_crop_left = 10.0;
+        layout.screen_crop_bottom = 20.0;
+        let (x, y, w, h) = layout.screen_crop_uv();
+        assert!((x - 0.1).abs() < 1e-6 && y == 0.0 && (w - 0.9).abs() < 1e-6 && (h - 0.8).abs() < 1e-6);
+        layout.screen_crop_right = 46.0;
+        assert!(layout.validate().unwrap_err().contains("crop right"));
+        layout = EditLayout::default();
+        layout.screen_scale_pct = 30.0;
+        assert!(layout.validate().unwrap_err().contains("scale"));
+        layout = EditLayout::default();
+        layout.webcam_size_pct = Some(70.0);
+        assert!(layout.validate().unwrap_err().contains("size"));
+        layout = EditLayout::default();
+        layout.webcam_roundness_pct = f32::NAN;
+        assert!(layout.validate().unwrap_err().contains("roundness"));
+        layout = EditLayout::default();
+        layout.background_type = "preset".into();
+        layout.validate().unwrap();
+        layout.background_preset = "plaid".into();
+        assert!(layout.validate().unwrap_err().contains("preset"));
     }
 
     #[test]
