@@ -343,10 +343,10 @@ export const App: React.FC = () => {
               <MonitorPlay className="w-8 h-8" />
             </div>
             <h2 className="text-xl font-bold text-white mb-2">
-              AeroShoot Video Editor
+              AeroEdits
             </h2>
             <p className="text-sm text-studio-400 max-w-md mb-6 leading-relaxed">
-              Open a recorded project folder produced by <strong>AeroShoot Recorder</strong> to edit video tracks, apply smart zoom from mouse telemetry, trim dead air, and export.
+              Open a recorded <strong>.aero</strong> project folder to edit video tracks, apply smart zoom from mouse telemetry, trim dead air, and export.
             </p>
 
             <button

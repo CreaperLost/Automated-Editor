@@ -90,7 +90,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
         </div>
         <div className="flex items-center space-x-2">
           <span className="font-bold text-white tracking-tight text-sm">
-            AeroShoot
+            AeroEdits
           </span>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300 font-mono font-medium">
             Video Editor

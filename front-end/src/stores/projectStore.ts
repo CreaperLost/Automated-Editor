@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { Track, ZoomKeyframe, SilenceBlock, ProjectManifest, OpenedProject, WaveformPage, PlaybackStatus, studioTrackType, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { useSettingsStore } from "./settingsStore";
 
-const RECENT_PROJECTS_KEY = "aeroshoot.recentProjects";
+const RECENT_PROJECTS_KEY = "aeroedits.recentProjects";
 const MAX_RECENT_PROJECTS = 8;
 
 function loadStoredRecentProjects(): string[] {

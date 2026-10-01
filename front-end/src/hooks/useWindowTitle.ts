@@ -4,7 +4,7 @@ import { api } from "../lib/ipc";
 
 export function formatWindowTitle(openedProjectName?: string | null): string {
   const trimmed = openedProjectName?.trim();
-  return trimmed ? `AeroShoot Editor \u2014 ${trimmed}` : "AeroShoot Editor";
+  return trimmed ? `AeroEdits \u2014 ${trimmed}` : "AeroEdits";
 }
 
 export function useWindowTitle(): void {

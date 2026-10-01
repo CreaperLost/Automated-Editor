@@ -45,13 +45,13 @@ impl AppState {
     }
 }
 
-/// Returns the cross-platform default storage directory for AeroShoot recordings and projects:
-/// `Documents/AeroShootRec/` on macOS, Windows, and Linux.
+/// Returns the cross-platform default folder for AeroEdits projects:
+/// `Documents/AeroEdits/` on Windows, macOS and Linux.
 pub fn default_projects_dir() -> PathBuf {
     let docs_dir = dirs::document_dir()
         .or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
         .unwrap_or_else(std::env::temp_dir);
-    docs_dir.join("AeroShootRec")
+    docs_dir.join("AeroEdits")
 }
 
 pub fn get_default_projects_dir_impl() -> String {
@@ -86,13 +86,12 @@ pub fn show_in_finder_impl(path: String) -> Result<(), String> {
     {
         #[cfg(target_os = "windows")]
         {
-            let status = std::process::Command::new("explorer")
+            // explorer.exe exits with status 1 even when it opens the window,
+            // so only a failure to launch it is an error.
+            std::process::Command::new("explorer")
                 .arg(format!("/select,{}", path))
-                .status()
+                .spawn()
                 .map_err(|e| format!("Failed to run explorer: {e}"))?;
-            if !status.success() {
-                return Err(format!("explorer failed with exit status: {status}"));
-            }
             Ok(())
         }
         #[cfg(target_os = "linux")]
@@ -163,16 +162,16 @@ mod tests {
     fn test_window_title_formatting() {
         assert_eq!(
             window_title_for_project(Some("Launch Demo")),
-            "AeroShoot \u{2014} Launch Demo"
+            "AeroEdits \u{2014} Launch Demo"
         );
-        assert_eq!(window_title_for_project(None), "AeroShoot");
-        assert_eq!(window_title_for_project(Some("")), "AeroShoot");
-        assert_eq!(window_title_for_project(Some("   ")), "AeroShoot");
+        assert_eq!(window_title_for_project(None), "AeroEdits");
+        assert_eq!(window_title_for_project(Some("")), "AeroEdits");
+        assert_eq!(window_title_for_project(Some("   ")), "AeroEdits");
     }
 
     #[test]
     fn test_show_in_finder_impl() {
-        let non_existent = "/tmp/does-not-exist-aeroshoot-test-finder-12345";
+        let non_existent = "/tmp/does-not-exist-aeroedits-test-finder-12345";
         let err = show_in_finder_impl(non_existent.into()).unwrap_err();
         assert!(err.contains("Path does not exist"));
 
@@ -646,7 +645,7 @@ pub fn media_interop_status_impl(state: &AppState) -> MediaInteropStatus {
 }
 
 pub fn media_run_parity_impl(state: &AppState) -> Result<MediaParityReport, String> {
-    let dir = std::env::temp_dir().join(format!("aeroshoot-f2-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("aeroedits-f2-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let report = crate::render::run_parity(&dir, &state.encoder_gate);
     let _ = std::fs::remove_dir_all(&dir);
@@ -707,11 +706,11 @@ pub fn export_cancel_impl(
 }
 
 /// Formats the window title for project editing.
-/// When a project is open, produces "AeroShoot — <Project Name>" (e.g. "AeroShoot — Launch Demo").
-/// When no project is open (None or empty), produces "AeroShoot".
+/// When a project is open, produces "AeroEdits — <Project Name>" (e.g. "AeroEdits — Launch Demo").
+/// When no project is open (None or empty), produces "AeroEdits".
 pub fn window_title_for_project(project_name: Option<&str>) -> String {
     match project_name.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(name) => format!("AeroShoot \u{2014} {}", name),
-        None => "AeroShoot".to_string(),
+        Some(name) => format!("AeroEdits \u{2014} {}", name),
+        None => "AeroEdits".to_string(),
     }
 }

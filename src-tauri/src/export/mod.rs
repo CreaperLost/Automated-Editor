@@ -666,7 +666,7 @@ pub fn prepare_job(
         ));
     }
     let temp = dest.with_file_name(format!(
-        ".{}-aeroshoot-partial-{}.mp4",
+        ".{}-aeroedits-partial-{}.mp4",
         dest.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("export"),
