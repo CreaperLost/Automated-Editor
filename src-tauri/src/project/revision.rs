@@ -18,6 +18,7 @@ pub const MAX_EDIT_BYTES: u64 = 1_048_576;
 pub const MAX_RETAINED_INTERVALS: usize = 10_000;
 pub const MAX_UNDO: usize = 64;
 pub const MAX_CUTS_PER_REVISION: usize = 256;
+pub const MAX_SPLIT_POINTS: usize = 10_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +32,11 @@ pub struct EditDocument {
     pub zooms: Vec<ZoomKeyframe>,
     #[serde(default)]
     pub dismissed_zoom_ids: Vec<String>,
+    /// Source timestamps where the user split a clip. A split never removes
+    /// media, so playback and export ignore it; the timeline draws clip edges
+    /// at the points that fall inside retained media.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub split_points_us: Vec<u64>,
 }
 
 impl Default for EditDocument {
@@ -42,6 +48,7 @@ impl Default for EditDocument {
             layout: EditLayout::default(),
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
+            split_points_us: Vec::new(),
         }
     }
 }
@@ -56,6 +63,7 @@ impl EditDocument {
             layout: EditLayout::default(),
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
+            split_points_us: Vec::new(),
         })
     }
 
@@ -106,6 +114,69 @@ pub fn validate_retained(retained: &[RetainedInterval]) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_split_points(points: &[u64]) -> Result<(), String> {
+    if points.len() > MAX_SPLIT_POINTS {
+        return Err("Too many split points".into());
+    }
+    if points.iter().any(|&p| p > 9_007_199_254_740_991) {
+        return Err("Split point exceeds supported precision".into());
+    }
+    if points.windows(2).any(|w| w[0] >= w[1]) {
+        return Err("Split points must be sorted and unique".into());
+    }
+    Ok(())
+}
+
+/// Source ranges that the edit removed: time in `[0, source_duration_us)` that
+/// no retained interval covers, minus the recorder's pause intervals, which
+/// hold no media and so can never be restored.
+pub fn removed_intervals(
+    retained: &[RetainedInterval],
+    pauses: &[RetainedInterval],
+    source_duration_us: u64,
+) -> Vec<RetainedInterval> {
+    let mut covered: Vec<(u64, u64)> = retained
+        .iter()
+        .chain(pauses.iter())
+        .map(|i| (i.start_us, i.end_us.min(source_duration_us)))
+        .filter(|(a, b)| b > a)
+        .collect();
+    covered.sort_unstable();
+    let mut removed = Vec::new();
+    let mut cursor = 0u64;
+    for (start, end) in covered {
+        if start > cursor {
+            removed.push(RetainedInterval {
+                start_us: cursor,
+                end_us: start,
+            });
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < source_duration_us {
+        removed.push(RetainedInterval {
+            start_us: cursor,
+            end_us: source_duration_us,
+        });
+    }
+    removed
+}
+
+/// Sorts and merges overlapping or touching ranges.
+fn merge_ranges(mut ranges: Vec<RetainedInterval>) -> Vec<RetainedInterval> {
+    ranges.sort_by_key(|r| (r.start_us, r.end_us));
+    let mut merged: Vec<RetainedInterval> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start_us <= last.end_us => {
+                last.end_us = last.end_us.max(range.end_us);
+            }
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
 pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
     let path = safe_path(root, "project.json")?;
     if !path.is_file() {
@@ -131,6 +202,7 @@ pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
     validate_layout(&document.layout)?;
     validate_zooms(&document.zooms)?;
     validate_dismissed(&document.dismissed_zoom_ids)?;
+    validate_split_points(&document.split_points_us)?;
     document.mapper()?;
     Ok(Some(document))
 }
@@ -281,6 +353,7 @@ impl EditHistory {
         validate_layout(&next.layout)?;
         validate_zooms(&next.zooms)?;
         validate_dismissed(&next.dismissed_zoom_ids)?;
+        validate_split_points(&next.split_points_us)?;
         next.schema_version = EDIT_SCHEMA_VERSION;
         next.revision = self
             .current
@@ -501,6 +574,71 @@ impl EditHistory {
         self.commit(expected_revision, retained, persist_root)
     }
 
+    /// Splits the clip under the edited position. No media is removed.
+    pub fn split(
+        &mut self,
+        expected_revision: u64,
+        edited_us: u64,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let source_us = self
+            .current
+            .mapper()?
+            .edited_to_source_us(edited_us)
+            .ok_or("Split point is outside the timeline")?;
+        if self
+            .current
+            .retained_intervals
+            .iter()
+            .any(|interval| interval.start_us == source_us)
+        {
+            return Err("There is already a clip edge here".into());
+        }
+        let mut next = self.current.clone();
+        match next.split_points_us.binary_search(&source_us) {
+            Ok(_) => return Err("There is already a clip edge here".into()),
+            Err(index) => next.split_points_us.insert(index, source_us),
+        }
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Puts removed source ranges back on the timeline. The caller clips the
+    /// ranges to media that was actually removed.
+    pub fn restore(
+        &mut self,
+        expected_revision: u64,
+        ranges: &[(u64, u64)],
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if ranges.is_empty() {
+            return Err("Nothing to restore".into());
+        }
+        if ranges.len() > MAX_RETAINED_INTERVALS {
+            return Err("Too many ranges to restore".into());
+        }
+        if ranges.iter().any(|(start, end)| end <= start) {
+            return Err("Restore range must be a half-open interval".into());
+        }
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let retained = merge_ranges(
+            self.current
+                .retained_intervals
+                .iter()
+                .cloned()
+                .chain(ranges.iter().map(|&(start_us, end_us)| RetainedInterval {
+                    start_us,
+                    end_us,
+                }))
+                .collect(),
+        );
+        self.commit(expected_revision, retained, persist_root)
+    }
+
     pub fn undo(
         &mut self,
         expected_revision: u64,
@@ -714,5 +852,86 @@ mod tests {
         bad.padding_px = 999;
         assert!(history.update_layout(3, bad, dir.path()).is_err());
         assert_eq!(history.current.revision, 3);
+    }
+
+    fn ri(start_us: u64, end_us: u64) -> RetainedInterval {
+        RetainedInterval { start_us, end_us }
+    }
+
+    #[test]
+    fn removed_intervals_skip_pauses_and_cover_tail() {
+        let retained = [ri(0, 1_000), ri(3_000, 5_000)];
+        let pauses = [ri(1_000, 1_500), ri(5_000, 6_000)];
+        assert_eq!(
+            removed_intervals(&retained, &pauses, 8_000),
+            vec![ri(1_500, 3_000), ri(6_000, 8_000)]
+        );
+        assert!(removed_intervals(&[ri(0, 8_000)], &[], 8_000).is_empty());
+    }
+
+    #[test]
+    fn split_keeps_media_and_survives_cut_restore_and_undo() {
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 10_000_000)]).unwrap());
+        history.split(0, 4_000_000, dir.path()).unwrap();
+        assert_eq!(history.current.split_points_us, vec![4_000_000]);
+        assert_eq!(history.current.retained_intervals, vec![ri(0, 10_000_000)]);
+        assert!(history
+            .split(1, 4_000_000, dir.path())
+            .unwrap_err()
+            .contains("clip edge"));
+        assert!(history.split(1, 10_000_000, dir.path()).is_err());
+
+        // Cut the second half of the first clip, then restore it.
+        history
+            .ripple_cuts(1, &[(2_000_000, 4_000_000)], dir.path())
+            .unwrap();
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![ri(0, 2_000_000), ri(4_000_000, 10_000_000)]
+        );
+        // The split now sits on an interval start, so no second split there.
+        assert!(history.split(2, 2_000_000, dir.path()).is_err());
+        history
+            .restore(2, &[(2_000_000, 4_000_000)], dir.path())
+            .unwrap();
+        assert_eq!(history.current.retained_intervals, vec![ri(0, 10_000_000)]);
+        assert_eq!(history.current.split_points_us, vec![4_000_000]);
+
+        history.undo(3, dir.path()).unwrap();
+        history.undo(4, dir.path()).unwrap();
+        history.undo(5, dir.path()).unwrap();
+        assert!(history.current.split_points_us.is_empty());
+        let loaded = load_edit_document(dir.path()).unwrap().unwrap();
+        assert!(loaded.split_points_us.is_empty());
+    }
+
+    #[test]
+    fn restore_merges_partial_ranges() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(
+            EditDocument::from_retained(vec![ri(0, 1_000), ri(5_000, 6_000)]).unwrap(),
+        );
+        history.restore(0, &[(2_000, 3_000)], dir.path()).unwrap();
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![ri(0, 1_000), ri(2_000, 3_000), ri(5_000, 6_000)]
+        );
+        history
+            .restore(1, &[(1_000, 2_000), (3_000, 5_000)], dir.path())
+            .unwrap();
+        assert_eq!(history.current.retained_intervals, vec![ri(0, 6_000)]);
+        assert!(history.restore(2, &[], dir.path()).is_err());
+        assert!(history.restore(2, &[(10, 10)], dir.path()).is_err());
+    }
+
+    #[test]
+    fn documents_without_split_points_still_load() {
+        let json =
+            r#"{"schemaVersion":1,"revision":3,"retainedIntervals":[{"startUs":0,"endUs":10}]}"#;
+        let doc: EditDocument = serde_json::from_str(json).unwrap();
+        assert!(doc.split_points_us.is_empty());
+        assert!(!serde_json::to_string(&doc).unwrap().contains("splitPoints"));
     }
 }

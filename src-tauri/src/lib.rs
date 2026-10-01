@@ -207,6 +207,28 @@ fn project_ripple_cuts(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_split(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    edited_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::project_split_impl(&state, project_handle, expected_revision, edited_us)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_restore_cuts(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    ranges: Vec<commands::EditCut>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_restore_cuts_impl(&state, project_handle, expected_revision, ranges)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_undo(
     state: State<'_, AppState>,
     project_handle: String,
@@ -573,6 +595,8 @@ pub fn run() {
             project_zoom_delete,
             project_layout_update,
             project_ripple_cuts,
+            project_split,
+            project_restore_cuts,
             project_undo,
             project_redo,
             playback_status,
