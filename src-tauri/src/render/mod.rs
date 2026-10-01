@@ -323,15 +323,15 @@ impl Compositor {
         .map_err(|e| format!("No GPU adapter for the F2 compositor: {e}"))?;
         let adapter_name = adapter.get_info().name;
         let mut desc = wgpu::DeviceDescriptor::default();
-        desc.label = Some("aeroshoot-compositor");
+        desc.label = Some("aeroedits-compositor");
         let (device, queue) = pollster::block_on(adapter.request_device(&desc))
             .map_err(|e| format!("Failed to open the compositor device: {e}"))?;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("aeroshoot-composite"),
+            label: Some("aeroedits-composite"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("aeroshoot-layer"),
+            label: Some("aeroedits-layer"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -362,12 +362,12 @@ impl Compositor {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("aeroshoot-composite-layout"),
+            label: Some("aeroedits-composite-layout"),
             bind_group_layouts: &[&bind_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("aeroshoot-composite-pipeline"),
+            label: Some("aeroedits-composite-pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -400,7 +400,7 @@ impl Compositor {
             cache: None,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("aeroshoot-nearest"),
+            label: Some("aeroedits-nearest"),
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -451,7 +451,7 @@ impl Compositor {
             return Err("Compositor layer count exceeds the F2 bound".into());
         }
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("aeroshoot-target"),
+            label: Some("aeroedits-target"),
             size: wgpu::Extent3d {
                 width: scene.width,
                 height: scene.height,
@@ -481,7 +481,7 @@ impl Compositor {
                 upload[dst..dst + tight as usize].copy_from_slice(&rgba[src..src + tight as usize]);
             }
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("aeroshoot-layer"),
+                label: Some("aeroedits-layer"),
                 size: wgpu::Extent3d {
                     width: layer.frame.width,
                     height: layer.frame.height,
@@ -516,12 +516,12 @@ impl Compositor {
             let layer_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let content_params = layer_params(layer, 0);
             let content_uniform = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aeroshoot-layer-params"),
+                label: Some("aeroedits-layer-params"),
                 contents: bytemuck::bytes_of(&content_params),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             let bind_content = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("aeroshoot-layer-bind"),
+                label: Some("aeroedits-layer-bind"),
                 layout: &self.bind_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -539,7 +539,7 @@ impl Compositor {
                 ],
             });
             let v_content = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aeroshoot-quad"),
+                label: Some("aeroedits-quad"),
                 contents: bytemuck::cast_slice(&quad_vertices(scene.width, scene.height, layer, 0.0)),
                 usage: wgpu::BufferUsages::VERTEX,
             });
@@ -549,12 +549,12 @@ impl Compositor {
                 let shadow_uniform =
                     self.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("aeroshoot-shadow-params"),
+                            label: Some("aeroedits-shadow-params"),
                             contents: bytemuck::bytes_of(&shadow_params),
                             usage: wgpu::BufferUsages::UNIFORM,
                         });
                 let bind_shadow = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("aeroshoot-shadow-bind"),
+                    label: Some("aeroedits-shadow-bind"),
                     layout: &self.bind_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
@@ -572,7 +572,7 @@ impl Compositor {
                     ],
                 });
                 let v_shadow = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("aeroshoot-shadow-quad"),
+                    label: Some("aeroedits-shadow-quad"),
                     contents: bytemuck::cast_slice(&quad_vertices(
                         scene.width,
                         scene.height,
@@ -598,11 +598,11 @@ impl Compositor {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("aeroshoot-composite-enc"),
+                label: Some("aeroedits-composite-enc"),
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("aeroshoot-layers"),
+                label: Some("aeroedits-layers"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -636,7 +636,7 @@ impl Compositor {
 
         let padded = padded_bytes_per_row(scene.width);
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("aeroshoot-readback"),
+            label: Some("aeroedits-readback"),
             size: u64::from(padded * scene.height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,

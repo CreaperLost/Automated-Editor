@@ -1,17 +1,17 @@
 [package]
-name = "aeroshoot-editor"
+name = "aeroedits"
 version = "0.1.0"
-description = "Next-generation video editor for AeroShoot recordings"
-authors = ["AeroShoot.AI Team"]
+description = "Automated video editor for Windows and macOS"
+authors = ["AeroEdits contributors"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [lib]
-name = "aeroshoot_editor_lib"
+name = "aeroedits_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "aeroshoot-editor"
+name = "aeroedits"
 path = "src/main.rs"
 
 [dependencies]

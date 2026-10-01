@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_WINDOW_MS: u32 = 20;
-pub const DEFAULT_STEP_MS: u32 = 10;
 pub const MAX_ENERGY_POLICY: &str = "max_energy";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

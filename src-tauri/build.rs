@@ -1,8 +1,8 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
-    let skip_swift = env::var("AEROSHOOT_SKIP_SWIFT").is_ok();
-    println!("cargo:rerun-if-env-changed=AEROSHOOT_SKIP_SWIFT");
+    let skip_swift = env::var("AEROEDITS_SKIP_SWIFT").is_ok();
+    println!("cargo:rerun-if-env-changed=AEROEDITS_SKIP_SWIFT");
     println!("cargo:rustc-check-cfg=cfg(stub_swift_ffi)");
     if skip_swift {
         println!("cargo:rustc-cfg=stub_swift_ffi");
@@ -27,7 +27,7 @@ fn build_macos_editor_bridge() {
     println!("cargo:rerun-if-changed={}", export_source.display());
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by Cargo"));
-    let library = out_dir.join("libaeroshoot_editor_macos.a");
+    let library = out_dir.join("libaeroedits_macos.a");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo target architecture");
     let swift_target = format!("{target_arch}-apple-macosx13.0");
     let module_cache = out_dir.join("swift-module-cache");
@@ -62,7 +62,7 @@ fn build_macos_editor_bridge() {
     );
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=aeroshoot_editor_macos");
+    println!("cargo:rustc-link-lib=static=aeroedits_macos");
     for framework in [
         "AVFoundation",
         "AppKit",

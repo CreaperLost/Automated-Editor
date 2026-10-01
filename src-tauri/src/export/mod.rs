@@ -2,15 +2,11 @@
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
 mod native;
 
-use crate::media::{
-    compare_frames, decode_h264_frame, EncoderGate, VideoFrame, MAX_FRAME_DIM,
-    PARITY_MEAN_TOLERANCE, PARITY_REGION_MEAN_TOLERANCE,
-};
+use crate::media::{decode_h264_frame, EncoderGate, VideoFrame, MAX_FRAME_DIM};
 use crate::project::manifest::TrackType;
 use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
 use crate::project::revision::EditDocument;
 use crate::render::{Compositor, Scene};
-use crate::session::SessionState;
 use native::NativeExport;
 
 pub use native::media_duration_us;
@@ -23,7 +19,6 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use uuid::Uuid;
 
-pub const MAX_EXPORT_FRAMES: u32 = u32::MAX;
 pub const ALLOWED_FPS: [u32; 6] = [10, 15, 24, 25, 30, 60];
 /// One AAC frame at 48 kHz plus a small encoder-delay allowance.
 pub const AUDIO_DURATION_SLACK_US: u64 = 80_000;
@@ -71,7 +66,6 @@ pub enum ExportFailure {
     Cancelled { message: String },
     InvalidSettings { message: String },
     SourcePath { message: String },
-    RecordingActive { message: String },
     EncoderBusy { message: String },
     Native { message: String },
     Io { message: String },
@@ -254,24 +248,6 @@ impl SceneEvaluator {
             document,
             tracks,
             compositor: Some(Compositor::new()?),
-            width,
-            height,
-        })
-    }
-
-    /// CPU-only evaluator for contract tests that must not require a GPU adapter.
-    pub fn new_cpu(
-        root: PathBuf,
-        document: EditDocument,
-        tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, String> {
-        Ok(Self {
-            root,
-            document,
-            tracks,
-            compositor: None,
             width,
             height,
         })
@@ -570,16 +546,6 @@ pub fn frame_time_us(index: u32, fps: u32) -> u64 {
     (index as u128 * 1_000_000 / fps as u128) as u64
 }
 
-pub fn recording_blocks_export(state: SessionState) -> bool {
-    matches!(
-        state,
-        SessionState::Preparing
-            | SessionState::Recording
-            | SessionState::Paused
-            | SessionState::Stopping
-    )
-}
-
 fn status_from(
     job_id: &str,
     document: &EditDocument,
@@ -605,7 +571,6 @@ fn status_from(
 }
 
 pub fn prepare_job(
-    session_state: SessionState,
     root: &Path,
     project_name: &str,
     document: EditDocument,
@@ -614,17 +579,6 @@ pub fn prepare_job(
     owner: &mut ExportOwner,
 ) -> Result<CapturedExport, ExportStatus> {
     let job_id = Uuid::new_v4().to_string();
-    if recording_blocks_export(session_state) {
-        return Err(status_from(
-            &job_id,
-            &document,
-            &settings,
-            ExportState::Failed,
-            Some(ExportFailure::RecordingActive {
-                message: "Export is deferred while a recording session is active".into(),
-            }),
-        ));
-    }
     if owner.busy() {
         return Err(status_from(
             &job_id,
@@ -712,7 +666,7 @@ pub fn prepare_job(
         ));
     }
     let temp = dest.with_file_name(format!(
-        ".{}-aeroshoot-partial-{}.mp4",
+        ".{}-aeroedits-partial-{}.mp4",
         dest.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("export"),
@@ -1024,16 +978,6 @@ fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
             })
         }
     }
-}
-
-pub fn compare_preview_and_export(
-    preview: &VideoFrame,
-    exported: &VideoFrame,
-) -> Result<(u8, f32, f32, bool), String> {
-    let (max_abs_delta, mean_abs_delta) = compare_frames(preview, exported)?;
-    let region = crate::media::region_mean_delta(preview, exported);
-    let matched = mean_abs_delta <= PARITY_MEAN_TOLERANCE && region <= PARITY_REGION_MEAN_TOLERANCE;
-    Ok((max_abs_delta, mean_abs_delta, region, matched))
 }
 
 #[cfg(test)]

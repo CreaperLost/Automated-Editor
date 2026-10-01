@@ -187,6 +187,13 @@ fn persist_revision(root: &Path, expected: u64, next: &EditDocument) -> Result<(
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    {
+        // No sharing: a second editor saving the same project gets a sharing
+        // violation, which stands in for the Unix flock below.
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
     let lock = options.open(lock_path).map_err(|e| e.to_string())?;
     if !lock.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Invalid edit lock".into());

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default-capability",
-  "description": "Default least-privilege capability for AeroShoot Studio",
-  "windows": ["main", "camera_overlay"],
+  "description": "Default least-privilege capability for AeroEdits",
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-set-title"

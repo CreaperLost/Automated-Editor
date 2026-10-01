@@ -543,8 +543,9 @@ fn write_cache(
 mod tests {
     use super::*;
     use crate::fixtures::generate_pcm16_wav;
+    use crate::fixtures::TestProject;
     use crate::project::manifest::{TrackDescriptor, TrackType};
-    use crate::project::{JournalRecord, ProjectBundle};
+    use crate::project::JournalRecord;
     use std::sync::atomic::Ordering;
     use tempfile::tempdir;
 
@@ -555,7 +556,7 @@ mod tests {
         sample_rate: u32,
     ) -> (tempfile::TempDir, PathBuf, String) {
         let dir = tempdir().unwrap();
-        let mut bundle = ProjectBundle::create_new(dir.path(), "wf", "wf").unwrap();
+        let mut bundle = TestProject::create(dir.path(), "wf");
         let wav = generate_pcm16_wav(sample_rate, channels, samples);
         let relative = "media/mic/000001.wav";
         fs::write(bundle.root_path().join(relative), &wav).unwrap();
@@ -575,27 +576,21 @@ mod tests {
             gaps_total: 0,
             media_timescale: Some(sample_rate),
         });
-        bundle
-            .journal()
-            .append(JournalRecord::SegmentCommitted {
-                seq: 0,
-                track_id: "mic".into(),
-                relative_path: relative.into(),
-                start_us,
-                end_us,
-                size_bytes: wav.len() as u64,
-                is_keyframe_start: true,
-                media_timescale: sample_rate,
-                media_start_value: 0,
-                host_anchor_us: start_us as i64,
-            })
-            .unwrap();
+        bundle.append_journal(JournalRecord::SegmentCommitted {
+            seq: 0,
+            track_id: "mic".into(),
+            relative_path: relative.into(),
+            start_us,
+            end_us,
+            size_bytes: wav.len() as u64,
+            is_keyframe_start: true,
+            media_timescale: sample_rate,
+            media_start_value: 0,
+            host_anchor_us: start_us as i64,
+        });
         bundle.manifest_mut().duration_us = end_us;
         bundle.manifest_mut().active_duration_us = end_us;
-        bundle
-            .manifest()
-            .save_with_backup(&bundle.root_path().join("manifest.json"))
-            .unwrap();
+        bundle.save_manifest();
         let root = bundle.root_path().to_path_buf();
         drop(bundle);
         (dir, root, relative.into())

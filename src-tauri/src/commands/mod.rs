@@ -5,22 +5,18 @@ use crate::playback::{
     PreviewViewport,
 };
 use crate::project::{
-    OpenedProject, ProjectReader, ProjectRecoveryReport, RecoveryEngine,
-    SegmentPage, WaveformPage, WaveformTrackContext,
+    OpenedProject, ProjectReader, SegmentPage, WaveformPage, WaveformTrackContext,
 };
-use crate::session::SessionStateMachine;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub struct AppState {
-    pub state_machine: SessionStateMachine,
     pub command_lock: Mutex<()>,
-    pub project_base_dir: PathBuf,
     pub opened_project: Mutex<Option<crate::project::ProjectReader>>,
     pub playback: Mutex<PlaybackOwner>,
     pub playback_shutdown: std::sync::atomic::AtomicBool,
@@ -33,11 +29,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(project_base_dir: PathBuf) -> Self {
+    pub fn new() -> Self {
         Self {
-            state_machine: SessionStateMachine::new(),
             command_lock: Mutex::new(()),
-            project_base_dir,
             opened_project: Mutex::new(None),
             playback: Mutex::new(PlaybackOwner::closed()),
             playback_shutdown: std::sync::atomic::AtomicBool::new(false),
@@ -49,87 +43,25 @@ impl AppState {
             native_capture_enabled: cfg!(target_os = "macos"),
         }
     }
-
-    pub fn new_test(project_base_dir: PathBuf) -> Self {
-        Self {
-            state_machine: SessionStateMachine::new(),
-            command_lock: Mutex::new(()),
-            project_base_dir,
-            opened_project: Mutex::new(None),
-            playback: Mutex::new(PlaybackOwner::closed()),
-            playback_shutdown: std::sync::atomic::AtomicBool::new(false),
-            preview: Mutex::new(PreviewOwner::new()),
-            encoder_gate: Arc::new(EncoderGate::new()),
-            export: Mutex::new(crate::export::ExportOwner::new()),
-            waveform_epoch: AtomicU64::new(0),
-            waveform_generations: Mutex::new(HashMap::new()),
-            native_capture_enabled: false,
-        }
-    }
 }
 
-/// Returns the cross-platform default storage directory for AeroShoot recordings and projects:
-/// `Documents/AeroShootRec/` on macOS, Windows, and Linux.
+/// Returns the cross-platform default folder for AeroEdits projects:
+/// `Documents/AeroEdits/` on Windows, macOS and Linux.
 pub fn default_projects_dir() -> PathBuf {
     let docs_dir = dirs::document_dir()
         .or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
         .unwrap_or_else(std::env::temp_dir);
-    docs_dir.join("AeroShootRec")
+    docs_dir.join("AeroEdits")
 }
 
 pub fn get_default_projects_dir_impl() -> String {
     default_projects_dir().to_string_lossy().into_owned()
 }
 
-fn looks_like_project_bundle(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "aero") || path.join("manifest.json").is_file()
-}
-
-/// Parent folder for a new `.aero` bundle. User-supplied paths must already exist.
-pub fn resolve_project_parent(requested: Option<&str>, default: &Path) -> Result<PathBuf, String> {
-    let supplied = requested.map(str::trim).filter(|value| !value.is_empty());
-    let parent = match supplied {
-        Some(value) => PathBuf::from(value),
-        None => default.to_path_buf(),
-    };
-    if parent.as_os_str().as_encoded_bytes().contains(&0) {
-        return Err("Project location is invalid".into());
-    }
-    if !parent.is_absolute() {
-        return Err("Project location must be an absolute folder".into());
-    }
-    if parent
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err("Project location cannot contain '..'".into());
-    }
-    if !parent.exists() {
-        if supplied.is_none() {
-            fs::create_dir_all(&parent)
-                .map_err(|error| format!("Failed to create project folder: {error}"))?;
-        } else {
-            return Err("Project location does not exist".into());
-        }
-    }
-    let meta = fs::symlink_metadata(&parent).map_err(|error| error.to_string())?;
-    if meta.file_type().is_symlink() {
-        return Err("Project location cannot be a symbolic link".into());
-    }
-    if !meta.is_dir() {
-        return Err("Project location must be a folder".into());
-    }
-    if looks_like_project_bundle(&parent) {
-        return Err("Choose a folder, not an existing .aero project".into());
-    }
-    Ok(parent)
-}
-
 impl Default for AppState {
     fn default() -> Self {
-        let base_dir = default_projects_dir();
-        let _ = fs::create_dir_all(&base_dir);
-        Self::new(base_dir)
+        let _ = fs::create_dir_all(default_projects_dir());
+        Self::new()
     }
 }
 
@@ -154,13 +86,12 @@ pub fn show_in_finder_impl(path: String) -> Result<(), String> {
     {
         #[cfg(target_os = "windows")]
         {
-            let status = std::process::Command::new("explorer")
+            // explorer.exe exits with status 1 even when it opens the window,
+            // so only a failure to launch it is an error.
+            std::process::Command::new("explorer")
                 .arg(format!("/select,{}", path))
-                .status()
+                .spawn()
                 .map_err(|e| format!("Failed to run explorer: {e}"))?;
-            if !status.success() {
-                return Err(format!("explorer failed with exit status: {status}"));
-            }
             Ok(())
         }
         #[cfg(target_os = "linux")]
@@ -222,40 +153,25 @@ pub fn detect_silence_impl(
     crate::project::silence::detect_track_silence(&ctx, &config)
 }
 
-pub fn recover_project_impl(project_dir: PathBuf) -> Result<ProjectRecoveryReport, String> {
-    RecoveryEngine::scan_and_recover(project_dir).map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
 
     #[test]
-    fn project_parent_rejects_bundle_and_parent_dir_components() {
-        let dir = tempdir().unwrap();
-        let bundle = ProjectBundle::create_new(dir.path(), "sess", "Inside").unwrap();
-        let err = resolve_project_parent(Some(&bundle.root_path().to_string_lossy()), dir.path())
-            .unwrap_err();
-        assert!(err.contains(".aero"));
-        assert!(resolve_project_parent(Some("/tmp/aeroshoot/../secret"), dir.path()).is_err());
-        assert!(resolve_project_parent(Some("/tmp/does-not-exist-aeroshoot"), dir.path()).is_err());
-    }
-
-    #[test]
     fn test_window_title_formatting() {
         assert_eq!(
             window_title_for_project(Some("Launch Demo")),
-            "AeroShoot \u{2014} Launch Demo"
+            "AeroEdits \u{2014} Launch Demo"
         );
-        assert_eq!(window_title_for_project(None), "AeroShoot");
-        assert_eq!(window_title_for_project(Some("")), "AeroShoot");
-        assert_eq!(window_title_for_project(Some("   ")), "AeroShoot");
+        assert_eq!(window_title_for_project(None), "AeroEdits");
+        assert_eq!(window_title_for_project(Some("")), "AeroEdits");
+        assert_eq!(window_title_for_project(Some("   ")), "AeroEdits");
     }
 
     #[test]
     fn test_show_in_finder_impl() {
-        let non_existent = "/tmp/does-not-exist-aeroshoot-test-finder-12345";
+        let non_existent = "/tmp/does-not-exist-aeroedits-test-finder-12345";
         let err = show_in_finder_impl(non_existent.into()).unwrap_err();
         assert!(err.contains("Path does not exist"));
 
@@ -729,7 +645,7 @@ pub fn media_interop_status_impl(state: &AppState) -> MediaInteropStatus {
 }
 
 pub fn media_run_parity_impl(state: &AppState) -> Result<MediaParityReport, String> {
-    let dir = std::env::temp_dir().join(format!("aeroshoot-f2-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("aeroedits-f2-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let report = crate::render::run_parity(&dir, &state.encoder_gate);
     let _ = std::fs::remove_dir_all(&dir);
@@ -742,7 +658,6 @@ pub fn export_start_impl(
     settings: crate::export::ExportSettings,
 ) -> Result<crate::export::ExportStatus, String> {
     let _guard = state.command_lock.lock();
-    let session_state = state.state_machine.current();
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
@@ -753,15 +668,7 @@ pub fn export_start_impl(
     drop(opened);
     let gate = Arc::clone(&state.encoder_gate);
     let mut owner = state.export.lock();
-    match crate::export::prepare_job(
-        session_state,
-        &root,
-        &name,
-        document,
-        tracks,
-        settings,
-        &mut owner,
-    ) {
+    match crate::export::prepare_job(&root, &name, document, tracks, settings, &mut owner) {
         Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
         Err(status) => {
             owner.install_failed(status.clone());
@@ -792,11 +699,11 @@ pub fn export_cancel_impl(
 }
 
 /// Formats the window title for project editing.
-/// When a project is open, produces "AeroShoot — <Project Name>" (e.g. "AeroShoot — Launch Demo").
-/// When no project is open (None or empty), produces "AeroShoot".
+/// When a project is open, produces "AeroEdits — <Project Name>" (e.g. "AeroEdits — Launch Demo").
+/// When no project is open (None or empty), produces "AeroEdits".
 pub fn window_title_for_project(project_name: Option<&str>) -> String {
     match project_name.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(name) => format!("AeroShoot \u{2014} {}", name),
-        None => "AeroShoot".to_string(),
+        Some(name) => format!("AeroEdits \u{2014} {}", name),
+        None => "AeroEdits".to_string(),
     }
 }
