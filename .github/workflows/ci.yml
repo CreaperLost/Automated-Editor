@@ -48,6 +48,9 @@ jobs:
       - run: cargo test
       - name: GPU compositor tests (software adapter)
         run: cargo test --lib render::tests::gpu -- --include-ignored
+      # Local Parakeet transcription is opt-in; make sure it keeps compiling.
+      - name: Check local Parakeet transcription
+        run: cargo check --features parakeet
 
   tauri-app:
     name: Tauri app build check

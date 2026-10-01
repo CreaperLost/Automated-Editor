@@ -31,6 +31,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 dirs = "6.0"
 tauri = { version = "2.0.0", optional = true , features = [] }
 rfd = { version = "0.15", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
+parakeet-rs = { version = "0.3.8", optional = true }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", optional = true , features = [] }
@@ -39,6 +44,12 @@ tauri-build = { version = "2.0.0", optional = true , features = [] }
 default = []
 tauri-app = ["dep:tauri", "dep:tauri-build", "dep:rfd"]
 custom-protocol = ["tauri/custom-protocol"]
+# Local NVIDIA Parakeet transcription through ONNX Runtime. `parakeet` alone runs on the CPU;
+# the GPU variants add an execution provider and fall back to the CPU when it is unavailable.
+parakeet = ["dep:parakeet-rs"]
+parakeet-cuda = ["parakeet", "parakeet-rs/cuda"]
+parakeet-directml = ["parakeet", "parakeet-rs/directml"]
+parakeet-webgpu = ["parakeet", "parakeet-rs/webgpu"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

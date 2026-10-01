@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub mod transcript;
+
 pub struct AppState {
     pub command_lock: Mutex<()>,
     pub opened_project: Mutex<Option<crate::project::ProjectReader>>,

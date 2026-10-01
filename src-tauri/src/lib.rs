@@ -8,6 +8,7 @@ pub mod project;
 pub mod render;
 pub mod telemetry;
 pub mod timeline;
+pub mod transcript;
 pub mod zoom;
 
 #[cfg(feature = "tauri-app")]
@@ -356,6 +357,123 @@ async fn detect_silence(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn transcript_settings_get() -> transcript::TranscriptSettingsView {
+    commands::transcript::transcript_settings_get_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_settings_set(
+    settings: transcript::TranscriptSettings,
+) -> Result<transcript::TranscriptSettingsView, String> {
+    commands::transcript::transcript_settings_set_impl(settings)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_set_api_key(key: String) -> Result<transcript::TranscriptSettingsView, String> {
+    commands::transcript::transcript_set_api_key_impl(key)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_get(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+) -> Result<Option<transcript::TranscriptView>, String> {
+    commands::transcript::transcript_get_impl(&state, project_handle, track_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn transcript_run(
+    app: tauri::AppHandle,
+    project_handle: String,
+    track_id: String,
+) -> Result<commands::transcript::TranscriptRunResult, String> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn_blocking(move || {
+        let emitter = app.clone();
+        commands::transcript::transcript_run_impl(
+            &app.state::<AppState>(),
+            &app.state::<commands::transcript::TranscriptState>(),
+            project_handle,
+            track_id,
+            &mut |progress| {
+                let _ = emitter.emit("transcript-progress", progress);
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_cancel(state: State<'_, commands::transcript::TranscriptState>) {
+    commands::transcript::transcript_cancel_impl(&state)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_delete(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+) -> Result<(), String> {
+    commands::transcript::transcript_delete_impl(&state, project_handle, track_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_suggestions(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
+    commands::transcript::transcript_suggestions_impl(&state, project_handle, track_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_cut_words(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    track_id: String,
+    word_ids: Vec<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::transcript::transcript_cut_words_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        track_id,
+        word_ids,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn transcript_download_model(
+    app: tauri::AppHandle,
+) -> Result<transcript::TranscriptSettingsView, String> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn_blocking(move || {
+        let emitter = app.clone();
+        commands::transcript::transcript_download_model_impl(
+            &app.state::<commands::transcript::TranscriptState>(),
+            &mut |progress| {
+                let _ = emitter.emit("transcript-model-progress", progress);
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn media_interop_status(state: State<'_, AppState>) -> media::MediaInteropStatus {
     commands::media_interop_status_impl(&state)
 }
@@ -547,6 +665,7 @@ fn show_in_finder(path: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(commands::AppState::default())
+        .manage(commands::transcript::TranscriptState::default())
         .setup(|app| {
             playback::engine::start(app.handle().clone());
             Ok(())
@@ -592,6 +711,16 @@ pub fn run() {
             export_status,
             export_cancel,
             detect_silence,
+            transcript_settings_get,
+            transcript_settings_set,
+            transcript_set_api_key,
+            transcript_get,
+            transcript_run,
+            transcript_cancel,
+            transcript_delete,
+            transcript_suggestions,
+            transcript_cut_words,
+            transcript_download_model,
             get_default_projects_dir,
             pick_project_folder,
             pick_export_destination,
