@@ -80,6 +80,7 @@ pub struct OpenedProject {
     pub split_points_us: Vec<u64>,
     #[serde(default)]
     pub webcam_focus: crate::webcam_focus::WebcamFocus,
+    pub audio: crate::project::AudioSettings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -468,6 +469,7 @@ impl ProjectReader {
                 removed_intervals: Vec::new(),
                 split_points_us: Vec::new(),
                 webcam_focus: Default::default(),
+                audio: history.current.audio.clone(),
             },
             segments,
             root,
@@ -668,6 +670,17 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn update_audio(
+        &mut self,
+        expected_revision: u64,
+        audio: crate::project::AudioSettings,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .update_audio(expected_revision, audio, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn rename_project(&mut self, new_name: &str) -> Result<OpenedProject, String> {
         let trimmed = new_name.trim();
         if trimmed.is_empty() {
@@ -709,6 +722,7 @@ impl ProjectReader {
             focus.attach_edited_ranges(&mapper);
         }
         self.summary.webcam_focus = focus;
+        self.summary.audio = self.history.current.audio.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest

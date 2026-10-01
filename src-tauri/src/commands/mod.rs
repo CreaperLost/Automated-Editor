@@ -450,6 +450,17 @@ pub fn project_layout_update_impl(
     })
 }
 
+pub fn project_audio_update_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    audio: crate::project::AudioSettings,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.update_audio(expected_revision, audio)
+    })
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WebcamFocusDetection {

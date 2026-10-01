@@ -1,6 +1,7 @@
 //! Shared decoder/encoder adapters. Frames are owned on the native/Rust side.
 pub mod audio;
 pub mod ffmpeg;
+pub mod polish;
 mod native;
 
 use crate::project::pcm::PcmReader;

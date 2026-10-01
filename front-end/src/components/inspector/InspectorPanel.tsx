@@ -5,6 +5,7 @@ import { WebcamFocusSection } from "./WebcamFocusSection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
+import { AudioSection } from "../audio/AudioSection";
 import {
   BACKGROUND_PRESETS,
   CameraBubblePosition,
@@ -533,6 +534,7 @@ export const InspectorPanel: React.FC = () => {
       </InspectorSection>
 
       <WebcamFocusSection webcamShown={cameraBubble.enabled} />
+      <AudioSection />
     </div>
   );
 };

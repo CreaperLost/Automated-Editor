@@ -253,6 +253,17 @@ fn project_layout_update(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_audio_update(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    audio: project::AudioSettings,
+) -> Result<project::OpenedProject, String> {
+    commands::project_audio_update_impl(&state, project_handle, expected_revision, audio)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_ripple_cuts(
     state: State<'_, AppState>,
     project_handle: String,
@@ -785,6 +796,7 @@ pub fn run() {
             project_webcam_focus_detect,
             project_webcam_focus_update,
             project_webcam_focus_add,
+            project_audio_update,
             project_ripple_cuts,
             project_split,
             project_restore_cuts,

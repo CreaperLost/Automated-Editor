@@ -1,4 +1,5 @@
 //! Bounded stereo PCM mixer shared by playback and export. Times are output frames.
+use super::polish::PolishPlan;
 use crate::project::{
     pcm::PcmReader,
     reader::{safe_path, SegmentSummary, TrackSummary},
@@ -23,7 +24,8 @@ struct Span {
 pub struct AudioMixer {
     root: PathBuf,
     spans: Vec<Span>,
-    tracks: Vec<Vec<SegmentSummary>>,
+    tracks: Vec<(TrackType, Vec<SegmentSummary>)>,
+    polish: Option<PolishPlan>,
     pub total_frames: u64,
 }
 fn ceil_frame(us: u64) -> u64 {
@@ -62,19 +64,26 @@ impl AudioMixer {
                     TrackType::MicAudio | TrackType::SystemAudio
                 )
             })
-            .map(|(_, s)| s.clone())
-            .collect();
+            .map(|(t, s)| (t.descriptor.track_type, s.clone()))
+            .collect::<Vec<_>>();
+        let polish = PolishPlan::build(
+            root,
+            &document.audio,
+            &document.retained_intervals,
+            &tracks,
+        );
         Ok(Self {
             root: root.into(),
             spans,
             tracks,
+            polish,
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
         })
     }
     pub fn has_audio(&self) -> bool {
         self.tracks
             .iter()
-            .any(|track| track.iter().any(|s| s.available))
+            .any(|(_, track)| track.iter().any(|s| s.available))
     }
     pub fn read_frames(&self, start: u64, count: usize) -> Result<Vec<i16>, String> {
         if count > CHUNK_FRAMES {
@@ -99,7 +108,7 @@ impl AudioMixer {
                 + ((b as u128 * 1_000_000 / SAMPLE_RATE as u128) as u64)
                     .saturating_sub(span.edited_start)
                 + 1;
-            for track in &self.tracks {
+            for (track_type, track) in &self.tracks {
                 let first = track.partition_point(|s| s.end_us <= source_a);
                 for segment in track[first..].iter().take_while(|s| s.start_us < source_b) {
                     if !segment.available {
@@ -138,14 +147,34 @@ impl AudioMixer {
                     if read_end <= read_start {
                         continue;
                     }
-                    reader.seek_to_frame(read_start)?;
                     let channels = info.channels as usize;
-                    let want = (read_end - read_start) as usize;
-                    let mut samples = vec![0f32; want * channels];
-                    let got = reader.read_frames(&mut samples, want)?;
+                    let denoiser = match (track_type, &self.polish) {
+                        (TrackType::MicAudio, Some(plan)) => {
+                            plan.denoiser(&segment.relative_path)
+                        }
+                        _ => None,
+                    };
+                    let (samples, got) = match denoiser {
+                        Some(denoiser) => {
+                            let (from, to) = denoiser.input_range(read_start, read_end);
+                            let input = read_padded(&mut reader, from, to)?;
+                            let samples =
+                                denoiser.process(&input, channels, read_start, read_end);
+                            (samples, (read_end - read_start) as usize)
+                        }
+                        None => {
+                            reader.seek_to_frame(read_start)?;
+                            let want = (read_end - read_start) as usize;
+                            let mut samples = vec![0f32; want * channels];
+                            let got = reader.read_frames(&mut samples, want)?;
+                            (samples, got)
+                        }
+                    };
                     if got == 0 {
                         continue;
                     }
+                    let ducked = *track_type == TrackType::SystemAudio
+                        && self.polish.is_some();
                     for frame in lo..hi {
                         let pos = local(frame);
                         if pos >= info.frame_count as f64 {
@@ -188,8 +217,17 @@ impl AudioMixer {
                             weights += weight;
                         }
                         if weights.abs() > 1e-12 {
+                            let gain = match &self.polish {
+                                Some(plan) if ducked => plan.duck_gain(
+                                    frame as f64 * 1e6 / SAMPLE_RATE as f64
+                                        - span.edited_start as f64
+                                        + span.source_start as f64,
+                                ),
+                                _ => 1.0,
+                            };
                             for ch in 0..2 {
-                                out[(frame - start) as usize * 2 + ch] += stereo[ch] / weights;
+                                out[(frame - start) as usize * 2 + ch] +=
+                                    stereo[ch] / weights * gain;
                             }
                         }
                     }
@@ -213,9 +251,29 @@ impl AudioMixer {
         }
         Ok(out
             .into_iter()
+            .map(|s| match &self.polish {
+                Some(plan) => plan.finish(s),
+                None => s,
+            })
             .map(|s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
             .collect())
     }
+}
+
+/// Reads frames `[from, to)` interleaved, with zeros before and after the file.
+fn read_padded(reader: &mut PcmReader, from: i64, to: i64) -> Result<Vec<f32>, String> {
+    let info = reader.info().clone();
+    let channels = info.channels as usize;
+    let mut out = vec![0f32; (to - from).max(0) as usize * channels];
+    let a = from.max(0) as u64;
+    let b = (to.max(0) as u64).min(info.frame_count);
+    if b > a {
+        reader.seek_to_frame(a)?;
+        let offset = (a as i64 - from) as usize * channels;
+        let want = (b - a) as usize;
+        reader.read_frames(&mut out[offset..offset + want * channels], want)?;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -274,6 +332,152 @@ mod tests {
         };
         (dir, document, vec![(track, vec![segment])])
     }
+    /// Mic: hiss, then a 220 Hz "voice" from 1 s to 2 s, then hiss. System: a steady
+    /// 1 kHz stereo tone. Both 3 s at 48 kHz.
+    fn polish_fixture(
+        with_system: bool,
+    ) -> (
+        tempfile::TempDir,
+        EditDocument,
+        Vec<(TrackSummary, Vec<SegmentSummary>)>,
+    ) {
+        let rate = 48_000usize;
+        let mut state = 9u64;
+        let mic: Vec<i16> = (0..rate * 3)
+            .map(|i| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let hiss = ((state >> 40) as f64 / (1u64 << 24) as f64 - 0.5) * 600.0;
+                let voice = if (rate..rate * 2).contains(&i) {
+                    9000.0 * (std::f64::consts::TAU * 220.0 * i as f64 / rate as f64).sin()
+                } else {
+                    0.0
+                };
+                (hiss + voice) as i16
+            })
+            .collect();
+        let (dir, document, mut tracks) = fixture(rate as u32, 1, mic);
+        if with_system {
+            let system: Vec<i16> = (0..rate * 3)
+                .flat_map(|i| {
+                    let v = 8000.0
+                        * (std::f64::consts::TAU * 1000.0 * i as f64 / rate as f64).sin();
+                    [v as i16, v as i16]
+                })
+                .collect();
+            let bytes = generate_pcm16_wav(rate as u32, 2, &system);
+            std::fs::write(dir.path().join("system.wav"), &bytes).unwrap();
+            let (mut track, mut segment) = tracks[0].clone();
+            track.descriptor.id = "system".into();
+            track.descriptor.track_type = TrackType::SystemAudio;
+            track.descriptor.relative_path = "system.wav".into();
+            track.descriptor.channels = Some(2);
+            segment[0].track_id = "system".into();
+            segment[0].relative_path = "system.wav".into();
+            segment[0].size_bytes = bytes.len() as u64;
+            tracks.push((track, segment));
+        }
+        (dir, document, tracks)
+    }
+
+    fn mix_all(mixer: &AudioMixer) -> Vec<f64> {
+        let mut out = Vec::new();
+        let mut frame = 0;
+        while frame < mixer.total_frames {
+            let pcm = mixer.read_frames(frame, CHUNK_FRAMES).unwrap();
+            out.extend(pcm.iter().map(|&s| s as f64 / 32767.0));
+            frame += CHUNK_FRAMES as u64;
+        }
+        out
+    }
+
+    fn rms(samples: &[f64]) -> f64 {
+        (samples.iter().map(|s| s * s).sum::<f64>() / samples.len() as f64).sqrt()
+    }
+
+    /// Interleaved stereo samples for `[a, b)` seconds.
+    fn seconds(samples: &[f64], a: f64, b: f64) -> &[f64] {
+        &samples[(a * 96_000.0) as usize..(b * 96_000.0) as usize]
+    }
+
+    #[test]
+    fn ducking_lowers_system_audio_only_under_speech() {
+        let (dir, mut doc, tracks) = polish_fixture(true);
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        doc.audio.duck_system_audio = true;
+        doc.audio.duck_db = 12.0;
+        let ducked = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        let diff: Vec<f64> = plain.iter().zip(&ducked).map(|(a, b)| a - b).collect();
+        assert!(rms(seconds(&diff, 0.2, 0.6)) < 1e-3, "no speech, no ducking");
+        // Under speech the system tone (rms 8000/32767/sqrt 2) drops by 12 dB.
+        let system_rms = 8000.0 / 32767.0 / 2f64.sqrt();
+        let removed = rms(seconds(&diff, 1.2, 1.8)) / system_rms;
+        let expected = 1.0 - 10f64.powf(-12.0 / 20.0);
+        assert!((removed - expected).abs() < 0.02, "removed {removed}");
+        // The hold keeps it ducked briefly after speech, then it recovers.
+        assert!(rms(seconds(&diff, 2.0, 2.2)) > 0.05);
+        assert!(rms(seconds(&diff, 2.8, 3.0)) < 1e-3);
+    }
+
+    #[test]
+    fn noise_reduction_quiets_hiss_and_keeps_speech() {
+        let (dir, mut doc, tracks) = polish_fixture(false);
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        doc.audio.noise_reduction = true;
+        doc.audio.noise_reduction_db = 18.0;
+        let clean = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        let hiss_drop = 20.0 * (rms(seconds(&clean, 0.2, 0.8)) / rms(seconds(&plain, 0.2, 0.8))).log10();
+        assert!(hiss_drop < -10.0, "hiss dropped {hiss_drop} dB");
+        let voice_change =
+            20.0 * (rms(seconds(&clean, 1.2, 1.8)) / rms(seconds(&plain, 1.2, 1.8))).log10();
+        assert!(voice_change.abs() < 1.0, "voice changed {voice_change} dB");
+    }
+
+    #[test]
+    fn normalization_hits_the_target_and_polish_is_chunk_independent() {
+        use crate::dsp::loudness::{integrated_lufs, KWeighting};
+        let (dir, mut doc, tracks) = polish_fixture(true);
+        doc.audio.normalize = true;
+        doc.audio.target_lufs = -20.0;
+        let out = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        let mut filters = [KWeighting::new(48_000), KWeighting::new(48_000)];
+        let blocks: Vec<f64> = out
+            .chunks(9_600)
+            .map(|block| {
+                block
+                    .chunks_exact(2)
+                    .map(|f| {
+                        let l = filters[0].process(f[0] as f32);
+                        let r = filters[1].process(f[1] as f32);
+                        l * l + r * r
+                    })
+                    .sum::<f64>()
+                    / (block.len() / 2) as f64
+            })
+            .collect();
+        let lufs = integrated_lufs(&blocks).unwrap();
+        assert!((lufs + 20.0).abs() < 1.0, "measured {lufs} LUFS");
+
+        doc.audio.noise_reduction = true;
+        doc.audio.duck_system_audio = true;
+        doc.retained_intervals = vec![
+            RetainedInterval {
+                start_us: 0,
+                end_us: 1_100_007,
+            },
+            RetainedInterval {
+                start_us: 1_500_013,
+                end_us: 3_000_000,
+            },
+        ];
+        let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
+        let a = mixer.read_frames(52_700, 300).unwrap();
+        let mut b = mixer.read_frames(52_700, 100).unwrap();
+        b.extend(mixer.read_frames(52_800, 200).unwrap());
+        assert_eq!(a, b);
+    }
+
     #[test]
     fn resamples_24khz_and_keeps_right_channel() {
         let (dir, doc, tracks) = fixture(24_000, 2, (0..24_000).flat_map(|_| [0, 16384]).collect());

@@ -21,6 +21,7 @@ import {
   WebcamFocusDetection,
   WebcamFocusSettings,
   EditLayout,
+  AudioSettings,
   TranscriptCutSuggestion,
   TranscriptRunResult,
   TranscriptSettings,
@@ -147,6 +148,12 @@ export const api = {
         ? { projectHandle, expectedRevision, layout, wallpaperSource }
         : { projectHandle, expectedRevision, layout },
     ),
+  projectAudioUpdate: (projectHandle: string, expectedRevision: number, audio: AudioSettings) =>
+    invokeTauri<OpenedProject>("project_audio_update", {
+      projectHandle,
+      expectedRevision,
+      audio,
+    }),
   projectRippleCuts: (
     projectHandle: string,
     expectedRevision: number,
