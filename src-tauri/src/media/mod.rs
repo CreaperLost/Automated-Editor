@@ -202,6 +202,20 @@ pub fn validate_dim(width: u32, height: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Set to log per-stage preview and decode timings to stderr.
+pub const PROFILE_ENV: &str = "AEROEDITS_PROFILE";
+
+/// Logs how long `stage` took when `AEROEDITS_PROFILE` is set.
+pub(crate) fn profile(stage: &str, started: std::time::Instant) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os(PROFILE_ENV).is_some()) {
+        eprintln!(
+            "[profile] {stage}: {:.1} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
 /// Selects the FFmpeg backend on macOS instead of the Swift bridge.
 pub const MEDIA_BACKEND_ENV: &str = "AEROEDITS_MEDIA_BACKEND";
 

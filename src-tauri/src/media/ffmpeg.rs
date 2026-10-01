@@ -506,9 +506,11 @@ pub fn decode_bgra_limited(
             (stream, frame)
         }
         None => {
+            let started = std::time::Instant::now();
             let info = cached_info(path)?;
             let mut stream = FrameStream::open(path, &info, limit, time_us)?;
             let frame = stream.frame_at(time_us);
+            super::profile("decoder seek (new FFmpeg process)", started);
             (stream, frame)
         }
     };

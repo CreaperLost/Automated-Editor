@@ -324,11 +324,15 @@ impl SceneEvaluator {
     }
 
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
+        let started = std::time::Instant::now();
         let scene = self.scene_at(edited_us)?;
+        crate::media::profile("scene (decode)", started);
+        let started = std::time::Instant::now();
         let mut frame = match self.compositor.as_mut() {
             Some(compositor) => compositor.composite(&scene)?,
             None => Compositor::composite_cpu(&scene)?,
         };
+        crate::media::profile("composite", started);
         frame.pts_us = edited_us;
         Ok(frame)
     }

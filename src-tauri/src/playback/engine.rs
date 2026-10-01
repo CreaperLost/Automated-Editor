@@ -82,6 +82,7 @@ fn tick(
     let error = |e| (generation, e);
     let webview = state.preview.lock().status().surface == "webview";
     if runtime.as_ref().map(|r| (r.generation, r.webview)) != Some((generation, webview)) {
+        let rebuild_started = std::time::Instant::now();
         let (root, document, tracks) = {
             let opened = state.opened_project.lock();
             let Some(reader) = opened.as_ref() else {
@@ -122,6 +123,7 @@ fn tick(
             _lease: lease,
         });
         *last_frame = None;
+        crate::media::profile("rebuild after seek", rebuild_started);
     }
     let runtime = runtime.as_mut().unwrap();
     if status.state == PlaybackState::Playing && runtime.mixer.has_audio() {
@@ -216,7 +218,9 @@ fn tick(
         .map_err(error)?;
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.
+        let started = std::time::Instant::now();
         let jpeg = super::preview::encode_webview_frame(&frame).map_err(error)?;
+        crate::media::profile("jpeg", started);
         let mut owner = state.playback.lock();
         if owner.status().is_ok_and(|s| {
             s.generation == generation
