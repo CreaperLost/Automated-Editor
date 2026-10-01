@@ -2,6 +2,7 @@
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path, RetainedInterval};
 use crate::timeline::{SourceInterval, TimelineMapper};
+use crate::webcam_focus::WebcamFocus;
 use crate::zoom::{
     attach_zoom_edited_ranges, validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion,
     MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
@@ -37,6 +38,9 @@ pub struct EditDocument {
     /// at the points that fall inside retained media.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split_points_us: Vec<u64>,
+    /// Auto webcam layout: when the webcam grows to fill the canvas.
+    #[serde(default, skip_serializing_if = "WebcamFocus::is_default")]
+    pub webcam_focus: WebcamFocus,
 }
 
 impl Default for EditDocument {
@@ -49,6 +53,7 @@ impl Default for EditDocument {
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
             split_points_us: Vec::new(),
+            webcam_focus: WebcamFocus::default(),
         }
     }
 }
@@ -64,6 +69,7 @@ impl EditDocument {
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
             split_points_us: Vec::new(),
+            webcam_focus: WebcamFocus::default(),
         })
     }
 
@@ -203,6 +209,7 @@ pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
     validate_zooms(&document.zooms)?;
     validate_dismissed(&document.dismissed_zoom_ids)?;
     validate_split_points(&document.split_points_us)?;
+    document.webcam_focus.validate()?;
     document.mapper()?;
     Ok(Some(document))
 }
@@ -212,6 +219,7 @@ pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), St
     validate_layout(&document.layout)?;
     validate_zooms(&document.zooms)?;
     validate_dismissed(&document.dismissed_zoom_ids)?;
+    document.webcam_focus.validate()?;
     if document.schema_version != EDIT_SCHEMA_VERSION {
         return Err("Unsupported edit schema version".into());
     }
@@ -354,6 +362,7 @@ impl EditHistory {
         validate_zooms(&next.zooms)?;
         validate_dismissed(&next.dismissed_zoom_ids)?;
         validate_split_points(&next.split_points_us)?;
+        next.webcam_focus.validate()?;
         next.schema_version = EDIT_SCHEMA_VERSION;
         next.revision = self
             .current
@@ -387,6 +396,68 @@ impl EditHistory {
         let mut next = self.current.clone();
         next.layout = layout;
         self.commit_next(expected_revision, persist_root, next)
+    }
+
+    pub fn update_webcam_focus(
+        &mut self,
+        expected_revision: u64,
+        focus: WebcamFocus,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let focus = focus.normalized();
+        focus.validate()?;
+        if focus == self.current.webcam_focus {
+            return Ok(&self.current);
+        }
+        let mut next = self.current.clone();
+        next.webcam_focus = focus;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Adds a webcam focus segment over an edited range, mapped to source time.
+    pub fn add_webcam_focus(
+        &mut self,
+        expected_revision: u64,
+        edited_start_us: u64,
+        edited_end_us: u64,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if edited_end_us <= edited_start_us {
+            return Err("Webcam focus must be a half-open edited range".into());
+        }
+        let mapper = self.current.mapper()?;
+        let source_start = mapper
+            .edited_to_source_us(edited_start_us)
+            .ok_or("Webcam focus start is not on retained media")?;
+        let source_end = mapper
+            .edited_to_source_us(edited_end_us.saturating_sub(1))
+            .ok_or("Webcam focus end is not on retained media")?
+            .saturating_add(1);
+        if source_end <= source_start {
+            return Err("Webcam focus range does not map onto source time".into());
+        }
+        let mut focus = self.current.webcam_focus.clone();
+        focus.enabled = true;
+        let mut n = focus.segments.len();
+        let id = loop {
+            let id = format!("manual-{source_start}-{n}");
+            if !focus.segments.iter().any(|s| s.id == id) {
+                break id;
+            }
+            n += 1;
+        };
+        focus.segments.push(crate::webcam_focus::WebcamFocusSegment {
+            id,
+            source_start_us: source_start,
+            source_end_us: source_end,
+            source: crate::webcam_focus::FocusSegmentSource::Manual,
+            enabled: true,
+            edited_ranges: Vec::new(),
+        });
+        self.update_webcam_focus(expected_revision, focus, persist_root)
     }
 
     pub fn accept_zooms(
@@ -719,6 +790,47 @@ mod tests {
         assert_eq!(history.current, snapshot);
         assert!(history.undo_available());
         assert!(!history.redo_available());
+    }
+
+    #[test]
+    fn webcam_focus_round_trips_through_revisions_and_undo() {
+        let dir = tempdir().unwrap();
+        let initial = EditDocument::from_retained(vec![
+            RetainedInterval { start_us: 0, end_us: 4_000_000 },
+            RetainedInterval { start_us: 6_000_000, end_us: 10_000_000 },
+        ])
+        .unwrap();
+        let mut history = EditHistory::new(initial);
+        // Edited 3s..5s spans the cut, so it maps to source 3s..7s.
+        history
+            .add_webcam_focus(0, 3_000_000, 5_000_000, dir.path())
+            .unwrap();
+        let focus = &history.current.webcam_focus;
+        assert!(focus.enabled);
+        assert_eq!(focus.segments.len(), 1);
+        assert_eq!(
+            (focus.segments[0].source_start_us, focus.segments[0].source_end_us),
+            (3_000_000, 7_000_000)
+        );
+        let on_disk = load_edit_document(dir.path()).unwrap().unwrap();
+        assert_eq!(on_disk.webcam_focus, history.current.webcam_focus);
+
+        // UI-only edited ranges are dropped, and an unchanged update is not a revision.
+        let mut echoed = history.current.webcam_focus.clone();
+        echoed.attach_edited_ranges(&history.current.mapper().unwrap());
+        history.update_webcam_focus(1, echoed, dir.path()).unwrap();
+        assert_eq!(history.current.revision, 1);
+
+        let mut off = history.current.webcam_focus.clone();
+        off.enabled = false;
+        history.update_webcam_focus(1, off, dir.path()).unwrap();
+        assert!(!history.current.webcam_focus.enabled);
+        history.undo(2, dir.path()).unwrap();
+        assert!(history.current.webcam_focus.enabled);
+
+        let mut bad = history.current.webcam_focus.clone();
+        bad.settings.focus_size_pct = 10.0;
+        assert!(history.update_webcam_focus(3, bad, dir.path()).is_err());
     }
 
     #[test]

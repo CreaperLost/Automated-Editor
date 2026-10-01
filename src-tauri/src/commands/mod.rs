@@ -5,7 +5,7 @@ use crate::playback::{
     PreviewViewport,
 };
 use crate::project::{
-    OpenedProject, ProjectReader, SegmentPage, WaveformPage, WaveformTrackContext,
+    OpenedProject, ProjectReader, SegmentPage, TrackType, WaveformPage, WaveformTrackContext,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -447,6 +447,100 @@ pub fn project_layout_update_impl(
             layout.background_type = "wallpaper".into();
         }
         reader.update_layout(expected_revision, layout)
+    })
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebcamFocusDetection {
+    pub project: OpenedProject,
+    /// Talking-while-idle segments found by this run.
+    pub detected: usize,
+    pub diagnostics: Vec<String>,
+}
+
+/// Finds where the speaker talks while the screen is idle and stores those stretches as
+/// auto webcam focus segments. Manual segments stay. Reading the mic happens outside the
+/// project lock; the commit checks the revision so a concurrent edit is not overwritten.
+pub fn project_webcam_focus_detect_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    settings: crate::webcam_focus::WebcamFocusSettings,
+) -> Result<WebcamFocusDetection, String> {
+    settings.validate()?;
+    let (ctx, root) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let track = reader
+            .summary
+            .tracks
+            .iter()
+            .find(|track| track.descriptor.track_type == TrackType::MicAudio)
+            .ok_or("This recording has no microphone track to detect speech on")?;
+        let track_id = track.descriptor.id.clone();
+        let ctx = WaveformTrackContext {
+            root: reader.root().to_path_buf(),
+            track_type: track.descriptor.track_type,
+            segments: reader
+                .segments_for(&track_id)
+                .ok_or("Unknown track")?
+                .to_vec(),
+            track_id,
+            retained: reader.summary.retained_intervals.clone(),
+            edited_duration_us: reader.summary.edited_duration_us,
+        };
+        (ctx, reader.root().to_path_buf())
+    };
+    let silence = SilenceConfig {
+        threshold_db: settings.speech_threshold_db,
+        min_duration_ms: settings.pause_tolerance_ms,
+        padding_ms: 0,
+        ..SilenceConfig::default()
+    };
+    let scan = crate::project::silence::scan_track_silence(&ctx, &silence)?;
+    let mut diagnostics = scan.diagnostics;
+    let speech = crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges);
+    let telemetry = crate::telemetry::reader::read_telemetry(&root)?;
+    if telemetry.events.is_empty() {
+        diagnostics.push("No mouse activity was recorded, so speech alone decides the layout".into());
+    }
+    let detected = crate::webcam_focus::detect_focus_ranges(&speech, &telemetry, &settings);
+    let project = mutate_opened(state, project_handle, |reader| {
+        let mut focus = reader.history().current.webcam_focus.clone();
+        focus.enabled = true;
+        focus.settings = settings;
+        focus.replace_auto_segments(&detected);
+        reader.update_webcam_focus(expected_revision, focus)
+    })?;
+    Ok(WebcamFocusDetection {
+        project,
+        detected: detected.len(),
+        diagnostics,
+    })
+}
+
+pub fn project_webcam_focus_update_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    focus: crate::webcam_focus::WebcamFocus,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.update_webcam_focus(expected_revision, focus)
+    })
+}
+
+pub fn project_webcam_focus_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    edited_start_us: u64,
+    edited_end_us: u64,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.add_webcam_focus(expected_revision, edited_start_us, edited_end_us)
     })
 }
 

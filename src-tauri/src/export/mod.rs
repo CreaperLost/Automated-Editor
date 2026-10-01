@@ -240,6 +240,8 @@ pub struct SceneEvaluator {
     decode_limit: DecodeLimit,
     /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
+    /// Enabled webcam focus segments on the edited timeline, merged.
+    webcam_focus: std::cell::OnceCell<Vec<(u64, u64)>>,
 }
 
 /// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
@@ -304,6 +306,7 @@ impl SceneEvaluator {
             height,
             decode_limit: DecodeLimit::NONE,
             wallpaper,
+            webcam_focus: std::cell::OnceCell::new(),
         })
     }
 
@@ -425,6 +428,18 @@ impl SceneEvaluator {
             let (uv_x, uv_y, uv_w, uv_h) = crate::render::zoom_within_crop(crop, camera.uv_rect());
             scene.apply_screen_uv(uv_x, uv_y, uv_w, uv_h);
         }
+        let focus = &self.document.webcam_focus;
+        let ranges = self
+            .webcam_focus
+            .get_or_init(|| focus.edited_ranges(&mapper));
+        let weight =
+            crate::webcam_focus::focus_weight(ranges, edited_us, focus.settings.transition_us());
+        scene.apply_webcam_focus(
+            &self.document.layout,
+            focus.settings.focus_size_pct,
+            weight,
+            crate::render::layout_px_unit(self.width, self.height),
+        );
         Ok(scene)
     }
 }
