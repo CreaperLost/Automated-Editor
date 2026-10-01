@@ -9,7 +9,7 @@ use crate::{
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
@@ -29,8 +29,56 @@ struct Runtime {
     _lease: std::fs::File,
 }
 
+/// A composited frame waiting for JPEG encoding and presentation on the webview surface.
+struct WebviewJob {
+    frame: crate::media::VideoFrame,
+    generation: u64,
+    surface_generation: u64,
+}
+
+/// Encodes and presents webview frames on their own thread, so the next frame decodes and
+/// composites while this one is compressed. The channel holds no buffer: handing over a frame
+/// waits for the previous one to finish, which keeps at most one frame in flight.
+fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
+    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(0);
+    thread::spawn(move || {
+        for job in jobs {
+            let state = app.state::<AppState>();
+            let started = std::time::Instant::now();
+            let jpeg = super::preview::encode_webview_frame(&job.frame);
+            crate::media::profile("jpeg", started);
+            let mut owner = state.playback.lock();
+            if !owner.status().is_ok_and(|s| {
+                s.generation == job.generation
+                    && !matches!(s.state, PlaybackState::Closed | PlaybackState::Error)
+            }) {
+                continue;
+            }
+            let jpeg = match jpeg {
+                Ok(jpeg) => jpeg,
+                Err(e) => {
+                    owner.fail(job.generation, e);
+                    continue;
+                }
+            };
+            let mut surface = state.preview.lock();
+            let current = surface.status();
+            if current.attached && current.generation == job.surface_generation && current.visible {
+                match surface.present_encoded(jpeg, job.surface_generation) {
+                    Ok(()) => {
+                        owner.mark_presented(job.generation);
+                    }
+                    Err(e) => owner.fail(job.generation, e),
+                }
+            }
+        }
+    });
+    sender
+}
+
 pub fn start(app: tauri::AppHandle) {
     thread::spawn(move || {
+        let encoder = start_webview_encoder(app.clone());
         let mut runtime: Option<Runtime> = None;
         let pending = Arc::new(AtomicBool::new(false));
         let mut last_frame: Option<(u64, u64, u64)> = None;
@@ -41,7 +89,14 @@ pub fn start(app: tauri::AppHandle) {
         {
             let state = app.state::<AppState>();
             let before = last_frame;
-            let result = tick(&app, &state, &mut runtime, &pending, &mut last_frame);
+            let result = tick(
+                &app,
+                &state,
+                &encoder,
+                &mut runtime,
+                &pending,
+                &mut last_frame,
+            );
             if let Err((generation, error)) = result {
                 state.playback.lock().fail(generation, error);
                 let app_copy = app.clone();
@@ -72,6 +127,7 @@ pub fn start(app: tauri::AppHandle) {
 fn tick(
     app: &tauri::AppHandle,
     state: &AppState,
+    encoder: &mpsc::SyncSender<WebviewJob>,
     runtime: &mut Option<Runtime>,
     pending: &Arc<AtomicBool>,
     last_frame: &mut Option<(u64, u64, u64)>,
@@ -221,25 +277,13 @@ fn tick(
         .map_err(error)?;
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.
-        let started = std::time::Instant::now();
-        let jpeg = super::preview::encode_webview_frame(&frame).map_err(error)?;
-        crate::media::profile("jpeg", started);
-        let mut owner = state.playback.lock();
-        if owner.status().is_ok_and(|s| {
-            s.generation == generation
-                && !matches!(s.state, PlaybackState::Closed | PlaybackState::Error)
-        }) {
-            let mut surface = state.preview.lock();
-            let current = surface.status();
-            if current.attached && current.generation == preview.generation && current.visible {
-                match surface.present_encoded(jpeg, preview.generation) {
-                    Ok(()) => {
-                        owner.mark_presented(generation);
-                    }
-                    Err(e) => owner.fail(generation, e),
-                }
-            }
-        }
+        encoder
+            .send(WebviewJob {
+                frame,
+                generation,
+                surface_generation: preview.generation,
+            })
+            .map_err(|_| error("The preview encoder stopped".to_string()))?;
         *last_frame = Some(key);
         return Ok(());
     }
