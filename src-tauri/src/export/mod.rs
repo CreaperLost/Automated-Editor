@@ -2,14 +2,18 @@
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
 mod native;
 
-use crate::media::{decode_h264_frame, EncoderGate, VideoFrame, MAX_FRAME_DIM};
+use crate::media::ffmpeg::FfmpegExport;
+use crate::media::{
+    decode_h264_frame, media_backend, media_duration_us, EncoderGate, MediaBackend, VideoFrame,
+    MAX_FRAME_DIM,
+};
 use crate::project::manifest::TrackType;
 use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
 use crate::project::revision::EditDocument;
 use crate::render::{Compositor, Scene};
 use native::NativeExport;
 
-pub use native::media_duration_us;
+pub(crate) use native::media_duration_us as native_media_duration_us;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -351,6 +355,67 @@ fn decode_layer(
             segment.relative_path, local_us, error
         )
     })
+}
+
+/// The H.264/AAC writer for whichever media backend is active.
+enum ExportWriter {
+    Native(NativeExport),
+    Ffmpeg(FfmpegExport),
+}
+
+impl ExportWriter {
+    fn begin(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Self, String> {
+        match media_backend() {
+            MediaBackend::Native => {
+                NativeExport::begin(path, width, height, fps, sample_rate, channels)
+                    .map(Self::Native)
+            }
+            MediaBackend::Ffmpeg => {
+                FfmpegExport::begin(path, width, height, fps, sample_rate, channels)
+                    .map(Self::Ffmpeg)
+            }
+        }
+    }
+
+    fn write_video(&mut self, pts_us: u64, frame: &VideoFrame) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.write_video(pts_us, frame),
+            Self::Ffmpeg(session) => session.write_video(frame),
+        }
+    }
+
+    fn write_audio(
+        &mut self,
+        pts_us: u64,
+        pcm: &[i16],
+        frames: u32,
+        channels: u16,
+    ) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.write_audio(pts_us, pcm, frames, channels),
+            Self::Ffmpeg(session) => {
+                let expected = frames as usize * channels.max(1) as usize;
+                let samples = pcm
+                    .get(..expected)
+                    .ok_or("Export audio buffer is truncated")?;
+                session.write_audio(samples)
+            }
+        }
+    }
+
+    fn finish(self, duration_us: u64) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.finish(duration_us),
+            Self::Ffmpeg(session) => session.finish(),
+        }
+    }
 }
 
 pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure> {
@@ -780,6 +845,18 @@ impl Drop for TempGuard {
 pub fn run_export(
     captured: &CapturedExport,
     cancel: &AtomicBool,
+    on_progress: impl FnMut(u32, u32),
+    gate: &EncoderGate,
+) -> Result<PathBuf, ExportFailure> {
+    let result = export_to_temp(captured, cancel, on_progress, gate);
+    // Decoder processes opened for the export are not needed once it ends.
+    crate::media::release_decoders();
+    result
+}
+
+fn export_to_temp(
+    captured: &CapturedExport,
+    cancel: &AtomicBool,
     mut on_progress: impl FnMut(u32, u32),
     gate: &EncoderGate,
 ) -> Result<PathBuf, ExportFailure> {
@@ -817,7 +894,7 @@ pub fn run_export(
     } else {
         (0, 0)
     };
-    let session = NativeExport::begin(
+    let mut session = ExportWriter::begin(
         &captured.temp,
         captured.settings.width,
         captured.settings.height,
@@ -908,6 +985,8 @@ pub fn run_export(
             message: "Export cancelled".into(),
         });
     }
+    // Windows cannot rename or delete the temp file while a decoder still has it open.
+    crate::media::release_decoders();
     publish_output(&captured.temp, &captured.dest)?;
     temp.keep = true;
     Ok(captured.dest.clone())
@@ -1009,6 +1088,131 @@ mod tests {
         assert_eq!(frame_time_us(0, 10), 0);
         assert_eq!(frame_time_us(1, 10), 100_000);
         assert!(frame_time_us(2, 10) >= 200_000);
+    }
+
+    /// Full export of a real project bundle with a cut: decode, composite, encode, mux.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_writes_a_playable_mp4_across_a_cut() {
+        use crate::fixtures::{generate_pcm16_wav, TestProject};
+        use crate::project::manifest::{TrackDescriptor, TrackType};
+        use crate::project::reader::{ProjectReader, RetainedInterval};
+        use crate::project::JournalRecord;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "export");
+        let root = bundle.root_path().to_path_buf();
+        // Two seconds of screen video whose grey level steps up every 100ms.
+        let frames: Vec<VideoFrame> = (0..20u8)
+            .map(|i| VideoFrame::solid(64, 64, 10 + i * 12, 10 + i * 12, 10 + i * 12, 0).unwrap())
+            .collect();
+        let screen_path = root.join("media/screen/000001.mp4");
+        crate::media::ffmpeg::encode_bgra_mp4(&screen_path, &frames, 10).unwrap();
+        let wav = generate_pcm16_wav(48_000, 1, &vec![8_000i16; 96_000]);
+        fs::write(root.join("media/mic/000001.wav"), &wav).unwrap();
+        for (id, track_type, codec, path, timescale) in [
+            (
+                "screen",
+                TrackType::Screen,
+                "h264",
+                "media/screen/000001.mp4",
+                10,
+            ),
+            (
+                "mic",
+                TrackType::MicAudio,
+                "pcm",
+                "media/mic/000001.wav",
+                48_000,
+            ),
+        ] {
+            let audio = track_type == TrackType::MicAudio;
+            bundle.manifest_mut().tracks.push(TrackDescriptor {
+                id: id.into(),
+                track_type,
+                codec: codec.into(),
+                relative_path: path.into(),
+                width: (!audio).then_some(64),
+                height: (!audio).then_some(64),
+                fps: (!audio).then_some(10),
+                sample_rate: audio.then_some(48_000),
+                channels: audio.then_some(1),
+                gaps_total: 0,
+                media_timescale: Some(timescale),
+            });
+            bundle.append_journal(JournalRecord::SegmentCommitted {
+                seq: 0,
+                track_id: id.into(),
+                relative_path: path.into(),
+                start_us: 0,
+                end_us: 2_000_000,
+                size_bytes: fs::metadata(root.join(path)).unwrap().len(),
+                is_keyframe_start: true,
+                media_timescale: timescale,
+                media_start_value: 0,
+                host_anchor_us: 0,
+            });
+        }
+        bundle.manifest_mut().duration_us = 2_000_000;
+        bundle.manifest_mut().active_duration_us = 2_000_000;
+        bundle.save_manifest();
+        drop(bundle);
+
+        let reader = ProjectReader::open(&root).unwrap();
+        let document = EditDocument::from_retained(vec![
+            RetainedInterval {
+                start_us: 0,
+                end_us: 500_000,
+            },
+            RetainedInterval {
+                start_us: 1_200_000,
+                end_us: 2_000_000,
+            },
+        ])
+        .unwrap();
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let gate = EncoderGate::new();
+        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
+            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+
+        assert!(output.is_file());
+        let duration = media_duration_us(&output).unwrap();
+        assert!(
+            duration.abs_diff(1_300_000) <= AUDIO_DURATION_SLACK_US,
+            "duration {duration}"
+        );
+        let leftovers: Vec<_> = fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("partial"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        // Just after the cut the screen shows source frame 12, not frame 5.
+        let after_cut = decode_h264_frame(&output, 550_000).unwrap();
+        assert_eq!((after_cut.width, after_cut.height), (320, 180));
+        let centre = ((90 * after_cut.stride) + 160 * 4) as usize;
+        let level = after_cut.data[centre + 1];
+        let expected = 10 + 12 * 12;
+        assert!(
+            level.abs_diff(expected) <= 14,
+            "level {level} after the cut, expected about {expected}"
+        );
+        crate::media::release_decoders();
     }
 
     #[test]

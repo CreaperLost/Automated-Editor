@@ -43,11 +43,34 @@ jobs:
           workspaces: src-tauri
       # Lavapipe gives wgpu a software Vulkan adapter, so the GPU compositor
       # tests can run without a real GPU.
-      - name: Install software Vulkan driver
-        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+      # Lavapipe for the GPU tests, FFmpeg for the shared media backend.
+      - name: Install software Vulkan driver and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg
       - run: cargo test
-      - name: GPU compositor tests (software adapter)
-        run: cargo test --lib render::tests::gpu -- --include-ignored
+        env:
+          AEROEDITS_REQUIRE_FFMPEG: "1"
+      - name: GPU compositor, media parity and export tests (software adapter)
+        run: cargo test --lib gpu -- --include-ignored
+        env:
+          AEROEDITS_REQUIRE_FFMPEG: "1"
+
+  rust-tests-windows:
+    name: Rust tests (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - run: cargo test
+        env:
+          AEROEDITS_REQUIRE_FFMPEG: "1"
 
   tauri-app:
     name: Tauri app build check

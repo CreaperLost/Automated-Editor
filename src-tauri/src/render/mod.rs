@@ -1102,7 +1102,7 @@ pub fn run_parity(
     use crate::media::{
         compare_frames, decode_h264_frame, decode_pcm, encode_h264_frames, region_mean_delta,
         write_solid_h264, COMPOSITOR_BACKEND, COMPOSITOR_MAX_TOLERANCE, COMPOSITOR_MEAN_TOLERANCE,
-        CONCURRENT_ENCODER_LIMIT, COPIES_DECODE, COPIES_ENCODE, DECODER_BACKEND, ENCODER_BACKEND,
+        CONCURRENT_ENCODER_LIMIT, COPIES_DECODE, COPIES_ENCODE,
         PARITY_MEAN_TOLERANCE, PARITY_REGION_MEAN_TOLERANCE,
     };
     use crate::project::pcm::channel_peak_rms;
@@ -1163,9 +1163,9 @@ pub fn run_parity(
         copies_composite: compositor.copies(),
         copies_encode: COPIES_ENCODE,
         concurrent_encoder_limit: CONCURRENT_ENCODER_LIMIT,
-        decoder_backend: DECODER_BACKEND.into(),
+        decoder_backend: crate::media::decoder_backend().into(),
         compositor_backend: COMPOSITOR_BACKEND.into(),
-        encoder_backend: ENCODER_BACKEND.into(),
+        encoder_backend: crate::media::encoder_backend(),
         ffmpeg_pinned: false,
         color_space: "rec709_full".into(),
         pcm_peak,
@@ -1550,6 +1550,19 @@ mod tests {
         assert!(load_wallpaper_frame(dir.path(), &url, 16, 16)
             .unwrap_err()
             .contains("URL"));
+    }
+
+    /// The in-app media check: compositor vs CPU, and an encode/decode round trip.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_media_parity_report_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = run_parity(dir.path(), &crate::media::EncoderGate::new()).unwrap();
+        assert!(report.matched, "parity failed: {:?}", report.diagnostics);
+        crate::media::release_decoders();
     }
 
     #[test]

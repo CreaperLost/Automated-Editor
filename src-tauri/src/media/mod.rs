@@ -1,17 +1,17 @@
 //! Shared decoder/encoder adapters. Frames are owned on the native/Rust side.
 pub mod audio;
+pub mod ffmpeg;
 mod native;
 
 use crate::project::pcm::PcmReader;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::OnceLock;
 
 pub const MAX_FRAME_DIM: u32 = 4096;
 pub const MAX_ENCODE_FRAMES: u32 = 8;
 pub const CONCURRENT_ENCODER_LIMIT: u32 = 1;
-pub const DECODER_BACKEND: &str = "videotoolbox";
-pub const ENCODER_BACKEND: &str = "videotoolbox-h264";
 pub const COMPOSITOR_BACKEND: &str = "wgpu-27.0.1";
 pub const COPIES_DECODE: u32 = 1;
 pub const COPIES_ENCODE: u32 = 1;
@@ -202,12 +202,89 @@ pub fn validate_dim(width: u32, height: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Selects the FFmpeg backend on macOS instead of the Swift bridge.
+pub const MEDIA_BACKEND_ENV: &str = "AEROEDITS_MEDIA_BACKEND";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaBackend {
+    /// The Swift AVFoundation/VideoToolbox bridge (macOS only).
+    Native,
+    /// FFmpeg subprocesses, on every platform.
+    Ffmpeg,
+}
+
+/// The macOS Swift bridge stays the default there until the FFmpeg path matches it.
+pub fn media_backend() -> MediaBackend {
+    static BACKEND: OnceLock<MediaBackend> = OnceLock::new();
+    *BACKEND.get_or_init(|| {
+        let native_built = cfg!(all(target_os = "macos", not(stub_swift_ffi)));
+        let wants_ffmpeg = std::env::var(MEDIA_BACKEND_ENV)
+            .is_ok_and(|value| value.eq_ignore_ascii_case("ffmpeg"));
+        if native_built && !wants_ffmpeg {
+            MediaBackend::Native
+        } else {
+            MediaBackend::Ffmpeg
+        }
+    })
+}
+
+pub fn decoder_backend() -> &'static str {
+    match media_backend() {
+        MediaBackend::Native => "videotoolbox",
+        MediaBackend::Ffmpeg => "ffmpeg",
+    }
+}
+
+pub fn encoder_backend() -> String {
+    match media_backend() {
+        MediaBackend::Native => "videotoolbox-h264".into(),
+        MediaBackend::Ffmpeg => match ffmpeg::encoder_name() {
+            Some(name) => format!("ffmpeg-{name}"),
+            None => "ffmpeg-unavailable".into(),
+        },
+    }
+}
+
+/// Whether decode and export can run here.
+pub fn media_supported() -> bool {
+    match media_backend() {
+        MediaBackend::Native => true,
+        MediaBackend::Ffmpeg => ffmpeg::available() && ffmpeg::encoder_name().is_some(),
+    }
+}
+
 pub fn decode_h264_frame(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
-    native::decode_bgra(path, time_us)
+    match media_backend() {
+        MediaBackend::Native => native::decode_bgra(path, time_us),
+        MediaBackend::Ffmpeg => ffmpeg::decode_bgra(path, time_us),
+    }
+}
+
+/// Container duration of a media file.
+pub fn media_duration_us(path: &Path) -> Result<u64, String> {
+    match media_backend() {
+        MediaBackend::Native => crate::export::native_media_duration_us(path),
+        MediaBackend::Ffmpeg => ffmpeg::duration_us(path),
+    }
+}
+
+/// Frees decoder state kept between calls, such as open FFmpeg processes.
+pub fn release_decoders() {
+    if media_backend() == MediaBackend::Ffmpeg {
+        ffmpeg::release_decoders();
+    }
 }
 
 pub fn encode_h264_frames(path: &Path, frames: &[VideoFrame], fps: u32) -> Result<(), String> {
-    native::encode_bgra_mp4(path, frames, fps)
+    match media_backend() {
+        MediaBackend::Native => native::encode_bgra_mp4(path, frames, fps),
+        MediaBackend::Ffmpeg => {
+            if frames.is_empty() || frames.len() as u32 > MAX_ENCODE_FRAMES {
+                return Err("Encoder requires 1..=8 frames".into());
+            }
+            ffmpeg::encode_bgra_mp4(path, frames, fps)
+        }
+    }
 }
 
 pub fn write_solid_h264(
@@ -218,7 +295,10 @@ pub fn write_solid_h264(
     g: f32,
     b: f32,
 ) -> Result<(), String> {
-    native::write_solid_mp4(path, width, height, r, g, b)
+    match media_backend() {
+        MediaBackend::Native => native::write_solid_mp4(path, width, height, r, g, b),
+        MediaBackend::Ffmpeg => ffmpeg::write_solid_mp4(path, width, height, r, g, b),
+    }
 }
 
 pub fn decode_pcm(path: &Path, max_frames: usize) -> Result<AudioBuffer, String> {
@@ -305,11 +385,11 @@ pub fn interop_status(
     diagnostics: Vec<String>,
 ) -> MediaInteropStatus {
     MediaInteropStatus {
-        decoder_backend: DECODER_BACKEND.into(),
+        decoder_backend: decoder_backend().into(),
         compositor_backend: COMPOSITOR_BACKEND.into(),
-        encoder_backend: ENCODER_BACKEND.into(),
+        encoder_backend: encoder_backend(),
         ffmpeg_pinned: false,
-        supported: cfg!(target_os = "macos"),
+        supported: media_supported(),
         preview_available: false,
         copies_decode: COPIES_DECODE,
         copies_composite: crate::render::COPIES_COMPOSITE,
