@@ -41,7 +41,7 @@ jobs:
           shared-key: linux-test
       - uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: mesa-vulkan-drivers libvulkan1 ffmpeg
+          packages: mesa-vulkan-drivers libvulkan1
           version: 1
       - run: cargo test --no-run
 

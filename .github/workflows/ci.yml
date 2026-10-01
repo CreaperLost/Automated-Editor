@@ -77,12 +77,15 @@ jobs:
           workspaces: src-tauri
           shared-key: linux-test
       # Lavapipe gives wgpu a software Vulkan adapter, so the GPU compositor
-      # tests can run without a real GPU. FFmpeg is the shared media backend.
-      # The .debs come from the Actions cache, not the Ubuntu mirror.
+      # tests can run without a real GPU. The .debs come from the Actions
+      # cache, not the Ubuntu mirror. FFmpeg is the shared media backend.
       - uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: mesa-vulkan-drivers libvulkan1 ffmpeg
+          packages: mesa-vulkan-drivers libvulkan1
           version: 1
+      # A static FFmpeg build: apt's ffmpeg breaks when restored from the
+      # apt cache (its BLAS library is wired up by an install-time script).
+      - uses: FedericoCarboni/setup-ffmpeg@v3
       - run: cargo test
         env:
           AEROEDITS_REQUIRE_FFMPEG: "1"
