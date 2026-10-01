@@ -166,6 +166,28 @@ export interface CanvasSettings {
   aspectRatio: "16:9" | "9:16" | "4:3" | "1:1";
 }
 
+/** Audio polish. Each effect has its own switch and applies to playback and export. */
+export interface AudioSettings {
+  normalize: boolean;
+  /** Integrated loudness target in LUFS, -30 to -8. */
+  targetLufs: number;
+  noiseReduction: boolean;
+  /** How far background noise is lowered, 3 to 30 dB. */
+  noiseReductionDb: number;
+  duckSystemAudio: boolean;
+  /** How far system audio is lowered under speech, 3 to 30 dB. */
+  duckDb: number;
+}
+
+export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
+  normalize: false,
+  targetLufs: -14,
+  noiseReduction: false,
+  noiseReductionDb: 12,
+  duckSystemAudio: false,
+  duckDb: 12,
+};
+
 export interface EditLayout {
   aspectRatio: string;
   paddingPx: number;
@@ -421,6 +443,7 @@ export interface OpenedProject {
   removedIntervals?: RetainedInterval[];
   /** Source timestamps where the user split a clip. */
   splitPointsUs?: number[];
+  audio?: AudioSettings;
 }
 
 export type PlaybackState =

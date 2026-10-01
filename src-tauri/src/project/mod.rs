@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod journal;
 pub mod layout;
 pub mod manifest;
@@ -7,6 +8,7 @@ pub mod revision;
 pub mod silence;
 pub mod waveform;
 
+pub use audio::AudioSettings;
 pub use journal::JournalRecord;
 pub use layout::EditLayout;
 pub use manifest::{ManifestError, ProjectManifest, TrackDescriptor, TrackType};
