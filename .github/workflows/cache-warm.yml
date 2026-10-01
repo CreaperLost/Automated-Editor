@@ -1,0 +1,99 @@
+name: Warm CI caches
+
+# GitHub only shares caches saved on main with every PR; a cache saved inside
+# one PR is invisible to the next. This builds dependencies on main (no tests)
+# whenever they change, so each new PR's first CI run starts warm.
+# Keys must match ci.yml: same shared-key, env and apt package lists.
+on:
+  push:
+    branches: [main]
+    paths:
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - src-tauri/build.rs
+      - front-end/package-lock.json
+      - .github/workflows/**
+  workflow_dispatch:
+
+concurrency:
+  group: cache-warm
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  linux-test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-test
+      - uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: mesa-vulkan-drivers libvulkan1
+          version: 1
+      - run: cargo test --no-run
+
+  linux-parakeet:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-parakeet
+      - run: cargo check --features parakeet
+
+  windows-test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: windows-test
+      - run: cargo test --no-run
+
+  linux-tauri:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
+          version: 1
+      - name: Build front-end
+        working-directory: front-end
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Build dependencies with the Tauri feature
+        working-directory: src-tauri
+        run: cargo check --features tauri-app
