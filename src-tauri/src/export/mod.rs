@@ -2,14 +2,18 @@
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
 mod native;
 
-use crate::media::{decode_h264_frame, EncoderGate, VideoFrame, MAX_FRAME_DIM};
+use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
+use crate::media::{
+    decode_h264_frame, decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate,
+    MediaBackend, VideoFrame, MAX_FRAME_DIM,
+};
 use crate::project::manifest::TrackType;
 use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
 use crate::project::revision::EditDocument;
 use crate::render::{Compositor, Scene};
 use native::NativeExport;
 
-pub use native::media_duration_us;
+pub(crate) use native::media_duration_us as native_media_duration_us;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -233,6 +237,32 @@ pub struct SceneEvaluator {
     compositor: Option<Compositor>,
     width: u32,
     height: u32,
+    decode_limit: DecodeLimit,
+    /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
+    wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
+}
+
+/// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
+/// edit: the GPU device (slow to create) and the background, if the layout kept it.
+pub struct EvaluatorReuse {
+    compositor: Compositor,
+    background: Option<(String, Option<VideoFrame>)>,
+}
+
+fn background_key(
+    root: &Path,
+    layout: &crate::project::layout::EditLayout,
+    w: u32,
+    h: u32,
+) -> String {
+    format!(
+        "{}|{}|{:?}|{}|{}|{w}x{h}",
+        root.display(),
+        layout.background_type,
+        layout.wallpaper_asset,
+        layout.color_start,
+        layout.color_end
+    )
 }
 
 impl SceneEvaluator {
@@ -243,22 +273,66 @@ impl SceneEvaluator {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
+        Self::new_reusing(root, document, tracks, width, height, None)
+    }
+
+    pub fn new_reusing(
+        root: PathBuf,
+        document: EditDocument,
+        tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
+        width: u32,
+        height: u32,
+        reuse: Option<EvaluatorReuse>,
+    ) -> Result<Self, String> {
+        let key = background_key(&root, &document.layout, width, height);
+        let wallpaper = std::cell::OnceCell::new();
+        let compositor = match reuse {
+            Some(reuse) => {
+                if let Some((_, frame)) = reuse.background.filter(|(k, _)| *k == key) {
+                    let _ = wallpaper.set(frame);
+                }
+                reuse.compositor
+            }
+            None => Compositor::new()?,
+        };
         Ok(Self {
             root,
             document,
             tracks,
-            compositor: Some(Compositor::new()?),
+            compositor: Some(compositor),
             width,
             height,
+            decode_limit: DecodeLimit::NONE,
+            wallpaper,
         })
     }
 
+    /// Gives up the parts a replacement evaluator can reuse.
+    pub fn into_reuse(self) -> Option<EvaluatorReuse> {
+        let key = background_key(&self.root, &self.document.layout, self.width, self.height);
+        let background = self.wallpaper.into_inner().map(|frame| (key, frame));
+        self.compositor.map(|compositor| EvaluatorReuse {
+            compositor,
+            background,
+        })
+    }
+
+    /// Decodes sources no larger or faster than `limit`, for preview.
+    pub fn with_decode_limit(mut self, limit: DecodeLimit) -> Self {
+        self.decode_limit = limit;
+        self
+    }
+
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
+        let started = std::time::Instant::now();
         let scene = self.scene_at(edited_us)?;
+        crate::media::profile("scene (decode)", started);
+        let started = std::time::Instant::now();
         let mut frame = match self.compositor.as_mut() {
             Some(compositor) => compositor.composite(&scene)?,
             None => Compositor::composite_cpu(&scene)?,
         };
+        crate::media::profile("composite", started);
         frame.pts_us = edited_us;
         Ok(frame)
     }
@@ -268,8 +342,8 @@ impl SceneEvaluator {
         let duration_us = mapper.total_edited_duration_us();
         let ended = edited_us >= duration_us;
         let source_us = mapper.edited_to_source_us(edited_us);
-        let mut screen = None;
-        let mut webcam = None;
+        let mut screen_job = None;
+        let mut webcam_job = None;
         for (track, segments) in &self.tracks {
             if ended {
                 return Err("The exclusive edited end is not a video sample".into());
@@ -294,26 +368,45 @@ impl SceneEvaluator {
                                 })
                             })
                     });
-                    screen = candidate
-                        .map(|(segment, time)| decode_layer(&self.root, segment, time))
-                        .transpose()?;
+                    screen_job = candidate;
                 }
                 TrackType::Webcam => {
-                    webcam = containing
-                        .map(|segment| decode_layer(&self.root, segment, source))
-                        .transpose()?;
+                    webcam_job = containing.map(|segment| (segment, source));
                 }
                 TrackType::MicAudio | TrackType::SystemAudio => {}
             }
         }
+        // Screen and webcam decode in parallel; each waits on its own FFmpeg process.
+        let (root, limit) = (&self.root, self.decode_limit);
+        let decode = move |job: Option<(&SegmentSummary, u64)>| {
+            job.map(|(segment, time)| decode_layer(root, segment, time, limit))
+                .transpose()
+        };
+        let (screen, webcam) = std::thread::scope(|scope| {
+            let webcam = webcam_job.map(|job| scope.spawn(move || decode(Some(job))));
+            let screen = decode(screen_job);
+            let webcam = match webcam {
+                Some(handle) => handle
+                    .join()
+                    .map_err(|_| "Webcam decode panicked".to_string())?,
+                None => Ok(None),
+            };
+            Ok::<_, String>((screen?, webcam?))
+        })?;
 
         let has_screen = screen.is_some();
-        let wallpaper = crate::render::load_wallpaper_frame(
-            &self.root,
-            &self.document.layout,
-            self.width,
-            self.height,
-        )?;
+        let wallpaper = match self.wallpaper.get() {
+            Some(cached) => cached.clone(),
+            None => {
+                let loaded = crate::render::background_frame(
+                    &self.root,
+                    &self.document.layout,
+                    self.width,
+                    self.height,
+                )?;
+                self.wallpaper.get_or_init(|| loaded).clone()
+            }
+        };
         let mut scene = Scene::from_layout_with_wallpaper(
             self.width,
             self.height,
@@ -338,6 +431,7 @@ fn decode_layer(
     root: &Path,
     segment: &SegmentSummary,
     source_us: u64,
+    limit: DecodeLimit,
 ) -> Result<VideoFrame, String> {
     let path = safe_path(root, &segment.relative_path)?;
     // Each independently written segment has an AVAsset timeline beginning at zero.
@@ -345,12 +439,73 @@ fn decode_layer(
     let local_us = source_us
         .checked_sub(segment.start_us)
         .ok_or("Invalid segment timestamp")?;
-    decode_h264_frame(&path, local_us).map_err(|error| {
+    decode_h264_frame_limited(&path, local_us, limit).map_err(|error| {
         format!(
             "{} at local {}us: {}",
             segment.relative_path, local_us, error
         )
     })
+}
+
+/// The H.264/AAC writer for whichever media backend is active.
+enum ExportWriter {
+    Native(NativeExport),
+    Ffmpeg(FfmpegExport),
+}
+
+impl ExportWriter {
+    fn begin(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Self, String> {
+        match media_backend() {
+            MediaBackend::Native => {
+                NativeExport::begin(path, width, height, fps, sample_rate, channels)
+                    .map(Self::Native)
+            }
+            MediaBackend::Ffmpeg => {
+                FfmpegExport::begin(path, width, height, fps, sample_rate, channels)
+                    .map(Self::Ffmpeg)
+            }
+        }
+    }
+
+    fn write_video(&mut self, pts_us: u64, frame: &VideoFrame) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.write_video(pts_us, frame),
+            Self::Ffmpeg(session) => session.write_video(frame),
+        }
+    }
+
+    fn write_audio(
+        &mut self,
+        pts_us: u64,
+        pcm: &[i16],
+        frames: u32,
+        channels: u16,
+    ) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.write_audio(pts_us, pcm, frames, channels),
+            Self::Ffmpeg(session) => {
+                let expected = frames as usize * channels.max(1) as usize;
+                let samples = pcm
+                    .get(..expected)
+                    .ok_or("Export audio buffer is truncated")?;
+                session.write_audio(samples)
+            }
+        }
+    }
+
+    fn finish(self, duration_us: u64) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.finish(duration_us),
+            Self::Ffmpeg(session) => session.finish(),
+        }
+    }
 }
 
 pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure> {
@@ -780,6 +935,18 @@ impl Drop for TempGuard {
 pub fn run_export(
     captured: &CapturedExport,
     cancel: &AtomicBool,
+    on_progress: impl FnMut(u32, u32),
+    gate: &EncoderGate,
+) -> Result<PathBuf, ExportFailure> {
+    let result = export_to_temp(captured, cancel, on_progress, gate);
+    // Decoder processes opened for the export are not needed once it ends.
+    crate::media::release_decoders();
+    result
+}
+
+fn export_to_temp(
+    captured: &CapturedExport,
+    cancel: &AtomicBool,
     mut on_progress: impl FnMut(u32, u32),
     gate: &EncoderGate,
 ) -> Result<PathBuf, ExportFailure> {
@@ -817,7 +984,7 @@ pub fn run_export(
     } else {
         (0, 0)
     };
-    let session = NativeExport::begin(
+    let mut session = ExportWriter::begin(
         &captured.temp,
         captured.settings.width,
         captured.settings.height,
@@ -908,6 +1075,8 @@ pub fn run_export(
             message: "Export cancelled".into(),
         });
     }
+    // Windows cannot rename or delete the temp file while a decoder still has it open.
+    crate::media::release_decoders();
     publish_output(&captured.temp, &captured.dest)?;
     temp.keep = true;
     Ok(captured.dest.clone())
@@ -921,7 +1090,9 @@ fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
         });
     }
     {
-        let file = File::open(temp).map_err(|e| ExportFailure::Io {
+        // Windows only flushes a handle opened for writing; a read-only one is "Access is denied".
+        let opened = fs::OpenOptions::new().write(true).open(temp);
+        let file = opened.map_err(|e| ExportFailure::Io {
             message: e.to_string(),
         })?;
         file.sync_all().map_err(|e| ExportFailure::Io {
@@ -1009,6 +1180,191 @@ mod tests {
         assert_eq!(frame_time_us(0, 10), 0);
         assert_eq!(frame_time_us(1, 10), 100_000);
         assert!(frame_time_us(2, 10) >= 200_000);
+    }
+
+    /// A `.aero` bundle with two seconds of 64x64 screen video, whose grey level steps up
+    /// every 100ms, and a mic track. Returns the project root.
+    fn screen_and_mic_project(dir: &Path) -> PathBuf {
+        use crate::fixtures::{generate_pcm16_wav, TestProject};
+        use crate::project::manifest::{TrackDescriptor, TrackType};
+        use crate::project::JournalRecord;
+
+        let mut bundle = TestProject::create(dir, "export");
+        let root = bundle.root_path().to_path_buf();
+        let frames: Vec<VideoFrame> = (0..20u8)
+            .map(|i| VideoFrame::solid(64, 64, 10 + i * 12, 10 + i * 12, 10 + i * 12, 0).unwrap())
+            .collect();
+        let screen_path = root.join("media/screen/000001.mp4");
+        crate::media::ffmpeg::encode_bgra_mp4(&screen_path, &frames, 10).unwrap();
+        let wav = generate_pcm16_wav(48_000, 1, &vec![8_000i16; 96_000]);
+        fs::write(root.join("media/mic/000001.wav"), &wav).unwrap();
+        for (id, track_type, codec, path, timescale) in [
+            (
+                "screen",
+                TrackType::Screen,
+                "h264",
+                "media/screen/000001.mp4",
+                10,
+            ),
+            (
+                "mic",
+                TrackType::MicAudio,
+                "pcm",
+                "media/mic/000001.wav",
+                48_000,
+            ),
+        ] {
+            let audio = track_type == TrackType::MicAudio;
+            bundle.manifest_mut().tracks.push(TrackDescriptor {
+                id: id.into(),
+                track_type,
+                codec: codec.into(),
+                relative_path: path.into(),
+                width: (!audio).then_some(64),
+                height: (!audio).then_some(64),
+                fps: (!audio).then_some(10),
+                sample_rate: audio.then_some(48_000),
+                channels: audio.then_some(1),
+                gaps_total: 0,
+                media_timescale: Some(timescale),
+            });
+            bundle.append_journal(JournalRecord::SegmentCommitted {
+                seq: 0,
+                track_id: id.into(),
+                relative_path: path.into(),
+                start_us: 0,
+                end_us: 2_000_000,
+                size_bytes: fs::metadata(root.join(path)).unwrap().len(),
+                is_keyframe_start: true,
+                media_timescale: timescale,
+                media_start_value: 0,
+                host_anchor_us: 0,
+            });
+        }
+        bundle.manifest_mut().duration_us = 2_000_000;
+        bundle.manifest_mut().active_duration_us = 2_000_000;
+        bundle.save_manifest();
+        drop(bundle);
+
+        root
+    }
+
+    fn cut_document() -> EditDocument {
+        use crate::project::reader::RetainedInterval;
+        EditDocument::from_retained(vec![
+            RetainedInterval {
+                start_us: 0,
+                end_us: 500_000,
+            },
+            RetainedInterval {
+                start_us: 1_200_000,
+                end_us: 2_000_000,
+            },
+        ])
+        .unwrap()
+    }
+
+    /// Full export of a real project bundle with a cut: decode, composite, encode, mux.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_writes_a_playable_mp4_across_a_cut() {
+        use crate::project::reader::ProjectReader;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let reader = ProjectReader::open(&root).unwrap();
+        let document = cut_document();
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let gate = EncoderGate::new();
+        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
+            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+
+        assert!(output.is_file());
+        let duration = media_duration_us(&output).unwrap();
+        assert!(
+            duration.abs_diff(1_300_000) <= AUDIO_DURATION_SLACK_US,
+            "duration {duration}"
+        );
+        let leftovers: Vec<_> = fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("partial"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        // Just after the cut the screen shows source frame 12, not frame 5.
+        let after_cut = decode_h264_frame(&output, 550_000).unwrap();
+        assert_eq!((after_cut.width, after_cut.height), (320, 180));
+        let centre = ((90 * after_cut.stride) + 160 * 4) as usize;
+        let level = after_cut.data[centre + 1];
+        let expected = 10 + 12 * 12;
+        assert!(
+            level.abs_diff(expected) <= 14,
+            "level {level} after the cut, expected about {expected}"
+        );
+        crate::media::release_decoders();
+    }
+
+    /// The webview preview path: small canvas, capped decode, JPEG out.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_webview_preview_frame_across_a_cut() {
+        use crate::playback::preview::{encode_webview_frame, webview_dimensions};
+        use crate::project::reader::ProjectReader;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let reader = ProjectReader::open(&root).unwrap();
+        let document = cut_document();
+        let (width, height) = webview_dimensions(1920, 1080);
+        let mut evaluator = SceneEvaluator::new(
+            root,
+            document,
+            crate::playback::tracks_from_reader(&reader),
+            width,
+            height,
+        )
+        .unwrap()
+        .with_decode_limit(DecodeLimit {
+            max_width: 32,
+            max_height: 32,
+            max_rate: 30,
+        });
+        // Play forward across the cut the way the playback worker does.
+        let mut last = None;
+        for edited_us in (0..1_300_000).step_by(33_333) {
+            last = Some(evaluator.preview_at(edited_us).unwrap());
+        }
+        let frame = last.unwrap();
+        assert_eq!((frame.width, frame.height), (1280, 720));
+        let jpeg = encode_webview_frame(&frame).unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        assert_eq!(decoded.dimensions(), (1280, 720));
+        // The last frame shows source frame 19, the brightest step.
+        let level = decoded.get_pixel(640, 360).0[1];
+        let expected = 10 + 19 * 12;
+        assert!(
+            level.abs_diff(expected) <= 16,
+            "level {level}, expected about {expected}"
+        );
+        crate::media::release_decoders();
     }
 
     #[test]

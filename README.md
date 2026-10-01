@@ -23,11 +23,16 @@ exporting an MP4.
 | | Windows | macOS |
 |---|---|---|
 | Open and edit projects, smart zoom, silence detection | Yes | Yes |
-| Preview, playback and export | Not yet | Yes (Swift/AVFoundation bridge) |
+| Export (H.264/AAC MP4) | Yes (FFmpeg) | Yes (Swift/AVFoundation bridge) |
+| Preview and playback | Yes (FFmpeg, preview drawn in the app window, WASAPI audio) | Yes (Swift/AVFoundation bridge) |
 
-Preview, playback and export currently go through the Swift bridges in
-`src-tauri/native/macos/`. A shared media backend for both platforms is planned; the Swift
-path stays until the shared one does everything it does.
+The shared media backend (`src-tauri/src/media/ffmpeg.rs`) decodes and encodes through
+FFmpeg on every platform. On macOS the Swift bridges in `src-tauri/native/macos/` stay the
+default until the shared backend does everything they do; set
+`AEROEDITS_MEDIA_BACKEND=ffmpeg` to try the shared one there.
+
+Without the Swift preview view, the backend composites each preview frame at up to 1280px,
+JPEG-encodes it, and the webview fetches it with the `preview_frame` command.
 
 ## Repository layout
 
@@ -63,6 +68,9 @@ src-tauri/                 Tauri v2 backend (Rust)
 - **Windows:** Microsoft C++ Build Tools (the "Desktop development with C++" workload) and
   the WebView2 runtime, which ships with Windows 10 and 11.
 - **macOS:** macOS 13 or newer with Xcode or the Command Line Tools, for the Swift bridges.
+- **FFmpeg** (with `ffprobe`) for decoding and export on Windows and Linux. On Windows run
+  `winget install Gyan.FFmpeg`, then open a new terminal. AeroEdits looks for it next to the
+  app, then on `PATH`; set `AEROEDITS_FFMPEG` and `AEROEDITS_FFPROBE` to point elsewhere.
 
 ### Run the app
 
@@ -112,6 +120,7 @@ cd ../front-end
 npx tsc --noEmit
 ```
 
-Some Rust tests need macOS (native preview) or a GPU adapter (compositor parity) and fail
-on machines without them. On macOS, set `AEROEDITS_SKIP_SWIFT=1` to build against stubbed
+Media tests skip when FFmpeg is missing unless `AEROEDITS_REQUIRE_FFMPEG=1` is set, as CI
+does. Tests whose names contain `gpu` need a GPU adapter and are ignored off macOS; run
+them with `cargo test --lib gpu -- --include-ignored`. The native preview tests need macOS. On macOS, set `AEROEDITS_SKIP_SWIFT=1` to build against stubbed
 Swift bridges.

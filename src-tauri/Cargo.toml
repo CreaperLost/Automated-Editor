@@ -29,6 +29,7 @@ pollster = "0.4"
 wgpu = "27.0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 dirs = "6.0"
+jpeg-encoder = { version = "0.7", features = ["simd"] }
 tauri = { version = "2.0.0", optional = true , features = [] }
 rfd = { version = "0.15", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
@@ -36,6 +37,10 @@ parakeet-rs = { version = "0.3.8", optional = true }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+# Audio output for playback on Windows (WASAPI). macOS uses the Swift bridge.
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", optional = true , features = [] }
@@ -53,3 +58,11 @@ parakeet-webgpu = ["parakeet", "parakeet-rs/webgpu"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Decode, compositing and JPEG/H.264 work is far too slow unoptimized, which made
+# `cargo tauri dev` play back at a fraction of real time. Optimize dev builds too.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

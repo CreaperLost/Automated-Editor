@@ -4,26 +4,81 @@ use crate::{
     commands::AppState,
     export::SceneEvaluator,
     media::audio::{AudioMixer, CHUNK_FRAMES, SAMPLE_RATE},
+    media::ffmpeg::DecodeLimit,
 };
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
 };
 use tauri::Manager;
 
+/// Audio queued ahead of the play position, in mixer chunks. The cpal queue (Windows) can
+/// take a deep lead, so a slow preview frame does not starve the audio clock.
+const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
+
 struct Runtime {
     generation: u64,
+    /// Built for the webview preview: smaller canvas and rate-capped decode.
+    webview: bool,
     evaluator: SceneEvaluator,
     mixer: AudioMixer,
     _lease: std::fs::File,
 }
 
+/// A composited frame waiting for JPEG encoding and presentation on the webview surface.
+struct WebviewJob {
+    frame: crate::media::VideoFrame,
+    generation: u64,
+    surface_generation: u64,
+}
+
+/// Encodes and presents webview frames on their own thread, so the next frame decodes and
+/// composites while this one is compressed. The channel holds no buffer: handing over a frame
+/// waits for the previous one to finish, which keeps at most one frame in flight.
+fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
+    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(0);
+    thread::spawn(move || {
+        for job in jobs {
+            let state = app.state::<AppState>();
+            let started = std::time::Instant::now();
+            let jpeg = super::preview::encode_webview_frame(&job.frame);
+            crate::media::profile("jpeg", started);
+            let mut owner = state.playback.lock();
+            if !owner.status().is_ok_and(|s| {
+                s.generation == job.generation
+                    && !matches!(s.state, PlaybackState::Closed | PlaybackState::Error)
+            }) {
+                continue;
+            }
+            let jpeg = match jpeg {
+                Ok(jpeg) => jpeg,
+                Err(e) => {
+                    owner.fail(job.generation, e);
+                    continue;
+                }
+            };
+            let mut surface = state.preview.lock();
+            let current = surface.status();
+            if current.attached && current.generation == job.surface_generation && current.visible {
+                match surface.present_encoded(jpeg, job.surface_generation) {
+                    Ok(()) => {
+                        owner.mark_presented(job.generation);
+                    }
+                    Err(e) => owner.fail(job.generation, e),
+                }
+            }
+        }
+    });
+    sender
+}
+
 pub fn start(app: tauri::AppHandle) {
     thread::spawn(move || {
+        let encoder = start_webview_encoder(app.clone());
         let mut runtime: Option<Runtime> = None;
         let pending = Arc::new(AtomicBool::new(false));
         let mut last_frame: Option<(u64, u64, u64)> = None;
@@ -33,7 +88,15 @@ pub fn start(app: tauri::AppHandle) {
             .load(Ordering::Acquire)
         {
             let state = app.state::<AppState>();
-            let result = tick(&app, &state, &mut runtime, &pending, &mut last_frame);
+            let before = last_frame;
+            let result = tick(
+                &app,
+                &state,
+                &encoder,
+                &mut runtime,
+                &pending,
+                &mut last_frame,
+            );
             if let Err((generation, error)) = result {
                 state.playback.lock().fail(generation, error);
                 let app_copy = app.clone();
@@ -53,7 +116,9 @@ pub fn start(app: tauri::AppHandle) {
                     }
                 });
             }
-            thread::sleep(Duration::from_millis(15));
+            // Right after a frame, go straight on to the next one; otherwise poll gently.
+            let rendered = last_frame.is_some() && last_frame != before;
+            thread::sleep(Duration::from_millis(if rendered { 1 } else { 15 }));
         }
         app.state::<AppState>().playback.lock().close();
     });
@@ -62,6 +127,7 @@ pub fn start(app: tauri::AppHandle) {
 fn tick(
     app: &tauri::AppHandle,
     state: &AppState,
+    encoder: &mpsc::SyncSender<WebviewJob>,
     runtime: &mut Option<Runtime>,
     pending: &Arc<AtomicBool>,
     last_frame: &mut Option<(u64, u64, u64)>,
@@ -73,7 +139,9 @@ fn tick(
     }
     let generation = status.generation;
     let error = |e| (generation, e);
-    if runtime.as_ref().map(|r| r.generation) != Some(generation) {
+    let webview = state.preview.lock().status().surface == "webview";
+    if runtime.as_ref().map(|r| (r.generation, r.webview)) != Some((generation, webview)) {
+        let rebuild_started = std::time::Instant::now();
         let (root, document, tracks) = {
             let opened = state.opened_project.lock();
             let Some(reader) = opened.as_ref() else {
@@ -90,16 +158,31 @@ fn tick(
         };
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
         let mixer = AudioMixer::new(&root, &document, &tracks).map_err(error)?;
-        let (width, height) = document.layout.preview_dimensions().map_err(error)?;
-        let evaluator =
-            SceneEvaluator::new(root, document, tracks, width, height).map_err(error)?;
+        let (mut width, mut height) = document.layout.preview_dimensions().map_err(error)?;
+        if webview {
+            (width, height) = super::preview::webview_dimensions(width, height);
+        }
+        // Keep the GPU device and background across seeks; recreating them dominated seek time.
+        let reuse = runtime.take().and_then(|old| old.evaluator.into_reuse());
+        let mut evaluator =
+            SceneEvaluator::new_reusing(root, document, tracks, width, height, reuse)
+                .map_err(error)?;
+        if webview {
+            evaluator = evaluator.with_decode_limit(DecodeLimit {
+                max_width: width,
+                max_height: height,
+                max_rate: super::preview::WEBVIEW_MAX_RATE,
+            });
+        }
         *runtime = Some(Runtime {
             generation,
+            webview,
             evaluator,
             mixer,
             _lease: lease,
         });
         *last_frame = None;
+        crate::media::profile("rebuild after seek", rebuild_started);
     }
     let runtime = runtime.as_mut().unwrap();
     if status.state == PlaybackState::Playing && runtime.mixer.has_audio() {
@@ -111,7 +194,9 @@ fn tick(
             let base = (status.position_us as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64;
             let mut output = AudioOutput::new().map_err(error)?;
             let mut queued = base;
-            while queued < (base + CHUNK_FRAMES as u64 * 3).min(runtime.mixer.total_frames) {
+            while queued
+                < (base + CHUNK_FRAMES as u64 * AUDIO_LEAD_CHUNKS).min(runtime.mixer.total_frames)
+            {
                 let chunk = runtime
                     .mixer
                     .read_frames(queued, CHUNK_FRAMES)
@@ -144,7 +229,8 @@ fn tick(
                     (current.position_us as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
                 )
             };
-            if queued >= runtime.mixer.total_frames || queued >= position + 3 * CHUNK_FRAMES as u64
+            if queued >= runtime.mixer.total_frames
+                || queued >= position + AUDIO_LEAD_CHUNKS * CHUNK_FRAMES as u64
             {
                 break;
             }
@@ -189,6 +275,18 @@ fn tick(
         .evaluator
         .preview_at(status.position_us)
         .map_err(error)?;
+    if preview.surface == "webview" {
+        // The webview fetches frames itself, so nothing here needs the UI thread.
+        encoder
+            .send(WebviewJob {
+                frame,
+                generation,
+                surface_generation: preview.generation,
+            })
+            .map_err(|_| error("The preview encoder stopped".to_string()))?;
+        *last_frame = Some(key);
+        return Ok(());
+    }
     pending.store(true, Ordering::Release);
     let pending_done = Arc::clone(pending);
     let app_copy = app.clone();

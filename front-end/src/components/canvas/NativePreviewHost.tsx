@@ -21,8 +21,50 @@ export function NativePreviewHost({
   const previewAvailable = useProjectStore(s => s.previewAvailable);
   const playbackError = useProjectStore(s => s.playbackError);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [error, setError] = useState<string>();
+  const webview = status?.attached === true && status.surface === "webview";
+  const webviewGeneration = webview ? status.generation : undefined;
+
+  // Without a native child view, pull JPEG frames from the backend and show them in an <img>.
+  useEffect(() => {
+    if (webviewGeneration === undefined) return;
+    let cancelled = false;
+    let animation = 0;
+    let inFlight = false;
+    let lastSeq = 0;
+    let objectUrl: string | undefined;
+    const poll = () => {
+      if (cancelled) return;
+      animation = requestAnimationFrame(poll);
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      void api.previewFrame(lastSeq)
+        .then(buffer => {
+          if (cancelled || buffer.byteLength <= 8) return;
+          lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
+          const next = URL.createObjectURL(new Blob([buffer.slice(8)], { type: "image/jpeg" }));
+          const image = imageRef.current;
+          if (!image) {
+            URL.revokeObjectURL(next);
+            return;
+          }
+          const previous = objectUrl;
+          objectUrl = next;
+          image.src = next;
+          if (previous) URL.revokeObjectURL(previous);
+        })
+        .catch(() => undefined)
+        .finally(() => { inFlight = false; });
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(animation);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [webviewGeneration]);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,7 +134,16 @@ export function NativePreviewHost({
           data-native-preview-host
           className={`pointer-events-none rounded-xl border border-studio-800 bg-black/50 ${fitAspectRatio ? "w-full h-full min-h-0" : `shrink-0 ${className}`}`}
           data-content-aspect-ratio={fitAspectRatio}
-        />
+        >
+          {webview && (
+            <img
+              ref={imageRef}
+              alt=""
+              draggable={false}
+              className="w-full h-full object-contain rounded-xl"
+            />
+          )}
+        </div>
       </div>
       {showStatus && <p className="text-xs text-studio-400 max-w-md text-center shrink-0">
         {error || playbackError
@@ -101,7 +152,7 @@ export function NativePreviewHost({
             ? previewAvailable
               ? ""
               : "Loading project preview…"
-            : "Native preview surface is not attached."}
+            : "Preview surface is not attached."}
       </p>}
     </div>
   );

@@ -1,6 +1,7 @@
 //! Playback owner: generation-aware seek plans, bounded open files, and a clock.
 //! F1 adds a discardable native preview overlay; F2 still owns decode/compositor.
 pub mod audio;
+mod audio_cpal;
 #[cfg(feature = "tauri-app")]
 pub mod engine;
 mod native;

@@ -1,3 +1,4 @@
+#[cfg(not(windows))]
 use std::{ffi::c_void, ptr::NonNull};
 #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
 extern "C" {
@@ -7,12 +8,18 @@ extern "C" {
     fn aeroshoot_audio_play(handle: *mut c_void);
     fn aeroshoot_audio_position(handle: *mut c_void) -> i64;
 }
+#[cfg(windows)]
+pub use super::audio_cpal::AudioOutput;
+
+#[cfg(not(windows))]
 pub struct AudioOutput {
     #[allow(dead_code)]
     handle: NonNull<c_void>,
 }
 // Calls are serialized by the playback mutex; no callbacks retain the Rust owner.
+#[cfg(not(windows))]
 unsafe impl Send for AudioOutput {}
+#[cfg(not(windows))]
 impl AudioOutput {
     pub fn new() -> Result<Self, String> {
         #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
@@ -55,6 +62,7 @@ impl AudioOutput {
         Err("No audio output".into())
     }
 }
+#[cfg(not(windows))]
 impl Drop for AudioOutput {
     fn drop(&mut self) {
         #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]

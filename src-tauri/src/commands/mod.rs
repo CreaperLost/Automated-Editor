@@ -42,7 +42,8 @@ impl AppState {
             export: Mutex::new(crate::export::ExportOwner::new()),
             waveform_epoch: AtomicU64::new(0),
             waveform_generations: Mutex::new(HashMap::new()),
-            native_capture_enabled: cfg!(target_os = "macos"),
+            // Playback has an audio output (and audio clock) on macOS and Windows.
+            native_capture_enabled: cfg!(any(target_os = "macos", windows)),
         }
     }
 }
@@ -168,6 +169,15 @@ mod tests {
         assert_eq!(window_title_for_project(None), "AeroEdits");
         assert_eq!(window_title_for_project(Some("")), "AeroEdits");
         assert_eq!(window_title_for_project(Some("   ")), "AeroEdits");
+    }
+
+    #[test]
+    fn preview_without_a_native_window_attaches_to_the_webview() {
+        let state = AppState::new();
+        let status =
+            preview_attach_impl(&state, "main".into(), PreviewHitMode::Consume, None).unwrap();
+        assert!(status.attached);
+        assert_eq!(status.surface, "webview");
     }
 
     #[test]
@@ -617,9 +627,7 @@ pub fn preview_attach_impl(
     hit_mode: PreviewHitMode,
     native_window: Option<*mut std::ffi::c_void>,
 ) -> Result<PreviewStatus, String> {
-    if native_window.is_none() {
-        return Err("Native preview requires a desktop window".into());
-    }
+    // No native window means the webview preview, where frames are fetched by the page.
     state
         .preview
         .lock()

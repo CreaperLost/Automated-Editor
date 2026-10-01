@@ -16,24 +16,30 @@ use commands::*;
 #[cfg(feature = "tauri-app")]
 use tauri::{Manager, State};
 
+/// The NSWindow for the native preview view, or `None` where preview frames go to the
+/// webview instead.
 #[cfg(feature = "tauri-app")]
 fn preview_ns_window(
     app: &tauri::AppHandle,
     window_label: &str,
-) -> Result<*mut std::ffi::c_void, String> {
+) -> Result<Option<*mut std::ffi::c_void>, String> {
     let window = app
         .get_webview_window(window_label)
         .ok_or_else(|| format!("Unknown window label: {window_label}"))?;
+    if media::media_backend() != media::MediaBackend::Native {
+        return Ok(None);
+    }
     #[cfg(target_os = "macos")]
     {
         window
             .ns_window()
+            .map(Some)
             .map_err(|e| format!("Failed to get NSWindow: {e}"))
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window;
-        Err("Native preview is not implemented on this platform".into())
+        Ok(None)
     }
 }
 
@@ -302,7 +308,7 @@ fn preview_attach(
     window_label: String,
     hit_mode: playback::PreviewHitMode,
 ) -> Result<playback::PreviewStatus, String> {
-    let ns_window = Some(preview_ns_window(&app, &window_label)?);
+    let ns_window = preview_ns_window(&app, &window_label)?;
     commands::preview_attach_impl(&app.state::<AppState>(), window_label, hit_mode, ns_window)
 }
 
@@ -335,6 +341,19 @@ fn preview_present_fixture(
     generation: Option<u64>,
 ) -> Result<playback::PreviewStatus, String> {
     commands::preview_present_fixture_impl(&state, path, generation.unwrap_or(0))
+}
+
+/// The latest webview preview frame newer than `after`: an 8-byte little-endian sequence
+/// number followed by JPEG bytes, or an empty body when nothing is newer.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preview_frame(state: State<'_, AppState>, after: u64) -> tauri::ipc::Response {
+    let frame = state.preview.lock().web_frame_after(after);
+    tauri::ipc::Response::new(
+        frame
+            .map(|bytes| bytes.as_ref().clone())
+            .unwrap_or_default(),
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -727,6 +746,7 @@ pub fn run() {
             preview_present_fixed,
             preview_present_fixture,
             preview_status,
+            preview_frame,
             preview_hit_test,
             preview_detach,
             media_interop_status,
