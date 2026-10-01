@@ -1,54 +1,3 @@
-export type SessionState =
-  | "idle"
-  | "preparing"
-  | "recording"
-  | "paused"
-  | "stopping"
-  | "completed"
-  | "error";
-
-export type PermissionState =
-  | "notDetermined"
-  | "authorized"
-  | "denied"
-  | "restricted"
-  | "unknown";
-
-export interface PermissionBundle {
-  screenRecording: PermissionState;
-  camera: PermissionState;
-  microphone: PermissionState;
-}
-
-/** Input Monitoring preflight. Booleans, not a capture PermissionBundle. */
-export interface MouseTelemetryPermission {
-  supported: boolean;
-  authorized: boolean;
-}
-
-export type CaptureSourceType = "display" | "window" | "application";
-
-export interface CaptureSource {
-  id: string;
-  name: string;
-  sourceType: CaptureSourceType;
-  width: number;
-  height: number;
-  thumbnailUrl?: string;
-}
-
-export interface AudioDevice {
-  id: string;
-  name: string;
-  isDefault: boolean;
-}
-
-export interface CameraDevice {
-  id: string;
-  name: string;
-  isDefault: boolean;
-}
-
 export type TrackType = "screen" | "webcam" | "mic" | "system";
 
 export interface TimelineInterval {
@@ -441,59 +390,6 @@ export type PreviewHitMode =
   | "circle_pass_through"
   | "squircle_pass_through";
 
-export type UiRootKind = "studio" | "hud";
-
-export interface WindowIdentity {
-  label: string;
-  uiRoot: UiRootKind | null;
-  rejected: boolean;
-}
-
-export type HudShape = "rect" | "circle" | "squircle" | "rect_16_9";
-export type HudSize = "sm" | "md" | "lg" | "xl";
-
-export interface HudSettings {
-  enabled: boolean;
-  shape: HudShape;
-  size: HudSize;
-  mirror: boolean;
-  borderColor: string;
-  borderWidth: number;
-  shadow: boolean;
-}
-
-export interface HudSettingsPatch {
-  enabled?: boolean;
-  shape?: HudShape;
-  size?: HudSize;
-  mirror?: boolean;
-  borderColor?: string;
-  borderWidth?: number;
-  shadow?: boolean;
-}
-
-export interface HudCameraInfo {
-  id: string;
-  name: string;
-}
-
-export interface HudSnapshot {
-  revision: number;
-  settings: HudSettings;
-  cameraId: string | null;
-  cameraName: string | null;
-  cameraAvailable: boolean;
-  hudAttached: boolean;
-  hudVisible: boolean;
-  exclusionEstablished: boolean;
-  hideDuringRecord: boolean;
-  sessionRecording: boolean;
-  captureSessionAlive: boolean;
-  startedIndependentCapture: boolean;
-  hitMode: PreviewHitMode;
-  diagnostics: string[];
-}
-
 export interface PreviewViewport {
   generation: number;
   clip?: [number, number, number, number];
@@ -583,7 +479,6 @@ export type ExportFailureKind =
   | "cancelled"
   | "invalid_settings"
   | "source_path"
-  | "recording_active"
   | "encoder_busy"
   | "native"
   | "io";
@@ -636,35 +531,8 @@ export interface SegmentPage {
   nextOffset: number | null;
 }
 
-export interface StartRecordingResult {
-  sessionId: string;
-  state: SessionState;
-  startedAtUs: number;
-  projectPath?: string;
-}
-
-export interface StopRecordingResult {
-  projectPath: string;
-  sessionId: string;
-  state: SessionState;
-  durationUs: number;
-}
-
 export function studioTrackType(trackType: NativeTrackType): TrackType {
   if (trackType === "mic_audio") return "mic";
   if (trackType === "system_audio") return "system";
   return trackType;
-}
-
-export interface TelemetryEvent {
-  version: number;
-  seq: number;
-  tUs: number;
-  geometryId: string;
-  kind: "move" | "down" | "up" | "click" | "scroll";
-  normX: number;
-  normY: number;
-  insideSource: boolean;
-  visible: boolean;
-  cursorId?: string;
 }
