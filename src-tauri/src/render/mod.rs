@@ -174,20 +174,34 @@ impl Scene {
         webcam: Option<VideoFrame>,
         wallpaper: Option<VideoFrame>,
     ) -> Result<Self, String> {
+        Self::from_layout_scaled(width, height, layout, screen, webcam, wallpaper, 1.0)
+    }
+
+    /// Build the scene with layout pixel values multiplied by `unit`; see [`layout_px_unit`].
+    pub fn from_layout_scaled(
+        width: u32,
+        height: u32,
+        layout: &EditLayout,
+        screen: Option<VideoFrame>,
+        webcam: Option<VideoFrame>,
+        wallpaper: Option<VideoFrame>,
+        unit: f32,
+    ) -> Result<Self, String> {
         validate_dim(width, height)?;
         layout.validate()?;
-        if layout.padding_px.saturating_mul(2) >= width
-            || layout.padding_px.saturating_mul(2) >= height
-        {
+        let unit = if unit.is_finite() && unit > 0.0 { unit } else { 1.0 };
+        let px = |value: u32| (value as f32 * unit).round() as u32;
+        let padding = px(layout.padding_px);
+        if padding.saturating_mul(2) >= width || padding.saturating_mul(2) >= height {
             return Err("Export padding leaves no content rectangle".into());
         }
         let (background, background_end) = layout.background_rgba()?;
-        let content_x = layout.padding_px;
-        let content_y = layout.padding_px;
-        let content_w = width - layout.padding_px * 2;
-        let content_h = height - layout.padding_px * 2;
         let mut layers = Vec::new();
-        if let Some(paper) = wallpaper {
+        let generated = match (&wallpaper, layout.background_type.as_str()) {
+            (None, "preset") => Some(preset_frame(width, height, &layout.background_preset)?),
+            _ => None,
+        };
+        if let Some(paper) = wallpaper.or(generated) {
             layers.push(
                 Layer::placed(paper, 0, 0, width, height)
                     .with_role(LayerRole::Background)
@@ -197,55 +211,71 @@ impl Scene {
             let gradient = gradient_frame(width, height, background, end)?;
             layers.push(Layer::placed(gradient, 0, 0, width, height).with_role(LayerRole::Background));
         }
-        let screen_clip = if layout.corner_radius_px > 0 {
-            ClipMode::RoundedRect
-        } else {
-            ClipMode::None
-        };
-        let screen_radius = layout.corner_radius_px as f32;
-        let screen_shadow = if layout.shadow_blur_px > 0 && layout.shadow_opacity > 0.0 {
-            Some((layout.shadow_blur_px as f32, layout.shadow_opacity))
-        } else {
-            None
-        };
         if let Some(screen) = screen {
+            let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
+            let scale = layout.screen_scale_pct.clamp(1.0, 100.0) / 100.0;
+            let area_w = width - padding * 2;
+            let area_h = height - padding * 2;
+            let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
+            let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
             let (x, y, w, h) = fit_inside(
-                screen.width,
-                screen.height,
-                content_x,
-                content_y,
-                content_w,
-                content_h,
+                ((screen.width as f32 * crop_w).round() as u32).max(1),
+                ((screen.height as f32 * crop_h).round() as u32).max(1),
+                padding + (area_w - box_w) / 2,
+                padding + (area_h - box_h) / 2,
+                box_w,
+                box_h,
             );
+            let radius = layout.corner_radius_px as f32 * unit;
+            let clip = if radius > 0.0 {
+                ClipMode::RoundedRect
+            } else {
+                ClipMode::None
+            };
             let mut layer = Layer::placed(screen, x, y, w, h)
                 .with_role(LayerRole::Screen)
-                .with_clip(screen_clip, screen_radius);
-            if let Some((blur, opacity)) = screen_shadow {
-                layer = layer.with_shadow(blur, opacity);
+                .with_clip(clip, radius);
+            layer.uv_x = crop_x;
+            layer.uv_y = crop_y;
+            layer.uv_w = crop_w;
+            layer.uv_h = crop_h;
+            if layout.shadow_blur_px > 0 && layout.shadow_opacity > 0.0 {
+                layer = layer.with_shadow(layout.shadow_blur_px as f32 * unit, layout.shadow_opacity);
             }
             layers.push(layer);
         }
         if layout.webcam_enabled {
             if let Some(webcam) = webcam {
-                let (bw, bh) = webcam_bubble_size(width, height, webcam.width, webcam.height, layout);
-                let (x, y) = webcam_origin(width, height, bw, bh, layout);
-                let (cam_clip, cam_radius) = webcam_clip(layout);
+                let (bw, bh) =
+                    webcam_bubble_size(width, height, webcam.width, webcam.height, layout);
+                let (x, y) = webcam_origin(width, height, bw, bh, layout, unit);
+                let (cam_clip, cam_radius) = webcam_clip(layout, bw, bh);
                 let cam_shadow = if layout.webcam_shadow {
-                    Some((WEBCAM_SHADOW_BLUR_PX, WEBCAM_SHADOW_OPACITY))
+                    Some((WEBCAM_SHADOW_BLUR_PX * unit, WEBCAM_SHADOW_OPACITY))
                 } else {
                     None
                 };
-                if layout.webcam_border_width > 0 {
-                    let inset = layout.webcam_border_width;
+                let inset = if layout.webcam_border_width > 0 {
+                    px(layout.webcam_border_width).max(1)
+                } else {
+                    0
+                };
+                if inset > 0 {
                     let bx = x.saturating_sub(inset);
                     let by = y.saturating_sub(inset);
                     let bwidth = (bw + inset * 2).min(width.saturating_sub(bx)).max(1);
                     let bheight = (bh + inset * 2).min(height.saturating_sub(by)).max(1);
                     let [r, g, b] = crate::project::layout::parse_hex_rgb(&layout.webcam_border_color)?;
                     let border = VideoFrame::solid(8, 8, b, g, r, 0)?;
+                    // The ring stays concentric with the rounded bubble inside it.
+                    let border_radius = if cam_radius > 0.0 {
+                        cam_radius + inset as f32
+                    } else {
+                        0.0
+                    };
                     let mut border_layer = Layer::placed(border, bx, by, bwidth, bheight)
                         .with_role(LayerRole::WebcamBorder)
-                        .with_clip(cam_clip, cam_radius);
+                        .with_clip(cam_clip, border_radius);
                     if let Some((blur, opacity)) = cam_shadow {
                         border_layer = border_layer.with_shadow(blur, opacity);
                     }
@@ -257,7 +287,7 @@ impl Scene {
                 if matches!(layout.webcam_shape.as_str(), "circle" | "squircle") {
                     bubble = bubble.cover_uv(bw, bh);
                 }
-                if layout.webcam_border_width == 0 {
+                if inset == 0 {
                     if let Some((blur, opacity)) = cam_shadow {
                         bubble = bubble.with_shadow(blur, opacity);
                     }
@@ -723,12 +753,7 @@ fn webcam_bubble_size(
     src_h: u32,
     layout: &EditLayout,
 ) -> (u32, u32) {
-    let frac = match layout.webcam_size.as_str() {
-        "sm" => 0.125,
-        "lg" => 0.28,
-        "xl" => 0.36,
-        _ => 0.2,
-    };
+    let frac = layout.webcam_size_fraction();
     let target = ((canvas_w.min(canvas_h) as f32) * frac).round() as u32;
     let target = target.max(8);
     if src_w == 0 || src_h == 0 {
@@ -757,10 +782,11 @@ fn webcam_origin(
     bubble_w: u32,
     bubble_h: u32,
     layout: &EditLayout,
+    unit: f32,
 ) -> (u32, u32) {
     let max_x = canvas_w.saturating_sub(bubble_w);
     let max_y = canvas_h.saturating_sub(bubble_h);
-    let margin = 8u32.min(max_x / 2).min(max_y / 2);
+    let margin = ((8.0 * unit).round() as u32).min(max_x / 2).min(max_y / 2);
     match layout.webcam_position.as_str() {
         "top-left" => (margin.min(max_x), margin.min(max_y)),
         "top-right" => (max_x.saturating_sub(margin), margin.min(max_y)),
@@ -807,12 +833,123 @@ fn gradient_frame(
     Ok(frame)
 }
 
-fn webcam_clip(layout: &EditLayout) -> (ClipMode, f32) {
+fn webcam_clip(layout: &EditLayout, bubble_w: u32, bubble_h: u32) -> (ClipMode, f32) {
     match layout.webcam_shape.as_str() {
         "circle" => (ClipMode::Circle, 0.0),
         "squircle" => (ClipMode::Squircle, 0.0),
-        _ => (ClipMode::None, 0.0),
+        _ => {
+            let radius = layout.webcam_roundness_pct.clamp(0.0, 50.0) / 100.0
+                * bubble_w.min(bubble_h) as f32;
+            if radius > 0.0 {
+                (ClipMode::RoundedRect, radius)
+            } else {
+                (ClipMode::None, 0.0)
+            }
+        }
     }
+}
+
+/// Multiplier for layout pixel values on a canvas of this size, so padding, radii, shadows and
+/// borders keep their proportions between the downscaled preview and any export resolution.
+pub fn layout_px_unit(canvas_w: u32, canvas_h: u32) -> f32 {
+    (canvas_w.min(canvas_h) as f32 / crate::project::layout::REFERENCE_SHORT_SIDE_PX).max(0.01)
+}
+
+/// The screen UV for a zoom camera inside a crop. The zoom keeps its target point in full-source
+/// coordinates and its size relative to the crop, and never shows anything the crop removed.
+pub fn zoom_within_crop(
+    crop: (f32, f32, f32, f32),
+    zoom: (f32, f32, f32, f32),
+) -> (f32, f32, f32, f32) {
+    let (cx, cy, cw, ch) = crop;
+    let (zx, zy, zw, zh) = zoom;
+    let w = (zw * cw).clamp(0.0001, cw);
+    let h = (zh * ch).clamp(0.0001, ch);
+    let center_x = zx + zw * 0.5;
+    let center_y = zy + zh * 0.5;
+    // max/min rather than clamp: rounding can put the upper bound a hair below the lower one.
+    let x = (center_x - w * 0.5).min(cx + cw - w).max(cx);
+    let y = (center_y - h * 0.5).min(cy + ch - h).max(cy);
+    (x, y, w, h)
+}
+
+struct Blob {
+    x: f32,
+    y: f32,
+    radius: f32,
+    color: [u8; 3],
+}
+
+const fn blob(x: f32, y: f32, radius: f32, color: u32) -> Blob {
+    Blob {
+        x,
+        y,
+        radius,
+        color: [(color >> 16) as u8, (color >> 8) as u8, color as u8],
+    }
+}
+
+/// Built-in backgrounds: a base color with soft color blobs. Positions are fractions of the
+/// canvas; radii are fractions of its long side. The inspector swatches mirror these values.
+fn preset_recipe(name: &str) -> Option<(u32, [Blob; 3])> {
+    Some(match name {
+        "aurora" => (
+            0x0b1026,
+            [blob(0.15, 0.2, 0.7, 0x3b82f6), blob(0.85, 0.3, 0.6, 0xa855f7), blob(0.5, 1.0, 0.7, 0x14b8a6)],
+        ),
+        "sunset" => (
+            0x1e1033,
+            [blob(0.2, 0.9, 0.8, 0xf97316), blob(0.8, 0.2, 0.7, 0xdb2777), blob(0.55, 0.55, 0.4, 0xfacc15)],
+        ),
+        "ocean" => (
+            0x031b34,
+            [blob(0.1, 0.1, 0.8, 0x0ea5e9), blob(0.9, 0.9, 0.8, 0x1d4ed8), blob(0.6, 0.4, 0.45, 0x22d3ee)],
+        ),
+        "forest" => (
+            0x052e16,
+            [blob(0.2, 0.8, 0.8, 0x15803d), blob(0.85, 0.15, 0.6, 0x65a30d), blob(0.6, 0.6, 0.45, 0x0f766e)],
+        ),
+        "candy" => (
+            0x3b0764,
+            [blob(0.1, 0.3, 0.7, 0xec4899), blob(0.9, 0.7, 0.7, 0x8b5cf6), blob(0.5, 0.0, 0.5, 0xf472b6)],
+        ),
+        "graphite" => (
+            0x111113,
+            [blob(0.2, 0.15, 0.8, 0x3f3f46), blob(0.85, 0.85, 0.7, 0x27272a), blob(0.6, 0.4, 0.4, 0x52525b)],
+        ),
+        _ => return None,
+    })
+}
+
+pub fn preset_frame(width: u32, height: u32, name: &str) -> Result<VideoFrame, String> {
+    let (base, blobs) =
+        preset_recipe(name).ok_or_else(|| format!("Unknown background preset: {name}"))?;
+    let base = [(base >> 16) as u8, (base >> 8) as u8, base as u8];
+    let mut frame = VideoFrame::solid(width, height, base[2], base[1], base[0], 0)?;
+    let long = width.max(height).max(1) as f32;
+    for y in 0..height {
+        for x in 0..width {
+            let mut rgb = [base[0] as f32, base[1] as f32, base[2] as f32];
+            for b in &blobs {
+                let dx = (x as f32 + 0.5 - b.x * width as f32) / long;
+                let dy = (y as f32 + 0.5 - b.y * height as f32) / long;
+                let d = (dx * dx + dy * dy) / (b.radius * b.radius);
+                if d >= 1.0 {
+                    continue;
+                }
+                let t = (1.0 - d) * (1.0 - d) * 0.85;
+                for c in 0..3 {
+                    rgb[c] += (b.color[c] as f32 - rgb[c]) * t;
+                }
+            }
+            let i = (y * frame.stride + x * 4) as usize;
+            frame.data[i] = rgb[2].round() as u8;
+            frame.data[i + 1] = rgb[1].round() as u8;
+            frame.data[i + 2] = rgb[0].round() as u8;
+            frame.data[i + 3] = 255;
+        }
+    }
+    Ok(frame)
 }
 
 fn cover_uv(src_w: u32, src_h: u32, dest_w: u32, dest_h: u32) -> (f32, f32, f32, f32) {
@@ -911,6 +1048,9 @@ pub fn background_frame(
 ) -> Result<Option<VideoFrame>, String> {
     if let Some(paper) = load_wallpaper_frame(root, layout, canvas_w, canvas_h)? {
         return Ok(Some(paper));
+    }
+    if layout.background_type == "preset" {
+        return preset_frame(canvas_w, canvas_h, &layout.background_preset).map(Some);
     }
     match layout.background_rgba()? {
         (start, Some(end)) => gradient_frame(canvas_w, canvas_h, start, end).map(Some),
@@ -1368,6 +1508,101 @@ mod tests {
     }
 
     #[test]
+    fn screen_crop_samples_kept_region_and_keeps_its_aspect() {
+        // Left half red, right half blue; cropping 45% from the left leaves mostly blue.
+        let screen = split_frame(32, 16, [0, 0, 255], [255, 0, 0]);
+        let mut layout = solid_layout();
+        layout.padding_px = 0;
+        layout.screen_crop_left = 45.0;
+        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let layer = scene.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
+        assert!((layer.uv_x - 0.45).abs() < 1e-6 && (layer.uv_w - 0.55).abs() < 1e-6);
+        // The kept 18x16 region fits the 32x32 canvas at its own aspect, not the source's 2:1.
+        assert_eq!((layer.width, layer.height), (32, 28));
+        let out = Compositor::composite_cpu(&scene).unwrap();
+        let [b, _, r, _] = pixel(&out, 30, 16);
+        assert!(b > 200 && r < 40, "right edge shows the blue half");
+        let [_, _, r, _] = pixel(&out, 1, 16);
+        assert!(r > 200, "left edge shows the red sliver the crop kept");
+    }
+
+    #[test]
+    fn screen_scale_shrinks_and_centers_the_screen() {
+        let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
+        let mut layout = solid_layout();
+        layout.padding_px = 0;
+        layout.screen_scale_pct = 50.0;
+        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let layer = scene.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
+        assert_eq!((layer.x, layer.y, layer.width, layer.height), (8, 8, 16, 16));
+        let out = Compositor::composite_cpu(&scene).unwrap();
+        assert_eq!(pixel(&out, 2, 2)[1], 255, "background shows around the scaled screen");
+        assert_eq!(pixel(&out, 16, 16)[2], 255);
+    }
+
+    #[test]
+    fn webcam_size_percent_and_roundness_apply() {
+        let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
+        let webcam = VideoFrame::solid(16, 16, 255, 0, 0, 0).unwrap();
+        let mut layout = solid_layout();
+        layout.webcam_enabled = true;
+        layout.webcam_mirror = false;
+        layout.webcam_size_pct = Some(50.0);
+        layout.webcam_roundness_pct = 50.0;
+        layout.webcam_border_width = 2;
+        let scene = Scene::from_layout(64, 64, &layout, Some(screen), Some(webcam)).unwrap();
+        let cam = scene.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap();
+        assert_eq!((cam.width, cam.height), (32, 32));
+        assert_eq!(cam.clip, ClipMode::RoundedRect);
+        assert!((cam.radius_px - 16.0).abs() < 1e-6);
+        let ring = scene.layers.iter().find(|l| l.role == LayerRole::WebcamBorder).unwrap();
+        assert!((ring.radius_px - 18.0).abs() < 1e-6, "ring stays concentric");
+        let out = Compositor::composite_cpu(&scene).unwrap();
+        let (cx, cy) = (cam.x, cam.y);
+        assert_ne!(pixel(&out, cx, cy)[0], 255, "rounded corner hides the webcam");
+        assert_eq!(pixel(&out, cx + 16, cy + 16)[0], 255);
+    }
+
+    #[test]
+    fn preset_background_renders_without_an_asset() {
+        let mut layout = solid_layout();
+        layout.background_type = "preset".into();
+        layout.background_preset = "sunset".into();
+        let scene = Scene::from_layout(48, 27, &layout, None, None).unwrap();
+        assert_eq!(scene.layers[0].role, LayerRole::Background);
+        let out = Compositor::composite_cpu(&scene).unwrap();
+        assert_ne!(pixel(&out, 2, 2), pixel(&out, 45, 24), "preset is not a flat fill");
+        assert!(preset_frame(8, 8, "plaid").is_err());
+    }
+
+    #[test]
+    fn pixel_values_scale_with_canvas_size() {
+        let screen = VideoFrame::solid(16, 9, 0, 0, 255, 0).unwrap();
+        let mut layout = solid_layout();
+        layout.padding_px = 54;
+        let small = Scene::from_layout_scaled(640, 360, &layout, Some(screen.clone()), None, None, layout_px_unit(640, 360)).unwrap();
+        let large = Scene::from_layout_scaled(1920, 1080, &layout, Some(screen), None, None, layout_px_unit(1920, 1080)).unwrap();
+        let s = small.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
+        let l = large.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
+        assert_eq!(s.y, 18);
+        assert_eq!(l.y, 54);
+        assert_eq!(s.width * 3, l.width);
+    }
+
+    #[test]
+    fn zoom_stays_inside_the_crop() {
+        let crop = (0.2, 0.1, 0.6, 0.8);
+        assert_eq!(zoom_within_crop(crop, (0.0, 0.0, 1.0, 1.0)), crop);
+        // A 2x zoom near the top-left corner of the full frame clamps to the crop's corner.
+        let (x, y, w, h) = zoom_within_crop(crop, (0.0, 0.0, 0.5, 0.5));
+        assert!((x - 0.2).abs() < 1e-6 && (y - 0.1).abs() < 1e-6);
+        assert!((w - 0.3).abs() < 1e-6 && (h - 0.4).abs() < 1e-6);
+        // A zoom centered inside the crop keeps its center.
+        let (x, _, w, _) = zoom_within_crop(crop, (0.25, 0.25, 0.5, 0.5));
+        assert!((x + w * 0.5 - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
     fn rounded_rect_reveals_background_in_screen_corners() {
         let screen = VideoFrame::solid(24, 24, 0, 0, 255, 0).unwrap();
         let mut layout = solid_layout();
@@ -1616,6 +1851,35 @@ mod tests {
             "full-frame GPU vs CPU mean {full_mean} max {full_max}"
         );
     }
+
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
+    )]
+    fn gpu_cpu_crop_scale_roundness_preset_within_tolerance() {
+        let compositor = Compositor::new().expect("GPU compositor required for contract tests");
+        let screen = split_frame(48, 24, [0, 0, 255], [255, 0, 0]);
+        let webcam = VideoFrame::solid(16, 12, 32, 200, 48, 0).unwrap();
+        let mut layout = solid_layout();
+        layout.background_type = "preset".into();
+        layout.background_preset = "ocean".into();
+        layout.screen_crop_left = 20.0;
+        layout.screen_crop_top = 10.0;
+        layout.screen_scale_pct = 80.0;
+        layout.corner_radius_px = 6;
+        layout.webcam_enabled = true;
+        layout.webcam_mirror = false;
+        layout.webcam_size_pct = Some(40.0);
+        layout.webcam_roundness_pct = 30.0;
+        layout.webcam_border_width = 2;
+        let scene = Scene::from_layout(48, 32, &layout, Some(screen), Some(webcam)).unwrap();
+        let cpu = Compositor::composite_cpu(&scene).unwrap();
+        let gpu = compositor.composite(&scene).unwrap();
+        let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
+        assert!(
+            mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
+            "GPU vs CPU mean {mean} max {max}"
+        );
+    }
 }
-
-

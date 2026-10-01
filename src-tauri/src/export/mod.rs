@@ -407,20 +407,22 @@ impl SceneEvaluator {
                 self.wallpaper.get_or_init(|| loaded).clone()
             }
         };
-        let mut scene = Scene::from_layout_with_wallpaper(
+        let mut scene = Scene::from_layout_scaled(
             self.width,
             self.height,
             &self.document.layout,
             screen,
             webcam,
             wallpaper,
+            crate::render::layout_px_unit(self.width, self.height),
         )?;
         let zooms = self.document.zoom_suggestions();
         let config = crate::zoom::eval_config_for(&self.document.zooms);
         let camera = crate::zoom::evaluate_at_edited(&zooms, &mapper, edited_us, &config)
             .unwrap_or_else(crate::zoom::CameraTransform::identity);
         if has_screen {
-            let (uv_x, uv_y, uv_w, uv_h) = camera.uv_rect();
+            let crop = self.document.layout.screen_crop_uv();
+            let (uv_x, uv_y, uv_w, uv_h) = crate::render::zoom_within_crop(crop, camera.uv_rect());
             scene.apply_screen_uv(uv_x, uv_y, uv_w, uv_h);
         }
         Ok(scene)
