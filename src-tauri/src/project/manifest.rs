@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +47,31 @@ pub struct PauseInterval {
     pub end_us: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitMode {
+    Fit,
+    Fill,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceGeometry {
+    pub source_rect: SourceRect,
+    pub dest_rect: SourceRect,
+    pub fit_mode: FitMode,
+    pub preserves_aspect_ratio: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectManifest {
@@ -66,9 +91,9 @@ pub struct ProjectManifest {
     pub gaps_total: u64,
     /// Most-recent source geometry revision (display/window/app rect +
     /// destination rect + fit mode). `None` until the first compute
-    /// happens. See `crate::capture::SourceGeometry`.
+    /// happens. Written by the recorder; the editor round-trips it unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_geometry: Option<crate::capture::SourceGeometry>,
+    pub source_geometry: Option<SourceGeometry>,
     /// Unknown on legacy bundles; native recording currently bakes the OS cursor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_mode: Option<String>,
@@ -94,6 +119,7 @@ pub enum ManifestError {
 impl ProjectManifest {
     pub const CURRENT_VERSION: u32 = 1;
 
+    #[cfg(test)]
     pub fn new(session_id: String, project_name: String) -> Self {
         Self {
             version: Self::CURRENT_VERSION,
@@ -108,22 +134,6 @@ impl ProjectManifest {
             cursor_mode: None,
             tracks: Vec::new(),
         }
-    }
-
-    /// Returns the sum of all `gaps_total` counters across the manifest's
-    /// track descriptors. Used by recovery to re-validate the global counter.
-    pub fn gaps_total_from_tracks(&self) -> u64 {
-        self.tracks.iter().map(|t| t.gaps_total).sum()
-    }
-
-    /// Increments both the global counter and the matching track's counter
-    /// when a new discontinuity is observed. Returns the new total.
-    pub fn record_gap(&mut self, track_id: &str) -> u64 {
-        if let Some(track) = self.tracks.iter_mut().find(|t| t.id == track_id) {
-            track.gaps_total = track.gaps_total.saturating_add(1);
-        }
-        self.gaps_total = self.gaps_total.saturating_add(1);
-        self.gaps_total
     }
 
     /// Validates the manifest integrity and path security.
@@ -147,39 +157,6 @@ impl ProjectManifest {
         }
 
         Ok(())
-    }
-
-    /// Validates that a path stays within the canonical project root (preventing symlink escapes).
-    pub fn validate_path_in_root<P: AsRef<Path>>(
-        project_root: P,
-        relative_path: &str,
-    ) -> Result<PathBuf, ManifestError> {
-        let root = project_root
-            .as_ref()
-            .canonicalize()
-            .map_err(|e| ManifestError::Io(e.to_string()))?;
-
-        let rel = Path::new(relative_path);
-        if rel.is_absolute()
-            || rel
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        {
-            return Err(ManifestError::InvalidTrackPath(relative_path.to_string()));
-        }
-
-        let full_path = root.join(rel);
-        if full_path.exists() {
-            let canonical = full_path
-                .canonicalize()
-                .map_err(|e| ManifestError::Io(e.to_string()))?;
-            if !canonical.starts_with(&root) {
-                return Err(ManifestError::PathEscapesRoot(relative_path.to_string()));
-            }
-            Ok(canonical)
-        } else {
-            Ok(full_path)
-        }
     }
 
     /// Saves manifest with durable atomic replacement and prior revision backup (.bak).
@@ -281,5 +258,21 @@ mod tests {
             manifest.validate(),
             Err(ManifestError::InvalidTrackPath(_))
         ));
+    }
+
+    #[test]
+    fn save_with_backup_preserves_prior_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("manifest.json");
+        let bak_path = dir.path().join("manifest.bak");
+        let mut manifest = ProjectManifest::new("sess-1".into(), "Rev 1".into());
+        manifest.save_with_backup(&manifest_path).unwrap();
+        assert!(manifest_path.exists());
+        assert!(!bak_path.exists());
+
+        manifest.project_name = "Rev 2".into();
+        manifest.save_with_backup(&manifest_path).unwrap();
+        assert!(fs::read_to_string(&bak_path).unwrap().contains("Rev 1"));
+        assert!(fs::read_to_string(&manifest_path).unwrap().contains("Rev 2"));
     }
 }

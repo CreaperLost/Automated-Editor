@@ -1,4 +1,3 @@
-pub mod capture;
 pub mod commands;
 pub mod dsp;
 pub mod export;
@@ -7,7 +6,6 @@ pub mod media;
 pub mod playback;
 pub mod project;
 pub mod render;
-pub mod session;
 pub mod telemetry;
 pub mod timeline;
 pub mod zoom;

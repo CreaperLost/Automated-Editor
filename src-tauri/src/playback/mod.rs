@@ -559,7 +559,8 @@ mod tests {
     use crate::fixtures::generate_pcm16_wav;
     use crate::project::manifest::{TrackDescriptor, TrackType};
     use crate::project::reader::ProjectReader;
-    use crate::project::{JournalRecord, ProjectBundle};
+    use crate::fixtures::TestProject;
+    use crate::project::JournalRecord;
     use std::fs;
 
     #[test]
@@ -591,7 +592,7 @@ mod tests {
     #[test]
     fn stale_generation_is_rejected_and_missing_mic_uses_monotonic_clock() {
         let dir = tempfile::tempdir().unwrap();
-        let mut bundle = ProjectBundle::create_new(dir.path(), "pb", "pb").unwrap();
+        let mut bundle = TestProject::create(dir.path(), "pb");
         let wav = generate_pcm16_wav(48_000, 1, &vec![0i16; 4_800]);
         fs::write(bundle.root_path().join("media/screen/000001.wav"), &wav).unwrap();
         bundle.manifest_mut().tracks.push(TrackDescriptor {
@@ -620,9 +621,7 @@ mod tests {
             gaps_total: 0,
             media_timescale: Some(48_000),
         });
-        bundle
-            .journal()
-            .append(JournalRecord::SegmentCommitted {
+        bundle.append_journal(JournalRecord::SegmentCommitted {
                 seq: 0,
                 track_id: "screen".into(),
                 relative_path: "media/screen/000001.wav".into(),
@@ -633,14 +632,10 @@ mod tests {
                 media_timescale: 48_000,
                 media_start_value: 0,
                 host_anchor_us: 0,
-            })
-            .unwrap();
+            });
         bundle.manifest_mut().duration_us = 100_000;
         bundle.manifest_mut().active_duration_us = 100_000;
-        bundle
-            .manifest()
-            .save_with_backup(&bundle.root_path().join("manifest.json"))
-            .unwrap();
+        bundle.save_manifest();
         let root = bundle.root_path().to_path_buf();
         drop(bundle);
         let reader = ProjectReader::open(&root).unwrap();

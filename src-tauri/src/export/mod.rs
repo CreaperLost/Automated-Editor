@@ -10,7 +10,6 @@ use crate::project::manifest::TrackType;
 use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
 use crate::project::revision::EditDocument;
 use crate::render::{Compositor, Scene};
-use crate::session::SessionState;
 use native::NativeExport;
 
 pub use native::media_duration_us;
@@ -71,7 +70,6 @@ pub enum ExportFailure {
     Cancelled { message: String },
     InvalidSettings { message: String },
     SourcePath { message: String },
-    RecordingActive { message: String },
     EncoderBusy { message: String },
     Native { message: String },
     Io { message: String },
@@ -570,16 +568,6 @@ pub fn frame_time_us(index: u32, fps: u32) -> u64 {
     (index as u128 * 1_000_000 / fps as u128) as u64
 }
 
-pub fn recording_blocks_export(state: SessionState) -> bool {
-    matches!(
-        state,
-        SessionState::Preparing
-            | SessionState::Recording
-            | SessionState::Paused
-            | SessionState::Stopping
-    )
-}
-
 fn status_from(
     job_id: &str,
     document: &EditDocument,
@@ -605,7 +593,6 @@ fn status_from(
 }
 
 pub fn prepare_job(
-    session_state: SessionState,
     root: &Path,
     project_name: &str,
     document: EditDocument,
@@ -614,17 +601,6 @@ pub fn prepare_job(
     owner: &mut ExportOwner,
 ) -> Result<CapturedExport, ExportStatus> {
     let job_id = Uuid::new_v4().to_string();
-    if recording_blocks_export(session_state) {
-        return Err(status_from(
-            &job_id,
-            &document,
-            &settings,
-            ExportState::Failed,
-            Some(ExportFailure::RecordingActive {
-                message: "Export is deferred while a recording session is active".into(),
-            }),
-        ));
-    }
     if owner.busy() {
         return Err(status_from(
             &job_id,
