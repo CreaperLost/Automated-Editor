@@ -53,11 +53,6 @@ impl TimelineMapper {
         None
     }
 
-    /// Playhead may sit on the exclusive edited end; that must not be decoded.
-    pub fn playhead_source_us(&self, edited_us: u64) -> Option<u64> {
-        self.edited_to_source_us(edited_us)
-    }
-
     /// Maps a half-open edited range onto source ranges without using the exclusive end as a sample.
     pub fn edited_range_to_source(&self, start_us: u64, end_us: u64) -> Vec<(u64, u64)> {
         let mut ranges = Vec::new();

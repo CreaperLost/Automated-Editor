@@ -17,7 +17,6 @@ pub const COPIES_DECODE: u32 = 1;
 pub const COPIES_ENCODE: u32 = 1;
 /// Mean absolute BGRA delta allowed between preview readback and independently decoded export.
 pub const PARITY_MEAN_TOLERANCE: f32 = 16.0;
-pub const PARITY_MAX_TOLERANCE: u8 = 255;
 pub const PARITY_REGION_MEAN_TOLERANCE: f32 = 48.0;
 pub const COMPOSITOR_MEAN_TOLERANCE: f32 = 3.0;
 pub const COMPOSITOR_MAX_TOLERANCE: u8 = 40;

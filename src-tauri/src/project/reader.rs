@@ -148,6 +148,13 @@ pub(crate) fn open_regular(path: &Path) -> Result<File, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open a symlink itself rather than its target, so the regular-file
+        // check below rejects it like O_NOFOLLOW does on Unix.
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let file = options.open(path).map_err(|e| e.to_string())?;
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Expected regular metadata file".into());
@@ -167,7 +174,27 @@ fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+#[cfg(windows)]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+/// Holds the project directory open while it is read. On Unix this also takes
+/// a shared `flock`, so a writer holding an exclusive lock is detected. Windows
+/// has no directory locks; there the `.lock` file check in `ProjectReader::open`
+/// is the only writer guard.
 pub(crate) fn acquire_read_lease(root: &Path) -> Result<File, String> {
+    #[cfg(windows)]
+    let lease = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Directories can only be opened as a handle with backup semantics.
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(root)
+            .map_err(|e| e.to_string())?
+    };
+    #[cfg(not(windows))]
     let lease = File::open(root).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -189,16 +216,7 @@ impl ProjectReader {
             return Err("Expected a project directory, not a symlink".into());
         }
         let root = path.canonicalize().map_err(|e| e.to_string())?;
-        let lease = File::open(&root).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
-                return Err("Project is in use by a writer".into());
-            }
-        }
-        #[cfg(not(unix))]
-        return Err("Read-only project leases are not supported on this platform yet".into());
+        let lease = acquire_read_lease(&root)?;
         // Reject old writers/stale locks too. Recovery, not open, owns repairs.
         if fs::symlink_metadata(root.join(".lock")).is_ok() {
             return Err("Project has a writer lock; close recording or recover it first".into());

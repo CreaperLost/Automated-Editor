@@ -256,10 +256,6 @@ impl PlaybackOwner {
         true
     }
 
-    pub fn open_file_count(&self) -> usize {
-        self.open_files.len()
-    }
-
     fn ensure_open(&self) -> Result<(), String> {
         if self.state == PlaybackState::Closed {
             return Err("Playback is closed".into());
