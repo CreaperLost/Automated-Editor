@@ -4,6 +4,9 @@ import {
   Sliders,
   Camera,
   Monitor,
+  Frame,
+  ChevronDown,
+  LucideIcon,
 } from "lucide-react";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
@@ -18,6 +21,59 @@ import {
   layoutFromSettings,
   presetBackgroundCss,
 } from "../../lib/types";
+
+const SECTION_STATE_KEY = "aeroedits.inspector.sections";
+
+function readOpenSections(): Record<string, boolean> {
+  try {
+    return JSON.parse(window.localStorage.getItem(SECTION_STATE_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/// A collapsible inspector group. Open/closed state is remembered per section.
+const InspectorSection: React.FC<{
+  id: string;
+  title: string;
+  icon: LucideIcon;
+  extra?: React.ReactNode;
+  children: React.ReactNode;
+}> = ({ id, title, icon: Icon, extra, children }) => {
+  const [open, setOpen] = useState(() => readOpenSections()[id] ?? true);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    try {
+      window.localStorage.setItem(
+        SECTION_STATE_KEY,
+        JSON.stringify({ ...readOpenSections(), [id]: next }),
+      );
+    } catch {
+      // Storage unavailable: the section still toggles for this session.
+    }
+  };
+  return (
+    <section className="rounded-lg border border-studio-800 bg-studio-900">
+      <div className="flex items-center justify-between px-3 py-2">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className="flex flex-1 items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400 hover:text-studio-200"
+        >
+          <ChevronDown
+            className={`w-3.5 h-3.5 transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+          <Icon className="w-3.5 h-3.5 text-indigo-400" />
+          <span>{title}</span>
+        </button>
+        {extra}
+      </div>
+      {open && <div className="space-y-4 px-3 pb-3 pt-1">{children}</div>}
+    </section>
+  );
+};
 
 const RangeRow: React.FC<{
   label: string;
@@ -105,7 +161,7 @@ export const InspectorPanel: React.FC = () => {
   ];
 
   return (
-    <div className="studio-inspector min-w-0 h-full border-l border-studio-800 bg-studio-900/95 flex flex-col overflow-y-auto select-none p-5 space-y-6">
+    <div className="studio-inspector min-w-0 h-full border-l border-studio-800 bg-studio-900/95 flex flex-col overflow-y-auto select-none p-5 space-y-3">
       <div className="flex items-center justify-between pb-3 border-b border-studio-800">
         <div className="flex items-center space-x-2 text-white font-semibold text-sm">
           <Sliders className="w-4 h-4 text-indigo-400" />
@@ -122,14 +178,10 @@ export const InspectorPanel: React.FC = () => {
         </p>
       )}
 
-      <div className="space-y-4">
-        <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400">
-          <Palette className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Canvas Wallpaper</span>
-        </div>
+      <InspectorSection id="background" title="Background" icon={Palette}>
 
         <div className="space-y-1.5">
-          <label className="text-xs text-studio-400">Background</label>
+          <label className="text-xs text-studio-400">Type</label>
           <div className="grid grid-cols-4 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
             {(["solid", "gradient", "preset", "wallpaper"] as const).map((kind) => (
               <button
@@ -257,7 +309,10 @@ export const InspectorPanel: React.FC = () => {
           </label>
         </div>
 
-        <div className="space-y-1.5 pt-1">
+      </InspectorSection>
+
+      <InspectorSection id="canvas" title="Canvas" icon={Frame}>
+        <div className="space-y-1.5">
           <label className="text-xs text-studio-400">Aspect Ratio</label>
           <div className="grid grid-cols-4 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
             {(["16:9", "9:16", "4:3", "1:1"] as const).map((ratio) => (
@@ -291,6 +346,34 @@ export const InspectorPanel: React.FC = () => {
           />
         </div>
 
+      </InspectorSection>
+
+      <InspectorSection
+        id="screen"
+        title="Screen"
+        icon={Monitor}
+        extra={
+          <button
+            type="button"
+            onClick={() =>
+              setCanvas({ screenScalePct: 100, screenCrop: { left: 0, top: 0, right: 0, bottom: 0 } })
+            }
+            className="text-[11px] text-studio-400 hover:text-studio-200"
+          >
+            Reset
+          </button>
+        }
+      >
+
+        <RangeRow
+          label="Screen Size"
+          value={canvas.screenScalePct}
+          min={40}
+          max={100}
+          unit="%"
+          onChange={(screenScalePct) => setCanvas({ screenScalePct })}
+        />
+
         <div className="space-y-1.5">
           <div className="flex justify-between text-xs">
             <span className="text-studio-400">Corner Radius</span>
@@ -320,35 +403,6 @@ export const InspectorPanel: React.FC = () => {
             className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
           />
         </div>
-      </div>
-
-      <div className="h-px bg-studio-800" />
-
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400">
-            <Monitor className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Screen</span>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              setCanvas({ screenScalePct: 100, screenCrop: { left: 0, top: 0, right: 0, bottom: 0 } })
-            }
-            className="text-[11px] text-studio-400 hover:text-studio-200"
-          >
-            Reset
-          </button>
-        </div>
-
-        <RangeRow
-          label="Screen Size"
-          value={canvas.screenScalePct}
-          min={40}
-          max={100}
-          unit="%"
-          onChange={(screenScalePct) => setCanvas({ screenScalePct })}
-        />
 
         <div className="space-y-2">
           <label className="text-xs text-studio-400">Crop</label>
@@ -374,23 +428,23 @@ export const InspectorPanel: React.FC = () => {
             />
           ))}
         </div>
-      </div>
+      </InspectorSection>
 
-      <div className="h-px bg-studio-800" />
-
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400">
-            <Camera className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Webcam Bubble</span>
-          </div>
+      <InspectorSection
+        id="webcam"
+        title="Webcam"
+        icon={Camera}
+        extra={
           <input
             type="checkbox"
+            aria-label="Show webcam"
+            title="Show webcam"
             checked={cameraBubble.enabled}
             onChange={(e) => setCamera({ enabled: e.target.checked })}
             className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
           />
-        </div>
+        }
+      >
 
         {cameraBubble.enabled && (
           <>
@@ -564,7 +618,7 @@ export const InspectorPanel: React.FC = () => {
             </div>
           </>
         )}
-      </div>
+      </InspectorSection>
     </div>
   );
 };
