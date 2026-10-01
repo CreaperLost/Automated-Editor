@@ -84,6 +84,32 @@ cargo tauri dev --features tauri-app
 
 Without `--features tauri-app` the binary builds the editor core only, with no window.
 
+### Transcription
+
+Transcripts drive word-based editing: delete words to cut them, remove filler sounds, and
+drop abandoned retakes. Two providers are supported, chosen in transcription settings:
+
+- **Parakeet (local):** NVIDIA Parakeet TDT 0.6B v3 through ONNX Runtime. It is opt-in at
+  build time, with one feature per accelerator:
+
+  ```bash
+  cargo tauri dev --features tauri-app,parakeet-cuda      # NVIDIA GPU (needs CUDA 12 and cuDNN 9)
+  cargo tauri dev --features tauri-app,parakeet-directml  # any DirectX 12 GPU on Windows, no extra installs
+  cargo tauri dev --features tauri-app,parakeet-webgpu    # Metal on macOS
+  cargo tauri dev --features tauri-app,parakeet           # CPU only
+  ```
+
+  The model (about 670 MB, INT8) downloads from Hugging Face from the settings dialog, or
+  can be placed by hand in any folder holding `vocab.txt`, `encoder-model*.onnx` and
+  `decoder_joint-model*.onnx` from
+  [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx).
+- **ElevenLabs Scribe (cloud):** enter an API key in settings. It is stored in Windows
+  Credential Manager or the macOS Keychain, never in the project; `ELEVENLABS_API_KEY`
+  overrides it for development.
+
+Transcripts are saved per audio track in `<project>.aero/transcripts/<track id>.json`, with
+word times in source time, so they stay valid across cuts and undo.
+
 ### Tests
 
 ```bash

@@ -42,8 +42,7 @@ jobs:
         with:
           workspaces: src-tauri
       # Lavapipe gives wgpu a software Vulkan adapter, so the GPU compositor
-      # tests can run without a real GPU.
-      # Lavapipe for the GPU tests, FFmpeg for the shared media backend.
+      # tests can run without a real GPU. FFmpeg is the shared media backend.
       - name: Install software Vulkan driver and FFmpeg
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg
       - run: cargo test
@@ -53,6 +52,9 @@ jobs:
         run: cargo test --lib gpu -- --include-ignored
         env:
           AEROEDITS_REQUIRE_FFMPEG: "1"
+      # Local Parakeet transcription is opt-in; make sure it keeps compiling.
+      - name: Check local Parakeet transcription
+        run: cargo check --features parakeet
 
   rust-tests-windows:
     name: Rust tests (Windows)

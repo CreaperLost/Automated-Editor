@@ -13,6 +13,7 @@ import { TimelineStudio } from "./components/timeline/TimelineStudio";
 import { NativePreviewHost } from "./components/canvas/NativePreviewHost";
 import { InspectorPanel } from "./components/inspector/InspectorPanel";
 import { SilenceModal } from "./components/silence-modal/SilenceModal";
+import { TranscriptPanel } from "./components/transcript/TranscriptPanel";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
@@ -280,6 +281,10 @@ export const App: React.FC = () => {
                             : 16 / 9
                     }
                   />
+                </div>
+
+                <div className="h-56 shrink-0 min-h-0">
+                  <TranscriptPanel />
                 </div>
 
                 {/* Diagnostics details toggle */}

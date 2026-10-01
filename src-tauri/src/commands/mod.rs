@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub mod transcript;
+
 pub struct AppState {
     pub command_lock: Mutex<()>,
     pub opened_project: Mutex<Option<crate::project::ProjectReader>>,
@@ -477,6 +479,43 @@ pub fn project_ripple_cuts_impl(
         .map(|cut| (cut.start_us, cut.end_us))
         .collect();
     let summary = reader.ripple_cuts(expected_revision, &ranges)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(summary)
+}
+
+pub fn project_split_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    edited_us: u64,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    // A split keeps every retained interval, so playback and waveforms stay as they are.
+    reader.split(expected_revision, edited_us)
+}
+
+pub fn project_restore_cuts_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    ranges: Vec<EditCut>,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let ranges: Vec<(u64, u64)> = ranges
+        .into_iter()
+        .map(|range| (range.start_us, range.end_us))
+        .collect();
+    let summary = reader.restore_cuts(expected_revision, &ranges)?;
     state
         .playback
         .lock()
