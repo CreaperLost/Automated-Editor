@@ -11,6 +11,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
+pub use super::audio::AudioSettings;
 pub use super::layout::EditLayout;
 
 pub const EDIT_SCHEMA_VERSION: u32 = 1;
@@ -37,6 +38,9 @@ pub struct EditDocument {
     /// at the points that fall inside retained media.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split_points_us: Vec<u64>,
+    /// Loudness, noise reduction and ducking. Applies to playback and export.
+    #[serde(default, skip_serializing_if = "AudioSettings::is_default")]
+    pub audio: AudioSettings,
 }
 
 impl Default for EditDocument {
@@ -49,6 +53,7 @@ impl Default for EditDocument {
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
             split_points_us: Vec::new(),
+            audio: AudioSettings::default(),
         }
     }
 }
@@ -64,6 +69,7 @@ impl EditDocument {
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
             split_points_us: Vec::new(),
+            audio: AudioSettings::default(),
         })
     }
 
@@ -354,6 +360,7 @@ impl EditHistory {
         validate_zooms(&next.zooms)?;
         validate_dismissed(&next.dismissed_zoom_ids)?;
         validate_split_points(&next.split_points_us)?;
+        next.audio.validate()?;
         next.schema_version = EDIT_SCHEMA_VERSION;
         next.revision = self
             .current
@@ -386,6 +393,24 @@ impl EditHistory {
         }
         let mut next = self.current.clone();
         next.layout = layout;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    pub fn update_audio(
+        &mut self,
+        expected_revision: u64,
+        audio: AudioSettings,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        audio.validate()?;
+        if audio == self.current.audio {
+            return Ok(&self.current);
+        }
+        let mut next = self.current.clone();
+        next.audio = audio;
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -852,6 +877,38 @@ mod tests {
         bad.padding_px = 999;
         assert!(history.update_layout(3, bad, dir.path()).is_err());
         assert_eq!(history.current.revision, 3);
+    }
+
+    #[test]
+    fn audio_settings_persist_undo_and_validate() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(
+            EditDocument::from_retained(vec![RetainedInterval {
+                start_us: 0,
+                end_us: 1_000_000,
+            }])
+            .unwrap(),
+        );
+        let audio = AudioSettings {
+            normalize: true,
+            duck_system_audio: true,
+            duck_db: 18.0,
+            ..Default::default()
+        };
+        history.update_audio(0, audio.clone(), dir.path()).unwrap();
+        assert_eq!(history.current.revision, 1);
+        assert_eq!(load_edit_document(dir.path()).unwrap().unwrap().audio, audio);
+        history.undo(1, dir.path()).unwrap();
+        assert!(history.current.audio.is_default());
+        let bad = AudioSettings {
+            target_lufs: 0.0,
+            ..audio
+        };
+        assert!(history.update_audio(2, bad, dir.path()).is_err());
+        assert_eq!(history.current.revision, 2);
+        // Documents without audio settings still load, and default settings stay out of the file.
+        let text = std::fs::read_to_string(dir.path().join("project.json")).unwrap();
+        assert!(!text.contains("\"audio\""));
     }
 
     fn ri(start_us: u64, end_us: u64) -> RetainedInterval {
