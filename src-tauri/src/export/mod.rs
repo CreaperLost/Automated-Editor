@@ -1020,7 +1020,9 @@ fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
         });
     }
     {
-        let file = File::open(temp).map_err(|e| ExportFailure::Io {
+        // Windows only flushes a handle opened for writing; a read-only one is "Access is denied".
+        let opened = fs::OpenOptions::new().write(true).open(temp);
+        let file = opened.map_err(|e| ExportFailure::Io {
             message: e.to_string(),
         })?;
         file.sync_all().map_err(|e| ExportFailure::Io {
