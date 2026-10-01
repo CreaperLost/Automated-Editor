@@ -156,7 +156,6 @@ pub fn detect_silence_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
     fn test_window_title_formatting() {
@@ -170,12 +169,17 @@ mod tests {
     }
 
     #[test]
-    fn test_show_in_finder_impl() {
+    fn test_show_in_finder_impl_missing_path() {
         let non_existent = "/tmp/does-not-exist-aeroedits-test-finder-12345";
         let err = show_in_finder_impl(non_existent.into()).unwrap_err();
         assert!(err.contains("Path does not exist"));
+    }
 
-        let dir = tempdir().unwrap();
+    // Opens a real Finder window, so it only runs on macOS.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_show_in_finder_impl() {
+        let dir = tempfile::tempdir().unwrap();
         let result = show_in_finder_impl(dir.path().to_string_lossy().into_owned());
         assert!(result.is_ok());
     }
