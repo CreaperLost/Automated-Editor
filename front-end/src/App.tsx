@@ -12,7 +12,6 @@ import { EditorTopBar } from "./components/navigation/EditorTopBar";
 import { TimelineStudio } from "./components/timeline/TimelineStudio";
 import { NativePreviewHost } from "./components/canvas/NativePreviewHost";
 import { InspectorPanel } from "./components/inspector/InspectorPanel";
-import { AudioPanel } from "./components/audio/AudioPanel";
 import { SilenceModal } from "./components/silence-modal/SilenceModal";
 import { TranscriptPanel } from "./components/transcript/TranscriptPanel";
 import { useProjectStore } from "./stores/projectStore";
@@ -332,11 +331,8 @@ export const App: React.FC = () => {
               </div>
 
               {/* Right Inspector Panel */}
-              <div className="w-80 shrink-0 h-full border-l border-studio-800 flex flex-col">
-                <div className="min-h-0 flex-1">
-                  <InspectorPanel />
-                </div>
-                <AudioPanel />
+              <div className="w-80 shrink-0 h-full border-l border-studio-800">
+                <InspectorPanel />
               </div>
             </div>
 

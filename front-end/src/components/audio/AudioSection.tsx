@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ChevronDown, Volume2 } from "lucide-react";
+import { Volume2 } from "lucide-react";
+import { InspectorSection } from "../inspector/InspectorSection";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { AudioSettings, DEFAULT_AUDIO_SETTINGS } from "../../lib/types";
@@ -57,19 +58,12 @@ const EffectRow: React.FC<EffectRowProps> = ({
 );
 
 /** Audio polish switches. Saved to the project, so playback and export both use them. */
-export const AudioPanel: React.FC = () => {
+export const AudioSection: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const saved = openedProject?.audio ?? DEFAULT_AUDIO_SETTINGS;
   const [draft, setDraft] = useState<AudioSettings>(saved);
   const [error, setError] = useState<string>();
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem("aeroedits.audioPanelOpen") !== "false";
-    } catch {
-      return true;
-    }
-  });
   const timer = useRef<number>();
   const openedRef = useRef(openedProject);
   openedRef.current = openedProject;
@@ -102,32 +96,8 @@ export const AudioPanel: React.FC = () => {
     }, 250);
   };
 
-  const toggleOpen = () => {
-    const next = !open;
-    setOpen(next);
-    try {
-      localStorage.setItem("aeroedits.audioPanelOpen", String(next));
-    } catch {
-      // Remembering the section state is a convenience only.
-    }
-  };
-
   return (
-    <div className="shrink-0 border-t border-studio-800 bg-studio-900/95 px-5 py-3 space-y-4 select-none">
-      <button
-        type="button"
-        onClick={toggleOpen}
-        aria-expanded={open}
-        className="w-full flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-studio-400 hover:text-studio-200"
-      >
-        <span className="flex items-center space-x-2">
-          <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Audio Polish</span>
-        </span>
-        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
-      </button>
-      {open && (
-        <>
+    <InspectorSection id="audio" title="Audio Polish" icon={Volume2}>
       {error && (
         <p role="alert" className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
           {error}
@@ -166,8 +136,6 @@ export const AudioPanel: React.FC = () => {
         value={draft.duckDb}
         onValue={(duckDb) => update({ duckDb })}
       />
-        </>
-      )}
-    </div>
+    </InspectorSection>
   );
 };
