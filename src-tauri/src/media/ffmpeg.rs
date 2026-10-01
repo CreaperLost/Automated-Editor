@@ -318,10 +318,7 @@ impl FrameStream {
         let (mut cmd, log) = command(ffmpeg_path()?)?;
         let (num, den) = info.rate;
         let (width, height) = (info.width, info.height);
-        // Hardware decode where available (D3D11/DXVA on Windows); FFmpeg falls back to
-        // software on its own.
         cmd.arg("-nostdin")
-            .args(["-hwaccel", "auto"])
             .args(["-ss", &seconds_arg(start_us)])
             .arg("-i")
             .arg(file_arg(path))

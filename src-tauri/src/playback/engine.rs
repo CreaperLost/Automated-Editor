@@ -40,6 +40,7 @@ pub fn start(app: tauri::AppHandle) {
             .load(Ordering::Acquire)
         {
             let state = app.state::<AppState>();
+            let before = last_frame;
             let result = tick(&app, &state, &mut runtime, &pending, &mut last_frame);
             if let Err((generation, error)) = result {
                 state.playback.lock().fail(generation, error);
@@ -60,7 +61,9 @@ pub fn start(app: tauri::AppHandle) {
                     }
                 });
             }
-            thread::sleep(Duration::from_millis(15));
+            // Right after a frame, go straight on to the next one; otherwise poll gently.
+            let rendered = last_frame.is_some() && last_frame != before;
+            thread::sleep(Duration::from_millis(if rendered { 1 } else { 15 }));
         }
         app.state::<AppState>().playback.lock().close();
     });

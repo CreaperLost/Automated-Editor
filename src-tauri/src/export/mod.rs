@@ -342,8 +342,8 @@ impl SceneEvaluator {
         let duration_us = mapper.total_edited_duration_us();
         let ended = edited_us >= duration_us;
         let source_us = mapper.edited_to_source_us(edited_us);
-        let mut screen = None;
-        let mut webcam = None;
+        let mut screen_job = None;
+        let mut webcam_job = None;
         for (track, segments) in &self.tracks {
             if ended {
                 return Err("The exclusive edited end is not a video sample".into());
@@ -368,20 +368,31 @@ impl SceneEvaluator {
                                 })
                             })
                     });
-                    screen = candidate
-                        .map(|(segment, time)| {
-                            decode_layer(&self.root, segment, time, self.decode_limit)
-                        })
-                        .transpose()?;
+                    screen_job = candidate;
                 }
                 TrackType::Webcam => {
-                    webcam = containing
-                        .map(|segment| decode_layer(&self.root, segment, source, self.decode_limit))
-                        .transpose()?;
+                    webcam_job = containing.map(|segment| (segment, source));
                 }
                 TrackType::MicAudio | TrackType::SystemAudio => {}
             }
         }
+        // Screen and webcam decode in parallel; each waits on its own FFmpeg process.
+        let (root, limit) = (&self.root, self.decode_limit);
+        let decode = move |job: Option<(&SegmentSummary, u64)>| {
+            job.map(|(segment, time)| decode_layer(root, segment, time, limit))
+                .transpose()
+        };
+        let (screen, webcam) = std::thread::scope(|scope| {
+            let webcam = webcam_job.map(|job| scope.spawn(move || decode(Some(job))));
+            let screen = decode(screen_job);
+            let webcam = match webcam {
+                Some(handle) => handle
+                    .join()
+                    .map_err(|_| "Webcam decode panicked".to_string())?,
+                None => Ok(None),
+            };
+            Ok::<_, String>((screen?, webcam?))
+        })?;
 
         let has_screen = screen.is_some();
         let wallpaper = match self.wallpaper.get() {
