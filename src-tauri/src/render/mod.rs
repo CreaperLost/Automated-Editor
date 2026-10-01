@@ -1553,6 +1553,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
+    )]
     fn gpu_cpu_clip_shadow_wallpaper_within_tolerance() {
         let compositor = match Compositor::new() {
             Ok(c) => c,
