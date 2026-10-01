@@ -13,12 +13,13 @@ import {
   Check,
   X,
   Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
 import { api } from "../../lib/ipc";
-import { editedToSourceUs } from "../../lib/projectUtils";
+import { buildClips, buildCutMarkers, editedToSourceUs } from "../../lib/projectUtils";
 import type { OpenedProject, ProjectZoom, ZoomKeyframe } from "../../lib/types";
 
 type DragMode = "move" | "start" | "end";
@@ -55,6 +56,13 @@ export const TimelineStudio: React.FC = () => {
   } | null>(null);
   const suppressSeek = useRef(false);
   useEffect(() => { setRangeStart("0"); setRangeEnd(String(durationUs / 1e6)); setEditError(undefined); }, [openedProject?.projectHandle, durationUs]);
+  const runEdit = async (work: (project: OpenedProject) => Promise<OpenedProject>) => {
+    if (!openedProject || editing) return;
+    setEditing(true); setEditError(undefined);
+    try { applyOpenedProject(await work(openedProject)); }
+    catch (err) { setEditError(String(err)); }
+    finally { setEditing(false); }
+  };
   const editRange = async (trim: boolean) => {
     if (!openedProject || editing) return;
     const startUs = Math.round(Number(rangeStart) * 1e6);
@@ -67,11 +75,61 @@ export const TimelineStudio: React.FC = () => {
       ...(endUs < durationUs ? [{ startUs: endUs, endUs: durationUs }] : []),
     ] : [{startUs, endUs}];
     if (!cuts.length) return;
-    setEditing(true); setEditError(undefined);
-    try { applyOpenedProject(await api.projectRippleCuts(openedProject.projectHandle, openedProject.revision, cuts)); }
-    catch (err) { setEditError(String(err)); }
-    finally { setEditing(false); }
+    await runEdit((project) => api.projectRippleCuts(project.projectHandle, project.revision, cuts));
   };
+  const splitAtPlayhead = () =>
+    runEdit((project) => api.projectSplit(project.projectHandle, project.revision, currentTimeUs));
+  const restoreCut = (startUs: number, endUs: number) =>
+    runEdit((project) => api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }]));
+
+  // The range fields double as the timeline selection; the full range means nothing is selected.
+  const selectedStartUs = Math.round(Number(rangeStart) * 1e6);
+  const selectedEndUs = Math.round(Number(rangeEnd) * 1e6);
+  const selection =
+    Number.isSafeInteger(selectedStartUs) &&
+    Number.isSafeInteger(selectedEndUs) &&
+    selectedStartUs >= 0 &&
+    selectedStartUs < selectedEndUs &&
+    selectedEndUs <= durationUs &&
+    !(selectedStartUs === 0 && selectedEndUs === durationUs)
+      ? { startUs: selectedStartUs, endUs: selectedEndUs }
+      : null;
+  const selectRange = (startUs: number, endUs: number) => {
+    setRangeStart(String(startUs / 1e6));
+    setRangeEnd(String(endUs / 1e6));
+  };
+  const clearSelection = () => selectRange(0, durationUs);
+
+  const retained = openedProject?.retainedIntervals ?? [];
+  const clips = buildClips(retained, openedProject?.splitPointsUs);
+  const cutMarkers = buildCutMarkers(retained, openedProject?.removedIntervals);
+
+  const shortcuts = useRef({ splitAtPlayhead, deleteSelection: () => {}, clearSelection });
+  shortcuts.current = {
+    splitAtPlayhead,
+    deleteSelection: () => { if (selection) void editRange(false); },
+    clearSelection,
+  };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        event.ctrlKey || event.metaKey || event.altKey ||
+        target?.closest("input, textarea, select, [contenteditable='true']")
+      ) return;
+      if (event.key === "s" || event.key === "S") {
+        event.preventDefault();
+        void shortcuts.current.splitAtPlayhead();
+      } else if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        shortcuts.current.deleteSelection();
+      } else if (event.key === "Escape") {
+        shortcuts.current.clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const timelineTrackRef = useRef<HTMLDivElement | null>(null);
 
@@ -167,6 +225,34 @@ export const TimelineStudio: React.FC = () => {
         transitionUs,
       }),
     );
+  };
+
+  const rangeDrag = useRef<{ startX: number; active: boolean } | null>(null);
+  const clientXToUs = (clientX: number) => {
+    const rect = timelineTrackRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    return Math.round(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * durationUs);
+  };
+  const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !openedProject || durationUs <= 0) return;
+    rangeDrag.current = { startX: event.clientX, active: false };
+  };
+  const onTrackPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = rangeDrag.current;
+    if (!drag) return;
+    if (!drag.active) {
+      if (Math.abs(event.clientX - drag.startX) < 4) return;
+      // Capture only once it is a drag, so a plain click still reaches the clip under it.
+      drag.active = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    const a = clientXToUs(drag.startX);
+    const b = clientXToUs(event.clientX);
+    if (a !== b) selectRange(Math.min(a, b), Math.max(a, b));
+  };
+  const onTrackPointerUp = () => {
+    if (rangeDrag.current?.active) suppressSeek.current = true;
+    rangeDrag.current = null;
   };
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -281,6 +367,15 @@ export const TimelineStudio: React.FC = () => {
 
         {/* Action Tools: Silence Detection & Zoom Keyframe */}
         <div className="flex items-center space-x-3">
+          <button
+            disabled={!openedProject || editing || durationUs === 0}
+            onClick={() => void splitAtPlayhead()}
+            className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
+            title="Split the clip at the playhead (S)"
+          >
+            <Scissors className="w-3.5 h-3.5" />
+            <span>Split</span>
+          </button>
           <button
             disabled={!openedProject?.undoAvailable}
             onClick={() => {
@@ -481,8 +576,20 @@ export const TimelineStudio: React.FC = () => {
         <button onClick={() => setRangeStart(String(currentTimeUs / 1e6))}>Set start here</button>
         <label>End (s) <input aria-label="Selection end in seconds" type="number" min="0" step="0.001" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} className="w-24 bg-studio-950 px-2 py-1 rounded" /></label>
         <button onClick={() => setRangeEnd(String(currentTimeUs / 1e6))}>Set end here</button>
-        <button disabled={editing || durationUs === 0} onClick={() => void editRange(false)} className="text-rose-300 disabled:opacity-40">Delete range</button>
+        <button disabled={editing || durationUs === 0} onClick={() => void editRange(false)} className="text-rose-300 disabled:opacity-40" title="Cut the selection and close the gap (Delete)">Delete range</button>
         <button disabled={editing || durationUs === 0} onClick={() => void editRange(true)} className="text-teal-300 disabled:opacity-40">Keep range</button>
+        {cutMarkers.length > 0 && (
+          <button
+            disabled={editing}
+            onClick={() => void restoreCut(0, openedProject.sourceDurationUs)}
+            className="flex items-center gap-1 text-amber-300 disabled:opacity-40"
+            title="Put every cut back on the timeline"
+          >
+            <RotateCcw className="w-3 h-3" />
+            Restore all {cutMarkers.length} cut{cutMarkers.length === 1 ? "" : "s"}
+          </button>
+        )}
+        <span className="text-studio-500">Drag on the timeline to select. S splits at the playhead, Delete removes the selection.</span>
         {editError && <span role="alert" className="text-rose-300">{editError}</span>}
       </div>}
 
@@ -496,6 +603,9 @@ export const TimelineStudio: React.FC = () => {
           </div>
 
           <div className="flex-1 space-y-2 py-2">
+            <div className="h-8 px-3 flex items-end text-[10px] font-semibold tracking-wider uppercase text-studio-400">
+              Clips
+            </div>
             {tracks.map((track) => (
               <div
                 key={track.id}
@@ -534,6 +644,10 @@ export const TimelineStudio: React.FC = () => {
           <div
             ref={timelineTrackRef}
             onClick={handleTimelineClick}
+            onPointerDown={onTrackPointerDown}
+            onPointerMove={onTrackPointerMove}
+            onPointerUp={onTrackPointerUp}
+            onPointerCancel={onTrackPointerUp}
             className="flex-1 relative cursor-pointer py-2 space-y-2"
           >
             {/* Playhead Vertical Line */}
@@ -595,6 +709,62 @@ export const TimelineStudio: React.FC = () => {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Drag selection */}
+            {selection && durationUs > 0 && (
+              <div
+                className="absolute top-0 bottom-0 bg-white/10 border-x border-white/60 z-10 pointer-events-none"
+                style={{
+                  left: `${(selection.startUs / durationUs) * 100}%`,
+                  width: `${((selection.endUs - selection.startUs) / durationUs) * 100}%`,
+                }}
+              />
+            )}
+
+            {/* Clip lane: edges come from cuts and splits; markers restore cuts */}
+            <div className="h-8 relative">
+              {durationUs > 0 && clips.map((clip, index) => {
+                const selected = selection?.startUs === clip.startUs && selection?.endUs === clip.endUs;
+                return (
+                  <button
+                    key={`${clip.sourceStartUs}-${index}`}
+                    className={`absolute top-2.5 bottom-0 rounded border text-[9px] font-mono text-left px-1 truncate ${
+                      selected
+                        ? "bg-teal-500/40 border-teal-200 text-white"
+                        : "bg-teal-500/15 border-teal-400/40 text-teal-200 hover:bg-teal-500/25"
+                    }`}
+                    style={{
+                      left: `${(clip.startUs / durationUs) * 100}%`,
+                      width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
+                    }}
+                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select.`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      selectRange(clip.startUs, clip.endUs);
+                    }}
+                  >
+                    {index + 1}
+                  </button>
+                );
+              })}
+              {durationUs > 0 && cutMarkers.map((marker) => (
+                <button
+                  key={marker.sourceStartUs}
+                  disabled={editing}
+                  aria-label="Restore cut"
+                  className="absolute top-1 bottom-0 w-3 -translate-x-1/2 z-20 flex justify-center group disabled:opacity-40"
+                  style={{ left: `${(marker.editedUs / durationUs) * 100}%` }}
+                  title={`Restore ${((marker.sourceEndUs - marker.sourceStartUs) / 1e6).toFixed(2)}s cut`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void restoreCut(marker.sourceStartUs, marker.sourceEndUs);
+                  }}
+                >
+                  <span className="w-0.5 h-full bg-rose-400 group-hover:bg-rose-200" />
+                </button>
+              ))}
             </div>
 
             {/* Individual Lanes */}

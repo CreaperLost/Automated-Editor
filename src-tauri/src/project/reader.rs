@@ -73,6 +73,11 @@ pub struct OpenedProject {
     pub layout: EditLayout,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
+    /// Source ranges the edit cut out that can be put back.
+    #[serde(default)]
+    pub removed_intervals: Vec<RetainedInterval>,
+    #[serde(default)]
+    pub split_points_us: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -441,7 +446,7 @@ impl ProjectReader {
         let edited_duration_us = history.current.edited_duration_us()?;
         let mut zooms = history.current.zooms.clone();
         crate::zoom::attach_zoom_edited_ranges(&mut zooms, &history.current.mapper()?);
-        Ok(Self {
+        let mut reader = Self {
             summary: OpenedProject {
                 project_handle: uuid::Uuid::new_v4().to_string(),
                 revision: history.current.revision,
@@ -458,12 +463,16 @@ impl ProjectReader {
                 dismissed_zoom_ids: history.current.dismissed_zoom_ids.clone(),
                 layout: history.current.layout.clone(),
                 project_path: Some(root.to_string_lossy().into_owned()),
+                removed_intervals: Vec::new(),
+                split_points_us: Vec::new(),
             },
             segments,
             root,
             history,
             _lease: lease,
-        })
+        };
+        reader.sync_summary();
+        Ok(reader)
     }
 
     pub fn root(&self) -> &Path {
@@ -500,6 +509,47 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .ripple_cuts(expected_revision, cuts, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn split(
+        &mut self,
+        expected_revision: u64,
+        edited_us: u64,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .split(expected_revision, edited_us, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    /// Restores removed media inside the requested source ranges. Parts of a
+    /// range that were never removed, or that fall in a recorder pause, are
+    /// ignored.
+    pub fn restore_cuts(
+        &mut self,
+        expected_revision: u64,
+        ranges: &[(u64, u64)],
+    ) -> Result<OpenedProject, String> {
+        let mut restorable = Vec::new();
+        for &(start, end) in ranges {
+            if end <= start {
+                return Err("Restore range must be a half-open interval".into());
+            }
+            for removed in &self.summary.removed_intervals {
+                let a = start.max(removed.start_us);
+                let b = end.min(removed.end_us);
+                if a < b {
+                    restorable.push((a, b));
+                }
+            }
+        }
+        if restorable.is_empty() {
+            return Err("Nothing to restore in that range".into());
+        }
+        self.history
+            .restore(expected_revision, &restorable, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
@@ -627,5 +677,74 @@ impl ProjectReader {
         self.summary.zooms = zooms;
         self.summary.dismissed_zoom_ids = self.history.current.dismissed_zoom_ids.clone();
         self.summary.layout = self.history.current.layout.clone();
+        self.summary.split_points_us = self.history.current.split_points_us.clone();
+        let pauses: Vec<RetainedInterval> = self
+            .summary
+            .manifest
+            .pause_intervals
+            .iter()
+            .map(|p| RetainedInterval {
+                start_us: p.start_us,
+                end_us: p.end_us,
+            })
+            .collect();
+        self.summary.removed_intervals = revision::removed_intervals(
+            &self.history.current.retained_intervals,
+            &pauses,
+            self.summary.source_duration_us,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::TestProject;
+    use crate::project::manifest::PauseInterval;
+
+    #[test]
+    fn restore_cuts_never_restores_pauses_or_uncut_media() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "restore");
+        bundle.manifest_mut().duration_us = 10_000_000;
+        bundle.manifest_mut().active_duration_us = 9_000_000;
+        bundle.manifest_mut().pause_intervals = vec![PauseInterval {
+            start_us: 6_000_000,
+            end_us: 7_000_000,
+        }];
+        bundle.save_manifest();
+        let root = bundle.root_path().to_path_buf();
+        drop(bundle);
+        let mut reader = ProjectReader::open(&root).unwrap();
+        assert!(reader.summary.removed_intervals.is_empty());
+        assert!(reader.restore_cuts(0, &[(0, 10_000_000)]).is_err());
+
+        let summary = reader.ripple_cuts(0, &[(1_000_000, 2_000_000)]).unwrap();
+        assert_eq!(
+            summary.removed_intervals,
+            vec![RetainedInterval {
+                start_us: 1_000_000,
+                end_us: 2_000_000
+            }]
+        );
+        let summary = reader.restore_cuts(1, &[(0, 10_000_000)]).unwrap();
+        assert!(summary.removed_intervals.is_empty());
+        assert_eq!(
+            summary.retained_intervals,
+            vec![
+                RetainedInterval {
+                    start_us: 0,
+                    end_us: 6_000_000
+                },
+                RetainedInterval {
+                    start_us: 7_000_000,
+                    end_us: 10_000_000
+                },
+            ]
+        );
+
+        let summary = reader.split(2, 3_000_000).unwrap();
+        assert_eq!(summary.split_points_us, vec![3_000_000]);
+        assert_eq!(summary.revision, 3);
     }
 }

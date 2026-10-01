@@ -339,6 +339,10 @@ export interface OpenedProject {
   dismissedZoomIds?: string[];
   layout?: EditLayout;
   projectPath?: string;
+  /** Source ranges the edit cut out that can be restored. */
+  removedIntervals?: RetainedInterval[];
+  /** Source timestamps where the user split a clip. */
+  splitPointsUs?: number[];
 }
 
 export type PlaybackState =

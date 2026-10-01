@@ -121,6 +121,18 @@ export const api = {
       expectedRevision,
       cuts,
     }),
+  projectSplit: (projectHandle: string, expectedRevision: number, editedUs: number) =>
+    invokeTauri<OpenedProject>("project_split", {
+      projectHandle,
+      expectedRevision,
+      editedUs: Math.max(0, Math.round(editedUs)),
+    }),
+  projectRestoreCuts: (projectHandle: string, expectedRevision: number, ranges: EditCut[]) =>
+    invokeTauri<OpenedProject>("project_restore_cuts", {
+      projectHandle,
+      expectedRevision,
+      ranges,
+    }),
   projectUndo: (projectHandle: string, expectedRevision: number) =>
     invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision }),
   projectRedo: (projectHandle: string, expectedRevision: number) =>
