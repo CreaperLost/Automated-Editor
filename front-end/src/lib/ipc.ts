@@ -18,6 +18,11 @@ import {
   ProjectZoom,
   ManualZoomInput,
   EditLayout,
+  TranscriptCutSuggestion,
+  TranscriptRunResult,
+  TranscriptSettings,
+  TranscriptSettingsView,
+  TranscriptView,
 } from "./types";
 
 declare global {
@@ -156,6 +161,34 @@ export const api = {
   exportCancel: (jobId: string) => invokeTauri<ExportStatus>("export_cancel", { jobId }),
   detectSilence: (projectHandle: string, trackId: string, config: SilenceConfig) =>
     invokeTauri<SilenceDetectionResult>("detect_silence", { projectHandle, trackId, config }),
+  transcriptSettingsGet: () => invokeTauri<TranscriptSettingsView>("transcript_settings_get"),
+  transcriptSettingsSet: (settings: TranscriptSettings) =>
+    invokeTauri<TranscriptSettingsView>("transcript_settings_set", { settings }),
+  transcriptSetApiKey: (key: string) =>
+    invokeTauri<TranscriptSettingsView>("transcript_set_api_key", { key }),
+  transcriptGet: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptView | null>("transcript_get", { projectHandle, trackId }),
+  transcriptRun: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptRunResult>("transcript_run", { projectHandle, trackId }),
+  transcriptCancel: () => invokeTauri<void>("transcript_cancel"),
+  transcriptDelete: (projectHandle: string, trackId: string) =>
+    invokeTauri<void>("transcript_delete", { projectHandle, trackId }),
+  transcriptSuggestions: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptCutSuggestion[]>("transcript_suggestions", { projectHandle, trackId }),
+  transcriptCutWords: (
+    projectHandle: string,
+    expectedRevision: number,
+    trackId: string,
+    wordIds: string[],
+  ) =>
+    invokeTauri<OpenedProject>("transcript_cut_words", {
+      projectHandle,
+      expectedRevision,
+      trackId,
+      wordIds,
+    }),
+  transcriptDownloadModel: () =>
+    invokeTauri<TranscriptSettingsView>("transcript_download_model"),
   getDefaultProjectsDir: () => invokeTauri<string>("get_default_projects_dir"),
   pickProjectFolder: () => invokeTauri<string | null>("pick_project_folder"),
   pickExportDestination: (projectHandle?: string) =>

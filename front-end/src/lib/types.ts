@@ -536,3 +536,71 @@ export function studioTrackType(trackType: NativeTrackType): TrackType {
   if (trackType === "system_audio") return "system";
   return trackType;
 }
+
+// Transcription (src-tauri/src/transcript)
+export type TranscriptProvider = "parakeet" | "elevenlabs";
+
+export interface TranscriptSettings {
+  provider: TranscriptProvider;
+  language: string;
+  scribeModel: string;
+  keyterms: string[];
+  parakeetModelDir: string;
+}
+
+export interface TranscriptSettingsView {
+  settings: TranscriptSettings;
+  elevenlabsKeySource: "keychain" | "file" | "environment" | null;
+  parakeetAvailable: boolean;
+  parakeetAccelerator: string;
+  parakeetModelDir: string;
+  parakeetModelPresent: boolean;
+}
+
+export interface TranscriptViewWord {
+  id: string;
+  text: string;
+  kind: "word" | "audioEvent";
+  sourceStartUs: number;
+  sourceEndUs: number;
+  confidence?: number;
+  speaker?: string;
+  /** Null when the word has been cut. */
+  editedStartUs: number | null;
+  editedEndUs: number | null;
+}
+
+export interface TranscriptView {
+  trackId: string;
+  provider: TranscriptProvider;
+  model: string;
+  language: string | null;
+  createdAt: string;
+  revision: number;
+  words: TranscriptViewWord[];
+}
+
+export interface TranscriptRunResult {
+  view: TranscriptView;
+  diagnostics: string[];
+}
+
+export interface TranscriptionProgress {
+  trackId: string;
+  fraction: number;
+  message: string;
+}
+
+export interface ModelDownloadProgress {
+  bytesDone: number;
+  bytesTotal: number | null;
+}
+
+export interface TranscriptCutSuggestion {
+  id: string;
+  kind: "filler" | "retake";
+  wordIds: string[];
+  text: string;
+  editedStartUs: number;
+  editedEndUs: number;
+}
