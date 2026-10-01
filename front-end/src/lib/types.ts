@@ -132,6 +132,8 @@ export interface CameraBubbleSettings {
   enabled: boolean;
   shape: CameraBubbleShape;
   size: CameraBubbleSize;
+  sizePct: number; // 5 to 60, percent of the canvas short side
+  roundnessPct: number; // 0 to 50, rect corner radius as percent of the bubble short side
   position: CameraBubblePosition;
   customX: number;
   customY: number;
@@ -141,10 +143,22 @@ export interface CameraBubbleSettings {
   shadow: boolean;
 }
 
+export type BackgroundPreset = "aurora" | "sunset" | "ocean" | "forest" | "candy" | "graphite";
+
+export interface ScreenCrop {
+  left: number; // 0 to 45, percent of the source
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 export interface CanvasSettings {
-  backgroundType: "gradient" | "solid" | "wallpaper";
+  backgroundType: "gradient" | "solid" | "wallpaper" | "preset";
+  backgroundPreset: BackgroundPreset;
   colorStart: string;
   colorEnd: string;
+  screenCrop: ScreenCrop;
+  screenScalePct: number; // 40 to 100
   paddingPx: number; // 0 to 80
   cornerRadiusPx: number; // 0 to 32
   shadowBlurPx: number; // 0 to 40
@@ -184,9 +198,17 @@ export interface EditLayout {
   shadowBlurPx?: number;
   shadowOpacity?: number;
   wallpaperAsset?: string | null;
+  backgroundPreset?: string;
+  screenCropLeft?: number;
+  screenCropTop?: number;
+  screenCropRight?: number;
+  screenCropBottom?: number;
+  screenScalePct?: number;
   webcamEnabled?: boolean;
   webcamShape?: string;
   webcamSize?: string;
+  webcamSizePct?: number;
+  webcamRoundnessPct?: number;
   webcamPosition?: string;
   webcamCustomX?: number;
   webcamCustomY?: number;
@@ -200,15 +222,59 @@ export const LAYOUT_UNSUPPORTED = {
   rect169: "16:9 webcam crop stays disabled until a dedicated bubble aspect path ships",
 } as const;
 
+/// Built-in backgrounds. Mirrors `preset_recipe` in src-tauri/src/render/mod.rs so the
+/// swatches look like what preview and export render.
+export const BACKGROUND_PRESETS: {
+  key: BackgroundPreset;
+  label: string;
+  base: string;
+  blobs: [x: number, y: number, radius: number, color: string][];
+}[] = [
+  { key: "aurora", label: "Aurora", base: "#0b1026", blobs: [[0.15, 0.2, 0.7, "#3b82f6"], [0.85, 0.3, 0.6, "#a855f7"], [0.5, 1.0, 0.7, "#14b8a6"]] },
+  { key: "sunset", label: "Sunset", base: "#1e1033", blobs: [[0.2, 0.9, 0.8, "#f97316"], [0.8, 0.2, 0.7, "#db2777"], [0.55, 0.55, 0.4, "#facc15"]] },
+  { key: "ocean", label: "Ocean", base: "#031b34", blobs: [[0.1, 0.1, 0.8, "#0ea5e9"], [0.9, 0.9, 0.8, "#1d4ed8"], [0.6, 0.4, 0.45, "#22d3ee"]] },
+  { key: "forest", label: "Forest", base: "#052e16", blobs: [[0.2, 0.8, 0.8, "#15803d"], [0.85, 0.15, 0.6, "#65a30d"], [0.6, 0.6, 0.45, "#0f766e"]] },
+  { key: "candy", label: "Candy", base: "#3b0764", blobs: [[0.1, 0.3, 0.7, "#ec4899"], [0.9, 0.7, 0.7, "#8b5cf6"], [0.5, 0.0, 0.5, "#f472b6"]] },
+  { key: "graphite", label: "Graphite", base: "#111113", blobs: [[0.2, 0.15, 0.8, "#3f3f46"], [0.85, 0.85, 0.7, "#27272a"], [0.6, 0.4, 0.4, "#52525b"]] },
+];
+
+/// CSS approximation of a built-in background for a 16:9 swatch.
+export function presetBackgroundCss(key: BackgroundPreset): string {
+  const preset = BACKGROUND_PRESETS.find((p) => p.key === key) ?? BACKGROUND_PRESETS[0];
+  const layers = preset.blobs.map(
+    ([x, y, r, color]) =>
+      `radial-gradient(ellipse ${r * 100}% ${r * 178}% at ${x * 100}% ${y * 100}%, ${color}d9, transparent)`,
+  );
+  return [...layers, preset.base].join(", ");
+}
+
+export const WEBCAM_SIZE_PRESET_PCT: Record<CameraBubbleSize, number> = {
+  sm: 12.5,
+  md: 20,
+  lg: 28,
+  xl: 36,
+};
+
 export function canvasFromLayout(layout: EditLayout): CanvasSettings {
   const aspect = layout.aspectRatio;
+  const preset = BACKGROUND_PRESETS.find((p) => p.key === layout.backgroundPreset);
   return {
     backgroundType:
-      layout.backgroundType === "solid" || layout.backgroundType === "wallpaper"
+      layout.backgroundType === "solid" ||
+      layout.backgroundType === "wallpaper" ||
+      layout.backgroundType === "preset"
         ? layout.backgroundType
         : "gradient",
+    backgroundPreset: preset?.key ?? "aurora",
     colorStart: layout.colorStart ?? "#312e81",
     colorEnd: layout.colorEnd ?? "#0f172a",
+    screenCrop: {
+      left: layout.screenCropLeft ?? 0,
+      top: layout.screenCropTop ?? 0,
+      right: layout.screenCropRight ?? 0,
+      bottom: layout.screenCropBottom ?? 0,
+    },
+    screenScalePct: layout.screenScalePct ?? 100,
     paddingPx: layout.paddingPx,
     cornerRadiusPx: layout.cornerRadiusPx ?? 0,
     shadowBlurPx: layout.shadowBlurPx ?? 0,
@@ -224,13 +290,17 @@ export function cameraFromLayout(layout: EditLayout): CameraBubbleSettings {
   const shape = layout.webcamShape;
   const size = layout.webcamSize;
   const position = layout.webcamPosition;
+  const preset: CameraBubbleSize =
+    size === "sm" || size === "lg" || size === "xl" || size === "md" ? size : "md";
   return {
     enabled: layout.webcamEnabled ?? true,
     shape:
       shape === "circle" || shape === "squircle" || shape === "rect_16_9" || shape === "rect"
         ? shape
         : "rect",
-    size: size === "sm" || size === "lg" || size === "xl" || size === "md" ? size : "md",
+    size: preset,
+    sizePct: layout.webcamSizePct ?? WEBCAM_SIZE_PRESET_PCT[preset],
+    roundnessPct: layout.webcamRoundnessPct ?? 0,
     position:
       position === "top-left" ||
       position === "top-right" ||
@@ -257,6 +327,12 @@ export function layoutFromSettings(
     aspectRatio: canvas.aspectRatio,
     paddingPx: canvas.paddingPx,
     backgroundType: canvas.backgroundType,
+    backgroundPreset: canvas.backgroundPreset,
+    screenCropLeft: canvas.screenCrop.left,
+    screenCropTop: canvas.screenCrop.top,
+    screenCropRight: canvas.screenCrop.right,
+    screenCropBottom: canvas.screenCrop.bottom,
+    screenScalePct: canvas.screenScalePct,
     colorStart: canvas.colorStart,
     colorEnd: canvas.colorEnd,
     cornerRadiusPx: canvas.cornerRadiusPx,
@@ -266,6 +342,8 @@ export function layoutFromSettings(
     webcamEnabled: camera.enabled,
     webcamShape: camera.shape,
     webcamSize: camera.size,
+    webcamSizePct: camera.sizePct,
+    webcamRoundnessPct: camera.roundnessPct,
     webcamPosition: camera.position,
     webcamCustomX: camera.customX,
     webcamCustomY: camera.customY,
