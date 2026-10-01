@@ -16,6 +16,10 @@ use std::{
 };
 use tauri::Manager;
 
+/// Audio queued ahead of the play position, in mixer chunks. The cpal queue (Windows) can
+/// take a deep lead, so a slow preview frame does not starve the audio clock.
+const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
+
 struct Runtime {
     generation: u64,
     /// Built for the webview preview: smaller canvas and rate-capped decode.
@@ -126,7 +130,9 @@ fn tick(
             let base = (status.position_us as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64;
             let mut output = AudioOutput::new().map_err(error)?;
             let mut queued = base;
-            while queued < (base + CHUNK_FRAMES as u64 * 3).min(runtime.mixer.total_frames) {
+            while queued
+                < (base + CHUNK_FRAMES as u64 * AUDIO_LEAD_CHUNKS).min(runtime.mixer.total_frames)
+            {
                 let chunk = runtime
                     .mixer
                     .read_frames(queued, CHUNK_FRAMES)
@@ -159,7 +165,8 @@ fn tick(
                     (current.position_us as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
                 )
             };
-            if queued >= runtime.mixer.total_frames || queued >= position + 3 * CHUNK_FRAMES as u64
+            if queued >= runtime.mixer.total_frames
+                || queued >= position + AUDIO_LEAD_CHUNKS * CHUNK_FRAMES as u64
             {
                 break;
             }

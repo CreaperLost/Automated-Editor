@@ -46,3 +46,11 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Decode, compositing and JPEG/H.264 work is far too slow unoptimized, which made
+# `cargo tauri dev` play back at a fraction of real time. Optimize dev builds too.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
