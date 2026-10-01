@@ -668,14 +668,7 @@ pub fn export_start_impl(
     drop(opened);
     let gate = Arc::clone(&state.encoder_gate);
     let mut owner = state.export.lock();
-    match crate::export::prepare_job(
-        &root,
-        &name,
-        document,
-        tracks,
-        settings,
-        &mut owner,
-    ) {
+    match crate::export::prepare_job(&root, &name, document, tracks, settings, &mut owner) {
         Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
         Err(status) => {
             owner.install_failed(status.clone());

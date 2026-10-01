@@ -273,6 +273,8 @@ mod tests {
         manifest.project_name = "Rev 2".into();
         manifest.save_with_backup(&manifest_path).unwrap();
         assert!(fs::read_to_string(&bak_path).unwrap().contains("Rev 1"));
-        assert!(fs::read_to_string(&manifest_path).unwrap().contains("Rev 2"));
+        assert!(fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains("Rev 2"));
     }
 }

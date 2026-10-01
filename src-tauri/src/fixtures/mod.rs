@@ -40,7 +40,14 @@ pub struct TestProject {
 impl TestProject {
     pub fn create(parent: &std::path::Path, name: &str) -> Self {
         let root = parent.join(format!("{name}.aero"));
-        for dir in ["telemetry", "media/screen", "media/webcam", "media/system", "media/mic", "cache"] {
+        for dir in [
+            "telemetry",
+            "media/screen",
+            "media/webcam",
+            "media/system",
+            "media/mic",
+            "cache",
+        ] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         let manifest = crate::project::ProjectManifest::new(format!("session-{name}"), name.into());

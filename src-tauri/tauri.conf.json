@@ -8,7 +8,7 @@
       "script": "npm run dev",
       "cwd": "../front-end"
     },
-    "devUrl": "http://localhost:1421",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": {
       "script": "npm run build",
       "cwd": "../front-end"

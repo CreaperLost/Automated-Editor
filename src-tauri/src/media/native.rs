@@ -1,7 +1,7 @@
 //! VideoToolbox decode/encode FFI. Pixels stay in-process.
-use super::{VideoFrame, MAX_ENCODE_FRAMES};
 #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
 use super::{ColorInfo, PixelFormat, MAX_FRAME_DIM};
+use super::{VideoFrame, MAX_ENCODE_FRAMES};
 #[allow(unused_imports)]
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::Path;

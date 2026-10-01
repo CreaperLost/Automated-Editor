@@ -543,8 +543,8 @@ fn write_cache(
 mod tests {
     use super::*;
     use crate::fixtures::generate_pcm16_wav;
-    use crate::project::manifest::{TrackDescriptor, TrackType};
     use crate::fixtures::TestProject;
+    use crate::project::manifest::{TrackDescriptor, TrackType};
     use crate::project::JournalRecord;
     use std::sync::atomic::Ordering;
     use tempfile::tempdir;
@@ -577,17 +577,17 @@ mod tests {
             media_timescale: Some(sample_rate),
         });
         bundle.append_journal(JournalRecord::SegmentCommitted {
-                seq: 0,
-                track_id: "mic".into(),
-                relative_path: relative.into(),
-                start_us,
-                end_us,
-                size_bytes: wav.len() as u64,
-                is_keyframe_start: true,
-                media_timescale: sample_rate,
-                media_start_value: 0,
-                host_anchor_us: start_us as i64,
-            });
+            seq: 0,
+            track_id: "mic".into(),
+            relative_path: relative.into(),
+            start_us,
+            end_us,
+            size_bytes: wav.len() as u64,
+            is_keyframe_start: true,
+            media_timescale: sample_rate,
+            media_start_value: 0,
+            host_anchor_us: start_us as i64,
+        });
         bundle.manifest_mut().duration_us = end_us;
         bundle.manifest_mut().active_duration_us = end_us;
         bundle.save_manifest();

@@ -553,9 +553,9 @@ pub fn tracks_from_reader(
 mod tests {
     use super::*;
     use crate::fixtures::generate_pcm16_wav;
+    use crate::fixtures::TestProject;
     use crate::project::manifest::{TrackDescriptor, TrackType};
     use crate::project::reader::ProjectReader;
-    use crate::fixtures::TestProject;
     use crate::project::JournalRecord;
     use std::fs;
 
@@ -618,17 +618,17 @@ mod tests {
             media_timescale: Some(48_000),
         });
         bundle.append_journal(JournalRecord::SegmentCommitted {
-                seq: 0,
-                track_id: "screen".into(),
-                relative_path: "media/screen/000001.wav".into(),
-                start_us: 0,
-                end_us: 100_000,
-                size_bytes: wav.len() as u64,
-                is_keyframe_start: true,
-                media_timescale: 48_000,
-                media_start_value: 0,
-                host_anchor_us: 0,
-            });
+            seq: 0,
+            track_id: "screen".into(),
+            relative_path: "media/screen/000001.wav".into(),
+            start_us: 0,
+            end_us: 100_000,
+            size_bytes: wav.len() as u64,
+            is_keyframe_start: true,
+            media_timescale: 48_000,
+            media_start_value: 0,
+            host_anchor_us: 0,
+        });
         bundle.manifest_mut().duration_us = 100_000;
         bundle.manifest_mut().active_duration_us = 100_000;
         bundle.save_manifest();

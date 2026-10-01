@@ -1,107 +1,91 @@
-# AeroShoot Video Editor
+# AeroEdits
 
-AeroShoot Video Editor is a dedicated post-production studio application for editing multi-stream recordings created by **AeroShoot Recorder**.
+AeroEdits is a desktop app for automated video editing, built for Windows and macOS. It opens
+multi-track `.aero` recording projects (screen, webcam, microphone and system audio, plus
+mouse telemetry) and edits them with smart zoom, silence cuts and layout presets before
+exporting an MP4.
 
-## Overview
+## Features
 
-AeroShoot Video Editor takes the recording bundles output by AeroShoot Recorder and provides an interactive timeline and canvas to customize, trim, autozoom, and export the finished video.
+- **Multi-track timeline:** screen and webcam video, microphone and system audio waveforms,
+  and a smart zoom track. Edits are non-destructive and support undo and redo.
+- **Smart zoom from mouse telemetry:** reads `telemetry/events.jsonl` and
+  `telemetry/geometry.jsonl` and suggests zooms and pans from clicks, dwell points and click
+  clusters. Suggestions can be accepted, dismissed, edited or added by hand.
+- **Silence detection:** finds dead air on the audio tracks and ripple-cuts it with
+  user-chosen thresholds.
+- **Layout:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows
+  and a styled webcam bubble.
+- **Export:** H.264 video with AAC stereo audio at 720p, 1080p or 4K.
 
-### Core Features
+## Platform status
 
-1. **Multi-Track Non-Destructive Timeline**:
-   - Screen video track
-   - Webcamera video track
-   - Microphone audio track with PCM waveforms
-   - System audio track with PCM waveforms
-   - Smart Zoom keyframe track
-2. **Telemetry-Driven Smart Zoom**:
-   - Reads `telemetry/events.jsonl` and `telemetry/geometry.jsonl` recorded during capture.
-   - Automatically analyzes mouse movements, dwell points, and click clusters to generate smooth camera-director style autozooms and pans.
-   - Supports user editing, acceptance, dismissal, and manual keyframe creation.
-3. **Studio Inspector & Layout Customization**:
-   - Responsive canvas aspect ratios: 16:9, 9:16 (vertical / reels / shorts), 4:3, 1:1.
-   - Beautiful canvas wallpapers: solid colors, gradient presets, custom images.
-   - Window padding, rounded corner radius, drop shadows.
-   - Webcamera bubble styling: circular, squircle, or rounded rect; position (corners or custom); size and shadows.
-4. **AI Silence Detection & Cuts**:
-   - Audio DSP silence detection across audio tracks.
-   - Ripple cut dead air with user-guided thresholds.
-5. **Video Export Engine**:
-   - Hardware-accelerated H.264 video and stereo AAC audio MP4 export at 720p, 1080p, or 4K.
+| | Windows | macOS |
+|---|---|---|
+| Open and edit projects, smart zoom, silence detection | Yes | Yes |
+| Preview, playback and export | Not yet | Yes (Swift/AVFoundation bridge) |
 
----
+Preview, playback and export currently go through the Swift bridges in
+`src-tauri/native/macos/`. A shared media backend for both platforms is planned; the Swift
+path stays until the shared one does everything it does.
 
-## Directory Structure
+## Repository layout
 
 ```
-editor/
-├── README.md               # This documentation
-├── front-end/              # React + Vite + TypeScript + Tailwind CSS UI
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── src/
-│       ├── App.tsx         # Main Editor application
-│       ├── components/     # Timeline, Canvas, Inspector, Waveform, SilenceModal
-│       ├── hooks/          # useTimeline, useWindowTitle
-│       ├── stores/         # projectStore, editorSettingsStore
-│       └── lib/            # IPC commands and types
-└── src-tauri/              # Tauri v2 backend in Rust & Swift
-    ├── Cargo.toml
-    ├── tauri.conf.json
-    ├── build.rs            # Builds Swift preview, playback, and export bridges
-    ├── native/macos/       # Swift bridges (AeroShootPreview, AeroShootPlayback, AeroShootExport, AeroShootMedia)
-    └── src/
-        ├── commands/       # Tauri command handlers for project editing and playback
-        ├── capture/        # Record-scene preview surface (capture sources, native preview)
-        ├── dsp/            # Silence detection DSP
-        ├── export/         # Export pipeline (H.264/AAC muxer)
-        ├── fixtures/       # Test-only fMP4/WAV generators
-        ├── media/          # BGRA frame model, decoder/encoder adapters
-        ├── playback/       # Real-time playback engine and preview coordinator
-        ├── project/        # Project reader, manifest, waveform, pcm, and revisions
-        ├── render/         # WGPU composite shader (composite.wgsl)
-        ├── session/        # Session state machine, clock, bounded queues
-        ├── telemetry/      # Mouse-telemetry reader for smart-zoom generation
-        ├── timeline/       # Multi-track timeline model & interval cuts
-        └── zoom/           # Smart zoom generator from mouse telemetry
+front-end/                 React + Vite + TypeScript + Tailwind UI
+  src/App.tsx              Main editor window
+  src/components/          Timeline, canvas preview, inspector, waveform, silence dialog
+  src/hooks/, src/stores/  Timeline hooks and zustand stores
+  src/lib/                 IPC wrappers (one per backend command) and shared types
+src-tauri/                 Tauri v2 backend (Rust)
+  tauri.conf.json
+  build.rs                 Builds the Swift bridges on macOS
+  native/macos/            Swift preview, playback, media and export bridges
+  src/commands/            Tauri command implementations
+  src/dsp/                 Silence detection
+  src/export/              Export pipeline
+  src/fixtures/            Synthetic media and projects for tests
+  src/media/               Frame model, decoder and encoder adapters
+  src/playback/            Playback engine and native preview
+  src/project/             Project reader, manifest, journal format, waveforms, edit revisions
+  src/render/              wgpu compositor (composite.wgsl)
+  src/telemetry/           Mouse telemetry reader
+  src/timeline/            Timeline model and interval mapping
+  src/zoom/                Smart zoom generator
 ```
 
----
-
-## Moving to a Separate Repository
-
-This folder is completely self-contained. To move it to its own Git repository:
-
-```bash
-# 1. Copy the editor folder to your desired destination
-cp -r /path/to/AeroShoot.AI/editor /path/to/aeroshoot-editor
-
-# 2. Initialize a new git repository
-cd /path/to/aeroshoot-editor
-git init
-git add .
-git commit -m "feat: initial commit of AeroShoot Video Editor"
-
-# 3. Add your remote repository and push
-git remote add origin git@github.com:your-username/aeroshoot-editor.git
-git branch -M main
-git push -u origin main
-```
-
----
-
-## Development Setup
+## Development
 
 ### Prerequisites
-- Node.js >= 18 and npm
-- Rust toolchain (stable)
-- macOS 13+ with Xcode / Command Line Tools (for Swift bridges)
 
-### Running the Editor in Development
+- Node.js 18 or newer, and npm
+- Rust (stable) and the Tauri CLI: `cargo install tauri-cli --version "^2"`
+- **Windows:** Microsoft C++ Build Tools (the "Desktop development with C++" workload) and
+  the WebView2 runtime, which ships with Windows 10 and 11.
+- **macOS:** macOS 13 or newer with Xcode or the Command Line Tools, for the Swift bridges.
+
+### Run the app
+
 ```bash
-cd editor/front-end
+cd front-end
 npm install
 
 cd ../src-tauri
-cargo tauri dev
+cargo tauri dev --features tauri-app
 ```
+
+Without `--features tauri-app` the binary builds the editor core only, with no window.
+
+### Tests
+
+```bash
+cd src-tauri
+cargo test
+
+cd ../front-end
+npx tsc --noEmit
+```
+
+Some Rust tests need macOS (native preview) or a GPU adapter (compositor parity) and fail
+on machines without them. On macOS, set `AEROEDITS_SKIP_SWIFT=1` to build against stubbed
+Swift bridges.
