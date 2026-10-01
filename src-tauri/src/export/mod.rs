@@ -2,10 +2,10 @@
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
 mod native;
 
-use crate::media::ffmpeg::FfmpegExport;
+use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
 use crate::media::{
-    decode_h264_frame, media_backend, media_duration_us, EncoderGate, MediaBackend, VideoFrame,
-    MAX_FRAME_DIM,
+    decode_h264_frame, decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate,
+    MediaBackend, VideoFrame, MAX_FRAME_DIM,
 };
 use crate::project::manifest::TrackType;
 use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
@@ -237,6 +237,9 @@ pub struct SceneEvaluator {
     compositor: Option<Compositor>,
     width: u32,
     height: u32,
+    decode_limit: DecodeLimit,
+    /// The document is fixed, so the wallpaper is decoded once rather than per frame.
+    wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
 }
 
 impl SceneEvaluator {
@@ -254,7 +257,15 @@ impl SceneEvaluator {
             compositor: Some(Compositor::new()?),
             width,
             height,
+            decode_limit: DecodeLimit::NONE,
+            wallpaper: std::cell::OnceCell::new(),
         })
+    }
+
+    /// Decodes sources no larger or faster than `limit`, for preview.
+    pub fn with_decode_limit(mut self, limit: DecodeLimit) -> Self {
+        self.decode_limit = limit;
+        self
     }
 
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
@@ -299,12 +310,14 @@ impl SceneEvaluator {
                             })
                     });
                     screen = candidate
-                        .map(|(segment, time)| decode_layer(&self.root, segment, time))
+                        .map(|(segment, time)| {
+                            decode_layer(&self.root, segment, time, self.decode_limit)
+                        })
                         .transpose()?;
                 }
                 TrackType::Webcam => {
                     webcam = containing
-                        .map(|segment| decode_layer(&self.root, segment, source))
+                        .map(|segment| decode_layer(&self.root, segment, source, self.decode_limit))
                         .transpose()?;
                 }
                 TrackType::MicAudio | TrackType::SystemAudio => {}
@@ -312,12 +325,18 @@ impl SceneEvaluator {
         }
 
         let has_screen = screen.is_some();
-        let wallpaper = crate::render::load_wallpaper_frame(
-            &self.root,
-            &self.document.layout,
-            self.width,
-            self.height,
-        )?;
+        let wallpaper = match self.wallpaper.get() {
+            Some(cached) => cached.clone(),
+            None => {
+                let loaded = crate::render::load_wallpaper_frame(
+                    &self.root,
+                    &self.document.layout,
+                    self.width,
+                    self.height,
+                )?;
+                self.wallpaper.get_or_init(|| loaded).clone()
+            }
+        };
         let mut scene = Scene::from_layout_with_wallpaper(
             self.width,
             self.height,
@@ -342,6 +361,7 @@ fn decode_layer(
     root: &Path,
     segment: &SegmentSummary,
     source_us: u64,
+    limit: DecodeLimit,
 ) -> Result<VideoFrame, String> {
     let path = safe_path(root, &segment.relative_path)?;
     // Each independently written segment has an AVAsset timeline beginning at zero.
@@ -349,7 +369,7 @@ fn decode_layer(
     let local_us = source_us
         .checked_sub(segment.start_us)
         .ok_or("Invalid segment timestamp")?;
-    decode_h264_frame(&path, local_us).map_err(|error| {
+    decode_h264_frame_limited(&path, local_us, limit).map_err(|error| {
         format!(
             "{} at local {}us: {}",
             segment.relative_path, local_us, error
@@ -1090,22 +1110,15 @@ mod tests {
         assert!(frame_time_us(2, 10) >= 200_000);
     }
 
-    /// Full export of a real project bundle with a cut: decode, composite, encode, mux.
-    #[test]
-    #[cfg_attr(
-        not(target_os = "macos"),
-        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
-    )]
-    fn gpu_export_writes_a_playable_mp4_across_a_cut() {
+    /// A `.aero` bundle with two seconds of 64x64 screen video, whose grey level steps up
+    /// every 100ms, and a mic track. Returns the project root.
+    fn screen_and_mic_project(dir: &Path) -> PathBuf {
         use crate::fixtures::{generate_pcm16_wav, TestProject};
         use crate::project::manifest::{TrackDescriptor, TrackType};
-        use crate::project::reader::{ProjectReader, RetainedInterval};
         use crate::project::JournalRecord;
 
-        let dir = tempfile::tempdir().unwrap();
-        let mut bundle = TestProject::create(dir.path(), "export");
+        let mut bundle = TestProject::create(dir, "export");
         let root = bundle.root_path().to_path_buf();
-        // Two seconds of screen video whose grey level steps up every 100ms.
         let frames: Vec<VideoFrame> = (0..20u8)
             .map(|i| VideoFrame::solid(64, 64, 10 + i * 12, 10 + i * 12, 10 + i * 12, 0).unwrap())
             .collect();
@@ -1161,8 +1174,12 @@ mod tests {
         bundle.save_manifest();
         drop(bundle);
 
-        let reader = ProjectReader::open(&root).unwrap();
-        let document = EditDocument::from_retained(vec![
+        root
+    }
+
+    fn cut_document() -> EditDocument {
+        use crate::project::reader::RetainedInterval;
+        EditDocument::from_retained(vec![
             RetainedInterval {
                 start_us: 0,
                 end_us: 500_000,
@@ -1172,7 +1189,22 @@ mod tests {
                 end_us: 2_000_000,
             },
         ])
-        .unwrap();
+        .unwrap()
+    }
+
+    /// Full export of a real project bundle with a cut: decode, composite, encode, mux.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_writes_a_playable_mp4_across_a_cut() {
+        use crate::project::reader::ProjectReader;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let reader = ProjectReader::open(&root).unwrap();
+        let document = cut_document();
         let tracks = crate::playback::tracks_from_reader(&reader);
         let settings = ExportSettings {
             width: 320,
@@ -1211,6 +1243,54 @@ mod tests {
         assert!(
             level.abs_diff(expected) <= 14,
             "level {level} after the cut, expected about {expected}"
+        );
+        crate::media::release_decoders();
+    }
+
+    /// The webview preview path: small canvas, capped decode, JPEG out.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_webview_preview_frame_across_a_cut() {
+        use crate::playback::preview::{encode_webview_frame, webview_dimensions};
+        use crate::project::reader::ProjectReader;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let reader = ProjectReader::open(&root).unwrap();
+        let document = cut_document();
+        let (width, height) = webview_dimensions(1920, 1080);
+        let mut evaluator = SceneEvaluator::new(
+            root,
+            document,
+            crate::playback::tracks_from_reader(&reader),
+            width,
+            height,
+        )
+        .unwrap()
+        .with_decode_limit(DecodeLimit {
+            max_width: 32,
+            max_height: 32,
+            max_rate: 30,
+        });
+        // Play forward across the cut the way the playback worker does.
+        let mut last = None;
+        for edited_us in (0..1_300_000).step_by(33_333) {
+            last = Some(evaluator.preview_at(edited_us).unwrap());
+        }
+        let frame = last.unwrap();
+        assert_eq!((frame.width, frame.height), (1280, 720));
+        let jpeg = encode_webview_frame(&frame).unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        assert_eq!(decoded.dimensions(), (1280, 720));
+        // The last frame shows source frame 19, the brightest step.
+        let level = decoded.get_pixel(640, 360).0[1];
+        let expected = 10 + 19 * 12;
+        assert!(
+            level.abs_diff(expected) <= 16,
+            "level {level}, expected about {expected}"
         );
         crate::media::release_decoders();
     }

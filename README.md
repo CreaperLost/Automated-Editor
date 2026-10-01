@@ -24,12 +24,15 @@ exporting an MP4.
 |---|---|---|
 | Open and edit projects, smart zoom, silence detection | Yes | Yes |
 | Export (H.264/AAC MP4) | Yes (FFmpeg) | Yes (Swift/AVFoundation bridge) |
-| Preview and playback | Not yet | Yes (Swift/AVFoundation bridge) |
+| Preview and playback | Yes (FFmpeg, preview drawn in the app window, WASAPI audio) | Yes (Swift/AVFoundation bridge) |
 
 The shared media backend (`src-tauri/src/media/ffmpeg.rs`) decodes and encodes through
 FFmpeg on every platform. On macOS the Swift bridges in `src-tauri/native/macos/` stay the
 default until the shared backend does everything they do; set
 `AEROEDITS_MEDIA_BACKEND=ffmpeg` to try the shared one there.
+
+Without the Swift preview view, the backend composites each preview frame at up to 1280px,
+JPEG-encodes it, and the webview fetches it with the `preview_frame` command.
 
 ## Repository layout
 

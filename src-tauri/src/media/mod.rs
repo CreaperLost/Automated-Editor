@@ -260,6 +260,19 @@ pub fn decode_h264_frame(path: &Path, time_us: u64) -> Result<VideoFrame, String
     }
 }
 
+/// Decode for preview: the FFmpeg backend scales and rate-caps to `limit`; the Swift bridge
+/// ignores it.
+pub fn decode_h264_frame_limited(
+    path: &Path,
+    time_us: u64,
+    limit: ffmpeg::DecodeLimit,
+) -> Result<VideoFrame, String> {
+    match media_backend() {
+        MediaBackend::Native => native::decode_bgra(path, time_us),
+        MediaBackend::Ffmpeg => ffmpeg::decode_bgra_limited(path, time_us, limit),
+    }
+}
+
 /// Container duration of a media file.
 pub fn media_duration_us(path: &Path) -> Result<u64, String> {
     match media_backend() {

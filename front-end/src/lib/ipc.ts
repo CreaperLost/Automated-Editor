@@ -144,6 +144,8 @@ export const api = {
   previewPresentFixture: (path: string, generation = 0) =>
     invokeTauri<PreviewStatus>("preview_present_fixture", { path, generation }),
   previewStatus: () => invokeTauri<PreviewStatus>("preview_status"),
+  /** Latest webview preview frame after `after`: 8-byte LE sequence number + JPEG, or empty. */
+  previewFrame: (after: number) => invokeTauri<ArrayBuffer>("preview_frame", { after }),
   previewHitTest: (x: number, y: number) => invokeTauri<boolean>("preview_hit_test", { x, y }),
   previewDetach: (windowLabel: string, generation?: number) =>
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),

@@ -1,8 +1,15 @@
-//! Native preview surface session. Geometry and lifetime are owned here;
-//! pixels are presented only through the platform adapter, never Tauri IPC.
+//! Preview surface session. Geometry and lifetime are owned here. On macOS pixels go to a
+//! native child view; elsewhere frames are JPEG-encoded and fetched by the webview.
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub const ARRANGEMENT: &str = "child_overlay";
+pub const WEBVIEW_ARRANGEMENT: &str = "webview";
+/// Long side of the composited frame sent to the webview.
+pub const WEBVIEW_MAX_DIM: u32 = 1280;
+/// Source frame-rate cap while decoding for the webview preview.
+pub const WEBVIEW_MAX_RATE: u32 = 30;
+const WEBVIEW_JPEG_QUALITY: u8 = 82;
 pub const MAX_VIEWPORT: f64 = 8_192.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -60,7 +67,50 @@ pub struct PreviewStatus {
     pub visible: bool,
     pub occluded: bool,
     pub hit_mode: PreviewHitMode,
+    /// "native" (Swift child view) or "webview" (frames fetched with `preview_frame`).
+    pub surface: String,
     pub diagnostics: Vec<String>,
+}
+
+/// Canvas size for webview preview: the layout's preview size scaled to fit
+/// [`WEBVIEW_MAX_DIM`], kept even.
+pub fn webview_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let long = width.max(height).max(1);
+    if long <= WEBVIEW_MAX_DIM {
+        return (width, height);
+    }
+    let fit = |value: u32| {
+        let scaled = (value as u64 * WEBVIEW_MAX_DIM as u64 / long as u64) as u32;
+        (scaled & !1).max(16)
+    };
+    (fit(width), fit(height))
+}
+
+/// JPEG bytes of a BGRA frame, for the webview preview.
+pub fn encode_webview_frame(frame: &crate::media::VideoFrame) -> Result<Vec<u8>, String> {
+    use image::codecs::jpeg::JpegEncoder;
+    let row = frame.width as usize * 4;
+    let mut rgb = Vec::with_capacity(frame.width as usize * frame.height as usize * 3);
+    for y in 0..frame.height as usize {
+        let start = y * frame.stride as usize;
+        let line = frame
+            .data
+            .get(start..start + row)
+            .ok_or("Preview frame buffer is truncated")?;
+        for px in line.chunks_exact(4) {
+            rgb.extend_from_slice(&[px[2], px[1], px[0]]);
+        }
+    }
+    let mut jpeg = Vec::with_capacity(rgb.len() / 8);
+    JpegEncoder::new_with_quality(&mut jpeg, WEBVIEW_JPEG_QUALITY)
+        .encode(
+            &rgb,
+            frame.width,
+            frame.height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|e| format!("Preview JPEG encode failed: {e}"))?;
+    Ok(jpeg)
 }
 
 impl PreviewViewport {
@@ -127,6 +177,9 @@ pub struct PreviewOwner {
     presented_bytes: u64,
     hit_mode: PreviewHitMode,
     supported: bool,
+    /// Latest webview frame: an 8-byte little-endian sequence number, then JPEG bytes.
+    web_frame: Option<Arc<Vec<u8>>>,
+    web_seq: u64,
 }
 
 impl PreviewOwner {
@@ -141,7 +194,9 @@ impl PreviewOwner {
             copies: 0,
             presented_bytes: 0,
             hit_mode: PreviewHitMode::Consume,
-            supported: cfg!(target_os = "macos"),
+            supported: true,
+            web_frame: None,
+            web_seq: 0,
         }
     }
 
@@ -151,7 +206,11 @@ impl PreviewOwner {
             window_label: self.window_label.clone(),
             generation: self.generation,
             layout_revision: self.viewport.as_ref().map(|v| v.revision).unwrap_or(0),
-            arrangement: ARRANGEMENT.into(),
+            arrangement: if self.attached && self.native.is_none() {
+                WEBVIEW_ARRANGEMENT.into()
+            } else {
+                ARRANGEMENT.into()
+            },
             supported: self.supported,
             presented_kind: self.presented_kind.clone(),
             copies_per_present: 1,
@@ -166,6 +225,11 @@ impl PreviewOwner {
             visible: self.viewport.as_ref().map(|v| v.visible).unwrap_or(false),
             occluded: self.viewport.as_ref().map(|v| v.occluded).unwrap_or(false),
             hit_mode: self.hit_mode,
+            surface: if self.native.is_some() {
+                "native".into()
+            } else {
+                "webview".into()
+            },
             diagnostics: Vec::new(),
         }
     }
@@ -224,6 +288,10 @@ impl PreviewOwner {
         self.ensure_generation(generation)?;
         if let Some(handle) = self.native {
             super::native::present_fixed(handle, r, g, b, self.generation)?;
+        } else {
+            let to_u8 = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let frame = crate::media::VideoFrame::solid(16, 16, to_u8(b), to_u8(g), to_u8(r), 0)?;
+            self.store_web_frame(encode_webview_frame(&frame)?);
         }
         self.presented_kind = "fixed".into();
         self.copies = self.copies.saturating_add(1);
@@ -257,12 +325,45 @@ impl PreviewOwner {
     ) -> Result<(), String> {
         self.ensure_open()?;
         self.ensure_generation(generation)?;
-        let native = self.native.ok_or("No native surface")?;
-        super::native::present_frame(native, frame, generation)?;
+        match self.native {
+            Some(native) => super::native::present_frame(native, frame, generation)?,
+            None => self.store_web_frame(encode_webview_frame(frame)?),
+        }
         self.presented_kind = "project".into();
         self.copies += 1;
         self.presented_bytes = frame.data.len() as u64;
         Ok(())
+    }
+
+    /// Presents a frame already encoded by [`encode_webview_frame`], so the caller can keep
+    /// encoding off the UI thread.
+    pub fn present_encoded(&mut self, jpeg: Vec<u8>, generation: u64) -> Result<(), String> {
+        self.ensure_open()?;
+        self.ensure_generation(generation)?;
+        if self.native.is_some() {
+            return Err("Encoded frames are only for the webview preview".into());
+        }
+        self.presented_bytes = jpeg.len() as u64;
+        self.store_web_frame(jpeg);
+        self.presented_kind = "project".into();
+        self.copies += 1;
+        Ok(())
+    }
+
+    fn store_web_frame(&mut self, jpeg: Vec<u8>) {
+        self.web_seq += 1;
+        let mut payload = Vec::with_capacity(8 + jpeg.len());
+        payload.extend_from_slice(&self.web_seq.to_le_bytes());
+        payload.extend_from_slice(&jpeg);
+        self.web_frame = Some(Arc::new(payload));
+    }
+
+    /// The latest webview frame if it is newer than `after_seq`.
+    pub fn web_frame_after(&self, after_seq: u64) -> Option<Arc<Vec<u8>>> {
+        if !self.attached || self.web_seq <= after_seq {
+            return None;
+        }
+        self.web_frame.clone()
     }
 
     pub fn hit_test(&self, x: f64, y: f64) -> bool {
@@ -295,6 +396,7 @@ impl PreviewOwner {
         self.attached = false;
         self.window_label = None;
         self.viewport = None;
+        self.web_frame = None;
         self.presented_kind = "none".into();
         self.generation = self.generation.saturating_add(1);
     }
@@ -353,6 +455,26 @@ mod tests {
     }
 
     #[test]
+    fn webview_frames_fit_the_size_cap() {
+        assert_eq!(webview_dimensions(1920, 1080), (1280, 720));
+        assert_eq!(webview_dimensions(1080, 1920), (720, 1280));
+        assert_eq!(webview_dimensions(1440, 1080), (1280, 960));
+        assert_eq!(webview_dimensions(640, 360), (640, 360));
+    }
+
+    #[test]
+    fn webview_frame_round_trips_through_jpeg() {
+        let frame = crate::media::VideoFrame::solid(64, 32, 20, 40, 220, 0).unwrap();
+        let jpeg = encode_webview_frame(&frame).unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        assert_eq!(decoded.dimensions(), (64, 32));
+        let px = decoded.get_pixel(32, 16).0;
+        for (got, want) in px.iter().zip([220u8, 40, 20]) {
+            assert!(got.abs_diff(want) <= 8, "decoded {px:?}");
+        }
+    }
+
+    #[test]
     fn logical_points_map_to_physical_pixels() {
         let physical = viewport(1).physical().unwrap();
         assert_eq!(physical.x, 20);
@@ -361,8 +483,6 @@ mod tests {
         assert_eq!(physical.height, 360);
     }
 
-    // Needs the native Swift preview view.
-    #[cfg(target_os = "macos")]
     #[test]
     fn stale_layout_and_generation_are_rejected() {
         let mut owner = PreviewOwner::new();
@@ -380,14 +500,21 @@ mod tests {
         let json = serde_json::to_value(owner.status()).unwrap();
         assert!(json.get("pixels").is_none());
         assert!(json.get("samples").is_none());
-        assert_eq!(json["arrangement"], "child_overlay");
+        // No native window was given, so frames go to the webview.
+        assert_eq!(json["arrangement"], "webview");
+        assert_eq!(json["surface"], "webview");
         assert_eq!(json["copiesPerPresent"], 1);
         assert_eq!(owner.status().presented_kind, "fixed");
         assert!(owner
             .present_fixture("/tmp/missing-f1.mp4", generation)
             .unwrap_err()
             .contains("Native preview view"));
+        let fixed = owner.web_frame_after(0).expect("fixed colour frame");
+        assert_eq!(&fixed[..8], &1u64.to_le_bytes());
+        assert_eq!(&fixed[8..10], &[0xFF, 0xD8], "payload is a JPEG");
+        assert!(owner.web_frame_after(1).is_none());
         owner.detach();
+        assert!(owner.web_frame_after(0).is_none());
         owner
             .attach("main".into(), PreviewHitMode::Consume, None)
             .unwrap();
@@ -396,8 +523,6 @@ mod tests {
         assert!(!owner.status().attached);
     }
 
-    // Needs the native Swift preview view.
-    #[cfg(target_os = "macos")]
     #[test]
     fn circle_hit_mode_passes_transparent_corners() {
         let mut owner = PreviewOwner::new();

@@ -40,7 +40,8 @@ impl AppState {
             export: Mutex::new(crate::export::ExportOwner::new()),
             waveform_epoch: AtomicU64::new(0),
             waveform_generations: Mutex::new(HashMap::new()),
-            native_capture_enabled: cfg!(target_os = "macos"),
+            // Playback has an audio output (and audio clock) on macOS and Windows.
+            native_capture_enabled: cfg!(any(target_os = "macos", windows)),
         }
     }
 }

@@ -249,9 +249,50 @@ fn seconds_arg(us: u64) -> String {
     format!("{}.{:06}", us / 1_000_000, us % 1_000_000)
 }
 
+/// Caps on decoded size and frame rate, so preview does not pull full-resolution frames
+/// through the pipe. Zero means no limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DecodeLimit {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_rate: u32,
+}
+
+impl DecodeLimit {
+    pub const NONE: Self = Self {
+        max_width: 0,
+        max_height: 0,
+        max_rate: 0,
+    };
+
+    /// Output size and rate for a source, keeping its aspect ratio.
+    fn apply(&self, info: &VideoInfo) -> VideoInfo {
+        let mut scale = 1.0f64;
+        if self.max_width > 0 && info.width > self.max_width {
+            scale = scale.min(self.max_width as f64 / info.width as f64);
+        }
+        if self.max_height > 0 && info.height > self.max_height {
+            scale = scale.min(self.max_height as f64 / info.height as f64);
+        }
+        let fit = |value: u32| ((value as f64 * scale).round() as u32).max(2);
+        let (num, den) = info.rate;
+        let rate = if self.max_rate > 0 && num > self.max_rate.saturating_mul(den) {
+            (self.max_rate, 1)
+        } else {
+            info.rate
+        };
+        VideoInfo {
+            width: fit(info.width),
+            height: fit(info.height),
+            rate,
+        }
+    }
+}
+
 /// One ffmpeg process emitting constant-rate BGRA frames from `start_us` onward.
 struct FrameStream {
     path: PathBuf,
+    limit: DecodeLimit,
     child: Child,
     stdout: ChildStdout,
     log: File,
@@ -267,9 +308,16 @@ struct FrameStream {
 }
 
 impl FrameStream {
-    fn open(path: &Path, info: &VideoInfo, start_us: u64) -> Result<Self, String> {
+    fn open(
+        path: &Path,
+        source: &VideoInfo,
+        limit: DecodeLimit,
+        start_us: u64,
+    ) -> Result<Self, String> {
+        let info = limit.apply(source);
         let (mut cmd, log) = command(ffmpeg_path()?)?;
         let (num, den) = info.rate;
+        let (width, height) = (info.width, info.height);
         cmd.arg("-nostdin")
             .args(["-ss", &seconds_arg(start_us)])
             .arg("-i")
@@ -277,7 +325,7 @@ impl FrameStream {
             .args(["-map", "0:v:0", "-an", "-sn"])
             .arg("-vf")
             .arg(format!(
-                "fps={num}/{den},scale=in_color_matrix=auto:in_range=auto:out_range=full,format=bgra"
+                "fps={num}/{den},scale={width}:{height}:flags=bilinear:in_color_matrix=auto:in_range=auto:out_range=full,format=bgra"
             ))
             .args(["-f", "rawvideo", "pipe:1"])
             .stdout(Stdio::piped());
@@ -290,6 +338,7 @@ impl FrameStream {
             .ok_or("FFmpeg decoder has no output pipe")?;
         Ok(Self {
             path: path.to_path_buf(),
+            limit,
             child,
             stdout,
             log,
@@ -431,12 +480,21 @@ fn cached_info(path: &Path) -> Result<VideoInfo, String> {
 
 /// Decodes the frame shown at `time_us` (relative to the start of the file) as BGRA.
 pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
+    decode_bgra_limited(path, time_us, DecodeLimit::NONE)
+}
+
+/// Like [`decode_bgra`], scaled down and rate-capped to `limit`.
+pub fn decode_bgra_limited(
+    path: &Path,
+    time_us: u64,
+    limit: DecodeLimit,
+) -> Result<VideoFrame, String> {
     let taken = {
         let mut cache = DECODERS.lock();
         cache
             .streams
             .iter()
-            .position(|s| s.path == path && s.can_serve(time_us))
+            .position(|s| s.path == path && s.limit == limit && s.can_serve(time_us))
             .map(|index| cache.streams.remove(index))
     };
     let (mut stream, mut frame) = match taken {
@@ -446,7 +504,7 @@ pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
         }
         None => {
             let info = cached_info(path)?;
-            let mut stream = FrameStream::open(path, &info, time_us)?;
+            let mut stream = FrameStream::open(path, &info, limit, time_us)?;
             let frame = stream.frame_at(time_us);
             (stream, frame)
         }
@@ -455,7 +513,7 @@ pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
         // Seeking past the last frame yields nothing; hold the final frame instead.
         let info = cached_info(path)?;
         let tail_start = duration_us(path)?.saturating_sub(TAIL_SEEK_US);
-        stream = FrameStream::open(path, &info, tail_start.min(time_us))?;
+        stream = FrameStream::open(path, &info, limit, tail_start.min(time_us))?;
         frame = stream.frame_at(time_us);
     }
     if frame.is_ok() {
@@ -829,6 +887,59 @@ mod tests {
         // Past the end holds the last frame.
         check(900_000, 9);
         check(5_000_000, 9);
+        release_decoders();
+    }
+
+    #[test]
+    fn limits_keep_aspect_and_cap_rate() {
+        let source = VideoInfo {
+            width: 3840,
+            height: 2160,
+            rate: (60, 1),
+        };
+        let limit = DecodeLimit {
+            max_width: 1280,
+            max_height: 1280,
+            max_rate: 30,
+        };
+        assert_eq!(
+            limit.apply(&source),
+            VideoInfo {
+                width: 1280,
+                height: 720,
+                rate: (30, 1)
+            }
+        );
+        assert_eq!(DecodeLimit::NONE.apply(&source), source);
+        let small = VideoInfo {
+            width: 640,
+            height: 480,
+            rate: (24000, 1001),
+        };
+        assert_eq!(limit.apply(&small), small);
+    }
+
+    #[test]
+    fn limited_decode_scales_frames() {
+        if !ffmpeg_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.mp4");
+        write_solid_mp4(&path, 128, 64, 0.1, 0.8, 0.1).unwrap();
+        let limit = DecodeLimit {
+            max_width: 32,
+            max_height: 32,
+            max_rate: 10,
+        };
+        let frame = decode_bgra_limited(&path, 250_000, limit).unwrap();
+        assert_eq!((frame.width, frame.height), (32, 16));
+        // A fresh stream starts at the requested time; the next frame is one 10 fps step on.
+        assert_eq!(frame.pts_us, 250_000);
+        let next = decode_bgra_limited(&path, 350_000, limit).unwrap();
+        assert_eq!(next.pts_us, 350_000);
+        let full = decode_bgra(&path, 250_000).unwrap();
+        assert_eq!((full.width, full.height), (128, 64));
         release_decoders();
     }
 

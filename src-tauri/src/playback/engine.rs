@@ -4,6 +4,7 @@ use crate::{
     commands::AppState,
     export::SceneEvaluator,
     media::audio::{AudioMixer, CHUNK_FRAMES, SAMPLE_RATE},
+    media::ffmpeg::DecodeLimit,
 };
 use std::{
     sync::{
@@ -17,6 +18,8 @@ use tauri::Manager;
 
 struct Runtime {
     generation: u64,
+    /// Built for the webview preview: smaller canvas and rate-capped decode.
+    webview: bool,
     evaluator: SceneEvaluator,
     mixer: AudioMixer,
     _lease: std::fs::File,
@@ -73,7 +76,8 @@ fn tick(
     }
     let generation = status.generation;
     let error = |e| (generation, e);
-    if runtime.as_ref().map(|r| r.generation) != Some(generation) {
+    let webview = state.preview.lock().status().surface == "webview";
+    if runtime.as_ref().map(|r| (r.generation, r.webview)) != Some((generation, webview)) {
         let (root, document, tracks) = {
             let opened = state.opened_project.lock();
             let Some(reader) = opened.as_ref() else {
@@ -90,11 +94,22 @@ fn tick(
         };
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
         let mixer = AudioMixer::new(&root, &document, &tracks).map_err(error)?;
-        let (width, height) = document.layout.preview_dimensions().map_err(error)?;
-        let evaluator =
+        let (mut width, mut height) = document.layout.preview_dimensions().map_err(error)?;
+        if webview {
+            (width, height) = super::preview::webview_dimensions(width, height);
+        }
+        let mut evaluator =
             SceneEvaluator::new(root, document, tracks, width, height).map_err(error)?;
+        if webview {
+            evaluator = evaluator.with_decode_limit(DecodeLimit {
+                max_width: width,
+                max_height: height,
+                max_rate: super::preview::WEBVIEW_MAX_RATE,
+            });
+        }
         *runtime = Some(Runtime {
             generation,
+            webview,
             evaluator,
             mixer,
             _lease: lease,
@@ -189,6 +204,28 @@ fn tick(
         .evaluator
         .preview_at(status.position_us)
         .map_err(error)?;
+    if preview.surface == "webview" {
+        // The webview fetches frames itself, so nothing here needs the UI thread.
+        let jpeg = super::preview::encode_webview_frame(&frame).map_err(error)?;
+        let mut owner = state.playback.lock();
+        if owner.status().is_ok_and(|s| {
+            s.generation == generation
+                && !matches!(s.state, PlaybackState::Closed | PlaybackState::Error)
+        }) {
+            let mut surface = state.preview.lock();
+            let current = surface.status();
+            if current.attached && current.generation == preview.generation && current.visible {
+                match surface.present_encoded(jpeg, preview.generation) {
+                    Ok(()) => {
+                        owner.mark_presented(generation);
+                    }
+                    Err(e) => owner.fail(generation, e),
+                }
+            }
+        }
+        *last_frame = Some(key);
+        return Ok(());
+    }
     pending.store(true, Ordering::Release);
     let pending_done = Arc::clone(pending);
     let app_copy = app.clone();

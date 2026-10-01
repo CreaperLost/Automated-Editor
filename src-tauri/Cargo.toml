@@ -32,6 +32,10 @@ dirs = "6.0"
 tauri = { version = "2.0.0", optional = true , features = [] }
 rfd = { version = "0.15", optional = true }
 
+# Audio output for playback on Windows (WASAPI). macOS uses the Swift bridge.
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", optional = true , features = [] }
 

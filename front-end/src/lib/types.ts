@@ -420,6 +420,8 @@ export interface PreviewStatus {
   visible: boolean;
   occluded: boolean;
   hitMode: PreviewHitMode;
+  /** "native": a macOS child view draws frames. "webview": fetch them with `previewFrame`. */
+  surface: "native" | "webview";
   diagnostics: string[];
 }
 
