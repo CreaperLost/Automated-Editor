@@ -53,3 +53,32 @@ export const InspectorSection: React.FC<{
     </section>
   );
 };
+
+export const RangeRow: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit: string;
+  onChange: (value: number) => void;
+}> = ({ label, value, min, max, step = 1, unit, onChange }) => (
+  <div className="space-y-1.5">
+    <div className="flex justify-between text-xs">
+      <span className="text-studio-400">{label}</span>
+      <span className="font-mono text-studio-300">
+        {Math.round(value * 10) / 10}
+        {unit}
+      </span>
+    </div>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+    />
+  </div>
+);

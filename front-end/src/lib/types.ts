@@ -443,8 +443,59 @@ export interface OpenedProject {
   removedIntervals?: RetainedInterval[];
   /** Source timestamps where the user split a clip. */
   splitPointsUs?: number[];
+  /** Auto webcam layout settings and segments. */
+  webcamFocus?: WebcamFocus;
   audio?: AudioSettings;
 }
+
+// Auto webcam layout (src-tauri/src/webcam_focus.rs)
+export interface WebcamFocusSettings {
+  speechThresholdDb: number;
+  pauseToleranceMs: number;
+  idleMs: number;
+  minFocusMs: number;
+  transitionMs: number;
+  cursorMovesAreActivity: boolean;
+  focusSizePct: number;
+}
+
+export interface WebcamFocusSegment {
+  id: string;
+  sourceStartUs: number;
+  sourceEndUs: number;
+  source: "auto" | "manual";
+  enabled: boolean;
+  /** Where the segment lands on the edited timeline. */
+  editedRanges?: { startUs: number; endUs: number }[];
+}
+
+export interface WebcamFocus {
+  enabled: boolean;
+  settings: WebcamFocusSettings;
+  segments: WebcamFocusSegment[];
+}
+
+export interface WebcamFocusDetection {
+  project: OpenedProject;
+  detected: number;
+  diagnostics: string[];
+}
+
+export const DEFAULT_WEBCAM_FOCUS_SETTINGS: WebcamFocusSettings = {
+  speechThresholdDb: -38,
+  pauseToleranceMs: 800,
+  idleMs: 1500,
+  minFocusMs: 2500,
+  transitionMs: 450,
+  cursorMovesAreActivity: true,
+  focusSizePct: 100,
+};
+
+export const DEFAULT_WEBCAM_FOCUS: WebcamFocus = {
+  enabled: false,
+  settings: DEFAULT_WEBCAM_FOCUS_SETTINGS,
+  segments: [],
+};
 
 export type PlaybackState =
   | "closed"

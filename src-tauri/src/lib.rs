@@ -9,6 +9,7 @@ pub mod render;
 pub mod telemetry;
 pub mod timeline;
 pub mod transcript;
+pub mod webcam_focus;
 pub mod zoom;
 
 #[cfg(feature = "tauri-app")]
@@ -181,6 +182,55 @@ fn project_zoom_delete(
     id: String,
 ) -> Result<project::OpenedProject, String> {
     commands::project_zoom_delete_impl(&state, project_handle, expected_revision, id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_webcam_focus_detect(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    settings: webcam_focus::WebcamFocusSettings,
+) -> Result<commands::WebcamFocusDetection, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::project_webcam_focus_detect_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            settings,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_webcam_focus_update(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    focus: webcam_focus::WebcamFocus,
+) -> Result<project::OpenedProject, String> {
+    commands::project_webcam_focus_update_impl(&state, project_handle, expected_revision, focus)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_webcam_focus_add(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    edited_start_us: u64,
+    edited_end_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::project_webcam_focus_add_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        edited_start_us,
+        edited_end_us,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -743,6 +793,9 @@ pub fn run() {
             project_zoom_add,
             project_zoom_delete,
             project_layout_update,
+            project_webcam_focus_detect,
+            project_webcam_focus_update,
+            project_webcam_focus_add,
             project_audio_update,
             project_ripple_cuts,
             project_split,

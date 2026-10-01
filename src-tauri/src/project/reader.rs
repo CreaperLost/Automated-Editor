@@ -79,6 +79,7 @@ pub struct OpenedProject {
     #[serde(default)]
     pub split_points_us: Vec<u64>,
     #[serde(default)]
+    pub webcam_focus: crate::webcam_focus::WebcamFocus,
     pub audio: crate::project::AudioSettings,
 }
 
@@ -467,6 +468,7 @@ impl ProjectReader {
                 project_path: Some(root.to_string_lossy().into_owned()),
                 removed_intervals: Vec::new(),
                 split_points_us: Vec::new(),
+                webcam_focus: Default::default(),
                 audio: history.current.audio.clone(),
             },
             segments,
@@ -645,6 +647,29 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn update_webcam_focus(
+        &mut self,
+        expected_revision: u64,
+        focus: crate::webcam_focus::WebcamFocus,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .update_webcam_focus(expected_revision, focus, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn add_webcam_focus(
+        &mut self,
+        expected_revision: u64,
+        edited_start_us: u64,
+        edited_end_us: u64,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .add_webcam_focus(expected_revision, edited_start_us, edited_end_us, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn update_audio(
         &mut self,
         expected_revision: u64,
@@ -692,6 +717,11 @@ impl ProjectReader {
         self.summary.dismissed_zoom_ids = self.history.current.dismissed_zoom_ids.clone();
         self.summary.layout = self.history.current.layout.clone();
         self.summary.split_points_us = self.history.current.split_points_us.clone();
+        let mut focus = self.history.current.webcam_focus.clone();
+        if let Ok(mapper) = self.history.current.mapper() {
+            focus.attach_edited_ranges(&mapper);
+        }
+        self.summary.webcam_focus = focus;
         self.summary.audio = self.history.current.audio.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary

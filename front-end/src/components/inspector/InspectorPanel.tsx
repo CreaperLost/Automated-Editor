@@ -1,15 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import {
-  Palette,
-  Sliders,
-  Camera,
-  Monitor,
-  Frame,
-} from "lucide-react";
+import { Palette, Sliders, Camera, Monitor, Frame } from "lucide-react";
+import { InspectorSection, RangeRow } from "./InspectorSection";
+import { WebcamFocusSection } from "./WebcamFocusSection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import { InspectorSection } from "./InspectorSection";
 import { AudioSection } from "../audio/AudioSection";
 import {
   BACKGROUND_PRESETS,
@@ -21,35 +16,6 @@ import {
   layoutFromSettings,
   presetBackgroundCss,
 } from "../../lib/types";
-
-const RangeRow: React.FC<{
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  unit: string;
-  onChange: (value: number) => void;
-}> = ({ label, value, min, max, step = 1, unit, onChange }) => (
-  <div className="space-y-1.5">
-    <div className="flex justify-between text-xs">
-      <span className="text-studio-400">{label}</span>
-      <span className="font-mono text-studio-300">
-        {Math.round(value * 10) / 10}
-        {unit}
-      </span>
-    </div>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      onChange={(e) => onChange(Number(e.target.value))}
-      className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
-    />
-  </div>
-);
 
 export const InspectorPanel: React.FC = () => {
   const {
@@ -567,6 +533,7 @@ export const InspectorPanel: React.FC = () => {
         )}
       </InspectorSection>
 
+      <WebcamFocusSection webcamShown={cameraBubble.enabled} />
       <AudioSection />
     </div>
   );

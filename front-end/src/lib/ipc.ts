@@ -17,6 +17,9 @@ import {
   ZoomConfig,
   ProjectZoom,
   ManualZoomInput,
+  WebcamFocus,
+  WebcamFocusDetection,
+  WebcamFocusSettings,
   EditLayout,
   AudioSettings,
   TranscriptCutSuggestion,
@@ -104,6 +107,34 @@ export const api = {
       projectHandle,
       expectedRevision,
       id,
+    }),
+  projectWebcamFocusDetect: (
+    projectHandle: string,
+    expectedRevision: number,
+    settings: WebcamFocusSettings,
+  ) =>
+    invokeTauri<WebcamFocusDetection>("project_webcam_focus_detect", {
+      projectHandle,
+      expectedRevision,
+      settings,
+    }),
+  projectWebcamFocusUpdate: (projectHandle: string, expectedRevision: number, focus: WebcamFocus) =>
+    invokeTauri<OpenedProject>("project_webcam_focus_update", {
+      projectHandle,
+      expectedRevision,
+      focus,
+    }),
+  projectWebcamFocusAdd: (
+    projectHandle: string,
+    expectedRevision: number,
+    editedStartUs: number,
+    editedEndUs: number,
+  ) =>
+    invokeTauri<OpenedProject>("project_webcam_focus_add", {
+      projectHandle,
+      expectedRevision,
+      editedStartUs,
+      editedEndUs,
     }),
   projectLayoutUpdate: (
     projectHandle: string,

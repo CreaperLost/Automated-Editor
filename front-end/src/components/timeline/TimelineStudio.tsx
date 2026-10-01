@@ -14,6 +14,7 @@ import {
   X,
   Trash2,
   RotateCcw,
+  Video,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -448,6 +449,21 @@ export const TimelineStudio: React.FC = () => {
             <Plus className="w-3.5 h-3.5" />
             <span>Add Zoom</span>
           </button>
+
+          <button
+            disabled={!openedProject || editing || !selection}
+            onClick={() => {
+              if (!selection) return;
+              void runEdit((project) =>
+                api.projectWebcamFocusAdd(project.projectHandle, project.revision, selection.startUs, selection.endUs),
+              );
+            }}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-200 text-xs font-medium transition-colors disabled:opacity-40"
+            title="Make the webcam fill the frame over the selection (turns Auto Webcam on)"
+          >
+            <Video className="w-3.5 h-3.5" />
+            <span>Cam Focus</span>
+          </button>
           {pendingCount > 0 && (
             <>
               <button
@@ -795,6 +811,26 @@ export const TimelineStudio: React.FC = () => {
                 {!track.waveform && track.trackType !== "mic" && track.trackType !== "system" && (
                   <div className="mx-2 h-8 flex-1 rounded bg-indigo-500/15 border border-indigo-400/20" />
                 )}
+
+                {/* Auto webcam layout: where the webcam fills the frame */}
+                {track.trackType === "webcam" && durationUs > 0 &&
+                  (openedProject?.webcamFocus?.segments ?? []).flatMap((segment) =>
+                    (segment.editedRanges ?? []).map((range, index) => (
+                      <div
+                        key={`${segment.id}-${index}`}
+                        className={`absolute top-1 bottom-1 rounded-sm border z-10 pointer-events-none ${
+                          segment.enabled && openedProject?.webcamFocus?.enabled
+                            ? "bg-amber-400/30 border-amber-300/70"
+                            : "border-dashed border-studio-500/60"
+                        }`}
+                        style={{
+                          left: `${(range.startUs / durationUs) * 100}%`,
+                          width: `${((range.endUs - range.startUs) / durationUs) * 100}%`,
+                        }}
+                        title={`Webcam ${segment.enabled ? "fills the frame" : "focus off"} (${segment.source})`}
+                      />
+                    )),
+                  )}
 
                 {/* Excluded intervals / Silence cuts overlay */}
                 {track.intervals

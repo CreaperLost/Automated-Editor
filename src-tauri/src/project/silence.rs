@@ -13,10 +13,22 @@ use std::fs;
 
 const MAX_DIAGNOSTICS: usize = 32;
 
-pub fn detect_track_silence(
+/// Silence found on one audio track, in source time, before it is mapped onto the edit.
+pub(crate) struct SilenceScan {
+    /// Silent ranges after the minimum-duration filter and padding.
+    pub source_ranges: Vec<(u64, u64)>,
+    /// Source ranges whose audio was actually read. Anything outside is a gap, not silence.
+    pub covered: Vec<(u64, u64)>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub policy: ChannelPolicy,
+    pub diagnostics: Vec<String>,
+}
+
+pub(crate) fn scan_track_silence(
     ctx: &WaveformTrackContext,
     config: &SilenceConfig,
-) -> Result<SilenceDetectionResult, String> {
+) -> Result<SilenceScan, String> {
     config.validate()?;
     if !matches!(ctx.track_type, TrackType::MicAudio | TrackType::SystemAudio) {
         return Err("Track is not audio".into());
@@ -33,15 +45,16 @@ pub fn detect_track_silence(
             &mut diagnostics,
             "Audio track is empty; no PCM segments to analyze",
         );
-        return Ok(SilenceDetectionResult {
-            track_id: ctx.track_id.clone(),
+        return Ok(SilenceScan {
+            source_ranges: Vec::new(),
+            covered: Vec::new(),
             sample_rate,
             channels,
-            channel_policy: channel_policy_name(policy),
-            suggestions: Vec::new(),
+            policy,
             diagnostics,
         });
     }
+    let mut covered = Vec::new();
 
     for segment in &ctx.segments {
         let path = match safe_path(&ctx.root, &segment.relative_path) {
@@ -139,6 +152,7 @@ pub fn detect_track_silence(
         let mut interleaved = vec![0.0f32; READ_FRAME_CHUNK * ch];
         let mut frame_index = 0u64;
         let mut feed_failed = None;
+        let mut read_failed = false;
         loop {
             let frames = match reader.read_frames(&mut interleaved, READ_FRAME_CHUNK) {
                 Ok(0) => break,
@@ -152,6 +166,7 @@ pub fn detect_track_silence(
                         ),
                     );
                     reset_detector(&mut detector, &mut raw_regions);
+                    read_failed = true;
                     break;
                 }
             };
@@ -185,13 +200,37 @@ pub fn detect_track_silence(
         if let Some(error) = feed_failed {
             return Err(error);
         }
+        if !read_failed && detector.is_some() {
+            covered.push((segment.start_us, segment.end_us));
+        }
     }
 
     if let Some(mut active) = detector.take() {
         raw_regions.extend(active.take_raw_regions());
     }
 
-    let source_ranges = finalize_regions(raw_regions, config);
+    Ok(SilenceScan {
+        source_ranges: finalize_regions(raw_regions, config),
+        covered,
+        sample_rate,
+        channels,
+        policy,
+        diagnostics,
+    })
+}
+
+pub fn detect_track_silence(
+    ctx: &WaveformTrackContext,
+    config: &SilenceConfig,
+) -> Result<SilenceDetectionResult, String> {
+    let SilenceScan {
+        source_ranges,
+        sample_rate,
+        channels,
+        policy,
+        mut diagnostics,
+        ..
+    } = scan_track_silence(ctx, config)?;
     let mapper = TimelineMapper::try_new(
         ctx.retained
             .iter()
@@ -257,5 +296,60 @@ fn reset_detector(
 fn push_diagnostic(diagnostics: &mut Vec<String>, message: &str) {
     if diagnostics.len() < MAX_DIAGNOSTICS {
         diagnostics.push(message.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::reader::{RetainedInterval, SegmentSummary};
+
+    #[test]
+    fn scan_reports_covered_audio_so_speech_can_be_derived() {
+        let dir = tempfile::tempdir().unwrap();
+        let rate = 16_000u32;
+        // 2s tone, 1s silence, 2s tone.
+        let samples: Vec<i16> = (0..rate * 5)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                if (2.0..3.0).contains(&t) {
+                    0
+                } else {
+                    ((t * 440.0 * std::f32::consts::TAU).sin() * 12_000.0) as i16
+                }
+            })
+            .collect();
+        let wav = crate::fixtures::generate_pcm16_wav(rate, 1, &samples);
+        std::fs::create_dir_all(dir.path().join("audio")).unwrap();
+        std::fs::write(dir.path().join("audio/mic.wav"), &wav).unwrap();
+        let ctx = WaveformTrackContext {
+            root: dir.path().to_path_buf(),
+            track_id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            segments: vec![SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: "audio/mic.wav".into(),
+                start_us: 0,
+                end_us: 5_000_000,
+                size_bytes: wav.len() as u64,
+                media_timescale: rate,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: None,
+                available: true,
+            }],
+            retained: vec![RetainedInterval { start_us: 0, end_us: 5_000_000 }],
+            edited_duration_us: 5_000_000,
+        };
+        let config = SilenceConfig {
+            padding_ms: 0,
+            ..SilenceConfig::default()
+        };
+        let scan = scan_track_silence(&ctx, &config).unwrap();
+        assert_eq!(scan.covered, vec![(0, 5_000_000)]);
+        let speech = crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges);
+        assert_eq!(speech.len(), 2, "{speech:?}");
+        assert!(speech[0].1.abs_diff(2_000_000) < 60_000, "{speech:?}");
+        assert!(speech[1].0.abs_diff(3_000_000) < 60_000, "{speech:?}");
     }
 }
