@@ -388,7 +388,7 @@ impl Compositor {
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    format: wgpu::TextureFormat::Bgra8Unorm,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -460,7 +460,7 @@ impl Compositor {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: wgpu::TextureFormat::Bgra8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -471,14 +471,13 @@ impl Compositor {
             if layer.frame.width > MAX_FRAME_DIM || layer.frame.height > MAX_FRAME_DIM {
                 return Err("Layer exceeds the compositor working-set limit".into());
             }
-            let rgba = bgra_to_rgba(&layer.frame)?;
-            let padded_row = padded_bytes_per_row(layer.frame.width);
-            let mut upload = vec![0u8; (padded_row * layer.frame.height) as usize];
-            let tight = layer.frame.width * 4;
-            for y in 0..layer.frame.height {
-                let src = (y * tight) as usize;
-                let dst = (y * padded_row) as usize;
-                upload[dst..dst + tight as usize].copy_from_slice(&rgba[src..src + tight as usize]);
+            // Layers and the target are BGRA like the frames themselves, so pixels upload and
+            // read back without a per-pixel channel swap.
+            let row_bytes = layer.frame.width as usize * 4;
+            let needed =
+                layer.frame.stride as usize * (layer.frame.height as usize - 1) + row_bytes;
+            if (layer.frame.stride as usize) < row_bytes || layer.frame.data.len() < needed {
+                return Err("Layer frame buffer is truncated".into());
             }
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("aeroedits-layer"),
@@ -490,7 +489,7 @@ impl Compositor {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Bgra8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -501,10 +500,10 @@ impl Compositor {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &upload,
+                &layer.frame.data[..needed],
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(padded_row),
+                    bytes_per_row: Some(layer.frame.stride),
                     rows_per_image: Some(layer.frame.height),
                 },
                 wgpu::Extent3d {
@@ -676,7 +675,7 @@ impl Compositor {
         }
         drop(data);
         staging.unmap();
-        let bgra = rgba_to_bgra(&packed);
+        let bgra = packed;
         let _keep = draws;
         Ok(VideoFrame {
             pts_us: scene.layers.first().map(|l| l.frame.pts_us).unwrap_or(0),
@@ -902,11 +901,28 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
 }
 
 /// Decode a project-relative wallpaper asset. Never follows URLs or symlinks.
+/// The scene background as one canvas-ready frame: the wallpaper, or the gradient. Callers
+/// that render many frames of one layout compute it once and pass it as the wallpaper.
+pub fn background_frame(
+    root: &Path,
+    layout: &EditLayout,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Result<Option<VideoFrame>, String> {
+    if let Some(paper) = load_wallpaper_frame(root, layout, canvas_w, canvas_h)? {
+        return Ok(Some(paper));
+    }
+    match layout.background_rgba()? {
+        (start, Some(end)) => gradient_frame(canvas_w, canvas_h, start, end).map(Some),
+        _ => Ok(None),
+    }
+}
+
 pub fn load_wallpaper_frame(
     root: &Path,
     layout: &EditLayout,
-    _canvas_w: u32,
-    _canvas_h: u32,
+    canvas_w: u32,
+    canvas_h: u32,
 ) -> Result<Option<VideoFrame>, String> {
     if layout.background_type != "wallpaper" {
         return Ok(None);
@@ -936,6 +952,15 @@ pub fn load_wallpaper_frame(
         return Err("Wallpaper exceeds compositor working-set limit".into());
     }
     validate_dim(img.width(), img.height())?;
+    // Shrink once to just cover the canvas, so each frame uploads and samples a small image.
+    let cover = (canvas_w as f64 / img.width() as f64).max(canvas_h as f64 / img.height() as f64);
+    let img = if cover < 1.0 && canvas_w > 0 && canvas_h > 0 {
+        let w = ((img.width() as f64 * cover).ceil() as u32).clamp(canvas_w, img.width());
+        let h = ((img.height() as f64 * cover).ceil() as u32).clamp(canvas_h, img.height());
+        image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
     let mut frame = VideoFrame::solid(img.width(), img.height(), 0, 0, 0, 0)?;
     for y in 0..img.height() {
         for x in 0..img.width() {
@@ -1019,32 +1044,6 @@ fn padded_bytes_per_row(width: u32) -> u32 {
     let unpadded = width * 4;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     (unpadded + align - 1) / align * align
-}
-
-fn bgra_to_rgba(frame: &VideoFrame) -> Result<Vec<u8>, String> {
-    let mut out = vec![0u8; (frame.width * frame.height * 4) as usize];
-    for y in 0..frame.height {
-        for x in 0..frame.width {
-            let src = (y * frame.stride + x * 4) as usize;
-            let dst = ((y * frame.width + x) * 4) as usize;
-            out[dst] = frame.data[src + 2];
-            out[dst + 1] = frame.data[src + 1];
-            out[dst + 2] = frame.data[src];
-            out[dst + 3] = frame.data[src + 3];
-        }
-    }
-    Ok(out)
-}
-
-fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
-    let mut out = vec![0u8; rgba.len()];
-    for (dst, src) in out.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
-        dst[0] = src[2];
-        dst[1] = src[1];
-        dst[2] = src[0];
-        dst[3] = src[3];
-    }
-    out
 }
 
 fn quad_vertices(canvas_w: u32, canvas_h: u32, layer: &Layer, pad: f32) -> [Vertex; 6] {
@@ -1618,3 +1617,5 @@ mod tests {
         );
     }
 }
+
+

@@ -238,8 +238,31 @@ pub struct SceneEvaluator {
     width: u32,
     height: u32,
     decode_limit: DecodeLimit,
-    /// The document is fixed, so the wallpaper is decoded once rather than per frame.
+    /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
+}
+
+/// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
+/// edit: the GPU device (slow to create) and the background, if the layout kept it.
+pub struct EvaluatorReuse {
+    compositor: Compositor,
+    background: Option<(String, Option<VideoFrame>)>,
+}
+
+fn background_key(
+    root: &Path,
+    layout: &crate::project::layout::EditLayout,
+    w: u32,
+    h: u32,
+) -> String {
+    format!(
+        "{}|{}|{:?}|{}|{}|{w}x{h}",
+        root.display(),
+        layout.background_type,
+        layout.wallpaper_asset,
+        layout.color_start,
+        layout.color_end
+    )
 }
 
 impl SceneEvaluator {
@@ -250,15 +273,47 @@ impl SceneEvaluator {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
+        Self::new_reusing(root, document, tracks, width, height, None)
+    }
+
+    pub fn new_reusing(
+        root: PathBuf,
+        document: EditDocument,
+        tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
+        width: u32,
+        height: u32,
+        reuse: Option<EvaluatorReuse>,
+    ) -> Result<Self, String> {
+        let key = background_key(&root, &document.layout, width, height);
+        let wallpaper = std::cell::OnceCell::new();
+        let compositor = match reuse {
+            Some(reuse) => {
+                if let Some((_, frame)) = reuse.background.filter(|(k, _)| *k == key) {
+                    let _ = wallpaper.set(frame);
+                }
+                reuse.compositor
+            }
+            None => Compositor::new()?,
+        };
         Ok(Self {
             root,
             document,
             tracks,
-            compositor: Some(Compositor::new()?),
+            compositor: Some(compositor),
             width,
             height,
             decode_limit: DecodeLimit::NONE,
-            wallpaper: std::cell::OnceCell::new(),
+            wallpaper,
+        })
+    }
+
+    /// Gives up the parts a replacement evaluator can reuse.
+    pub fn into_reuse(self) -> Option<EvaluatorReuse> {
+        let key = background_key(&self.root, &self.document.layout, self.width, self.height);
+        let background = self.wallpaper.into_inner().map(|frame| (key, frame));
+        self.compositor.map(|compositor| EvaluatorReuse {
+            compositor,
+            background,
         })
     }
 
@@ -328,7 +383,7 @@ impl SceneEvaluator {
         let wallpaper = match self.wallpaper.get() {
             Some(cached) => cached.clone(),
             None => {
-                let loaded = crate::render::load_wallpaper_frame(
+                let loaded = crate::render::background_frame(
                     &self.root,
                     &self.document.layout,
                     self.width,

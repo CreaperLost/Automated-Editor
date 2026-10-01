@@ -102,8 +102,11 @@ fn tick(
         if webview {
             (width, height) = super::preview::webview_dimensions(width, height);
         }
+        // Keep the GPU device and background across seeks; recreating them dominated seek time.
+        let reuse = runtime.take().and_then(|old| old.evaluator.into_reuse());
         let mut evaluator =
-            SceneEvaluator::new(root, document, tracks, width, height).map_err(error)?;
+            SceneEvaluator::new_reusing(root, document, tracks, width, height, reuse)
+                .map_err(error)?;
         if webview {
             evaluator = evaluator.with_decode_limit(DecodeLimit {
                 max_width: width,

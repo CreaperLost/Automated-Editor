@@ -88,27 +88,32 @@ pub fn webview_dimensions(width: u32, height: u32) -> (u32, u32) {
 
 /// JPEG bytes of a BGRA frame, for the webview preview.
 pub fn encode_webview_frame(frame: &crate::media::VideoFrame) -> Result<Vec<u8>, String> {
-    use image::codecs::jpeg::JpegEncoder;
     let row = frame.width as usize * 4;
-    let mut rgb = Vec::with_capacity(frame.width as usize * frame.height as usize * 3);
-    for y in 0..frame.height as usize {
-        let start = y * frame.stride as usize;
-        let line = frame
+    let tight;
+    let pixels = if frame.stride as usize == row {
+        frame
             .data
-            .get(start..start + row)
-            .ok_or("Preview frame buffer is truncated")?;
-        for px in line.chunks_exact(4) {
-            rgb.extend_from_slice(&[px[2], px[1], px[0]]);
+            .get(..row * frame.height as usize)
+            .ok_or("Preview frame buffer is truncated")?
+    } else {
+        let mut packed = Vec::with_capacity(row * frame.height as usize);
+        for y in 0..frame.height as usize {
+            let start = y * frame.stride as usize;
+            packed.extend_from_slice(
+                frame
+                    .data
+                    .get(start..start + row)
+                    .ok_or("Preview frame buffer is truncated")?,
+            );
         }
-    }
-    let mut jpeg = Vec::with_capacity(rgb.len() / 8);
-    JpegEncoder::new_with_quality(&mut jpeg, WEBVIEW_JPEG_QUALITY)
-        .encode(
-            &rgb,
-            frame.width,
-            frame.height,
-            image::ExtendedColorType::Rgb8,
-        )
+        tight = packed;
+        &tight
+    };
+    let width = u16::try_from(frame.width).map_err(|_| "Preview frame is too wide")?;
+    let height = u16::try_from(frame.height).map_err(|_| "Preview frame is too tall")?;
+    let mut jpeg = Vec::with_capacity(pixels.len() / 10);
+    jpeg_encoder::Encoder::new(&mut jpeg, WEBVIEW_JPEG_QUALITY)
+        .encode(pixels, width, height, jpeg_encoder::ColorType::Bgra)
         .map_err(|e| format!("Preview JPEG encode failed: {e}"))?;
     Ok(jpeg)
 }
