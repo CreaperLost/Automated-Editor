@@ -170,6 +170,15 @@ mod tests {
     }
 
     #[test]
+    fn preview_without_a_native_window_attaches_to_the_webview() {
+        let state = AppState::new();
+        let status =
+            preview_attach_impl(&state, "main".into(), PreviewHitMode::Consume, None).unwrap();
+        assert!(status.attached);
+        assert_eq!(status.surface, "webview");
+    }
+
+    #[test]
     fn test_show_in_finder_impl_missing_path() {
         let non_existent = "/tmp/does-not-exist-aeroedits-test-finder-12345";
         let err = show_in_finder_impl(non_existent.into()).unwrap_err();
@@ -579,9 +588,7 @@ pub fn preview_attach_impl(
     hit_mode: PreviewHitMode,
     native_window: Option<*mut std::ffi::c_void>,
 ) -> Result<PreviewStatus, String> {
-    if native_window.is_none() {
-        return Err("Native preview requires a desktop window".into());
-    }
+    // No native window means the webview preview, where frames are fetched by the page.
     state
         .preview
         .lock()
