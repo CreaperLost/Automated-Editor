@@ -24,20 +24,14 @@
 }
 
 @layer components {
+  /* The shell sizes the inspector (see App.tsx); the panel just fills its slot. */
   .studio-inspector {
-    width: clamp(17rem, 24vw, 20rem);
+    width: 100%;
   }
 
   @media (max-width: 1180px) {
     .studio-inspector {
-      width: clamp(16rem, 27vw, 18rem);
       padding: 1rem;
-    }
-  }
-
-  @media (max-width: 1020px) {
-    .studio-inspector {
-      width: 16rem;
     }
   }
 }
