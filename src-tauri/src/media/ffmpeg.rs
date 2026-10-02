@@ -4,13 +4,14 @@ use super::{
     validate_dim, ColorInfo, PixelFormat, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
 };
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 /// Overrides the ffmpeg binary location.
@@ -291,6 +292,166 @@ impl DecodeLimit {
     }
 }
 
+/// Forces a GPU decode API for preview, playback and export (`d3d11va`, `cuda`, `qsv`,
+/// `videotoolbox`, ...), or `none` for software decoding.
+pub const HWACCEL_ENV: &str = "AEROEDITS_HWACCEL";
+
+/// Tried in order; the first whose test decode succeeds is used.
+#[cfg(windows)]
+const HWACCEL_CANDIDATES: &[&str] = &["d3d11va", "cuda", "qsv"];
+#[cfg(target_os = "macos")]
+const HWACCEL_CANDIDATES: &[&str] = &["videotoolbox"];
+#[cfg(not(any(windows, target_os = "macos")))]
+const HWACCEL_CANDIDATES: &[&str] = &[];
+
+/// Set once a GPU decode fails at runtime; software decoding is used from then on.
+static HWACCEL_BROKEN: AtomicBool = AtomicBool::new(false);
+static HWACCEL_CHOSEN: OnceLock<Option<&'static str>> = OnceLock::new();
+
+/// The GPU decode API to use, probed once per machine against `sample` (any source video).
+fn hwaccel_for(sample: &Path) -> Option<&'static str> {
+    if HWACCEL_BROKEN.load(Ordering::Relaxed) {
+        return None;
+    }
+    *HWACCEL_CHOSEN.get_or_init(|| {
+        let started = std::time::Instant::now();
+        let chosen = choose_hwaccel(sample);
+        super::profile(
+            &format!("GPU decode probe ({})", chosen.unwrap_or("software")),
+            started,
+        );
+        chosen
+    })
+}
+
+fn choose_hwaccel(sample: &Path) -> Option<&'static str> {
+    if let Some(forced) = env::var(HWACCEL_ENV).ok().filter(|v| !v.trim().is_empty()) {
+        let forced = forced.trim().to_ascii_lowercase();
+        if forced == "none" || forced == "software" {
+            return None;
+        }
+        return Some(Box::leak(forced.into_boxed_str()));
+    }
+    if HWACCEL_CANDIDATES.is_empty() {
+        return None;
+    }
+    let ffmpeg = ffmpeg_path().ok()?;
+    let cache = hwaccel_cache_path();
+    let key = HwaccelProbe::key_for(ffmpeg);
+    if let (Some(cache), Some(key)) = (&cache, &key) {
+        if let Some(cached) = HwaccelProbe::read(cache).filter(|probe| probe.matches(key)) {
+            return cached.api();
+        }
+    }
+    let listed = {
+        let (mut cmd, log) = command(ffmpeg).ok()?;
+        cmd.arg("-hwaccels");
+        String::from_utf8_lossy(&run(cmd, log, "Listing FFmpeg hwaccels failed").ok()?).into_owned()
+    };
+    let chosen = HWACCEL_CANDIDATES
+        .iter()
+        .copied()
+        .filter(|api| listed.lines().any(|line| line.trim() == *api))
+        .find(|api| hwaccel_works(ffmpeg, api, sample));
+    if let (Some(cache), Some(key)) = (cache, key) {
+        HwaccelProbe::from_key(key, chosen).write(&cache);
+    }
+    chosen
+}
+
+/// Decodes two frames of `sample` with `api`. FFmpeg logs at error level only, so any log
+/// output (for example "Device creation failed") counts as a failure.
+fn hwaccel_works(ffmpeg: &Path, api: &str, sample: &Path) -> bool {
+    let Ok((mut cmd, mut log)) = command(ffmpeg) else {
+        return false;
+    };
+    cmd.args(["-nostdin", "-hwaccel", api, "-i"])
+        .arg(file_arg(sample))
+        .args(["-map", "0:v:0", "-frames:v", "2", "-f", "null", "-"]);
+    let ok = cmd.status().is_ok_and(|status| status.success());
+    ok && log_tail(&mut log).is_empty()
+}
+
+fn hwaccel_cache_path() -> Option<PathBuf> {
+    Some(
+        dirs::cache_dir()?
+            .join("aeroedits")
+            .join("hwaccel-probe.json"),
+    )
+}
+
+/// The probe result for one FFmpeg binary, cached so later launches skip the test decode.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct HwaccelProbe {
+    ffmpeg: String,
+    size: u64,
+    modified_secs: u64,
+    hwaccel: Option<String>,
+}
+
+impl HwaccelProbe {
+    fn key_for(ffmpeg: &Path) -> Option<(String, u64, u64)> {
+        let meta = fs::metadata(ffmpeg).ok()?;
+        let modified = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        Some((ffmpeg.to_string_lossy().into_owned(), meta.len(), modified))
+    }
+
+    fn from_key(key: (String, u64, u64), api: Option<&str>) -> Self {
+        Self {
+            ffmpeg: key.0,
+            size: key.1,
+            modified_secs: key.2,
+            hwaccel: api.map(str::to_string),
+        }
+    }
+
+    fn matches(&self, key: &(String, u64, u64)) -> bool {
+        (&self.ffmpeg, self.size, self.modified_secs) == (&key.0, key.1, key.2)
+    }
+
+    /// Only APIs this build would try are trusted from the cache.
+    fn api(&self) -> Option<&'static str> {
+        let wanted = self.hwaccel.as_deref()?;
+        HWACCEL_CANDIDATES
+            .iter()
+            .copied()
+            .find(|api| *api == wanted)
+    }
+
+    fn read(path: &Path) -> Option<Self> {
+        let bytes = fs::read(path).ok()?;
+        if bytes.len() > 4096 {
+            return None;
+        }
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn write(&self, path: &Path) {
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        if let Ok(json) = serde_json::to_vec(self) {
+            let _ = fs::write(path, json);
+        }
+    }
+}
+
+/// Switches to software decoding for the rest of the session and forgets the cached probe,
+/// so the next launch tests the GPU again.
+fn disable_hwaccel(api: &str, error: &str) {
+    if !HWACCEL_BROKEN.swap(true, Ordering::Relaxed) {
+        eprintln!("[media] GPU decode ({api}) failed, using software decoding: {error}");
+        if let Some(cache) = hwaccel_cache_path() {
+            let _ = fs::remove_file(cache);
+        }
+    }
+}
+
 /// One ffmpeg process emitting constant-rate BGRA frames from `start_us` onward.
 struct FrameStream {
     path: PathBuf,
@@ -298,6 +459,10 @@ struct FrameStream {
     child: Child,
     stdout: ChildStdout,
     log: File,
+    /// The GPU decode API this process was started with, if any.
+    hwaccel: Option<&'static str>,
+    /// FFmpeg exited with an error or the pipe broke (not a clean end of file).
+    failed: bool,
     width: u32,
     height: u32,
     rate: (u32, u32),
@@ -315,13 +480,18 @@ impl FrameStream {
         source: &VideoInfo,
         limit: DecodeLimit,
         start_us: u64,
+        hwaccel: Option<&'static str>,
     ) -> Result<Self, String> {
         let info = limit.apply(source);
         let (mut cmd, log) = command(ffmpeg_path()?)?;
         let (num, den) = info.rate;
         let (width, height) = (info.width, info.height);
-        cmd.arg("-nostdin")
-            .args(["-ss", &seconds_arg(start_us)])
+        cmd.arg("-nostdin");
+        if let Some(api) = hwaccel {
+            // Frames come back to system memory, so the filters below work unchanged.
+            cmd.args(["-hwaccel", api]);
+        }
+        cmd.args(["-ss", &seconds_arg(start_us)])
             .arg("-i")
             .arg(file_arg(path))
             .args(["-map", "0:v:0", "-an", "-sn"])
@@ -344,6 +514,8 @@ impl FrameStream {
             child,
             stdout,
             log,
+            hwaccel,
+            failed: false,
             width: info.width,
             height: info.height,
             rate: info.rate,
@@ -352,10 +524,6 @@ impl FrameStream {
             last: None,
             eof: false,
         })
-    }
-
-    fn frame_len(&self) -> usize {
-        self.width as usize * self.height as usize * 4
     }
 
     fn time_of(&self, index: u64) -> u64 {
@@ -392,6 +560,10 @@ impl FrameStream {
                 .saturating_add(MAX_FORWARD_READ_US)
     }
 
+    fn frame_len(&self) -> usize {
+        self.width as usize * self.height as usize * 4
+    }
+
     fn read_next(&mut self) -> Result<bool, String> {
         if self.eof {
             return Ok(false);
@@ -404,7 +576,10 @@ impl FrameStream {
                 Ok(0) => break,
                 Ok(n) => filled += n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(format!("FFmpeg decoder pipe failed: {e}")),
+                Err(e) => {
+                    self.failed = true;
+                    return Err(format!("FFmpeg decoder pipe failed: {e}"));
+                }
             }
         }
         if filled < buffer.len() {
@@ -419,6 +594,7 @@ impl FrameStream {
                 };
                 return Ok(false);
             }
+            self.failed = true;
             return Err(failure("FFmpeg decoder stopped early", &mut self.log));
         }
         self.last = Some(buffer);
@@ -507,8 +683,17 @@ pub fn decode_bgra_limited(
         None => {
             let started = std::time::Instant::now();
             let info = cached_info(path)?;
-            let mut stream = FrameStream::open(path, &info, limit, time_us)?;
-            let frame = stream.frame_at(time_us);
+            let hwaccel = hwaccel_for(path);
+            let mut stream = FrameStream::open(path, &info, limit, time_us, hwaccel)?;
+            let mut frame = stream.frame_at(time_us);
+            if let (Err(error), Some(api)) = (&frame, stream.hwaccel) {
+                // Only a failed process, not a seek past the last frame, rules out the GPU.
+                if stream.failed && stream.next_index == 0 {
+                    disable_hwaccel(api, error);
+                    stream = FrameStream::open(path, &info, limit, time_us, None)?;
+                    frame = stream.frame_at(time_us);
+                }
+            }
             super::profile("decoder seek (new FFmpeg process)", started);
             (stream, frame)
         }
@@ -517,7 +702,13 @@ pub fn decode_bgra_limited(
         // Seeking past the last frame yields nothing; hold the final frame instead.
         let info = cached_info(path)?;
         let tail_start = duration_us(path)?.saturating_sub(TAIL_SEEK_US);
-        stream = FrameStream::open(path, &info, limit, tail_start.min(time_us))?;
+        stream = FrameStream::open(
+            path,
+            &info,
+            limit,
+            tail_start.min(time_us),
+            hwaccel_for(path),
+        )?;
         frame = stream.frame_at(time_us);
     }
     if frame.is_ok() {
@@ -1013,6 +1204,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn hwaccel_probe_cache_round_trips_and_trusts_only_known_apis() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("nested").join("hwaccel-probe.json");
+        let key = ("/opt/ffmpeg".to_string(), 1234, 99);
+        let probe = HwaccelProbe::from_key(key.clone(), Some("cuda"));
+        probe.write(&cache);
+        let read = HwaccelProbe::read(&cache).unwrap();
+        assert_eq!(read, probe);
+        assert!(read.matches(&key));
+        // A different FFmpeg binary (size or date) needs a new probe.
+        assert!(!read.matches(&("/opt/ffmpeg".to_string(), 1235, 99)));
+        // Only APIs this platform would try are trusted.
+        let expected = HWACCEL_CANDIDATES.contains(&"cuda").then_some("cuda");
+        assert_eq!(read.api(), expected);
+        assert_eq!(HwaccelProbe::from_key(key, Some("bogus")).api(), None);
+        fs::write(&cache, b"not json").unwrap();
+        assert!(HwaccelProbe::read(&cache).is_none());
     }
 
     fn ffmpeg_or_skip() -> bool {

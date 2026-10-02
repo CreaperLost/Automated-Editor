@@ -86,6 +86,13 @@ pub fn webview_dimensions(width: u32, height: u32) -> (u32, u32) {
     (fit(width), fit(height))
 }
 
+/// Start of the `rate`-per-second frame that contains `position_us`.
+pub fn frame_start_us(position_us: u64, rate: u32) -> u64 {
+    let rate = rate.max(1) as u128;
+    let index = position_us as u128 * rate / 1_000_000;
+    (index * 1_000_000 / rate) as u64
+}
+
 /// JPEG bytes of a BGRA frame, for the webview preview.
 pub fn encode_webview_frame(frame: &crate::media::VideoFrame) -> Result<Vec<u8>, String> {
     let row = frame.width as usize * 4;
@@ -442,6 +449,20 @@ unsafe impl Sync for PreviewOwner {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_positions_snap_to_frame_starts() {
+        assert_eq!(frame_start_us(0, 30), 0);
+        assert_eq!(frame_start_us(33_333, 30), 0);
+        assert_eq!(frame_start_us(33_334, 30), 33_333);
+        assert_eq!(frame_start_us(1_000_000, 30), 1_000_000);
+        // Every position inside one frame maps to the same start, so it renders once.
+        let starts: std::collections::BTreeSet<_> = (0..1_000_000)
+            .step_by(997)
+            .map(|us| frame_start_us(us, 30))
+            .collect();
+        assert_eq!(starts.len(), 30);
+    }
 
     fn viewport(revision: u64) -> PreviewViewport {
         PreviewViewport {

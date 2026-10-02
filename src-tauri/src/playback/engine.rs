@@ -42,7 +42,20 @@ struct WebviewJob {
 fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
     let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(0);
     thread::spawn(move || {
+        // With AEROEDITS_PROFILE set, reports the presented preview rate every two seconds.
+        let mut window = std::time::Instant::now();
+        let mut presented = 0u32;
         for job in jobs {
+            if window.elapsed() >= Duration::from_secs(2) {
+                if presented > 0 && crate::media::profiling() {
+                    eprintln!(
+                        "[profile] preview presented {:.1} fps",
+                        presented as f64 / window.elapsed().as_secs_f64()
+                    );
+                }
+                window = std::time::Instant::now();
+                presented = 0;
+            }
             let state = app.state::<AppState>();
             let started = std::time::Instant::now();
             let jpeg = super::preview::encode_webview_frame(&job.frame);
@@ -67,6 +80,7 @@ fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> 
                 match surface.present_encoded(jpeg, job.surface_generation) {
                     Ok(()) => {
                         owner.mark_presented(job.generation);
+                        presented += 1;
                     }
                     Err(e) => owner.fail(job.generation, e),
                 }
@@ -267,14 +281,19 @@ fn tick(
     {
         return Ok(());
     }
-    let key = (generation, status.position_us, preview.generation);
+    // While playing, the webview preview shows whole frames at its capped rate. The clock moves
+    // every tick, so without this the same source frame was composited and JPEG-encoded again
+    // and again, holding up the next real frame.
+    let render_us = if runtime.webview && status.state == PlaybackState::Playing {
+        super::preview::frame_start_us(status.position_us, super::preview::WEBVIEW_MAX_RATE)
+    } else {
+        status.position_us
+    };
+    let key = (generation, render_us, preview.generation);
     if *last_frame == Some(key) {
         return Ok(());
     }
-    let frame = runtime
-        .evaluator
-        .preview_at(status.position_us)
-        .map_err(error)?;
+    let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.
         encoder
