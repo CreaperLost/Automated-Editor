@@ -133,6 +133,35 @@ jobs:
         env:
           AEROEDITS_REQUIRE_FFMPEG: "1"
 
+  # The Swift bridges for Mac preview/playback/export only build on macOS, so
+  # this is the one place they are compiled and the Mac-only tests run.
+  macos:
+    name: macOS build and tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.front == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: macos-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - name: Build front-end
+        working-directory: front-end
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Check the app with the Tauri feature
+        working-directory: src-tauri
+        run: cargo check --features tauri-app
+
   tauri-app:
     name: Tauri app build check
     needs: changes

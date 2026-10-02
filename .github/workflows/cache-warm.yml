@@ -97,3 +97,17 @@ jobs:
       - name: Build dependencies with the Tauri feature
         working-directory: src-tauri
         run: cargo check --features tauri-app
+
+  macos-test:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: macos-test
+      - run: cargo test --no-run
