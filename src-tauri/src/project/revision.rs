@@ -165,7 +165,7 @@ pub fn validate_retained(retained: &[RetainedInterval]) -> Result<(), String> {
     if retained.len() > MAX_RETAINED_INTERVALS {
         return Err("Too many retained intervals".into());
     }
-    let mut previous_end = 0u64;
+    // The list order is the timeline order; source ranges must not overlap.
     for interval in retained {
         if interval.end_us > 9_007_199_254_740_991 {
             return Err("Retained timestamp exceeds supported precision".into());
@@ -173,10 +173,11 @@ pub fn validate_retained(retained: &[RetainedInterval]) -> Result<(), String> {
         if interval.end_us <= interval.start_us {
             return Err("Retained interval must be a half-open range".into());
         }
-        if interval.start_us < previous_end {
-            return Err("Retained intervals must be sorted and non-overlapping".into());
-        }
-        previous_end = interval.end_us;
+    }
+    let mut by_source: Vec<(u64, u64)> = retained.iter().map(|i| (i.start_us, i.end_us)).collect();
+    by_source.sort_unstable();
+    if by_source.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+        return Err("Retained intervals must not overlap".into());
     }
     Ok(())
 }
@@ -242,6 +243,167 @@ fn merge_ranges(mut ranges: Vec<RetainedInterval>) -> Vec<RetainedInterval> {
         }
     }
     merged
+}
+
+/// Joins neighbours in the list that are also contiguous in source time, so an edit that
+/// does not reorder anything leaves the same intervals it always did.
+pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterval> {
+    let mut out: Vec<RetainedInterval> = Vec::with_capacity(retained.len());
+    for interval in retained {
+        if interval.end_us <= interval.start_us {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.end_us == interval.start_us => last.end_us = interval.end_us,
+            _ => out.push(interval),
+        }
+    }
+    out
+}
+
+/// Makes `edited_us` an interval boundary in `retained` and returns the index of the
+/// interval that starts there (`retained.len()` at the end of the timeline).
+fn split_at_edited(retained: &mut Vec<RetainedInterval>, edited_us: u64) -> Result<usize, String> {
+    let mut cursor = 0u64;
+    for index in 0..retained.len() {
+        let interval = retained[index].clone();
+        let length = interval.end_us - interval.start_us;
+        if edited_us == cursor {
+            return Ok(index);
+        }
+        if edited_us < cursor + length {
+            let source = interval.start_us + (edited_us - cursor);
+            retained[index].end_us = source;
+            retained.insert(
+                index + 1,
+                RetainedInterval {
+                    start_us: source,
+                    end_us: interval.end_us,
+                },
+            );
+            return Ok(index + 1);
+        }
+        cursor += length;
+    }
+    if edited_us == cursor {
+        Ok(retained.len())
+    } else {
+        Err("Position is outside the timeline".into())
+    }
+}
+
+/// Moves the edited range `[start, end)` so it starts at edited position `target` of the
+/// timeline as it is before the move. `target` must not be strictly inside the range.
+pub fn move_edited_range(
+    retained: &[RetainedInterval],
+    start_us: u64,
+    end_us: u64,
+    target_us: u64,
+) -> Result<Vec<RetainedInterval>, String> {
+    if start_us >= end_us {
+        return Err("Move range must be a half-open interval".into());
+    }
+    if target_us > start_us && target_us < end_us {
+        return Err("A clip cannot move inside itself".into());
+    }
+    let mut list = retained.to_vec();
+    let duration: u64 = list.iter().map(|i| i.end_us - i.start_us).sum();
+    if end_us > duration || target_us > duration {
+        return Err("Move is outside the timeline".into());
+    }
+    // Split from the latest position back, so earlier positions stay valid.
+    let mut points = [start_us, end_us, target_us];
+    points.sort_unstable();
+    for &point in points.iter().rev() {
+        split_at_edited(&mut list, point)?;
+    }
+    let first = split_at_edited(&mut list, start_us)?;
+    let last = split_at_edited(&mut list, end_us)?;
+    let mut at = split_at_edited(&mut list, target_us)?;
+    let block: Vec<RetainedInterval> = list.drain(first..last).collect();
+    if at >= last {
+        at -= block.len();
+    }
+    list.splice(at..at, block);
+    Ok(canonical_retained(list))
+}
+
+/// Which clip grows when restored media touches two clips that are no longer neighbours
+/// on the timeline (after a reorder).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestoreGrow {
+    /// The clip that ends where the restored media starts, else the one that starts where
+    /// it ends.
+    #[default]
+    End,
+    /// The clip that starts where the restored media ends, else the one that ends where it
+    /// starts.
+    Start,
+}
+
+/// Puts `ranges` (removed source time) back in `retained` without disturbing the order:
+/// a range touching a clip extends it (`grow` picks which when it touches two);
+/// anything else goes before the first clip that starts later in the recording.
+pub fn restore_in_order(
+    retained: &[RetainedInterval],
+    ranges: &[(u64, u64)],
+    grow: RestoreGrow,
+) -> Vec<RetainedInterval> {
+    let mut list = retained.to_vec();
+    let mut pieces: Vec<RetainedInterval> = ranges
+        .iter()
+        .map(|&(start_us, end_us)| RetainedInterval { start_us, end_us })
+        .collect();
+    pieces = merge_ranges(pieces);
+    for piece in pieces {
+        // Only restore time no clip already holds.
+        let mut free = vec![(piece.start_us, piece.end_us)];
+        for interval in &list {
+            free = free
+                .into_iter()
+                .flat_map(|(a, b)| {
+                    let mut parts = Vec::new();
+                    if interval.end_us <= a || interval.start_us >= b {
+                        parts.push((a, b));
+                    } else {
+                        if interval.start_us > a {
+                            parts.push((a, interval.start_us));
+                        }
+                        if interval.end_us < b {
+                            parts.push((interval.end_us, b));
+                        }
+                    }
+                    parts
+                })
+                .collect();
+        }
+        for (start_us, end_us) in free {
+            let before = list.iter().position(|i| i.end_us == start_us);
+            let after = list.iter().position(|i| i.start_us == end_us);
+            // List neighbours that touch on both sides simply join.
+            let neighbours = matches!((before, after), (Some(b), Some(a)) if a == b + 1);
+            let pick = match grow {
+                RestoreGrow::End => before.map(|b| (b, true)).or(after.map(|a| (a, false))),
+                RestoreGrow::Start if neighbours => before.map(|b| (b, true)),
+                RestoreGrow::Start => after.map(|a| (a, false)).or(before.map(|b| (b, true))),
+            };
+            if let Some((index, extend_end)) = pick {
+                if extend_end {
+                    list[index].end_us = end_us;
+                } else {
+                    list[index].start_us = start_us;
+                }
+            } else {
+                let at = list
+                    .iter()
+                    .position(|i| i.start_us > start_us)
+                    .unwrap_or(list.len());
+                list.insert(at, RetainedInterval { start_us, end_us });
+            }
+        }
+    }
+    canonical_retained(list)
 }
 
 pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
@@ -742,14 +904,16 @@ impl EditHistory {
         for (start, end) in ordered {
             mapper.ripple_cut_edited(start, end)?;
         }
-        let retained = mapper
-            .intervals()
-            .iter()
-            .map(|interval| RetainedInterval {
-                start_us: interval.start_us,
-                end_us: interval.end_us,
-            })
-            .collect();
+        let retained = canonical_retained(
+            mapper
+                .intervals()
+                .iter()
+                .map(|interval| RetainedInterval {
+                    start_us: interval.start_us,
+                    end_us: interval.end_us,
+                })
+                .collect(),
+        );
         self.commit(expected_revision, retained, persist_root)
     }
 
@@ -817,6 +981,7 @@ impl EditHistory {
         &mut self,
         expected_revision: u64,
         ranges: &[(u64, u64)],
+        grow: RestoreGrow,
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         if ranges.is_empty() {
@@ -831,18 +996,31 @@ impl EditHistory {
         if expected_revision != self.current.revision {
             return Err("Stale edit revision".into());
         }
-        let retained = merge_ranges(
-            self.current
-                .retained_intervals
-                .iter()
-                .cloned()
-                .chain(
-                    ranges
-                        .iter()
-                        .map(|&(start_us, end_us)| RetainedInterval { start_us, end_us }),
-                )
-                .collect(),
-        );
+        let retained = restore_in_order(&self.current.retained_intervals, ranges, grow);
+        self.commit(expected_revision, retained, persist_root)
+    }
+
+    /// Moves the clip (or any edited range) `[start, end)` to edited position `target`.
+    pub fn move_range(
+        &mut self,
+        expected_revision: u64,
+        start_us: u64,
+        end_us: u64,
+        target_us: u64,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let retained = move_edited_range(
+            &self.current.retained_intervals,
+            start_us,
+            end_us,
+            target_us,
+        )?;
+        if retained == self.current.retained_intervals {
+            return Err("The clip is already there".into());
+        }
         self.commit(expected_revision, retained, persist_root)
     }
 
@@ -1190,7 +1368,7 @@ mod tests {
         // The split now sits on an interval start, so no second split there.
         assert!(history.split(2, 2_000_000, dir.path()).is_err());
         history
-            .restore(2, &[(2_000_000, 4_000_000)], dir.path())
+            .restore(2, &[(2_000_000, 4_000_000)], RestoreGrow::End, dir.path())
             .unwrap();
         assert_eq!(history.current.retained_intervals, vec![ri(0, 10_000_000)]);
         assert_eq!(history.current.split_points_us, vec![4_000_000]);
@@ -1209,17 +1387,28 @@ mod tests {
         let mut history = EditHistory::new(
             EditDocument::from_retained(vec![ri(0, 1_000), ri(5_000, 6_000)]).unwrap(),
         );
-        history.restore(0, &[(2_000, 3_000)], dir.path()).unwrap();
+        history
+            .restore(0, &[(2_000, 3_000)], RestoreGrow::End, dir.path())
+            .unwrap();
         assert_eq!(
             history.current.retained_intervals,
             vec![ri(0, 1_000), ri(2_000, 3_000), ri(5_000, 6_000)]
         );
         history
-            .restore(1, &[(1_000, 2_000), (3_000, 5_000)], dir.path())
+            .restore(
+                1,
+                &[(1_000, 2_000), (3_000, 5_000)],
+                RestoreGrow::End,
+                dir.path(),
+            )
             .unwrap();
         assert_eq!(history.current.retained_intervals, vec![ri(0, 6_000)]);
-        assert!(history.restore(2, &[], dir.path()).is_err());
-        assert!(history.restore(2, &[(10, 10)], dir.path()).is_err());
+        assert!(history
+            .restore(2, &[], RestoreGrow::End, dir.path())
+            .is_err());
+        assert!(history
+            .restore(2, &[(10, 10)], RestoreGrow::End, dir.path())
+            .is_err());
     }
 
     #[test]
@@ -1310,6 +1499,106 @@ mod tests {
             .ripple_trim(0, 0, TrimSide::Previous, dir.path())
             .is_err());
         assert_eq!(history.current.revision, 0);
+    }
+
+    fn spans(list: &[RetainedInterval]) -> Vec<(u64, u64)> {
+        list.iter().map(|i| (i.start_us, i.end_us)).collect()
+    }
+
+    #[test]
+    fn moving_a_clip_reorders_the_timeline_and_restoring_keeps_the_order() {
+        const S: u64 = 1_000_000;
+        let base = vec![ri(0, 10 * S)];
+        // Move edited [6s, 10s) to the front.
+        let moved = move_edited_range(&base, 6 * S, 10 * S, 0).unwrap();
+        assert_eq!(spans(&moved), vec![(6 * S, 10 * S), (0, 6 * S)]);
+        // Moving it back to the end restores the single interval.
+        let back = move_edited_range(&moved, 0, 4 * S, 10 * S).unwrap();
+        assert_eq!(spans(&back), vec![(0, 10 * S)]);
+        // A middle clip moves to the end; edges at the target split correctly.
+        let three = vec![ri(0, 2 * S), ri(4 * S, 6 * S), ri(8 * S, 10 * S)];
+        let moved = move_edited_range(&three, 2 * S, 4 * S, 6 * S).unwrap();
+        assert_eq!(
+            spans(&moved),
+            vec![(0, 2 * S), (8 * S, 10 * S), (4 * S, 6 * S)]
+        );
+        // Part of a clip can move into the middle of another one.
+        let moved = move_edited_range(&base, 0, 2 * S, 5 * S).unwrap();
+        assert_eq!(
+            spans(&moved),
+            vec![(2 * S, 5 * S), (0, 2 * S), (5 * S, 10 * S)]
+        );
+        assert!(move_edited_range(&base, 2 * S, 6 * S, 4 * S).is_err());
+        assert!(move_edited_range(&base, 0, 2 * S, 11 * S).is_err());
+
+        // Restoring the cut between reordered clips extends the clip it touches in place.
+        let reordered = vec![ri(8 * S, 10 * S), ri(0, 2 * S), ri(4 * S, 6 * S)];
+        let restored = restore_in_order(&reordered, &[(2 * S, 3 * S)], RestoreGrow::End);
+        assert_eq!(
+            spans(&restored),
+            vec![(8 * S, 10 * S), (0, 3 * S), (4 * S, 6 * S)]
+        );
+        // Restoring a gap between list neighbours that are contiguous in source joins them.
+        let restored = restore_in_order(&restored, &[(3 * S, 4 * S)], RestoreGrow::End);
+        assert_eq!(spans(&restored), vec![(8 * S, 10 * S), (0, 6 * S)]);
+        // Time that is already on the timeline is never added twice; the free part (6-8s)
+        // extends the clip that ends where it starts.
+        let restored = restore_in_order(&restored, &[(5 * S, 9 * S)], RestoreGrow::End);
+        assert_eq!(spans(&restored), vec![(8 * S, 10 * S), (0, 8 * S)]);
+        validate_retained(&restored).unwrap();
+
+        // B (3-5s) plays before A (0-2s); the removed 2-3s touches both.
+        let swapped = vec![ri(3 * S, 5 * S), ri(0, 2 * S)];
+        assert_eq!(
+            spans(&restore_in_order(
+                &swapped,
+                &[(2 * S, 3 * S)],
+                RestoreGrow::Start
+            )),
+            vec![(2 * S, 5 * S), (0, 2 * S)],
+            "dragging B's start back grows B"
+        );
+        assert_eq!(
+            spans(&restore_in_order(
+                &swapped,
+                &[(2 * S, 3 * S)],
+                RestoreGrow::End
+            )),
+            vec![(3 * S, 5 * S), (0, 3 * S)],
+            "dragging A's end out grows A"
+        );
+    }
+
+    #[test]
+    fn move_range_is_undoable_and_cuts_keep_the_order() {
+        const S: u64 = 1_000_000;
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 10 * S)]).unwrap());
+        history.move_range(0, 6 * S, 10 * S, 0, dir.path()).unwrap();
+        assert_eq!(
+            spans(&history.current.retained_intervals),
+            vec![(6 * S, 10 * S), (0, 6 * S)]
+        );
+        // Cut the first second of the second clip (source 0..1s at edited 4..5s).
+        history
+            .ripple_cuts(1, &[(4 * S, 5 * S)], dir.path())
+            .unwrap();
+        assert_eq!(
+            spans(&history.current.retained_intervals),
+            vec![(6 * S, 10 * S), (S, 6 * S)]
+        );
+        let loaded = load_edit_document(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            loaded.retained_intervals,
+            history.current.retained_intervals
+        );
+        history.undo(2, dir.path()).unwrap();
+        history.undo(3, dir.path()).unwrap();
+        assert_eq!(
+            spans(&history.current.retained_intervals),
+            vec![(0, 10 * S)]
+        );
     }
 
     #[test]

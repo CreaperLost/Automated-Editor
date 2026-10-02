@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// Shared non-destructive timeline time mapper.
 /// Maps edited output time to source recording time through the cumulative lengths
-/// of retained source intervals.
+/// of retained source intervals, **in list order**: the list is the timeline, so clips can
+/// be reordered. Intervals never overlap in source time, so each source moment appears on
+/// the timeline at most once, but later source time is not necessarily later edited time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineMapper {
     intervals: Vec<SourceInterval>,
@@ -18,11 +20,11 @@ impl TimelineMapper {
 
     pub fn try_new(mut intervals: Vec<SourceInterval>) -> Result<Self, String> {
         intervals.retain(|i| i.end_us > i.start_us);
-        intervals.sort_by_key(|i| i.start_us);
-        for pair in intervals.windows(2) {
-            if pair[1].start_us < pair[0].end_us {
-                return Err("Retained intervals must be non-overlapping".into());
-            }
+        let mut by_source: Vec<(u64, u64)> =
+            intervals.iter().map(|i| (i.start_us, i.end_us)).collect();
+        by_source.sort_unstable();
+        if by_source.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            return Err("Retained intervals must be non-overlapping".into());
         }
         Ok(Self { intervals })
     }
@@ -53,7 +55,8 @@ impl TimelineMapper {
         None
     }
 
-    /// Maps a half-open edited range onto source ranges without using the exclusive end as a sample.
+    /// Maps a half-open edited range onto source ranges, in edited order (not necessarily
+    /// source order once clips are reordered), without using the exclusive end as a sample.
     pub fn edited_range_to_source(&self, start_us: u64, end_us: u64) -> Vec<(u64, u64)> {
         let mut ranges = Vec::new();
         let mut edited_cursor = 0u64;
@@ -113,8 +116,9 @@ impl TimelineMapper {
         Ok(())
     }
 
-    /// Maps a half-open source range onto edited ranges. Cuts split the result;
-    /// removed source time is omitted rather than interpolated.
+    /// Maps a half-open source range onto edited ranges, in edited order. Cuts and
+    /// reordered clips split the result; removed source time is omitted rather than
+    /// interpolated.
     pub fn source_range_to_edited(&self, start_us: u64, end_us: u64) -> Vec<(u64, u64)> {
         let mut ranges = Vec::new();
         let mut edited_cursor = 0u64;
@@ -130,6 +134,27 @@ impl TimelineMapper {
             edited_cursor += duration;
         }
         ranges
+    }
+
+    /// The edited span of a short source range (a word), taken from the clip that holds its
+    /// midpoint. Unlike the first/last of [`Self::source_range_to_edited`], this never
+    /// stretches across clips that were reordered. `None` when the midpoint was cut.
+    pub fn edited_span_of(&self, start_us: u64, end_us: u64) -> Option<(u64, u64)> {
+        let end_us = end_us.max(start_us + 1);
+        let mid = start_us + (end_us - start_us) / 2;
+        let mut accumulated_us: u64 = 0;
+        for interval in &self.intervals {
+            if interval.contains_source_us(mid) {
+                let a = start_us.max(interval.start_us);
+                let b = end_us.min(interval.end_us);
+                return Some((
+                    accumulated_us + (a - interval.start_us),
+                    accumulated_us + (b - interval.start_us),
+                ));
+            }
+            accumulated_us += interval.duration_us();
+        }
+        None
     }
 
     /// Maps a source recording timestamp `source_us` to its edited timeline position.
@@ -156,7 +181,6 @@ impl TimelineMapper {
             let parts = interval.exclude_range(cut_start_us, cut_end_us);
             new_intervals.extend(parts);
         }
-        new_intervals.sort_by_key(|i| i.start_us);
         self.intervals = new_intervals;
     }
 }
@@ -212,5 +236,45 @@ mod tests {
             mapper.source_range_to_edited(1_000_000, 6_000_000),
             vec![(1_000_000, 2_000_000), (2_000_000, 3_000_000)]
         );
+    }
+
+    #[test]
+    fn reordered_intervals_map_in_list_order() {
+        const S: u64 = 1_000_000;
+        // Source [5s, 10s) plays first, then [0s, 2s).
+        let mut mapper = TimelineMapper::try_new(vec![
+            SourceInterval::new("b".into(), 5 * S, 10 * S),
+            SourceInterval::new("a".into(), 0, 2 * S),
+        ])
+        .unwrap();
+        assert_eq!(mapper.total_edited_duration_us(), 7 * S);
+        assert_eq!(mapper.edited_to_source_us(0), Some(5 * S));
+        assert_eq!(mapper.edited_to_source_us(5 * S), Some(0));
+        assert_eq!(mapper.source_to_edited_us(S), Some(6 * S));
+        assert_eq!(mapper.source_to_edited_us(7 * S), Some(2 * S));
+        // A source range across both clips lands in two places, in edited order.
+        assert_eq!(
+            mapper.source_range_to_edited(S, 6 * S),
+            vec![(0, S), (6 * S, 7 * S)]
+        );
+        assert_eq!(
+            mapper.edited_range_to_source(4 * S, 6 * S),
+            vec![(9 * S, 10 * S), (0, S)]
+        );
+        // A cut keeps the order.
+        mapper.ripple_cut_edited(S, 2 * S).unwrap();
+        let order: Vec<_> = mapper.intervals().iter().map(|i| i.start_us).collect();
+        assert_eq!(order, vec![5 * S, 7 * S, 0]);
+        // Overlap is still rejected, touching is fine.
+        assert!(TimelineMapper::try_new(vec![
+            SourceInterval::new("x".into(), 0, 5 * S),
+            SourceInterval::new("y".into(), 4 * S, 6 * S),
+        ])
+        .is_err());
+        assert!(TimelineMapper::try_new(vec![
+            SourceInterval::new("x".into(), 5 * S, 6 * S),
+            SourceInterval::new("y".into(), 0, 5 * S),
+        ])
+        .is_ok());
     }
 }

@@ -190,20 +190,15 @@ pub fn build_cues(
     let max_words = settings
         .max_words
         .clamp(MAX_WORDS_RANGE.0, MAX_WORDS_RANGE.1) as usize;
+    // (word, source start, source end), in playback order once clips are reordered.
     let mut words = Vec::new();
     for word in &transcript.words {
         if word.kind != WordKind::Word || word.text.trim().is_empty() {
             continue;
         }
-        let mid = word.source_start_us + (word.source_end_us - word.source_start_us) / 2;
-        if mapper.source_to_edited_us(mid).is_none() {
-            continue;
-        }
-        let ranges = mapper.source_range_to_edited(
-            word.source_start_us,
-            word.source_end_us.max(word.source_start_us + 1),
-        );
-        let (Some(first), Some(last)) = (ranges.first(), ranges.last()) else {
+        let Some((start_us, end_us)) =
+            mapper.edited_span_of(word.source_start_us, word.source_end_us)
+        else {
             continue;
         };
         let text = if settings.uppercase {
@@ -211,26 +206,37 @@ pub fn build_cues(
         } else {
             word.text.trim().to_string()
         };
-        words.push(CueWord {
-            text,
-            start_us: first.0,
-            end_us: last.1.max(first.0 + 1),
-        });
+        words.push((
+            CueWord {
+                text,
+                start_us,
+                end_us: end_us.max(start_us + 1),
+            },
+            word.source_start_us,
+            word.source_end_us,
+        ));
     }
+    words.sort_by_key(|(word, _, _)| word.start_us);
 
     let mut cues: Vec<CaptionCue> = Vec::new();
     let mut current: Vec<CueWord> = Vec::new();
-    for word in words {
+    let mut last_source_end = 0u64;
+    for (word, source_start, source_end) in words {
         if let Some(last) = current.last() {
             let first_start = current[0].start_us;
+            // Playing earlier recording time next means a clip was reordered here: never
+            // join across it. (A cut jumps forward and keeps the cue together.)
+            let jumped = source_start < last_source_end;
             let breaks = current.len() >= max_words
                 || ends_sentence(&last.text)
+                || jumped
                 || word.start_us.saturating_sub(last.end_us) >= CUE_PAUSE_US
                 || word.end_us.saturating_sub(first_start) > MAX_CUE_US;
             if breaks {
                 cues.push(cue_from(std::mem::take(&mut current)));
             }
         }
+        last_source_end = source_end;
         current.push(word);
     }
     if !current.is_empty() {
@@ -601,6 +607,27 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn reordered_clips_give_sorted_cues_that_never_span_the_jump() {
+        let t = transcript(&[
+            ("early", 0, 300),
+            ("words", 350, 600),
+            ("late", 1000, 1300),
+            ("words", 1350, 1600),
+        ]);
+        // Source 1000-2000 plays first, then 0-1000.
+        let m = mapper(&[(1000, 2000), (0, 1000)]);
+        let cues = build_cues(&t, &m, &CaptionSettings::default());
+        assert!(cues.windows(2).all(|w| w[0].start_us < w[1].start_us));
+        let texts: Vec<Vec<&str>> = cues
+            .iter()
+            .map(|c| c.words.iter().map(|w| w.text.as_str()).collect())
+            .collect();
+        assert_eq!(texts, vec![vec!["late", "words"], vec!["early", "words"]]);
+        assert_eq!(cue_at(&cues, 100_000), Some(0));
+        assert_eq!(cue_at(&cues, 1_100_000), Some(1));
     }
 
     #[test]

@@ -62,6 +62,8 @@ const MIN_TIMELINE_ZOOM = 1;
 const MAX_TIMELINE_ZOOM = 64;
 /** Pointer distance, in pixels, inside which a dragged clip edge snaps to the playhead. */
 const SNAP_PX = 8;
+/** Pointer travel, in pixels, before a press on a clip becomes a drag that reorders it. */
+const CLIP_DRAG_PX = 8;
 /** Pointer travel, in pixels, before a press on the track becomes a range selection instead of a seek. */
 const RANGE_DRAG_PX = 6;
 
@@ -111,11 +113,12 @@ export const TimelineStudio: React.FC = () => {
   } | null>(null);
   const suppressSeek = useRef(false);
   useEffect(() => { setRangeStart("0"); setRangeEnd(String(durationUs / 1e6)); setEditError(undefined); }, [openedProject?.projectHandle, durationUs]);
+  /** Runs one edit; resolves to whether it was applied. */
   const runEdit = async (work: (project: OpenedProject) => Promise<OpenedProject>) => {
-    if (!openedProject || editing) return;
+    if (!openedProject || editing) return false;
     setEditing(true); setEditError(undefined);
-    try { applyOpenedProject(await work(openedProject)); }
-    catch (err) { setEditError(String(err)); }
+    try { applyOpenedProject(await work(openedProject)); return true; }
+    catch (err) { setEditError(String(err)); return false; }
     finally { setEditing(false); }
   };
   const editRange = async (trim: boolean) => {
@@ -134,8 +137,8 @@ export const TimelineStudio: React.FC = () => {
   };
   const splitAtPlayhead = () =>
     runEdit((project) => api.projectSplit(project.projectHandle, project.revision, currentTimeUs));
-  const restoreCut = (startUs: number, endUs: number) =>
-    runEdit((project) => api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }]));
+  const restoreCut = (startUs: number, endUs: number, grow: "end" | "start" = "end") =>
+    runEdit((project) => api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }], grow));
   // Q and E: ripple-delete from the playhead to the previous or next edit point.
   const rippleTrim = (side: "previous" | "next") =>
     runEdit(async (project) => {
@@ -455,17 +458,23 @@ export const TimelineStudio: React.FC = () => {
           ? api.projectRippleCuts(project.projectHandle, project.revision, [
               { startUs: clip.startUs, endUs: clip.startUs + deltaUs },
             ])
-          : api.projectRestoreCuts(project.projectHandle, project.revision, [
-              { startUs: clip.sourceStartUs + deltaUs, endUs: clip.sourceStartUs },
-            ]);
+          : api.projectRestoreCuts(
+              project.projectHandle,
+              project.revision,
+              [{ startUs: clip.sourceStartUs + deltaUs, endUs: clip.sourceStartUs }],
+              "start",
+            );
       }
       return deltaUs < 0
         ? api.projectRippleCuts(project.projectHandle, project.revision, [
             { startUs: clip.endUs + deltaUs, endUs: clip.endUs },
           ])
-        : api.projectRestoreCuts(project.projectHandle, project.revision, [
-            { startUs: sourceEndUs, endUs: sourceEndUs + deltaUs },
-          ]);
+        : api.projectRestoreCuts(
+            project.projectHandle,
+            project.revision,
+            [{ startUs: sourceEndUs, endUs: sourceEndUs + deltaUs }],
+            "end",
+          );
     });
   };
 
@@ -611,6 +620,70 @@ export const TimelineStudio: React.FC = () => {
   };
   const clipSelected = (clip: TimelineClip) =>
     !!selection && clip.startUs >= selection.startUs && clip.endUs <= selection.endUs;
+
+  // Drag a clip (or the selection that holds it) to another clip edge to reorder.
+  type ClipMove = {
+    pointerId: number;
+    startX: number;
+    range: { startUs: number; endUs: number };
+    active: boolean;
+    targetUs: number | null;
+  };
+  const clipMoveRef = useRef<ClipMove | null>(null);
+  const [clipMove, setClipMove] = useState<ClipMove | null>(null);
+  const beginClipMove = (event: React.PointerEvent<HTMLElement>, clip: TimelineClip) => {
+    if (event.button !== 0 || editing || !openedProject) return;
+    // The track would otherwise start a range selection from this press.
+    event.stopPropagation();
+    suppressSeek.current = false;
+    const range = clipSelected(clip) && selection ? selection : { startUs: clip.startUs, endUs: clip.endUs };
+    clipMoveRef.current = { pointerId: event.pointerId, startX: event.clientX, range, active: false, targetUs: null };
+  };
+  const moveClipMove = (event: React.PointerEvent<HTMLElement>) => {
+    const move = clipMoveRef.current;
+    if (!move || move.pointerId !== event.pointerId) return;
+    if (!move.active) {
+      if (Math.abs(event.clientX - move.startX) < CLIP_DRAG_PX) return;
+      move.active = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    const pointerUs = clientXToUs(event.clientX);
+    const candidates = edges.filter((edge) => edge <= move.range.startUs || edge >= move.range.endUs);
+    const nearest = candidates.reduce(
+      (best, edge) => (Math.abs(edge - pointerUs) < Math.abs(best - pointerUs) ? edge : best),
+      candidates[0] ?? 0,
+    );
+    move.targetUs = nearest === move.range.startUs || nearest === move.range.endUs ? null : nearest;
+    setClipMove({ ...move });
+  };
+  const endClipMove = (event: React.PointerEvent<HTMLElement>) => {
+    const move = clipMoveRef.current;
+    if (!move || move.pointerId !== event.pointerId) return;
+    clipMoveRef.current = null;
+    setClipMove(null);
+    if (!move.active) return; // A plain click: onClick selects and seeks.
+    suppressSeek.current = true; // The click that ends a drag must not select or seek.
+    const target = move.targetUs;
+    if (target === null) return;
+    const { startUs, endUs } = move.range;
+    const length = endUs - startUs;
+    void runEdit((project) =>
+      api.projectMoveRange(project.projectHandle, project.revision, startUs, endUs, target),
+    ).then((applied) => {
+      if (!applied) return;
+      const movedStart = target < startUs ? target : target - length;
+      selectRange(movedStart, movedStart + length);
+    });
+  };
+  const clipMoveHandlers = (clip: TimelineClip) => ({
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => beginClipMove(event, clip),
+    onPointerMove: moveClipMove,
+    onPointerUp: endClipMove,
+    onPointerCancel: () => {
+      clipMoveRef.current = null;
+      setClipMove(null);
+    },
+  });
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (suppressSeek.current) {
@@ -996,7 +1069,7 @@ export const TimelineStudio: React.FC = () => {
             Restore all {cutMarkers.length} cut{cutMarkers.length === 1 ? "" : "s"}
           </button>
         )}
-        <span className="text-studio-500">Drag on the timeline to select, drag a clip edge to trim it. S splits, Q/E ripple-trim to the previous/next edit, Delete removes the selection.</span>
+        <span className="text-studio-500">Drag on the timeline to select, drag a clip to move it, drag a clip edge to trim it. S splits, Q/E ripple-trim to the previous/next edit, Delete removes the selection.</span>
         {editError && <span role="alert" className="text-rose-300">{editError}</span>}
       </div>}
 
@@ -1165,6 +1238,29 @@ export const TimelineStudio: React.FC = () => {
               />
             )}
 
+            {/* Clip move: the dragged range dims and a bar marks where it will land */}
+            {clipMove?.active && durationUs > 0 && (
+              <>
+                <div
+                  className="absolute top-0 bottom-0 bg-teal-300/10 border-x border-dashed border-teal-200/70 z-30 pointer-events-none"
+                  style={{
+                    left: `${(clipMove.range.startUs / durationUs) * 100}%`,
+                    width: `${((clipMove.range.endUs - clipMove.range.startUs) / durationUs) * 100}%`,
+                  }}
+                />
+                {clipMove.targetUs !== null && (
+                  <div
+                    className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.8)] z-40 pointer-events-none"
+                    style={{ left: `${(clipMove.targetUs / durationUs) * 100}%` }}
+                  >
+                    <span className="absolute -top-0.5 left-1.5 text-[9px] font-mono text-amber-100 bg-studio-950/90 rounded px-1 whitespace-nowrap">
+                      Move here
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+
             {/* Clip lane: edges come from cuts and splits; markers restore cuts */}
             <div className="h-8 relative">
               {durationUs > 0 && clips.map((clip, index) => {
@@ -1181,8 +1277,9 @@ export const TimelineStudio: React.FC = () => {
                       left: `${(clip.startUs / durationUs) * 100}%`,
                       width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
                     }}
-                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend.`}
+                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend, drag to move it.`}
                     onClick={(event) => onClipClick(event, clip)}
+                    {...clipMoveHandlers(clip)}
                   >
                     {index + 1}
                   </button>
@@ -1249,7 +1346,7 @@ export const TimelineStudio: React.FC = () => {
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void restoreCut(marker.sourceStartUs, marker.sourceEndUs);
+                    void restoreCut(marker.sourceStartUs, marker.sourceEndUs, marker.grow);
                   }}
                 >
                   <span className="w-2.5 h-2 shrink-0 rounded-sm bg-rose-400 group-hover:bg-rose-200" />
@@ -1281,8 +1378,9 @@ export const TimelineStudio: React.FC = () => {
                         left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
                         width: `max(1px, calc(${((clip.endUs - clip.startUs) / durationUs) * 100}% - 2px))`,
                       }}
-                      title={`${track.name}, clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s`}
+                      title={`${track.name}, clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Drag to move it.`}
                       onClick={(event) => onClipClick(event, clip)}
+                      {...clipMoveHandlers(clip)}
                     >
                       {track.waveform && track.waveform.buckets.length > 0 ? (
                         <div className="w-full h-full px-0.5 py-1">

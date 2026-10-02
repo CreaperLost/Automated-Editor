@@ -299,6 +299,26 @@ fn project_ripple_trim(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_move_range(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    start_us: u64,
+    end_us: u64,
+    target_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::project_move_range_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        start_us,
+        end_us,
+        target_us,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_split(
     state: State<'_, AppState>,
     project_handle: String,
@@ -315,8 +335,15 @@ fn project_restore_cuts(
     project_handle: String,
     expected_revision: u64,
     ranges: Vec<commands::EditCut>,
+    grow: Option<project::revision::RestoreGrow>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_restore_cuts_impl(&state, project_handle, expected_revision, ranges)
+    commands::project_restore_cuts_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        ranges,
+        grow.unwrap_or_default(),
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -861,6 +888,7 @@ pub fn run() {
             project_ripple_cuts,
             project_ripple_trim,
             project_split,
+            project_move_range,
             project_restore_cuts,
             project_undo,
             project_redo,

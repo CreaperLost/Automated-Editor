@@ -85,24 +85,34 @@ fn kept(word: &TranscriptWord, mapper: &TimelineMapper) -> bool {
 }
 
 pub fn view(transcript: &Transcript, mapper: &TimelineMapper, revision: u64) -> TranscriptView {
-    let words = transcript
+    let mut words: Vec<TranscriptViewWord> = transcript
         .words
         .iter()
         .map(|word| {
-            let ranges = if kept(word, mapper) {
-                mapper.source_range_to_edited(
-                    word.source_start_us,
-                    word.source_end_us.max(word.source_start_us + 1),
-                )
-            } else {
-                Vec::new()
-            };
+            let span = mapper.edited_span_of(word.source_start_us, word.source_end_us);
             TranscriptViewWord {
                 word: word.clone(),
-                edited_start_us: ranges.first().map(|r| r.0),
-                edited_end_us: ranges.last().map(|r| r.1),
+                edited_start_us: span.map(|s| s.0),
+                edited_end_us: span.map(|s| s.1),
             }
         })
+        .collect();
+    // Read in playback order: kept words by edited time, and each cut word right after the
+    // kept word before it in the recording, so it still shows where it was removed.
+    let mut anchor = 0u64;
+    let mut keys: Vec<(u64, usize)> = Vec::with_capacity(words.len());
+    for (index, word) in words.iter().enumerate() {
+        if let Some(start) = word.edited_start_us {
+            anchor = start;
+        }
+        keys.push((anchor, index));
+    }
+    keys.sort_by_key(|&(key, index)| (key, words[index].edited_start_us.is_none(), index));
+    let order: Vec<usize> = keys.into_iter().map(|(_, index)| index).collect();
+    let mut taken: Vec<Option<TranscriptViewWord>> = words.drain(..).map(Some).collect();
+    let words = order
+        .into_iter()
+        .filter_map(|index| taken[index].take())
         .collect();
     TranscriptView {
         track_id: transcript.track_id.clone(),
@@ -161,16 +171,18 @@ pub fn word_cuts(
     if source_ranges.is_empty() {
         return Err("Those words are already cut".into());
     }
+    // Reordered clips can put later source time earlier on the timeline: sort, then merge.
+    let mut edited: Vec<(u64, u64)> = source_ranges
+        .into_iter()
+        .flat_map(|(start, end)| mapper.source_range_to_edited(start, end))
+        .filter(|(a, b)| b > a)
+        .collect();
+    edited.sort_unstable();
     let mut cuts: Vec<(u64, u64)> = Vec::new();
-    for (start, end) in source_ranges {
-        for (a, b) in mapper.source_range_to_edited(start, end) {
-            if b <= a {
-                continue;
-            }
-            match cuts.last_mut() {
-                Some(last) if a <= last.1 => last.1 = last.1.max(b),
-                _ => cuts.push((a, b)),
-            }
+    for (a, b) in edited {
+        match cuts.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => cuts.push((a, b)),
         }
     }
     if cuts.is_empty() {
@@ -348,6 +360,30 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn reordered_clips_list_words_in_playback_order() {
+        let t = transcript(&[
+            ("one", 0, 400),
+            ("two", 600, 900),
+            ("cut", 1100, 1300),
+            ("three", 1500, 1900),
+        ]);
+        // Source 1500-2000 plays first, then 0-1000; "cut" (1000-1500) is removed.
+        let m = mapper(&[(1500, 2000), (0, 1000)]);
+        let v = view(&t, &m, 1);
+        let order: Vec<_> = v.words.iter().map(|w| w.word.text.as_str()).collect();
+        // The removed word stays right after the word before it in the recording.
+        assert_eq!(order, vec!["three", "one", "two", "cut"]);
+        assert_eq!(v.words[0].edited_start_us, Some(0));
+        assert_eq!(v.words[1].edited_start_us, Some(500_000));
+        assert_eq!(v.words[2].edited_start_us, Some(1_100_000));
+        assert!(v.words[3].edited_start_us.is_none());
+        // Deleting "three" and "one" yields two sorted, separate edited cuts.
+        let cuts = word_cuts(&t, &["w-3".into(), "w-0".into()], &m).unwrap();
+        assert!(cuts.windows(2).all(|w| w[0].1 <= w[1].0), "{cuts:?}");
+        assert_eq!(cuts.len(), 2);
     }
 
     #[test]

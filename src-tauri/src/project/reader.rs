@@ -544,6 +544,20 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    /// Moves the edited range `[start, end)` (usually one clip) to edited position `target`.
+    pub fn move_range(
+        &mut self,
+        expected_revision: u64,
+        start_us: u64,
+        end_us: u64,
+        target_us: u64,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .move_range(expected_revision, start_us, end_us, target_us, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     /// Restores removed media inside the requested source ranges. Parts of a
     /// range that were never removed, or that fall in a recorder pause, are
     /// ignored.
@@ -551,6 +565,7 @@ impl ProjectReader {
         &mut self,
         expected_revision: u64,
         ranges: &[(u64, u64)],
+        grow: crate::project::revision::RestoreGrow,
     ) -> Result<OpenedProject, String> {
         let mut restorable = Vec::new();
         for &(start, end) in ranges {
@@ -569,7 +584,7 @@ impl ProjectReader {
             return Err("Nothing to restore in that range".into());
         }
         self.history
-            .restore(expected_revision, &restorable, &self.root)?;
+            .restore(expected_revision, &restorable, grow, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
@@ -835,7 +850,9 @@ mod tests {
         drop(bundle);
         let mut reader = ProjectReader::open(&root).unwrap();
         assert!(reader.summary.removed_intervals.is_empty());
-        assert!(reader.restore_cuts(0, &[(0, 10_000_000)]).is_err());
+        assert!(reader
+            .restore_cuts(0, &[(0, 10_000_000)], Default::default())
+            .is_err());
 
         let summary = reader.ripple_cuts(0, &[(1_000_000, 2_000_000)]).unwrap();
         assert_eq!(
@@ -845,7 +862,9 @@ mod tests {
                 end_us: 2_000_000
             }]
         );
-        let summary = reader.restore_cuts(1, &[(0, 10_000_000)]).unwrap();
+        let summary = reader
+            .restore_cuts(1, &[(0, 10_000_000)], Default::default())
+            .unwrap();
         assert!(summary.removed_intervals.is_empty());
         assert_eq!(
             summary.retained_intervals,
