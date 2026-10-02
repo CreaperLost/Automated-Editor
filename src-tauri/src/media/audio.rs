@@ -24,7 +24,8 @@ struct Span {
 pub struct AudioMixer {
     root: PathBuf,
     spans: Vec<Span>,
-    tracks: Vec<(TrackType, Vec<SegmentSummary>)>,
+    /// Audible audio tracks with their mix gain; muted tracks are left out.
+    tracks: Vec<(TrackType, f64, Vec<SegmentSummary>)>,
     polish: Option<PolishPlan>,
     pub total_frames: u64,
 }
@@ -64,7 +65,11 @@ impl AudioMixer {
                     TrackType::MicAudio | TrackType::SystemAudio
                 )
             })
-            .map(|(t, s)| (t.descriptor.track_type, s.clone()))
+            .map(|(t, s)| {
+                let gain = document.audio.track_gain(&t.descriptor.id);
+                (t.descriptor.track_type, gain, s.clone())
+            })
+            .filter(|(_, gain, _)| *gain > 0.0)
             .collect::<Vec<_>>();
         let polish = PolishPlan::build(
             root,
@@ -83,7 +88,7 @@ impl AudioMixer {
     pub fn has_audio(&self) -> bool {
         self.tracks
             .iter()
-            .any(|(_, track)| track.iter().any(|s| s.available))
+            .any(|(_, _, track)| track.iter().any(|s| s.available))
     }
     pub fn read_frames(&self, start: u64, count: usize) -> Result<Vec<i16>, String> {
         if count > CHUNK_FRAMES {
@@ -108,7 +113,7 @@ impl AudioMixer {
                 + ((b as u128 * 1_000_000 / SAMPLE_RATE as u128) as u64)
                     .saturating_sub(span.edited_start)
                 + 1;
-            for (track_type, track) in &self.tracks {
+            for (track_type, track_gain, track) in &self.tracks {
                 let first = track.partition_point(|s| s.end_us <= source_a);
                 for segment in track[first..].iter().take_while(|s| s.start_us < source_b) {
                     if !segment.available {
@@ -217,14 +222,15 @@ impl AudioMixer {
                             weights += weight;
                         }
                         if weights.abs() > 1e-12 {
-                            let gain = match &self.polish {
-                                Some(plan) if ducked => plan.duck_gain(
-                                    frame as f64 * 1e6 / SAMPLE_RATE as f64
-                                        - span.edited_start as f64
-                                        + span.source_start as f64,
-                                ),
-                                _ => 1.0,
-                            };
+                            let gain = track_gain
+                                * match &self.polish {
+                                    Some(plan) if ducked => plan.duck_gain(
+                                        frame as f64 * 1e6 / SAMPLE_RATE as f64
+                                            - span.edited_start as f64
+                                            + span.source_start as f64,
+                                    ),
+                                    _ => 1.0,
+                                };
                             for ch in 0..2 {
                                 out[(frame - start) as usize * 2 + ch] +=
                                     stereo[ch] / weights * gain;
@@ -418,6 +424,39 @@ mod tests {
         // The hold keeps it ducked briefly after speech, then it recovers.
         assert!(rms(seconds(&diff, 2.0, 2.2)) > 0.05);
         assert!(rms(seconds(&diff, 2.8, 3.0)) < 1e-3);
+    }
+
+    #[test]
+    fn track_mute_and_volume_apply_to_the_mix() {
+        use crate::project::audio::TrackMix;
+        let (dir, mut doc, tracks) = polish_fixture(true);
+        let both = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        doc.audio.tracks.insert(
+            "system".into(),
+            TrackMix {
+                muted: true,
+                volume_db: 0.0,
+            },
+        );
+        let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
+        assert!(mixer.has_audio());
+        let mic_only = mix_all(&mixer);
+        // The 1 kHz system tone is gone; only the mic is left.
+        let system_rms = 8000.0 / 32767.0 / 2f64.sqrt();
+        let diff: Vec<f64> = both.iter().zip(&mic_only).map(|(a, b)| a - b).collect();
+        assert!((rms(seconds(&diff, 0.2, 2.8)) / system_rms - 1.0).abs() < 0.02);
+
+        doc.audio.tracks.get_mut("system").unwrap().muted = false;
+        doc.audio.tracks.get_mut("system").unwrap().volume_db = -6.0;
+        let quieter = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
+        let diff: Vec<f64> = quieter.iter().zip(&mic_only).map(|(a, b)| a - b).collect();
+        let level = rms(seconds(&diff, 0.2, 2.8)) / system_rms;
+        assert!((level - 10f64.powf(-6.0 / 20.0)).abs() < 0.02, "level {level}");
+
+        doc.audio.tracks.insert("mic".into(), TrackMix { muted: true, volume_db: 0.0 });
+        doc.audio.tracks.get_mut("system").unwrap().muted = true;
+        let silent = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
+        assert!(!silent.has_audio(), "every track muted means no audio stream");
     }
 
     #[test]

@@ -29,6 +29,15 @@ function saveStoredRecentProjects(projects: string[]) {
   }
 }
 
+/** A track's mute and volume as saved in the project's audio settings. */
+function trackMixFields(project: OpenedProject, trackId: string): Pick<Track, "muted" | "volume"> {
+  const mix = project.audio?.tracks?.[trackId];
+  return {
+    muted: mix?.muted ?? false,
+    volume: mix ? 10 ** (mix.volumeDb / 20) : 1,
+  };
+}
+
 function barsFromSuggestion(suggestion: ZoomSuggestion, pending: boolean, source?: ProjectZoom["source"]): ZoomKeyframe[] {
   const ranges = suggestion.editedRanges.filter((range) => range.endUs > range.startUs);
   const fallback = [{ startUs: suggestion.sourceStartUs, endUs: suggestion.sourceEndUs }];
@@ -174,8 +183,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         id: descriptor.id,
         trackType: studioTrackType(descriptor.trackType),
         name: `${descriptor.id} · ${availableSegmentCount}/${segmentCount} segments available`,
-        muted: false,
-        volume: 1,
+        ...trackMixFields(project, descriptor.id),
         intervals: [],
       })),
     });
@@ -298,8 +306,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
             id: descriptor.id,
             trackType: studioTrackType(descriptor.trackType),
             name: `${descriptor.id} · ${availableSegmentCount}/${segmentCount} segments available`,
-            muted: existing?.muted ?? false,
-            volume: existing?.volume ?? 1,
+            ...trackMixFields(project, descriptor.id),
             intervals: existing?.intervals ?? [],
             waveform: existing?.waveform,
           };

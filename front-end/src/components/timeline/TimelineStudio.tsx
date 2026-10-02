@@ -6,9 +6,6 @@ import {
   ZoomIn,
   ZoomOut,
   Scissors,
-  Eye,
-  Volume2,
-  VolumeX,
   Plus,
   Check,
   X,
@@ -19,6 +16,7 @@ import {
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
+import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
 import { buildClips, buildCutMarkers, editedToSourceUs } from "../../lib/projectUtils";
 import type { OpenedProject, ProjectZoom, ZoomKeyframe } from "../../lib/types";
@@ -634,14 +632,7 @@ export const TimelineStudio: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-1">
-                  <button disabled className="p-1 rounded text-studio-400 hover:text-white">
-                    {track.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                  </button>
-                  <button disabled className="p-1 rounded text-studio-400 hover:text-white">
-                    <Eye className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <TrackHeaderButtons track={track} />
               </div>
             ))}
           </div>
