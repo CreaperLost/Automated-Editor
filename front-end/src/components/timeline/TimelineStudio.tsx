@@ -906,7 +906,7 @@ export const TimelineStudio: React.FC = () => {
       </div>}
 
       {/* Multi-Track Workspace */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex min-h-0 overflow-x-hidden overflow-y-auto">
         {/* Left Track Headers */}
         <div className="w-56 border-r border-studio-800 bg-studio-900 shrink-0 flex flex-col">
           {/* Header spacer aligned with time ruler */}
