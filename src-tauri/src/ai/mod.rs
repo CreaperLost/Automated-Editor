@@ -153,7 +153,7 @@ pub fn client_from_settings(dir: &Path) -> Result<client::ChatClient, String> {
     let provider = settings.provider;
     let (key, _) = crate::secrets::get(dir, provider.key_spec()).ok_or_else(|| {
         format!(
-            "Add your {} API key in the AI settings first",
+            "Add your {} API key first: in the Transcript panel, open settings (the gear) and fill in AI review",
             provider.label()
         )
     })?;

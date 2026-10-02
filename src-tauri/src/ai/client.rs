@@ -1,9 +1,15 @@
 //! A minimal OpenAI-compatible chat-completions client that asks for a JSON object back.
 use super::AiProvider;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_ATTEMPTS: u32 = 3;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// How often a waiting request checks for Cancel.
+const CANCEL_POLL: Duration = Duration::from_millis(150);
 
 /// Something that answers a system + user prompt with a JSON object. The detection code
 /// takes this trait so tests can use canned answers.
@@ -19,6 +25,7 @@ pub struct ChatClient {
     base_url: String,
     api_key: String,
     model: String,
+    cancel: Arc<AtomicBool>,
 }
 
 impl ChatClient {
@@ -37,7 +44,8 @@ impl ChatClient {
             return Err(format!("Add your {} API key first", provider.label()));
         }
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(180))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -46,10 +54,49 @@ impl ChatClient {
             base_url,
             api_key: api_key.trim().to_string(),
             model,
+            cancel: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    fn request(&self, body: &Value) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    /// Stops waiting on a request as soon as `cancel` is set, instead of after the timeout.
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    /// Sends on a helper thread and waits for it, checking Cancel while the provider thinks.
+    /// A cancelled request is left to finish (or time out) on its own; its answer is dropped.
+    fn send(&self, body: &Value) -> Result<(reqwest::StatusCode, String), String> {
+        let request = self.request(body);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = request.send().and_then(|response| {
+                let status = response.status();
+                response.text().map(|text| (status, text))
+            });
+            let _ = tx.send(result);
+        });
+        loop {
+            if self.cancel.load(Ordering::SeqCst) {
+                return Err("Cancelled".into());
+            }
+            match rx.recv_timeout(CANCEL_POLL) {
+                Ok(Ok(answer)) => return Ok(answer),
+                Ok(Err(e)) if e.is_timeout() => {
+                    return Err(format!("{} did not answer in time", self.provider.label()))
+                }
+                Ok(Err(e)) => {
+                    return Err(format!("Could not reach {}: {e}", self.provider.label()))
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(format!("The request to {} stopped", self.provider.label()))
+                }
+            }
+        }
+    }
+
+    fn request(&self, body: &Value) -> reqwest::blocking::RequestBuilder {
         let mut request = self
             .client
             .post(format!("{}/chat/completions", self.base_url))
@@ -64,7 +111,7 @@ impl ChatClient {
                 )
                 .header("X-Title", "AeroEdits");
         }
-        request.send()
+        request
     }
 }
 
@@ -102,17 +149,24 @@ impl JsonModel for ChatClient {
         let mut last_error = String::new();
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
-                std::thread::sleep(Duration::from_secs(2u64.pow(attempt)));
+                // Back off before retrying, still answering Cancel.
+                let wait = Duration::from_secs(2u64.pow(attempt));
+                let started = std::time::Instant::now();
+                while started.elapsed() < wait {
+                    if self.cancel.load(Ordering::SeqCst) {
+                        return Err("Cancelled".into());
+                    }
+                    std::thread::sleep(CANCEL_POLL);
+                }
             }
-            let response = match self.request(&body) {
-                Ok(response) => response,
+            let (status, text) = match self.send(&body) {
+                Ok(answer) => answer,
+                Err(e) if e == "Cancelled" => return Err(e),
                 Err(e) => {
-                    last_error = format!("Could not reach {}: {e}", self.provider.label());
+                    last_error = e;
                     continue;
                 }
             };
-            let status = response.status();
-            let text = response.text().unwrap_or_default();
             if status.is_success() {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|_| format!("{} sent an unreadable reply", self.provider.label()))?;
@@ -244,5 +298,34 @@ mod tests {
         assert!(error.contains("OpenAI rejected the API key"), "{error}");
         assert!(error.contains("Incorrect API key provided"));
         assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cancel_stops_a_request_that_is_still_waiting() {
+        // A server that accepts the connection and never answers.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let _hold = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+            drop(stream);
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut client =
+            ChatClient::with_base_url(AiProvider::OpenAi, url, "sk-test".into(), "m".into())
+                .unwrap()
+                .with_cancel(cancel.clone());
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(client.complete_json("s", "u").unwrap_err(), "Cancelled");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }

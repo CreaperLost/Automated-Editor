@@ -21,7 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Default)]
 pub struct TranscriptState {
     pub running: Mutex<Option<String>>,
-    pub cancel: AtomicBool,
+    /// Shared with AI clients so Cancel also stops a request waiting on the network.
+    pub cancel: std::sync::Arc<AtomicBool>,
 }
 
 struct RunGuard<'a>(&'a TranscriptState);
@@ -373,6 +374,9 @@ pub fn transcript_ai_suggest_impl(
     track_id: String,
     progress: &mut dyn FnMut(TranscriptionProgress),
 ) -> Result<Vec<TranscriptCutSuggestion>, String> {
+    // Missing settings or key fail here, before the job slot or the project is touched.
+    let mut client =
+        crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
     let _run = RunGuard::start(transcripts, format!("AI review of {track_id}"))?;
     let (created_at, words) = {
         let opened = state.opened_project.lock();
@@ -390,7 +394,6 @@ pub fn transcript_ai_suggest_impl(
         (transcript.created_at, words)
     };
     // No lock is held while waiting on the network.
-    let mut client = crate::ai::client_from_settings(&config_dir())?;
     let refs: Vec<&crate::transcript::TranscriptWord> = words.iter().collect();
     let spans = crate::ai::fillers::detect(
         &mut client,
@@ -426,6 +429,9 @@ pub fn project_chapters_generate_impl(
     project_handle: String,
     track_id: String,
 ) -> Result<OpenedProject, String> {
+    // Missing settings or key fail here, before the job slot or the project is touched.
+    let mut client =
+        crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
     let _run = RunGuard::start(transcripts, "Finding chapters".into())?;
     let words = {
         let opened = state.opened_project.lock();
@@ -436,7 +442,6 @@ pub fn project_chapters_generate_impl(
         let document = &reader.history().current;
         edit::view(&transcript, &document.mapper()?, document.revision).words
     };
-    let mut client = crate::ai::client_from_settings(&config_dir())?;
     let chapters = crate::ai::chapters::suggest(&mut client, &words)?;
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
@@ -456,6 +461,9 @@ pub fn project_shorts_generate_impl(
     project_handle: String,
     track_id: String,
 ) -> Result<OpenedProject, String> {
+    // Missing settings or key fail here, before the job slot or the project is touched.
+    let mut client =
+        crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
     let _run = RunGuard::start(transcripts, "Finding shorts".into())?;
     let words = {
         let opened = state.opened_project.lock();
@@ -466,7 +474,6 @@ pub fn project_shorts_generate_impl(
         let document = &reader.history().current;
         edit::view(&transcript, &document.mapper()?, document.revision).words
     };
-    let mut client = crate::ai::client_from_settings(&config_dir())?;
     let shorts = crate::ai::shorts::suggest(&mut client, &words)?;
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
