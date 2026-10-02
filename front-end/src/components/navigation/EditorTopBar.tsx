@@ -88,7 +88,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
         <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-teal-600 to-emerald-400 text-white font-black text-sm shadow-md shadow-teal-600/30">
           <Film className="w-4 h-4" />
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="hidden xl:flex items-center space-x-2">
           <span className="font-bold text-white tracking-tight text-sm">
             AeroEdits
           </span>
@@ -155,7 +155,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
           title="Open a recorded project folder"
         >
           <FolderOpen className="w-3.5 h-3.5" />
-          <span>Open Folder</span>
+          <span className="hidden xl:inline">Open Folder</span>
         </button>
 
         {project && projectPath && (
@@ -167,7 +167,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             title="Reveal project bundle in Finder"
           >
             <Folder className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Finder</span>
+            <span className="hidden xl:inline">Finder</span>
           </button>
         )}
 
