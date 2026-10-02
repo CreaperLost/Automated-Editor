@@ -596,6 +596,14 @@ impl ExportWriter {
         }
     }
 
+    /// Called once the last audio has been written.
+    fn end_audio(&mut self) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.end_audio(),
+            Self::Ffmpeg(_) => Ok(()),
+        }
+    }
+
     fn finish(self, duration_us: u64) -> Result<(), String> {
         match self {
             Self::Native(session) => session.finish(duration_us),
@@ -1099,6 +1107,7 @@ fn export_to_temp(
     .map_err(|message| ExportFailure::Native { message })?;
 
     let mut audio_frame = 0u64;
+    let mut audio_ended = channels == 0;
     for index in 0..frames {
         if cancel.load(Ordering::SeqCst) {
             drop(session);
@@ -1138,6 +1147,12 @@ fn export_to_temp(
                     .write_audio(pts, &chunk, count as u32, CHANNELS)
                     .map_err(|message| ExportFailure::Native { message })?;
                 audio_frame += count as u64;
+            }
+            if !audio_ended && audio_frame >= mixer.total_frames {
+                session
+                    .end_audio()
+                    .map_err(|message| ExportFailure::Native { message })?;
+                audio_ended = true;
             }
         }
         on_progress(index + 1, frames);

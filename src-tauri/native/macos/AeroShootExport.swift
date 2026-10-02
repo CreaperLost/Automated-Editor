@@ -19,6 +19,11 @@ private final class ExportSession {
   /// so it can hold video back until it has more audio; queueing audio here and
   /// draining it while video waits keeps one input from starving the other.
   var pendingAudio: [CMSampleBuffer] = []
+  /// Rust has sent all the audio. The input is closed once the queue empties,
+  /// because the writer can hold the last video frames until audio ends.
+  var audioEnded = false
+  var audioFinished = false
+  var lastError: String?
 
   init(
     writer: AVAssetWriter,
@@ -43,10 +48,14 @@ private final class ExportSession {
 
 /// Appends queued audio while the audio input accepts it. False if an append fails.
 private func drainAudio(_ session: ExportSession) -> Bool {
-  guard let audio = session.audio else { return true }
+  guard let audio = session.audio, !session.audioFinished else { return true }
   while let sample = session.pendingAudio.first, audio.isReadyForMoreMediaData {
     guard audio.append(sample) else { return false }
     session.pendingAudio.removeFirst()
+  }
+  if session.audioEnded && session.pendingAudio.isEmpty {
+    audio.markAsFinished()
+    session.audioFinished = true
   }
   return true
 }
@@ -68,6 +77,7 @@ private func exportErrorMessage(_ session: ExportSession) -> String {
   if let error = session.writer.error as NSError? {
     return "\(error.domain) \(error.code): \(error.localizedDescription)"
   }
+  if let message = session.lastError { return message }
   return "AVAssetWriter status \(session.writer.status.rawValue)"
 }
 
@@ -175,7 +185,12 @@ func exportVideo(
     }
   }
   CVPixelBufferUnlockBaseAddress(buffer, [])
-  guard waitReady(session.video, session: session) else { return 5 }
+  guard waitReady(session.video, session: session) else {
+    session.lastError =
+      "video input not ready at \(ptsUs)us (writer status \(session.writer.status.rawValue), "
+      + "\(session.pendingAudio.count) audio buffers queued, audio ended \(session.audioEnded))"
+    return 5
+  }
   let time = CMTime(value: ptsUs, timescale: 1_000_000)
   return session.adaptor.append(buffer, withPresentationTime: time) ? 0 : 5
 }
@@ -210,19 +225,27 @@ func exportAudio(
   return drainAudio(session) ? 0 : 5
 }
 
+@_cdecl("aeroshoot_export_audio_end")
+func exportAudioEnd(_ handle: UnsafeMutableRawPointer?) -> Int32 {
+  guard let handle else { return 1 }
+  let session = Unmanaged<ExportSession>.fromOpaque(handle).takeUnretainedValue()
+  session.audioEnded = true
+  return drainAudio(session) ? 0 : 5
+}
+
 @_cdecl("aeroshoot_export_finish")
 func exportFinish(_ handle: UnsafeMutableRawPointer?, _ durationUs: Int64) -> Int32 {
   guard let handle else { return 1 }
   let session = Unmanaged<ExportSession>.fromOpaque(handle).takeRetainedValue()
   session.video.markAsFinished()
-  if let audio = session.audio {
-    while !session.pendingAudio.isEmpty {
+  if let audio = session.audio, !session.audioFinished {
+    session.audioEnded = true
+    while !session.audioFinished {
       guard waitReady(audio, session: session), drainAudio(session) else {
         session.writer.cancelWriting()
         return 5
       }
     }
-    audio.markAsFinished()
   }
   session.writer.endSession(atSourceTime: CMTime(value: durationUs, timescale: 1_000_000))
   let done = DispatchSemaphore(value: 0)
