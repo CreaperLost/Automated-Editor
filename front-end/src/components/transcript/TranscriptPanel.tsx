@@ -5,6 +5,7 @@ import { api, isTauriEnvironment } from "../../lib/ipc";
 import {
   OpenedProject,
   TranscriptCutSuggestion,
+  TranscriptViewWord,
   TranscriptionProgress,
   TranscriptView,
 } from "../../lib/types";
@@ -29,6 +30,47 @@ function formatTime(us: number): string {
 }
 
 type ReviewFilter = "all" | "filler" | "retake";
+
+/** Lines break at pauses, sentence ends, speaker changes and jumps in time. */
+const LINE_PAUSE_US = 1_000_000;
+const LINE_MAX_US = 12_000_000;
+const LINE_SENTENCE_MIN_WORDS = 6;
+
+type LineWord = { w: TranscriptViewWord; i: number };
+type TranscriptLine = { words: LineWord[]; startUs: number | null; endUs: number | null; sourceStartUs: number };
+
+/// Groups words (already in playback order) into time-stamped lines.
+function transcriptLines(words: LineWord[]): TranscriptLine[] {
+  const lines: TranscriptLine[] = [];
+  let current: LineWord[] = [];
+  const flush = () => {
+    if (current.length === 0) return;
+    const kept = current.filter(({ w }) => w.editedStartUs !== null);
+    lines.push({
+      words: current,
+      startUs: kept.length > 0 ? kept[0].w.editedStartUs : null,
+      endUs: kept.length > 0 ? kept[kept.length - 1].w.editedEndUs : null,
+      sourceStartUs: current[0].w.sourceStartUs,
+    });
+    current = [];
+  };
+  for (const item of words) {
+    const prev = current[current.length - 1]?.w;
+    if (prev) {
+      const w = item.w;
+      const gap = w.sourceStartUs - prev.sourceEndUs;
+      const jumped = gap < 0 || (prev.editedEndUs !== null && w.editedStartUs !== null && w.editedStartUs - prev.editedEndUs > LINE_PAUSE_US);
+      const span = w.sourceEndUs - current[0].w.sourceStartUs;
+      const sentenceEnd = /[.!?…]["')\]]?$/.test(prev.text) && current.length >= LINE_SENTENCE_MIN_WORDS;
+      if (jumped || gap > LINE_PAUSE_US || sentenceEnd || span > LINE_MAX_US || (w.speaker ?? "") !== (prev.speaker ?? "")) {
+        flush();
+      }
+    }
+    current.push(item);
+  }
+  flush();
+  return lines;
+}
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -104,6 +146,7 @@ export const TranscriptPanel: React.FC = () => {
     () => words.map((w, i) => ({ w, i })).filter(({ w }) => showCut || w.editedStartUs !== null),
     [words, showCut],
   );
+  const lines = useMemo(() => transcriptLines(visible), [visible]);
   const pending = useMemo(() => suggestions.filter((s) => !s.dismissed), [suggestions]);
   const suggestionKind = useMemo(() => {
     const map = new Map<string, TranscriptCutSuggestion["kind"]>();
@@ -360,7 +403,7 @@ export const TranscriptPanel: React.FC = () => {
       <div
         tabIndex={0}
         onKeyDown={onKeyDown}
-        className="flex-1 min-w-0 overflow-y-auto px-3 py-2 leading-6 text-[13px] text-studio-200 outline-none select-none"
+        className="flex-1 min-w-0 overflow-y-auto px-2 py-2 space-y-0.5 leading-6 text-[13px] text-studio-200 outline-none select-none"
       >
         {!view && !running && (
           <p className="text-studio-500">
@@ -370,59 +413,83 @@ export const TranscriptPanel: React.FC = () => {
             you can keep or cut each one.
           </p>
         )}
-        {visible.map(({ w, i }) => {
-          const cut = w.editedStartUs === null;
-          const selected =
-            selection !== null &&
-            i >= Math.min(selection.anchor, selection.focus) &&
-            i <= Math.max(selection.anchor, selection.focus);
-          const kind = suggestionKind.get(w.id);
-          if (editing?.index === i) {
-            return (
-              <React.Fragment key={w.id}>
-                <input
-                  autoFocus
-                  aria-label="Word text"
-                  value={editing.text}
-                  size={Math.max(4, editing.text.length + 1)}
-                  onChange={(e) => setEditing({ index: i, text: e.target.value })}
-                  onKeyDown={(e) => {
-                    e.stopPropagation();
-                    if (e.key === "Enter") void commitEdit();
-                    else if (e.key === "Escape") setEditing(null);
-                  }}
-                  onBlur={() => void commitEdit()}
-                  className="bg-studio-800 text-white rounded px-1 outline outline-1 outline-teal-500"
-                />{" "}
-              </React.Fragment>
-            );
-          }
-          const classes = [
-            "rounded px-0.5 cursor-pointer",
-            cut ? "line-through text-studio-600" : "hover:bg-studio-800",
-            selected && !cut ? "bg-rose-800/60 text-white" : "",
-            i === activeIndex ? "bg-teal-800/70 text-white" : "",
-            kind === "filler" && !cut ? "underline decoration-amber-400 decoration-2" : "",
-            kind === "retake" && !cut ? "underline decoration-violet-400 decoration-2" : "",
-            w.kind === "audioEvent" ? "italic text-studio-400" : "",
-          ].join(" ");
+        {lines.map((line, lineIndex) => {
+          const playing =
+            line.startUs !== null && line.endUs !== null && currentTimeUs >= line.startUs && currentTimeUs < line.endUs;
           return (
-            <React.Fragment key={w.id}>
-              <span
-                ref={i === activeIndex ? activeRef : undefined}
-                className={classes}
-                title={kind === "filler" ? "Filler sound" : kind === "retake" ? "Abandoned take" : undefined}
-                onClick={(e) => {
-                  if (cut) return;
-                  setSelection(e.shiftKey && selection ? { anchor: selection.anchor, focus: i } : { anchor: i, focus: i });
-                }}
-                onDoubleClick={() => {
-                  if (w.editedStartUs !== null) seekTo(w.editedStartUs);
-                }}
+            <div
+              key={line.words[0].w.id}
+              className={`flex gap-3 rounded-md px-1.5 py-1 ${playing ? "bg-teal-950/40" : lineIndex % 2 ? "bg-studio-900/30" : ""}`}
+            >
+              <button
+                type="button"
+                disabled={line.startUs === null}
+                onClick={() => line.startUs !== null && seekTo(line.startUs)}
+                className={`shrink-0 w-14 text-left font-mono text-[11px] leading-6 tabular-nums disabled:cursor-default ${
+                  playing ? "text-teal-300" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-teal-300"
+                }`}
+                title={line.startUs === null ? "This line is cut" : "Jump here"}
               >
-                {w.text}
-              </span>{" "}
-            </React.Fragment>
+                {formatTime(line.startUs ?? line.sourceStartUs)}
+              </button>
+              <p className="flex-1 min-w-0">
+                {line.words.map(({ w, i }) => {
+                  const cut = w.editedStartUs === null;
+                  const selected =
+                    selection !== null &&
+                    i >= Math.min(selection.anchor, selection.focus) &&
+                    i <= Math.max(selection.anchor, selection.focus);
+                  const kind = suggestionKind.get(w.id);
+                  if (editing?.index === i) {
+                    return (
+                      <React.Fragment key={w.id}>
+                        <input
+                          autoFocus
+                          aria-label="Word text"
+                          value={editing.text}
+                          size={Math.max(4, editing.text.length + 1)}
+                          onChange={(e) => setEditing({ index: i, text: e.target.value })}
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === "Enter") void commitEdit();
+                            else if (e.key === "Escape") setEditing(null);
+                          }}
+                          onBlur={() => void commitEdit()}
+                          className="bg-studio-800 text-white rounded px-1 outline outline-1 outline-teal-500"
+                        />{" "}
+                      </React.Fragment>
+                    );
+                  }
+                  const classes = [
+                    "rounded px-0.5 cursor-pointer",
+                    cut ? "line-through text-studio-600" : "hover:bg-studio-800",
+                    selected && !cut ? "bg-rose-800/60 text-white" : "",
+                    i === activeIndex ? "bg-teal-800/70 text-white" : "",
+                    kind === "filler" && !cut ? "underline decoration-amber-400 decoration-2" : "",
+                    kind === "retake" && !cut ? "underline decoration-violet-400 decoration-2" : "",
+                    w.kind === "audioEvent" ? "italic text-studio-400" : "",
+                  ].join(" ");
+                  return (
+                    <React.Fragment key={w.id}>
+                      <span
+                        ref={i === activeIndex ? activeRef : undefined}
+                        className={classes}
+                        title={kind === "filler" ? "Filler sound" : kind === "retake" ? "Abandoned take" : undefined}
+                        onClick={(e) => {
+                          if (cut) return;
+                          setSelection(e.shiftKey && selection ? { anchor: selection.anchor, focus: i } : { anchor: i, focus: i });
+                        }}
+                        onDoubleClick={() => {
+                          if (w.editedStartUs !== null) seekTo(w.editedStartUs);
+                        }}
+                      >
+                        {w.text}
+                      </span>{" "}
+                    </React.Fragment>
+                  );
+                        })}
+              </p>
+            </div>
           );
         })}
       </div>
