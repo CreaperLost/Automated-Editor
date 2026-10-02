@@ -32,7 +32,7 @@ export interface Track {
   trackType: TrackType;
   name: string;
   muted: boolean;
-  volume: number; // 0.0 to 1.0
+  volume: number; // linear gain, 1.0 plays as recorded
   intervals: TimelineInterval[];
   waveform?: WaveformPage;
 }
@@ -177,6 +177,22 @@ export interface AudioSettings {
   duckSystemAudio: boolean;
   /** How far system audio is lowered under speech, 3 to 30 dB. */
   duckDb: number;
+  /** Mute and volume per audio track id; tracks without an entry play as recorded. */
+  tracks?: Record<string, TrackMix>;
+}
+
+export interface TrackMix {
+  muted: boolean;
+  /** Gain in dB, -30 to +12. */
+  volumeDb: number;
+}
+
+export const DEFAULT_TRACK_MIX: TrackMix = { muted: false, volumeDb: 0 };
+export const TRACK_VOLUME_DB_RANGE = { min: -30, max: 12 } as const;
+
+/** Audio track kinds the mixer plays. */
+export function isAudioTrack(trackType: TrackType): boolean {
+  return trackType === "mic" || trackType === "system";
 }
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {

@@ -212,6 +212,9 @@ fn noise_profile(
     Ok(builder.finish())
 }
 
+/// An analyzed audio file with its track type and mix gain.
+type Analyzed<'a> = (TrackType, f64, &'a SegmentSummary, Arc<SegmentAnalysis>);
+
 /// Polish derived for one edit: everything the mixer needs per sample.
 pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
@@ -229,17 +232,17 @@ impl PolishPlan {
         root: &Path,
         settings: &AudioSettings,
         retained: &[RetainedInterval],
-        tracks: &[(TrackType, Vec<SegmentSummary>)],
+        tracks: &[(TrackType, f64, Vec<SegmentSummary>)],
     ) -> Option<Self> {
         if !settings.any_enabled() {
             return None;
         }
         let has_system = tracks
             .iter()
-            .any(|(t, s)| *t == TrackType::SystemAudio && s.iter().any(|s| s.available));
+            .any(|(t, _, s)| *t == TrackType::SystemAudio && s.iter().any(|s| s.available));
         let duck_on = settings.duck_system_audio && has_system;
-        let mut analyses: Vec<(TrackType, &SegmentSummary, Arc<SegmentAnalysis>)> = Vec::new();
-        for (track_type, segments) in tracks {
+        let mut analyses: Vec<Analyzed> = Vec::new();
+        for (track_type, gain, segments) in tracks {
             let needed = settings.normalize
                 || (*track_type == TrackType::MicAudio && (settings.noise_reduction || duck_on));
             if !needed {
@@ -250,7 +253,7 @@ impl PolishPlan {
                     continue;
                 };
                 if let Ok(analysis) = analyze_cached(&path) {
-                    analyses.push((*track_type, segment, analysis));
+                    analyses.push((*track_type, *gain, segment, analysis));
                 }
             }
         }
@@ -259,15 +262,15 @@ impl PolishPlan {
                 settings.duck_db,
                 analyses
                     .iter()
-                    .filter(|(t, _, _)| *t == TrackType::MicAudio)
-                    .map(|(_, s, a)| (s.start_us, a.voice.as_slice())),
+                    .filter(|(t, _, _, _)| *t == TrackType::MicAudio)
+                    .map(|(_, _, s, a)| (s.start_us, a.voice.as_slice())),
             )
         } else {
             Vec::new()
         };
         let mut denoisers = HashMap::new();
         if settings.noise_reduction {
-            for (track_type, segment, analysis) in &analyses {
+            for (track_type, _, segment, analysis) in &analyses {
                 if let (TrackType::MicAudio, Some(profile)) = (track_type, &analysis.noise) {
                     denoisers.insert(
                         segment.relative_path.clone(),
@@ -296,22 +299,23 @@ impl PolishPlan {
     /// every track, with ducking applied, in playback order.
     fn edit_loudness(
         &self,
-        analyses: &[(TrackType, &SegmentSummary, Arc<SegmentAnalysis>)],
+        analyses: &[Analyzed],
         retained: &[RetainedInterval],
     ) -> Option<f64> {
         let end = analyses
             .iter()
-            .map(|(_, s, a)| s.start_us + a.loudness.len() as u64 * LOUDNESS_BLOCK_US)
+            .map(|(_, _, s, a)| s.start_us + a.loudness.len() as u64 * LOUDNESS_BLOCK_US)
             .max()?;
         let mut energy = vec![0f64; end.div_ceil(LOUDNESS_BLOCK_US) as usize];
-        for (track_type, segment, analysis) in analyses {
+        for (track_type, track_gain, segment, analysis) in analyses {
             for (i, &e) in analysis.loudness.iter().enumerate() {
                 let start = segment.start_us + i as u64 * LOUDNESS_BLOCK_US;
-                let gain = if *track_type == TrackType::SystemAudio {
-                    self.duck_gain(start as f64 + LOUDNESS_BLOCK_US as f64 / 2.0)
-                } else {
-                    1.0
-                };
+                let gain = track_gain
+                    * if *track_type == TrackType::SystemAudio {
+                        self.duck_gain(start as f64 + LOUDNESS_BLOCK_US as f64 / 2.0)
+                    } else {
+                        1.0
+                    };
                 if let Some(slot) = energy.get_mut((start / LOUDNESS_BLOCK_US) as usize) {
                     *slot += e * gain * gain;
                 }

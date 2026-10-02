@@ -1,6 +1,7 @@
 //! Audio polish settings stored in the edit document. Each effect has its own switch and
 //! applies to playback and export alike, because both read the same mixer.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// YouTube and most streaming platforms normalize to about -14 LUFS.
 pub const DEFAULT_TARGET_LUFS: f32 = -14.0;
@@ -9,6 +10,7 @@ pub const DEFAULT_DUCK_DB: f32 = 12.0;
 pub const TARGET_LUFS_RANGE: (f32, f32) = (-30.0, -8.0);
 pub const NOISE_REDUCTION_DB_RANGE: (f32, f32) = (3.0, 30.0);
 pub const DUCK_DB_RANGE: (f32, f32) = (3.0, 30.0);
+pub const TRACK_VOLUME_DB_RANGE: (f32, f32) = (-30.0, 12.0);
 
 fn default_target_lufs() -> f32 {
     DEFAULT_TARGET_LUFS
@@ -42,6 +44,31 @@ pub struct AudioSettings {
     /// How far system audio is lowered under speech, in dB.
     #[serde(default = "default_duck_db")]
     pub duck_db: f32,
+    /// Mute and volume per audio track id. Tracks without an entry play at full volume.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tracks: BTreeMap<String, TrackMix>,
+}
+
+/// One audio track's level in the mix.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMix {
+    #[serde(default)]
+    pub muted: bool,
+    /// Gain applied to the track, in dB. 0 leaves it as recorded.
+    #[serde(default)]
+    pub volume_db: f32,
+}
+
+impl TrackMix {
+    /// Linear gain, 0 when muted.
+    pub fn gain(&self) -> f64 {
+        if self.muted {
+            0.0
+        } else {
+            10f64.powf(self.volume_db as f64 / 20.0)
+        }
+    }
 }
 
 impl Default for AudioSettings {
@@ -53,6 +80,7 @@ impl Default for AudioSettings {
             noise_reduction_db: DEFAULT_NOISE_REDUCTION_DB,
             duck_system_audio: false,
             duck_db: DEFAULT_DUCK_DB,
+            tracks: BTreeMap::new(),
         }
     }
 }
@@ -64,6 +92,11 @@ impl AudioSettings {
 
     pub fn any_enabled(&self) -> bool {
         self.normalize || self.noise_reduction || self.duck_system_audio
+    }
+
+    /// Linear gain for the audio track `track_id`, 0 when muted.
+    pub fn track_gain(&self, track_id: &str) -> f64 {
+        self.tracks.get(track_id).map_or(1.0, TrackMix::gain)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -80,7 +113,11 @@ impl AudioSettings {
             self.noise_reduction_db,
             NOISE_REDUCTION_DB_RANGE,
         )?;
-        check("Ducking amount", self.duck_db, DUCK_DB_RANGE)
+        check("Ducking amount", self.duck_db, DUCK_DB_RANGE)?;
+        for mix in self.tracks.values() {
+            check("Track volume", mix.volume_db, TRACK_VOLUME_DB_RANGE)?;
+        }
+        Ok(())
     }
 }
 
@@ -108,8 +145,30 @@ mod tests {
                 noise_reduction_db: 50.0,
                 ..Default::default()
             },
+            AudioSettings {
+                tracks: BTreeMap::from([(
+                    "mic".into(),
+                    TrackMix {
+                        muted: false,
+                        volume_db: 40.0,
+                    },
+                )]),
+                ..Default::default()
+            },
         ] {
             assert!(bad.validate().is_err());
         }
+    }
+
+    #[test]
+    fn track_mix_round_trips_and_defaults_to_full_volume() {
+        let settings: AudioSettings =
+            serde_json::from_str(r#"{"tracks":{"system":{"muted":true},"mic":{"volumeDb":-6}}}"#)
+                .unwrap();
+        assert_eq!(settings.track_gain("system"), 0.0);
+        assert!((settings.track_gain("mic") - 0.501).abs() < 1e-3);
+        assert_eq!(settings.track_gain("other"), 1.0);
+        let json = serde_json::to_string(&AudioSettings::default()).unwrap();
+        assert!(!json.contains("tracks"), "{json}");
     }
 }
