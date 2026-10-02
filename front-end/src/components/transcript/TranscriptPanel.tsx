@@ -212,6 +212,31 @@ export const TranscriptPanel: React.FC = () => {
     }
   };
 
+  const runAiReview = async () => {
+    if (!handle || !trackId) return;
+    setRunning(true);
+    setError(null);
+    setNotice(null);
+    setProgress(null);
+    try {
+      const before = new Set(suggestions.map((s) => s.id));
+      const next = await api.transcriptAiSuggest(handle, trackId);
+      setSuggestions(next);
+      const added = next.filter((s) => s.source === "ai" && !before.has(s.id)).length;
+      setReviewOpen(true);
+      setNotice(
+        added > 0
+          ? `AI review found ${added} more suggestion${added === 1 ? "" : "s"}.`
+          : "AI review found nothing the rules had not already found.",
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setRunning(false);
+      setProgress(null);
+    }
+  };
+
   const dismiss = async (ids: string[], dismissed: boolean) => {
     if (!handle || !trackId || ids.length === 0) return;
     setError(null);
@@ -301,10 +326,10 @@ export const TranscriptPanel: React.FC = () => {
           </span>
         )}
         <div className="ml-auto flex items-center gap-1.5">
-          {view && suggestions.length > 0 && (
+          {view && (
             <button
               type="button"
-              title="Review filler sounds and restarted sentences one by one"
+              title="Review filler sounds and restarted sentences one by one, or find more with AI"
               onClick={() => setReviewOpen(!reviewOpen)}
               aria-pressed={reviewOpen}
               className={`flex items-center gap-1 px-2 py-1 rounded border ${
@@ -518,6 +543,17 @@ export const TranscriptPanel: React.FC = () => {
               {showRejected ? "Back" : `Rejected ${rejectedCount}`}
             </button>
           </div>
+          <div className="px-2 pt-2">
+            <button
+              type="button"
+              disabled={running}
+              onClick={() => void runAiReview()}
+              className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded bg-violet-900/40 border border-violet-600/40 text-violet-100 hover:bg-violet-800/50 disabled:opacity-40"
+              title="Ask the AI provider from Transcription and AI settings to find filler words and retakes in context. Sends the transcript text."
+            >
+              <Sparkles className="w-3 h-3" /> Find with AI
+            </button>
+          </div>
           {!showRejected && reviewed.length > 1 && (
             <button
               type="button"
@@ -550,6 +586,11 @@ export const TranscriptPanel: React.FC = () => {
                   >
                     {s.kind === "filler" ? "Filler" : "Retake"}
                   </span>
+                  {s.source === "ai" && (
+                    <span className="px-1 rounded text-[10px] font-semibold bg-sky-900/60 text-sky-200" title="Found by the AI review">
+                      AI
+                    </span>
+                  )}
                   <span className="font-mono text-studio-500">{formatTime(s.editedStartUs)}</span>
                   <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                     <button
@@ -594,6 +635,7 @@ export const TranscriptPanel: React.FC = () => {
                   </div>
                 </div>
                 <p className={`mt-1 text-studio-200 ${s.dismissed ? "text-studio-500" : ""}`}>&ldquo;{s.text}&rdquo;</p>
+                {s.reason && <p className="mt-0.5 text-[11px] text-studio-500 italic">{s.reason}</p>}
               </li>
             ))}
           </ul>

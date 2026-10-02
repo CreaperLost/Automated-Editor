@@ -65,6 +65,20 @@ pub struct TranscriptCutSuggestion {
     /// The user rejected this suggestion; it stays out of "remove all".
     #[serde(default)]
     pub dismissed: bool,
+    /// Found by the built-in rules or by an AI pass.
+    #[serde(default)]
+    pub source: SuggestionSource,
+    /// The AI's short explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SuggestionSource {
+    #[default]
+    Rules,
+    Ai,
 }
 
 fn normalize(text: &str) -> String {
@@ -79,7 +93,7 @@ fn ends_clause(text: &str) -> bool {
 }
 
 /// A word counts as kept when its midpoint survives the current cuts.
-fn kept(word: &TranscriptWord, mapper: &TimelineMapper) -> bool {
+pub(crate) fn kept(word: &TranscriptWord, mapper: &TimelineMapper) -> bool {
     let mid = word.source_start_us + (word.source_end_us - word.source_start_us) / 2;
     mapper.source_to_edited_us(mid).is_some()
 }
@@ -290,6 +304,40 @@ pub fn suggestions(
         }
     }
 
+    // AI spans whose words are all still kept, skipping any that overlap a rule-based one.
+    let position: std::collections::HashMap<&str, usize> = live
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.id.as_str(), i))
+        .collect();
+    let mut taken: Vec<(usize, usize)> = Vec::new();
+    for s in &out {
+        if let (Some(&a), Some(&b)) = (
+            s.word_ids.first().and_then(|id| position.get(id.as_str())),
+            s.word_ids.last().and_then(|id| position.get(id.as_str())),
+        ) {
+            taken.push((a, b));
+        }
+    }
+    for span in &transcript.ai_suggestions {
+        let (Some(&a), Some(&b)) = (
+            position.get(span.first_word_id.as_str()),
+            position.get(span.last_word_id.as_str()),
+        ) else {
+            continue;
+        };
+        if a > b || taken.iter().any(|&(x, y)| a <= y && x <= b) {
+            continue;
+        }
+        let before = out.len();
+        push_suggestion(&mut out, span.kind, &live[a..=b], transcript, mapper);
+        if let Some(added) = out.get_mut(before) {
+            added.source = SuggestionSource::Ai;
+            added.reason = Some(span.reason.clone()).filter(|r| !r.is_empty());
+            taken.push((a, b));
+        }
+    }
+
     out.sort_by_key(|s| s.edited_start_us);
     for s in out.iter_mut() {
         s.id = format!(
@@ -332,6 +380,8 @@ fn push_suggestion(
         edited_start_us: first.0,
         edited_end_us: last.1,
         dismissed: false,
+        source: SuggestionSource::Rules,
+        reason: None,
     });
 }
 
@@ -457,6 +507,65 @@ mod tests {
         let again = suggestions(&t, &m);
         assert!(again[0].dismissed);
         assert!(!again[1].dismissed);
+    }
+
+    #[test]
+    fn ai_spans_join_the_rules_without_duplicates() {
+        use crate::transcript::AiSpan;
+        let mut t = transcript(&[
+            ("So", 0, 200),
+            ("um,", 300, 500),
+            ("like,", 600, 800),
+            ("this", 900, 1100),
+            ("is", 1150, 1300),
+            ("the", 1350, 1500),
+            ("map.", 1550, 1900),
+        ]);
+        let span = |kind, a: &str, b: &str, reason: &str| AiSpan {
+            kind,
+            first_word_id: a.into(),
+            last_word_id: b.into(),
+            reason: reason.into(),
+        };
+        t.ai_suggestions = vec![
+            // Overlaps the rule-based "um," filler: skipped.
+            span(TranscriptSuggestionKind::Filler, "w-1", "w-2", "um like"),
+            // New: "like," on its own is not in the rules.
+            span(
+                TranscriptSuggestionKind::Filler,
+                "w-2",
+                "w-2",
+                "filler like",
+            ),
+            // Unknown word ids are ignored.
+            span(TranscriptSuggestionKind::Retake, "w-90", "w-91", ""),
+        ];
+        let m = mapper(&[(0, 4000)]);
+        let s = suggestions(&t, &m);
+        assert_eq!(s.len(), 2, "{s:?}");
+        assert_eq!(s[0].id, "filler-w-1-w-1");
+        assert_eq!(s[0].source, SuggestionSource::Rules);
+        assert_eq!(s[1].id, "filler-w-2-w-2");
+        assert_eq!(s[1].source, SuggestionSource::Ai);
+        assert_eq!(s[1].reason.as_deref(), Some("filler like"));
+
+        // Rejections work by id for AI suggestions too.
+        t.set_dismissed(&[s[1].id.clone()], true).unwrap();
+        assert!(suggestions(&t, &m)[1].dismissed);
+
+        // Once "like," is cut, its AI suggestion goes away.
+        let m = mapper(&[(0, 550), (850, 4000)]);
+        let s = suggestions(&t, &m);
+        assert!(
+            s.iter().all(|s| s.source == SuggestionSource::Rules),
+            "{s:?}"
+        );
+
+        // Stored spans survive a save and load.
+        let json = serde_json::to_string(&t).unwrap();
+        let back: Transcript = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ai_suggestions, t.ai_suggestions);
+        back.validate().unwrap();
     }
 
     #[test]

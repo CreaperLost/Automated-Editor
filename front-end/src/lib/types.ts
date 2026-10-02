@@ -862,4 +862,25 @@ export interface TranscriptCutSuggestion {
   editedEndUs: number;
   /** Rejected in the review list; left out of "remove all". */
   dismissed: boolean;
+  /** Found by the built-in rules or by an AI review. */
+  source?: "rules" | "ai";
+  /** The AI's short explanation. */
+  reason?: string;
+}
+
+export type AiProvider = "openAi" | "openRouter";
+
+export interface AiSettings {
+  provider: AiProvider;
+  /** Empty uses the default model. */
+  openaiModel: string;
+  openrouterModel: string;
+}
+
+export interface AiSettingsView {
+  settings: AiSettings;
+  openaiKeySource: "keychain" | "file" | "environment" | null;
+  openrouterKeySource: "keychain" | "file" | "environment" | null;
+  openaiDefaultModel: string;
+  openrouterDefaultModel: string;
 }

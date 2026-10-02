@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod captions;
 pub mod commands;
 pub mod dsp;
@@ -8,6 +9,7 @@ pub mod media_bin;
 pub mod playback;
 pub mod project;
 pub mod render;
+pub mod secrets;
 pub mod telemetry;
 pub mod timeline;
 pub mod transcript;
@@ -617,6 +619,48 @@ fn transcript_set_api_key(key: String) -> Result<transcript::TranscriptSettingsV
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn ai_settings_get() -> ai::AiSettingsView {
+    commands::transcript::ai_settings_get_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn ai_settings_set(settings: ai::AiSettings) -> Result<ai::AiSettingsView, String> {
+    commands::transcript::ai_settings_set_impl(settings)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn ai_set_api_key(provider: ai::AiProvider, key: String) -> Result<ai::AiSettingsView, String> {
+    commands::transcript::ai_set_api_key_impl(provider, key)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn transcript_ai_suggest(
+    app: tauri::AppHandle,
+    project_handle: String,
+    track_id: String,
+) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn_blocking(move || {
+        let emitter = app.clone();
+        commands::transcript::transcript_ai_suggest_impl(
+            &app.state::<AppState>(),
+            &app.state::<commands::transcript::TranscriptState>(),
+            project_handle,
+            track_id,
+            &mut |progress| {
+                let _ = emitter.emit("transcript-progress", progress);
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn transcript_get(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1005,6 +1049,10 @@ pub fn run() {
             transcript_settings_get,
             transcript_settings_set,
             transcript_set_api_key,
+            ai_settings_get,
+            ai_settings_set,
+            ai_set_api_key,
+            transcript_ai_suggest,
             transcript_get,
             transcript_run,
             transcript_cancel,
