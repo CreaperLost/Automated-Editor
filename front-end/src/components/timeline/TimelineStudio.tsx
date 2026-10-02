@@ -878,8 +878,11 @@ export const TimelineStudio: React.FC = () => {
             </span>
           )}
           {zoomDiagnostics.length > 0 && pendingCount === 0 && persistedCount === 0 && (
-            <span className="text-[11px] text-studio-400 truncate max-w-[220px]" title={zoomDiagnostics.join(" · ")}>
-              No auto-zoom
+            <span
+              className="text-[11px] text-amber-300/90 truncate max-w-[360px]"
+              title={zoomDiagnostics.join("\n")}
+            >
+              No auto-zoom: {zoomDiagnostics[zoomDiagnostics.length - 1]}
             </span>
           )}
 

@@ -294,6 +294,7 @@ pub fn detect_focus_ranges(
             | CanonicalKind::ButtonUp { .. }
             | CanonicalKind::Click { .. }
             | CanonicalKind::Scroll { .. } => true,
+            CanonicalKind::Note => false,
             CanonicalKind::Gap {
                 start_us, end_us, ..
             } => {

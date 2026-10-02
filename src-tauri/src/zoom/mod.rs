@@ -445,6 +445,8 @@ fn extract_interest(
 
     for event in &stream.events {
         match &event.kind {
+            // Cursor shape changes and unknown records are not interest.
+            CanonicalKind::Note => {}
             CanonicalKind::Gap { start_us, .. } => {
                 let end = dwell
                     .as_ref()

@@ -12,10 +12,14 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-pub const EVENTS_LIMIT: u64 = 33_554_432;
+/// Long recordings with a high-rate mouse reach hundreds of MB of JSONL.
+pub const EVENTS_LIMIT: u64 = 1_073_741_824;
 pub const GEOMETRY_LIMIT: u64 = 1_048_576;
 pub const LINE_LIMIT: u64 = 65_536;
-pub const RECORD_LIMIT: usize = 100_000;
+pub const RECORD_LIMIT: usize = 5_000_000;
+/// Mouse moves closer together than this are thinned to one sample; zoom and the auto
+/// webcam need positions and pauses, not a 1000 Hz trace.
+pub const MOVE_THIN_US: u64 = 8_000;
 pub const DIAGNOSTIC_LIMIT: usize = 256;
 const MAX_SAFE_TIME: u64 = 9_007_199_254_740_991;
 
@@ -72,6 +76,9 @@ pub enum CanonicalKind {
         end_us: u64,
         dropped_events: u64,
     },
+    /// A record that is not mouse activity (cursor shape changes, unknown kinds). Kept so
+    /// sequence numbers stay contiguous.
+    Note,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,8 +182,8 @@ fn parse_jsonl(
 ) -> Result<(), String> {
     let file = open_regular(path)?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() || meta.len() > limit {
-        return Err("Telemetry file exceeds size limit or is not a file".into());
+    if !meta.is_file() {
+        return Err("Telemetry path is not a file".into());
     }
     let mut reader = BufReader::new(file.take(limit + 1));
     let mut total = 0u64;
@@ -191,8 +198,16 @@ fn parse_jsonl(
             break;
         }
         total += count as u64;
-        if count as u64 > LINE_LIMIT || total > limit || line_number == RECORD_LIMIT {
-            return Err("Telemetry record limit exceeded".into());
+        if count as u64 > LINE_LIMIT {
+            return Err("Telemetry line exceeds the size limit".into());
+        }
+        if total > limit || line_number == RECORD_LIMIT {
+            // Keep what was read rather than losing the whole recording's telemetry.
+            push_diag(
+                stream,
+                format!("Telemetry is very large; only the first {line_number} records were read"),
+            );
+            break;
         }
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
@@ -296,11 +311,10 @@ fn geometry_from_v1(record: GeometryRecord) -> CanonicalGeometry {
 
 fn geometry_from_v2(record: MouseGeometry) -> CanonicalGeometry {
     let mut unsupported_reason = None;
-    if record.coordinate_space != "quartz_global" {
-        unsupported_reason = Some(format!(
-            "unsupported coordinate space {}",
-            record.coordinate_space
-        ));
+    // Events carry coordinates the recorder already normalized to the source, so the space
+    // name (quartz_global on macOS, a Windows desktop space on Windows) is only a label.
+    if record.coordinate_space.trim().is_empty() {
+        unsupported_reason = Some("geometry has no coordinate space".into());
     } else if record.source_id.starts_with("application:") {
         unsupported_reason = Some("application capture geometry is unsupported".into());
     } else if record.source_id.starts_with("window:")
@@ -413,8 +427,29 @@ fn parse_event_line(
             });
         }
     }
-    stream.events.push(event);
+    push_thinned(stream, event);
     Ok(())
+}
+
+/// Appends `event`, replacing the newest move instead when it and the move before it are
+/// within [`MOVE_THIN_US`] of `event`. Replacing (not dropping) keeps sequence numbers
+/// contiguous, so thinning never looks like a telemetry gap.
+fn push_thinned(stream: &mut TelemetryStream, event: CanonicalEvent) {
+    let is_move = |e: &CanonicalEvent| matches!(e.kind, CanonicalKind::Move { .. });
+    if is_move(&event) {
+        if let [.., before, last] = stream.events.as_slice() {
+            if is_move(before)
+                && is_move(last)
+                && last.seq.saturating_add(1) == event.seq
+                && last.geometry_id == event.geometry_id
+                && event.t_us.saturating_sub(before.t_us) < MOVE_THIN_US
+            {
+                *stream.events.last_mut().unwrap() = event;
+                return;
+            }
+        }
+    }
+    stream.events.push(event);
 }
 
 fn event_from_v1(event: TelemetryEvent) -> CanonicalEvent {
@@ -514,6 +549,7 @@ fn event_from_v2(event: MouseEvent) -> Result<CanonicalEvent, String> {
                 dropped_events,
             }
         }
+        MousePayload::CursorChanged { .. } | MousePayload::Unknown => CanonicalKind::Note,
     };
     Ok(CanonicalEvent {
         version: 2,
@@ -534,6 +570,113 @@ mod tests {
         fs::create_dir_all(root.join("telemetry")).unwrap();
         fs::write(root.join("telemetry/geometry.jsonl"), geometry).unwrap();
         fs::write(root.join("telemetry/events.jsonl"), events).unwrap();
+    }
+
+    /// Shaped like the Windows recorder's output: a `windows_virtual_screen` geometry and
+    /// `cursor_changed` records between the mouse events.
+    const WINDOWS_GEOMETRY: &str = r#"{"version":2,"geometry_id":"mouse-g1","t_us":4895,"coordinate_space":"windows_virtual_screen","source_id":"display:1","bounds":{"x":0.0,"y":0.0,"width":1920.0,"height":1080.0},"output_width":1920,"output_height":1080,"sampling_interval_us":100000,"cursor_mode":"replace","physical_width":1920.0,"physical_height":1080.0,"rotation_degrees":0.0,"logical_to_physical_scale_x":1.0,"logical_to_physical_scale_y":1.0}
+"#;
+
+    fn windows_events() -> String {
+        let mut lines = vec![
+            r#"{"version":2,"seq":0,"t_us":4895,"payload":{"kind":"gap","reason":"geometry_changed","start_us":0,"end_us":4895,"dropped_events":0}}"#.to_string(),
+            r#"{"version":2,"seq":1,"t_us":4895,"geometry_id":"mouse-g1","payload":{"kind":"cursor_changed","cursor_id":"c1","name":"arrow","hotspot_x":2.0,"hotspot_y":2.0,"width":32.0,"height":32.0}}"#.to_string(),
+        ];
+        let mut seq = 2;
+        // The cursor rests near (0.7, 0.6) for two seconds, then clicks there.
+        for i in 0..20u64 {
+            lines.push(format!(
+                r#"{{"version":2,"seq":{seq},"t_us":{},"geometry_id":"mouse-g1","norm_x":0.7,"norm_y":0.6,"inside_source":true,"payload":{{"kind":"move"}}}}"#,
+                500_000 + i * 100_000
+            ));
+            seq += 1;
+        }
+        lines.push(format!(
+            r#"{{"version":2,"seq":{seq},"t_us":2600000,"geometry_id":"mouse-g1","payload":{{"kind":"cursor_changed","cursor_id":"c1","name":"pointing_hand","hotspot_x":2.0,"hotspot_y":2.0,"width":32.0,"height":32.0}}}}"#
+        ));
+        seq += 1;
+        for (kind, t) in [("button_down", 2_700_000), ("button_up", 2_780_000)] {
+            lines.push(format!(
+                r#"{{"version":2,"seq":{seq},"t_us":{t},"geometry_id":"mouse-g1","norm_x":0.7,"norm_y":0.6,"inside_source":true,"payload":{{"kind":"{kind}","button":0}}}}"#
+            ));
+            seq += 1;
+        }
+        lines.push(format!(
+            r#"{{"version":2,"seq":{seq},"t_us":2800000,"payload":{{"kind":"a_future_kind","value":1}}}}"#
+        ));
+        lines.join("\n") + "\n"
+    }
+
+    #[test]
+    fn windows_recorder_telemetry_reads_cleanly_and_yields_zooms() {
+        let dir = tempdir().unwrap();
+        write_pair(dir.path(), WINDOWS_GEOMETRY, &windows_events());
+        let stream = read_telemetry(dir.path()).unwrap();
+        assert!(stream.diagnostics.is_empty(), "{:?}", stream.diagnostics);
+        let geometry = &stream.geometries["mouse-g1"];
+        assert!(geometry.supported, "{:?}", geometry.unsupported_reason);
+        // Only the recorder's own leading gap; cursor changes and unknown kinds are notes.
+        let gaps = stream
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, CanonicalKind::Gap { .. }))
+            .count();
+        assert_eq!(gaps, 1);
+        assert_eq!(
+            stream
+                .events
+                .iter()
+                .filter(|e| e.kind == CanonicalKind::Note)
+                .count(),
+            3
+        );
+        let generation =
+            crate::zoom::generate_zoom_suggestions(&stream, &crate::zoom::ZoomConfig::default())
+                .unwrap();
+        assert!(
+            !generation.suggestions.is_empty(),
+            "{:?}",
+            generation.diagnostics
+        );
+    }
+
+    #[test]
+    fn dense_moves_are_thinned_without_breaking_the_sequence() {
+        let dir = tempdir().unwrap();
+        // One move per millisecond for a second.
+        let events: String = (0..1_000u64)
+            .map(|i| {
+                format!(
+                    "{{\"version\":2,\"seq\":{i},\"t_us\":{},\"geometry_id\":\"mouse-g1\",\"norm_x\":{},\"norm_y\":0.5,\"inside_source\":true,\"payload\":{{\"kind\":\"move\"}}}}\n",
+                    1_000 + i * 1_000,
+                    i as f64 / 1_000.0
+                )
+            })
+            .collect();
+        write_pair(dir.path(), WINDOWS_GEOMETRY, &events);
+        let stream = read_telemetry(dir.path()).unwrap();
+        assert!(stream.diagnostics.is_empty(), "{:?}", stream.diagnostics);
+        assert!(
+            stream
+                .events
+                .iter()
+                .all(|e| matches!(e.kind, CanonicalKind::Move { .. })),
+            "thinning must not insert gaps"
+        );
+        // About one sample per 8 ms, and the last position survives.
+        assert!(
+            (100..=160).contains(&stream.events.len()),
+            "{}",
+            stream.events.len()
+        );
+        assert_eq!(stream.events.last().unwrap().seq, 999);
+        let gaps_between = stream
+            .events
+            .windows(2)
+            .map(|w| w[1].t_us - w[0].t_us)
+            .max()
+            .unwrap();
+        assert!(gaps_between <= MOVE_THIN_US, "{gaps_between}");
     }
 
     #[test]
