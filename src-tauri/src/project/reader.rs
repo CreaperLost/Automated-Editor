@@ -730,6 +730,22 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn remove_webcam_focus(
+        &mut self,
+        expected_revision: u64,
+        edited_start_us: u64,
+        edited_end_us: u64,
+    ) -> Result<OpenedProject, String> {
+        self.history.remove_webcam_focus(
+            expected_revision,
+            edited_start_us,
+            edited_end_us,
+            &self.root,
+        )?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn update_audio(
         &mut self,
         expected_revision: u64,

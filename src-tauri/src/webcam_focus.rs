@@ -270,6 +270,72 @@ impl WebcamFocus {
         subtract_ranges(&merge_ranges(ranges), &merge_ranges(normal))
     }
 
+    /// Makes the webcam fill the frame over the source `pieces`, without stacking: parts
+    /// already covered by an enabled segment are left alone, new manual focus merges with the
+    /// manual focus it touches, and switched-off segments give way.
+    pub fn add_focus(&mut self, pieces: &[(u64, u64)]) {
+        let pieces = merge_ranges(pieces.to_vec());
+        let covered_auto = merge_ranges(
+            self.segments
+                .iter()
+                .filter(|s| s.enabled && s.source == FocusSegmentSource::Auto)
+                .map(|s| (s.source_start_us, s.source_end_us))
+                .collect(),
+        );
+        let mut manual: Vec<(u64, u64)> = self
+            .segments
+            .iter()
+            .filter(|s| s.enabled && s.source == FocusSegmentSource::Manual)
+            .map(|s| (s.source_start_us, s.source_end_us))
+            .collect();
+        manual.extend(subtract_ranges(&pieces, &covered_auto));
+        let mut kept: Vec<WebcamFocusSegment> = Vec::new();
+        for segment in std::mem::take(&mut self.segments) {
+            match (segment.enabled, segment.source) {
+                (true, FocusSegmentSource::Auto) => kept.push(segment),
+                (true, FocusSegmentSource::Manual) => {}
+                (false, _) => kept.extend(trimmed(segment, &pieces)),
+            }
+        }
+        self.segments = kept;
+        for (start, end) in merge_ranges(manual) {
+            let id = self.unique_id(&format!("manual-{start}"));
+            self.segments.push(WebcamFocusSegment {
+                id,
+                source_start_us: start,
+                source_end_us: end,
+                source: FocusSegmentSource::Manual,
+                enabled: true,
+                edited_ranges: Vec::new(),
+            });
+        }
+        *self = std::mem::take(self).normalized();
+    }
+
+    /// Takes the source `pieces` out of every segment, auto or manual, so the webcam stays in
+    /// its bubble there. Re-detecting can find auto focus there again.
+    pub fn remove_focus(&mut self, pieces: &[(u64, u64)]) {
+        let pieces = merge_ranges(pieces.to_vec());
+        let segments = std::mem::take(&mut self.segments);
+        for segment in segments {
+            for mut piece in trimmed(segment, &pieces) {
+                piece.id = self.unique_id(&piece.id);
+                self.segments.push(piece);
+            }
+        }
+        *self = std::mem::take(self).normalized();
+    }
+
+    fn unique_id(&self, base: &str) -> String {
+        let mut id = base.to_string();
+        let mut n = 1;
+        while self.segments.iter().any(|s| s.id == id) {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        id
+    }
+
     /// Replaces the auto-detected segments, keeping manual ones and any auto segment the
     /// user switched off that is detected again.
     pub fn replace_auto_segments(&mut self, detected: &[(u64, u64)]) {
@@ -375,6 +441,30 @@ pub fn detect_focus_ranges(
         .into_iter()
         .filter(|(start, end)| end - start >= min_focus)
         .take(MAX_FOCUS_SEGMENTS)
+        .collect()
+}
+
+/// What is left of `segment` outside `remove`. A piece that keeps the segment's start keeps
+/// its id; later pieces are named after their own start.
+fn trimmed(segment: WebcamFocusSegment, remove: &[(u64, u64)]) -> Vec<WebcamFocusSegment> {
+    let prefix = match segment.source {
+        FocusSegmentSource::Auto => "auto",
+        FocusSegmentSource::Manual => "manual",
+    };
+    subtract_ranges(&[(segment.source_start_us, segment.source_end_us)], remove)
+        .into_iter()
+        .map(|(start, end)| WebcamFocusSegment {
+            id: if start == segment.source_start_us {
+                segment.id.clone()
+            } else {
+                format!("{prefix}-{start}")
+            },
+            source_start_us: start,
+            source_end_us: end,
+            source: segment.source,
+            enabled: segment.enabled,
+            edited_ranges: Vec::new(),
+        })
         .collect()
 }
 
@@ -572,6 +662,58 @@ mod tests {
         assert_eq!(focus.edited_ranges(&mapper), vec![(5 * S, 15 * S)]);
         focus.enabled = false;
         assert!(focus.edited_ranges(&mapper).is_empty());
+    }
+
+    #[test]
+    fn manual_focus_never_stacks_and_can_be_removed() {
+        let mut focus = WebcamFocus::default();
+        focus.replace_auto_segments(&[(10 * S, 20 * S)]);
+        focus.add_focus(&[(2 * S, 5 * S)]);
+        // Adding the same range again, or one inside it, changes nothing.
+        let once = focus.clone();
+        focus.add_focus(&[(2 * S, 5 * S)]);
+        focus.add_focus(&[(3 * S, 4 * S)]);
+        assert_eq!(focus, once);
+        // Overlapping focus merges; the part already covered by auto focus is not doubled.
+        focus.add_focus(&[(4 * S, 12 * S)]);
+        let ranges = |focus: &WebcamFocus| {
+            focus
+                .segments
+                .iter()
+                .map(|s| (s.source, s.source_start_us, s.source_end_us, s.enabled))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ranges(&focus),
+            vec![
+                (FocusSegmentSource::Manual, 2 * S, 10 * S, true),
+                (FocusSegmentSource::Auto, 10 * S, 20 * S, true),
+            ]
+        );
+        // Removing a range splits whatever covers it, auto or manual.
+        focus.remove_focus(&[(8 * S, 15 * S)]);
+        assert_eq!(
+            ranges(&focus),
+            vec![
+                (FocusSegmentSource::Manual, 2 * S, 8 * S, true),
+                (FocusSegmentSource::Auto, 15 * S, 20 * S, true),
+            ]
+        );
+        let ids: std::collections::BTreeSet<_> = focus.segments.iter().map(|s| &s.id).collect();
+        assert_eq!(ids.len(), focus.segments.len());
+        // A switched-off segment gives way to new focus instead of sitting under it.
+        focus.segments[1].enabled = false;
+        focus.add_focus(&[(16 * S, 18 * S)]);
+        assert_eq!(
+            ranges(&focus),
+            vec![
+                (FocusSegmentSource::Manual, 2 * S, 8 * S, true),
+                (FocusSegmentSource::Auto, 15 * S, 16 * S, false),
+                (FocusSegmentSource::Manual, 16 * S, 18 * S, true),
+                (FocusSegmentSource::Auto, 18 * S, 20 * S, false),
+            ]
+        );
+        focus.validate().unwrap();
     }
 
     #[test]

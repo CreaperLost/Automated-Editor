@@ -706,37 +706,36 @@ impl EditHistory {
         if edited_end_us <= edited_start_us {
             return Err("Webcam focus must be a half-open edited range".into());
         }
-        let mapper = self.current.mapper()?;
-        let source_start = mapper
-            .edited_to_source_us(edited_start_us)
-            .ok_or("Webcam focus start is not on retained media")?;
-        let source_end = mapper
-            .edited_to_source_us(edited_end_us.saturating_sub(1))
-            .ok_or("Webcam focus end is not on retained media")?
-            .saturating_add(1);
-        if source_end <= source_start {
-            return Err("Webcam focus range does not map onto source time".into());
+        let pieces = self
+            .current
+            .mapper()?
+            .edited_range_to_source(edited_start_us, edited_end_us);
+        if pieces.is_empty() {
+            return Err("Webcam focus needs part of the recording, not only imported media".into());
         }
         let mut focus = self.current.webcam_focus.clone();
         focus.enabled = true;
-        let mut n = focus.segments.len();
-        let id = loop {
-            let id = format!("manual-{source_start}-{n}");
-            if !focus.segments.iter().any(|s| s.id == id) {
-                break id;
-            }
-            n += 1;
-        };
-        focus
-            .segments
-            .push(crate::webcam_focus::WebcamFocusSegment {
-                id,
-                source_start_us: source_start,
-                source_end_us: source_end,
-                source: crate::webcam_focus::FocusSegmentSource::Manual,
-                enabled: true,
-                edited_ranges: Vec::new(),
-            });
+        focus.add_focus(&pieces);
+        self.update_webcam_focus(expected_revision, focus, persist_root)
+    }
+
+    /// Switches webcam focus off over an edited range, whichever segments cover it.
+    pub fn remove_webcam_focus(
+        &mut self,
+        expected_revision: u64,
+        edited_start_us: u64,
+        edited_end_us: u64,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if edited_end_us <= edited_start_us {
+            return Err("Webcam focus must be a half-open edited range".into());
+        }
+        let pieces = self
+            .current
+            .mapper()?
+            .edited_range_to_source(edited_start_us, edited_end_us);
+        let mut focus = self.current.webcam_focus.clone();
+        focus.remove_focus(&pieces);
         self.update_webcam_focus(expected_revision, focus, persist_root)
     }
 
@@ -1268,19 +1267,45 @@ mod tests {
         ])
         .unwrap();
         let mut history = EditHistory::new(initial);
-        // Edited 3s..5s spans the cut, so it maps to source 3s..7s.
+        // Edited 3s..5s spans the cut, so it maps to source 3s..4s and 6s..7s.
         history
             .add_webcam_focus(0, 3_000_000, 5_000_000, dir.path())
             .unwrap();
         let focus = &history.current.webcam_focus;
         assert!(focus.enabled);
-        assert_eq!(focus.segments.len(), 1);
+        let sources = |focus: &WebcamFocus| {
+            focus
+                .segments
+                .iter()
+                .map(|s| (s.source_start_us, s.source_end_us))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            (
-                focus.segments[0].source_start_us,
-                focus.segments[0].source_end_us
-            ),
-            (3_000_000, 7_000_000)
+            sources(focus),
+            vec![(3_000_000, 4_000_000), (6_000_000, 7_000_000)]
+        );
+        assert_eq!(
+            focus.edited_ranges(&history.current.mapper().unwrap()),
+            vec![(3_000_000, 5_000_000)]
+        );
+        // Adding it again does not stack; removing part of it is one undoable edit.
+        history
+            .add_webcam_focus(1, 3_000_000, 5_000_000, dir.path())
+            .unwrap();
+        assert_eq!(history.current.revision, 1);
+        history
+            .remove_webcam_focus(1, 4_500_000, 5_000_000, dir.path())
+            .unwrap();
+        assert_eq!(
+            sources(&history.current.webcam_focus),
+            vec![(3_000_000, 4_000_000), (6_000_000, 6_500_000)]
+        );
+        history.undo(2, dir.path()).unwrap();
+        // Undo and redo are revisions of their own; continue from the restored focus.
+        let revision = history.current.revision;
+        assert_eq!(
+            sources(&history.current.webcam_focus),
+            vec![(3_000_000, 4_000_000), (6_000_000, 7_000_000)]
         );
         let on_disk = load_edit_document(dir.path()).unwrap().unwrap();
         assert_eq!(on_disk.webcam_focus, history.current.webcam_focus);
@@ -1288,19 +1313,25 @@ mod tests {
         // UI-only edited ranges are dropped, and an unchanged update is not a revision.
         let mut echoed = history.current.webcam_focus.clone();
         echoed.attach_edited_ranges(&history.current.mapper().unwrap());
-        history.update_webcam_focus(1, echoed, dir.path()).unwrap();
-        assert_eq!(history.current.revision, 1);
+        history
+            .update_webcam_focus(revision, echoed, dir.path())
+            .unwrap();
+        assert_eq!(history.current.revision, revision);
 
         let mut off = history.current.webcam_focus.clone();
         off.enabled = false;
-        history.update_webcam_focus(1, off, dir.path()).unwrap();
+        history
+            .update_webcam_focus(revision, off, dir.path())
+            .unwrap();
         assert!(!history.current.webcam_focus.enabled);
-        history.undo(2, dir.path()).unwrap();
+        history.undo(revision + 1, dir.path()).unwrap();
         assert!(history.current.webcam_focus.enabled);
 
         let mut bad = history.current.webcam_focus.clone();
         bad.settings.focus_size_pct = 10.0;
-        assert!(history.update_webcam_focus(3, bad, dir.path()).is_err());
+        assert!(history
+            .update_webcam_focus(history.current.revision, bad, dir.path())
+            .is_err());
     }
 
     #[test]

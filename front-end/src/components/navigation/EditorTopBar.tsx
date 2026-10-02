@@ -165,10 +165,10 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
               type="button"
               onClick={() => setIsSilenceModalOpen(true)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-amber-300 hover:text-amber-200 text-xs font-medium transition-colors"
-              title="AI Silence Cuts"
+              title="Find the silent pauses and cut them out (jump cuts)"
             >
               <Scissors className="w-3.5 h-3.5" />
-              <span>Silence Cuts</span>
+              <span>Jump Cuts</span>
             </button>
 
             {/* Export: settings, destination and progress live in the export dialog. */}

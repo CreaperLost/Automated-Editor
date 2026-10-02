@@ -15,10 +15,10 @@
   --dv-tab-font-size: inherit;
   --dv-border-radius: 8px;
   --dv-tab-margin: 0;
-  --dv-sash-color: transparent;
+  --dv-sash-color: #1c1c21;
   --dv-active-sash-color: #14b8a6;
   --dv-active-sash-transition-duration: 0.1s;
-  --dv-active-sash-transition-delay: 0.3s;
+  --dv-active-sash-transition-delay: 0s;
   --dv-spacing-padding: 0px;
   --dv-tab-border-radius: 0px;
   --dv-sash-border-radius: 0px;
@@ -63,4 +63,50 @@
 /* Tabs are drag handles: show it. */
 .dockview-theme-aero .dv-tab {
   cursor: grab;
+}
+
+/* Resize bars: a wider grab area than the visible bar, with a grip in the middle. */
+.dockview-theme-aero .dv-split-view-container > .dv-sash-container > .dv-sash:not(.dv-disabled)::before {
+  content: "";
+  position: absolute;
+  background: transparent;
+}
+.dockview-theme-aero .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash:not(.dv-disabled)::before {
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  right: -6px;
+}
+.dockview-theme-aero .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash:not(.dv-disabled)::before {
+  left: 0;
+  right: 0;
+  top: -6px;
+  bottom: -6px;
+}
+.dockview-theme-aero .dv-split-view-container > .dv-sash-container > .dv-sash:not(.dv-disabled)::after {
+  content: "";
+  position: absolute;
+  border-radius: 2px;
+  background: #3f3f46;
+  pointer-events: none;
+}
+.dockview-theme-aero .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash:not(.dv-disabled)::after {
+  top: 50%;
+  left: 1px;
+  width: calc(100% - 2px);
+  height: 32px;
+  transform: translateY(-50%);
+}
+.dockview-theme-aero .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash:not(.dv-disabled)::after {
+  left: 50%;
+  top: 1px;
+  height: calc(100% - 2px);
+  width: 32px;
+  transform: translateX(-50%);
+}
+.dockview-theme-aero .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash {
+  width: 6px;
+}
+.dockview-theme-aero .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash {
+  height: 6px;
 }

@@ -591,6 +591,18 @@ pub fn project_webcam_focus_add_impl(
     })
 }
 
+pub fn project_webcam_focus_remove_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    edited_start_us: u64,
+    edited_end_us: u64,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.remove_webcam_focus(expected_revision, edited_start_us, edited_end_us)
+    })
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EditCut {

@@ -263,22 +263,6 @@ export const InspectorPanel: React.FC = () => {
             ))}
           </div>
         </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-xs">
-            <span className="text-studio-400">Canvas Padding</span>
-            <span className="font-mono text-studio-300">{canvas.paddingPx}px</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={80}
-            value={canvas.paddingPx}
-            onChange={(e) => setCanvas({ paddingPx: Number(e.target.value) })}
-            className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
-          />
-        </div>
-
       </InspectorSection>
 
       <InspectorSection

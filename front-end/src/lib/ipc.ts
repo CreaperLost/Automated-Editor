@@ -137,6 +137,18 @@ export const api = {
       editedStartUs,
       editedEndUs,
     }),
+  projectWebcamFocusRemove: (
+    projectHandle: string,
+    expectedRevision: number,
+    editedStartUs: number,
+    editedEndUs: number,
+  ) =>
+    invokeTauri<OpenedProject>("project_webcam_focus_remove", {
+      projectHandle,
+      expectedRevision,
+      editedStartUs,
+      editedEndUs,
+    }),
   projectLayoutUpdate: (
     projectHandle: string,
     expectedRevision: number,

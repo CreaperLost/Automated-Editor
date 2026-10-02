@@ -54,3 +54,21 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #3f3f46;
 }
+
+/* The timeline's left/right scrollbar is a real control: make it easy to grab. */
+.timeline-scroll::-webkit-scrollbar {
+  height: 14px;
+}
+.timeline-scroll::-webkit-scrollbar-track {
+  background: #0d0d10;
+  border-top: 1px solid #202024;
+}
+.timeline-scroll::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 7px;
+  border: 3px solid #0d0d10;
+  min-width: 48px;
+}
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
