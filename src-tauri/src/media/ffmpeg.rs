@@ -532,18 +532,87 @@ pub fn release_decoders() {
     drop(streams);
 }
 
+/// Forces one H.264 encoder by FFmpeg name, e.g. `libx264` or `h264_nvenc`.
+pub const ENCODER_ENV: &str = "AEROEDITS_H264_ENCODER";
+
 #[derive(Clone, Debug)]
 struct H264Encoder {
     name: &'static str,
-    /// Uses a constant-quality flag rather than a bitrate target.
-    crf: bool,
+    /// Constant-quality settings; `None` falls back to a bitrate target.
+    quality: Option<&'static [&'static str]>,
+    /// GPU encoders are listed by any build that supports them, so they are only used after a
+    /// one-frame test encode succeeds on this machine.
+    hardware: bool,
+}
+
+/// In order of preference: GPU encoders first, then libx264, then the remaining fallbacks.
+const H264_ENCODERS: &[H264Encoder] = &[
+    H264Encoder {
+        name: "h264_nvenc",
+        quality: Some(&[
+            "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "19", "-b:v", "0",
+        ]),
+        hardware: true,
+    },
+    H264Encoder {
+        name: "h264_amf",
+        quality: Some(&[
+            "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20",
+        ]),
+        hardware: true,
+    },
+    H264Encoder {
+        name: "h264_qsv",
+        quality: Some(&["-preset", "medium", "-global_quality", "20"]),
+        hardware: true,
+    },
+    H264Encoder {
+        name: "libx264",
+        quality: Some(&["-preset", "veryfast", "-crf", "18"]),
+        hardware: false,
+    },
+    H264Encoder {
+        name: "h264_mf",
+        quality: None,
+        hardware: false,
+    },
+    H264Encoder {
+        name: "h264_videotoolbox",
+        quality: None,
+        hardware: false,
+    },
+    H264Encoder {
+        name: "libopenh264",
+        quality: None,
+        hardware: false,
+    },
+];
+
+/// Encodes one small frame to check the encoder's device and driver are actually present.
+fn encoder_works(ffmpeg: &Path, encoder: &H264Encoder) -> bool {
+    let Ok((mut cmd, log)) = command(ffmpeg) else {
+        return false;
+    };
+    cmd.args(["-f", "lavfi", "-i", "color=black:size=256x256:rate=30"])
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "format=yuv420p",
+            "-c:v",
+            encoder.name,
+        ])
+        .args(encoder.quality.unwrap_or_default())
+        .args(["-f", "null", "-"]);
+    run(cmd, log, "Test encode failed").is_ok()
 }
 
 fn h264_encoder() -> Result<&'static H264Encoder, String> {
-    static ENCODER: OnceLock<Result<H264Encoder, String>> = OnceLock::new();
+    static ENCODER: OnceLock<Result<&'static H264Encoder, String>> = OnceLock::new();
     ENCODER
         .get_or_init(|| {
-            let (mut cmd, log) = command(ffmpeg_path()?)?;
+            let ffmpeg = ffmpeg_path()?;
+            let (mut cmd, log) = command(ffmpeg)?;
             cmd.arg("-encoders");
             let listing =
                 String::from_utf8_lossy(&run(cmd, log, "Listing FFmpeg encoders failed")?)
@@ -553,19 +622,19 @@ fn h264_encoder() -> Result<&'static H264Encoder, String> {
                     .lines()
                     .any(|line| line.split_whitespace().nth(1) == Some(name))
             };
-            [
-                ("libx264", true),
-                ("h264_mf", false),
-                ("h264_videotoolbox", false),
-                ("libopenh264", false),
-            ]
-            .into_iter()
-            .find(|(name, _)| has(name))
-            .map(|(name, crf)| H264Encoder { name, crf })
-            .ok_or_else(|| "This FFmpeg build has no H.264 encoder".to_string())
+            if let Some(forced) = env::var(ENCODER_ENV).ok().filter(|v| !v.is_empty()) {
+                return H264_ENCODERS
+                    .iter()
+                    .find(|encoder| encoder.name == forced && has(encoder.name))
+                    .ok_or_else(|| format!("{ENCODER_ENV}={forced} is not available"));
+            }
+            H264_ENCODERS
+                .iter()
+                .filter(|encoder| has(encoder.name))
+                .find(|encoder| !encoder.hardware || encoder_works(ffmpeg, encoder))
+                .ok_or_else(|| "This FFmpeg build has no H.264 encoder".to_string())
         })
-        .as_ref()
-        .map_err(Clone::clone)
+        .clone()
 }
 
 pub fn encoder_name() -> Option<&'static str> {
@@ -623,8 +692,8 @@ impl FfmpegExport {
                 "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
             ])
             .args(["-c:v", encoder.name]);
-        if encoder.crf {
-            cmd.args(["-preset", "veryfast", "-crf", "18"]);
+        if let Some(quality) = encoder.quality {
+            cmd.args(quality);
         } else {
             let bitrate = (width as u64 * height as u64 * fps as u64 / 5).max(1_000_000);
             cmd.args(["-b:v", &bitrate.to_string()]);

@@ -2,13 +2,14 @@
 // Downloads ffmpeg and ffprobe into src-tauri/binaries/ with the names Tauri expects for
 // sidecars (`ffmpeg-<target-triple>[.exe]`), so `tauri.ffmpeg.conf.json` can bundle them.
 //
-//   node scripts/fetch-ffmpeg.mjs [--target <triple>] [--gpl] [--force]
+//   node scripts/fetch-ffmpeg.mjs [--target <triple>] [--lgpl] [--force]
 //
 // Builds come from BtbN/FFmpeg-Builds (release branch 8.1) and are checked against the
-// release's published SHA-256 sums. The default LGPL build keeps the app's MIT/Apache
-// license unaffected; `--gpl` fetches the GPL build instead (adds libx264), which must then
-// be distributed under the GPL's terms. macOS has no BtbN build yet: on a Mac the Swift
-// bridges are the default backend and FFmpeg comes from Homebrew.
+// release's published SHA-256 sums. The default GPL build includes libx264 and the NVENC,
+// AMF and Quick Sync GPU encoders; it is a separate program the app runs, shipped with its
+// license under the GPL's terms. `--lgpl` fetches the LGPL build (same GPU encoders, no
+// libx264). macOS has no BtbN build: on a Mac the Swift bridges are the default backend and
+// FFmpeg comes from Homebrew.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -67,7 +68,7 @@ async function main() {
       `No bundled FFmpeg for ${triple}. Supported: ${Object.keys(PLATFORMS).join(", ")}.`,
     );
   }
-  const license = flag("--gpl") ? "gpl" : "lgpl";
+  const license = flag("--lgpl") ? "lgpl" : "gpl";
   const asset = `ffmpeg-n${BRANCH}-latest-${platform.build}-${license}-${BRANCH}.${platform.ext}`;
 
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

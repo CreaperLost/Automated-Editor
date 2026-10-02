@@ -97,15 +97,17 @@ cargo tauri build --features tauri-app --config tauri.ffmpeg.conf.json
 cargo tauri dev --features tauri-app --config tauri.ffmpeg.conf.json   # optional in dev
 ```
 
-The script downloads the LGPL 8.1 build from
+The script downloads the GPL 8.1 build from
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) for the Rust host target
 (`--target <triple>` to cross-fetch; Windows and Linux, x64 and ARM64) and checks it against
-the release's SHA-256 sums. The LGPL build keeps AeroEdits' MIT/Apache license intact; it has
-no libx264, so Windows exports use Media Foundation (`h264_mf`) or OpenH264. `--gpl` fetches
-the GPL build with libx264 instead, which is fine for personal builds but must be
-distributed under the GPL. The license text and download source are installed with the app
-under `licenses/`. macOS keeps using the Swift bridges, with FFmpeg from Homebrew when the
-shared backend is forced.
+the release's SHA-256 sums. FFmpeg runs as a separate program, so its GPL license covers
+only the bundled binaries, whose license text and download source are installed with the app
+under `licenses/`. `--lgpl` fetches the LGPL build instead (no libx264). macOS keeps using
+the Swift bridges, with FFmpeg from Homebrew when the shared backend is forced.
+
+Export uses a GPU H.264 encoder when one works on the machine (NVIDIA NVENC, then AMD AMF,
+then Intel Quick Sync, each checked with a one-frame test encode), otherwise libx264. Set
+`AEROEDITS_H264_ENCODER` to an FFmpeg encoder name, such as `libx264`, to force one.
 
 ### Transcription
 
