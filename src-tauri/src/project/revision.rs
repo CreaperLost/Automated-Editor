@@ -52,6 +52,9 @@ pub struct EditDocument {
     /// Videos, images and audio imported into the project; timeline entries refer to them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media_assets: Vec<crate::media_bin::MediaAsset>,
+    /// Chapter markers, anchored in source time. Exported as MP4 chapters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chapters: Vec<crate::chapters::Chapter>,
 }
 
 impl Default for EditDocument {
@@ -68,6 +71,7 @@ impl Default for EditDocument {
             audio: AudioSettings::default(),
             captions: CaptionSettings::default(),
             media_assets: Vec::new(),
+            chapters: Vec::new(),
         }
     }
 }
@@ -87,6 +91,7 @@ impl EditDocument {
             audio: AudioSettings::default(),
             captions: CaptionSettings::default(),
             media_assets: Vec::new(),
+            chapters: Vec::new(),
         })
     }
 
@@ -631,6 +636,7 @@ impl EditHistory {
         next.webcam_focus.validate()?;
         next.audio.validate()?;
         crate::media_bin::validate_assets(&next.media_assets)?;
+        crate::chapters::validate(&next.chapters)?;
         if let Some(missing) = next.retained_intervals.iter().find_map(|entry| {
             entry
                 .media
@@ -692,6 +698,26 @@ impl EditHistory {
         }
         let mut next = self.current.clone();
         next.webcam_focus = focus;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Replaces the chapter markers.
+    pub fn set_chapters(
+        &mut self,
+        expected_revision: u64,
+        chapters: Vec<crate::chapters::Chapter>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        crate::chapters::validate(&chapters)?;
+        let chapters = crate::chapters::normalized(chapters);
+        if chapters == self.current.chapters {
+            return Ok(&self.current);
+        }
+        let mut next = self.current.clone();
+        next.chapters = chapters;
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1332,6 +1358,46 @@ mod tests {
         assert!(history
             .update_webcam_focus(history.current.revision, bad, dir.path())
             .is_err());
+    }
+
+    #[test]
+    fn chapters_are_undoable_and_saved() {
+        use crate::chapters::Chapter;
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 10_000_000)]).unwrap());
+        let chapter = |id: &str, source_us: u64, title: &str| Chapter {
+            id: id.into(),
+            source_us,
+            title: title.into(),
+            edited_us: Some(123),
+        };
+        history
+            .set_chapters(
+                0,
+                vec![chapter("b", 5_000_000, " Main "), chapter("a", 0, "Intro")],
+                dir.path(),
+            )
+            .unwrap();
+        let saved = &history.current.chapters;
+        assert_eq!(saved[0].id, "a");
+        assert_eq!(saved[1].title, "Main");
+        assert!(saved.iter().all(|c| c.edited_us.is_none()));
+        let json = fs::read_to_string(dir.path().join("project.json")).unwrap();
+        assert!(json.contains("\"chapters\"") && !json.contains("editedUs"));
+        assert_eq!(
+            load_edit_document(dir.path()).unwrap().unwrap().chapters,
+            history.current.chapters
+        );
+        // The same chapters again are not a new revision; a bad title is refused.
+        let same = history.current.chapters.clone();
+        history.set_chapters(1, same, dir.path()).unwrap();
+        assert_eq!(history.current.revision, 1);
+        assert!(history
+            .set_chapters(1, vec![chapter("x", 0, "")], dir.path())
+            .is_err());
+        history.undo(1, dir.path()).unwrap();
+        assert!(history.current.chapters.is_empty());
     }
 
     #[test]

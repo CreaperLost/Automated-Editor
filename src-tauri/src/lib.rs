@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod captions;
+pub mod chapters;
 pub mod commands;
 pub mod dsp;
 pub mod export;
@@ -619,6 +620,36 @@ fn transcript_set_api_key(key: String) -> Result<transcript::TranscriptSettingsV
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_chapters_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    chapters: Vec<chapters::Chapter>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_chapters_set_impl(&state, project_handle, expected_revision, chapters)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_chapters_generate(
+    app: tauri::AppHandle,
+    project_handle: String,
+    track_id: String,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::transcript::project_chapters_generate_impl(
+            &app.state::<AppState>(),
+            &app.state::<commands::transcript::TranscriptState>(),
+            project_handle,
+            track_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn ai_settings_get() -> ai::AiSettingsView {
     commands::transcript::ai_settings_get_impl()
 }
@@ -1053,6 +1084,8 @@ pub fn run() {
             ai_settings_set,
             ai_set_api_key,
             transcript_ai_suggest,
+            project_chapters_set,
+            project_chapters_generate,
             transcript_get,
             transcript_run,
             transcript_cancel,

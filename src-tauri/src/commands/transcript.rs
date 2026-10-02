@@ -417,3 +417,33 @@ pub fn transcript_ai_suggest_impl(
     })?;
     transcript_suggestions_impl(state, project_handle, track_id)
 }
+
+/// Asks the AI provider for chapters from a track's transcript and replaces the project's
+/// chapters with them (one undoable edit).
+pub fn project_chapters_generate_impl(
+    state: &AppState,
+    transcripts: &TranscriptState,
+    project_handle: String,
+    track_id: String,
+) -> Result<OpenedProject, String> {
+    let _run = RunGuard::start(transcripts, "Finding chapters".into())?;
+    let words = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        super::require_handle(reader, &project_handle)?;
+        let transcript = store::load_transcript(reader.root(), &track_id)?
+            .ok_or("Transcribe this track first")?;
+        let document = &reader.history().current;
+        edit::view(&transcript, &document.mapper()?, document.revision).words
+    };
+    let mut client = crate::ai::client_from_settings(&config_dir())?;
+    let chapters = crate::ai::chapters::suggest(&mut client, &words)?;
+    if transcripts.cancel.load(Ordering::SeqCst) {
+        return Err("Cancelled".into());
+    }
+    // Chapters are anchored in source time, so they apply to whatever the edit is now.
+    super::mutate_opened(state, project_handle, |reader| {
+        let revision = reader.history().current.revision;
+        reader.set_chapters(revision, chapters)
+    })
+}

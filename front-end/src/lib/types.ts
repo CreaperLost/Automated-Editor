@@ -526,6 +526,7 @@ export interface OpenedProject {
   captions?: CaptionSettings;
   /** Videos, images and audio imported into the project. */
   mediaAssets?: MediaAsset[];
+  chapters?: Chapter[];
 }
 
 // Auto webcam layout (src-tauri/src/webcam_focus.rs)
@@ -866,6 +867,15 @@ export interface TranscriptCutSuggestion {
   source?: "rules" | "ai";
   /** The AI's short explanation. */
   reason?: string;
+}
+
+/** A chapter marker, anchored in source time so it survives cuts and reordering. */
+export interface Chapter {
+  id: string;
+  sourceUs: number;
+  title: string;
+  /** Edited-timeline start, or null when that moment was cut. Filled in by the backend. */
+  editedUs?: number | null;
 }
 
 export type AiProvider = "openAi" | "openRouter";

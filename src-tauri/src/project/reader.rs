@@ -105,6 +105,8 @@ pub struct OpenedProject {
     pub captions: crate::captions::CaptionSettings,
     #[serde(default)]
     pub media_assets: Vec<crate::media_bin::MediaAsset>,
+    #[serde(default)]
+    pub chapters: Vec<crate::chapters::Chapter>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -498,6 +500,7 @@ impl ProjectReader {
                 audio: history.current.audio.clone(),
                 captions: history.current.captions.clone(),
                 media_assets: history.current.media_assets.clone(),
+                chapters: Vec::new(),
             },
             segments,
             root,
@@ -746,6 +749,17 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn set_chapters(
+        &mut self,
+        expected_revision: u64,
+        chapters: Vec<crate::chapters::Chapter>,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .set_chapters(expected_revision, chapters, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn update_audio(
         &mut self,
         expected_revision: u64,
@@ -880,6 +894,11 @@ impl ProjectReader {
         self.summary.audio = self.history.current.audio.clone();
         self.summary.captions = self.history.current.captions.clone();
         self.summary.media_assets = self.history.current.media_assets.clone();
+        let mut chapters = self.history.current.chapters.clone();
+        if let Ok(mapper) = self.history.current.mapper() {
+            crate::chapters::attach_edited(&mut chapters, &mapper);
+        }
+        self.summary.chapters = chapters;
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest

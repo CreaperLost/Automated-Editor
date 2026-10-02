@@ -25,6 +25,7 @@ import {
   CaptionSettings,
   TranscriptCutSuggestion,
   AiProvider,
+  Chapter,
   AiSettings,
   AiSettingsView,
   TranscriptRunResult,
@@ -336,6 +337,15 @@ export const api = {
       assetId,
       targetUs: Math.max(0, Math.round(targetUs)),
     }),
+  projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
+    invokeTauri<OpenedProject>("project_chapters_set", {
+      projectHandle,
+      expectedRevision,
+      chapters: chapters.map(({ id, sourceUs, title }) => ({ id, sourceUs, title })),
+    }),
+  /** Asks the AI provider for chapters from a track's transcript. */
+  projectChaptersGenerate: (projectHandle: string, trackId: string) =>
+    invokeTauri<OpenedProject>("project_chapters_generate", { projectHandle, trackId }),
   showInFinder: (path: string): Promise<void> =>
     invokeTauri<void>("show_in_finder", { path }),
   setWindowTitle: async (title: string): Promise<void> => {
