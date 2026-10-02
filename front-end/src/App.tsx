@@ -17,8 +17,18 @@ import { TranscriptPanel } from "./components/transcript/TranscriptPanel";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
+import { useElementSize } from "./hooks/useElementSize";
+import { Splitter } from "./components/layout/Splitter";
+import { fittedPanelSize, useLayoutStore } from "./stores/layoutStore";
 import { api } from "./lib/ipc";
 import { ExportStatus, SegmentPage } from "./lib/types";
+
+/// Space the shell always leaves for the preview stage and the row above the timeline,
+/// so dragged panels (or a small window) can never squeeze the preview away entirely.
+const MIN_STAGE_WIDTH = 420;
+const MIN_TOP_ROW_HEIGHT = 260;
+/// Stage chrome around the transcript: padding, info row, diagnostics, and a usable preview.
+const STAGE_RESERVED_HEIGHT = 250;
 
 function formatSeconds(us: number): string {
   return `${(us / 1_000_000).toFixed(2)}s`;
@@ -59,6 +69,8 @@ export const App: React.FC = () => {
     clearRecentProjects,
   } = useProjectStore();
   const { canvas } = useSettingsStore();
+  const panels = useLayoutStore((s) => s.panels);
+  const [workspaceRef, workspace] = useElementSize<HTMLDivElement>();
 
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -209,6 +221,17 @@ export const App: React.FC = () => {
 
   const defaultExportPath = getDefaultExportPath(path, project?.manifest.projectName);
 
+  // Before the first measurement, show stored sizes as-is rather than collapsing everything.
+  const measured = workspace.width > 0 && workspace.height > 0;
+  const inspectorMax = measured ? workspace.width - MIN_STAGE_WIDTH : Infinity;
+  const timelineMax = measured ? workspace.height - MIN_TOP_ROW_HEIGHT : Infinity;
+  const inspectorWidth = fittedPanelSize("inspector", panels.inspector, inspectorMax);
+  const timelineHeight = fittedPanelSize("timeline", panels.timeline, timelineMax);
+  const transcriptMax = measured
+    ? workspace.height - timelineHeight - STAGE_RESERVED_HEIGHT
+    : Infinity;
+  const transcriptHeight = fittedPanelSize("transcript", panels.transcript, transcriptMax);
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-950 text-studio-100 select-none">
       {/* 1. Editor Header */}
@@ -252,7 +275,7 @@ export const App: React.FC = () => {
       {/* 3. Main Editor Workspace */}
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         {project ? (
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div ref={workspaceRef} className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Top row: Canvas Stage + Inspector */}
             <div className="flex-1 flex min-h-0 overflow-hidden">
               {/* Center Canvas Stage */}
@@ -283,9 +306,19 @@ export const App: React.FC = () => {
                   />
                 </div>
 
-                <div className="h-56 shrink-0 min-h-0">
-                  <TranscriptPanel />
-                </div>
+                <Splitter
+                  panel="transcript"
+                  orientation="horizontal"
+                  grow={-1}
+                  size={transcriptHeight}
+                  max={transcriptMax}
+                  label="Transcript height"
+                />
+                {transcriptHeight > 0 && (
+                  <div className="shrink-0 min-h-0" style={{ height: transcriptHeight }}>
+                    <TranscriptPanel />
+                  </div>
+                )}
 
                 {/* Diagnostics details toggle */}
                 <details className="max-h-24 shrink-0 overflow-y-auto rounded-lg border border-studio-800/80 bg-studio-900/40 px-3 py-1.5 text-xs text-studio-400">
@@ -331,13 +364,37 @@ export const App: React.FC = () => {
               </div>
 
               {/* Right Inspector Panel */}
-              <div className="w-80 shrink-0 h-full border-l border-studio-800">
-                <InspectorPanel />
-              </div>
+              <Splitter
+                panel="inspector"
+                orientation="vertical"
+                grow={-1}
+                size={inspectorWidth}
+                max={inspectorMax}
+                label="Inspector width"
+              />
+              {inspectorWidth > 0 && (
+                <div
+                  className="shrink-0 h-full min-w-0 overflow-hidden border-l border-studio-800"
+                  style={{ width: inspectorWidth }}
+                >
+                  <InspectorPanel />
+                </div>
+              )}
             </div>
 
             {/* Bottom: Multi-Track Timeline Studio */}
-            <div className="min-h-0 border-t border-studio-800 shrink-0">
+            <Splitter
+              panel="timeline"
+              orientation="horizontal"
+              grow={-1}
+              size={timelineHeight}
+              max={timelineMax}
+              label="Timeline height"
+            />
+            <div
+              className="min-h-0 overflow-hidden border-t border-studio-800 shrink-0"
+              style={{ height: timelineHeight }}
+            >
               <TimelineStudio />
             </div>
           </div>

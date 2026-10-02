@@ -34,6 +34,7 @@ extern "C" {
         pcm: *const i16,
         len: i32,
     ) -> c_int;
+    fn aeroshoot_export_audio_end(handle: *mut c_void) -> c_int;
     fn aeroshoot_export_finish(handle: *mut c_void, duration_us: i64) -> c_int;
     fn aeroshoot_export_abort(handle: *mut c_void);
     fn aeroshoot_export_copy_error(handle: *mut c_void) -> *mut c_char;
@@ -177,6 +178,25 @@ impl NativeExport {
         }
     }
 
+    /// Tells the writer no more audio is coming, so it stops holding video back
+    /// to interleave audio that will never arrive.
+    pub fn end_audio(&self) -> Result<(), String> {
+        let handle = self.handle.ok_or("Export session is closed")?;
+        #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
+        unsafe {
+            if aeroshoot_export_audio_end(handle.as_ptr()) == 0 {
+                Ok(())
+            } else {
+                Err(self.last_error("Native export audio end failed"))
+            }
+        }
+        #[cfg(not(all(target_os = "macos", not(stub_swift_ffi))))]
+        {
+            let _ = handle;
+            Err("Native H.264/AAC export is not implemented on this platform".into())
+        }
+    }
+
     pub fn finish(mut self, duration_us: u64) -> Result<(), String> {
         let handle = self.handle.take().ok_or("Export session is closed")?;
         #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
@@ -270,6 +290,11 @@ mod stub_export_ffi {
         _pcm: *const i16,
         _len: i32,
     ) -> c_int {
+        1
+    }
+
+    #[no_mangle]
+    pub extern "C" fn aeroshoot_export_audio_end(_handle: *mut c_void) -> c_int {
         1
     }
 
