@@ -122,6 +122,12 @@ func mediaFree(_ ptr: UnsafeMutableRawPointer?) {
   free(ptr)
 }
 
+/// Frees a C string the bridge returned with strdup (error and stats text).
+@_cdecl("aeroshoot_macos_free_string")
+func macosFreeString(_ value: UnsafeMutablePointer<CChar>?) {
+  free(value)
+}
+
 @_cdecl("aeroshoot_media_encode_bgra_mp4")
 func mediaEncodeBgraMp4(
   _ path: UnsafePointer<CChar>?,
