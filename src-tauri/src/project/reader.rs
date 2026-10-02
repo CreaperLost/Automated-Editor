@@ -81,6 +81,8 @@ pub struct OpenedProject {
     #[serde(default)]
     pub webcam_focus: crate::webcam_focus::WebcamFocus,
     pub audio: crate::project::AudioSettings,
+    #[serde(default)]
+    pub captions: crate::captions::CaptionSettings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -470,6 +472,7 @@ impl ProjectReader {
                 split_points_us: Vec::new(),
                 webcam_focus: Default::default(),
                 audio: history.current.audio.clone(),
+                captions: history.current.captions.clone(),
             },
             segments,
             root,
@@ -681,6 +684,17 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn update_captions(
+        &mut self,
+        expected_revision: u64,
+        captions: crate::captions::CaptionSettings,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .update_captions(expected_revision, captions, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn rename_project(&mut self, new_name: &str) -> Result<OpenedProject, String> {
         let trimmed = new_name.trim();
         if trimmed.is_empty() {
@@ -723,6 +737,7 @@ impl ProjectReader {
         }
         self.summary.webcam_focus = focus;
         self.summary.audio = self.history.current.audio.clone();
+        self.summary.captions = self.history.current.captions.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest

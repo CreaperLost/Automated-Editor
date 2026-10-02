@@ -58,7 +58,12 @@ pub struct Transcript {
     pub language: Option<String>,
     pub created_at: String,
     pub words: Vec<TranscriptWord>,
+    /// Filler and retake suggestions the user rejected, by suggestion id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dismissed_suggestions: Vec<String>,
 }
+
+pub const MAX_DISMISSED_SUGGESTIONS: usize = 10_000;
 
 impl Transcript {
     pub fn new(
@@ -80,6 +85,7 @@ impl Transcript {
             language,
             created_at: chrono::Utc::now().to_rfc3339(),
             words,
+            dismissed_suggestions: Vec::new(),
         }
     }
 
@@ -92,6 +98,11 @@ impl Transcript {
         }
         if self.words.len() > MAX_WORDS {
             return Err("Transcript has too many words".into());
+        }
+        if self.dismissed_suggestions.len() > MAX_DISMISSED_SUGGESTIONS
+            || self.dismissed_suggestions.iter().any(|id| id.len() > 64)
+        {
+            return Err("Transcript has too many rejected suggestions".into());
         }
         let mut previous_start = 0u64;
         let mut ids = std::collections::HashSet::with_capacity(self.words.len());
@@ -109,6 +120,45 @@ impl Transcript {
                 return Err("Duplicate transcript word id".into());
             }
             previous_start = word.source_start_us;
+        }
+        Ok(())
+    }
+
+    /// Replaces one word's text, e.g. to fix a misheard name before it shows in captions.
+    pub fn set_word_text(&mut self, word_id: &str, text: &str) -> Result<(), String> {
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.is_empty() {
+            return Err("A word cannot be empty; cut it instead".into());
+        }
+        if text.chars().count() > MAX_WORD_CHARS {
+            return Err("That text is too long for one word".into());
+        }
+        let word = self
+            .words
+            .iter_mut()
+            .find(|w| w.id == word_id)
+            .ok_or("Unknown word")?;
+        word.text = text;
+        Ok(())
+    }
+
+    /// Rejects (or restores) suggestions so they stop showing in the review list.
+    pub fn set_dismissed(&mut self, ids: &[String], dismissed: bool) -> Result<(), String> {
+        for id in ids {
+            if id.is_empty() || id.len() > 64 {
+                return Err("Invalid suggestion id".into());
+            }
+            let present = self.dismissed_suggestions.iter().position(|d| d == id);
+            match (dismissed, present) {
+                (true, None) => self.dismissed_suggestions.push(id.clone()),
+                (false, Some(i)) => {
+                    self.dismissed_suggestions.remove(i);
+                }
+                _ => {}
+            }
+        }
+        if self.dismissed_suggestions.len() > MAX_DISMISSED_SUGGESTIONS {
+            return Err("Too many rejected suggestions".into());
         }
         Ok(())
     }
@@ -179,6 +229,27 @@ mod tests {
         t.words[0].source_end_us = 0;
         t.words[0].source_start_us = 10;
         assert!(t.validate().is_err());
+    }
+
+    #[test]
+    fn word_text_edits_and_dismissals() {
+        let mut t = Transcript::new(
+            "mic".into(),
+            ProviderKind::ElevenLabs,
+            "scribe_v2".into(),
+            None,
+            vec![test_word("Jorge", 0, 300)],
+        );
+        t.set_word_text("w-0", "  George,\n ").unwrap();
+        assert_eq!(t.words[0].text, "George,");
+        assert!(t.set_word_text("w-0", "   ").is_err());
+        assert!(t.set_word_text("w-9", "x").is_err());
+        t.set_dismissed(&["filler-w-1-w-1".into()], true).unwrap();
+        t.set_dismissed(&["filler-w-1-w-1".into()], true).unwrap();
+        assert_eq!(t.dismissed_suggestions.len(), 1);
+        t.validate().unwrap();
+        t.set_dismissed(&["filler-w-1-w-1".into()], false).unwrap();
+        assert!(t.dismissed_suggestions.is_empty());
     }
 
     #[test]

@@ -188,6 +188,45 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   duckDb: 12,
 };
 
+/** Captions burned into playback and export from a track's transcript. */
+export interface CaptionSettings {
+  enabled: boolean;
+  /** Transcript to caption; unset picks the microphone, then system audio. */
+  trackId?: string;
+  position: "bottom" | "middle" | "top";
+  /** Distance from the top or bottom edge, 0 to 45 % of the canvas height. */
+  offsetPct: number;
+  /** Text size, 2 to 15 % of the canvas height. */
+  fontSizePct: number;
+  textColor: string;
+  highlightWords: boolean;
+  highlightColor: string;
+  outline: boolean;
+  background: boolean;
+  backgroundColor: string;
+  /** 0 to 1. */
+  backgroundOpacity: number;
+  uppercase: boolean;
+  /** Most words on screen at once, 1 to 12. */
+  maxWords: number;
+}
+
+export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
+  enabled: false,
+  position: "bottom",
+  offsetPct: 8,
+  fontSizePct: 5.5,
+  textColor: "#FFFFFF",
+  highlightWords: true,
+  highlightColor: "#FACC15",
+  outline: true,
+  background: false,
+  backgroundColor: "#000000",
+  backgroundOpacity: 0.55,
+  uppercase: false,
+  maxWords: 6,
+};
+
 export interface EditLayout {
   aspectRatio: string;
   paddingPx: number;
@@ -446,6 +485,7 @@ export interface OpenedProject {
   /** Auto webcam layout settings and segments. */
   webcamFocus?: WebcamFocus;
   audio?: AudioSettings;
+  captions?: CaptionSettings;
 }
 
 // Auto webcam layout (src-tauri/src/webcam_focus.rs)
@@ -761,4 +801,6 @@ export interface TranscriptCutSuggestion {
   text: string;
   editedStartUs: number;
   editedEndUs: number;
+  /** Rejected in the review list; left out of "remove all". */
+  dismissed: boolean;
 }

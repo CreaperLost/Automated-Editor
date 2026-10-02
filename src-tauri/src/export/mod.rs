@@ -242,6 +242,16 @@ pub struct SceneEvaluator {
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
     /// Enabled webcam focus segments on the edited timeline, merged.
     webcam_focus: std::cell::OnceCell<Vec<(u64, u64)>>,
+    /// Caption cues from the captioned track's transcript; empty when captions are off.
+    caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
+    /// The last cue drawn and its colored frame for the active word.
+    caption_cache: std::cell::RefCell<CaptionCache>,
+}
+
+#[derive(Default)]
+struct CaptionCache {
+    raster: Option<(usize, Option<crate::captions::CueRaster>)>,
+    frame: Option<((usize, Option<usize>), VideoFrame)>,
 }
 
 /// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
@@ -307,6 +317,8 @@ impl SceneEvaluator {
             decode_limit: DecodeLimit::NONE,
             wallpaper,
             webcam_focus: std::cell::OnceCell::new(),
+            caption_cues: std::cell::OnceCell::new(),
+            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
         })
     }
 
@@ -440,7 +452,74 @@ impl SceneEvaluator {
             weight,
             crate::render::layout_px_unit(self.width, self.height),
         );
+        if let Some((frame, x, y)) = self.caption_at(&mapper, edited_us) {
+            scene.push_caption(frame, x, y);
+        }
         Ok(scene)
+    }
+
+    /// The transcript captions read from: the chosen track, else the first transcribed
+    /// microphone, else system audio.
+    fn caption_transcript(&self) -> Option<crate::transcript::Transcript> {
+        let settings = &self.document.captions;
+        let load = |id: &str| {
+            crate::transcript::store::load_transcript(&self.root, id)
+                .ok()
+                .flatten()
+        };
+        if let Some(id) = &settings.track_id {
+            return load(id);
+        }
+        [TrackType::MicAudio, TrackType::SystemAudio]
+            .iter()
+            .flat_map(|kind| {
+                self.tracks
+                    .iter()
+                    .filter(move |(t, _)| t.descriptor.track_type == *kind)
+            })
+            .find_map(|(t, _)| load(&t.descriptor.id))
+    }
+
+    fn caption_at(
+        &self,
+        mapper: &crate::timeline::TimelineMapper,
+        edited_us: u64,
+    ) -> Option<(VideoFrame, u32, u32)> {
+        let settings = &self.document.captions;
+        if !settings.enabled {
+            return None;
+        }
+        let cues = self.caption_cues.get_or_init(|| {
+            self.caption_transcript()
+                .map(|t| crate::captions::build_cues(&t, mapper, settings))
+                .unwrap_or_default()
+        });
+        let index = crate::captions::cue_at(cues, edited_us)?;
+        let cue = &cues[index];
+        let active = crate::captions::active_word(cue, edited_us);
+        let mut cache = self.caption_cache.borrow_mut();
+        let frame = match &cache.frame {
+            Some((key, frame)) if *key == (index, active) => frame.clone(),
+            _ => {
+                if cache.raster.as_ref().map(|(i, _)| *i) != Some(index) {
+                    let raster =
+                        crate::captions::rasterize_cue(cue, settings, self.width, self.height);
+                    cache.raster = Some((index, raster));
+                }
+                let raster = cache.raster.as_ref()?.1.as_ref()?;
+                let frame = crate::captions::colorize(raster, settings, active);
+                cache.frame = Some(((index, active), frame.clone()));
+                frame
+            }
+        };
+        let (x, y) = crate::captions::placement(
+            settings,
+            self.width,
+            self.height,
+            frame.width,
+            frame.height,
+        );
+        Some((frame, x, y))
     }
 }
 
@@ -1385,6 +1464,136 @@ mod tests {
             "level {level}, expected about {expected}"
         );
         crate::media::release_decoders();
+    }
+
+    /// Captions come from the mic transcript, skip cut words and land in the frame.
+    #[test]
+    fn captions_render_from_the_transcript_in_edited_time() {
+        use crate::fixtures::{generate_pcm16_wav, TestProject};
+        use crate::project::manifest::{TrackDescriptor, TrackType};
+        use crate::project::reader::{ProjectReader, RetainedInterval};
+        use crate::project::JournalRecord;
+        use crate::transcript::{store, test_word, ProviderKind, Transcript};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "captions");
+        let root = bundle.root_path().to_path_buf();
+        let path = "media/mic/000001.wav";
+        fs::write(
+            root.join(path),
+            generate_pcm16_wav(48_000, 1, &vec![0i16; 96_000]),
+        )
+        .unwrap();
+        bundle.manifest_mut().tracks.push(TrackDescriptor {
+            id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            codec: "pcm".into(),
+            relative_path: path.into(),
+            width: None,
+            height: None,
+            fps: None,
+            sample_rate: Some(48_000),
+            channels: Some(1),
+            gaps_total: 0,
+            media_timescale: Some(48_000),
+        });
+        bundle.append_journal(JournalRecord::SegmentCommitted {
+            seq: 0,
+            track_id: "mic".into(),
+            relative_path: path.into(),
+            start_us: 0,
+            end_us: 2_000_000,
+            size_bytes: fs::metadata(root.join(path)).unwrap().len(),
+            is_keyframe_start: true,
+            media_timescale: 48_000,
+            media_start_value: 0,
+            host_anchor_us: 0,
+        });
+        bundle.manifest_mut().duration_us = 2_000_000;
+        bundle.manifest_mut().active_duration_us = 2_000_000;
+        bundle.save_manifest();
+        drop(bundle);
+        store::save_transcript(
+            &root,
+            &Transcript::new(
+                "mic".into(),
+                ProviderKind::ElevenLabs,
+                "scribe_v2".into(),
+                None,
+                vec![
+                    test_word("Hello", 0, 400),
+                    test_word("um", 600, 900),
+                    test_word("world", 1300, 1700),
+                ],
+            ),
+        )
+        .unwrap();
+
+        let reader = ProjectReader::open(&root).unwrap();
+        // "um" is cut out: source 500-1200 removed.
+        let mut document = EditDocument::from_retained(vec![
+            RetainedInterval {
+                start_us: 0,
+                end_us: 500_000,
+            },
+            RetainedInterval {
+                start_us: 1_200_000,
+                end_us: 2_000_000,
+            },
+        ])
+        .unwrap();
+        document.layout.background_type = "solid".into();
+        document.layout.color_start = "#000000".into();
+        document.layout.color_end = "#000000".into();
+        document.captions.enabled = true;
+        document.captions.text_color = "#FFFFFF".into();
+        document.captions.highlight_words = false;
+        let evaluator = SceneEvaluator {
+            root: root.clone(),
+            document,
+            tracks: crate::playback::tracks_from_reader(&reader),
+            compositor: None,
+            width: 320,
+            height: 180,
+            decode_limit: DecodeLimit::NONE,
+            wallpaper: std::cell::OnceCell::new(),
+            webcam_focus: std::cell::OnceCell::new(),
+            caption_cues: std::cell::OnceCell::new(),
+            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
+        };
+        let mapper = evaluator.document.mapper().unwrap();
+        let (_, _, y) = evaluator.caption_at(&mapper, 100_000).unwrap();
+        assert!(y > 90, "caption sits in the lower half, y {y}");
+        let cues = evaluator.caption_cues.get().unwrap();
+        let words: Vec<_> = cues
+            .iter()
+            .flat_map(|c| c.words.iter().map(|w| w.text.as_str()))
+            .collect();
+        assert_eq!(words, vec!["Hello", "world"]);
+        // "world" starts at edited 600 ms once the cut closes up.
+        assert_eq!(cues.last().unwrap().words.last().unwrap().start_us, 600_000);
+
+        let scene = evaluator.scene_at(100_000).unwrap();
+        let frame = Compositor::composite_cpu(&scene).unwrap();
+        let bright = frame
+            .data
+            .chunks_exact(4)
+            .filter(|p| p[0] > 200 && p[1] > 200 && p[2] > 200)
+            .count();
+        assert!(bright > 50, "caption text drawn, {bright} white pixels");
+        // The GPU blends the caption the same way, where a GPU adapter exists.
+        if let Ok(gpu) = Compositor::new() {
+            let frame = gpu.composite(&scene).unwrap();
+            let gpu_bright = frame
+                .data
+                .chunks_exact(4)
+                .filter(|p| p[0] > 200 && p[1] > 200 && p[2] > 200)
+                .count();
+            assert!(
+                gpu_bright.abs_diff(bright) <= bright / 10,
+                "gpu {gpu_bright} vs cpu {bright}"
+            );
+        }
     }
 
     #[test]

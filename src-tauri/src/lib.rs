@@ -1,3 +1,4 @@
+pub mod captions;
 pub mod commands;
 pub mod dsp;
 pub mod export;
@@ -260,6 +261,17 @@ fn project_audio_update(
     audio: project::AudioSettings,
 ) -> Result<project::OpenedProject, String> {
     commands::project_audio_update_impl(&state, project_handle, expected_revision, audio)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_captions_update(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    captions: captions::CaptionSettings,
+) -> Result<project::OpenedProject, String> {
+    commands::project_captions_update_impl(&state, project_handle, expected_revision, captions)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -539,6 +551,42 @@ fn transcript_suggestions(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn transcript_set_word_text(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+    word_id: String,
+    text: String,
+) -> Result<transcript::TranscriptView, String> {
+    commands::transcript::transcript_set_word_text_impl(
+        &state,
+        project_handle,
+        track_id,
+        word_id,
+        text,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_dismiss_suggestions(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+    ids: Vec<String>,
+    dismissed: bool,
+) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
+    commands::transcript::transcript_dismiss_suggestions_impl(
+        &state,
+        project_handle,
+        track_id,
+        ids,
+        dismissed,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn transcript_cut_words(
     state: State<'_, AppState>,
     project_handle: String,
@@ -797,6 +845,7 @@ pub fn run() {
             project_webcam_focus_update,
             project_webcam_focus_add,
             project_audio_update,
+            project_captions_update,
             project_ripple_cuts,
             project_split,
             project_restore_cuts,
@@ -829,6 +878,8 @@ pub fn run() {
             transcript_delete,
             transcript_suggestions,
             transcript_cut_words,
+            transcript_set_word_text,
+            transcript_dismiss_suggestions,
             transcript_download_model,
             get_default_projects_dir,
             pick_project_folder,

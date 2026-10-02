@@ -22,6 +22,7 @@ import {
   WebcamFocusSettings,
   EditLayout,
   AudioSettings,
+  CaptionSettings,
   TranscriptCutSuggestion,
   TranscriptRunResult,
   TranscriptSettings,
@@ -154,6 +155,12 @@ export const api = {
       expectedRevision,
       audio,
     }),
+  projectCaptionsUpdate: (projectHandle: string, expectedRevision: number, captions: CaptionSettings) =>
+    invokeTauri<OpenedProject>("project_captions_update", {
+      projectHandle,
+      expectedRevision,
+      captions,
+    }),
   projectRippleCuts: (
     projectHandle: string,
     expectedRevision: number,
@@ -238,6 +245,15 @@ export const api = {
       expectedRevision,
       trackId,
       wordIds,
+    }),
+  transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
+    invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text }),
+  transcriptDismissSuggestions: (projectHandle: string, trackId: string, ids: string[], dismissed: boolean) =>
+    invokeTauri<TranscriptCutSuggestion[]>("transcript_dismiss_suggestions", {
+      projectHandle,
+      trackId,
+      ids,
+      dismissed,
     }),
   transcriptDownloadModel: () =>
     invokeTauri<TranscriptSettingsView>("transcript_download_model"),

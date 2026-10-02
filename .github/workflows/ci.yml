@@ -132,6 +132,14 @@ jobs:
       - run: cargo test
         env:
           AEROEDITS_REQUIRE_FFMPEG: "1"
+      - name: Fetch the bundled FFmpeg and check its H.264 encoders
+        shell: bash
+        run: |
+          node scripts/fetch-ffmpeg.mjs
+          binaries/ffprobe-x86_64-pc-windows-msvc.exe -hide_banner -version
+          binaries/ffmpeg-x86_64-pc-windows-msvc.exe -hide_banner -encoders > encoders.txt
+          grep -E ' libx264 ' encoders.txt
+          grep -E ' h264_nvenc ' encoders.txt
 
   # The Swift bridges for Mac preview/playback/export only build on macOS, so
   # this is the one place they are compiled and the Mac-only tests run.
@@ -195,6 +203,13 @@ jobs:
       - name: Build front-end
         working-directory: front-end
         run: npm ci --no-audit --no-fund && npm run build
+      # Checks with the bundled-FFmpeg config, so tauri-build also validates the sidecars.
+      - name: Fetch the bundled FFmpeg
+        working-directory: src-tauri
+        run: node scripts/fetch-ffmpeg.mjs
       - name: Check the app with the Tauri feature
         working-directory: src-tauri
-        run: cargo check --features tauri-app
+        run: |
+          export TAURI_CONFIG="$(cat tauri.ffmpeg.conf.json)"
+          cargo check --features tauri-app
+          test -x target/debug/ffmpeg && test -x target/debug/ffprobe
