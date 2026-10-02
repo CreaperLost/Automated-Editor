@@ -159,7 +159,6 @@ export interface CanvasSettings {
   colorEnd: string;
   screenCrop: ScreenCrop;
   screenScalePct: number; // 40 to 100
-  paddingPx: number; // 0 to 80
   cornerRadiusPx: number; // 0 to 32
   shadowBlurPx: number; // 0 to 40
   shadowOpacity: number; // 0.0 to 1.0
@@ -329,8 +328,14 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
       right: layout.screenCropRight ?? 0,
       bottom: layout.screenCropBottom ?? 0,
     },
-    screenScalePct: layout.screenScalePct ?? 100,
-    paddingPx: layout.paddingPx,
+    // Canvas padding is gone: screen scale does the same job. Older projects keep their
+    // look by folding the padding into the scale (padding is in 1080p-short-side pixels).
+    screenScalePct: Math.max(
+      1,
+      Math.round(
+        (layout.screenScalePct ?? 100) * Math.max(0, (1080 - 2 * (layout.paddingPx ?? 0)) / 1080),
+      ),
+    ),
     cornerRadiusPx: layout.cornerRadiusPx ?? 0,
     shadowBlurPx: layout.shadowBlurPx ?? 0,
     shadowOpacity: layout.shadowOpacity ?? 0.5,
@@ -380,7 +385,7 @@ export function layoutFromSettings(
 ): EditLayout {
   return {
     aspectRatio: canvas.aspectRatio,
-    paddingPx: canvas.paddingPx,
+    paddingPx: 0,
     backgroundType: canvas.backgroundType,
     backgroundPreset: canvas.backgroundPreset,
     screenCropLeft: canvas.screenCrop.left,

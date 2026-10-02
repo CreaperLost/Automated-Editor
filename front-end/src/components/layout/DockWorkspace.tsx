@@ -20,7 +20,7 @@ const THEME: DockviewTheme = {
   name: "aeroedits",
   className: "dockview-theme-aero",
   colorScheme: "dark",
-  gap: 4,
+  gap: 6,
 };
 
 const fill = (node: React.ReactNode) => <div className="h-full w-full min-h-0 min-w-0 overflow-hidden">{node}</div>;

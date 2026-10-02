@@ -104,7 +104,7 @@ export const SilenceModal: React.FC = () => {
               <Scissors className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-white">AI Smart Jump Cuts</h3>
+              <h3 className="text-sm font-semibold text-white">Jump Cuts: remove silences</h3>
               <p className="text-xs text-studio-400">
                 DSP silence detection across synchronized tracks
               </p>

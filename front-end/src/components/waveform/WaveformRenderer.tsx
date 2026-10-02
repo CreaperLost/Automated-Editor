@@ -11,6 +11,8 @@ interface WaveformRendererProps {
   barColor?: string;
   activeBarColor?: string;
   gapColor?: string;
+  /** Redraws when the lane is resized. */
+  heightPx?: number;
 }
 
 export const WaveformRenderer: React.FC<WaveformRendererProps> = ({
@@ -22,6 +24,7 @@ export const WaveformRenderer: React.FC<WaveformRendererProps> = ({
   barColor = "#3f3f46",
   activeBarColor = "#10b981",
   gapColor = "#57534e",
+  heightPx,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -68,7 +71,7 @@ export const WaveformRenderer: React.FC<WaveformRendererProps> = ({
       ctx.roundRect(x0, y, barWidth, barHeight, 1);
       ctx.fill();
     }
-  }, [buckets, startUs, endUs, currentTimeUs, barColor, activeBarColor, gapColor]);
+  }, [buckets, startUs, endUs, currentTimeUs, barColor, activeBarColor, gapColor, heightPx]);
 
   return <canvas ref={canvasRef} className={`w-full h-full block ${className}`} />;
 };

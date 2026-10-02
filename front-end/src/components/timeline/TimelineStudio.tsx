@@ -68,6 +68,22 @@ const CLIP_DRAG_PX = 8;
 /** Pointer travel, in pixels, before a press on the track becomes a range selection instead of a seek. */
 const RANGE_DRAG_PX = 6;
 
+/** Track lane heights, per track type, remembered on this machine. */
+const TRACK_HEIGHT_KEY = "aeroedits.trackHeights.v1";
+const DEFAULT_TRACK_HEIGHT = 56;
+const MIN_TRACK_HEIGHT = 28;
+const MAX_TRACK_HEIGHT = 240;
+
+function loadTrackHeights(): Record<string, number> {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(TRACK_HEIGHT_KEY) ?? "null");
+    if (stored && typeof stored === "object") return stored;
+  } catch {
+    // Storage can be unavailable; default heights still work.
+  }
+  return {};
+}
+
 /** A clip edge being dragged: inward ripple-deletes, outward restores cut media. */
 interface EdgeDrag {
   clip: TimelineClip;
@@ -88,7 +104,6 @@ export const TimelineStudio: React.FC = () => {
     zoomDiagnostics,
     currentTimeUs,
     durationUs,
-    setIsSilenceModalOpen,
     setTrackWaveform,
     applyOpenedProject,
     applyZoomGeneration,
@@ -113,6 +128,21 @@ export const TimelineStudio: React.FC = () => {
     originEnd: number;
   } | null>(null);
   const suppressSeek = useRef(false);
+  const [trackHeights, setTrackHeights] = useState(loadTrackHeights);
+  const trackHeight = (trackType: string) => trackHeights[trackType] ?? DEFAULT_TRACK_HEIGHT;
+  const setTrackHeight = (trackType: string, height: number | null) =>
+    setTrackHeights((current) => {
+      const next = { ...current };
+      if (height === null) delete next[trackType];
+      else next[trackType] = Math.round(Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, height)));
+      try {
+        window.localStorage.setItem(TRACK_HEIGHT_KEY, JSON.stringify(next));
+      } catch {
+        // Not remembering the height is harmless.
+      }
+      return next;
+    });
+  const trackResize = useRef<{ trackType: string; startY: number; startHeight: number } | null>(null);
   useEffect(() => { setRangeStart("0"); setRangeEnd(String(durationUs / 1e6)); setEditError(undefined); }, [openedProject?.projectHandle, durationUs]);
   /** Runs one edit; resolves to whether it was applied. */
   const runEdit = async (work: (project: OpenedProject) => Promise<OpenedProject>) => {
@@ -204,6 +234,24 @@ export const TimelineStudio: React.FC = () => {
         ...(project.webcamFocus ?? DEFAULT_WEBCAM_FOCUS),
         normalView: next.map(([sourceStartUs, sourceEndUs]) => ({ sourceStartUs, sourceEndUs })),
       }),
+    );
+  };
+
+  // Cam Focus toggles: on adds focus over the selection (never stacking), on again removes it.
+  const focusEdited: SourceRange[] = focus.enabled
+    ? (focus.segments ?? [])
+        .filter((segment) => segment.enabled)
+        .flatMap((segment) => (segment.editedRanges ?? []).map((r): SourceRange => [r.startUs, r.endUs]))
+    : [];
+  const selectionFocused =
+    !!selection && subtractRanges([[selection.startUs, selection.endUs]], focusEdited).length === 0;
+  const toggleCamFocus = () => {
+    if (!selection) return;
+    const { startUs, endUs } = selection;
+    void runEdit((project) =>
+      selectionFocused
+        ? api.projectWebcamFocusRemove(project.projectHandle, project.revision, startUs, endUs)
+        : api.projectWebcamFocusAdd(project.projectHandle, project.revision, startUs, endUs),
     );
   };
 
@@ -717,6 +765,8 @@ export const TimelineStudio: React.FC = () => {
       return;
     }
     if (!timelineTrackRef.current) return;
+    // Clips stop their clicks, so a click that lands here hit empty track space: deselect.
+    clearSelection();
     const rect = timelineTrackRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const progress = Math.max(0, Math.min(1, clickX / rect.width));
@@ -866,16 +916,6 @@ export const TimelineStudio: React.FC = () => {
           </button>
 
           <button
-            disabled={!openedProject}
-            onClick={() => setIsSilenceModalOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-medium transition-colors"
-            title="Detect and ripple-delete silence"
-          >
-            <Scissors className="w-3.5 h-3.5" />
-            <span>AI Jump Cuts</span>
-          </button>
-
-          <button
             disabled={!openedProject || zoomBusy || durationUs < 3}
             onClick={() => {
               if (!openedProject) return;
@@ -911,14 +951,18 @@ export const TimelineStudio: React.FC = () => {
 
           <button
             disabled={!openedProject || editing || !selection}
-            onClick={() => {
-              if (!selection) return;
-              void runEdit((project) =>
-                api.projectWebcamFocusAdd(project.projectHandle, project.revision, selection.startUs, selection.endUs),
-              );
-            }}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-200 text-xs font-medium transition-colors disabled:opacity-40"
-            title="Make the webcam fill the frame over the selection (turns Auto Webcam on)"
+            onClick={toggleCamFocus}
+            aria-pressed={selectionFocused}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-40 ${
+              selectionFocused
+                ? "bg-amber-500/35 border-amber-300/70 text-amber-50"
+                : "bg-amber-500/15 hover:bg-amber-500/25 border-amber-400/30 text-amber-200"
+            }`}
+            title={
+              selectionFocused
+                ? "Remove Cam Focus from the selection"
+                : "Make the webcam fill the frame over the selection (turns Auto Webcam on). Click a focus block on the webcam lane to select it."
+            }
           >
             <Video className="w-3.5 h-3.5" />
             <span>Cam Focus</span>
@@ -1084,6 +1128,16 @@ export const TimelineStudio: React.FC = () => {
         <button onClick={() => setRangeEnd(String(currentTimeUs / 1e6))}>Set end here</button>
         <button disabled={editing || durationUs === 0} onClick={() => void editRange(false)} className="text-rose-300 disabled:opacity-40" title="Cut the selection and close the gap (Delete)">Delete range</button>
         <button disabled={editing || durationUs === 0} onClick={() => void editRange(true)} className="text-teal-300 disabled:opacity-40">Keep range</button>
+        {selection && (
+          <button
+            onClick={clearSelection}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-studio-700 text-studio-200 hover:bg-studio-800"
+            title="Deselect (Esc, or click empty track space)"
+          >
+            <X className="w-3 h-3" />
+            Clear selection
+          </button>
+        )}
         {cutMarkers.length > 0 && (
           <button
             disabled={editing}
@@ -1095,7 +1149,7 @@ export const TimelineStudio: React.FC = () => {
             Restore all {cutMarkers.length} cut{cutMarkers.length === 1 ? "" : "s"}
           </button>
         )}
-        <span className="text-studio-500">Drag on the timeline to select, drag a clip to move it, drag a clip edge to trim it. S splits, Q/E ripple-trim to the previous/next edit, Delete removes the selection.</span>
+        <span className="text-studio-500">Drag on the timeline to select, drag a clip to move it, drag a clip edge to trim it. S splits, Q/E ripple-trim to the previous/next edit, Delete removes the selection, Esc deselects.</span>
         {editError && <span role="alert" className="text-rose-300">{editError}</span>}
       </div>}
 
@@ -1115,8 +1169,40 @@ export const TimelineStudio: React.FC = () => {
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className="h-14 px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
+                className="relative px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
+                style={{ height: trackHeight(track.trackType) }}
               >
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label={`Resize the ${track.name} track`}
+                  title="Drag to resize the track, double-click to reset"
+                  className="absolute left-0 right-0 -bottom-1.5 h-3 z-10 cursor-ns-resize group flex items-center justify-center"
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    trackResize.current = {
+                      trackType: track.trackType,
+                      startY: event.clientY,
+                      startHeight: trackHeight(track.trackType),
+                    };
+                  }}
+                  onPointerMove={(event) => {
+                    const resize = trackResize.current;
+                    if (!resize) return;
+                    setTrackHeight(resize.trackType, resize.startHeight + event.clientY - resize.startY);
+                  }}
+                  onPointerUp={() => {
+                    trackResize.current = null;
+                  }}
+                  onPointerCancel={() => {
+                    trackResize.current = null;
+                  }}
+                  onDoubleClick={() => setTrackHeight(track.trackType, null)}
+                >
+                  <span className="h-1 w-10 rounded-full bg-studio-700 group-hover:bg-teal-400 transition-colors" />
+                </div>
                 <div className="truncate">
                   <div className="text-xs font-medium text-studio-200 truncate">{track.name}</div>
                   <div className="text-[10px] uppercase font-mono text-studio-400">
@@ -1131,7 +1217,7 @@ export const TimelineStudio: React.FC = () => {
         </div>
 
         {/* Right Track Lanes & Playhead */}
-        <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden relative">
+        <div ref={scrollRef} className="timeline-scroll flex-1 overflow-x-auto overflow-y-hidden relative">
           <div className="flex flex-col h-full min-w-full" style={{ width: `${timelineZoom * 100}%` }}>
           {/* Time Ruler: drag to scrub */}
           <div
@@ -1401,7 +1487,8 @@ export const TimelineStudio: React.FC = () => {
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className="h-14 relative"
+                className="relative"
+                style={{ height: trackHeight(track.trackType) }}
               >
                 {durationUs > 0 && clips.map((clip, index) => {
                   const selected = clipSelected(clip);
@@ -1441,6 +1528,8 @@ export const TimelineStudio: React.FC = () => {
                             endUs={clip.endUs}
                             currentTimeUs={currentTimeUs}
                             activeBarColor={track.trackType === "mic" ? "#10b981" : "#6366f1"}
+                            className="w-full h-full"
+                            heightPx={trackHeight(track.trackType)}
                           />
                         </div>
                       ) : (
@@ -1468,7 +1557,13 @@ export const TimelineStudio: React.FC = () => {
                     (segment.editedRanges ?? []).map((range, index) => (
                       <div
                         key={`${segment.id}-${index}`}
-                        className={`absolute top-1 bottom-1 rounded-sm border z-10 pointer-events-none ${
+                        role="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          selectRange(range.startUs, range.endUs);
+                        }}
+                        className={`absolute top-1 bottom-1 rounded-sm border z-10 cursor-pointer hover:ring-1 hover:ring-amber-200 ${
                           segment.enabled && openedProject?.webcamFocus?.enabled
                             ? "bg-amber-400/30 border-amber-300/70"
                             : "border-dashed border-studio-500/60"
@@ -1477,7 +1572,7 @@ export const TimelineStudio: React.FC = () => {
                           left: `${(range.startUs / durationUs) * 100}%`,
                           width: `${((range.endUs - range.startUs) / durationUs) * 100}%`,
                         }}
-                        title={`Webcam ${segment.enabled ? "fills the frame" : "focus off"} (${segment.source})`}
+                        title={`Webcam ${segment.enabled ? "fills the frame" : "focus off"} (${segment.source}). Click to select it, then press Cam Focus to remove it.`}
                       />
                     )),
                   )}

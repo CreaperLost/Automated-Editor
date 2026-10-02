@@ -237,6 +237,24 @@ fn project_webcam_focus_add(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_webcam_focus_remove(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    edited_start_us: u64,
+    edited_end_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::project_webcam_focus_remove_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        edited_start_us,
+        edited_end_us,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_layout_update(
     state: State<'_, AppState>,
     project_handle: String,
@@ -952,6 +970,7 @@ pub fn run() {
             project_webcam_focus_detect,
             project_webcam_focus_update,
             project_webcam_focus_add,
+            project_webcam_focus_remove,
             project_audio_update,
             project_captions_update,
             project_ripple_cuts,
