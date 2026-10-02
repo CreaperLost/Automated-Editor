@@ -36,6 +36,8 @@ const MIN_TIMELINE_ZOOM = 1;
 const MAX_TIMELINE_ZOOM = 64;
 /** Pointer distance, in pixels, inside which a dragged clip edge snaps to the playhead. */
 const SNAP_PX = 8;
+/** Pointer travel, in pixels, before a press on the track becomes a range selection instead of a seek. */
+const RANGE_DRAG_PX = 6;
 
 /** A clip edge being dragged: inward ripple-deletes, outward restores cut media. */
 interface EdgeDrag {
@@ -515,6 +517,8 @@ export const TimelineStudio: React.FC = () => {
     return Math.round(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * durationUs);
   };
   const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    // A drag that ended on a handle never delivers its click here, so clear the flag it left.
+    suppressSeek.current = false;
     if (event.button !== 0 || !openedProject || durationUs <= 0) return;
     rangeDrag.current = { startX: event.clientX, active: false };
   };
@@ -522,7 +526,7 @@ export const TimelineStudio: React.FC = () => {
     const drag = rangeDrag.current;
     if (!drag) return;
     if (!drag.active) {
-      if (Math.abs(event.clientX - drag.startX) < 4) return;
+      if (Math.abs(event.clientX - drag.startX) < RANGE_DRAG_PX) return;
       // Capture only once it is a drag, so a plain click still reaches the clip under it.
       drag.active = true;
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -973,12 +977,37 @@ export const TimelineStudio: React.FC = () => {
           >
             {/* Playhead Vertical Line */}
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-indigo-500 z-30 pointer-events-none transition-all duration-75"
+              className="absolute top-0 bottom-0 w-0.5 bg-indigo-500 z-30 pointer-events-none"
               style={{ left: `${progress * 100}%` }}
             >
               {/* Playhead Top Scrubber Cap */}
               <div className="w-3 h-3 bg-indigo-500 rounded-sm transform -translate-x-1/2 -top-1 absolute rotate-45 shadow-md shadow-indigo-500/50" />
             </div>
+            {/* Playhead grab strip: drag the playhead itself without touching the selection. */}
+            <div
+              role="slider"
+              aria-label="Playhead"
+              aria-valuemin={0}
+              aria-valuemax={durationUs}
+              aria-valuenow={currentTimeUs}
+              className="absolute top-0 bottom-0 w-3 -translate-x-1/2 z-40 cursor-ew-resize"
+              style={{ left: `${progress * 100}%` }}
+              title="Drag to move the playhead"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                onRulerPointerDown(event);
+              }}
+              onPointerMove={(event) => {
+                event.stopPropagation();
+                onRulerPointerMove(event);
+              }}
+              onPointerUp={(event) => {
+                event.stopPropagation();
+                onRulerPointerUp();
+              }}
+              onPointerCancel={onRulerPointerUp}
+              onClick={(event) => event.stopPropagation()}
+            />
 
             {/* Zoom Keyframe Track overlay */}
             <div className="h-4 absolute top-0 left-0 right-0 z-20">
@@ -1059,14 +1088,21 @@ export const TimelineStudio: React.FC = () => {
                       left: `${(clip.startUs / durationUs) * 100}%`,
                       width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
                     }}
-                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select, Shift+click to extend.`}
+                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend.`}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (event.shiftKey && selection) {
+                      if (suppressSeek.current) {
+                        suppressSeek.current = false;
+                        return;
+                      }
+                      const extend = (event.shiftKey || event.ctrlKey || event.metaKey) && selection;
+                      if (extend) {
                         selectRange(Math.min(selection.startUs, clip.startUs), Math.max(selection.endUs, clip.endUs));
-                      } else {
+                      } else if (!selection || clip.startUs < selection.startUs || clip.endUs > selection.endUs) {
+                        // A click inside the current selection only moves the playhead.
                         selectRange(clip.startUs, clip.endUs);
                       }
+                      seekToUs(clientXToUs(event.clientX));
                     }}
                   >
                     {index + 1}
