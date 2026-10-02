@@ -4,6 +4,7 @@
 //!
 //! Only transcript text (words and pause lengths) is sent, never audio or video, and only
 //! when the user asks for an AI pass.
+pub mod chapters;
 pub mod client;
 pub mod fillers;
 

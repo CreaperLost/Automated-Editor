@@ -1303,9 +1303,38 @@ fn export_to_temp(
     }
     // Windows cannot rename or delete the temp file while a decoder still has it open.
     crate::media::release_decoders();
+    write_chapters(&captured.temp, &captured.document, duration_us)
+        .map_err(|message| ExportFailure::Native { message })?;
     publish_output(&captured.temp, &captured.dest)?;
     temp.keep = true;
     Ok(captured.dest.clone())
+}
+
+/// Adds the document's chapters to the finished file, in place. Nothing to do without any.
+fn write_chapters(temp: &Path, document: &EditDocument, duration_us: u64) -> Result<(), String> {
+    let timeline = crate::chapters::timeline(&document.chapters, &document.mapper()?);
+    if timeline.is_empty() {
+        return Ok(());
+    }
+    let side = |suffix: &str| {
+        let mut name = temp.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let metadata = side(".chapters.txt");
+    let with_chapters = side(".chapters.mp4");
+    let result = (|| {
+        fs::write(
+            &metadata,
+            crate::chapters::ffmetadata(&timeline, duration_us),
+        )
+        .map_err(|e| e.to_string())?;
+        crate::media::ffmpeg::add_chapters(temp, &metadata, &with_chapters)?;
+        fs::rename(&with_chapters, temp).map_err(|e| e.to_string())
+    })();
+    let _ = fs::remove_file(&metadata);
+    let _ = fs::remove_file(&with_chapters);
+    result
 }
 
 fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
@@ -1650,6 +1679,93 @@ mod tests {
         assert!(r > 180 && b < 80, "video clip is red, got b{b} r{r}");
         let (b, _, r) = at(500_000 + video.duration_us + 500_000);
         assert!(b > 180 && r < 80, "image clip is blue, got b{b} r{r}");
+        crate::media::release_decoders();
+    }
+
+    /// Chapters land in the MP4 in playback order, from 0, with cut ones left out.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_writes_chapters_in_playback_order() {
+        use crate::chapters::Chapter;
+        use crate::project::reader::{ProjectReader, RetainedInterval};
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let reader = ProjectReader::open(&root).unwrap();
+        let mut document = EditDocument::from_retained(vec![
+            RetainedInterval {
+                start_us: 1_000_000,
+                end_us: 2_000_000,
+                media: None,
+            },
+            RetainedInterval {
+                start_us: 0,
+                end_us: 600_000,
+                media: None,
+            },
+        ])
+        .unwrap();
+        let chapter = |id: &str, source_us: u64, title: &str| Chapter {
+            id: id.into(),
+            source_us,
+            title: title.into(),
+            edited_us: None,
+        };
+        document.chapters = vec![
+            chapter("a", 100_000, "Intro; part=1"),
+            chapter("b", 800_000, "Cut away"),
+            chapter("c", 1_200_000, "Main"),
+        ];
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let gate = EncoderGate::new();
+        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
+            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let read = Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+            .args(["-v", "error", "-i"])
+            .arg(&output)
+            .args(["-f", "ffmetadata", "-"])
+            .output()
+            .unwrap();
+        assert!(read.status.success());
+        let text = String::from_utf8_lossy(&read.stdout);
+        let titles: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("title="))
+            .collect();
+        // "Main" plays first (from 0); "Intro" starts after the 1 s clip; "Cut away" is gone.
+        assert_eq!(titles, vec!["Main", "Intro\\; part\\=1"], "{text}");
+        let starts: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("START="))
+            .collect();
+        assert_eq!(starts.len(), 2, "{text}");
+        assert_eq!(starts[0], "0");
+        // The second chapter starts at 1.1 s (1.0 s clip + 0.1 s into the next one).
+        // FFmpeg may rewrite the timebase (macOS writes 1/48000, the audio track's), so read
+        // the one it reports.
+        let timebase: f64 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("TIMEBASE=1/"))
+            .unwrap_or_else(|| panic!("no timebase in {text}"))
+            .parse()
+            .unwrap();
+        let second_s = starts[1].parse::<f64>().unwrap() / timebase;
+        assert!((second_s - 1.1).abs() < 0.01, "{text}");
+        assert!(media_duration_us(&output).unwrap() > 1_500_000);
+        assert!(decode_h264_frame(&output, 0).is_ok(), "video still decodes");
         crate::media::release_decoders();
     }
 

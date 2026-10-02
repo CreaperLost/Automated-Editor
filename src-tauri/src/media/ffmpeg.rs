@@ -269,6 +269,29 @@ pub fn extract_audio_wav(source: &Path, target: &Path) -> Result<(), String> {
     run(cmd, log, "Extracting the audio failed").map(|_| ())
 }
 
+/// Copies `source` to `target` with the chapters from an FFmpeg metadata file, keeping every
+/// stream and the source's own metadata.
+pub fn add_chapters(source: &Path, metadata: &Path, target: &Path) -> Result<(), String> {
+    let (mut cmd, log) = command(ffmpeg_path()?)?;
+    cmd.args(["-nostdin", "-y", "-i"])
+        .arg(file_arg(source))
+        .args(["-f", "ffmetadata", "-i"])
+        .arg(file_arg(metadata))
+        .args([
+            "-map",
+            "0",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "1",
+            "-c",
+            "copy",
+        ])
+        .args(["-movflags", "+faststart"])
+        .arg(file_arg(target));
+    run(cmd, log, "Adding the chapters failed").map(|_| ())
+}
+
 fn seconds_arg(us: u64) -> String {
     format!("{}.{:06}", us / 1_000_000, us % 1_000_000)
 }

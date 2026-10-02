@@ -7,6 +7,7 @@ export const DOCK_PANELS = {
   inspector: { title: "Inspector", minimumWidth: 240, minimumHeight: 200 },
   media: { title: "Media", minimumWidth: 220, minimumHeight: 110 },
   zoom: { title: "Zoom", minimumWidth: 220, minimumHeight: 160 },
+  chapters: { title: "Chapters", minimumWidth: 220, minimumHeight: 110 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -33,6 +34,11 @@ function addMedia(api: DockviewApi) {
   addZoom(api);
 }
 
+/// Chapters sit behind the transcript they are made from.
+function addChapters(api: DockviewApi) {
+  api.addPanel({ ...panel("chapters"), position: { referencePanel: "transcript", direction: "within" }, inactive: true });
+}
+
 function addZoom(api: DockviewApi) {
   api.addPanel({ ...panel("zoom"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
@@ -44,6 +50,7 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
     case "transcript": {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 420 });
+      addChapters(api);
       api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
       addMedia(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
@@ -53,6 +60,7 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 340 });
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+      addChapters(api);
       addMedia(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 220 });
       break;
@@ -63,6 +71,7 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       addMedia(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "preview", direction: "below" }, initialHeight: 180 });
+      addChapters(api);
     }
   }
   api.getPanel("preview")?.api.setActive();
@@ -85,6 +94,10 @@ export function restoreLayout(api: DockviewApi) {
       if (!ids.has("zoom") && ids.has("inspector")) {
         addZoom(api);
         ids.add("zoom");
+      }
+      if (!ids.has("chapters") && ids.has("transcript")) {
+        addChapters(api);
+        ids.add("chapters");
       }
       if ((Object.keys(DOCK_PANELS) as DockPanelId[]).every((id) => ids.has(id))) return;
     }

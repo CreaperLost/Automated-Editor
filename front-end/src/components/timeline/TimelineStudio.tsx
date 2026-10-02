@@ -15,6 +15,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
 import { MEDIA_DRAG_TYPE } from "../media/MediaPanel";
+import { placedChapters } from "../chapters/ChaptersPanel";
 import { useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsStore";
 import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
@@ -1101,6 +1102,21 @@ export const TimelineStudio: React.FC = () => {
                 {formatRulerLabel(tickUs, rulerStep)}
               </div>
             ))}
+            {/* Chapter markers, in playback order, the first at 0:00 like the export */}
+            {durationUs > 0 &&
+              placedChapters(openedProject?.chapters ?? []).map(({ chapter, atUs }) => (
+                <div
+                  key={chapter.id}
+                  className="absolute top-0 bottom-0 pointer-events-none z-10"
+                  style={{ left: `${(atUs / durationUs) * 100}%` }}
+                  title={chapter.title}
+                >
+                  <div className="h-full border-l border-violet-400/80" />
+                  <span className="absolute top-0 left-0.5 max-w-[160px] truncate rounded-sm bg-violet-900/80 px-1 text-[9px] leading-[14px] text-violet-100">
+                    {chapter.title}
+                  </span>
+                </div>
+              ))}
             <div
               className="absolute top-0 bottom-0 w-0.5 bg-indigo-500 pointer-events-none"
               style={{ left: `${progress * 100}%` }}

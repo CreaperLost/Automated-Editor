@@ -1,12 +1,13 @@
+/** The recording time shown at `editedUs`, or null past the end or inside imported media. */
 export function editedToSourceUs(
-  retained: { startUs: number; endUs: number }[],
+  retained: { startUs: number; endUs: number; media?: string }[],
   editedUs: number,
 ): number | null {
   let accumulated = 0;
   for (const interval of retained) {
     const duration = interval.endUs - interval.startUs;
     if (editedUs < accumulated + duration) {
-      return interval.startUs + (editedUs - accumulated);
+      return interval.media ? null : interval.startUs + (editedUs - accumulated);
     }
     accumulated += duration;
   }

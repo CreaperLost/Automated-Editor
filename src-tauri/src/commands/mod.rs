@@ -340,7 +340,7 @@ pub struct ManualZoomInput {
     pub scale: f64,
 }
 
-fn mutate_opened(
+pub(crate) fn mutate_opened(
     state: &AppState,
     project_handle: String,
     mutate: impl FnOnce(&mut crate::project::ProjectReader) -> Result<OpenedProject, String>,
@@ -565,6 +565,17 @@ pub fn project_webcam_focus_detect_impl(
         project,
         detected: detected.len(),
         diagnostics,
+    })
+}
+
+pub fn project_chapters_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    chapters: Vec<crate::chapters::Chapter>,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.set_chapters(expected_revision, chapters)
     })
 }
 
