@@ -667,15 +667,15 @@ pub fn default_export_filename(project_name: &str) -> String {
 
 pub fn is_inside_bundle(path: &Path, bundle_root: Option<&Path>) -> bool {
     if let Some(bundle) = bundle_root {
-        if let Ok(canonical_bundle) = fs::canonicalize(bundle) {
+        if let Ok(canonical_bundle) = dunce::canonicalize(bundle) {
             if let Some(parent) = path.parent() {
-                if let Ok(canonical_parent) = fs::canonicalize(parent) {
+                if let Ok(canonical_parent) = dunce::canonicalize(parent) {
                     if canonical_parent.starts_with(&canonical_bundle) {
                         return true;
                     }
                 }
             }
-            if let Ok(canonical_path) = fs::canonicalize(path) {
+            if let Ok(canonical_path) = dunce::canonicalize(path) {
                 if canonical_path.starts_with(&canonical_bundle) {
                     return true;
                 }
@@ -727,7 +727,7 @@ pub fn resolve_destination(
         Some(path) if !path.trim().is_empty() => PathBuf::from(path),
         _ => default_destination(project_root, project_name, revision),
     };
-    let project_root = fs::canonicalize(project_root).map_err(|e| ExportFailure::Io {
+    let project_root = dunce::canonicalize(project_root).map_err(|e| ExportFailure::Io {
         message: e.to_string(),
     })?;
     if dest.as_os_str().is_empty() {
@@ -748,7 +748,7 @@ pub fn resolve_destination(
             message: "Export destination parent is not a directory".into(),
         });
     }
-    let canonical_parent = fs::canonicalize(parent).map_err(|e| ExportFailure::Io {
+    let canonical_parent = dunce::canonicalize(parent).map_err(|e| ExportFailure::Io {
         message: e.to_string(),
     })?;
     let file_name = dest.file_name().ok_or_else(|| ExportFailure::Io {
@@ -763,7 +763,9 @@ pub fn resolve_destination(
     for (_track, segments) in tracks {
         for segment in segments {
             if let Ok(path) = safe_path(&project_root, &segment.relative_path) {
-                if let (Ok(src), Ok(out)) = (fs::canonicalize(&path), fs::canonicalize(&resolved)) {
+                if let (Ok(src), Ok(out)) =
+                    (dunce::canonicalize(&path), dunce::canonicalize(&resolved))
+                {
                     if src == out {
                         return Err(ExportFailure::SourcePath {
                             message: "Export destination cannot overwrite a source track".into(),
@@ -1426,17 +1428,6 @@ mod tests {
         let centre = ((90 * after_cut.stride) + 160 * 4) as usize;
         let level = after_cut.data[centre + 1];
         let expected = 10 + 12 * 12;
-        let probe = |path: &Path, t: u64| {
-            let f = decode_h264_frame(path, t).unwrap();
-            let c = (((f.height / 2) * f.stride) + (f.width / 2) * 4) as usize;
-            (f.data[c], f.data[c + 1], f.data[c + 2])
-        };
-        let screen = root.join("media/screen/000001.mp4");
-        eprintln!(
-            "DIAG out@50ms={:?} out@250ms={:?} out@550ms={:?} out@750ms={:?} out@1250ms={:?} src@50ms={:?} src@1250ms={:?} src@1950ms={:?}",
-            probe(&output, 50_000), probe(&output, 250_000), probe(&output, 550_000), probe(&output, 750_000), probe(&output, 1_250_000),
-            probe(&screen, 50_000), probe(&screen, 1_250_000), probe(&screen, 1_950_000)
-        );
         assert!(
             level.abs_diff(expected) <= 14,
             "level {level} after the cut, expected about {expected}"
