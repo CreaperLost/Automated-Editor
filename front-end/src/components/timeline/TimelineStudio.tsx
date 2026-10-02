@@ -425,7 +425,7 @@ export const TimelineStudio: React.FC = () => {
     );
     for (const track of audioTracks) {
       void api
-        .projectWaveform(openedProject.projectHandle, track.descriptor.id, 0, durationUs, 256)
+        .projectWaveform(openedProject.projectHandle, track.descriptor.id, 0, durationUs, 512)
         .then((page) => {
           if (active && !page.cancelled) {
             setTrackWaveform(track.descriptor.id, page);
@@ -539,6 +539,25 @@ export const TimelineStudio: React.FC = () => {
     if (rangeDrag.current?.active) suppressSeek.current = true;
     rangeDrag.current = null;
   };
+
+  /** Clicking a clip block, in any lane, selects it and moves the playhead to the click point. */
+  const onClipClick = (event: React.MouseEvent, clip: TimelineClip) => {
+    event.stopPropagation();
+    if (suppressSeek.current) {
+      suppressSeek.current = false;
+      return;
+    }
+    const extend = (event.shiftKey || event.ctrlKey || event.metaKey) && selection;
+    if (extend) {
+      selectRange(Math.min(selection.startUs, clip.startUs), Math.max(selection.endUs, clip.endUs));
+    } else if (!selection || clip.startUs < selection.startUs || clip.endUs > selection.endUs) {
+      // A click inside the current selection only moves the playhead.
+      selectRange(clip.startUs, clip.endUs);
+    }
+    seekToUs(clientXToUs(event.clientX));
+  };
+  const clipSelected = (clip: TimelineClip) =>
+    !!selection && clip.startUs >= selection.startUs && clip.endUs <= selection.endUs;
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (suppressSeek.current) {
@@ -1075,7 +1094,7 @@ export const TimelineStudio: React.FC = () => {
             {/* Clip lane: edges come from cuts and splits; markers restore cuts */}
             <div className="h-8 relative">
               {durationUs > 0 && clips.map((clip, index) => {
-                const selected = selection?.startUs === clip.startUs && selection?.endUs === clip.endUs;
+                const selected = clipSelected(clip);
                 return (
                   <button
                     key={`${clip.sourceStartUs}-${index}`}
@@ -1089,21 +1108,7 @@ export const TimelineStudio: React.FC = () => {
                       width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
                     }}
                     title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend.`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (suppressSeek.current) {
-                        suppressSeek.current = false;
-                        return;
-                      }
-                      const extend = (event.shiftKey || event.ctrlKey || event.metaKey) && selection;
-                      if (extend) {
-                        selectRange(Math.min(selection.startUs, clip.startUs), Math.max(selection.endUs, clip.endUs));
-                      } else if (!selection || clip.startUs < selection.startUs || clip.endUs > selection.endUs) {
-                        // A click inside the current selection only moves the playhead.
-                        selectRange(clip.startUs, clip.endUs);
-                      }
-                      seekToUs(clientXToUs(event.clientX));
-                    }}
+                    onClick={(event) => onClipClick(event, clip)}
                   >
                     {index + 1}
                   </button>
@@ -1179,33 +1184,59 @@ export const TimelineStudio: React.FC = () => {
               ))}
             </div>
 
-            {/* Individual Lanes */}
+            {/* Individual Lanes: one block per clip, so every cut and split shows as a gap. */}
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className="h-14 mx-2 rounded-lg bg-studio-800/60 border border-studio-750 relative overflow-hidden flex items-center"
+                className="h-14 relative"
               >
-                {/* Waveform for audio tracks */}
-                {track.waveform && track.waveform.buckets.length > 0 && (
-                  <div className="w-full h-full px-2 py-1">
-                    <WaveformRenderer
-                      buckets={track.waveform.buckets}
-                      currentTimeProgress={progress}
-                      activeBarColor={track.trackType === "mic" ? "#10b981" : "#6366f1"}
-                    />
-                  </div>
-                )}
+                {durationUs > 0 && clips.map((clip, index) => {
+                  const selected = clipSelected(clip);
+                  const audio = track.trackType === "mic" || track.trackType === "system";
+                  return (
+                    <div
+                      key={`${clip.sourceStartUs}-${index}`}
+                      className={`absolute top-0 bottom-0 rounded-md border overflow-hidden flex items-center ${
+                        selected
+                          ? "bg-studio-700/80 border-teal-200 ring-1 ring-teal-200/60"
+                          : audio
+                            ? "bg-studio-800/70 border-studio-700 hover:border-studio-500"
+                            : "bg-indigo-500/15 border-indigo-400/30 hover:border-indigo-300/60"
+                      }`}
+                      style={{
+                        left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
+                        width: `max(1px, calc(${((clip.endUs - clip.startUs) / durationUs) * 100}% - 2px))`,
+                      }}
+                      title={`${track.name}, clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s`}
+                      onClick={(event) => onClipClick(event, clip)}
+                    >
+                      {track.waveform && track.waveform.buckets.length > 0 ? (
+                        <div className="w-full h-full px-0.5 py-1">
+                          <WaveformRenderer
+                            buckets={track.waveform.buckets}
+                            startUs={clip.startUs}
+                            endUs={clip.endUs}
+                            currentTimeUs={currentTimeUs}
+                            activeBarColor={track.trackType === "mic" ? "#10b981" : "#6366f1"}
+                          />
+                        </div>
+                      ) : (
+                        !audio && (
+                          <span className="px-1.5 text-[9px] font-mono text-indigo-200/70 truncate pointer-events-none">
+                            {index + 1}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  );
+                })}
 
                 {track.waveform && track.waveform.buckets.length === 0 && (
-                  <span className="px-4 text-xs text-studio-400">Waveform unavailable</span>
+                  <span className="absolute inset-0 flex items-center px-4 text-xs text-studio-400 pointer-events-none">Waveform unavailable</span>
                 )}
 
                 {!track.waveform && (track.trackType === "mic" || track.trackType === "system") && (
-                  <span className="px-4 text-xs text-studio-400">Loading waveform…</span>
-                )}
-
-                {!track.waveform && track.trackType !== "mic" && track.trackType !== "system" && (
-                  <div className="mx-2 h-8 flex-1 rounded bg-indigo-500/15 border border-indigo-400/20" />
+                  <span className="absolute inset-0 flex items-center px-4 text-xs text-studio-400 pointer-events-none">Loading waveform…</span>
                 )}
 
                 {/* Auto webcam layout: where the webcam fills the frame */}
