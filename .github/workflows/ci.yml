@@ -163,9 +163,6 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - name: DIAG encoders
         run: swift .github/diag/encoders.swift || true
-      - name: DIAG export test alone
-        working-directory: src-tauri
-        run: cargo test --lib gpu_export_writes -- --test-threads=1 --nocapture || true
       - name: Run tests
         working-directory: src-tauri
         run: cargo test
