@@ -24,3 +24,6 @@ output/
 .vscode/
 .idea/
 *.swp
+
+# Bundled FFmpeg sidecars (fetched by src-tauri/scripts/fetch-ffmpeg.mjs)
+src-tauri/binaries/
