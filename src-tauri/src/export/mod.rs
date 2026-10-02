@@ -1038,8 +1038,11 @@ fn export_to_temp(
             .write_video(pts_us, &frame)
             .map_err(|message| ExportFailure::Native { message })?;
         if channels > 0 {
+            // Audio runs a second ahead of video: the macOS writer interleaves its
+            // tracks and can hold video back until it has audio past that point.
             let end =
-                ((index as u128 + 1) * SAMPLE_RATE as u128 / captured.settings.fps as u128) as u64;
+                ((index as u128 + 1) * SAMPLE_RATE as u128 / captured.settings.fps as u128) as u64
+                    + SAMPLE_RATE as u64;
             let end = end.min(mixer.total_frames);
             while audio_frame < end {
                 if cancel.load(Ordering::SeqCst) {
