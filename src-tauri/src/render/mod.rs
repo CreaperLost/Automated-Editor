@@ -559,9 +559,11 @@ impl Compositor {
             cache: None,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("aeroedits-nearest"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            // Bilinear: layers are almost never drawn 1:1 (padding, screen size, zoom), and
+            // nearest sampling dropped or doubled whole pixel columns of screen text.
+            label: Some("aeroedits-bilinear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -596,7 +598,7 @@ impl Compositor {
             if layer.has_shadow() {
                 blit_shadow(&mut frame, layer)?;
             }
-            blit_nearest(&mut frame, layer)?;
+            blit_bilinear(&mut frame, layer)?;
         }
         if let Some(first) = scene.layers.first() {
             frame.pts_us = first.frame.pts_us;
@@ -1304,7 +1306,28 @@ fn blit_shadow(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
     Ok(())
 }
 
-fn blit_nearest(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
+/// Samples `frame` at normalized `(u, v)` like a clamp-to-edge bilinear GPU sampler.
+fn sample_bilinear(frame: &VideoFrame, u: f32, v: f32) -> [u8; 4] {
+    let x = u * frame.width as f32 - 0.5;
+    let y = v * frame.height as f32 - 0.5;
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let clamp_x = |value: i64| value.clamp(0, frame.width as i64 - 1) as u32;
+    let clamp_y = |value: i64| value.clamp(0, frame.height as i64 - 1) as u32;
+    let (xa, xb) = (clamp_x(x0 as i64), clamp_x(x0 as i64 + 1));
+    let (ya, yb) = (clamp_y(y0 as i64), clamp_y(y0 as i64 + 1));
+    let texel =
+        |sx: u32, sy: u32, c: usize| frame.data[(sy * frame.stride + sx * 4) as usize + c] as f32;
+    let mut out = [0u8; 4];
+    for (c, slot) in out.iter_mut().enumerate() {
+        let top = texel(xa, ya, c) * (1.0 - fx) + texel(xb, ya, c) * fx;
+        let bottom = texel(xa, yb, c) * (1.0 - fx) + texel(xb, yb, c) * fx;
+        *slot = (top * (1.0 - fy) + bottom * fy).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
     if layer.width == 0 || layer.height == 0 {
         return Err("Layer size is empty".into());
     }
@@ -1313,39 +1336,31 @@ fn blit_nearest(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
         if y >= dest.height {
             continue;
         }
-        let src_y = {
-            let v = layer.uv_y + layer.uv_h * ((dy as f32 + 0.5) / layer.height as f32);
-            let y = (v * layer.frame.height as f32).floor() as i64;
-            y.clamp(0, layer.frame.height as i64 - 1) as u32
-        };
+        let local_y = (dy as f32 + 0.5) / layer.height as f32;
+        let v = layer.uv_y + layer.uv_h * local_y;
         for dx in 0..layer.width {
             let x = layer.x + dx;
             if x >= dest.width {
                 continue;
             }
             let local_x = (dx as f32 + 0.5) / layer.width as f32;
-            let local_y = (dy as f32 + 0.5) / layer.height as f32;
             if layer_sdf(layer, local_x, local_y, false) > 0.0 {
                 continue;
             }
-            let src_x = {
-                let u = layer.uv_x + layer.uv_w * ((dx as f32 + 0.5) / layer.width as f32);
-                let sx = (u * layer.frame.width as f32).floor() as i64;
-                sx.clamp(0, layer.frame.width as i64 - 1) as u32
-            };
-            let si = (src_y * layer.frame.stride + src_x * 4) as usize;
+            let u = layer.uv_x + layer.uv_w * local_x;
+            let src = sample_bilinear(&layer.frame, u, v);
             let di = (y * dest.stride + x * 4) as usize;
             if layer.role == LayerRole::Caption {
                 // Same blend as the GPU pipeline: source over, straight alpha.
-                let alpha = layer.frame.data[si + 3] as u32;
+                let alpha = src[3] as u32;
                 for c in 0..3 {
-                    let src = layer.frame.data[si + c] as u32;
                     let dst = dest.data[di + c] as u32;
-                    dest.data[di + c] = ((src * alpha + dst * (255 - alpha) + 127) / 255) as u8;
+                    dest.data[di + c] =
+                        ((src[c] as u32 * alpha + dst * (255 - alpha) + 127) / 255) as u8;
                 }
                 continue;
             }
-            dest.data[di..di + 4].copy_from_slice(&layer.frame.data[si..si + 4]);
+            dest.data[di..di + 4].copy_from_slice(&src);
         }
     }
     Ok(())
@@ -1488,6 +1503,26 @@ pub fn run_parity(
 mod tests {
     use super::*;
     use crate::media::VideoFrame;
+
+    /// Nearest sampling at 60% scale skipped source column 3 entirely; bilinear keeps it.
+    #[test]
+    fn bilinear_sampling_keeps_thin_lines_when_scaling_down() {
+        let mut frame = VideoFrame::solid(100, 4, 0, 0, 0, 255).unwrap();
+        for y in 0..4u32 {
+            let i = (y * frame.stride + 3 * 4) as usize;
+            frame.data[i..i + 3].copy_from_slice(&[255, 255, 255]);
+        }
+        // Texel centres return the texel exactly.
+        assert_eq!(sample_bilinear(&frame, 3.5 / 100.0, 0.5)[0], 255);
+        assert_eq!(sample_bilinear(&frame, 2.5 / 100.0, 0.5)[0], 0);
+        // Halfway between two texels is their average.
+        assert_eq!(sample_bilinear(&frame, 3.0 / 100.0, 0.5)[0], 128);
+        let brightest = (0..60)
+            .map(|dx| sample_bilinear(&frame, (dx as f32 + 0.5) / 60.0, 0.5)[0])
+            .max()
+            .unwrap();
+        assert!(brightest >= 64, "thin line vanished: {brightest}");
+    }
 
     #[test]
     fn cpu_composite_crops_screen_uv_and_leaves_webcam() {

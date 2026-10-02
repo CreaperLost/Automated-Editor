@@ -22,6 +22,58 @@ pub const PARITY_REGION_MEAN_TOLERANCE: f32 = 48.0;
 pub const COMPOSITOR_MEAN_TOLERANCE: f32 = 3.0;
 pub const COMPOSITOR_MAX_TOLERANCE: u8 = 40;
 
+/// Constant-quality presets for H.264 export.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoQuality {
+    /// Smaller files; fine for drafts and talking-head footage.
+    Standard,
+    /// Sharp screen text at a reasonable size. The default.
+    #[default]
+    High,
+    /// Near-lossless; large files.
+    Max,
+}
+
+impl VideoQuality {
+    /// Bits per pixel per frame for encoders that only take a bitrate target.
+    pub fn bits_per_pixel(self) -> f64 {
+        match self {
+            Self::Standard => 0.08,
+            Self::High => 0.15,
+            Self::Max => 0.25,
+        }
+    }
+}
+
+/// How the H.264 encoder spends bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RateControl {
+    /// Constant quality: the encoder picks the bitrate.
+    Quality(VideoQuality),
+    /// Average bitrate in bits per second, with peaks up to 1.5x.
+    Bitrate(u64),
+}
+
+impl Default for RateControl {
+    fn default() -> Self {
+        Self::Quality(VideoQuality::default())
+    }
+}
+
+impl RateControl {
+    /// A bitrate for encoders that cannot do constant quality.
+    pub fn target_bps(self, width: u32, height: u32, fps: u32) -> u64 {
+        match self {
+            Self::Bitrate(bps) => bps,
+            Self::Quality(quality) => {
+                let pixels = width as f64 * height as f64 * fps.max(1) as f64;
+                ((pixels * quality.bits_per_pixel()) as u64).max(1_000_000)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PixelFormat {

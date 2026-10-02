@@ -1,5 +1,9 @@
 //! Streaming H.264/AAC writer FFI. Pixels and PCM stay in-process.
-use crate::media::{validate_dim, VideoFrame, MAX_FRAME_DIM};
+use crate::media::{validate_dim, RateControl, VideoFrame, MAX_FRAME_DIM};
+
+/// VideoToolbox fails mid-export when asked for much more than this at H.264 Main/auto level.
+#[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
+const NATIVE_MAX_BPS: u64 = 50_000_000;
 #[allow(unused_imports)]
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::Path;
@@ -17,6 +21,7 @@ extern "C" {
         fps: i32,
         sample_rate: i32,
         channels: i32,
+        bitrate_bps: i64,
     ) -> *mut c_void;
     fn aeroshoot_export_video(
         handle: *mut c_void,
@@ -76,6 +81,7 @@ impl NativeExport {
         fps: u32,
         sample_rate: u32,
         channels: u16,
+        rate: RateControl,
     ) -> Result<Self, String> {
         validate_dim(width, height)?;
         if width % 2 != 0 || height % 2 != 0 {
@@ -95,6 +101,7 @@ impl NativeExport {
                 fps as i32,
                 sample_rate as i32,
                 channels as i32,
+                rate.target_bps(width, height, fps).min(NATIVE_MAX_BPS) as i64,
             );
             let handle = NonNull::new(handle).ok_or("Failed to open the native export session")?;
             Ok(Self {
@@ -105,7 +112,7 @@ impl NativeExport {
         }
         #[cfg(not(all(target_os = "macos", not(stub_swift_ffi))))]
         {
-            let _ = (path, fps, sample_rate, channels);
+            let _ = (path, fps, sample_rate, channels, rate);
             Err("Native H.264/AAC export is not implemented on this platform".into())
         }
     }
@@ -267,6 +274,7 @@ mod stub_export_ffi {
         _fps: i32,
         _sample_rate: i32,
         _channels: i32,
+        _bitrate_bps: i64,
     ) -> *mut c_void {
         std::ptr::null_mut()
     }
