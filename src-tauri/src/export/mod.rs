@@ -1426,6 +1426,17 @@ mod tests {
         let centre = ((90 * after_cut.stride) + 160 * 4) as usize;
         let level = after_cut.data[centre + 1];
         let expected = 10 + 12 * 12;
+        let probe = |path: &Path, t: u64| {
+            let f = decode_h264_frame(path, t).unwrap();
+            let c = (((f.height / 2) * f.stride) + (f.width / 2) * 4) as usize;
+            (f.data[c], f.data[c + 1], f.data[c + 2])
+        };
+        let screen = root.join("media/screen/000001.mp4");
+        eprintln!(
+            "DIAG out@50ms={:?} out@250ms={:?} out@550ms={:?} out@750ms={:?} out@1250ms={:?} src@50ms={:?} src@1250ms={:?} src@1950ms={:?}",
+            probe(&output, 50_000), probe(&output, 250_000), probe(&output, 550_000), probe(&output, 750_000), probe(&output, 1_250_000),
+            probe(&screen, 50_000), probe(&screen, 1_250_000), probe(&screen, 1_950_000)
+        );
         assert!(
             level.abs_diff(expected) <= 14,
             "level {level} after the cut, expected about {expected}"
