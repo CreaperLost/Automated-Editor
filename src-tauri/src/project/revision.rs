@@ -14,6 +14,7 @@ use std::path::Path;
 
 pub use super::audio::AudioSettings;
 pub use super::layout::EditLayout;
+pub use crate::captions::CaptionSettings;
 
 pub const EDIT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_EDIT_BYTES: u64 = 1_048_576;
@@ -45,6 +46,9 @@ pub struct EditDocument {
     /// Loudness, noise reduction and ducking. Applies to playback and export.
     #[serde(default, skip_serializing_if = "AudioSettings::is_default")]
     pub audio: AudioSettings,
+    /// Captions burned into playback and export from a track's transcript.
+    #[serde(default, skip_serializing_if = "CaptionSettings::is_default")]
+    pub captions: CaptionSettings,
 }
 
 impl Default for EditDocument {
@@ -59,6 +63,7 @@ impl Default for EditDocument {
             split_points_us: Vec::new(),
             webcam_focus: WebcamFocus::default(),
             audio: AudioSettings::default(),
+            captions: CaptionSettings::default(),
         }
     }
 }
@@ -76,6 +81,7 @@ impl EditDocument {
             split_points_us: Vec::new(),
             webcam_focus: WebcamFocus::default(),
             audio: AudioSettings::default(),
+            captions: CaptionSettings::default(),
         })
     }
 
@@ -482,6 +488,24 @@ impl EditHistory {
         }
         let mut next = self.current.clone();
         next.audio = audio;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    pub fn update_captions(
+        &mut self,
+        expected_revision: u64,
+        captions: CaptionSettings,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        captions.validate()?;
+        if captions == self.current.captions {
+            return Ok(&self.current);
+        }
+        let mut next = self.current.clone();
+        next.captions = captions;
         self.commit_next(expected_revision, persist_root, next)
     }
 
