@@ -5,35 +5,16 @@ import {
   MonitorPlay,
   Clock,
   X,
-  AlertTriangle,
-  Clapperboard,
 } from "lucide-react";
 import { EditorTopBar } from "./components/navigation/EditorTopBar";
-import { TimelineStudio } from "./components/timeline/TimelineStudio";
-import { NativePreviewHost } from "./components/canvas/NativePreviewHost";
-import { InspectorPanel } from "./components/inspector/InspectorPanel";
 import { SilenceModal } from "./components/silence-modal/SilenceModal";
-import { TranscriptPanel } from "./components/transcript/TranscriptPanel";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
-import { useElementSize } from "./hooks/useElementSize";
-import { Splitter } from "./components/layout/Splitter";
-import { fittedPanelSize, useLayoutStore } from "./stores/layoutStore";
+import { DockWorkspace } from "./components/layout/DockWorkspace";
 import { api } from "./lib/ipc";
-import { ExportSettings, ExportStatus, SegmentPage } from "./lib/types";
+import { ExportSettings, ExportStatus } from "./lib/types";
 import { ExportDialog } from "./components/export/ExportDialog";
-
-/// Space the shell always leaves for the preview stage and the row above the timeline,
-/// so dragged panels (or a small window) can never squeeze the preview away entirely.
-const MIN_STAGE_WIDTH = 420;
-const MIN_TOP_ROW_HEIGHT = 260;
-/// Stage chrome around the transcript: padding, info row, diagnostics, and a usable preview.
-const STAGE_RESERVED_HEIGHT = 250;
-
-function formatSeconds(us: number): string {
-  return `${(us / 1_000_000).toFixed(2)}s`;
-}
 
 function getProjectFolderName(fullPath: string): string {
   const parts = fullPath.split(/[/\\]/).filter(Boolean);
@@ -70,40 +51,12 @@ export const App: React.FC = () => {
     clearRecentProjects,
   } = useProjectStore();
   const { canvas } = useSettingsStore();
-  const panels = useLayoutStore((s) => s.panels);
-  const [workspaceRef, workspace] = useElementSize<HTMLDivElement>();
 
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [trackId, setTrackId] = useState("");
-  const [offset, setOffset] = useState(0);
-  const [page, setPage] = useState<SegmentPage>();
   const [exportOpen, setExportOpen] = useState(false);
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
-
-  useEffect(() => {
-    setTrackId(project?.tracks[0]?.descriptor.id ?? "");
-    setOffset(0);
-  }, [project?.projectHandle]);
-
-  useEffect(() => {
-    let active = true;
-    setPage(undefined);
-    if (project && trackId) {
-      void api
-        .projectSegments(project.projectHandle, trackId, offset)
-        .then((next) => {
-          if (active) setPage(next);
-        })
-        .catch((err) => {
-          if (active) setError(String(err));
-        });
-    }
-    return () => {
-      active = false;
-    };
-  }, [project?.projectHandle, trackId, offset]);
 
   useEffect(() => {
     if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running")) {
@@ -214,17 +167,6 @@ export const App: React.FC = () => {
 
   const defaultExportPath = getDefaultExportPath(path, project?.manifest.projectName);
 
-  // Before the first measurement, show stored sizes as-is rather than collapsing everything.
-  const measured = workspace.width > 0 && workspace.height > 0;
-  const inspectorMax = measured ? workspace.width - MIN_STAGE_WIDTH : Infinity;
-  const timelineMax = measured ? workspace.height - MIN_TOP_ROW_HEIGHT : Infinity;
-  const inspectorWidth = fittedPanelSize("inspector", panels.inspector, inspectorMax);
-  const timelineHeight = fittedPanelSize("timeline", panels.timeline, timelineMax);
-  const transcriptMax = measured
-    ? workspace.height - timelineHeight - STAGE_RESERVED_HEIGHT
-    : Infinity;
-  const transcriptHeight = fittedPanelSize("transcript", panels.transcript, transcriptMax);
-
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-950 text-studio-100 select-none">
       {/* 1. Editor Header */}
@@ -261,128 +203,8 @@ export const App: React.FC = () => {
       {/* 3. Main Editor Workspace */}
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         {project ? (
-          <div ref={workspaceRef} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Top row: Canvas Stage + Inspector */}
-            <div className="flex-1 flex min-h-0 overflow-hidden">
-              {/* Center Canvas Stage */}
-              <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden p-4 gap-3 bg-studio-950">
-                <div className="flex items-center justify-between text-xs text-studio-400 px-1">
-                  <div>
-                    {project.tracks.length} tracks · source {formatSeconds(project.sourceDurationUs)} · edited {formatSeconds(project.editedDurationUs)}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] text-studio-500">
-                      Canvas: {canvas.aspectRatio}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex-1 min-h-0 overflow-hidden border border-studio-800 rounded-xl bg-studio-900/40 flex items-center justify-center p-2">
-                  <NativePreviewHost
-                    key={project.projectHandle}
-                    fitAspectRatio={
-                      canvas.aspectRatio === "9:16"
-                        ? 9 / 16
-                        : canvas.aspectRatio === "4:3"
-                          ? 4 / 3
-                          : canvas.aspectRatio === "1:1"
-                            ? 1
-                            : 16 / 9
-                    }
-                  />
-                </div>
-
-                <Splitter
-                  panel="transcript"
-                  orientation="horizontal"
-                  grow={-1}
-                  size={transcriptHeight}
-                  max={transcriptMax}
-                  label="Transcript height"
-                />
-                {transcriptHeight > 0 && (
-                  <div className="shrink-0 min-h-0" style={{ height: transcriptHeight }}>
-                    <TranscriptPanel />
-                  </div>
-                )}
-
-                {/* Diagnostics details toggle */}
-                <details className="max-h-24 shrink-0 overflow-y-auto rounded-lg border border-studio-800/80 bg-studio-900/40 px-3 py-1.5 text-xs text-studio-400">
-                  <summary className="cursor-pointer font-medium text-studio-300">
-                    Track segments and recording diagnostics
-                  </summary>
-                  <div className="space-y-2 pt-2">
-                    {project.diagnostics.length > 0 && (
-                      <ul className="text-xs text-amber-300 space-y-1 bg-amber-950/20 border border-amber-900/40 rounded p-2">
-                        {project.diagnostics.map((msg, i) => (
-                          <li key={i} className="flex gap-1.5 items-center">
-                            <AlertTriangle className="w-3 h-3 shrink-0" />
-                            <span>{msg}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <Clapperboard className="w-3.5 h-3.5 text-teal-400" />
-                      <select
-                        aria-label="Track selector"
-                        value={trackId}
-                        onChange={(e) => {
-                          setTrackId(e.target.value);
-                          setOffset(0);
-                        }}
-                        className="bg-studio-800 text-studio-100 rounded px-2 py-0.5"
-                      >
-                        {project.tracks.map((t) => (
-                          <option key={t.descriptor.id} value={t.descriptor.id}>
-                            {t.descriptor.id} ({t.descriptor.trackType}) — {t.availableSegmentCount}/{t.segmentCount} segments
-                          </option>
-                        ))}
-                      </select>
-                      {page && (
-                        <span className="text-studio-500 font-mono text-[11px]">
-                          {page.segments.length} segments loaded
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </details>
-              </div>
-
-              {/* Right Inspector Panel */}
-              <Splitter
-                panel="inspector"
-                orientation="vertical"
-                grow={-1}
-                size={inspectorWidth}
-                max={inspectorMax}
-                label="Inspector width"
-              />
-              {inspectorWidth > 0 && (
-                <div
-                  className="shrink-0 h-full min-w-0 overflow-hidden border-l border-studio-800"
-                  style={{ width: inspectorWidth }}
-                >
-                  <InspectorPanel />
-                </div>
-              )}
-            </div>
-
-            {/* Bottom: Multi-Track Timeline Studio */}
-            <Splitter
-              panel="timeline"
-              orientation="horizontal"
-              grow={-1}
-              size={timelineHeight}
-              max={timelineMax}
-              label="Timeline height"
-            />
-            <div
-              className="min-h-0 overflow-hidden border-t border-studio-800 shrink-0"
-              style={{ height: timelineHeight }}
-            >
-              <TimelineStudio />
-            </div>
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <DockWorkspace />
           </div>
         ) : (
           /* Empty / Welcome State */

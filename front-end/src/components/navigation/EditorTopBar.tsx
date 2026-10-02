@@ -10,6 +10,7 @@ import {
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { ExportStatus } from "../../lib/types";
+import { LayoutMenu } from "../layout/LayoutMenu";
 
 interface EditorTopBarProps {
   onOpenExport: () => void;
@@ -158,6 +159,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
 
         {project && (
           <>
+            <LayoutMenu />
+
             <button
               type="button"
               onClick={() => setIsSilenceModalOpen(true)}
