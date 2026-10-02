@@ -88,7 +88,8 @@ func exportBegin(
   _ height: Int32,
   _ fps: Int32,
   _ sampleRate: Int32,
-  _ channels: Int32
+  _ channels: Int32,
+  _ bitrateBps: Int64
 ) -> UnsafeMutableRawPointer? {
   guard let path, width >= 16, height >= 16, width % 2 == 0, height % 2 == 0 else { return nil }
   guard fps >= 1, fps <= 60, width <= 4096, height <= 4096 else { return nil }
@@ -104,13 +105,13 @@ func exportBegin(
       AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
     ],
     AVVideoCompressionPropertiesKey: [
-      // About 0.12 bits/pixel/frame is visually solid for screen capture and
-      // stays within VideoToolbox's practical H.264 level limits. The old
-      // width*height*32 value requested 66 Mbps for 1080p and caused the
-      // encoder to fail after its initial frame queue filled.
-      AVVideoAverageBitRateKey: max(
-        2_000_000,
-        Int(Double(width) * Double(height) * Double(fps) * 0.12)),
+      // Rust picks the bitrate from the export quality and caps it at 50 Mbps:
+      // the old width*height*32 value requested 66 Mbps for 1080p and caused the
+      // encoder to fail after its initial frame queue filled. Zero keeps the
+      // previous default of about 0.12 bits/pixel/frame.
+      AVVideoAverageBitRateKey: bitrateBps > 0
+        ? Int(min(bitrateBps, 50_000_000))
+        : max(2_000_000, Int(Double(width) * Double(height) * Double(fps) * 0.12)),
       AVVideoProfileLevelKey: AVVideoProfileLevelH264MainAutoLevel,
     ],
   ]
@@ -132,7 +133,7 @@ func exportBegin(
       AVFormatIDKey: kAudioFormatMPEG4AAC,
       AVSampleRateKey: sampleRate,
       AVNumberOfChannelsKey: channels,
-      AVEncoderBitRateKey: 96_000,
+      AVEncoderBitRateKey: 192_000,
     ]
     let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
     input.expectsMediaDataInRealTime = false

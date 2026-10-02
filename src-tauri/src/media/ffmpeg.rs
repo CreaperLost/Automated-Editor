@@ -1,6 +1,8 @@
 //! FFmpeg subprocess backend for probing, decoding and encoding. Used on Windows and Linux,
 //! and on macOS when `AEROEDITS_MEDIA_BACKEND=ffmpeg`. Frames cross a pipe as raw BGRA.
-use super::{validate_dim, ColorInfo, PixelFormat, VideoFrame, MAX_FRAME_DIM};
+use super::{
+    validate_dim, ColorInfo, PixelFormat, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
+};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::env;
@@ -535,11 +537,21 @@ pub fn release_decoders() {
 /// Forces one H.264 encoder by FFmpeg name, e.g. `libx264` or `h264_nvenc`.
 pub const ENCODER_ENV: &str = "AEROEDITS_H264_ENCODER";
 
+/// Which rate-control options an encoder understands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EncoderFamily {
+    Nvenc,
+    Amf,
+    Qsv,
+    X264,
+    /// Takes only `-b:v`.
+    BitrateOnly,
+}
+
 #[derive(Clone, Debug)]
 struct H264Encoder {
     name: &'static str,
-    /// Constant-quality settings; `None` falls back to a bitrate target.
-    quality: Option<&'static [&'static str]>,
+    family: EncoderFamily,
     /// GPU encoders are listed by any build that supports them, so they are only used after a
     /// one-frame test encode succeeds on this machine.
     hardware: bool,
@@ -549,44 +561,114 @@ struct H264Encoder {
 const H264_ENCODERS: &[H264Encoder] = &[
     H264Encoder {
         name: "h264_nvenc",
-        quality: Some(&[
-            "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "19", "-b:v", "0",
-        ]),
+        family: EncoderFamily::Nvenc,
         hardware: true,
     },
     H264Encoder {
         name: "h264_amf",
-        quality: Some(&[
-            "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20",
-        ]),
+        family: EncoderFamily::Amf,
         hardware: true,
     },
     H264Encoder {
         name: "h264_qsv",
-        quality: Some(&["-preset", "medium", "-global_quality", "20"]),
+        family: EncoderFamily::Qsv,
         hardware: true,
     },
     H264Encoder {
         name: "libx264",
-        quality: Some(&["-preset", "veryfast", "-crf", "18"]),
+        family: EncoderFamily::X264,
         hardware: false,
     },
     H264Encoder {
         name: "h264_mf",
-        quality: None,
+        family: EncoderFamily::BitrateOnly,
         hardware: false,
     },
     H264Encoder {
         name: "h264_videotoolbox",
-        quality: None,
+        family: EncoderFamily::BitrateOnly,
         hardware: false,
     },
     H264Encoder {
         name: "libopenh264",
-        quality: None,
+        family: EncoderFamily::BitrateOnly,
         hardware: false,
     },
 ];
+
+impl H264Encoder {
+    /// FFmpeg options for `rate` at this size and frame rate.
+    fn rate_args(&self, rate: RateControl, width: u32, height: u32, fps: u32) -> Vec<String> {
+        match (self.family, rate) {
+            (EncoderFamily::Nvenc, RateControl::Quality(quality)) => {
+                let cq = match quality {
+                    VideoQuality::Standard => "23",
+                    VideoQuality::High => "19",
+                    VideoQuality::Max => "15",
+                };
+                [
+                    "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", cq, "-b:v", "0",
+                ]
+                .map(String::from)
+                .to_vec()
+            }
+            (EncoderFamily::Amf, RateControl::Quality(quality)) => {
+                let (qp_i, qp_p) = match quality {
+                    VideoQuality::Standard => ("22", "24"),
+                    VideoQuality::High => ("18", "20"),
+                    VideoQuality::Max => ("14", "16"),
+                };
+                [
+                    "-quality", "quality", "-rc", "cqp", "-qp_i", qp_i, "-qp_p", qp_p,
+                ]
+                .map(String::from)
+                .to_vec()
+            }
+            (EncoderFamily::Qsv, RateControl::Quality(quality)) => {
+                let global = match quality {
+                    VideoQuality::Standard => "24",
+                    VideoQuality::High => "20",
+                    VideoQuality::Max => "16",
+                };
+                ["-preset", "medium", "-global_quality", global]
+                    .map(String::from)
+                    .to_vec()
+            }
+            (EncoderFamily::X264, RateControl::Quality(quality)) => {
+                let crf = match quality {
+                    VideoQuality::Standard => "21",
+                    VideoQuality::High => "17",
+                    VideoQuality::Max => "14",
+                };
+                ["-preset", "fast", "-crf", crf].map(String::from).to_vec()
+            }
+            (family, rate) => {
+                let bps = rate.target_bps(width, height, fps);
+                let mut args = match family {
+                    EncoderFamily::Nvenc => ["-preset", "p5", "-tune", "hq", "-rc", "vbr"]
+                        .map(String::from)
+                        .to_vec(),
+                    EncoderFamily::Amf => ["-quality", "quality", "-rc", "vbr_peak"]
+                        .map(String::from)
+                        .to_vec(),
+                    EncoderFamily::Qsv => vec!["-preset".into(), "medium".into()],
+                    EncoderFamily::X264 => vec!["-preset".into(), "fast".into()],
+                    EncoderFamily::BitrateOnly => Vec::new(),
+                };
+                args.extend(["-b:v".into(), bps.to_string()]);
+                if family != EncoderFamily::BitrateOnly {
+                    args.extend([
+                        "-maxrate".into(),
+                        (bps + bps / 2).to_string(),
+                        "-bufsize".into(),
+                        (bps * 2).to_string(),
+                    ]);
+                }
+                args
+            }
+        }
+    }
+}
 
 /// Encodes one small frame to check the encoder's device and driver are actually present.
 fn encoder_works(ffmpeg: &Path, encoder: &H264Encoder) -> bool {
@@ -602,7 +684,7 @@ fn encoder_works(ffmpeg: &Path, encoder: &H264Encoder) -> bool {
             "-c:v",
             encoder.name,
         ])
-        .args(encoder.quality.unwrap_or_default())
+        .args(encoder.rate_args(RateControl::default(), 256, 256, 30))
         .args(["-f", "null", "-"]);
     run(cmd, log, "Test encode failed").is_ok()
 }
@@ -672,6 +754,26 @@ impl FfmpegExport {
         sample_rate: u32,
         channels: u16,
     ) -> Result<Self, String> {
+        Self::begin_with_rate(
+            path,
+            width,
+            height,
+            fps,
+            sample_rate,
+            channels,
+            RateControl::default(),
+        )
+    }
+
+    pub fn begin_with_rate(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        sample_rate: u32,
+        channels: u16,
+        rate: RateControl,
+    ) -> Result<Self, String> {
         validate_dim(width, height)?;
         if width % 2 != 0 || height % 2 != 0 {
             return Err("H.264 export requires even dimensions".into());
@@ -691,13 +793,8 @@ impl FfmpegExport {
                 "-vf",
                 "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
             ])
-            .args(["-c:v", encoder.name]);
-        if let Some(quality) = encoder.quality {
-            cmd.args(quality);
-        } else {
-            let bitrate = (width as u64 * height as u64 * fps as u64 / 5).max(1_000_000);
-            cmd.args(["-b:v", &bitrate.to_string()]);
-        }
+            .args(["-c:v", encoder.name])
+            .args(encoder.rate_args(rate, width, height, fps));
         cmd.args([
             "-colorspace",
             "bt709",
@@ -863,6 +960,60 @@ mod tests {
 
     /// CI sets this so a missing FFmpeg fails the run instead of skipping media tests.
     const REQUIRE_ENV: &str = "AEROEDITS_REQUIRE_FFMPEG";
+
+    fn encoder(name: &str) -> &'static H264Encoder {
+        H264_ENCODERS.iter().find(|e| e.name == name).unwrap()
+    }
+
+    fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let at = args.iter().position(|arg| arg == flag)?;
+        args.get(at + 1).map(String::as_str)
+    }
+
+    #[test]
+    fn quality_presets_map_to_each_encoders_constant_quality_option() {
+        let high = RateControl::Quality(VideoQuality::High);
+        let max = RateControl::Quality(VideoQuality::Max);
+        let x264 = encoder("libx264").rate_args(high, 1920, 1080, 30);
+        assert_eq!(value_after(&x264, "-crf"), Some("17"));
+        assert_eq!(
+            value_after(&encoder("libx264").rate_args(max, 1920, 1080, 30), "-crf"),
+            Some("14")
+        );
+        let nvenc = encoder("h264_nvenc").rate_args(high, 1920, 1080, 30);
+        assert_eq!(value_after(&nvenc, "-cq"), Some("19"));
+        assert_eq!(value_after(&nvenc, "-b:v"), Some("0"));
+        let amf = encoder("h264_amf").rate_args(max, 1920, 1080, 30);
+        assert_eq!(value_after(&amf, "-qp_i"), Some("14"));
+        let qsv = encoder("h264_qsv").rate_args(high, 1920, 1080, 30);
+        assert_eq!(value_after(&qsv, "-global_quality"), Some("20"));
+        // Bitrate-only encoders get a bitrate scaled from the preset.
+        let mf = encoder("h264_mf").rate_args(high, 1920, 1080, 30);
+        let bps: u64 = value_after(&mf, "-b:v").unwrap().parse().unwrap();
+        assert_eq!(bps, (1920.0 * 1080.0 * 30.0 * 0.15) as u64);
+    }
+
+    #[test]
+    fn custom_bitrate_sets_average_and_peak_on_every_encoder() {
+        let rate = RateControl::Bitrate(20_000_000);
+        for e in H264_ENCODERS {
+            let args = e.rate_args(rate, 1920, 1080, 60);
+            assert_eq!(value_after(&args, "-b:v"), Some("20000000"), "{}", e.name);
+            assert!(
+                !args.iter().any(|a| a == "-crf" || a == "-cq"),
+                "{}",
+                e.name
+            );
+            if e.family != EncoderFamily::BitrateOnly {
+                assert_eq!(
+                    value_after(&args, "-maxrate"),
+                    Some("30000000"),
+                    "{}",
+                    e.name
+                );
+            }
+        }
+    }
 
     fn ffmpeg_or_skip() -> bool {
         if available() {

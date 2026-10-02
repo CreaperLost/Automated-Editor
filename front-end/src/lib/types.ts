@@ -702,6 +702,8 @@ export interface ExportFailure {
   message: string;
 }
 
+export type ExportQuality = "standard" | "high" | "max";
+
 export interface ExportSettings {
   videoCodec: "h264";
   audioCodec: "aac";
@@ -709,6 +711,10 @@ export interface ExportSettings {
   height: number;
   fps: number;
   destination?: string | null;
+  /** Constant-quality preset; ignored when bitrateKbps is set. */
+  quality?: ExportQuality;
+  /** Average video bitrate; omit to use the quality preset. */
+  bitrateKbps?: number | null;
 }
 
 export interface ExportStatus {

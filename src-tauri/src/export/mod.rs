@@ -5,7 +5,7 @@ mod native;
 use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
 use crate::media::{
     decode_h264_frame, decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate,
-    MediaBackend, VideoFrame, MAX_FRAME_DIM,
+    MediaBackend, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
 };
 use crate::project::manifest::TrackType;
 use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
@@ -24,6 +24,8 @@ use std::thread::JoinHandle;
 use uuid::Uuid;
 
 pub const ALLOWED_FPS: [u32; 6] = [10, 15, 24, 25, 30, 60];
+pub const MIN_BITRATE_KBPS: u32 = 1_000;
+pub const MAX_BITRATE_KBPS: u32 = 200_000;
 /// One AAC frame at 48 kHz plus a small encoder-delay allowance.
 pub const AUDIO_DURATION_SLACK_US: u64 = 80_000;
 
@@ -37,6 +39,21 @@ pub struct ExportSettings {
     pub fps: u32,
     #[serde(default)]
     pub destination: Option<String>,
+    /// Constant-quality preset; ignored when `bitrate_kbps` is set.
+    #[serde(default)]
+    pub quality: VideoQuality,
+    /// Average video bitrate. `None` uses `quality` instead.
+    #[serde(default)]
+    pub bitrate_kbps: Option<u32>,
+}
+
+impl ExportSettings {
+    pub fn rate_control(&self) -> RateControl {
+        match self.bitrate_kbps {
+            Some(kbps) => RateControl::Bitrate(kbps as u64 * 1_000),
+            None => RateControl::Quality(self.quality),
+        }
+    }
 }
 
 impl Default for ExportSettings {
@@ -48,6 +65,8 @@ impl Default for ExportSettings {
             height: 1080,
             fps: 30,
             destination: None,
+            quality: VideoQuality::default(),
+            bitrate_kbps: None,
         }
     }
 }
@@ -523,6 +542,17 @@ impl SceneEvaluator {
     }
 }
 
+/// Sources larger than twice the output are shrunk by FFmpeg's filtered scaler before
+/// compositing; the compositor's bilinear sampling aliases at bigger reductions. Twice the
+/// output keeps full detail for smart zoom up to 2x.
+fn export_decode_limit(width: u32, height: u32) -> DecodeLimit {
+    DecodeLimit {
+        max_width: width.saturating_mul(2),
+        max_height: height.saturating_mul(2),
+        max_rate: 0,
+    }
+}
+
 fn decode_layer(
     root: &Path,
     segment: &SegmentSummary,
@@ -557,14 +587,15 @@ impl ExportWriter {
         fps: u32,
         sample_rate: u32,
         channels: u16,
+        rate: RateControl,
     ) -> Result<Self, String> {
         match media_backend() {
             MediaBackend::Native => {
-                NativeExport::begin(path, width, height, fps, sample_rate, channels)
+                NativeExport::begin(path, width, height, fps, sample_rate, channels, rate)
                     .map(Self::Native)
             }
             MediaBackend::Ffmpeg => {
-                FfmpegExport::begin(path, width, height, fps, sample_rate, channels)
+                FfmpegExport::begin_with_rate(path, width, height, fps, sample_rate, channels, rate)
                     .map(Self::Ffmpeg)
             }
         }
@@ -628,6 +659,17 @@ pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure>
         return Err(ExportFailure::InvalidSettings {
             message: format!("Unsupported export frame rate: {}", settings.fps),
         });
+    }
+    if let Some(kbps) = settings.bitrate_kbps {
+        if !(MIN_BITRATE_KBPS..=MAX_BITRATE_KBPS).contains(&kbps) {
+            return Err(ExportFailure::InvalidSettings {
+                message: format!(
+                    "Export bitrate must be {}..={} Mbps",
+                    MIN_BITRATE_KBPS / 1_000,
+                    MAX_BITRATE_KBPS / 1_000
+                ),
+            });
+        }
     }
     if settings.width < 16
         || settings.height < 16
@@ -1100,6 +1142,7 @@ fn export_to_temp(
         captured.settings.fps,
         sample_rate,
         channels,
+        captured.settings.rate_control(),
     )
     .map_err(|message| ExportFailure::Native { message })?;
     let mut evaluator = SceneEvaluator::new(
@@ -1109,7 +1152,11 @@ fn export_to_temp(
         captured.settings.width,
         captured.settings.height,
     )
-    .map_err(|message| ExportFailure::Native { message })?;
+    .map_err(|message| ExportFailure::Native { message })?
+    .with_decode_limit(export_decode_limit(
+        captured.settings.width,
+        captured.settings.height,
+    ));
 
     let mut audio_frame = 0u64;
     let mut audio_ended = channels == 0;
@@ -1288,6 +1335,44 @@ mod tests {
             validate_settings(&settings),
             Err(ExportFailure::InvalidSettings { .. })
         ));
+    }
+
+    #[test]
+    fn quality_defaults_to_high_and_bitrate_is_bounded() {
+        let settings: ExportSettings = serde_json::from_value(serde_json::json!({
+            "videoCodec": "h264", "audioCodec": "aac", "width": 1920, "height": 1080, "fps": 30
+        }))
+        .unwrap();
+        assert_eq!(
+            settings.rate_control(),
+            RateControl::Quality(VideoQuality::High)
+        );
+        let custom: ExportSettings = serde_json::from_value(serde_json::json!({
+            "videoCodec": "h264", "audioCodec": "aac", "width": 1920, "height": 1080, "fps": 60,
+            "quality": "max", "bitrateKbps": 24000
+        }))
+        .unwrap();
+        assert_eq!(custom.rate_control(), RateControl::Bitrate(24_000_000));
+        assert!(validate_settings(&custom).is_ok());
+        for kbps in [MIN_BITRATE_KBPS - 1, MAX_BITRATE_KBPS + 1] {
+            let settings = ExportSettings {
+                bitrate_kbps: Some(kbps),
+                ..ExportSettings::default()
+            };
+            assert!(matches!(
+                validate_settings(&settings),
+                Err(ExportFailure::InvalidSettings { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn export_decode_limit_is_twice_the_output() {
+        let limit = export_decode_limit(1920, 1080);
+        assert_eq!(
+            (limit.max_width, limit.max_height, limit.max_rate),
+            (3840, 2160, 0)
+        );
     }
 
     #[test]

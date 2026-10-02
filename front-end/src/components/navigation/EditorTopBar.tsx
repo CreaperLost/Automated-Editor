@@ -6,21 +6,13 @@ import {
   Pencil,
   Scissors,
   Download,
-  XCircle,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { ExportStatus } from "../../lib/types";
 
 interface EditorTopBarProps {
-  resolution: string;
-  setResolution: (res: string) => void;
-  exportFps: number;
-  setExportFps: (fps: number) => void;
-  exportDestination: string;
-  chooseExportDestination: () => void;
-  startExport: () => void;
-  cancelExport: () => void;
+  onOpenExport: () => void;
   exportJob?: ExportStatus;
   busy: boolean;
   onOpenFolder: () => void;
@@ -29,14 +21,7 @@ interface EditorTopBarProps {
 }
 
 export const EditorTopBar: React.FC<EditorTopBarProps> = ({
-  resolution,
-  setResolution,
-  exportFps,
-  setExportFps,
-  exportDestination,
-  chooseExportDestination,
-  startExport,
-  cancelExport,
+  onOpenExport,
   exportJob,
   busy,
   onOpenFolder,
@@ -183,64 +168,25 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
               <span>Silence Cuts</span>
             </button>
 
-            {/* Export Settings */}
-            <div className="flex items-center bg-studio-950/60 border border-studio-800 rounded-lg p-0.5 text-[11px] font-mono">
-              <select
-                aria-label="Export resolution"
-                disabled={exporting}
-                value={resolution}
-                onChange={(e) => setResolution(e.target.value)}
-                className="bg-transparent text-studio-300 px-1.5 py-0.5 rounded outline-none"
-              >
-                <option value="1280x720">720p</option>
-                <option value="1920x1080">1080p</option>
-                <option value="3840x2160">4K</option>
-              </select>
-              <div className="h-3 w-px bg-studio-800 mx-0.5" />
-              <select
-                aria-label="Export frame rate"
-                disabled={exporting}
-                value={exportFps}
-                onChange={(e) => setExportFps(Number(e.target.value))}
-                className="bg-transparent text-studio-300 px-1.5 py-0.5 rounded outline-none"
-              >
-                <option value={24}>24fps</option>
-                <option value={30}>30fps</option>
-                <option value={60}>60fps</option>
-              </select>
-            </div>
-
+            {/* Export: settings, destination and progress live in the export dialog. */}
             <button
               type="button"
-              disabled={busy || exporting}
-              onClick={chooseExportDestination}
-              className="px-2 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-300 text-xs font-medium transition-colors"
-              title={exportDestination || "Choose export save destination"}
-            >
-              Save as…
-            </button>
-
-            <button
-              type="button"
-              disabled={busy || exporting}
-              onClick={startExport}
+              disabled={busy}
+              onClick={onOpenExport}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold shadow-md shadow-teal-900/40 disabled:opacity-40 transition-all"
-              title="Export high quality MP4 with H.264 video and AAC audio"
+              title="Choose resolution, frame rate and quality, then export an MP4"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>{exporting ? "Exporting…" : "Export"}</span>
+              <span>
+                {exporting
+                  ? `Exporting ${
+                      exportJob && exportJob.progressDenominator > 0
+                        ? Math.round((exportJob.progressNumerator / exportJob.progressDenominator) * 100)
+                        : 0
+                    }%`
+                  : "Export…"}
+              </span>
             </button>
-
-            {exporting && (
-              <button
-                type="button"
-                onClick={cancelExport}
-                className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-800 text-rose-300 text-xs font-medium"
-              >
-                <XCircle className="w-3.5 h-3.5" />
-                <span>Cancel</span>
-              </button>
-            )}
 
             <button
               type="button"

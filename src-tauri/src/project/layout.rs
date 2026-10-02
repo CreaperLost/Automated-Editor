@@ -203,7 +203,10 @@ impl EditLayout {
     /// so 9:16 / 1:1 / 4:3 do not stretch inside a 16:9 encoder frame.
     pub fn fit_export_size(&self, width: u32, height: u32) -> Result<(u32, u32), String> {
         self.validate()?;
-        let standard = matches!((width, height), (1280, 720) | (1920, 1080) | (3840, 2160));
+        let standard = matches!(
+            (width, height),
+            (1280, 720) | (1920, 1080) | (2560, 1440) | (3840, 2160)
+        );
         if !standard {
             return Ok((width, height));
         }

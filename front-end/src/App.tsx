@@ -21,7 +21,8 @@ import { useElementSize } from "./hooks/useElementSize";
 import { Splitter } from "./components/layout/Splitter";
 import { fittedPanelSize, useLayoutStore } from "./stores/layoutStore";
 import { api } from "./lib/ipc";
-import { ExportStatus, SegmentPage } from "./lib/types";
+import { ExportSettings, ExportStatus, SegmentPage } from "./lib/types";
+import { ExportDialog } from "./components/export/ExportDialog";
 
 /// Space the shell always leaves for the preview stage and the row above the timeline,
 /// so dragged panels (or a small window) can never squeeze the preview away entirely.
@@ -77,8 +78,7 @@ export const App: React.FC = () => {
   const [trackId, setTrackId] = useState("");
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<SegmentPage>();
-  const [resolution, setResolution] = useState("1920x1080");
-  const [exportFps, setExportFps] = useState(30);
+  const [exportOpen, setExportOpen] = useState(false);
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
 
@@ -189,22 +189,15 @@ export const App: React.FC = () => {
     }
   };
 
-  const startExport = async () => {
+  const startExport = async (settings: ExportSettings) => {
     if (!project) return;
     setError(undefined);
     try {
       const next = await api.exportStart(project.projectHandle, {
-        videoCodec: "h264",
-        audioCodec: "aac",
-        width: Number(resolution.split("x")[0]),
-        height: Number(resolution.split("x")[1]),
-        fps: exportFps,
+        ...settings,
         destination: exportDestination.trim() || undefined,
       });
       setExportJob(next);
-      if (next.failure) {
-        setError(`${next.failure.kind}: ${next.failure.message}`);
-      }
     } catch (err) {
       setError(String(err));
     }
@@ -236,14 +229,7 @@ export const App: React.FC = () => {
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-950 text-studio-100 select-none">
       {/* 1. Editor Header */}
       <EditorTopBar
-        resolution={resolution}
-        setResolution={setResolution}
-        exportFps={exportFps}
-        setExportFps={setExportFps}
-        exportDestination={exportDestination || defaultExportPath || ""}
-        chooseExportDestination={chooseExportDestination}
-        startExport={startExport}
-        cancelExport={cancelExport}
+        onOpenExport={() => setExportOpen(true)}
         exportJob={exportJob}
         busy={busy}
         onOpenFolder={handleOpenFolder}
@@ -481,6 +467,19 @@ export const App: React.FC = () => {
 
       {/* 4. Global Silence Cuts Modal */}
       <SilenceModal />
+
+      {project && exportOpen && (
+        <ExportDialog
+          aspectRatio={canvas.aspectRatio}
+          editedDurationUs={project.editedDurationUs}
+          destination={exportDestination || defaultExportPath || ""}
+          exportJob={exportJob}
+          onChooseDestination={() => void chooseExportDestination()}
+          onStart={(settings) => void startExport(settings)}
+          onCancel={() => void cancelExport()}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
     </div>
   );
 };
