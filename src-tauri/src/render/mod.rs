@@ -227,14 +227,28 @@ impl Scene {
             let area_h = height - padding * 2;
             let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
             let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
-            let (x, y, w, h) = fit_inside(
-                ((screen.width as f32 * crop_w).round() as u32).max(1),
-                ((screen.height as f32 * crop_h).round() as u32).max(1),
+            // Crop in place: the uncropped screen keeps its size and position, and each
+            // crop only moves its own edge inward. Re-fitting the kept region would
+            // re-centre it, so cropping one side looked like cropping both.
+            let (full_x, full_y, full_w, full_h) = fit_inside(
+                screen.width,
+                screen.height,
                 padding + (area_w - box_w) / 2,
                 padding + (area_h - box_h) / 2,
                 box_w,
                 box_h,
             );
+            let edge = |origin: u32, size: u32, fraction: f32| {
+                origin + (size as f32 * fraction).round() as u32
+            };
+            let x = edge(full_x, full_w, crop_x);
+            let y = edge(full_y, full_h, crop_y);
+            let w = edge(full_x, full_w, crop_x + crop_w)
+                .saturating_sub(x)
+                .max(1);
+            let h = edge(full_y, full_h, crop_y + crop_h)
+                .saturating_sub(y)
+                .max(1);
             let radius = layout.corner_radius_px as f32 * unit;
             let clip = if radius > 0.0 {
                 ClipMode::RoundedRect
@@ -1714,26 +1728,57 @@ mod tests {
     }
 
     #[test]
-    fn screen_crop_samples_kept_region_and_keeps_its_aspect() {
+    fn screen_crop_moves_only_the_cropped_edge() {
         // Left half red, right half blue; cropping 45% from the left leaves mostly blue.
         let screen = split_frame(32, 16, [0, 0, 255], [255, 0, 0]);
         let mut layout = solid_layout();
         layout.padding_px = 0;
+        let full = Scene::from_layout(32, 32, &layout, Some(screen.clone()), None).unwrap();
+        let full = full
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Screen)
+            .unwrap();
+        assert_eq!((full.x, full.y, full.width, full.height), (0, 8, 32, 16));
+
         layout.screen_crop_left = 45.0;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let scene = Scene::from_layout(32, 32, &layout, Some(screen.clone()), None).unwrap();
         let layer = scene
             .layers
             .iter()
             .find(|l| l.role == LayerRole::Screen)
             .unwrap();
         assert!((layer.uv_x - 0.45).abs() < 1e-6 && (layer.uv_w - 0.55).abs() < 1e-6);
-        // The kept 18x16 region fits the 32x32 canvas at its own aspect, not the source's 2:1.
-        assert_eq!((layer.width, layer.height), (32, 28));
+        // Only the left edge moved: the right edge, top and height are where they were.
+        assert_eq!(
+            (layer.x, layer.y, layer.width, layer.height),
+            (14, 8, 18, 16)
+        );
         let out = Compositor::composite_cpu(&scene).unwrap();
         let [b, _, r, _] = pixel(&out, 30, 16);
         assert!(b > 200 && r < 40, "right edge shows the blue half");
-        let [_, _, r, _] = pixel(&out, 1, 16);
-        assert!(r > 200, "left edge shows the red sliver the crop kept");
+        let [_, _, r, _] = pixel(&out, 14, 16);
+        assert!(r > 200, "new left edge shows the red sliver the crop kept");
+        assert_eq!(
+            pixel(&out, 4, 16)[1],
+            255,
+            "background shows where the crop removed"
+        );
+
+        // Cropping the right side leaves the left edge in place.
+        layout.screen_crop_left = 0.0;
+        layout.screen_crop_right = 25.0;
+        layout.screen_crop_bottom = 25.0;
+        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let layer = scene
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Screen)
+            .unwrap();
+        assert_eq!(
+            (layer.x, layer.y, layer.width, layer.height),
+            (0, 8, 24, 12)
+        );
     }
 
     #[test]
