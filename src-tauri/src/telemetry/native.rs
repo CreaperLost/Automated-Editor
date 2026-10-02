@@ -27,6 +27,15 @@ pub enum MousePayload {
         end_us: u64,
         dropped_events: u64,
     },
+    /// The recorder drew a different cursor shape (arrow, pointing hand, ...).
+    CursorChanged {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// A record kind this build does not know. It keeps its sequence number but is not
+    /// mouse activity, so newer recorders do not break older editors.
+    #[serde(other)]
+    Unknown,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
