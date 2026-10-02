@@ -100,6 +100,10 @@ interface ProjectStore {
   zoomKeyframes: ZoomKeyframe[];
   pendingZoomSuggestions: ZoomSuggestion[];
   zoomDiagnostics: string[];
+  /** The zoom picked on the timeline lane or in the Zoom panel. */
+  selectedZoomId?: string;
+  /** The timeline's selection, shared so other panels can act on it. */
+  timelineSelection: { startUs: number; endUs: number } | null;
   currentTimeUs: number;
   durationUs: number;
   isPlaying: boolean;
@@ -117,6 +121,8 @@ interface ProjectStore {
   setIsPlaying: (isPlaying: boolean) => void;
   togglePlayPause: () => void;
   applyZoomGeneration: (generation: Pick<ZoomGeneration, "suggestions" | "diagnostics">) => void;
+  setSelectedZoomId: (id?: string) => void;
+  setTimelineSelection: (selection: { startUs: number; endUs: number } | null) => void;
   setSilenceBlocks: (
     blocks: SilenceBlock[],
     analysis?: { projectHandle: string; revision: number } | null,
@@ -213,6 +219,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   zoomKeyframes: [],
   pendingZoomSuggestions: [],
   zoomDiagnostics: [],
+  selectedZoomId: undefined,
+  timelineSelection: null,
   currentTimeUs: 0,
   durationUs: 0,
   isPlaying: false,
@@ -235,6 +243,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   setIsPlaying: (isPlaying) => set({ isPlaying }),
 
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
+
+  setSelectedZoomId: (selectedZoomId) => set({ selectedZoomId }),
+  setTimelineSelection: (timelineSelection) => set({ timelineSelection }),
 
   applyZoomGeneration: (generation) =>
     set((state) => ({

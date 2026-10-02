@@ -89,7 +89,23 @@ jobs:
           version: 1
       # A static FFmpeg build: apt's ffmpeg breaks when restored from the
       # apt cache (its BLAS library is wired up by an install-time script).
-      - uses: FedericoCarboni/setup-ffmpeg@v3
+      # Downloaded directly: setup-ffmpeg@v3 failed intermittently with
+      # "Failed to read version from readme". If the download fails, Ubuntu's
+      # own package (installed normally, not from the cache) is used instead.
+      - name: Install FFmpeg
+        run: |
+          url=https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          if curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/ffmpeg.tar.xz" "$url"; then
+            mkdir -p "$RUNNER_TEMP/ffmpeg"
+            tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+            echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
+            "$RUNNER_TEMP/ffmpeg/ffmpeg" -hide_banner -version | head -n 1
+          else
+            echo "Static FFmpeg download failed; installing Ubuntu's ffmpeg"
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends ffmpeg
+            ffmpeg -hide_banner -version | head -n 1
+          fi
       - run: cargo test
         env:
           AEROEDITS_REQUIRE_FFMPEG: "1"

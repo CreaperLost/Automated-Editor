@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, Check, Download, KeyRound, X } from "lucide-react";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import { ModelDownloadProgress, TranscriptSettings, TranscriptSettingsView } from "../../lib/types";
@@ -95,7 +96,8 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
 
   const input = "w-full bg-studio-800 border border-studio-700 rounded px-2 py-1 text-studio-100";
 
-  return (
+  // Rendered into <body>: inside a dock panel the panel resize bars would sit on top of it.
+  return createPortal(
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
       <div className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-xs">
         <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
@@ -250,6 +252,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
