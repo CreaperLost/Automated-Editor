@@ -155,9 +155,17 @@ jobs:
       - name: Build front-end
         working-directory: front-end
         run: npm ci --no-audit --no-fund && npm run build
+      # The export tests encode their fixtures with FFmpeg on macOS too.
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - name: Run tests
         working-directory: src-tauri
         run: cargo test
+        env:
+          AEROEDITS_REQUIRE_FFMPEG: "1"
       - name: Check the app with the Tauri feature
         working-directory: src-tauri
         run: cargo check --features tauri-app
