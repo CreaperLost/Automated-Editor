@@ -68,9 +68,10 @@ src-tauri/                 Tauri v2 backend (Rust)
 - **Windows:** Microsoft C++ Build Tools (the "Desktop development with C++" workload) and
   the WebView2 runtime, which ships with Windows 10 and 11.
 - **macOS:** macOS 13 or newer with Xcode or the Command Line Tools, for the Swift bridges.
-- **FFmpeg** (with `ffprobe`) for decoding and export on Windows and Linux. On Windows run
-  `winget install Gyan.FFmpeg`, then open a new terminal. AeroEdits looks for it next to the
-  app, then on `PATH`; set `AEROEDITS_FFMPEG` and `AEROEDITS_FFPROBE` to point elsewhere.
+- **FFmpeg** (with `ffprobe`) for decoding and export on Windows and Linux. Either fetch the
+  copy the app bundles (see [Bundled FFmpeg](#bundled-ffmpeg)) or install it: on Windows run
+  `winget install Gyan.FFmpeg`, then open a new terminal. AeroEdits looks for it in
+  `AEROEDITS_FFMPEG` and `AEROEDITS_FFPROBE`, then next to the app, then on `PATH`.
 
 ### Run the app
 
@@ -83,6 +84,28 @@ cargo tauri dev --features tauri-app
 ```
 
 Without `--features tauri-app` the binary builds the editor core only, with no window.
+
+### Bundled FFmpeg
+
+Release builds ship `ffmpeg` and `ffprobe` as Tauri sidecars, so users need no separate
+install. Fetch them once per machine, then pass the extra config to Tauri:
+
+```bash
+cd src-tauri
+node scripts/fetch-ffmpeg.mjs             # into src-tauri/binaries/ (git-ignored)
+cargo tauri build --features tauri-app --config tauri.ffmpeg.conf.json
+cargo tauri dev --features tauri-app --config tauri.ffmpeg.conf.json   # optional in dev
+```
+
+The script downloads the LGPL 8.1 build from
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) for the Rust host target
+(`--target <triple>` to cross-fetch; Windows and Linux, x64 and ARM64) and checks it against
+the release's SHA-256 sums. The LGPL build keeps AeroEdits' MIT/Apache license intact; it has
+no libx264, so Windows exports use Media Foundation (`h264_mf`) or OpenH264. `--gpl` fetches
+the GPL build with libx264 instead, which is fine for personal builds but must be
+distributed under the GPL. The license text and download source are installed with the app
+under `licenses/`. macOS keeps using the Swift bridges, with FFmpeg from Homebrew when the
+shared backend is forced.
 
 ### Transcription
 

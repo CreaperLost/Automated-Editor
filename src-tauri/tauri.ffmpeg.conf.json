@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "resources": {
+      "binaries/FFMPEG-LICENSE.txt": "licenses/FFMPEG-LICENSE.txt",
+      "binaries/FFMPEG-SOURCE.txt": "licenses/FFMPEG-SOURCE.txt"
+    }
+  }
+}
