@@ -225,7 +225,7 @@ impl ProjectReader {
         if !meta.is_dir() || meta.file_type().is_symlink() {
             return Err("Expected a project directory, not a symlink".into());
         }
-        let root = path.canonicalize().map_err(|e| e.to_string())?;
+        let root = dunce::canonicalize(path).map_err(|e| e.to_string())?;
         let lease = acquire_read_lease(&root)?;
         // Reject old writers/stale locks too. Recovery, not open, owns repairs.
         if fs::symlink_metadata(root.join(".lock")).is_ok() {
@@ -773,6 +773,47 @@ mod tests {
     use super::*;
     use crate::fixtures::TestProject;
     use crate::project::manifest::PauseInterval;
+
+    /// `fs::canonicalize` returns verbatim `\\?\C:\...` paths on Windows, which leak into
+    /// FFmpeg arguments, the UI and comparisons with user-chosen paths.
+    #[cfg(windows)]
+    #[test]
+    fn open_root_has_no_verbatim_prefix_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = TestProject::create(dir.path(), "verbatim");
+        let root = bundle.root_path().to_path_buf();
+        drop(bundle);
+        let reader = ProjectReader::open(&root).unwrap();
+        let shown = reader.root().to_string_lossy().into_owned();
+        assert!(!shown.starts_with(r"\\?\"), "verbatim root {shown}");
+        assert!(reader.root().is_absolute());
+
+        let parent = dir.path().join("exports");
+        fs::create_dir_all(&parent).unwrap();
+        let requested = parent.join("out.mp4");
+        let resolved = crate::export::resolve_destination(
+            reader.root(),
+            "verbatim",
+            0,
+            Some(requested.to_str().unwrap()),
+            &[],
+        )
+        .unwrap();
+        let shown = resolved.to_string_lossy().into_owned();
+        assert!(!shown.starts_with(r"\\?\"), "verbatim destination {shown}");
+        assert_eq!(resolved.file_name().unwrap(), "out.mp4");
+        // Traversal and the inside-bundle check still apply.
+        assert!(ProjectReader::open(&root.join("..").join("verbatim.aero")).is_err());
+        let inside = reader.root().join("out.mp4");
+        assert!(crate::export::resolve_destination(
+            reader.root(),
+            "verbatim",
+            0,
+            Some(inside.to_str().unwrap()),
+            &[],
+        )
+        .is_err());
+    }
 
     #[test]
     fn restore_cuts_never_restores_pauses_or_uncut_media() {
