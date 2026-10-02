@@ -58,6 +58,8 @@
   --dv-separator-border: #202024;
   --dv-paneview-header-border-color: #202024;
   background-color: #09090b;
+  /* dockview's resize bars use z-index 99; keep that inside the workspace so dialogs stay on top. */
+  isolation: isolate;
 }
 
 /* Tabs are drag handles: show it. */
