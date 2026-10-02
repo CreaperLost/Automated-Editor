@@ -111,6 +111,37 @@ fn current_view(
     )))
 }
 
+/// Playback keeps its own copy of the captions; rebuild it after the transcript changes.
+fn refresh_playback(state: &AppState) {
+    let opened = state.opened_project.lock();
+    if let Some(reader) = opened.as_ref() {
+        if reader.history().current.captions.enabled {
+            let _ = state
+                .playback
+                .lock()
+                .apply_document(&reader.history().current);
+        }
+    }
+}
+
+/// Loads, changes and saves the transcript of `track_id` in the open project.
+fn modify_transcript<T>(
+    state: &AppState,
+    project_handle: &str,
+    track_id: &str,
+    change: impl FnOnce(&mut crate::transcript::Transcript) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = state.command_lock.lock();
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    super::require_handle(reader, project_handle)?;
+    let mut transcript =
+        store::load_transcript(reader.root(), track_id)?.ok_or("Transcribe this track first")?;
+    let out = change(&mut transcript)?;
+    store::save_transcript(reader.root(), &transcript)?;
+    Ok(out)
+}
+
 pub fn transcript_settings_get_impl() -> TranscriptSettingsView {
     settings::settings_view(&config_dir())
 }
@@ -179,6 +210,7 @@ pub fn transcript_run_impl(
         progress,
     )?;
     store::save_transcript(&ctx.root, &output.transcript)?;
+    refresh_playback(state);
     let view = current_view(state, &project_handle, &track_id)?
         .ok_or("The transcript was saved but could not be read back")?;
     Ok(TranscriptRunResult {
@@ -199,7 +231,10 @@ pub fn transcript_delete_impl(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, &project_handle)?;
-    store::delete_transcript(reader.root(), &track_id)
+    store::delete_transcript(reader.root(), &track_id)?;
+    drop(opened);
+    refresh_playback(state);
+    Ok(())
 }
 
 pub fn transcript_suggestions_impl(
@@ -216,6 +251,33 @@ pub fn transcript_suggestions_impl(
         &transcript,
         &reader.history().current.mapper()?,
     ))
+}
+
+pub fn transcript_set_word_text_impl(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+    word_id: String,
+    text: String,
+) -> Result<TranscriptView, String> {
+    modify_transcript(state, &project_handle, &track_id, |t| {
+        t.set_word_text(&word_id, &text)
+    })?;
+    refresh_playback(state);
+    current_view(state, &project_handle, &track_id)?.ok_or_else(|| "Transcript disappeared".into())
+}
+
+pub fn transcript_dismiss_suggestions_impl(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+    ids: Vec<String>,
+    dismissed: bool,
+) -> Result<Vec<TranscriptCutSuggestion>, String> {
+    modify_transcript(state, &project_handle, &track_id, |t| {
+        t.set_dismissed(&ids, dismissed)
+    })?;
+    transcript_suggestions_impl(state, project_handle, track_id)
 }
 
 pub fn transcript_cut_words_impl(

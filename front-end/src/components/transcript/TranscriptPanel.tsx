@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Eye, EyeOff, Loader2, Scissors, Settings2, Sparkles, X } from "lucide-react";
+import { AudioLines, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles, X } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import {
@@ -21,6 +21,15 @@ function audioTracks(project: OpenedProject | null) {
   );
 }
 
+function formatTime(us: number): string {
+  const total = us / 1_000_000;
+  const minutes = Math.floor(total / 60);
+  const seconds = total - minutes * 60;
+  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+type ReviewFilter = "all" | "filler" | "retake";
+
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === "string" && err.trim()) return err;
@@ -40,6 +49,10 @@ export const TranscriptPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const [showRejected, setShowRejected] = useState(false);
+  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const activeRef = useRef<HTMLSpanElement | null>(null);
 
   const handle = openedProject?.projectHandle;
@@ -91,13 +104,17 @@ export const TranscriptPanel: React.FC = () => {
     () => words.map((w, i) => ({ w, i })).filter(({ w }) => showCut || w.editedStartUs !== null),
     [words, showCut],
   );
+  const pending = useMemo(() => suggestions.filter((s) => !s.dismissed), [suggestions]);
   const suggestionKind = useMemo(() => {
     const map = new Map<string, TranscriptCutSuggestion["kind"]>();
-    for (const s of suggestions) for (const id of s.wordIds) map.set(id, s.kind);
+    for (const s of pending) for (const id of s.wordIds) map.set(id, s.kind);
     return map;
-  }, [suggestions]);
-  const fillerSuggestions = suggestions.filter((s) => s.kind === "filler");
-  const retakeSuggestions = suggestions.filter((s) => s.kind === "retake");
+  }, [pending]);
+  const wordIndex = useMemo(() => new Map(words.map((w, i) => [w.id, i])), [words]);
+  const reviewed = suggestions.filter(
+    (s) => (reviewFilter === "all" || s.kind === reviewFilter) && (showRejected ? s.dismissed : !s.dismissed),
+  );
+  const rejectedCount = suggestions.length - pending.length;
 
   const activeIndex = useMemo(
     () =>
@@ -152,6 +169,44 @@ export const TranscriptPanel: React.FC = () => {
     }
   };
 
+  const dismiss = async (ids: string[], dismissed: boolean) => {
+    if (!handle || !trackId || ids.length === 0) return;
+    setError(null);
+    try {
+      setSuggestions(await api.transcriptDismissSuggestions(handle, trackId, ids, dismissed));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
+  const focusSuggestion = (s: TranscriptCutSuggestion) => {
+    const first = wordIndex.get(s.wordIds[0]);
+    const last = wordIndex.get(s.wordIds[s.wordIds.length - 1]);
+    if (first !== undefined && last !== undefined) setSelection({ anchor: first, focus: last });
+    // Start a moment early so the cut is heard in context.
+    seekTo(Math.max(0, s.editedStartUs - 1_000_000));
+  };
+
+  const startEditing = () => {
+    const index = selectedIds.length === 1 ? wordIndex.get(selectedIds[0]) : undefined;
+    if (index === undefined) return;
+    setEditing({ index, text: words[index].text });
+  };
+
+  const commitEdit = async () => {
+    if (!editing || !handle || !trackId) return;
+    const word = words[editing.index];
+    setEditing(null);
+    if (!word || editing.text.trim() === word.text) return;
+    setError(null);
+    try {
+      setView(await api.transcriptSetWordText(handle, trackId, word.id, editing.text));
+      setNotice(`Changed "${word.text}" to "${editing.text.trim()}".`);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const seekTo = (us: number) => {
     if (!handle) return;
     void api
@@ -161,7 +216,11 @@ export const TranscriptPanel: React.FC = () => {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.length > 0) {
+    if (editing) return;
+    if ((e.key === "Enter" || e.key === "F2") && selectedIds.length === 1) {
+      e.preventDefault();
+      startEditing();
+    } else if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.length > 0) {
       e.preventDefault();
       void cutWords(selectedIds, `Cut ${selectedIds.length} word${selectedIds.length === 1 ? "" : "s"}`);
     } else if (e.key === "Escape") {
@@ -199,34 +258,29 @@ export const TranscriptPanel: React.FC = () => {
           </span>
         )}
         <div className="ml-auto flex items-center gap-1.5">
-          {view && fillerSuggestions.length > 0 && (
+          {view && suggestions.length > 0 && (
             <button
               type="button"
-              title="Cut every um, uh, er and similar filler sound"
-              onClick={() =>
-                void cutWords(
-                  fillerSuggestions.flatMap((s) => s.wordIds),
-                  `Removed ${fillerSuggestions.length} filler${fillerSuggestions.length === 1 ? "" : "s"}`,
-                )
-              }
-              className="flex items-center gap-1 px-2 py-1 rounded bg-amber-900/40 border border-amber-700/50 text-amber-200 hover:bg-amber-800/50"
+              title="Review filler sounds and restarted sentences one by one"
+              onClick={() => setReviewOpen(!reviewOpen)}
+              aria-pressed={reviewOpen}
+              className={`flex items-center gap-1 px-2 py-1 rounded border ${
+                reviewOpen
+                  ? "bg-amber-800/60 border-amber-600 text-amber-100"
+                  : "bg-amber-900/40 border-amber-700/50 text-amber-200 hover:bg-amber-800/50"
+              }`}
             >
-              <Sparkles className="w-3 h-3" /> Remove {fillerSuggestions.length} filler{fillerSuggestions.length === 1 ? "" : "s"}
+              <Sparkles className="w-3 h-3" /> Review {pending.length}
             </button>
           )}
-          {view && retakeSuggestions.length > 0 && (
+          {selectedIds.length === 1 && !editing && (
             <button
               type="button"
-              title="Cut earlier attempts of sentences you restarted (highlighted in violet)"
-              onClick={() =>
-                void cutWords(
-                  retakeSuggestions.flatMap((s) => s.wordIds),
-                  `Removed ${retakeSuggestions.length} retake${retakeSuggestions.length === 1 ? "" : "s"}`,
-                )
-              }
-              className="flex items-center gap-1 px-2 py-1 rounded bg-violet-900/40 border border-violet-700/50 text-violet-200 hover:bg-violet-800/50"
+              title="Fix this word's text (Enter). Captions show the corrected word."
+              onClick={startEditing}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
             >
-              <Scissors className="w-3 h-3" /> Remove {retakeSuggestions.length} retake{retakeSuggestions.length === 1 ? "" : "s"}
+              <Pencil className="w-3 h-3" /> Fix word
             </button>
           )}
           {selectedIds.length > 0 && (
@@ -302,16 +356,18 @@ export const TranscriptPanel: React.FC = () => {
         </div>
       )}
 
+      <div className="flex-1 min-h-0 flex">
       <div
         tabIndex={0}
         onKeyDown={onKeyDown}
-        className="flex-1 min-h-0 overflow-y-auto px-3 py-2 leading-6 text-[13px] text-studio-200 outline-none select-none"
+        className="flex-1 min-w-0 overflow-y-auto px-3 py-2 leading-6 text-[13px] text-studio-200 outline-none select-none"
       >
         {!view && !running && (
           <p className="text-studio-500">
             Transcribe the {tracks[0]?.descriptor.trackType === "system_audio" ? "system audio" : "microphone"} track to edit
             the video by deleting words. Click a word to select it, shift-click to extend, then press Delete. Double-click a
-            word to jump to it.
+            word to jump to it, or press Enter to fix a misheard word. Review lists every filler sound and restarted sentence so
+            you can keep or cut each one.
           </p>
         )}
         {visible.map(({ w, i }) => {
@@ -321,6 +377,26 @@ export const TranscriptPanel: React.FC = () => {
             i >= Math.min(selection.anchor, selection.focus) &&
             i <= Math.max(selection.anchor, selection.focus);
           const kind = suggestionKind.get(w.id);
+          if (editing?.index === i) {
+            return (
+              <React.Fragment key={w.id}>
+                <input
+                  autoFocus
+                  aria-label="Word text"
+                  value={editing.text}
+                  size={Math.max(4, editing.text.length + 1)}
+                  onChange={(e) => setEditing({ index: i, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") void commitEdit();
+                    else if (e.key === "Escape") setEditing(null);
+                  }}
+                  onBlur={() => void commitEdit()}
+                  className="bg-studio-800 text-white rounded px-1 outline outline-1 outline-teal-500"
+                />{" "}
+              </React.Fragment>
+            );
+          }
           const classes = [
             "rounded px-0.5 cursor-pointer",
             cut ? "line-through text-studio-600" : "hover:bg-studio-800",
@@ -349,6 +425,113 @@ export const TranscriptPanel: React.FC = () => {
             </React.Fragment>
           );
         })}
+      </div>
+      {reviewOpen && view && (
+        <aside className="w-72 shrink-0 border-l border-studio-800 flex flex-col min-h-0" aria-label="Suggestion review">
+          <div className="px-2 py-1.5 border-b border-studio-800 flex items-center gap-1">
+            {(["all", "filler", "retake"] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setReviewFilter(f)}
+                className={`px-1.5 py-0.5 rounded ${
+                  reviewFilter === f ? "bg-studio-700 text-white" : "text-studio-400 hover:text-white"
+                }`}
+              >
+                {f === "all" ? "All" : f === "filler" ? "Fillers" : "Retakes"}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowRejected(!showRejected)}
+              disabled={rejectedCount === 0 && !showRejected}
+              className="ml-auto text-studio-400 hover:text-white disabled:opacity-40"
+              title="Rejected suggestions stay out of Accept all"
+            >
+              {showRejected ? "Back" : `Rejected ${rejectedCount}`}
+            </button>
+          </div>
+          {!showRejected && reviewed.length > 1 && (
+            <button
+              type="button"
+              onClick={() =>
+                void cutWords(
+                  reviewed.flatMap((s) => s.wordIds),
+                  `Removed ${reviewed.length} suggestion${reviewed.length === 1 ? "" : "s"}`,
+                )
+              }
+              className="mx-2 mt-2 flex items-center justify-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
+            >
+              <Scissors className="w-3 h-3" /> Accept all {reviewed.length}
+            </button>
+          )}
+          <ul className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
+            {reviewed.length === 0 && (
+              <li className="text-studio-500 px-1">{showRejected ? "Nothing rejected." : "Nothing left to review."}</li>
+            )}
+            {reviewed.map((s) => (
+              <li
+                key={s.id}
+                className="rounded border border-studio-800 bg-studio-900/60 hover:border-studio-600 p-1.5 cursor-pointer"
+                onClick={() => focusSuggestion(s)}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`px-1 rounded text-[10px] uppercase font-semibold ${
+                      s.kind === "filler" ? "bg-amber-900/60 text-amber-200" : "bg-violet-900/60 text-violet-200"
+                    }`}
+                  >
+                    {s.kind === "filler" ? "Filler" : "Retake"}
+                  </span>
+                  <span className="font-mono text-studio-500">{formatTime(s.editedStartUs)}</span>
+                  <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      title="Play from just before it"
+                      onClick={() => focusSuggestion(s)}
+                      className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
+                    >
+                      <Play className="w-3 h-3" />
+                    </button>
+                    {s.dismissed ? (
+                      <button
+                        type="button"
+                        title="Put it back in the review list"
+                        onClick={() => void dismiss([s.id], false)}
+                        className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          title="Accept: cut these words"
+                          onClick={() =>
+                            void cutWords(s.wordIds, `Cut ${s.kind === "filler" ? "filler" : "retake"} "${s.text}"`)
+                          }
+                          className="p-1 rounded text-emerald-400 hover:text-white hover:bg-emerald-800/60"
+                        >
+                          <Check className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Reject: keep these words"
+                          onClick={() => void dismiss([s.id], true)}
+                          className="p-1 rounded text-rose-400 hover:text-white hover:bg-rose-900/60"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <p className={`mt-1 text-studio-200 ${s.dismissed ? "text-studio-500" : ""}`}>&ldquo;{s.text}&rdquo;</p>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )}
       </div>
 
       {settingsOpen && <TranscriptSettingsModal onClose={() => setSettingsOpen(false)} />}

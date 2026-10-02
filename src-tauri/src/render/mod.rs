@@ -9,7 +9,8 @@ use std::path::Path;
 use wgpu::util::DeviceExt;
 
 pub const COPIES_COMPOSITE: u32 = 2;
-pub const MAX_LAYERS: usize = 4;
+/// Background, screen, webcam border, webcam and captions.
+pub const MAX_LAYERS: usize = 5;
 const SHADER: &str = include_str!("composite.wgsl");
 const WEBCAM_SHADOW_BLUR_PX: f32 = 16.0;
 const WEBCAM_SHADOW_OPACITY: f32 = 0.55;
@@ -43,6 +44,8 @@ pub enum LayerRole {
     Screen,
     WebcamBorder,
     Webcam,
+    /// Straight-alpha text over everything else.
+    Caption,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -307,6 +310,19 @@ impl Scene {
             background,
             layers,
         })
+    }
+
+    /// Adds a caption on top of everything else, if the scene has room for one more layer.
+    pub fn push_caption(&mut self, frame: VideoFrame, x: u32, y: u32) {
+        if self.layers.len() >= MAX_LAYERS || x >= self.width || y >= self.height {
+            return;
+        }
+        let width = frame.width.min(self.width - x);
+        let height = frame.height.min(self.height - y);
+        let mut layer = Layer::placed(frame, x, y, width, height).with_role(LayerRole::Caption);
+        layer.uv_w = width as f32 / layer.frame.width as f32;
+        layer.uv_h = height as f32 / layer.frame.height as f32;
+        self.layers.push(layer);
     }
 
     pub fn apply_screen_uv(&mut self, uv_x: f32, uv_y: f32, uv_w: f32, uv_h: f32) {
@@ -1257,6 +1273,16 @@ fn blit_nearest(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             };
             let si = (src_y * layer.frame.stride + src_x * 4) as usize;
             let di = (y * dest.stride + x * 4) as usize;
+            if layer.role == LayerRole::Caption {
+                // Same blend as the GPU pipeline: source over, straight alpha.
+                let alpha = layer.frame.data[si + 3] as u32;
+                for c in 0..3 {
+                    let src = layer.frame.data[si + c] as u32;
+                    let dst = dest.data[di + c] as u32;
+                    dest.data[di + c] = ((src * alpha + dst * (255 - alpha) + 127) / 255) as u8;
+                }
+                continue;
+            }
             dest.data[di..di + 4].copy_from_slice(&layer.frame.data[si..si + 4]);
         }
     }

@@ -55,12 +55,16 @@ pub enum TranscriptSuggestionKind {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptCutSuggestion {
+    /// Stable while the same words are suggested: `<kind>-<first word>-<last word>`.
     pub id: String,
     pub kind: TranscriptSuggestionKind,
     pub word_ids: Vec<String>,
     pub text: String,
     pub edited_start_us: u64,
     pub edited_end_us: u64,
+    /// The user rejected this suggestion; it stays out of "remove all".
+    #[serde(default)]
+    pub dismissed: bool,
 }
 
 fn normalize(text: &str) -> String {
@@ -275,15 +279,17 @@ pub fn suggestions(
     }
 
     out.sort_by_key(|s| s.edited_start_us);
-    for (n, s) in out.iter_mut().enumerate() {
+    for s in out.iter_mut() {
         s.id = format!(
-            "{}-{}",
+            "{}-{}-{}",
             match s.kind {
                 TranscriptSuggestionKind::Filler => "filler",
                 TranscriptSuggestionKind::Retake => "retake",
             },
-            n + 1
+            s.word_ids.first().map(String::as_str).unwrap_or(""),
+            s.word_ids.last().map(String::as_str).unwrap_or("")
         );
+        s.dismissed = transcript.dismissed_suggestions.contains(&s.id);
     }
     out
 }
@@ -313,6 +319,7 @@ fn push_suggestion(
         word_ids: ids,
         edited_start_us: first.0,
         edited_end_us: last.1,
+        dismissed: false,
     });
 }
 
@@ -404,6 +411,16 @@ mod tests {
         assert_eq!(s[1].kind, TranscriptSuggestionKind::Retake);
         assert_eq!(s[1].word_ids, vec!["w-2", "w-3", "w-4"]);
         assert_eq!(s[1].text, "today we build");
+        assert_eq!(s[0].id, "filler-w-1-w-1");
+        assert_eq!(s[1].id, "retake-w-2-w-4");
+        assert!(!s[0].dismissed);
+
+        // A rejected suggestion keeps its id and comes back marked.
+        let mut t = t;
+        t.set_dismissed(&[s[0].id.clone()], true).unwrap();
+        let again = suggestions(&t, &m);
+        assert!(again[0].dismissed);
+        assert!(!again[1].dismissed);
     }
 
     #[test]
