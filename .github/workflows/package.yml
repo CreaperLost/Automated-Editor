@@ -8,6 +8,8 @@ on:
   pull_request:
     paths:
       - src-tauri/tauri.conf.json
+      - src-tauri/tauri.ffmpeg.conf.json
+      - src-tauri/scripts/fetch-ffmpeg.mjs
       - src-tauri/Cargo.toml
       - src-tauri/build.rs
       - src-tauri/icons/**
@@ -36,10 +38,13 @@ jobs:
             os: windows-latest
             bundles: nsis
             output: src-tauri/target/release/bundle/nsis/*.exe
+            # Windows ships FFmpeg as a sidecar; macOS uses its Swift bridges.
+            config: --config tauri.ffmpeg.conf.json
           - name: macOS
             os: macos-latest
             bundles: app,dmg
             output: src-tauri/target/release/bundle/dmg/*.dmg
+            config: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -57,9 +62,13 @@ jobs:
       - name: Install front-end dependencies
         working-directory: front-end
         run: npm ci --no-audit --no-fund
+      - name: Fetch the FFmpeg sidecar
+        if: matrix.config != ''
+        working-directory: src-tauri
+        run: node scripts/fetch-ffmpeg.mjs
       - name: Build installer
         working-directory: src-tauri
-        run: npx --yes @tauri-apps/cli@^2 build --ci --features tauri-app --bundles ${{ matrix.bundles }}
+        run: npx --yes @tauri-apps/cli@^2 build --ci --features tauri-app --bundles ${{ matrix.bundles }} ${{ matrix.config }}
       - uses: actions/upload-artifact@v4
         with:
           name: AeroEdits-${{ matrix.name }}
