@@ -297,11 +297,7 @@ impl PolishPlan {
 
     /// Integrated loudness of the edit before normalization: retained 100 ms blocks of
     /// every track, with ducking applied, in playback order.
-    fn edit_loudness(
-        &self,
-        analyses: &[Analyzed],
-        retained: &[RetainedInterval],
-    ) -> Option<f64> {
+    fn edit_loudness(&self, analyses: &[Analyzed], retained: &[RetainedInterval]) -> Option<f64> {
         let end = analyses
             .iter()
             .map(|(_, _, s, a)| s.start_us + a.loudness.len() as u64 * LOUDNESS_BLOCK_US)

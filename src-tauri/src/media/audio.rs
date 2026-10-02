@@ -71,12 +71,8 @@ impl AudioMixer {
             })
             .filter(|(_, gain, _)| *gain > 0.0)
             .collect::<Vec<_>>();
-        let polish = PolishPlan::build(
-            root,
-            &document.audio,
-            &document.retained_intervals,
-            &tracks,
-        );
+        let polish =
+            PolishPlan::build(root, &document.audio, &document.retained_intervals, &tracks);
         Ok(Self {
             root: root.into(),
             spans,
@@ -154,17 +150,14 @@ impl AudioMixer {
                     }
                     let channels = info.channels as usize;
                     let denoiser = match (track_type, &self.polish) {
-                        (TrackType::MicAudio, Some(plan)) => {
-                            plan.denoiser(&segment.relative_path)
-                        }
+                        (TrackType::MicAudio, Some(plan)) => plan.denoiser(&segment.relative_path),
                         _ => None,
                     };
                     let (samples, got) = match denoiser {
                         Some(denoiser) => {
                             let (from, to) = denoiser.input_range(read_start, read_end);
                             let input = read_padded(&mut reader, from, to)?;
-                            let samples =
-                                denoiser.process(&input, channels, read_start, read_end);
+                            let samples = denoiser.process(&input, channels, read_start, read_end);
                             (samples, (read_end - read_start) as usize)
                         }
                         None => {
@@ -178,8 +171,7 @@ impl AudioMixer {
                     if got == 0 {
                         continue;
                     }
-                    let ducked = *track_type == TrackType::SystemAudio
-                        && self.polish.is_some();
+                    let ducked = *track_type == TrackType::SystemAudio && self.polish.is_some();
                     for frame in lo..hi {
                         let pos = local(frame);
                         if pos >= info.frame_count as f64 {
@@ -367,8 +359,8 @@ mod tests {
         if with_system {
             let system: Vec<i16> = (0..rate * 3)
                 .flat_map(|i| {
-                    let v = 8000.0
-                        * (std::f64::consts::TAU * 1000.0 * i as f64 / rate as f64).sin();
+                    let v =
+                        8000.0 * (std::f64::consts::TAU * 1000.0 * i as f64 / rate as f64).sin();
                     [v as i16, v as i16]
                 })
                 .collect();
@@ -415,7 +407,10 @@ mod tests {
         doc.audio.duck_db = 12.0;
         let ducked = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
         let diff: Vec<f64> = plain.iter().zip(&ducked).map(|(a, b)| a - b).collect();
-        assert!(rms(seconds(&diff, 0.2, 0.6)) < 1e-3, "no speech, no ducking");
+        assert!(
+            rms(seconds(&diff, 0.2, 0.6)) < 1e-3,
+            "no speech, no ducking"
+        );
         // Under speech the system tone (rms 8000/32767/sqrt 2) drops by 12 dB.
         let system_rms = 8000.0 / 32767.0 / 2f64.sqrt();
         let removed = rms(seconds(&diff, 1.2, 1.8)) / system_rms;
@@ -451,12 +446,24 @@ mod tests {
         let quieter = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
         let diff: Vec<f64> = quieter.iter().zip(&mic_only).map(|(a, b)| a - b).collect();
         let level = rms(seconds(&diff, 0.2, 2.8)) / system_rms;
-        assert!((level - 10f64.powf(-6.0 / 20.0)).abs() < 0.02, "level {level}");
+        assert!(
+            (level - 10f64.powf(-6.0 / 20.0)).abs() < 0.02,
+            "level {level}"
+        );
 
-        doc.audio.tracks.insert("mic".into(), TrackMix { muted: true, volume_db: 0.0 });
+        doc.audio.tracks.insert(
+            "mic".into(),
+            TrackMix {
+                muted: true,
+                volume_db: 0.0,
+            },
+        );
         doc.audio.tracks.get_mut("system").unwrap().muted = true;
         let silent = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
-        assert!(!silent.has_audio(), "every track muted means no audio stream");
+        assert!(
+            !silent.has_audio(),
+            "every track muted means no audio stream"
+        );
     }
 
     #[test]
@@ -466,7 +473,8 @@ mod tests {
         doc.audio.noise_reduction = true;
         doc.audio.noise_reduction_db = 18.0;
         let clean = mix_all(&AudioMixer::new(dir.path(), &doc, &tracks).unwrap());
-        let hiss_drop = 20.0 * (rms(seconds(&clean, 0.2, 0.8)) / rms(seconds(&plain, 0.2, 0.8))).log10();
+        let hiss_drop =
+            20.0 * (rms(seconds(&clean, 0.2, 0.8)) / rms(seconds(&plain, 0.2, 0.8))).log10();
         assert!(hiss_drop < -10.0, "hiss dropped {hiss_drop} dB");
         let voice_change =
             20.0 * (rms(seconds(&clean, 1.2, 1.8)) / rms(seconds(&plain, 1.2, 1.8))).log10();

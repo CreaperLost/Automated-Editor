@@ -511,14 +511,16 @@ impl EditHistory {
             }
             n += 1;
         };
-        focus.segments.push(crate::webcam_focus::WebcamFocusSegment {
-            id,
-            source_start_us: source_start,
-            source_end_us: source_end,
-            source: crate::webcam_focus::FocusSegmentSource::Manual,
-            enabled: true,
-            edited_ranges: Vec::new(),
-        });
+        focus
+            .segments
+            .push(crate::webcam_focus::WebcamFocusSegment {
+                id,
+                source_start_us: source_start,
+                source_end_us: source_end,
+                source: crate::webcam_focus::FocusSegmentSource::Manual,
+                enabled: true,
+                edited_ranges: Vec::new(),
+            });
         self.update_webcam_focus(expected_revision, focus, persist_root)
     }
 
@@ -587,8 +589,11 @@ impl EditHistory {
         if next.zooms.len() > MAX_ZOOMS {
             return Err("Too many zoom keyframes".into());
         }
-        next.zooms
-            .sort_by(|a, b| a.source_start_us.cmp(&b.source_start_us).then(a.id.cmp(&b.id)));
+        next.zooms.sort_by(|a, b| {
+            a.source_start_us
+                .cmp(&b.source_start_us)
+                .then(a.id.cmp(&b.id))
+        });
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -667,7 +672,9 @@ impl EditHistory {
         if duration < 3 {
             return Err("Zoom range is too short".into());
         }
-        let transition_us = (duration / 5).clamp(1, 400_000).min(duration.saturating_sub(1));
+        let transition_us = (duration / 5)
+            .clamp(1, 400_000)
+            .min(duration.saturating_sub(1));
         let mut next = self.current.clone();
         let id = format!("m-{}-{}", source_start, next.zooms.len());
         next.zooms.push(ZoomKeyframe {
@@ -683,8 +690,11 @@ impl EditHistory {
             source: ZoomSource::Manual,
             edited_ranges: Vec::new(),
         });
-        next.zooms
-            .sort_by(|a, b| a.source_start_us.cmp(&b.source_start_us).then(a.id.cmp(&b.id)));
+        next.zooms.sort_by(|a, b| {
+            a.source_start_us
+                .cmp(&b.source_start_us)
+                .then(a.id.cmp(&b.id))
+        });
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -826,10 +836,11 @@ impl EditHistory {
                 .retained_intervals
                 .iter()
                 .cloned()
-                .chain(ranges.iter().map(|&(start_us, end_us)| RetainedInterval {
-                    start_us,
-                    end_us,
-                }))
+                .chain(
+                    ranges
+                        .iter()
+                        .map(|&(start_us, end_us)| RetainedInterval { start_us, end_us }),
+                )
                 .collect(),
         );
         self.commit(expected_revision, retained, persist_root)
@@ -921,8 +932,14 @@ mod tests {
     fn webcam_focus_round_trips_through_revisions_and_undo() {
         let dir = tempdir().unwrap();
         let initial = EditDocument::from_retained(vec![
-            RetainedInterval { start_us: 0, end_us: 4_000_000 },
-            RetainedInterval { start_us: 6_000_000, end_us: 10_000_000 },
+            RetainedInterval {
+                start_us: 0,
+                end_us: 4_000_000,
+            },
+            RetainedInterval {
+                start_us: 6_000_000,
+                end_us: 10_000_000,
+            },
         ])
         .unwrap();
         let mut history = EditHistory::new(initial);
@@ -934,7 +951,10 @@ mod tests {
         assert!(focus.enabled);
         assert_eq!(focus.segments.len(), 1);
         assert_eq!(
-            (focus.segments[0].source_start_us, focus.segments[0].source_end_us),
+            (
+                focus.segments[0].source_start_us,
+                focus.segments[0].source_end_us
+            ),
             (3_000_000, 7_000_000)
         );
         let on_disk = load_edit_document(dir.path()).unwrap().unwrap();
@@ -1044,7 +1064,9 @@ mod tests {
         history
             .accept_zooms(2, &[suggestion.clone()], dir.path())
             .unwrap_err();
-        history.dismiss_zooms(2, &["z-1-n1".into()], dir.path()).unwrap();
+        history
+            .dismiss_zooms(2, &["z-1-n1".into()], dir.path())
+            .unwrap();
         assert!(history.current.zooms.is_empty());
         history
             .accept_zooms(3, &[suggestion], dir.path())
@@ -1074,7 +1096,9 @@ mod tests {
         layout.color_start = "#ff0000".into();
         layout.webcam_mirror = false;
         layout.webcam_position = "top-left".into();
-        history.update_layout(0, layout.clone(), dir.path()).unwrap();
+        history
+            .update_layout(0, layout.clone(), dir.path())
+            .unwrap();
         assert_eq!(history.current.revision, 1);
         assert_eq!(history.current.layout.aspect_ratio, "9:16");
         history.undo(1, dir.path()).unwrap();
@@ -1109,7 +1133,10 @@ mod tests {
         };
         history.update_audio(0, audio.clone(), dir.path()).unwrap();
         assert_eq!(history.current.revision, 1);
-        assert_eq!(load_edit_document(dir.path()).unwrap().unwrap().audio, audio);
+        assert_eq!(
+            load_edit_document(dir.path()).unwrap().unwrap().audio,
+            audio
+        );
         history.undo(1, dir.path()).unwrap();
         assert!(history.current.audio.is_default());
         let bad = AudioSettings {

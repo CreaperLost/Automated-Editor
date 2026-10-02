@@ -61,7 +61,9 @@ impl NativeExport {
             let Some(pointer) = NonNull::new(pointer) else {
                 return fallback.into();
             };
-            let detail = CStr::from_ptr(pointer.as_ptr()).to_string_lossy().into_owned();
+            let detail = CStr::from_ptr(pointer.as_ptr())
+                .to_string_lossy()
+                .into_owned();
             aeroshoot_macos_free_string(pointer.as_ptr());
             format!("{fallback}: {detail}")
         }

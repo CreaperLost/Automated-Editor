@@ -861,7 +861,10 @@ pub fn prepare_job(
         ));
     }
     let mut settings = settings;
-    match document.layout.fit_export_size(settings.width, settings.height) {
+    match document
+        .layout
+        .fit_export_size(settings.width, settings.height)
+    {
         Ok((width, height)) => {
             settings.width = width;
             settings.height = height;
@@ -1130,9 +1133,9 @@ fn export_to_temp(
         if channels > 0 {
             // Audio runs a second ahead of video: the macOS writer interleaves its
             // tracks and can hold video back until it has audio past that point.
-            let end =
-                ((index as u128 + 1) * SAMPLE_RATE as u128 / captured.settings.fps as u128) as u64
-                    + SAMPLE_RATE as u64;
+            let end = ((index as u128 + 1) * SAMPLE_RATE as u128 / captured.settings.fps as u128)
+                as u64
+                + SAMPLE_RATE as u64;
             let end = end.min(mixer.total_frames);
             while audio_frame < end {
                 if cancel.load(Ordering::SeqCst) {

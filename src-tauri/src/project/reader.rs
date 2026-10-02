@@ -646,7 +646,8 @@ impl ProjectReader {
         expected_revision: u64,
         id: &str,
     ) -> Result<OpenedProject, String> {
-        self.history.delete_zoom(expected_revision, id, &self.root)?;
+        self.history
+            .delete_zoom(expected_revision, id, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
@@ -679,8 +680,12 @@ impl ProjectReader {
         edited_start_us: u64,
         edited_end_us: u64,
     ) -> Result<OpenedProject, String> {
-        self.history
-            .add_webcam_focus(expected_revision, edited_start_us, edited_end_us, &self.root)?;
+        self.history.add_webcam_focus(
+            expected_revision,
+            edited_start_us,
+            edited_end_us,
+            &self.root,
+        )?;
         self.sync_summary();
         Ok(self.summary.clone())
     }

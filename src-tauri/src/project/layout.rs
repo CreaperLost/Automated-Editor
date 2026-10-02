@@ -22,7 +22,8 @@ pub const MAX_WEBCAM_SIZE_PCT: f32 = 60.0;
 /// Webcam roundness, as a percent of the bubble's short side; 50 is a pill or circle.
 pub const MAX_WEBCAM_ROUNDNESS_PCT: f32 = 50.0;
 /// Built-in backgrounds rendered by the compositor, so they need no project asset.
-pub const BACKGROUND_PRESETS: [&str; 6] = ["aurora", "sunset", "ocean", "forest", "candy", "graphite"];
+pub const BACKGROUND_PRESETS: [&str; 6] =
+    ["aurora", "sunset", "ocean", "forest", "candy", "graphite"];
 
 fn default_aspect() -> String {
     "16:9".into()
@@ -202,10 +203,7 @@ impl EditLayout {
     /// so 9:16 / 1:1 / 4:3 do not stretch inside a 16:9 encoder frame.
     pub fn fit_export_size(&self, width: u32, height: u32) -> Result<(u32, u32), String> {
         self.validate()?;
-        let standard = matches!(
-            (width, height),
-            (1280, 720) | (1920, 1080) | (3840, 2160)
-        );
+        let standard = matches!((width, height), (1280, 720) | (1920, 1080) | (3840, 2160));
         if !standard {
             return Ok((width, height));
         }
@@ -235,7 +233,8 @@ impl EditLayout {
         if !self.shadow_opacity.is_finite() || !(0.0..=1.0).contains(&self.shadow_opacity) {
             return Err("Shadow opacity is out of range".into());
         }
-        let in_range = |value: f32, min: f32, max: f32| value.is_finite() && (min..=max).contains(&value);
+        let in_range =
+            |value: f32, min: f32, max: f32| value.is_finite() && (min..=max).contains(&value);
         for (edge, value) in [
             ("left", self.screen_crop_left),
             ("top", self.screen_crop_top),
@@ -261,7 +260,10 @@ impl EditLayout {
             "solid" | "gradient" => {}
             "preset" => {
                 if !BACKGROUND_PRESETS.contains(&self.background_preset.as_str()) {
-                    return Err(format!("Unknown background preset: {}", self.background_preset));
+                    return Err(format!(
+                        "Unknown background preset: {}",
+                        self.background_preset
+                    ));
                 }
             }
             "wallpaper" => {
@@ -472,7 +474,9 @@ mod tests {
 
     #[test]
     fn crop_scale_and_webcam_controls_validate_and_default() {
-        let legacy: EditLayout = serde_json::from_str(r#"{"aspectRatio":"16:9","paddingPx":0,"webcamSize":"lg"}"#).unwrap();
+        let legacy: EditLayout =
+            serde_json::from_str(r#"{"aspectRatio":"16:9","paddingPx":0,"webcamSize":"lg"}"#)
+                .unwrap();
         assert_eq!(legacy.screen_crop_uv(), (0.0, 0.0, 1.0, 1.0));
         assert_eq!(legacy.screen_scale_pct, 100.0);
         assert!((legacy.webcam_size_fraction() - 0.28).abs() < 1e-6);
@@ -482,7 +486,9 @@ mod tests {
         layout.screen_crop_left = 10.0;
         layout.screen_crop_bottom = 20.0;
         let (x, y, w, h) = layout.screen_crop_uv();
-        assert!((x - 0.1).abs() < 1e-6 && y == 0.0 && (w - 0.9).abs() < 1e-6 && (h - 0.8).abs() < 1e-6);
+        assert!(
+            (x - 0.1).abs() < 1e-6 && y == 0.0 && (w - 0.9).abs() < 1e-6 && (h - 0.8).abs() < 1e-6
+        );
         layout.screen_crop_right = 46.0;
         assert!(layout.validate().unwrap_err().contains("crop right"));
         layout = EditLayout::default();
@@ -504,9 +510,11 @@ mod tests {
     #[test]
     fn wallpaper_ingest_rejects_url_symlink_and_oversize() {
         let dir = tempdir().unwrap();
-        assert!(ingest_wallpaper(dir.path(), Path::new("https://example.com/bg.png"))
-            .unwrap_err()
-            .contains("URL"));
+        assert!(
+            ingest_wallpaper(dir.path(), Path::new("https://example.com/bg.png"))
+                .unwrap_err()
+                .contains("URL")
+        );
         let file = dir.path().join("ok.png");
         fs::write(&file, b"\x89PNG").unwrap();
         let rel = ingest_wallpaper(dir.path(), &file).unwrap();
