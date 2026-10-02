@@ -2,7 +2,6 @@ import React, { useRef, useState } from "react";
 import {
   Folder,
   FolderOpen,
-  Film,
   Pencil,
   Scissors,
   Download,
@@ -71,9 +70,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     <header className="h-14 border-b border-studio-800/80 bg-studio-900/90 backdrop-blur-xl px-4 flex items-center justify-between gap-4 select-none z-30 shrink-0">
       {/* 1. Left: Brand & Studio Name */}
       <div className="flex items-center space-x-3 shrink-0">
-        <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-tr from-teal-600 to-emerald-400 text-white font-black text-sm shadow-md shadow-teal-600/30">
-          <Film className="w-4 h-4" />
-        </div>
+        <img src="/aeroedits-icon.svg" alt="" className="w-9 h-9 drop-shadow-md" draggable={false} />
         <div className="hidden xl:flex items-center space-x-2">
           <span className="font-bold text-white tracking-tight text-sm">
             AeroEdits
