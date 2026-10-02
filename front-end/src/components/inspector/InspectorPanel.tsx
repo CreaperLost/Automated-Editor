@@ -65,6 +65,30 @@ export const InspectorPanel: React.FC = () => {
     persistLayout(canvas, { ...cameraBubble, ...patch });
   };
 
+  /** Copies a chosen image into the project's assets/ and switches the background to it. */
+  const pickWallpaper = () => {
+    const opened = openedRef.current;
+    if (!opened) {
+      setPersistError("Open a project to ingest wallpaper into assets/");
+      return;
+    }
+    void api
+      .pickWallpaperSource()
+      .then((source) => {
+        if (!source) return;
+        const layout = layoutFromSettings(canvas, cameraBubble, opened.layout?.wallpaperAsset);
+        layout.backgroundType = "wallpaper";
+        return api
+          .projectLayoutUpdate(opened.projectHandle, opened.revision, layout, source)
+          .then((updated) => {
+            applyOpenedProject(updated);
+            updateCanvas({ backgroundType: "wallpaper" });
+            setPersistError(undefined);
+          });
+      })
+      .catch((err) => setPersistError(String(err)));
+  };
+
   const gradientPresets = [
     { label: "Indigo Cosmic", start: "#312e81", end: "#0f172a" },
     { label: "Electric Violet", start: "#4c1d95", end: "#1e1b4b" },
@@ -106,36 +130,11 @@ export const InspectorPanel: React.FC = () => {
                     setCanvas({ backgroundType: kind });
                     return;
                   }
-                  const existing = openedProject?.layout?.wallpaperAsset;
-                  if (existing && canvas.backgroundType !== "wallpaper") {
+                  if (openedProject?.layout?.wallpaperAsset) {
                     setCanvas({ backgroundType: "wallpaper" });
                     return;
                   }
-                  const opened = openedRef.current;
-                  if (!opened) {
-                    setPersistError("Open a project to ingest wallpaper into assets/");
-                    return;
-                  }
-                  void api
-                    .pickWallpaperSource()
-                    .then((source) => {
-                      if (!source) return;
-                      const layout = layoutFromSettings(canvas, cameraBubble, opened.layout?.wallpaperAsset);
-                      layout.backgroundType = "wallpaper";
-                      return api
-                        .projectLayoutUpdate(
-                          opened.projectHandle,
-                          opened.revision,
-                          layout,
-                          source,
-                        )
-                        .then((updated) => {
-                          applyOpenedProject(updated);
-                          updateCanvas({ backgroundType: "wallpaper" });
-                          setPersistError(undefined);
-                        });
-                    })
-                    .catch((err) => setPersistError(String(err)));
+                  pickWallpaper();
                 }}
                 className={`py-1 text-xs capitalize rounded transition-colors ${
                   canvas.backgroundType === kind
@@ -147,63 +146,12 @@ export const InspectorPanel: React.FC = () => {
               </button>
             ))}
           </div>
-          {canvas.backgroundType === "wallpaper" && (
-            <p className="text-[10px] text-studio-500">
-              Stored in the project bundle. Export never reads an external URL.
-            </p>
-          )}
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          {BACKGROUND_PRESETS.map((preset) => (
-            <button
-              key={preset.key}
-              type="button"
-              onClick={() => setCanvas({ backgroundType: "preset", backgroundPreset: preset.key })}
-              className={`h-12 rounded-lg border text-left p-2 flex flex-col justify-end transition-all ${
-                canvas.backgroundType === "preset" && canvas.backgroundPreset === preset.key
-                  ? "border-indigo-500 shadow-md shadow-indigo-500/20"
-                  : "border-studio-750 hover:border-studio-600"
-              }`}
-              style={{ background: presetBackgroundCss(preset.key) }}
-            >
-              <span className="text-[10px] font-medium text-white/90 drop-shadow">{preset.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          {gradientPresets.map((preset) => (
-            <button
-              key={preset.label}
-              onClick={() =>
-                setCanvas({
-                  backgroundType: "gradient",
-                  colorStart: preset.start,
-                  colorEnd: preset.end,
-                })
-              }
-              className={`h-12 rounded-lg border text-left p-2 flex flex-col justify-end transition-all ${
-                canvas.backgroundType === "gradient" &&
-                canvas.colorStart === preset.start &&
-                canvas.colorEnd === preset.end
-                  ? "border-indigo-500 shadow-md shadow-indigo-500/20"
-                  : "border-studio-750 hover:border-studio-600"
-              }`}
-              style={{
-                background: `linear-gradient(135deg, ${preset.start}, ${preset.end})`,
-              }}
-            >
-              <span className="text-[10px] font-medium text-white/90 drop-shadow">
-                {preset.label}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs text-studio-400 space-y-1">
-            <span>Start</span>
+        {/* Only the selected type's controls are shown. */}
+        {canvas.backgroundType === "solid" && (
+          <label className="block text-xs text-studio-400 space-y-1">
+            <span>Color</span>
             <input
               type="color"
               value={canvas.colorStart}
@@ -211,17 +159,88 @@ export const InspectorPanel: React.FC = () => {
               className="w-full h-8 bg-studio-850 border border-studio-800 rounded cursor-pointer"
             />
           </label>
-          <label className="text-xs text-studio-400 space-y-1">
-            <span>End</span>
-            <input
-              type="color"
-              value={canvas.colorEnd}
-              onChange={(e) => setCanvas({ colorEnd: e.target.value })}
-              disabled={canvas.backgroundType === "solid"}
-              className="w-full h-8 bg-studio-850 border border-studio-800 rounded cursor-pointer disabled:opacity-40"
-            />
-          </label>
-        </div>
+        )}
+
+        {canvas.backgroundType === "gradient" && (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              {gradientPresets.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => setCanvas({ colorStart: preset.start, colorEnd: preset.end })}
+                  className={`h-12 rounded-lg border text-left p-2 flex flex-col justify-end transition-all ${
+                    canvas.colorStart === preset.start && canvas.colorEnd === preset.end
+                      ? "border-indigo-500 shadow-md shadow-indigo-500/20"
+                      : "border-studio-750 hover:border-studio-600"
+                  }`}
+                  style={{
+                    background: `linear-gradient(135deg, ${preset.start}, ${preset.end})`,
+                  }}
+                >
+                  <span className="text-[10px] font-medium text-white/90 drop-shadow">
+                    {preset.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs text-studio-400 space-y-1">
+                <span>Start</span>
+                <input
+                  type="color"
+                  value={canvas.colorStart}
+                  onChange={(e) => setCanvas({ colorStart: e.target.value })}
+                  className="w-full h-8 bg-studio-850 border border-studio-800 rounded cursor-pointer"
+                />
+              </label>
+              <label className="text-xs text-studio-400 space-y-1">
+                <span>End</span>
+                <input
+                  type="color"
+                  value={canvas.colorEnd}
+                  onChange={(e) => setCanvas({ colorEnd: e.target.value })}
+                  className="w-full h-8 bg-studio-850 border border-studio-800 rounded cursor-pointer"
+                />
+              </label>
+            </div>
+          </>
+        )}
+
+        {canvas.backgroundType === "preset" && (
+          <div className="grid grid-cols-3 gap-2">
+            {BACKGROUND_PRESETS.map((preset) => (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => setCanvas({ backgroundPreset: preset.key })}
+                className={`h-12 rounded-lg border text-left p-2 flex flex-col justify-end transition-all ${
+                  canvas.backgroundPreset === preset.key
+                    ? "border-indigo-500 shadow-md shadow-indigo-500/20"
+                    : "border-studio-750 hover:border-studio-600"
+                }`}
+                style={{ background: presetBackgroundCss(preset.key) }}
+              >
+                <span className="text-[10px] font-medium text-white/90 drop-shadow">{preset.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {canvas.backgroundType === "wallpaper" && (
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={pickWallpaper}
+              className="w-full py-1.5 text-xs rounded border border-studio-750 text-studio-300 hover:border-studio-600 hover:text-studio-100"
+            >
+              Choose image…
+            </button>
+            <p className="text-[10px] text-studio-500">
+              Stored in the project bundle. Export never reads an external URL.
+            </p>
+          </div>
+        )}
 
       </InspectorSection>
 
