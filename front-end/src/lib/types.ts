@@ -508,7 +508,10 @@ export interface OpenedProject {
 export interface WebcamFocusSettings {
   speechThresholdDb: number;
   pauseToleranceMs: number;
+  /** How long the mouse must rest before the webcam fills the frame, up to 60 s. */
   idleMs: number;
+  /** Only fill the frame while the speaker talks. */
+  requireSpeech: boolean;
   minFocusMs: number;
   transitionMs: number;
   cursorMovesAreActivity: boolean;
@@ -525,10 +528,19 @@ export interface WebcamFocusSegment {
   editedRanges?: { startUs: number; endUs: number }[];
 }
 
+/** A source range (usually a clip) where the webcam stays in its bubble. */
+export interface NormalViewRange {
+  sourceStartUs: number;
+  sourceEndUs: number;
+  /** Filled in by the backend for display; never stored. */
+  editedRanges?: EditedRange[];
+}
+
 export interface WebcamFocus {
   enabled: boolean;
   settings: WebcamFocusSettings;
   segments: WebcamFocusSegment[];
+  normalView?: NormalViewRange[];
 }
 
 export interface WebcamFocusDetection {
@@ -540,9 +552,10 @@ export interface WebcamFocusDetection {
 export const DEFAULT_WEBCAM_FOCUS_SETTINGS: WebcamFocusSettings = {
   speechThresholdDb: -38,
   pauseToleranceMs: 800,
-  idleMs: 1500,
+  idleMs: 5000,
+  requireSpeech: false,
   minFocusMs: 2500,
-  transitionMs: 450,
+  transitionMs: 0,
   cursorMovesAreActivity: true,
   focusSizePct: 100,
 };

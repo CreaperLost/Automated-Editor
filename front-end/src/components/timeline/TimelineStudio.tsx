@@ -12,6 +12,7 @@ import {
   Trash2,
   RotateCcw,
   Video,
+  MonitorPlay,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -28,7 +29,32 @@ import {
   rulerStepUs,
   type TimelineClip,
 } from "../../lib/projectUtils";
-import type { OpenedProject, ProjectZoom, ZoomKeyframe } from "../../lib/types";
+import {
+  DEFAULT_WEBCAM_FOCUS,
+  type OpenedProject,
+  type ProjectZoom,
+  type ZoomKeyframe,
+} from "../../lib/types";
+
+type SourceRange = [start: number, end: number];
+
+/** `ranges` minus `cut`, both as [start, end) source ranges. */
+function subtractRanges(ranges: SourceRange[], cut: SourceRange[]): SourceRange[] {
+  return ranges.flatMap(([start, end]) => {
+    let pieces: SourceRange[] = [[start, end]];
+    for (const [cutStart, cutEnd] of cut) {
+      pieces = pieces.flatMap(([a, b]): SourceRange[] =>
+        cutEnd <= a || cutStart >= b
+          ? [[a, b]]
+          : [
+              ...(cutStart > a ? [[a, cutStart] as SourceRange] : []),
+              ...(cutEnd < b ? [[cutEnd, b] as SourceRange] : []),
+            ],
+      );
+    }
+    return pieces;
+  });
+}
 
 type DragMode = "move" | "start" | "end";
 
@@ -148,6 +174,33 @@ export const TimelineStudio: React.FC = () => {
   const clips = buildClips(retained, openedProject?.splitPointsUs);
   const cutMarkers = buildCutMarkers(retained, openedProject?.removedIntervals);
   const edges = clipEdges(clips);
+
+  // Per-clip "normal view": the webcam keeps its bubble over these source ranges.
+  const focus = openedProject?.webcamFocus ?? DEFAULT_WEBCAM_FOCUS;
+  const normalView: SourceRange[] = (focus.normalView ?? []).map((r) => [r.sourceStartUs, r.sourceEndUs]);
+  const selectionSource: SourceRange[] = selection
+    ? clips.flatMap((clip): SourceRange[] => {
+        const start = Math.max(selection.startUs, clip.startUs);
+        const end = Math.min(selection.endUs, clip.endUs);
+        if (end <= start) return [];
+        const offset = clip.sourceStartUs - clip.startUs;
+        return [[start + offset, end + offset]];
+      })
+    : [];
+  const selectionInNormalView =
+    selectionSource.length > 0 && subtractRanges(selectionSource, normalView).length === 0;
+  const toggleNormalView = () => {
+    if (selectionSource.length === 0) return;
+    const next = selectionInNormalView
+      ? subtractRanges(normalView, selectionSource)
+      : [...normalView, ...selectionSource];
+    void runEdit((project) =>
+      api.projectWebcamFocusUpdate(project.projectHandle, project.revision, {
+        ...(project.webcamFocus ?? DEFAULT_WEBCAM_FOCUS),
+        normalView: next.map(([sourceStartUs, sourceEndUs]) => ({ sourceStartUs, sourceEndUs })),
+      }),
+    );
+  };
   const jumpToEdit = (direction: -1 | 1) => {
     const target =
       direction < 0
@@ -771,6 +824,24 @@ export const TimelineStudio: React.FC = () => {
             <Video className="w-3.5 h-3.5" />
             <span>Cam Focus</span>
           </button>
+          <button
+            disabled={!openedProject || editing || !selection}
+            onClick={toggleNormalView}
+            aria-pressed={selectionInNormalView}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-40 ${
+              selectionInNormalView
+                ? "bg-sky-500/30 border-sky-300/60 text-sky-100"
+                : "bg-sky-500/10 hover:bg-sky-500/20 border-sky-400/30 text-sky-200"
+            }`}
+            title={
+              selectionInNormalView
+                ? "These clips use normal view. Click to let Auto Webcam go full frame here again."
+                : "Keep the normal view (webcam bubble) over the selected clips, even when Auto Webcam would go full frame"
+            }
+          >
+            <MonitorPlay className="w-3.5 h-3.5" />
+            <span>Normal view</span>
+          </button>
           {pendingCount > 0 && (
             <>
               <button
@@ -1259,6 +1330,24 @@ export const TimelineStudio: React.FC = () => {
                         }}
                         title={`Webcam ${segment.enabled ? "fills the frame" : "focus off"} (${segment.source})`}
                       />
+                    )),
+                  )}
+
+                {/* Normal view: the webcam keeps its bubble here whatever Auto Webcam finds */}
+                {track.trackType === "webcam" && durationUs > 0 &&
+                  (focus.normalView ?? []).flatMap((range) =>
+                    (range.editedRanges ?? []).map((edited, index) => (
+                      <div
+                        key={`normal-${range.sourceStartUs}-${index}`}
+                        className="absolute top-1 bottom-1 rounded-sm border border-sky-300/70 bg-sky-500/20 z-10 pointer-events-none flex items-center justify-center"
+                        style={{
+                          left: `${(edited.startUs / durationUs) * 100}%`,
+                          width: `${((edited.endUs - edited.startUs) / durationUs) * 100}%`,
+                        }}
+                        title="Normal view: the webcam stays in its bubble here"
+                      >
+                        <span className="text-[9px] font-mono text-sky-100 truncate px-1">Normal</span>
+                      </div>
                     )),
                   )}
 

@@ -492,43 +492,66 @@ pub fn project_webcam_focus_detect_impl(
     settings: crate::webcam_focus::WebcamFocusSettings,
 ) -> Result<WebcamFocusDetection, String> {
     settings.validate()?;
-    let (ctx, root) = {
+    let (ctx, root, source_duration_us) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
-        let track = reader
+        let mic = reader
             .summary
             .tracks
             .iter()
-            .find(|track| track.descriptor.track_type == TrackType::MicAudio)
-            .ok_or("This recording has no microphone track to detect speech on")?;
-        let track_id = track.descriptor.id.clone();
-        let ctx = WaveformTrackContext {
-            root: reader.root().to_path_buf(),
-            track_type: track.descriptor.track_type,
-            segments: reader
-                .segments_for(&track_id)
-                .ok_or("Unknown track")?
-                .to_vec(),
-            track_id,
-            retained: reader.summary.retained_intervals.clone(),
-            edited_duration_us: reader.summary.edited_duration_us,
+            .find(|track| track.descriptor.track_type == TrackType::MicAudio);
+        let ctx = match (settings.require_speech, mic) {
+            (false, _) => None,
+            (true, None) => {
+                return Err("This recording has no microphone track to detect speech on".into())
+            }
+            (true, Some(track)) => {
+                let track_id = track.descriptor.id.clone();
+                Some(WaveformTrackContext {
+                    root: reader.root().to_path_buf(),
+                    track_type: track.descriptor.track_type,
+                    segments: reader
+                        .segments_for(&track_id)
+                        .ok_or("Unknown track")?
+                        .to_vec(),
+                    track_id,
+                    retained: reader.summary.retained_intervals.clone(),
+                    edited_duration_us: reader.summary.edited_duration_us,
+                })
+            }
         };
-        (ctx, reader.root().to_path_buf())
+        (
+            ctx,
+            reader.root().to_path_buf(),
+            reader.summary.source_duration_us,
+        )
     };
-    let silence = SilenceConfig {
-        threshold_db: settings.speech_threshold_db,
-        min_duration_ms: settings.pause_tolerance_ms,
-        padding_ms: 0,
-        ..SilenceConfig::default()
+    // Without the speech requirement the whole recording is a candidate; only the mouse
+    // decides.
+    let (speech, mut diagnostics) = match ctx {
+        None => (vec![(0, source_duration_us)], Vec::new()),
+        Some(ctx) => {
+            let silence = SilenceConfig {
+                threshold_db: settings.speech_threshold_db,
+                min_duration_ms: settings.pause_tolerance_ms,
+                padding_ms: 0,
+                ..SilenceConfig::default()
+            };
+            let scan = crate::project::silence::scan_track_silence(&ctx, &silence)?;
+            (
+                crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges),
+                scan.diagnostics,
+            )
+        }
     };
-    let scan = crate::project::silence::scan_track_silence(&ctx, &silence)?;
-    let mut diagnostics = scan.diagnostics;
-    let speech = crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges);
     let telemetry = crate::telemetry::reader::read_telemetry(&root)?;
     if telemetry.events.is_empty() {
-        diagnostics
-            .push("No mouse activity was recorded, so speech alone decides the layout".into());
+        diagnostics.push(if settings.require_speech {
+            "No mouse activity was recorded, so speech alone decides the layout".into()
+        } else {
+            "No mouse activity was recorded, so the whole recording counts as idle".into()
+        });
     }
     let detected = crate::webcam_focus::detect_focus_ranges(&speech, &telemetry, &settings);
     let project = mutate_opened(state, project_handle, |reader| {
