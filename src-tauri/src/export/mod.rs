@@ -435,6 +435,9 @@ impl SceneEvaluator {
             Ok::<_, String>((screen?, webcam?))
         })?;
 
+        if let Some(short) = self.document.short_layout.clone() {
+            return self.split_scene(&short, &mapper, edited_us, screen, webcam);
+        }
         let has_screen = screen.is_some();
         let wallpaper = self.background()?;
         let mut scene = Scene::from_layout_scaled(
@@ -468,6 +471,70 @@ impl SceneEvaluator {
             crate::render::layout_px_unit(self.width, self.height),
         );
         if let Some((frame, x, y)) = self.caption_at(&mapper, edited_us) {
+            scene.push_caption(frame, x, y);
+        }
+        Ok(scene)
+    }
+
+    /// A short's vertical frame: the camera across the top or bottom and the screen in the
+    /// rest, cut to that shape and following the project's zooms, with captions placed to suit.
+    fn split_scene(
+        &self,
+        short: &crate::shorts::ShortLayout,
+        mapper: &crate::timeline::TimelineMapper,
+        edited_us: u64,
+        screen: Option<VideoFrame>,
+        webcam: Option<VideoFrame>,
+    ) -> Result<Scene, String> {
+        use crate::render::{Layer, LayerRole};
+        let layout = &self.document.layout;
+        let webcam = webcam.filter(|_| layout.webcam_enabled);
+        let rects = crate::shorts::split_rects(self.width, self.height, short, webcam.is_some());
+        let mut layers = Vec::new();
+        if let Some(screen) = screen {
+            let crop = layout.screen_crop_uv();
+            let (center, zoom) = if short.follow_zooms {
+                let zooms = self.document.zoom_suggestions();
+                let config = crate::zoom::eval_config_for(&self.document.zooms);
+                let camera = crate::zoom::evaluate_at_edited(&zooms, mapper, edited_us, &config)
+                    .unwrap_or_else(crate::zoom::CameraTransform::identity);
+                (
+                    (camera.center_x as f32, camera.center_y as f32),
+                    short.screen_zoom * camera.scale.max(1.0) as f32,
+                )
+            } else {
+                (
+                    (crop.0 + crop.2 / 2.0, crop.1 + crop.3 / 2.0),
+                    short.screen_zoom,
+                )
+            };
+            let (x, y, w, h) = rects.screen;
+            let (uv_x, uv_y, uv_w, uv_h) =
+                crate::shorts::screen_window(screen.width, screen.height, crop, w, h, zoom, center);
+            let mut layer = Layer::placed(screen, x, y, w, h).with_role(LayerRole::Screen);
+            layer.uv_x = uv_x;
+            layer.uv_y = uv_y;
+            layer.uv_w = uv_w;
+            layer.uv_h = uv_h;
+            layers.push(layer);
+        }
+        if let (Some((x, y, w, h)), Some(webcam)) = (rects.camera, webcam) {
+            let mut layer = Layer::placed(webcam, x, y, w, h)
+                .with_role(LayerRole::Webcam)
+                .cover_uv(w, h);
+            if layout.webcam_mirror {
+                layer = layer.mirrored();
+            }
+            layers.push(layer);
+        }
+        let mut scene = Scene {
+            width: self.width,
+            height: self.height,
+            background: [0.0, 0.0, 0.0, 1.0],
+            layers,
+        };
+        if let Some((frame, x, _)) = self.caption_at(mapper, edited_us) {
+            let y = crate::shorts::caption_y(short.caption_spot, &rects, frame.height, self.height);
             scene.push_caption(frame, x, y);
         }
         Ok(scene)
@@ -1478,6 +1545,11 @@ mod tests {
     /// A `.aero` bundle with two seconds of 64x64 screen video, whose grey level steps up
     /// every 100ms, and a mic track. Returns the project root.
     fn screen_and_mic_project(dir: &Path) -> PathBuf {
+        project_with_tracks(dir, false)
+    }
+
+    /// The screen (grey ramp) and mic project, plus a solid red webcam when `webcam` is set.
+    fn project_with_tracks(dir: &Path, webcam: bool) -> PathBuf {
         use crate::fixtures::{generate_pcm16_wav, TestProject};
         use crate::project::manifest::{TrackDescriptor, TrackType};
         use crate::project::JournalRecord;
@@ -1491,22 +1563,36 @@ mod tests {
         crate::media::ffmpeg::encode_bgra_mp4(&screen_path, &frames, 10).unwrap();
         let wav = generate_pcm16_wav(48_000, 1, &vec![8_000i16; 96_000]);
         fs::write(root.join("media/mic/000001.wav"), &wav).unwrap();
-        for (id, track_type, codec, path, timescale) in [
-            (
-                "screen",
-                TrackType::Screen,
+        let mut tracks = vec![(
+            "screen",
+            TrackType::Screen,
+            "h264",
+            "media/screen/000001.mp4",
+            10,
+        )];
+        if webcam {
+            let red: Vec<VideoFrame> = (0..20)
+                .map(|_| VideoFrame::solid(64, 64, 0, 0, 255, 0).unwrap())
+                .collect();
+            let path = root.join("media/webcam/000001.mp4");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            crate::media::ffmpeg::encode_bgra_mp4(&path, &red, 10).unwrap();
+            tracks.push((
+                "webcam",
+                TrackType::Webcam,
                 "h264",
-                "media/screen/000001.mp4",
+                "media/webcam/000001.mp4",
                 10,
-            ),
-            (
-                "mic",
-                TrackType::MicAudio,
-                "pcm",
-                "media/mic/000001.wav",
-                48_000,
-            ),
-        ] {
+            ));
+        }
+        tracks.push((
+            "mic",
+            TrackType::MicAudio,
+            "pcm",
+            "media/mic/000001.wav",
+            48_000,
+        ));
+        for (id, track_type, codec, path, timescale) in tracks {
             let audio = track_type == TrackType::MicAudio;
             bundle.manifest_mut().tracks.push(TrackDescriptor {
                 id: id.into(),
@@ -1766,6 +1852,84 @@ mod tests {
         assert!((second_s - 1.1).abs() < 0.01, "{text}");
         assert!(media_duration_us(&output).unwrap() > 1_500_000);
         assert!(decode_h264_frame(&output, 0).is_ok(), "video still decodes");
+        crate::media::release_decoders();
+    }
+
+    /// A short exports as a 9:16 split-screen video of just its stretch of the edit: the
+    /// camera across the top, the screen below.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_renders_a_short_as_a_split_vertical_clip() {
+        use crate::project::reader::{ProjectReader, RetainedInterval};
+        use crate::shorts::{short_document, Short, ShortLayout};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_with_tracks(dir.path(), true);
+        let reader = ProjectReader::open(&root).unwrap();
+        let base = EditDocument::from_retained(vec![RetainedInterval {
+            start_us: 0,
+            end_us: 2_000_000,
+            media: None,
+        }])
+        .unwrap();
+        let short = Short {
+            id: "s".into(),
+            title: "Short".into(),
+            source_start_us: 300_000,
+            source_end_us: 1_200_000,
+            reason: String::new(),
+            layout: ShortLayout::default(),
+            edited_start_us: None,
+            edited_end_us: None,
+        };
+        // Real shorts are at least 3 s; this fixture is 2 s, so build the document by hand.
+        assert!(short_document(&base, &short, false).is_err());
+        let mut document = base.clone();
+        document.retained_intervals =
+            crate::shorts::slice_retained(&base.retained_intervals, 300_000, 1_200_000);
+        document.layout.aspect_ratio = "9:16".into();
+        document.short_layout = Some(short.layout.clone());
+        let tracks = crate::playback::tracks_from_reader(&reader);
+
+        // Standard sizes are reshaped to the canvas: 720p becomes 720x1280.
+        let settings = ExportSettings {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "short", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let gate = EncoderGate::new();
+        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
+            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let frame = decode_h264_frame(&output, 100_000).unwrap();
+        assert_eq!((frame.width, frame.height), (720, 1280));
+        let pixel = |y: u32| {
+            let i = (y * frame.stride + 360 * 4) as usize;
+            (frame.data[i], frame.data[i + 1], frame.data[i + 2])
+        };
+        // The camera takes the top 35% (448 px): red.
+        let (b, g, r) = pixel(200);
+        assert!(
+            r > 180 && g < 70 && b < 70,
+            "camera band is red, got b{b} g{g} r{r}"
+        );
+        // The screen fills the rest: grey, not red, not the black background.
+        let (b, g, r) = pixel(900);
+        assert!(
+            r.abs_diff(b) < 30 && r.abs_diff(g) < 30 && r > 20,
+            "screen band is grey, got b{b} g{g} r{r}"
+        );
+        let duration = media_duration_us(&output).unwrap();
+        assert!(
+            duration.abs_diff(900_000) <= AUDIO_DURATION_SLACK_US + 40_000,
+            "duration {duration}"
+        );
         crate::media::release_decoders();
     }
 

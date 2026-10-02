@@ -55,6 +55,12 @@ pub struct EditDocument {
     /// Chapter markers, anchored in source time. Exported as MP4 chapters.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chapters: Vec<crate::chapters::Chapter>,
+    /// Vertical clips picked from this video, anchored in source time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shorts: Vec<crate::shorts::Short>,
+    /// Set only on the document a short renders from: draw a split-screen vertical frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_layout: Option<crate::shorts::ShortLayout>,
 }
 
 impl Default for EditDocument {
@@ -72,6 +78,8 @@ impl Default for EditDocument {
             captions: CaptionSettings::default(),
             media_assets: Vec::new(),
             chapters: Vec::new(),
+            shorts: Vec::new(),
+            short_layout: None,
         }
     }
 }
@@ -92,6 +100,8 @@ impl EditDocument {
             captions: CaptionSettings::default(),
             media_assets: Vec::new(),
             chapters: Vec::new(),
+            shorts: Vec::new(),
+            short_layout: None,
         })
     }
 
@@ -637,6 +647,10 @@ impl EditHistory {
         next.audio.validate()?;
         crate::media_bin::validate_assets(&next.media_assets)?;
         crate::chapters::validate(&next.chapters)?;
+        crate::shorts::validate(&next.shorts)?;
+        if next.short_layout.is_some() {
+            return Err("A project's own edit cannot use a short's split layout".into());
+        }
         if let Some(missing) = next.retained_intervals.iter().find_map(|entry| {
             entry
                 .media
@@ -718,6 +732,26 @@ impl EditHistory {
         }
         let mut next = self.current.clone();
         next.chapters = chapters;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Replaces the shorts list.
+    pub fn set_shorts(
+        &mut self,
+        expected_revision: u64,
+        shorts: Vec<crate::shorts::Short>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        crate::shorts::validate(&shorts)?;
+        let shorts = crate::shorts::normalized(shorts);
+        if shorts == self.current.shorts {
+            return Ok(&self.current);
+        }
+        let mut next = self.current.clone();
+        next.shorts = shorts;
         self.commit_next(expected_revision, persist_root, next)
     }
 

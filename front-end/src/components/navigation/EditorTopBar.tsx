@@ -5,6 +5,7 @@ import {
   Pencil,
   Scissors,
   Download,
+  Smartphone,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
@@ -166,6 +167,16 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             >
               <Scissors className="w-3.5 h-3.5" />
               <span>Jump Cuts</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void api.openShortsWindow().catch(() => undefined)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-200 text-xs font-medium transition-colors"
+              title="Open the Shorts Studio: vertical split-screen clips from this video"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Shorts</span>
             </button>
 
             {/* Export: settings, destination and progress live in the export dialog. */}

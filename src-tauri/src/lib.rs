@@ -11,6 +11,7 @@ pub mod playback;
 pub mod project;
 pub mod render;
 pub mod secrets;
+pub mod shorts;
 pub mod telemetry;
 pub mod timeline;
 pub mod transcript;
@@ -650,6 +651,105 @@ async fn project_chapters_generate(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_shorts_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    shorts: Vec<shorts::Short>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_shorts_generate(
+    app: tauri::AppHandle,
+    project_handle: String,
+    track_id: String,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::transcript::project_shorts_generate_impl(
+            &app.state::<AppState>(),
+            &app.state::<commands::transcript::TranscriptState>(),
+            project_handle,
+            track_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_export(
+    state: State<'_, AppState>,
+    project_handle: String,
+    short_id: String,
+    settings: export::ExportSettings,
+) -> Result<export::ExportStatus, String> {
+    commands::project_short_export_impl(&state, project_handle, short_id, settings)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn short_preview_frame(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: String,
+    layout: shorts::ShortLayout,
+    offset_us: u64,
+) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::short_preview_frame_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            short_id,
+            layout,
+            offset_us,
+        )
+        .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The project open in the editor, for windows that open after it (the Shorts Studio).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_current(state: State<'_, AppState>) -> Option<project::OpenedProject> {
+    state
+        .opened_project
+        .lock()
+        .as_ref()
+        .map(|reader| reader.summary.clone())
+}
+
+/// Opens the Shorts Studio window, or brings it to the front if it is already open.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn open_shorts_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("shorts") {
+        let _ = window.unminimize();
+        return window.set_focus().map_err(|e| e.to_string());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "shorts",
+        tauri::WebviewUrl::App("index.html?window=shorts".into()),
+    )
+    .title("AeroEdits Shorts Studio")
+    .inner_size(1280.0, 860.0)
+    .min_inner_size(960.0, 640.0)
+    // HTML5 drag and drop needs the native file-drop handler off, as in the main window.
+    .disable_drag_drop_handler()
+    .build()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn ai_settings_get() -> ai::AiSettingsView {
     commands::transcript::ai_settings_get_impl()
 }
@@ -1086,6 +1186,12 @@ pub fn run() {
             transcript_ai_suggest,
             project_chapters_set,
             project_chapters_generate,
+            project_shorts_set,
+            project_shorts_generate,
+            project_short_export,
+            short_preview_frame,
+            open_shorts_window,
+            project_current,
             transcript_get,
             transcript_run,
             transcript_cancel,

@@ -29,7 +29,18 @@ pub struct AppState {
     pub waveform_epoch: AtomicU64,
     pub waveform_generations: Mutex<HashMap<String, u64>>,
     pub native_capture_enabled: bool,
+    /// The renderer behind the Shorts Studio preview, kept while the same short and layout
+    /// are being scrubbed.
+    pub short_preview: Mutex<Option<ShortPreviewCache>>,
 }
+
+pub struct ShortPreviewCache {
+    key: String,
+    evaluator: crate::export::SceneEvaluator,
+}
+
+/// Studio preview frames: 432x768, decoded at no more than twice that.
+const SHORT_PREVIEW_SIZE: (u32, u32) = (432, 768);
 
 impl AppState {
     pub fn new() -> Self {
@@ -45,6 +56,7 @@ impl AppState {
             waveform_generations: Mutex::new(HashMap::new()),
             // Playback has an audio output (and audio clock) on macOS and Windows.
             native_capture_enabled: cfg!(any(target_os = "macos", windows)),
+            short_preview: Mutex::new(None),
         }
     }
 }
@@ -577,6 +589,137 @@ pub fn project_chapters_set_impl(
     mutate_opened(state, project_handle, |reader| {
         reader.set_chapters(expected_revision, chapters)
     })
+}
+
+/// Whether a microphone or system audio track has a transcript to caption from.
+fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
+    reader.summary.tracks.iter().any(|track| {
+        matches!(
+            track.descriptor.track_type,
+            TrackType::MicAudio | TrackType::SystemAudio
+        ) && crate::transcript::store::load_transcript(reader.root(), &track.descriptor.id)
+            .ok()
+            .flatten()
+            .is_some()
+    })
+}
+
+/// One preview frame of a short, `offset_us` into it, drawn with `layout` (which may not be
+/// saved yet), as a JPEG.
+pub fn short_preview_frame_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: String,
+    layout: crate::shorts::ShortLayout,
+    offset_us: u64,
+) -> Result<Vec<u8>, String> {
+    layout.validate()?;
+    let (document, tracks, root, key) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let base = &reader.history().current;
+        let mut short = base
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?
+            .clone();
+        short.layout = layout;
+        let document = crate::shorts::short_document(base, &short, has_speech_transcript(reader))?;
+        let key = format!(
+            "{project_handle}:{}:{short_id}:{}",
+            base.revision,
+            serde_json::to_string(&short.layout).map_err(|e| e.to_string())?
+        );
+        (
+            document,
+            playback::tracks_from_reader(reader),
+            reader.root().to_path_buf(),
+            key,
+        )
+    };
+    let at = offset_us.min(document.edited_duration_us()?.saturating_sub(1));
+    let mut cache = state.short_preview.lock();
+    if cache.as_ref().map(|c| c.key.as_str()) != Some(key.as_str()) {
+        let reuse = cache.take().and_then(|c| c.evaluator.into_reuse());
+        let (width, height) = SHORT_PREVIEW_SIZE;
+        let evaluator = crate::export::SceneEvaluator::new_reusing(
+            root, document, tracks, width, height, reuse,
+        )?
+        .with_decode_limit(crate::media::ffmpeg::DecodeLimit {
+            max_width: width * 2,
+            max_height: height * 2,
+            max_rate: 0,
+        });
+        *cache = Some(ShortPreviewCache { key, evaluator });
+    }
+    let frame = cache
+        .as_mut()
+        .ok_or("The preview renderer is not ready")?
+        .evaluator
+        .preview_at(at)?;
+    crate::playback::preview::encode_webview_frame(&frame)
+}
+
+pub fn project_shorts_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    shorts: Vec<crate::shorts::Short>,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.set_shorts(expected_revision, shorts)
+    })
+}
+
+/// Exports one short as a 9:16 video next to the project (or to `settings.destination`),
+/// named after the project and the short. Captions are turned on when a speech track has a
+/// transcript.
+pub fn project_short_export_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: String,
+    settings: crate::export::ExportSettings,
+) -> Result<crate::export::ExportStatus, String> {
+    let _guard = state.command_lock.lock();
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let base = &reader.history().current;
+    let short = base
+        .shorts
+        .iter()
+        .find(|s| s.id == short_id)
+        .ok_or("That short no longer exists")?;
+    let document = crate::shorts::short_document(base, short, has_speech_transcript(reader))?;
+    let tracks = playback::tracks_from_reader(reader);
+    let root = reader.root().to_path_buf();
+    let stem = format!("{} - {}", reader.summary.manifest.project_name, short.title);
+    drop(opened);
+    // The first free "<project> - <short>.mp4", then " (2)", " (3)" and so on.
+    let name = (1..1000)
+        .map(|n| {
+            if n == 1 {
+                stem.clone()
+            } else {
+                format!("{stem} ({n})")
+            }
+        })
+        .find(|name| {
+            settings.destination.is_some()
+                || !crate::export::default_destination(&root, name, 0).exists()
+        })
+        .ok_or("Too many exports of this short already exist")?;
+    let gate = Arc::clone(&state.encoder_gate);
+    let mut owner = state.export.lock();
+    match crate::export::prepare_job(&root, &name, document, tracks, settings, &mut owner) {
+        Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
+        Err(status) => {
+            owner.install_failed(status.clone());
+            Ok(status)
+        }
+    }
 }
 
 pub fn project_webcam_focus_update_impl(
