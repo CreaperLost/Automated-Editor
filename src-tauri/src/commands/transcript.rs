@@ -342,3 +342,78 @@ mod tests {
         assert!(RunGuard::start(&state, "b".into()).is_ok());
     }
 }
+
+pub fn ai_settings_get_impl() -> crate::ai::AiSettingsView {
+    crate::ai::settings_view(&config_dir())
+}
+
+pub fn ai_settings_set_impl(
+    new_settings: crate::ai::AiSettings,
+) -> Result<crate::ai::AiSettingsView, String> {
+    let dir = config_dir();
+    crate::ai::save_settings(&dir, &new_settings)?;
+    Ok(crate::ai::settings_view(&dir))
+}
+
+pub fn ai_set_api_key_impl(
+    provider: crate::ai::AiProvider,
+    key: String,
+) -> Result<crate::ai::AiSettingsView, String> {
+    let dir = config_dir();
+    crate::secrets::set(&dir, provider.key_spec(), &key)?;
+    Ok(crate::ai::settings_view(&dir))
+}
+
+/// Sends the kept words to the chosen AI provider and stores the filler and retake spans it
+/// finds with the transcript. Returns the merged suggestion list.
+pub fn transcript_ai_suggest_impl(
+    state: &AppState,
+    transcripts: &TranscriptState,
+    project_handle: String,
+    track_id: String,
+    progress: &mut dyn FnMut(TranscriptionProgress),
+) -> Result<Vec<TranscriptCutSuggestion>, String> {
+    let _run = RunGuard::start(transcripts, format!("AI review of {track_id}"))?;
+    let (created_at, words) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        super::require_handle(reader, &project_handle)?;
+        let transcript = store::load_transcript(reader.root(), &track_id)?
+            .ok_or("Transcribe this track first")?;
+        let mapper = reader.history().current.mapper()?;
+        let words: Vec<crate::transcript::TranscriptWord> = transcript
+            .words
+            .iter()
+            .filter(|w| w.kind == crate::transcript::WordKind::Word && edit::kept(w, &mapper))
+            .cloned()
+            .collect();
+        (transcript.created_at, words)
+    };
+    // No lock is held while waiting on the network.
+    let mut client = crate::ai::client_from_settings(&config_dir())?;
+    let refs: Vec<&crate::transcript::TranscriptWord> = words.iter().collect();
+    let spans = crate::ai::fillers::detect(
+        &mut client,
+        &refs,
+        &mut |fraction| {
+            progress(TranscriptionProgress {
+                track_id: track_id.clone(),
+                fraction: fraction as f64,
+                message: format!("AI review {}%", (fraction * 100.0).round()),
+            })
+        },
+        &|| !transcripts.cancel.load(Ordering::SeqCst),
+    )?;
+    let model = crate::ai::client::JsonModel::describe(&client);
+    modify_transcript(state, &project_handle, &track_id, |t| {
+        if t.created_at != created_at {
+            return Err(
+                "The track was transcribed again during the AI review; run it again".into(),
+            );
+        }
+        t.ai_suggestions = spans;
+        t.ai_model = Some(model);
+        Ok(())
+    })?;
+    transcript_suggestions_impl(state, project_handle, track_id)
+}

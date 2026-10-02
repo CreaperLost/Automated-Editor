@@ -24,6 +24,9 @@ import {
   AudioSettings,
   CaptionSettings,
   TranscriptCutSuggestion,
+  AiProvider,
+  AiSettings,
+  AiSettingsView,
   TranscriptRunResult,
   TranscriptSettings,
   TranscriptSettingsView,
@@ -285,6 +288,13 @@ export const api = {
     invokeTauri<void>("transcript_delete", { projectHandle, trackId }),
   transcriptSuggestions: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_suggestions", { projectHandle, trackId }),
+  /** Sends the kept words to the chosen AI provider; progress arrives as `transcript-progress`. */
+  transcriptAiSuggest: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId }),
+  aiSettingsGet: () => invokeTauri<AiSettingsView>("ai_settings_get"),
+  aiSettingsSet: (settings: AiSettings) => invokeTauri<AiSettingsView>("ai_settings_set", { settings }),
+  aiSetApiKey: (provider: AiProvider, key: string) =>
+    invokeTauri<AiSettingsView>("ai_set_api_key", { provider, key }),
   transcriptCutWords: (
     projectHandle: string,
     expectedRevision: number,

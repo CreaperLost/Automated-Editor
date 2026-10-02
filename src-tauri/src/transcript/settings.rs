@@ -7,11 +7,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const SETTINGS_FILE: &str = "transcription.json";
-const KEY_ENV: &str = "ELEVENLABS_API_KEY";
-#[cfg(any(windows, target_os = "macos"))]
-const KEYRING_SERVICE: &str = "AeroEdits";
-#[cfg(any(windows, target_os = "macos"))]
-const KEYRING_USER: &str = "elevenlabs-api-key";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -120,77 +115,19 @@ pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
     }
 }
 
+pub const ELEVENLABS_KEY: crate::secrets::KeySpec = crate::secrets::KeySpec {
+    env: "ELEVENLABS_API_KEY",
+    name: "elevenlabs-api-key",
+};
+
 /// The ElevenLabs key and where it came from.
 pub fn api_key(dir: &Path) -> Option<(String, &'static str)> {
-    if let Ok(key) = std::env::var(KEY_ENV) {
-        if !key.trim().is_empty() {
-            return Some((key.trim().to_string(), "environment"));
-        }
-    }
-    stored_key(dir)
-}
-
-#[cfg(any(windows, target_os = "macos"))]
-fn stored_key(_dir: &Path) -> Option<(String, &'static str)> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .ok()?
-        .get_password()
-        .ok()
-        .filter(|k| !k.is_empty())
-        .map(|k| (k, "keychain"))
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn stored_key(dir: &Path) -> Option<(String, &'static str)> {
-    fs::read_to_string(dir.join("elevenlabs.key"))
-        .ok()
-        .map(|k| k.trim().to_string())
-        .filter(|k| !k.is_empty())
-        .map(|k| (k, "file"))
+    crate::secrets::get(dir, ELEVENLABS_KEY)
 }
 
 /// Stores `key`, or removes the stored key when `key` is empty.
 pub fn set_api_key(dir: &Path, key: &str) -> Result<(), String> {
-    let key = key.trim();
-    if key.len() > 256 || key.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return Err("That does not look like an API key".into());
-    }
-    store_key(dir, key)
-}
-
-#[cfg(any(windows, target_os = "macos"))]
-fn store_key(_dir: &Path, key: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
-    if key.is_empty() {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
-    } else {
-        entry.set_password(key).map_err(|e| e.to_string())
-    }
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn store_key(dir: &Path, key: &str) -> Result<(), String> {
-    let path = dir.join("elevenlabs.key");
-    if key.is_empty() {
-        return match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.to_string()),
-        };
-    }
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&path).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut file, key.as_bytes()).map_err(|e| e.to_string())
+    crate::secrets::set(dir, ELEVENLABS_KEY, key)
 }
 
 #[cfg(test)]
@@ -215,21 +152,5 @@ mod tests {
         let mut s = TranscriptSettings::default();
         s.language = "en; rm".into();
         assert!(s.validate().is_err());
-    }
-
-    #[test]
-    fn key_must_be_a_single_token() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(set_api_key(dir.path(), "sk a").is_err());
-    }
-
-    #[cfg(not(any(windows, target_os = "macos")))]
-    #[test]
-    fn file_key_store_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        set_api_key(dir.path(), "sk_test").unwrap();
-        assert_eq!(stored_key(dir.path()).unwrap().0, "sk_test");
-        set_api_key(dir.path(), "").unwrap();
-        assert!(stored_key(dir.path()).is_none());
     }
 }

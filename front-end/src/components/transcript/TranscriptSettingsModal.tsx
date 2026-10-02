@@ -2,7 +2,13 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertCircle, Check, Download, KeyRound, X } from "lucide-react";
 import { api, isTauriEnvironment } from "../../lib/ipc";
-import { ModelDownloadProgress, TranscriptSettings, TranscriptSettingsView } from "../../lib/types";
+import {
+  AiSettings,
+  AiSettingsView,
+  ModelDownloadProgress,
+  TranscriptSettings,
+  TranscriptSettingsView,
+} from "../../lib/types";
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -23,6 +29,14 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [aiView, setAiView] = useState<AiSettingsView | null>(null);
+  const [aiDraft, setAiDraft] = useState<AiSettings | null>(null);
+  const [aiKey, setAiKey] = useState("");
+
+  const loadAi = (next: AiSettingsView) => {
+    setAiView(next);
+    setAiDraft(next.settings);
+  };
 
   const load = (next: TranscriptSettingsView) => {
     setView(next);
@@ -32,6 +46,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
 
   useEffect(() => {
     void api.transcriptSettingsGet().then(load).catch((err) => setError(errorMessage(err)));
+    void api.aiSettingsGet().then(loadAi).catch((err) => setError(errorMessage(err)));
   }, []);
 
   useEffect(() => {
@@ -64,6 +79,14 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
         setApiKey("");
       }
       load(next);
+      if (aiDraft) {
+        let ai = await api.aiSettingsSet(aiDraft);
+        if (aiKey.trim()) {
+          ai = await api.aiSetApiKey(aiDraft.provider, aiKey.trim());
+          setAiKey("");
+        }
+        loadAi(ai);
+      }
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1500);
     } catch (err) {
@@ -75,6 +98,16 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
     setError(null);
     try {
       load(await api.transcriptSetApiKey(""));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
+  const removeAiKey = async () => {
+    if (!aiDraft) return;
+    setError(null);
+    try {
+      loadAi(await api.aiSetApiKey(aiDraft.provider, ""));
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -102,7 +135,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
       <div className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-xs">
         <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
           <div>
-            <h3 className="text-sm font-semibold text-white">Transcription settings</h3>
+            <h3 className="text-sm font-semibold text-white">Transcription and AI settings</h3>
             <p className="text-studio-400">Used for every project on this computer.</p>
           </div>
           <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-studio-400 hover:text-white hover:bg-studio-700">
@@ -225,6 +258,92 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   <span className="text-studio-400">Key terms, comma separated (names it should spell right)</span>
                   <input value={keyterms} onChange={(e) => setKeyterms(e.target.value)} className={input} />
                 </label>
+              </div>
+            )}
+
+            {aiDraft && aiView && (
+              <div className="space-y-3 pt-4 border-t border-studio-800">
+                <div>
+                  <span className="font-semibold text-studio-300">AI review (filler words and retakes)</span>
+                  <p className="text-studio-500">
+                    Sends the transcript text, never audio or video, to the provider when you press Find with AI.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-lg p-1">
+                  {(
+                    [
+                      ["openAi", "OpenAI"],
+                      ["openRouter", "OpenRouter"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={aiDraft.provider === value}
+                      onClick={() => setAiDraft({ ...aiDraft, provider: value })}
+                      className={`py-1.5 rounded-md ${
+                        aiDraft.provider === value ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:bg-studio-800"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const openAi = aiDraft.provider === "openAi";
+                  const source = openAi ? aiView.openaiKeySource : aiView.openrouterKeySource;
+                  const envName = openAi ? "OPENAI_API_KEY" : "OPENROUTER_API_KEY";
+                  return (
+                    <div className="space-y-3 p-3 rounded-lg border border-studio-800 bg-studio-850/60">
+                      <label className="block space-y-1">
+                        <span className="flex items-center gap-1 text-studio-400">
+                          <KeyRound className="w-3 h-3" /> {openAi ? "OpenAI" : "OpenRouter"} API key
+                          {source && (
+                            <span className="ml-auto text-teal-300">
+                              saved ({source === "environment" ? `from ${envName}` : source})
+                            </span>
+                          )}
+                        </span>
+                        <input
+                          type="password"
+                          autoComplete="off"
+                          value={aiKey}
+                          placeholder={source ? "Enter a new key to replace it" : `Paste your ${openAi ? "OpenAI" : "OpenRouter"} API key`}
+                          onChange={(e) => setAiKey(e.target.value)}
+                          className={input}
+                        />
+                      </label>
+                      {source && source !== "environment" && (
+                        <button type="button" onClick={() => void removeAiKey()} className="text-rose-300 hover:text-rose-200">
+                          Remove saved key
+                        </button>
+                      )}
+                      <label className="block space-y-1">
+                        <span className="text-studio-400">
+                          Model (leave empty for {openAi ? aiView.openaiDefaultModel : aiView.openrouterDefaultModel})
+                        </span>
+                        <input
+                          value={openAi ? aiDraft.openaiModel : aiDraft.openrouterModel}
+                          placeholder={openAi ? aiView.openaiDefaultModel : aiView.openrouterDefaultModel}
+                          onChange={(e) =>
+                            setAiDraft(
+                              openAi
+                                ? { ...aiDraft, openaiModel: e.target.value.trim() }
+                                : { ...aiDraft, openrouterModel: e.target.value.trim() },
+                            )
+                          }
+                          className={input}
+                        />
+                      </label>
+                      {!openAi && (
+                        <p className="text-studio-500">
+                          Any OpenRouter model id works, such as <code>anthropic/claude-sonnet-4.5</code> or{" "}
+                          <code>google/gemini-2.5-flash</code>, if it supports JSON output.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

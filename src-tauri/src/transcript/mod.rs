@@ -14,7 +14,9 @@ pub mod store;
 
 use serde::{Deserialize, Serialize};
 
-pub use edit::{TranscriptCutSuggestion, TranscriptSuggestionKind, TranscriptView};
+pub use edit::{
+    SuggestionSource, TranscriptCutSuggestion, TranscriptSuggestionKind, TranscriptView,
+};
 pub use provider::{ProviderKind, TranscriptionProgress};
 pub use settings::{TranscriptSettings, TranscriptSettingsView};
 
@@ -61,7 +63,27 @@ pub struct Transcript {
     /// Filler and retake suggestions the user rejected, by suggestion id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dismissed_suggestions: Vec<String>,
+    /// Spans an AI pass suggested cutting, by word id. They join the rule-based suggestions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_suggestions: Vec<AiSpan>,
+    /// `provider/model` of the last AI pass, when there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_model: Option<String>,
 }
+
+/// A run of words an AI pass suggested cutting, from `first_word_id` to `last_word_id`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSpan {
+    pub kind: TranscriptSuggestionKind,
+    pub first_word_id: String,
+    pub last_word_id: String,
+    /// The model's short explanation, shown in the review list.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+pub const MAX_AI_SUGGESTIONS: usize = 20_000;
 
 pub const MAX_DISMISSED_SUGGESTIONS: usize = 10_000;
 
@@ -86,6 +108,8 @@ impl Transcript {
             created_at: chrono::Utc::now().to_rfc3339(),
             words,
             dismissed_suggestions: Vec::new(),
+            ai_suggestions: Vec::new(),
+            ai_model: None,
         }
     }
 
@@ -103,6 +127,14 @@ impl Transcript {
             || self.dismissed_suggestions.iter().any(|id| id.len() > 64)
         {
             return Err("Transcript has too many rejected suggestions".into());
+        }
+        if self.ai_suggestions.len() > MAX_AI_SUGGESTIONS
+            || self.ai_suggestions.iter().any(|s| {
+                s.first_word_id.len() > 32 || s.last_word_id.len() > 32 || s.reason.len() > 512
+            })
+            || self.ai_model.as_ref().is_some_and(|m| m.len() > 256)
+        {
+            return Err("Transcript has invalid AI suggestions".into());
         }
         let mut previous_start = 0u64;
         let mut ids = std::collections::HashSet::with_capacity(self.words.len());
