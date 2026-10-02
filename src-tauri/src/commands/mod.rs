@@ -527,7 +527,8 @@ pub fn project_webcam_focus_detect_impl(
     let speech = crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges);
     let telemetry = crate::telemetry::reader::read_telemetry(&root)?;
     if telemetry.events.is_empty() {
-        diagnostics.push("No mouse activity was recorded, so speech alone decides the layout".into());
+        diagnostics
+            .push("No mouse activity was recorded, so speech alone decides the layout".into());
     }
     let detected = crate::webcam_focus::detect_focus_ranges(&speech, &telemetry, &settings);
     let project = mutate_opened(state, project_handle, |reader| {

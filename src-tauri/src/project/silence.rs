@@ -338,7 +338,10 @@ mod tests {
                 is_keyframe_start: None,
                 available: true,
             }],
-            retained: vec![RetainedInterval { start_us: 0, end_us: 5_000_000 }],
+            retained: vec![RetainedInterval {
+                start_us: 0,
+                end_us: 5_000_000,
+            }],
             edited_duration_us: 5_000_000,
         };
         let config = SilenceConfig {

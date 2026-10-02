@@ -72,6 +72,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # Formatting first: it needs no build and fails fast.
+      - run: cargo fmt --check
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri

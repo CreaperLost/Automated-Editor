@@ -873,7 +873,10 @@ mod tests {
         let generated = generate_zoom_suggestions(&data, &config).unwrap();
         assert!(
             generated.suggestions.iter().all(|suggestion| {
-                suggestion.source_end_us.saturating_sub(suggestion.source_start_us) < 1_000_000
+                suggestion
+                    .source_end_us
+                    .saturating_sub(suggestion.source_start_us)
+                    < 1_000_000
             }),
             "dwell must not span a corrupt telemetry gap: {:?}",
             generated.suggestions

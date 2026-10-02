@@ -192,7 +192,11 @@ impl Scene {
     ) -> Result<Self, String> {
         validate_dim(width, height)?;
         layout.validate()?;
-        let unit = if unit.is_finite() && unit > 0.0 { unit } else { 1.0 };
+        let unit = if unit.is_finite() && unit > 0.0 {
+            unit
+        } else {
+            1.0
+        };
         let px = |value: u32| (value as f32 * unit).round() as u32;
         let padding = px(layout.padding_px);
         if padding.saturating_mul(2) >= width || padding.saturating_mul(2) >= height {
@@ -212,7 +216,9 @@ impl Scene {
             );
         } else if let Some(end) = background_end {
             let gradient = gradient_frame(width, height, background, end)?;
-            layers.push(Layer::placed(gradient, 0, 0, width, height).with_role(LayerRole::Background));
+            layers.push(
+                Layer::placed(gradient, 0, 0, width, height).with_role(LayerRole::Background),
+            );
         }
         if let Some(screen) = screen {
             let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
@@ -243,7 +249,8 @@ impl Scene {
             layer.uv_w = crop_w;
             layer.uv_h = crop_h;
             if layout.shadow_blur_px > 0 && layout.shadow_opacity > 0.0 {
-                layer = layer.with_shadow(layout.shadow_blur_px as f32 * unit, layout.shadow_opacity);
+                layer =
+                    layer.with_shadow(layout.shadow_blur_px as f32 * unit, layout.shadow_opacity);
             }
             layers.push(layer);
         }
@@ -268,7 +275,8 @@ impl Scene {
                     let by = y.saturating_sub(inset);
                     let bwidth = (bw + inset * 2).min(width.saturating_sub(bx)).max(1);
                     let bheight = (bh + inset * 2).min(height.saturating_sub(by)).max(1);
-                    let [r, g, b] = crate::project::layout::parse_hex_rgb(&layout.webcam_border_color)?;
+                    let [r, g, b] =
+                        crate::project::layout::parse_hex_rgb(&layout.webcam_border_color)?;
                     let border = VideoFrame::solid(8, 8, b, g, r, 0)?;
                     // The ring stays concentric with the rounded bubble inside it.
                     let border_radius = if cam_radius > 0.0 {
@@ -342,8 +350,18 @@ impl Scene {
     /// the canvas. `weight` is the eased progress: 0 leaves the bubble untouched, 1 is the
     /// enlarged webcam. Position, size, corner radius and the source crop all interpolate, so
     /// the move is continuous; the border thins out and the shadow fades as it grows.
-    pub fn apply_webcam_focus(&mut self, layout: &EditLayout, size_pct: f32, weight: f32, unit: f32) {
-        let t = if weight.is_finite() { weight.clamp(0.0, 1.0) } else { 0.0 };
+    pub fn apply_webcam_focus(
+        &mut self,
+        layout: &EditLayout,
+        size_pct: f32,
+        weight: f32,
+        unit: f32,
+    ) {
+        let t = if weight.is_finite() {
+            weight.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         if t <= 0.0 {
             return;
         }
@@ -352,7 +370,10 @@ impl Scene {
         };
         let (canvas_w, canvas_h) = (self.width as f32, self.height as f32);
         let frac = size_pct.clamp(40.0, 100.0) / 100.0;
-        let (target_w, target_h) = ((canvas_w * frac).round().max(1.0), (canvas_h * frac).round().max(1.0));
+        let (target_w, target_h) = (
+            (canvas_w * frac).round().max(1.0),
+            (canvas_h * frac).round().max(1.0),
+        );
         let target_x = ((canvas_w - target_w) / 2.0).round();
         let target_y = ((canvas_h - target_h) / 2.0).round();
         // Full bleed has square corners; a smaller focus matches the screen's rounding.
@@ -364,7 +385,12 @@ impl Scene {
         let lerp = |a: f32, b: f32| a + (b - a) * t;
 
         let cam = &self.layers[index];
-        let (bx, by, bw, bh) = (cam.x as f32, cam.y as f32, cam.width as f32, cam.height as f32);
+        let (bx, by, bw, bh) = (
+            cam.x as f32,
+            cam.y as f32,
+            cam.width as f32,
+            cam.height as f32,
+        );
         let bubble_radius = match cam.clip {
             ClipMode::None => 0.0,
             ClipMode::RoundedRect => cam.radius_px,
@@ -372,8 +398,12 @@ impl Scene {
             // The closest rounded rectangle; the shapes differ by a hair at the first frame.
             ClipMode::Squircle => bw.min(bh) * 0.3,
         };
-        let (mut tu_x, tu_y, mut tu_w, tu_h) =
-            cover_uv(cam.frame.width, cam.frame.height, target_w as u32, target_h as u32);
+        let (mut tu_x, tu_y, mut tu_w, tu_h) = cover_uv(
+            cam.frame.width,
+            cam.frame.height,
+            target_w as u32,
+            target_h as u32,
+        );
         if layout.webcam_mirror {
             tu_x += tu_w;
             tu_w = -tu_w;
@@ -643,11 +673,13 @@ impl Compositor {
             );
             let layer_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let content_params = layer_params(layer, 0);
-            let content_uniform = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aeroedits-layer-params"),
-                contents: bytemuck::bytes_of(&content_params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+            let content_uniform =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("aeroedits-layer-params"),
+                        contents: bytemuck::bytes_of(&content_params),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
             let bind_content = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("aeroedits-layer-bind"),
                 layout: &self.bind_layout,
@@ -666,11 +698,18 @@ impl Compositor {
                     },
                 ],
             });
-            let v_content = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("aeroedits-quad"),
-                contents: bytemuck::cast_slice(&quad_vertices(scene.width, scene.height, layer, 0.0)),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+            let v_content = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("aeroedits-quad"),
+                    contents: bytemuck::cast_slice(&quad_vertices(
+                        scene.width,
+                        scene.height,
+                        layer,
+                        0.0,
+                    )),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
             let shadow = if layer.has_shadow() {
                 let pad = shadow_pad(layer);
                 let shadow_params = layer_params(layer, 1);
@@ -699,16 +738,18 @@ impl Compositor {
                         },
                     ],
                 });
-                let v_shadow = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("aeroedits-shadow-quad"),
-                    contents: bytemuck::cast_slice(&quad_vertices(
-                        scene.width,
-                        scene.height,
-                        layer,
-                        pad,
-                    )),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
+                let v_shadow = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("aeroedits-shadow-quad"),
+                        contents: bytemuck::cast_slice(&quad_vertices(
+                            scene.width,
+                            scene.height,
+                            layer,
+                            pad,
+                        )),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
                 Some((bind_shadow, v_shadow, shadow_uniform))
             } else {
                 None
@@ -867,10 +908,7 @@ fn webcam_bubble_size(
     };
     if matches!(layout.webcam_shape.as_str(), "circle" | "squircle") {
         let side = w.min(h).max(8);
-        return (
-            side.min(canvas_w).max(1),
-            side.min(canvas_h).max(1),
-        );
+        return (side.min(canvas_w).max(1), side.min(canvas_h).max(1));
     }
     (w, h)
 }
@@ -891,14 +929,13 @@ fn webcam_origin(
         "top-right" => (max_x.saturating_sub(margin), margin.min(max_y)),
         "bottom-left" => (margin.min(max_x), max_y.saturating_sub(margin)),
         "custom" => {
-            let x = (layout.webcam_custom_x.clamp(0.0, 100.0) / 100.0 * max_x as f32).round() as u32;
-            let y = (layout.webcam_custom_y.clamp(0.0, 100.0) / 100.0 * max_y as f32).round() as u32;
+            let x =
+                (layout.webcam_custom_x.clamp(0.0, 100.0) / 100.0 * max_x as f32).round() as u32;
+            let y =
+                (layout.webcam_custom_y.clamp(0.0, 100.0) / 100.0 * max_y as f32).round() as u32;
             (x.min(max_x), y.min(max_y))
         }
-        _ => (
-            max_x.saturating_sub(margin),
-            max_y.saturating_sub(margin),
-        ),
+        _ => (max_x.saturating_sub(margin), max_y.saturating_sub(margin)),
     }
 }
 
@@ -994,27 +1031,51 @@ fn preset_recipe(name: &str) -> Option<(u32, [Blob; 3])> {
     Some(match name {
         "aurora" => (
             0x0b1026,
-            [blob(0.15, 0.2, 0.7, 0x3b82f6), blob(0.85, 0.3, 0.6, 0xa855f7), blob(0.5, 1.0, 0.7, 0x14b8a6)],
+            [
+                blob(0.15, 0.2, 0.7, 0x3b82f6),
+                blob(0.85, 0.3, 0.6, 0xa855f7),
+                blob(0.5, 1.0, 0.7, 0x14b8a6),
+            ],
         ),
         "sunset" => (
             0x1e1033,
-            [blob(0.2, 0.9, 0.8, 0xf97316), blob(0.8, 0.2, 0.7, 0xdb2777), blob(0.55, 0.55, 0.4, 0xfacc15)],
+            [
+                blob(0.2, 0.9, 0.8, 0xf97316),
+                blob(0.8, 0.2, 0.7, 0xdb2777),
+                blob(0.55, 0.55, 0.4, 0xfacc15),
+            ],
         ),
         "ocean" => (
             0x031b34,
-            [blob(0.1, 0.1, 0.8, 0x0ea5e9), blob(0.9, 0.9, 0.8, 0x1d4ed8), blob(0.6, 0.4, 0.45, 0x22d3ee)],
+            [
+                blob(0.1, 0.1, 0.8, 0x0ea5e9),
+                blob(0.9, 0.9, 0.8, 0x1d4ed8),
+                blob(0.6, 0.4, 0.45, 0x22d3ee),
+            ],
         ),
         "forest" => (
             0x052e16,
-            [blob(0.2, 0.8, 0.8, 0x15803d), blob(0.85, 0.15, 0.6, 0x65a30d), blob(0.6, 0.6, 0.45, 0x0f766e)],
+            [
+                blob(0.2, 0.8, 0.8, 0x15803d),
+                blob(0.85, 0.15, 0.6, 0x65a30d),
+                blob(0.6, 0.6, 0.45, 0x0f766e),
+            ],
         ),
         "candy" => (
             0x3b0764,
-            [blob(0.1, 0.3, 0.7, 0xec4899), blob(0.9, 0.7, 0.7, 0x8b5cf6), blob(0.5, 0.0, 0.5, 0xf472b6)],
+            [
+                blob(0.1, 0.3, 0.7, 0xec4899),
+                blob(0.9, 0.7, 0.7, 0x8b5cf6),
+                blob(0.5, 0.0, 0.5, 0xf472b6),
+            ],
         ),
         "graphite" => (
             0x111113,
-            [blob(0.2, 0.15, 0.8, 0x3f3f46), blob(0.85, 0.85, 0.7, 0x27272a), blob(0.6, 0.4, 0.4, 0x52525b)],
+            [
+                blob(0.2, 0.15, 0.8, 0x3f3f46),
+                blob(0.85, 0.85, 0.7, 0x27272a),
+                blob(0.6, 0.4, 0.4, 0x52525b),
+            ],
         ),
         _ => return None,
     })
@@ -1118,9 +1179,7 @@ fn shadow_coverage(sdf: f32, blur: f32) -> f32 {
 }
 
 fn shadow_pad(layer: &Layer) -> f32 {
-    layer.shadow_blur_px
-        + layer.shadow_offset[0].abs()
-        + layer.shadow_offset[1].abs()
+    layer.shadow_blur_px + layer.shadow_offset[0].abs() + layer.shadow_offset[1].abs()
 }
 
 fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
@@ -1186,7 +1245,10 @@ pub fn load_wallpaper_frame(
     let img = image::load_from_memory(&bytes)
         .map_err(|e| format!("Wallpaper decode failed: {e}"))?
         .to_rgba8();
-    if img.width() > MAX_FRAME_DIM || img.height() > MAX_FRAME_DIM || img.width() == 0 || img.height() == 0
+    if img.width() > MAX_FRAME_DIM
+        || img.height() > MAX_FRAME_DIM
+        || img.width() == 0
+        || img.height() == 0
     {
         return Err("Wallpaper exceeds compositor working-set limit".into());
     }
@@ -1350,8 +1412,8 @@ pub fn run_parity(
     use crate::media::{
         compare_frames, decode_h264_frame, decode_pcm, encode_h264_frames, region_mean_delta,
         write_solid_h264, COMPOSITOR_BACKEND, COMPOSITOR_MAX_TOLERANCE, COMPOSITOR_MEAN_TOLERANCE,
-        CONCURRENT_ENCODER_LIMIT, COPIES_DECODE, COPIES_ENCODE,
-        PARITY_MEAN_TOLERANCE, PARITY_REGION_MEAN_TOLERANCE,
+        CONCURRENT_ENCODER_LIMIT, COPIES_DECODE, COPIES_ENCODE, PARITY_MEAN_TOLERANCE,
+        PARITY_REGION_MEAN_TOLERANCE,
     };
     use crate::project::pcm::channel_peak_rms;
     use std::fs;
@@ -1624,7 +1686,11 @@ mod tests {
         layout.padding_px = 0;
         layout.screen_crop_left = 45.0;
         let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
-        let layer = scene.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
+        let layer = scene
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Screen)
+            .unwrap();
         assert!((layer.uv_x - 0.45).abs() < 1e-6 && (layer.uv_w - 0.55).abs() < 1e-6);
         // The kept 18x16 region fits the 32x32 canvas at its own aspect, not the source's 2:1.
         assert_eq!((layer.width, layer.height), (32, 28));
@@ -1642,10 +1708,21 @@ mod tests {
         layout.padding_px = 0;
         layout.screen_scale_pct = 50.0;
         let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
-        let layer = scene.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
-        assert_eq!((layer.x, layer.y, layer.width, layer.height), (8, 8, 16, 16));
+        let layer = scene
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Screen)
+            .unwrap();
+        assert_eq!(
+            (layer.x, layer.y, layer.width, layer.height),
+            (8, 8, 16, 16)
+        );
         let out = Compositor::composite_cpu(&scene).unwrap();
-        assert_eq!(pixel(&out, 2, 2)[1], 255, "background shows around the scaled screen");
+        assert_eq!(
+            pixel(&out, 2, 2)[1],
+            255,
+            "background shows around the scaled screen"
+        );
         assert_eq!(pixel(&out, 16, 16)[2], 255);
     }
 
@@ -1660,15 +1737,30 @@ mod tests {
         layout.webcam_roundness_pct = 50.0;
         layout.webcam_border_width = 2;
         let scene = Scene::from_layout(64, 64, &layout, Some(screen), Some(webcam)).unwrap();
-        let cam = scene.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap();
+        let cam = scene
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Webcam)
+            .unwrap();
         assert_eq!((cam.width, cam.height), (32, 32));
         assert_eq!(cam.clip, ClipMode::RoundedRect);
         assert!((cam.radius_px - 16.0).abs() < 1e-6);
-        let ring = scene.layers.iter().find(|l| l.role == LayerRole::WebcamBorder).unwrap();
-        assert!((ring.radius_px - 18.0).abs() < 1e-6, "ring stays concentric");
+        let ring = scene
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::WebcamBorder)
+            .unwrap();
+        assert!(
+            (ring.radius_px - 18.0).abs() < 1e-6,
+            "ring stays concentric"
+        );
         let out = Compositor::composite_cpu(&scene).unwrap();
         let (cx, cy) = (cam.x, cam.y);
-        assert_ne!(pixel(&out, cx, cy)[0], 255, "rounded corner hides the webcam");
+        assert_ne!(
+            pixel(&out, cx, cy)[0],
+            255,
+            "rounded corner hides the webcam"
+        );
         assert_eq!(pixel(&out, cx + 16, cy + 16)[0], 255);
     }
 
@@ -1698,13 +1790,21 @@ mod tests {
 
         let mut full = bubble.clone();
         full.apply_webcam_focus(&layout, 100.0, 1.0, 1.0);
-        let cam = full.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap();
+        let cam = full
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Webcam)
+            .unwrap();
         assert_eq!((cam.x, cam.y, cam.width, cam.height), (0, 0, 64, 48));
         assert_eq!(cam.clip, ClipMode::None);
         assert_eq!(cam.shadow_opacity, 0.0);
         // Cover crop of a 4:3 source into a 4:3 canvas uses the whole frame, mirrored.
         assert!((cam.uv_x - 1.0).abs() < 1e-6 && (cam.uv_w + 1.0).abs() < 1e-6);
-        let ring = full.layers.iter().find(|l| l.role == LayerRole::WebcamBorder).unwrap();
+        let ring = full
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::WebcamBorder)
+            .unwrap();
         assert_eq!((ring.width, ring.height), (64, 48), "the border thins away");
         let out = Compositor::composite_cpu(&full).unwrap();
         assert_eq!(pixel(&out, 0, 0)[0], 255, "webcam covers the corner");
@@ -1715,12 +1815,21 @@ mod tests {
     fn webcam_focus_interpolates_size_position_and_radius() {
         let layout = focus_layout();
         let bubble = focus_scene(&layout);
-        let start = bubble.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap().clone();
+        let start = bubble
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Webcam)
+            .unwrap()
+            .clone();
         let mut previous = (start.width, start.x);
         for step in 1..=10 {
             let mut scene = bubble.clone();
             scene.apply_webcam_focus(&layout, 80.0, step as f32 / 10.0, 1.0);
-            let cam = scene.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap();
+            let cam = scene
+                .layers
+                .iter()
+                .find(|l| l.role == LayerRole::Webcam)
+                .unwrap();
             assert!(cam.width >= previous.0, "grows monotonically");
             assert!(cam.x <= previous.1, "slides towards the center");
             assert!(cam.radius_px <= cam.width.min(cam.height) as f32 / 2.0 + 1e-3);
@@ -1728,13 +1837,21 @@ mod tests {
         }
         let mut focused = bubble.clone();
         focused.apply_webcam_focus(&layout, 80.0, 1.0, 1.0);
-        let cam = focused.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap();
+        let cam = focused
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Webcam)
+            .unwrap();
         // 80% of 64x48, centered.
         assert_eq!((cam.x, cam.y, cam.width, cam.height), (7, 5, 51, 38));
         // The circle opens up as a rounded rectangle on the first frame.
         let mut first = bubble.clone();
         first.apply_webcam_focus(&layout, 80.0, 0.01, 1.0);
-        let cam = first.layers.iter().find(|l| l.role == LayerRole::Webcam).unwrap();
+        let cam = first
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Webcam)
+            .unwrap();
         assert_eq!(cam.clip, ClipMode::RoundedRect);
         assert!((cam.radius_px - cam.width.min(cam.height) as f32 / 2.0).abs() < 1.0);
     }
@@ -1747,7 +1864,11 @@ mod tests {
         let scene = Scene::from_layout(48, 27, &layout, None, None).unwrap();
         assert_eq!(scene.layers[0].role, LayerRole::Background);
         let out = Compositor::composite_cpu(&scene).unwrap();
-        assert_ne!(pixel(&out, 2, 2), pixel(&out, 45, 24), "preset is not a flat fill");
+        assert_ne!(
+            pixel(&out, 2, 2),
+            pixel(&out, 45, 24),
+            "preset is not a flat fill"
+        );
         assert!(preset_frame(8, 8, "plaid").is_err());
     }
 
@@ -1756,10 +1877,36 @@ mod tests {
         let screen = VideoFrame::solid(16, 9, 0, 0, 255, 0).unwrap();
         let mut layout = solid_layout();
         layout.padding_px = 54;
-        let small = Scene::from_layout_scaled(640, 360, &layout, Some(screen.clone()), None, None, layout_px_unit(640, 360)).unwrap();
-        let large = Scene::from_layout_scaled(1920, 1080, &layout, Some(screen), None, None, layout_px_unit(1920, 1080)).unwrap();
-        let s = small.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
-        let l = large.layers.iter().find(|l| l.role == LayerRole::Screen).unwrap();
+        let small = Scene::from_layout_scaled(
+            640,
+            360,
+            &layout,
+            Some(screen.clone()),
+            None,
+            None,
+            layout_px_unit(640, 360),
+        )
+        .unwrap();
+        let large = Scene::from_layout_scaled(
+            1920,
+            1080,
+            &layout,
+            Some(screen),
+            None,
+            None,
+            layout_px_unit(1920, 1080),
+        )
+        .unwrap();
+        let s = small
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Screen)
+            .unwrap();
+        let l = large
+            .layers
+            .iter()
+            .find(|l| l.role == LayerRole::Screen)
+            .unwrap();
         assert_eq!(s.y, 18);
         assert_eq!(l.y, 54);
         assert_eq!(s.width * 3, l.width);
@@ -1791,7 +1938,10 @@ mod tests {
             "rounded clip must show green background in the screen AABB corner, got {corner:?}"
         );
         let center = pixel(&out, 16, 16);
-        assert!(center[2] > 200 && center[1] < 40, "screen interior stays red");
+        assert!(
+            center[2] > 200 && center[1] < 40,
+            "screen interior stays red"
+        );
     }
 
     #[test]
@@ -1824,13 +1974,15 @@ mod tests {
         let cx = cam.x + cam.width / 2;
         let cy = cam.y + cam.height / 2;
         let cam_center = pixel(&out, cx, cy);
-        assert!(cam_center[1] > 200 && cam_center[2] < 40, "circle interior is webcam");
+        assert!(
+            cam_center[1] > 200 && cam_center[2] < 40,
+            "circle interior is webcam"
+        );
         let screen_far = pixel(&out, 30, 30);
         assert!(screen_far[2] > 200, "screen layer is not circle-clipped");
 
         layout.webcam_shape = "squircle".into();
-        let squircle =
-            Scene::from_layout(32, 32, &layout, Some(screen), Some(webcam)).unwrap();
+        let squircle = Scene::from_layout(32, 32, &layout, Some(screen), Some(webcam)).unwrap();
         let cam = squircle
             .layers
             .iter()
@@ -1939,15 +2091,9 @@ mod tests {
             .unwrap()
             .expect("decoded wallpaper");
         let screen = VideoFrame::solid(8, 8, 0, 0, 255, 0).unwrap();
-        let scene = Scene::from_layout_with_wallpaper(
-            16,
-            16,
-            &layout,
-            Some(screen),
-            None,
-            Some(paper),
-        )
-        .unwrap();
+        let scene =
+            Scene::from_layout_with_wallpaper(16, 16, &layout, Some(screen), None, Some(paper))
+                .unwrap();
         let out = Compositor::composite_cpu(&scene).unwrap();
         let pad = pixel(&out, 0, 0);
         assert!(
@@ -2054,7 +2200,8 @@ mod tests {
         let gpu = compositor.composite(&scene).unwrap();
         let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
         assert!(
-            mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
+            mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE
+                && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
             "GPU vs CPU mean {mean} max {max}"
         );
     }
@@ -2074,7 +2221,8 @@ mod tests {
         let gpu = compositor.composite(&scene).unwrap();
         let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
         assert!(
-            mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
+            mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE
+                && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
             "GPU vs CPU mean {mean} max {max}"
         );
     }
