@@ -725,19 +725,25 @@ fn project_current(state: State<'_, AppState>) -> Option<project::OpenedProject>
 }
 
 /// Opens the Shorts Studio window, or brings it to the front if it is already open.
+///
+/// Async on purpose: Tauri runs synchronous commands on the main thread, and creating a
+/// window there deadlocks WebView2 on Windows (the window stays white).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn open_shorts_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_shorts_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
-    if let Some(window) = app.get_webview_window("shorts") {
+    if let Some(window) = app.get_webview_window(SHORTS_WINDOW) {
         let _ = window.unminimize();
         return window.set_focus().map_err(|e| e.to_string());
     }
     tauri::WebviewWindowBuilder::new(
         &app,
-        "shorts",
-        tauri::WebviewUrl::App("index.html?window=shorts".into()),
+        SHORTS_WINDOW,
+        tauri::WebviewUrl::App("index.html".into()),
     )
+    // Tells the page which app to render before any script runs; a URL query is not
+    // carried reliably by every platform's asset protocol.
+    .initialization_script("window.__AEROEDITS_WINDOW__ = 'shorts';")
     .title("AeroEdits Shorts Studio")
     .inner_size(1280.0, 860.0)
     .min_inner_size(960.0, 640.0)
@@ -1113,6 +1119,9 @@ fn show_in_finder(path: String) -> Result<(), String> {
 }
 
 #[cfg(feature = "tauri-app")]
+const SHORTS_WINDOW: &str = "shorts";
+
+#[cfg(feature = "tauri-app")]
 pub fn run() {
     tauri::Builder::default()
         .manage(commands::AppState::default())
@@ -1127,6 +1136,11 @@ pub fn run() {
                     &window.state::<AppState>(),
                     window.label().to_string(),
                 );
+                // The Shorts Studio only works alongside the editor: closing the editor
+                // closes the app, rather than leaving the studio on torn-down state.
+                if window.label() == "main" {
+                    window.app_handle().exit(0);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

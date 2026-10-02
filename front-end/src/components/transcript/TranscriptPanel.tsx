@@ -214,6 +214,22 @@ export const TranscriptPanel: React.FC = () => {
 
   const runAiReview = async () => {
     if (!handle || !trackId) return;
+    // Without a key the request cannot start: say so and open the settings instead.
+    try {
+      const ai = await api.aiSettingsGet();
+      const source = ai.settings.provider === "openAi" ? ai.openaiKeySource : ai.openrouterKeySource;
+      if (!source) {
+        setError(null);
+        setNotice(
+          `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under AI review, then press Find with AI again.`,
+        );
+        setSettingsOpen(true);
+        return;
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+      return;
+    }
     setRunning(true);
     setError(null);
     setNotice(null);
