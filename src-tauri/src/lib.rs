@@ -287,6 +287,18 @@ fn project_ripple_cuts(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_ripple_trim(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    playhead_us: u64,
+    side: project::revision::TrimSide,
+) -> Result<project::OpenedProject, String> {
+    commands::project_ripple_trim_impl(&state, project_handle, expected_revision, playhead_us, side)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_split(
     state: State<'_, AppState>,
     project_handle: String,
@@ -847,6 +859,7 @@ pub fn run() {
             project_audio_update,
             project_captions_update,
             project_ripple_cuts,
+            project_ripple_trim,
             project_split,
             project_restore_cuts,
             project_undo,

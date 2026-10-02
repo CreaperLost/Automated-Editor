@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Play,
   Pause,
@@ -20,10 +20,35 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
 import { api } from "../../lib/ipc";
-import { buildClips, buildCutMarkers, editedToSourceUs } from "../../lib/projectUtils";
+import {
+  buildClips,
+  buildCutMarkers,
+  clipEdges,
+  clipTrimLimits,
+  editedToSourceUs,
+  formatRulerLabel,
+  rulerStepUs,
+  type TimelineClip,
+} from "../../lib/projectUtils";
 import type { OpenedProject, ProjectZoom, ZoomKeyframe } from "../../lib/types";
 
 type DragMode = "move" | "start" | "end";
+
+const MIN_TIMELINE_ZOOM = 1;
+const MAX_TIMELINE_ZOOM = 64;
+/** Pointer distance, in pixels, inside which a dragged clip edge snaps to the playhead. */
+const SNAP_PX = 8;
+
+/** A clip edge being dragged: inward ripple-deletes, outward restores cut media. */
+interface EdgeDrag {
+  clip: TimelineClip;
+  side: "start" | "end";
+  startX: number;
+  minDeltaUs: number;
+  maxDeltaUs: number;
+  deltaUs: number;
+  pointerId: number;
+}
 
 export const TimelineStudio: React.FC = () => {
   const {
@@ -41,6 +66,9 @@ export const TimelineStudio: React.FC = () => {
   } = useProjectStore();
 
   const { isPlaying, togglePlayPause, seekToUs, formattedTime, formattedDuration } = useTimeline();
+  const frameUs = Math.round(
+    1e6 / (openedProject?.manifest.tracks.find((track) => track.trackType === "screen")?.fps || 30),
+  );
 
   const [rangeStart, setRangeStart] = useState("0");
   const [rangeEnd, setRangeEnd] = useState("0");
@@ -82,6 +110,21 @@ export const TimelineStudio: React.FC = () => {
     runEdit((project) => api.projectSplit(project.projectHandle, project.revision, currentTimeUs));
   const restoreCut = (startUs: number, endUs: number) =>
     runEdit((project) => api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }]));
+  // Q and E: ripple-delete from the playhead to the previous or next edit point.
+  const rippleTrim = (side: "previous" | "next") =>
+    runEdit(async (project) => {
+      const playheadUs = currentTimeUs;
+      const next = await api.projectRippleTrim(project.projectHandle, project.revision, playheadUs, side);
+      // Q pulls the later media back to the previous edit point; the playhead follows it.
+      if (side === "previous") seekToUs(playheadUs - (project.editedDurationUs - next.editedDurationUs));
+      return next;
+    });
+  const undo = () => {
+    if (openedProject?.undoAvailable) void runEdit((project) => api.projectUndo(project.projectHandle, project.revision));
+  };
+  const redo = () => {
+    if (openedProject?.redoAvailable) void runEdit((project) => api.projectRedo(project.projectHandle, project.revision));
+  };
 
   // The range fields double as the timeline selection; the full range means nothing is selected.
   const selectedStartUs = Math.round(Number(rangeStart) * 1e6);
@@ -104,35 +147,274 @@ export const TimelineStudio: React.FC = () => {
   const retained = openedProject?.retainedIntervals ?? [];
   const clips = buildClips(retained, openedProject?.splitPointsUs);
   const cutMarkers = buildCutMarkers(retained, openedProject?.removedIntervals);
+  const edges = clipEdges(clips);
+  const jumpToEdit = (direction: -1 | 1) => {
+    const target =
+      direction < 0
+        ? [...edges].reverse().find((edge) => edge < currentTimeUs)
+        : edges.find((edge) => edge > currentTimeUs && edge < durationUs);
+    if (target !== undefined) seekToUs(target);
+  };
 
-  const shortcuts = useRef({ splitAtPlayhead, deleteSelection: () => {}, clearSelection });
+  const shortcuts = useRef({
+    splitAtPlayhead,
+    deleteSelection: () => {},
+    clearSelection,
+    rippleTrim,
+    undo,
+    redo,
+    togglePlayPause,
+    jumpToEdit,
+    stepUs: (_offsetUs: number) => {},
+    seekToUs,
+  });
   shortcuts.current = {
     splitAtPlayhead,
     deleteSelection: () => { if (selection) void editRange(false); },
     clearSelection,
+    rippleTrim,
+    undo,
+    redo,
+    togglePlayPause,
+    jumpToEdit,
+    stepUs: (offsetUs: number) => seekToUs(currentTimeUs + offsetUs),
+    seekToUs,
   };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (
-        event.ctrlKey || event.metaKey || event.altKey ||
-        target?.closest("input, textarea, select, [contenteditable='true']")
-      ) return;
-      if (event.key === "s" || event.key === "S") {
-        event.preventDefault();
-        void shortcuts.current.splitAtPlayhead();
-      } else if (event.key === "Delete" || event.key === "Backspace") {
-        event.preventDefault();
-        shortcuts.current.deleteSelection();
-      } else if (event.key === "Escape") {
-        shortcuts.current.clearSelection();
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      const keys = shortcuts.current;
+      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        const key = event.key.toLowerCase();
+        if (key === "z") {
+          event.preventDefault();
+          if (event.shiftKey) keys.redo();
+          else keys.undo();
+        } else if (key === "y") {
+          event.preventDefault();
+          keys.redo();
+        }
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      switch (event.key) {
+        case "s":
+        case "S":
+          event.preventDefault();
+          if (!event.repeat) void keys.splitAtPlayhead();
+          break;
+        case "q":
+        case "Q":
+          event.preventDefault();
+          if (!event.repeat) void keys.rippleTrim("previous");
+          break;
+        case "e":
+        case "E":
+          event.preventDefault();
+          if (!event.repeat) void keys.rippleTrim("next");
+          break;
+        case "Delete":
+        case "Backspace":
+          event.preventDefault();
+          keys.deleteSelection();
+          break;
+        case "Escape":
+          keys.clearSelection();
+          break;
+        case " ":
+          event.preventDefault();
+          if (!event.repeat) keys.togglePlayPause();
+          break;
+        case "ArrowLeft":
+          event.preventDefault();
+          keys.stepUs(-(event.shiftKey ? 1_000_000 : frameUs));
+          break;
+        case "ArrowRight":
+          event.preventDefault();
+          keys.stepUs(event.shiftKey ? 1_000_000 : frameUs);
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          keys.jumpToEdit(-1);
+          break;
+        case "ArrowDown":
+          event.preventDefault();
+          keys.jumpToEdit(1);
+          break;
+        case "=":
+        case "+":
+          event.preventDefault();
+          zoomRef.current(2);
+          break;
+        case "-":
+          event.preventDefault();
+          zoomRef.current(0.5);
+          break;
+        case "Home":
+          event.preventDefault();
+          keys.seekToUs(0);
+          break;
+        case "End":
+          event.preventDefault();
+          keys.seekToUs(Number.MAX_SAFE_INTEGER);
+          break;
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [frameUs]);
 
   const timelineTrackRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState(1);
+  const [viewportPx, setViewportPx] = useState(0);
+  // Keeps the time under the cursor (or the playhead) in place while zooming.
+  const zoomAnchor = useRef<{ timeUs: number; offsetPx: number } | null>(null);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => setViewportPx(element.clientWidth));
+    observer.observe(element);
+    setViewportPx(element.clientWidth);
+    return () => observer.disconnect();
+  }, [openedProject?.projectHandle]);
+  useEffect(() => setTimelineZoom(1), [openedProject?.projectHandle]);
+
+  const contentPx = viewportPx * timelineZoom;
+  const pxPerUs = durationUs > 0 ? contentPx / durationUs : 0;
+
+  const zoomTimeline = (factor: number, anchor?: { timeUs: number; offsetPx: number }) => {
+    const next = Math.min(MAX_TIMELINE_ZOOM, Math.max(MIN_TIMELINE_ZOOM, timelineZoom * factor));
+    if (next === timelineZoom) return;
+    const element = scrollRef.current;
+    zoomAnchor.current =
+      anchor ??
+      (element && pxPerUs > 0
+        ? { timeUs: currentTimeUs, offsetPx: currentTimeUs * pxPerUs - element.scrollLeft }
+        : null);
+    setTimelineZoom(next);
+  };
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    const element = scrollRef.current;
+    zoomAnchor.current = null;
+    if (!anchor || !element || pxPerUs <= 0) return;
+    element.scrollLeft = Math.max(0, anchor.timeUs * pxPerUs - anchor.offsetPx);
+  }, [timelineZoom, pxPerUs]);
+
+  // Read by the wheel and keyboard listeners, which outlive this render.
+  const zoomRef = useRef(zoomTimeline);
+  zoomRef.current = zoomTimeline;
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    // Ctrl/Cmd + wheel zooms around the cursor; the listener is not passive so it can stop page zoom.
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      const rect = element.getBoundingClientRect();
+      const offsetPx = event.clientX - rect.left;
+      const width = element.scrollWidth;
+      const timeUs = width > 0 ? ((element.scrollLeft + offsetPx) / width) * durationUs : 0;
+      zoomRef.current(event.deltaY < 0 ? 1.25 : 0.8, { timeUs, offsetPx });
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, [openedProject?.projectHandle, durationUs]);
+
+  // While playing, page the view so the playhead stays visible.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!isPlaying || !element || pxPerUs <= 0 || timelineZoom <= 1) return;
+    const x = currentTimeUs * pxPerUs;
+    if (x < element.scrollLeft || x > element.scrollLeft + element.clientWidth - 24) {
+      element.scrollLeft = Math.max(0, x - element.clientWidth * 0.1);
+    }
+  }, [isPlaying, currentTimeUs, pxPerUs, timelineZoom]);
+
+  const rulerStep = rulerStepUs(pxPerUs);
+  const rulerTicks =
+    durationUs > 0 && pxPerUs > 0
+      ? Array.from({ length: Math.floor(durationUs / rulerStep) + 1 }, (_, i) => i * rulerStep)
+      : [];
+
+  // Dragging on the ruler scrubs the playhead; seeks are sent at most once per frame.
+  const scrub = useRef<{ frame: number | null; targetUs: number } | null>(null);
+  const scrubTo = (clientX: number) => {
+    const state = scrub.current;
+    if (!state) return;
+    state.targetUs = clientXToUs(clientX);
+    if (state.frame !== null) return;
+    state.frame = requestAnimationFrame(() => {
+      if (!scrub.current) return;
+      scrub.current.frame = null;
+      seekToUs(scrub.current.targetUs);
+    });
+  };
+  const onRulerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !openedProject || durationUs <= 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    scrub.current = { frame: null, targetUs: 0 };
+    scrubTo(event.clientX);
+  };
+  const onRulerPointerMove = (event: React.PointerEvent<HTMLDivElement>) => scrubTo(event.clientX);
+  const onRulerPointerUp = () => {
+    const state = scrub.current;
+    scrub.current = null;
+    if (state?.frame != null) {
+      cancelAnimationFrame(state.frame);
+      seekToUs(state.targetUs);
+    }
+  };
+
+  const [edgeDrag, setEdgeDrag] = useState<EdgeDrag | null>(null);
+  const beginEdgeDrag = (event: React.PointerEvent<HTMLDivElement>, clip: TimelineClip, side: "start" | "end") => {
+    if (event.button !== 0 || !openedProject || editing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const limits = clipTrimLimits(clip, side, retained, openedProject.removedIntervals);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setEdgeDrag({ clip, side, startX: event.clientX, ...limits, deltaUs: 0, pointerId: event.pointerId });
+  };
+  const moveEdgeDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!edgeDrag || event.pointerId !== edgeDrag.pointerId || pxPerUs <= 0) return;
+    event.stopPropagation();
+    const edgeUs = edgeDrag.side === "start" ? edgeDrag.clip.startUs : edgeDrag.clip.endUs;
+    let deltaUs = Math.round((event.clientX - edgeDrag.startX) / pxPerUs);
+    // Snap the edge onto the playhead when the pointer is close to it.
+    if (Math.abs(edgeUs + deltaUs - currentTimeUs) * pxPerUs <= SNAP_PX) deltaUs = currentTimeUs - edgeUs;
+    deltaUs = Math.min(edgeDrag.maxDeltaUs, Math.max(edgeDrag.minDeltaUs, deltaUs));
+    if (deltaUs !== edgeDrag.deltaUs) setEdgeDrag({ ...edgeDrag, deltaUs });
+  };
+  const endEdgeDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!edgeDrag || event.pointerId !== edgeDrag.pointerId) return;
+    event.stopPropagation();
+    suppressSeek.current = true;
+    const { clip, side, deltaUs } = edgeDrag;
+    setEdgeDrag(null);
+    if (Math.abs(deltaUs) < 1_000) return;
+    const sourceEndUs = clip.sourceStartUs + (clip.endUs - clip.startUs);
+    void runEdit((project) => {
+      if (side === "start") {
+        return deltaUs > 0
+          ? api.projectRippleCuts(project.projectHandle, project.revision, [
+              { startUs: clip.startUs, endUs: clip.startUs + deltaUs },
+            ])
+          : api.projectRestoreCuts(project.projectHandle, project.revision, [
+              { startUs: clip.sourceStartUs + deltaUs, endUs: clip.sourceStartUs },
+            ]);
+      }
+      return deltaUs < 0
+        ? api.projectRippleCuts(project.projectHandle, project.revision, [
+            { startUs: clip.endUs + deltaUs, endUs: clip.endUs },
+          ])
+        : api.projectRestoreCuts(project.projectHandle, project.revision, [
+            { startUs: sourceEndUs, endUs: sourceEndUs + deltaUs },
+          ]);
+    });
+  };
 
   useEffect(() => {
     if (!openedProject || durationUs <= 0) return;
@@ -378,30 +660,34 @@ export const TimelineStudio: React.FC = () => {
             <span>Split</span>
           </button>
           <button
-            disabled={!openedProject?.undoAvailable}
-            onClick={() => {
-              if (!openedProject) return;
-              void api
-                .projectUndo(openedProject.projectHandle, openedProject.revision)
-                .then(applyOpenedProject)
-                .catch((err) => console.warn("[Timeline] undo failed:", err));
-            }}
+            disabled={!openedProject || editing || durationUs === 0}
+            onClick={() => void rippleTrim("previous")}
+            className="px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
+            title="Ripple delete from the playhead back to the previous edit (Q)"
+          >
+            Trim ← Q
+          </button>
+          <button
+            disabled={!openedProject || editing || durationUs === 0}
+            onClick={() => void rippleTrim("next")}
+            className="px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
+            title="Ripple delete from the playhead to the next edit (E)"
+          >
+            E → Trim
+          </button>
+          <button
+            disabled={!openedProject?.undoAvailable || editing}
+            onClick={undo}
             className="px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-            title="Undo edit"
+            title="Undo edit (Ctrl+Z)"
           >
             Undo
           </button>
           <button
-            disabled={!openedProject?.redoAvailable}
-            onClick={() => {
-              if (!openedProject) return;
-              void api
-                .projectRedo(openedProject.projectHandle, openedProject.revision)
-                .then(applyOpenedProject)
-                .catch((err) => console.warn("[Timeline] redo failed:", err));
-            }}
+            disabled={!openedProject?.redoAvailable || editing}
+            onClick={redo}
             className="px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-            title="Redo edit"
+            title="Redo edit (Ctrl+Shift+Z)"
           >
             Redo
           </button>
@@ -578,10 +864,20 @@ export const TimelineStudio: React.FC = () => {
 
           <div className="h-4 w-px bg-studio-700 mx-1" />
 
-          <button disabled className="p-1.5 rounded hover:bg-studio-700 text-studio-400">
+          <button
+            disabled={!openedProject || timelineZoom <= MIN_TIMELINE_ZOOM}
+            onClick={() => zoomTimeline(0.5)}
+            className="p-1.5 rounded hover:bg-studio-700 text-studio-400 disabled:opacity-40"
+            title="Zoom the timeline out (-)"
+          >
             <ZoomOut className="w-4 h-4" />
           </button>
-          <button disabled className="p-1.5 rounded hover:bg-studio-700 text-studio-400">
+          <button
+            disabled={!openedProject || timelineZoom >= MAX_TIMELINE_ZOOM}
+            onClick={() => zoomTimeline(2)}
+            className="p-1.5 rounded hover:bg-studio-700 text-studio-400 disabled:opacity-40"
+            title="Zoom the timeline in (+)"
+          >
             <ZoomIn className="w-4 h-4" />
           </button>
         </div>
@@ -605,7 +901,7 @@ export const TimelineStudio: React.FC = () => {
             Restore all {cutMarkers.length} cut{cutMarkers.length === 1 ? "" : "s"}
           </button>
         )}
-        <span className="text-studio-500">Drag on the timeline to select. S splits at the playhead, Delete removes the selection.</span>
+        <span className="text-studio-500">Drag on the timeline to select, drag a clip edge to trim it. S splits, Q/E ripple-trim to the previous/next edit, Delete removes the selection.</span>
         {editError && <span role="alert" className="text-rose-300">{editError}</span>}
       </div>}
 
@@ -648,12 +944,30 @@ export const TimelineStudio: React.FC = () => {
         </div>
 
         {/* Right Track Lanes & Playhead */}
-        <div className="flex-1 flex flex-col overflow-x-auto relative">
-          {/* Time Ruler */}
-          <div className="h-7 border-b border-studio-800 bg-studio-850/70 relative">
-            <div className="flex items-center h-full px-2 text-[10px] font-mono text-studio-500 justify-between">
-              {Array.from({ length: 7 }, (_, i) => <span key={i}>{(durationUs * i / 6 / 1_000_000).toFixed(1)}s</span>)}
-            </div>
+        <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden relative">
+          <div className="flex flex-col h-full min-w-full" style={{ width: `${timelineZoom * 100}%` }}>
+          {/* Time Ruler: drag to scrub */}
+          <div
+            className="h-7 shrink-0 border-b border-studio-800 bg-studio-850/70 relative cursor-ew-resize overflow-hidden"
+            onPointerDown={onRulerPointerDown}
+            onPointerMove={onRulerPointerMove}
+            onPointerUp={onRulerPointerUp}
+            onPointerCancel={onRulerPointerUp}
+            title="Drag to scrub"
+          >
+            {rulerTicks.map((tickUs) => (
+              <div
+                key={tickUs}
+                className="absolute top-0 bottom-0 border-l border-studio-700 pl-1 text-[10px] font-mono text-studio-500 pointer-events-none"
+                style={{ left: `${(tickUs / durationUs) * 100}%` }}
+              >
+                {formatRulerLabel(tickUs, rulerStep)}
+              </div>
+            ))}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-indigo-500 pointer-events-none"
+              style={{ left: `${progress * 100}%` }}
+            />
           </div>
 
           {/* Interactive Track Area */}
@@ -754,22 +1068,76 @@ export const TimelineStudio: React.FC = () => {
                       left: `${(clip.startUs / durationUs) * 100}%`,
                       width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
                     }}
-                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select.`}
+                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select, Shift+click to extend.`}
                     onClick={(event) => {
                       event.stopPropagation();
-                      selectRange(clip.startUs, clip.endUs);
+                      if (event.shiftKey && selection) {
+                        selectRange(Math.min(selection.startUs, clip.startUs), Math.max(selection.endUs, clip.endUs));
+                      } else {
+                        selectRange(clip.startUs, clip.endUs);
+                      }
                     }}
                   >
                     {index + 1}
                   </button>
                 );
               })}
+              {/* Clip edge handles: the end handle sits left of the edge, the start handle right of it. */}
+              {durationUs > 0 && !editing && clips.flatMap((clip, index) =>
+                (["start", "end"] as const).map((side) => {
+                  const edgePct = ((side === "start" ? clip.startUs : clip.endUs) / durationUs) * 100;
+                  return (
+                    <div
+                      key={`${side}-${clip.sourceStartUs}-${index}`}
+                      role="separator"
+                      aria-label={`Trim clip ${index + 1} ${side}`}
+                      className={`absolute top-2.5 bottom-0 w-1.5 z-30 cursor-ew-resize hover:bg-teal-200/70 ${
+                        side === "start" ? "rounded-l" : "-translate-x-full rounded-r"
+                      }`}
+                      style={{ left: `${edgePct}%` }}
+                      title={`Drag to trim clip ${index + 1} ${side === "start" ? "start" : "end"}`}
+                      onPointerDown={(event) => beginEdgeDrag(event, clip, side)}
+                      onPointerMove={moveEdgeDrag}
+                      onPointerUp={endEdgeDrag}
+                      onPointerCancel={() => setEdgeDrag(null)}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  );
+                }),
+              )}
+              {edgeDrag && edgeDrag.deltaUs !== 0 && durationUs > 0 && (() => {
+                const { clip, side, deltaUs } = edgeDrag;
+                const edgeUs = side === "start" ? clip.startUs : clip.endUs;
+                const trimming = side === "start" ? deltaUs > 0 : deltaUs < 0;
+                const fromUs = Math.min(edgeUs, edgeUs + deltaUs);
+                const toUs = Math.max(edgeUs, edgeUs + deltaUs);
+                return (
+                  <div
+                    className={`absolute top-2.5 bottom-0 z-20 pointer-events-none rounded border flex items-center justify-center text-[9px] font-mono ${
+                      trimming
+                        ? "bg-rose-500/40 border-rose-300 text-rose-50"
+                        : "bg-teal-300/30 border-dashed border-teal-100 text-teal-50"
+                    }`}
+                    style={{
+                      left: `${(Math.max(0, fromUs) / durationUs) * 100}%`,
+                      width: `${((Math.min(durationUs, toUs) - Math.max(0, fromUs)) / durationUs) * 100}%`,
+                      minWidth: 2,
+                    }}
+                  >
+                    <span className="px-1 bg-studio-950/80 rounded whitespace-nowrap">
+                      {trimming ? "−" : "+"}
+                      {(Math.abs(deltaUs) / 1e6).toFixed(2)}s
+                    </span>
+                  </div>
+                );
+              })()}
+              {/* Cut markers: the cap above the clips restores the cut; the edge below it trims. */}
               {durationUs > 0 && cutMarkers.map((marker) => (
                 <button
                   key={marker.sourceStartUs}
                   disabled={editing}
                   aria-label="Restore cut"
-                  className="absolute top-1 bottom-0 w-3 -translate-x-1/2 z-20 flex justify-center group disabled:opacity-40"
+                  className="absolute top-0 bottom-0 w-3 -translate-x-1/2 z-20 flex flex-col items-center group disabled:opacity-40"
                   style={{ left: `${(marker.editedUs / durationUs) * 100}%` }}
                   title={`Restore ${((marker.sourceEndUs - marker.sourceStartUs) / 1e6).toFixed(2)}s cut`}
                   onPointerDown={(event) => event.stopPropagation()}
@@ -778,7 +1146,8 @@ export const TimelineStudio: React.FC = () => {
                     void restoreCut(marker.sourceStartUs, marker.sourceEndUs);
                   }}
                 >
-                  <span className="w-0.5 h-full bg-rose-400 group-hover:bg-rose-200" />
+                  <span className="w-2.5 h-2 shrink-0 rounded-sm bg-rose-400 group-hover:bg-rose-200" />
+                  <span className="w-0.5 flex-1 bg-rose-400 group-hover:bg-rose-200" />
                 </button>
               ))}
             </div>
@@ -855,6 +1224,7 @@ export const TimelineStudio: React.FC = () => {
                   })}
               </div>
             ))}
+          </div>
           </div>
         </div>
       </div>

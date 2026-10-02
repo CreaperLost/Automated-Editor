@@ -4,6 +4,7 @@ use crate::playback::{
     self, PlaybackOwner, PlaybackStatus, PreviewHitMode, PreviewOwner, PreviewStatus,
     PreviewViewport,
 };
+use crate::project::revision::TrimSide;
 use crate::project::{
     OpenedProject, ProjectReader, SegmentPage, TrackType, WaveformPage, WaveformTrackContext,
 };
@@ -595,6 +596,26 @@ pub fn project_ripple_cuts_impl(
         .map(|cut| (cut.start_us, cut.end_us))
         .collect();
     let summary = reader.ripple_cuts(expected_revision, &ranges)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(summary)
+}
+
+pub fn project_ripple_trim_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    playhead_us: u64,
+    side: TrimSide,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let summary = reader.ripple_trim(expected_revision, playhead_us, side)?;
     state
         .playback
         .lock()

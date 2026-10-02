@@ -110,6 +110,55 @@ impl EditDocument {
     pub fn edited_duration_us(&self) -> Result<u64, String> {
         Ok(self.mapper()?.total_edited_duration_us())
     }
+
+    /// Edit points on the edited timeline: the start, every cut, every split
+    /// inside retained media, and the end. Sorted and unique.
+    pub fn clip_edges_edited(&self) -> Vec<u64> {
+        let mut edges = vec![0u64];
+        let mut cursor = 0u64;
+        for interval in &self.retained_intervals {
+            edges.push(cursor);
+            let first = self
+                .split_points_us
+                .partition_point(|&p| p <= interval.start_us);
+            for &point in &self.split_points_us[first..] {
+                if point >= interval.end_us {
+                    break;
+                }
+                edges.push(cursor + (point - interval.start_us));
+            }
+            cursor += interval.end_us - interval.start_us;
+        }
+        edges.push(cursor);
+        edges.dedup();
+        edges
+    }
+}
+
+/// Which side of the playhead a ripple trim removes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrimSide {
+    /// Premiere's Q: from the previous edit point up to the playhead.
+    Previous,
+    /// Premiere's E: from the playhead up to the next edit point.
+    Next,
+}
+
+/// The edited range a ripple trim removes, given sorted `edges`. `None` when
+/// there is no edit point on that side of the playhead.
+pub fn ripple_trim_range(edges: &[u64], playhead_us: u64, side: TrimSide) -> Option<(u64, u64)> {
+    match side {
+        TrimSide::Previous => edges
+            .iter()
+            .rev()
+            .find(|&&edge| edge < playhead_us)
+            .map(|&edge| (edge, playhead_us)),
+        TrimSide::Next => edges
+            .iter()
+            .find(|&&edge| edge > playhead_us)
+            .map(|&edge| (playhead_us, edge)),
+    }
 }
 
 pub fn validate_retained(retained: &[RetainedInterval]) -> Result<(), String> {
@@ -694,6 +743,33 @@ impl EditHistory {
         self.commit(expected_revision, retained, persist_root)
     }
 
+    /// Premiere-style Q/E: ripple-deletes from the playhead back to the
+    /// previous edit point, or forward to the next one, and closes the gap.
+    /// Returns the removed edited range.
+    pub fn ripple_trim(
+        &mut self,
+        expected_revision: u64,
+        playhead_us: u64,
+        side: TrimSide,
+        persist_root: &Path,
+    ) -> Result<(u64, u64), String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let duration = self.current.edited_duration_us()?;
+        let playhead_us = playhead_us.min(duration);
+        let edges = self.current.clip_edges_edited();
+        let (start, end) = ripple_trim_range(&edges, playhead_us, side).ok_or(match side {
+            TrimSide::Previous => "No edit point before the playhead",
+            TrimSide::Next => "No edit point after the playhead",
+        })?;
+        if start == 0 && end >= duration {
+            return Err("That would remove the whole timeline".into());
+        }
+        self.ripple_cuts(expected_revision, &[(start, end)], persist_root)?;
+        Ok((start, end))
+    }
+
     /// Splits the clip under the edited position. No media is removed.
     pub fn split(
         &mut self,
@@ -1117,6 +1193,96 @@ mod tests {
         assert_eq!(history.current.retained_intervals, vec![ri(0, 6_000)]);
         assert!(history.restore(2, &[], dir.path()).is_err());
         assert!(history.restore(2, &[(10, 10)], dir.path()).is_err());
+    }
+
+    #[test]
+    fn clip_edges_include_cuts_and_splits_inside_media() {
+        let mut doc = EditDocument::from_retained(vec![ri(0, 4_000), ri(6_000, 10_000)]).unwrap();
+        // 5_000 sits in removed media and 6_000 on an interval start: neither adds an edge.
+        doc.split_points_us = vec![2_000, 5_000, 6_000, 8_000];
+        assert_eq!(doc.clip_edges_edited(), vec![0, 2_000, 4_000, 6_000, 8_000]);
+        assert_eq!(
+            EditDocument::from_retained(vec![])
+                .unwrap()
+                .clip_edges_edited(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn ripple_trim_range_picks_the_neighbouring_edit() {
+        let edges = [0, 2_000, 5_000, 8_000];
+        assert_eq!(
+            ripple_trim_range(&edges, 3_000, TrimSide::Previous),
+            Some((2_000, 3_000))
+        );
+        assert_eq!(
+            ripple_trim_range(&edges, 3_000, TrimSide::Next),
+            Some((3_000, 5_000))
+        );
+        // On an edit point, Q reaches the one before and E the one after.
+        assert_eq!(
+            ripple_trim_range(&edges, 5_000, TrimSide::Previous),
+            Some((2_000, 5_000))
+        );
+        assert_eq!(
+            ripple_trim_range(&edges, 5_000, TrimSide::Next),
+            Some((5_000, 8_000))
+        );
+        assert_eq!(ripple_trim_range(&edges, 0, TrimSide::Previous), None);
+        assert_eq!(ripple_trim_range(&edges, 8_000, TrimSide::Next), None);
+    }
+
+    #[test]
+    fn ripple_trim_cuts_to_the_edit_point_and_undoes() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(
+            EditDocument::from_retained(vec![ri(0, 4_000), ri(6_000, 10_000)]).unwrap(),
+        );
+        // Q at edited 3_000: removes [1_000, 3_000) of source back to the start.
+        assert_eq!(
+            history
+                .ripple_trim(0, 3_000, TrimSide::Previous, dir.path())
+                .unwrap(),
+            (0, 3_000)
+        );
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![ri(3_000, 4_000), ri(6_000, 10_000)]
+        );
+        // E at edited 2_000 (source 7_000): removes up to the end of that clip.
+        assert_eq!(
+            history
+                .ripple_trim(1, 2_000, TrimSide::Next, dir.path())
+                .unwrap(),
+            (2_000, 5_000)
+        );
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![ri(3_000, 4_000), ri(6_000, 7_000)]
+        );
+        history.undo(2, dir.path()).unwrap();
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![ri(3_000, 4_000), ri(6_000, 10_000)]
+        );
+    }
+
+    #[test]
+    fn ripple_trim_refuses_to_empty_the_timeline() {
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 4_000)]).unwrap());
+        assert!(history
+            .ripple_trim(0, 4_000, TrimSide::Previous, dir.path())
+            .is_err());
+        assert!(history
+            .ripple_trim(0, 0, TrimSide::Next, dir.path())
+            .is_err());
+        assert!(history
+            .ripple_trim(0, 0, TrimSide::Previous, dir.path())
+            .is_err());
+        assert_eq!(history.current.revision, 0);
     }
 
     #[test]

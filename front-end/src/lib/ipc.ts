@@ -171,6 +171,19 @@ export const api = {
       expectedRevision,
       cuts,
     }),
+  /** Premiere-style Q ("previous") and E ("next") ripple trim at the playhead. */
+  projectRippleTrim: (
+    projectHandle: string,
+    expectedRevision: number,
+    playheadUs: number,
+    side: "previous" | "next",
+  ) =>
+    invokeTauri<OpenedProject>("project_ripple_trim", {
+      projectHandle,
+      expectedRevision,
+      playheadUs: Math.max(0, Math.round(playheadUs)),
+      side,
+    }),
   projectSplit: (projectHandle: string, expectedRevision: number, editedUs: number) =>
     invokeTauri<OpenedProject>("project_split", {
       projectHandle,

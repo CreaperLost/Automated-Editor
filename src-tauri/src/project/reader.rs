@@ -4,7 +4,7 @@ use super::{
     journal::JournalRecord,
     layout::EditLayout,
     manifest::{ProjectManifest, TrackDescriptor},
-    revision::{self, EditDocument, EditHistory},
+    revision::{self, EditDocument, EditHistory, TrimSide},
 };
 use crate::zoom::ZoomKeyframe;
 use serde::{Deserialize, Serialize};
@@ -517,6 +517,18 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .ripple_cuts(expected_revision, cuts, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn ripple_trim(
+        &mut self,
+        expected_revision: u64,
+        playhead_us: u64,
+        side: TrimSide,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .ripple_trim(expected_revision, playhead_us, side, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
