@@ -16,6 +16,7 @@ const DETECTION_KEYS: (keyof WebcamFocusSettings)[] = [
   "speechThresholdDb",
   "pauseToleranceMs",
   "idleMs",
+  "requireSpeech",
   "minFocusMs",
   "cursorMovesAreActivity",
 ];
@@ -29,7 +30,7 @@ function segmentEditedSpan(segment: WebcamFocusSegment) {
   };
 }
 
-/// Auto webcam layout: the webcam fills the frame while you talk and the mouse rests.
+/// Auto webcam layout: the webcam fills the frame once the mouse has rested for a while.
 export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamShown }) => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
@@ -84,8 +85,8 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
         setStale(false);
         setNotes([
           result.detected === 0
-            ? "No stretches of talking with an idle mouse were found."
-            : `Found ${result.detected} stretch${result.detected === 1 ? "" : "es"} of talking with an idle mouse.`,
+            ? "No long enough idle-mouse stretches were found."
+            : `Found ${result.detected} idle-mouse stretch${result.detected === 1 ? "" : "es"}.`,
           ...result.diagnostics,
         ]);
       })
@@ -155,8 +156,9 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
       }
     >
       <p className="text-[11px] text-studio-400">
-        The webcam fills the frame while you talk and the mouse rests, and shrinks back to its
-        bubble just before you click, scroll or move the mouse.
+        The webcam fills the frame once the mouse has rested for the time below, and goes back
+        to its bubble just before you click, scroll or move the mouse. Select clips on the
+        timeline and use Normal view to keep the bubble there.
       </p>
       {!openedProject && <p className="text-[11px] text-studio-500">Open a project to use this.</p>}
       {openedProject && !webcamShown && (
@@ -183,7 +185,7 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
               ? "bg-amber-500/20 border-amber-400/50 text-amber-200 hover:bg-amber-500/30"
               : "bg-indigo-600/20 border-indigo-500/30 text-indigo-300 hover:bg-indigo-600/30"
           }`}
-          title="Find stretches of talking with an idle mouse. Segments you added or switched off are kept."
+          title="Find stretches where the mouse rests. Segments you added or switched off are kept."
         >
           {busy ? "Detecting…" : saved.segments.length === 0 ? "Detect" : "Re-detect"}
         </button>
@@ -200,7 +202,7 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
       <div className="space-y-3">
         <label className="text-xs text-studio-400">Look</label>
         <RangeRow
-          label="Webcam size when talking"
+          label="Full-frame webcam size"
           value={draft.focusSizePct}
           min={40}
           max={100}
@@ -208,9 +210,9 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
           onChange={(focusSizePct) => setSetting({ focusSizePct })}
         />
         <RangeRow
-          label="Transition"
+          label={draft.transitionMs === 0 ? "Transition (instant)" : "Transition"}
           value={draft.transitionMs}
-          min={100}
+          min={0}
           max={2000}
           step={50}
           unit="ms"
@@ -221,31 +223,44 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
       <div className="space-y-3">
         <label className="text-xs text-studio-400">Detection</label>
         <RangeRow
-          label="Speech level"
-          value={draft.speechThresholdDb}
-          min={-70}
-          max={-10}
-          unit=" dB"
-          onChange={(speechThresholdDb) => setSetting({ speechThresholdDb })}
-        />
-        <RangeRow
-          label="Allowed pause in speech"
-          value={draft.pauseToleranceMs}
-          min={100}
-          max={3000}
-          step={50}
-          unit="ms"
-          onChange={(pauseToleranceMs) => setSetting({ pauseToleranceMs })}
-        />
-        <RangeRow
-          label="Mouse idle before growing"
-          value={draft.idleMs}
+          label="Mouse idle before full frame"
+          value={draft.idleMs / 1000}
           min={0}
-          max={5000}
-          step={100}
-          unit="ms"
-          onChange={(idleMs) => setSetting({ idleMs })}
+          max={60}
+          step={0.5}
+          unit="s"
+          onChange={(seconds) => setSetting({ idleMs: Math.round(seconds * 1000) })}
         />
+        <label className="flex items-center justify-between text-xs text-studio-400">
+          <span>Only while I'm talking</span>
+          <input
+            type="checkbox"
+            checked={draft.requireSpeech}
+            onChange={(e) => setSetting({ requireSpeech: e.target.checked })}
+            className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
+          />
+        </label>
+        {draft.requireSpeech && (
+          <>
+            <RangeRow
+              label="Speech level"
+              value={draft.speechThresholdDb}
+              min={-70}
+              max={-10}
+              unit=" dB"
+              onChange={(speechThresholdDb) => setSetting({ speechThresholdDb })}
+            />
+            <RangeRow
+              label="Allowed pause in speech"
+              value={draft.pauseToleranceMs}
+              min={100}
+              max={3000}
+              step={50}
+              unit="ms"
+              onChange={(pauseToleranceMs) => setSetting({ pauseToleranceMs })}
+            />
+          </>
+        )}
         <RangeRow
           label="Shortest full-frame stretch"
           value={draft.minFocusMs}

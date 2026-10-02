@@ -1,5 +1,6 @@
-//! Auto webcam layout: the webcam grows to fill the canvas while the speaker talks and the
-//! screen is idle, and shrinks back to its bubble before the next click, scroll or cursor move.
+//! Auto webcam layout: the webcam fills the canvas once the mouse has rested for a set time
+//! (optionally only while the speaker talks), and goes back to its bubble before the next
+//! click, scroll or cursor move. Clips marked "normal view" never switch.
 //!
 //! Detection runs once, in source time, and stores plain segments in the edit document, so
 //! the user can switch each one off or add their own. Rendering only reads those segments,
@@ -10,6 +11,9 @@ use crate::zoom::EditedRange;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_FOCUS_SEGMENTS: usize = 1_024;
+pub const MAX_NORMAL_VIEW_RANGES: usize = 1_024;
+/// Longest mouse rest the trigger can wait for.
+pub const MAX_IDLE_MS: u32 = 60_000;
 /// Cursor travel, as a fraction of the screen diagonal, that counts as activity.
 /// Smaller moves are hand tremor or a resting mouse being resampled.
 const CURSOR_MOVE_EPSILON: f64 = 0.006;
@@ -25,15 +29,16 @@ fn default_pause_tolerance_ms() -> u32 {
 }
 
 fn default_idle_ms() -> u32 {
-    1_500
+    5_000
 }
 
 fn default_min_focus_ms() -> u32 {
     2_500
 }
 
+/// Zero is a hard cut: the webcam switches to full frame instantly.
 fn default_transition_ms() -> u32 {
-    450
+    0
 }
 
 fn default_focus_size_pct() -> f32 {
@@ -53,13 +58,16 @@ pub struct WebcamFocusSettings {
     /// Pauses in speech shorter than this keep the webcam large.
     #[serde(default = "default_pause_tolerance_ms")]
     pub pause_tolerance_ms: u32,
-    /// How long the mouse must rest after activity before the webcam grows.
+    /// How long the mouse must rest after activity before the webcam fills the frame.
     #[serde(default = "default_idle_ms")]
     pub idle_ms: u32,
+    /// Also require speech: the webcam only fills the frame while the speaker talks.
+    #[serde(default)]
+    pub require_speech: bool,
     /// Shorter talking-while-idle stretches are ignored.
     #[serde(default = "default_min_focus_ms")]
     pub min_focus_ms: u32,
-    /// Grow and shrink animation length.
+    /// Grow and shrink animation length; zero switches instantly.
     #[serde(default = "default_transition_ms")]
     pub transition_ms: u32,
     /// Treat cursor movement, not only clicks and scrolls, as screen activity.
@@ -76,6 +84,7 @@ impl Default for WebcamFocusSettings {
             speech_threshold_db: default_speech_threshold_db(),
             pause_tolerance_ms: default_pause_tolerance_ms(),
             idle_ms: default_idle_ms(),
+            require_speech: false,
             min_focus_ms: default_min_focus_ms(),
             transition_ms: default_transition_ms(),
             cursor_moves_are_activity: true,
@@ -94,13 +103,13 @@ impl WebcamFocusSettings {
         if !(100..=5_000).contains(&self.pause_tolerance_ms) {
             return Err("Pause tolerance is out of range".into());
         }
-        if self.idle_ms > 10_000 {
+        if self.idle_ms > MAX_IDLE_MS {
             return Err("Idle time is out of range".into());
         }
         if !(500..=30_000).contains(&self.min_focus_ms) {
             return Err("Minimum focus length is out of range".into());
         }
-        if !(100..=2_000).contains(&self.transition_ms) {
+        if self.transition_ms > 2_000 {
             return Err("Transition length is out of range".into());
         }
         if !self.focus_size_pct.is_finite() || !(40.0..=100.0).contains(&self.focus_size_pct) {
@@ -135,6 +144,18 @@ pub struct WebcamFocusSegment {
     pub edited_ranges: Vec<EditedRange>,
 }
 
+/// A source range (usually a clip) where the webcam stays in its bubble whatever the
+/// segments say.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalViewRange {
+    pub source_start_us: u64,
+    pub source_end_us: u64,
+    /// Where the range lands on the edited timeline. Filled in for the UI, never stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edited_ranges: Vec<EditedRange>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WebcamFocus {
@@ -145,6 +166,9 @@ pub struct WebcamFocus {
     pub settings: WebcamFocusSettings,
     #[serde(default)]
     pub segments: Vec<WebcamFocusSegment>,
+    /// Ranges kept in normal view (webcam bubble), e.g. clips the user switched back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub normal_view: Vec<NormalViewRange>,
 }
 
 impl WebcamFocus {
@@ -166,6 +190,16 @@ impl WebcamFocus {
                 return Err("Webcam focus segment must be a half-open source range".into());
             }
         }
+        if self.normal_view.len() > MAX_NORMAL_VIEW_RANGES {
+            return Err("Too many normal-view ranges".into());
+        }
+        if self
+            .normal_view
+            .iter()
+            .any(|range| range.source_end_us <= range.source_start_us)
+        {
+            return Err("Normal-view range must be a half-open source range".into());
+        }
         Ok(())
     }
 
@@ -179,6 +213,19 @@ impl WebcamFocus {
                 .cmp(&b.source_start_us)
                 .then(a.id.cmp(&b.id))
         });
+        let ranges = self
+            .normal_view
+            .iter()
+            .map(|range| (range.source_start_us, range.source_end_us))
+            .collect();
+        self.normal_view = merge_ranges(ranges)
+            .into_iter()
+            .map(|(source_start_us, source_end_us)| NormalViewRange {
+                source_start_us,
+                source_end_us,
+                edited_ranges: Vec::new(),
+            })
+            .collect();
         self
     }
 
@@ -190,9 +237,17 @@ impl WebcamFocus {
                 .map(|(start_us, end_us)| EditedRange { start_us, end_us })
                 .collect();
         }
+        for range in &mut self.normal_view {
+            range.edited_ranges = mapper
+                .source_range_to_edited(range.source_start_us, range.source_end_us)
+                .into_iter()
+                .map(|(start_us, end_us)| EditedRange { start_us, end_us })
+                .collect();
+        }
     }
 
-    /// Enabled segments on the edited timeline, sorted and merged. Empty when switched off.
+    /// Enabled segments on the edited timeline minus the normal-view ranges, sorted and
+    /// merged. Empty when switched off.
     pub fn edited_ranges(&self, mapper: &TimelineMapper) -> Vec<(u64, u64)> {
         if !self.enabled {
             return Vec::new();
@@ -205,7 +260,14 @@ impl WebcamFocus {
                 mapper.source_range_to_edited(segment.source_start_us, segment.source_end_us)
             })
             .collect();
-        merge_ranges(ranges)
+        let normal = self
+            .normal_view
+            .iter()
+            .flat_map(|range| {
+                mapper.source_range_to_edited(range.source_start_us, range.source_end_us)
+            })
+            .collect();
+        subtract_ranges(&merge_ranges(ranges), &merge_ranges(normal))
     }
 
     /// Replaces the auto-detected segments, keeping manual ones and any auto segment the
@@ -263,7 +325,8 @@ pub fn speech_ranges(covered: &[(u64, u64)], silent: &[(u64, u64)]) -> Vec<(u64,
     )
 }
 
-/// Source ranges where the speaker talks and the screen is idle.
+/// Source ranges inside `speech` where the screen is idle. Without the speech requirement,
+/// pass the whole recording as `speech`.
 pub fn detect_focus_ranges(
     speech: &[(u64, u64)],
     telemetry: &TelemetryStream,
@@ -547,8 +610,80 @@ mod tests {
         assert!(parsed.enabled);
         assert_eq!(parsed.settings, WebcamFocusSettings::default());
         parsed.validate().unwrap();
+        // Zero is an instant cut, and the idle trigger reaches a minute.
+        let mut ok = parsed.clone();
+        ok.settings.transition_ms = 0;
+        ok.settings.idle_ms = MAX_IDLE_MS;
+        ok.validate().unwrap();
         let mut bad = parsed.clone();
-        bad.settings.transition_ms = 5;
+        bad.settings.transition_ms = 2_001;
         assert!(bad.validate().is_err());
+        let mut bad = parsed.clone();
+        bad.settings.idle_ms = MAX_IDLE_MS + 1;
+        assert!(bad.validate().is_err());
+        // Older projects without the new fields keep loading, and save without them.
+        assert!(!parsed.settings.require_speech);
+        assert!(parsed.normal_view.is_empty());
+        assert!(!serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("normalView"));
+    }
+
+    #[test]
+    fn zero_transition_switches_instantly() {
+        let ranges = [(10 * S, 20 * S)];
+        assert_eq!(focus_weight(&ranges, 10 * S - 1, 0), 0.0);
+        assert_eq!(focus_weight(&ranges, 10 * S + 1, 0), 1.0);
+        assert_eq!(focus_weight(&ranges, 20 * S - 1, 0), 1.0);
+        assert_eq!(focus_weight(&ranges, 20 * S, 0), 0.0);
+    }
+
+    #[test]
+    fn mouse_rest_alone_triggers_full_frame_after_the_idle_time() {
+        // The whole recording is a candidate when speech is not required.
+        let mut settings = WebcamFocusSettings::default();
+        settings.idle_ms = 10_000;
+        let telemetry = stream(vec![click(1 * S), click(30 * S)]);
+        let ranges = detect_focus_ranges(&[(0, 60 * S)], &telemetry, &settings);
+        let lead = settings.transition_us() + ACTIVITY_LEAD_US;
+        // Full frame from ten seconds after the last click until just before the next one.
+        assert_eq!(ranges, vec![(11 * S, 30 * S - lead), (40 * S, 60 * S)]);
+    }
+
+    #[test]
+    fn normal_view_ranges_keep_the_bubble() {
+        let mapper = TimelineMapper::new(vec![SourceInterval::new("a".into(), 0, 30 * S)]);
+        let mut focus = WebcamFocus {
+            enabled: true,
+            ..WebcamFocus::default()
+        };
+        focus.replace_auto_segments(&[(5 * S, 25 * S)]);
+        focus.normal_view = vec![
+            NormalViewRange {
+                source_start_us: 12 * S,
+                source_end_us: 15 * S,
+                edited_ranges: Vec::new(),
+            },
+            NormalViewRange {
+                source_start_us: 10 * S,
+                source_end_us: 13 * S,
+                edited_ranges: Vec::new(),
+            },
+        ];
+        focus.validate().unwrap();
+        assert_eq!(
+            focus.edited_ranges(&mapper),
+            vec![(5 * S, 10 * S), (15 * S, 25 * S)]
+        );
+        // Overlapping ranges merge when the document is normalized.
+        let normalized = focus.normalized();
+        assert_eq!(normalized.normal_view.len(), 1);
+        assert_eq!(
+            (
+                normalized.normal_view[0].source_start_us,
+                normalized.normal_view[0].source_end_us
+            ),
+            (10 * S, 15 * S)
+        );
     }
 }
