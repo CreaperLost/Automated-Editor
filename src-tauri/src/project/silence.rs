@@ -272,6 +272,11 @@ pub fn detect_track_silence(
             "Silence suggestion count was bounded to one revision of ripple cuts",
         );
     }
+    // Reordered clips map later source time earlier: list suggestions in timeline order.
+    suggestions.sort_by_key(|s| s.start_us);
+    for (index, suggestion) in suggestions.iter_mut().enumerate() {
+        suggestion.id = format!("silence-{}", index + 1);
+    }
 
     Ok(SilenceDetectionResult {
         track_id: ctx.track_id.clone(),

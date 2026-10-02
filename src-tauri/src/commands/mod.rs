@@ -628,6 +628,27 @@ pub fn project_ripple_cuts_impl(
     Ok(summary)
 }
 
+pub fn project_move_range_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    start_us: u64,
+    end_us: u64,
+    target_us: u64,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let summary = reader.move_range(expected_revision, start_us, end_us, target_us)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(summary)
+}
+
 pub fn project_ripple_trim_impl(
     state: &AppState,
     project_handle: String,
@@ -667,6 +688,7 @@ pub fn project_restore_cuts_impl(
     project_handle: String,
     expected_revision: u64,
     ranges: Vec<EditCut>,
+    grow: crate::project::revision::RestoreGrow,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
@@ -676,7 +698,7 @@ pub fn project_restore_cuts_impl(
         .into_iter()
         .map(|range| (range.start_us, range.end_us))
         .collect();
-    let summary = reader.restore_cuts(expected_revision, &ranges)?;
+    let summary = reader.restore_cuts(expected_revision, &ranges, grow)?;
     state
         .playback
         .lock()

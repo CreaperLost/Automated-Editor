@@ -184,17 +184,43 @@ export const api = {
       playheadUs: Math.max(0, Math.round(playheadUs)),
       side,
     }),
+  /** Moves the edited range [startUs, endUs) (a clip) to edited position targetUs. */
+  projectMoveRange: (
+    projectHandle: string,
+    expectedRevision: number,
+    startUs: number,
+    endUs: number,
+    targetUs: number,
+  ) =>
+    invokeTauri<OpenedProject>("project_move_range", {
+      projectHandle,
+      expectedRevision,
+      startUs: Math.max(0, Math.round(startUs)),
+      endUs: Math.max(0, Math.round(endUs)),
+      targetUs: Math.max(0, Math.round(targetUs)),
+    }),
   projectSplit: (projectHandle: string, expectedRevision: number, editedUs: number) =>
     invokeTauri<OpenedProject>("project_split", {
       projectHandle,
       expectedRevision,
       editedUs: Math.max(0, Math.round(editedUs)),
     }),
-  projectRestoreCuts: (projectHandle: string, expectedRevision: number, ranges: EditCut[]) =>
+  /**
+   * Puts removed media back. `grow` picks the clip that grows when the media touches two
+   * clips that are no longer neighbours: "end" (default) the one ending where it starts,
+   * "start" the one starting where it ends.
+   */
+  projectRestoreCuts: (
+    projectHandle: string,
+    expectedRevision: number,
+    ranges: EditCut[],
+    grow: "end" | "start" = "end",
+  ) =>
     invokeTauri<OpenedProject>("project_restore_cuts", {
       projectHandle,
       expectedRevision,
       ranges,
+      grow,
     }),
   projectUndo: (projectHandle: string, expectedRevision: number) =>
     invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision }),

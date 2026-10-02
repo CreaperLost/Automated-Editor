@@ -22,11 +22,13 @@ export interface TimelineClip {
   sourceStartUs: number;
 }
 
-/** A removed source range, drawn where it used to sit on the edited timeline. */
+/** A removed source range, drawn against the clip it would grow back onto. */
 export interface CutMarker {
   editedUs: number;
   sourceStartUs: number;
   sourceEndUs: number;
+  /** Which clip grows on restore: the one ending where the cut starts, or starting where it ends. */
+  grow: "end" | "start";
 }
 
 /** Splits retained media into clips at cut edges and at the user's split points. */
@@ -48,14 +50,30 @@ export function buildClips(retained: Range[], splitPointsUs: number[] = []): Tim
   return clips;
 }
 
+/**
+ * Places each removed range at the end of the clip it follows in the recording, or else at
+ * the start of the clip it precedes. Clips can be reordered, so this is found per clip
+ * rather than by summing everything earlier in the recording.
+ */
 export function buildCutMarkers(retained: Range[], removed: Range[] = []): CutMarker[] {
-  return removed.map((cut) => ({
-    editedUs: retained
-      .filter((interval) => interval.startUs < cut.startUs)
-      .reduce((sum, interval) => sum + Math.min(interval.endUs, cut.startUs) - interval.startUs, 0),
-    sourceStartUs: cut.startUs,
-    sourceEndUs: cut.endUs,
-  }));
+  const placed: { interval: Range; editedStart: number }[] = [];
+  let edited = 0;
+  for (const interval of retained) {
+    placed.push({ interval, editedStart: edited });
+    edited += interval.endUs - interval.startUs;
+  }
+  return removed.map((cut) => {
+    const before = placed.find((p) => p.interval.endUs === cut.startUs);
+    const after = placed.find((p) => p.interval.startUs === cut.endUs);
+    const base = { sourceStartUs: cut.startUs, sourceEndUs: cut.endUs };
+    if (before) {
+      return { ...base, grow: "end", editedUs: before.editedStart + before.interval.endUs - before.interval.startUs };
+    }
+    if (after) return { ...base, grow: "start", editedUs: after.editedStart };
+    // Not next to any clip (e.g. bounded by recorder pauses): before the next clip in the recording.
+    const next = placed.find((p) => p.interval.startUs > cut.startUs);
+    return { ...base, grow: "end", editedUs: next ? next.editedStart : edited };
+  });
 }
 
 /** Edit points on the edited timeline: 0, every clip edge, and the end. */

@@ -1468,6 +1468,65 @@ mod tests {
         .unwrap()
     }
 
+    /// Export with the clips reordered: the later recording plays first.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_plays_reordered_clips_in_timeline_order() {
+        use crate::project::reader::{ProjectReader, RetainedInterval};
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let reader = ProjectReader::open(&root).unwrap();
+        let document = EditDocument::from_retained(vec![
+            RetainedInterval {
+                start_us: 1_200_000,
+                end_us: 2_000_000,
+            },
+            RetainedInterval {
+                start_us: 0,
+                end_us: 500_000,
+            },
+        ])
+        .unwrap();
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let gate = EncoderGate::new();
+        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
+            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let duration = media_duration_us(&output).unwrap();
+        assert!(
+            duration.abs_diff(1_300_000) <= AUDIO_DURATION_SLACK_US,
+            "duration {duration}"
+        );
+        // The screen fixture is 10 fps with level 10 + 12 * frame.
+        let level_at = |t: u64| {
+            let frame = decode_h264_frame(&output, t).unwrap();
+            frame.data[((90 * frame.stride) + 160 * 4) as usize + 1]
+        };
+        let first = level_at(150_000);
+        assert!(
+            first.abs_diff(10 + 12 * 13) <= 14,
+            "opens on source 1.35s, got {first}"
+        );
+        let later = level_at(1_050_000);
+        assert!(
+            later.abs_diff(10 + 12 * 2) <= 14,
+            "then source 0.25s, got {later}"
+        );
+        crate::media::release_decoders();
+    }
+
     /// Full export of a real project bundle with a cut: decode, composite, encode, mux.
     #[test]
     #[cfg_attr(
