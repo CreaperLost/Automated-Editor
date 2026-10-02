@@ -1029,6 +1029,24 @@ mod tests {
     }
 
     #[test]
+    fn unreachable_min_dwell_switches_hover_zooms_off() {
+        // The Zoom panel's "Hover zoom: Off" sends dwell scale 1 and a one-hour dwell.
+        let config = ZoomConfig {
+            dwell_scale: 1.0,
+            min_dwell_us: 3_600_000_000,
+            ..ZoomConfig::default()
+        };
+        config.validate().unwrap();
+        let data = stream(vec![
+            move_at(0, 1_000_000, 0.5, 0.5),
+            move_at(1, 1_400_000, 0.51, 0.49),
+            move_at(2, 1_800_000, 0.50, 0.50),
+        ]);
+        let generated = generate_zoom_suggestions(&data, &config).unwrap();
+        assert!(generated.suggestions.is_empty());
+    }
+
+    #[test]
     fn bezier_evaluator_respects_cuts_and_clamps_viewport_not_source() {
         let config = ZoomConfig::default();
         let suggestion = ZoomSuggestion {

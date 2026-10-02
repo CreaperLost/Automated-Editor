@@ -6,10 +6,7 @@ import {
   ZoomIn,
   ZoomOut,
   Scissors,
-  Plus,
-  Check,
   X,
-  Trash2,
   RotateCcw,
   Video,
   MonitorPlay,
@@ -18,6 +15,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
 import { MEDIA_DRAG_TYPE } from "../media/MediaPanel";
+import { useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsStore";
 import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
 import {
@@ -118,7 +116,10 @@ export const TimelineStudio: React.FC = () => {
   const [rangeEnd, setRangeEnd] = useState("0");
   const [editError, setEditError] = useState<string>();
   const [editing, setEditing] = useState(false);
-  const [selectedZoomId, setSelectedZoomId] = useState<string>();
+  const selectedZoomId = useProjectStore((s) => s.selectedZoomId);
+  const setSelectedZoomId = useProjectStore((s) => s.setSelectedZoomId);
+  const setTimelineSelection = useProjectStore((s) => s.setTimelineSelection);
+  const autoZoomOptions = useZoomSettingsStore((s) => s.options);
   const [zoomBusy, setZoomBusy] = useState(false);
   const dragging = useRef<{
     mode: DragMode;
@@ -203,6 +204,9 @@ export const TimelineStudio: React.FC = () => {
     setRangeEnd(String(endUs / 1e6));
   };
   const clearSelection = () => selectRange(0, durationUs);
+  useEffect(() => {
+    setTimelineSelection(selection);
+  }, [selection?.startUs, selection?.endUs, setTimelineSelection]);
 
   const retained = openedProject?.retainedIntervals ?? [];
   const clips = buildClips(retained, openedProject?.splitPointsUs);
@@ -593,7 +597,7 @@ export const TimelineStudio: React.FC = () => {
     if (!openedProject) return;
     let active = true;
     void api
-      .projectZoomSuggestions(openedProject.projectHandle)
+      .projectZoomSuggestions(openedProject.projectHandle, zoomConfigFor(autoZoomOptions))
       .then((generation) => {
         if (active) applyZoomGeneration(generation);
       })
@@ -604,7 +608,7 @@ export const TimelineStudio: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [openedProject?.projectHandle, openedProject?.revision, applyZoomGeneration]);
+  }, [openedProject?.projectHandle, openedProject?.revision, applyZoomGeneration, autoZoomOptions]);
 
   useEffect(() => {
     if (selectedZoomId && !zoomKeyframes.some((bar) => bar.zoomId === selectedZoomId)) {
@@ -625,8 +629,6 @@ export const TimelineStudio: React.FC = () => {
     }
   };
 
-  const selectedBar = zoomKeyframes.find((bar) => bar.zoomId === selectedZoomId);
-  const persistedSelected = openedProject?.zooms?.find((zoom) => zoom.id === selectedZoomId);
 
   const patchPersisted = (zoom: ProjectZoom, sourceStartUs: number, sourceEndUs: number) => {
     if (!openedProject) return;
@@ -915,39 +917,6 @@ export const TimelineStudio: React.FC = () => {
             Redo
           </button>
 
-          <button
-            disabled={!openedProject || zoomBusy || durationUs < 3}
-            onClick={() => {
-              if (!openedProject) return;
-              const selectedStart = Math.round(Number(rangeStart) * 1e6);
-              const selectedEnd = Math.round(Number(rangeEnd) * 1e6);
-              const useSelection =
-                Number.isSafeInteger(selectedStart) &&
-                Number.isSafeInteger(selectedEnd) &&
-                selectedEnd - selectedStart >= 3 &&
-                selectedEnd <= durationUs;
-              const startUs = useSelection
-                ? selectedStart
-                : Math.max(0, currentTimeUs - 600_000);
-              const endUs = useSelection
-                ? selectedEnd
-                : Math.min(durationUs, Math.max(startUs + 2_000_000, currentTimeUs + 1_400_000));
-              void persistZoom(() =>
-                api.projectZoomAdd(openedProject.projectHandle, openedProject.revision, {
-                  editedStartUs: startUs,
-                  editedEndUs: endUs,
-                  centerX: 0.5,
-                  centerY: 0.5,
-                  scale: 1.8,
-                }),
-              );
-            }}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 text-xs font-medium transition-colors disabled:opacity-40"
-            title="Add a manual zoom on the selection, or around the playhead"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Zoom</span>
-          </button>
 
           <button
             disabled={!openedProject || editing || !selection}
@@ -985,118 +954,13 @@ export const TimelineStudio: React.FC = () => {
             <MonitorPlay className="w-3.5 h-3.5" />
             <span>Normal view</span>
           </button>
-          {pendingCount > 0 && (
-            <>
-              <button
-                disabled={zoomBusy}
-                onClick={() => {
-                  if (!openedProject) return;
-                  void persistZoom(() =>
-                    api.projectZoomAccept(
-                      openedProject.projectHandle,
-                      openedProject.revision,
-                      pendingZoomSuggestions.map((item) => item.id),
-                    ),
-                  );
-                }}
-                className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-indigo-200 hover:bg-indigo-600/20 disabled:opacity-40"
-                title="Accept all pending auto-zooms"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Accept {pendingCount}</span>
-              </button>
-              {selectedBar?.pending && (
-                <>
-                  <button
-                    disabled={zoomBusy}
-                    onClick={() => {
-                      if (!openedProject || !selectedZoomId) return;
-                      void persistZoom(() =>
-                        api.projectZoomAccept(openedProject.projectHandle, openedProject.revision, [
-                          selectedZoomId,
-                        ]),
-                      );
-                    }}
-                    className="px-2 py-1.5 rounded-md text-xs text-indigo-200 hover:bg-indigo-600/20 disabled:opacity-40"
-                  >
-                    Accept selected
-                  </button>
-                  <button
-                    disabled={zoomBusy}
-                    onClick={() => {
-                      if (!openedProject || !selectedZoomId) return;
-                      void persistZoom(() =>
-                        api.projectZoomDismiss(openedProject.projectHandle, openedProject.revision, [
-                          selectedZoomId,
-                        ]),
-                      );
-                    }}
-                    className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Dismiss</span>
-                  </button>
-                </>
-              )}
-            </>
-          )}
-          {persistedSelected && (
-            <>
-              <label className="flex items-center space-x-1 text-[11px] text-studio-300">
-                <span>Scale</span>
-                <input
-                  aria-label="Zoom scale"
-                  type="number"
-                  min={1}
-                  max={8}
-                  step={0.1}
-                  value={persistedSelected.scale}
-                  disabled={zoomBusy}
-                  onChange={(event) => {
-                    const scale = Number(event.target.value);
-                    if (!Number.isFinite(scale) || scale < 1 || scale > 8 || !openedProject) return;
-                    void persistZoom(() =>
-                      api.projectZoomUpdate(openedProject.projectHandle, openedProject.revision, {
-                        ...persistedSelected,
-                        scale,
-                      }),
-                    );
-                  }}
-                  className="w-14 bg-studio-950 px-1 py-0.5 rounded"
-                />
-              </label>
-              <button
-                disabled={zoomBusy}
-                onClick={() => {
-                  if (!openedProject || !selectedZoomId) return;
-                  void persistZoom(() =>
-                    api.projectZoomDelete(openedProject.projectHandle, openedProject.revision, selectedZoomId),
-                  );
-                }}
-                className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-rose-300 hover:bg-rose-950/40 disabled:opacity-40"
-                title="Delete this zoom"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
-            </>
-          )}
-          {pendingCount > 0 && (
-            <span className="text-[11px] text-indigo-300/80">
-              {pendingCount} pending auto-zoom{pendingCount === 1 ? "" : "s"}
-            </span>
-          )}
-          {persistedCount > 0 && (
-            <span className="text-[11px] text-studio-400">
-              {persistedCount} saved
-            </span>
-          )}
-          {zoomDiagnostics.length > 0 && pendingCount === 0 && persistedCount === 0 && (
-            <span
-              className="text-[11px] text-amber-300/90 truncate max-w-[360px]"
-              title={zoomDiagnostics.join("\n")}
-            >
-              No auto-zoom: {zoomDiagnostics[zoomDiagnostics.length - 1]}
+          {(pendingCount > 0 || zoomDiagnostics.length > 0 || persistedCount > 0) && (
+            <span className="text-[11px] text-indigo-300/80" title="Review and change zooms in the Zoom panel">
+              {pendingCount > 0
+                ? `${pendingCount} zoom suggestion${pendingCount === 1 ? "" : "s"} in the Zoom panel`
+                : persistedCount > 0
+                  ? `${persistedCount} zoom${persistedCount === 1 ? "" : "s"}`
+                  : "No auto-zoom (see the Zoom panel)"}
             </span>
           )}
 

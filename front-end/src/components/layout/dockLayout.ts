@@ -6,6 +6,7 @@ export const DOCK_PANELS = {
   transcript: { title: "Transcript", minimumWidth: 260, minimumHeight: 110 },
   inspector: { title: "Inspector", minimumWidth: 240, minimumHeight: 200 },
   media: { title: "Media", minimumWidth: 220, minimumHeight: 110 },
+  zoom: { title: "Zoom", minimumWidth: 220, minimumHeight: 160 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -26,9 +27,14 @@ function panel(id: DockPanelId) {
   return { id, component: id, title, minimumWidth, minimumHeight };
 }
 
-/// The media bin shares the inspector's tab group, behind it.
+/// The media bin and the zoom panel share the inspector's tab group, behind it.
 function addMedia(api: DockviewApi) {
   api.addPanel({ ...panel("media"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+  addZoom(api);
+}
+
+function addZoom(api: DockviewApi) {
+  api.addPanel({ ...panel("zoom"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
 /// Replaces the current layout with `preset`.
@@ -74,6 +80,11 @@ export function restoreLayout(api: DockviewApi) {
       if (!ids.has("media") && ids.has("inspector")) {
         addMedia(api);
         ids.add("media");
+        ids.add("zoom");
+      }
+      if (!ids.has("zoom") && ids.has("inspector")) {
+        addZoom(api);
+        ids.add("zoom");
       }
       if ((Object.keys(DOCK_PANELS) as DockPanelId[]).every((id) => ids.has(id))) return;
     }
