@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { Track, ZoomKeyframe, SilenceBlock, ProjectManifest, OpenedProject, WaveformPage, PlaybackStatus, studioTrackType, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
+import { broadcastProject } from "../lib/windowSync";
 import { useSettingsStore } from "./settingsStore";
 
 const RECENT_PROJECTS_KEY = "aeroedits.recentProjects";
@@ -131,7 +132,9 @@ interface ProjectStore {
   applySilenceCuts: () => void;
   setIsSilenceModalOpen: (open: boolean) => void;
   setTrackWaveform: (trackId: string, waveform: WaveformPage) => void;
-  applyOpenedProject: (project: OpenedProject) => void;
+  /** Applies an edit's result. `remote` marks one broadcast by another window: it is applied
+   *  only if newer, and not broadcast again. */
+  applyOpenedProject: (project: OpenedProject, options?: { remote?: boolean }) => void;
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -287,7 +290,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       ),
     })),
 
-  applyOpenedProject: (project) =>
+  applyOpenedProject: (project, options) => {
+    const current = get().openedProject;
+    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle) {
+      return;
+    }
+    if (!options?.remote && current?.projectHandle === project.projectHandle) broadcastProject(project);
     set((state) => {
       if (state.openedProject?.projectHandle !== project.projectHandle) return state;
       const taken = new Set([
@@ -323,5 +331,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           };
         }),
       };
-    }),
+    });
+  },
 }));

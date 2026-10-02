@@ -527,6 +527,7 @@ export interface OpenedProject {
   /** Videos, images and audio imported into the project. */
   mediaAssets?: MediaAsset[];
   chapters?: Chapter[];
+  shorts?: Short[];
 }
 
 // Auto webcam layout (src-tauri/src/webcam_focus.rs)
@@ -876,6 +877,30 @@ export interface Chapter {
   title: string;
   /** Edited-timeline start, or null when that moment was cut. Filled in by the backend. */
   editedUs?: number | null;
+}
+
+export interface ShortLayout {
+  cameraPosition: "top" | "bottom";
+  /** Share of the frame height the camera takes, 20 to 70. */
+  cameraPct: number;
+  /** Extra zoom on the screen part, 1 to 3. */
+  screenZoom: number;
+  followZooms: boolean;
+  captions: boolean;
+  captionSpot: "seam" | "screen" | "camera";
+}
+
+/** A vertical clip of the video, anchored in source time at its first and last word. */
+export interface Short {
+  id: string;
+  title: string;
+  sourceStartUs: number;
+  sourceEndUs: number;
+  reason?: string;
+  layout: ShortLayout;
+  /** Absent when an end was cut from the video. Filled in by the backend. */
+  editedStartUs?: number;
+  editedEndUs?: number;
 }
 
 export type AiProvider = "openAi" | "openRouter";

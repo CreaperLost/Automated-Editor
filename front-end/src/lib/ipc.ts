@@ -26,6 +26,8 @@ import {
   TranscriptCutSuggestion,
   AiProvider,
   Chapter,
+  Short,
+  ShortLayout,
   AiSettings,
   AiSettingsView,
   TranscriptRunResult,
@@ -346,6 +348,27 @@ export const api = {
   /** Asks the AI provider for chapters from a track's transcript. */
   projectChaptersGenerate: (projectHandle: string, trackId: string) =>
     invokeTauri<OpenedProject>("project_chapters_generate", { projectHandle, trackId }),
+  projectCurrent: () => invokeTauri<OpenedProject | null>("project_current"),
+  openShortsWindow: () => invokeTauri<void>("open_shorts_window"),
+  projectShortsSet: (projectHandle: string, expectedRevision: number, shorts: Short[]) =>
+    invokeTauri<OpenedProject>("project_shorts_set", {
+      projectHandle,
+      expectedRevision,
+      shorts: shorts.map(({ editedStartUs: _s, editedEndUs: _e, ...short }) => short),
+    }),
+  /** Asks the AI provider for moments that work as shorts; replaces the shorts list. */
+  projectShortsGenerate: (projectHandle: string, trackId: string) =>
+    invokeTauri<OpenedProject>("project_shorts_generate", { projectHandle, trackId }),
+  projectShortExport: (projectHandle: string, shortId: string, settings: ExportSettings) =>
+    invokeTauri<ExportStatus>("project_short_export", { projectHandle, shortId, settings }),
+  /** A JPEG of the short `offsetUs` into it, drawn with `layout`. */
+  shortPreviewFrame: (projectHandle: string, shortId: string, layout: ShortLayout, offsetUs: number) =>
+    invokeTauri<ArrayBuffer>("short_preview_frame", {
+      projectHandle,
+      shortId,
+      layout,
+      offsetUs: Math.max(0, Math.round(offsetUs)),
+    }),
   showInFinder: (path: string): Promise<void> =>
     invokeTauri<void>("show_in_finder", { path }),
   setWindowTitle: async (title: string): Promise<void> => {

@@ -27,6 +27,9 @@ Answer with a JSON object only: {\"chapters\":[{\"line\":<index>,\"title\":\"<ti
 pub struct Line {
     pub edited_us: u64,
     pub source_us: u64,
+    /// End of the line's last word.
+    pub edited_end_us: u64,
+    pub source_end_us: u64,
     pub text: String,
 }
 
@@ -66,6 +69,8 @@ pub fn lines(words: &[TranscriptViewWord]) -> Vec<Line> {
             out.push(Line {
                 edited_us: start,
                 source_us: w.word.source_start_us,
+                edited_end_us: end,
+                source_end_us: w.word.source_end_us,
                 text: String::new(),
             });
             count = 0;
@@ -75,6 +80,8 @@ pub fn lines(words: &[TranscriptViewWord]) -> Vec<Line> {
             line.text.push(' ');
         }
         line.text.push_str(&w.word.text);
+        line.edited_end_us = end;
+        line.source_end_us = w.word.source_end_us;
         count += 1;
         last_end = Some(end);
         last_text = w.word.text.clone();
@@ -85,6 +92,8 @@ pub fn lines(words: &[TranscriptViewWord]) -> Vec<Line> {
             .map(|pair| Line {
                 edited_us: pair[0].edited_us,
                 source_us: pair[0].source_us,
+                edited_end_us: pair[pair.len() - 1].edited_end_us,
+                source_end_us: pair[pair.len() - 1].source_end_us,
                 text: pair
                     .iter()
                     .map(|l| l.text.as_str())
@@ -233,6 +242,8 @@ mod tests {
             .map(|i| Line {
                 edited_us: i * 8 * S,
                 source_us: 1_000 + i,
+                edited_end_us: i * 8 * S + 7 * S,
+                source_end_us: 2_000 + i,
                 text: format!("line {i}"),
             })
             .collect();

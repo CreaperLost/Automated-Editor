@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { listenForProjects } from "./lib/windowSync";
 import {
   Folder,
   FolderOpen,
@@ -57,6 +58,12 @@ export const App: React.FC = () => {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
+
+  // Edits made in the Shorts Studio window.
+  useEffect(
+    () => listenForProjects((next) => useProjectStore.getState().applyOpenedProject(next, { remote: true })),
+    [],
+  );
 
   useEffect(() => {
     if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running")) {

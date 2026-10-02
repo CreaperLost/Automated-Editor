@@ -7,6 +7,7 @@
 pub mod chapters;
 pub mod client;
 pub mod fillers;
+pub mod shorts;
 
 use crate::secrets::KeySpec;
 use serde::{Deserialize, Serialize};
