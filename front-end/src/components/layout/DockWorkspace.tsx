@@ -10,6 +10,7 @@ import {
 import "dockview-react/dist/styles/dockview.css";
 import "./dockTheme.css";
 import { InspectorPanel } from "../inspector/InspectorPanel";
+import { MediaPanel } from "../media/MediaPanel";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { TranscriptPanel } from "../transcript/TranscriptPanel";
 import { StagePanel } from "./StagePanel";
@@ -28,6 +29,7 @@ const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProp
   preview: () => fill(<StagePanel />),
   transcript: () => fill(<TranscriptPanel />),
   inspector: () => fill(<InspectorPanel />),
+  media: () => fill(<MediaPanel />),
   timeline: () => fill(<TimelineStudio />),
 };
 

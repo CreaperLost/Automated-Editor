@@ -265,6 +265,8 @@ pub struct SceneEvaluator {
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The last cue drawn and its colored frame for the active word.
     caption_cache: std::cell::RefCell<CaptionCache>,
+    /// The last imported image drawn, decoded once rather than per frame.
+    image_cache: std::cell::RefCell<Option<(String, VideoFrame)>>,
 }
 
 #[derive(Default)]
@@ -338,6 +340,7 @@ impl SceneEvaluator {
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
+            image_cache: std::cell::RefCell::new(None),
         })
     }
 
@@ -373,6 +376,9 @@ impl SceneEvaluator {
 
     pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
         let mapper = self.document.mapper()?;
+        if let Some((asset_id, local_us)) = mapper.media_at(edited_us) {
+            return self.media_scene(asset_id, local_us);
+        }
         let duration_us = mapper.total_edited_duration_us();
         let ended = edited_us >= duration_us;
         let source_us = mapper.edited_to_source_us(edited_us);
@@ -393,6 +399,7 @@ impl SceneEvaluator {
                         self.document
                             .retained_intervals
                             .iter()
+                            .filter(|interval| interval.is_recording())
                             .rev()
                             .find_map(|interval| {
                                 segments.iter().rev().find_map(|s| {
@@ -429,18 +436,7 @@ impl SceneEvaluator {
         })?;
 
         let has_screen = screen.is_some();
-        let wallpaper = match self.wallpaper.get() {
-            Some(cached) => cached.clone(),
-            None => {
-                let loaded = crate::render::background_frame(
-                    &self.root,
-                    &self.document.layout,
-                    self.width,
-                    self.height,
-                )?;
-                self.wallpaper.get_or_init(|| loaded).clone()
-            }
-        };
+        let wallpaper = self.background()?;
         let mut scene = Scene::from_layout_scaled(
             self.width,
             self.height,
@@ -475,6 +471,70 @@ impl SceneEvaluator {
             scene.push_caption(frame, x, y);
         }
         Ok(scene)
+    }
+
+    /// The wallpaper or gradient, built once per evaluator.
+    fn background(&self) -> Result<Option<VideoFrame>, String> {
+        Ok(match self.wallpaper.get() {
+            Some(cached) => cached.clone(),
+            None => {
+                let loaded = crate::render::background_frame(
+                    &self.root,
+                    &self.document.layout,
+                    self.width,
+                    self.height,
+                )?;
+                self.wallpaper.get_or_init(|| loaded).clone()
+            }
+        })
+    }
+
+    /// An imported media clip, drawn where the screen recording would be, with the same
+    /// background, padding, corners and shadow. Crop, zoom, the webcam and captions belong to
+    /// the recording, so they are left out.
+    fn media_scene(&self, asset_id: &str, local_us: u64) -> Result<Scene, String> {
+        use crate::media_bin::MediaKind;
+        let asset = self
+            .document
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("Imported media is missing from the project")?;
+        let path = safe_path(&self.root, &asset.relative_path)?;
+        let frame = match asset.kind {
+            MediaKind::Video => Some(crate::media::ffmpeg::decode_bgra_limited(
+                &path,
+                local_us,
+                self.decode_limit,
+            )?),
+            MediaKind::Image => {
+                let mut cache = self.image_cache.borrow_mut();
+                match cache.as_ref() {
+                    Some((id, frame)) if id == asset_id => Some(frame.clone()),
+                    _ => {
+                        let frame = crate::media_bin::decode_image(&path)?;
+                        *cache = Some((asset_id.to_string(), frame.clone()));
+                        Some(frame)
+                    }
+                }
+            }
+            MediaKind::Audio => None,
+        };
+        let mut layout = self.document.layout.clone();
+        layout.webcam_enabled = false;
+        layout.screen_crop_left = 0.0;
+        layout.screen_crop_top = 0.0;
+        layout.screen_crop_right = 0.0;
+        layout.screen_crop_bottom = 0.0;
+        Scene::from_layout_scaled(
+            self.width,
+            self.height,
+            &layout,
+            frame,
+            None,
+            self.background()?,
+            crate::render::layout_px_unit(self.width, self.height),
+        )
     }
 
     /// The transcript captions read from: the chosen track, else the first transcribed
@@ -1459,13 +1519,138 @@ mod tests {
             RetainedInterval {
                 start_us: 0,
                 end_us: 500_000,
+                media: None,
             },
             RetainedInterval {
                 start_us: 1_200_000,
                 end_us: 2_000_000,
+                media: None,
             },
         ])
         .unwrap()
+    }
+
+    /// Imported media on the timeline: an image and a video with sound play between parts of
+    /// the recording, in preview and export.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_export_plays_imported_media_between_recording_clips() {
+        use crate::project::reader::ProjectReader;
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        // A pure-blue 1.0 s image clip and a 0.6 s red video with a tone.
+        let png = dir.path().join("blue.png");
+        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
+            .save(&png)
+            .unwrap();
+        let clip = dir.path().join("red.mp4");
+        let ffmpeg = crate::media::ffmpeg::ffmpeg_path().unwrap();
+        let status = Command::new(ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=64x36:r=30:d=0.6",
+            ])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=0.6",
+            ])
+            .args([
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let mut reader = ProjectReader::open(&root).unwrap();
+        let summary = reader.import_media(0, &[png, clip]).unwrap();
+        assert_eq!(summary.media_assets.len(), 2);
+        let image_id = summary.media_assets[0].id.clone();
+        let video = summary.media_assets[1].clone();
+        assert!(
+            video.audio_path.is_some(),
+            "the video's audio was extracted"
+        );
+        // Recording 0-2s; insert the video at 0.5s, then a 1s image after it.
+        reader.insert_media(1, &video.id, 500_000, None).unwrap();
+        let summary = reader
+            .insert_media(
+                2,
+                &image_id,
+                500_000 + video.duration_us,
+                Some((0, 1_000_000)),
+            )
+            .unwrap();
+        let total = 2_000_000 + video.duration_us + 1_000_000;
+        assert_eq!(summary.edited_duration_us, total);
+
+        let document = reader.history().current.clone();
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        let mut evaluator =
+            SceneEvaluator::new(root.clone(), document.clone(), tracks.clone(), 320, 180).unwrap();
+        let preview = evaluator
+            .preview_at(500_000 + video.duration_us + 200_000)
+            .unwrap();
+        let centre = ((90 * preview.stride) + 160 * 4) as usize;
+        assert!(
+            preview.data[centre] > 200 && preview.data[centre + 2] < 60,
+            "image clip is blue"
+        );
+
+        let mixer = AudioMixer::new(&root, &document, &tracks).unwrap();
+        assert!(mixer.has_audio());
+        let frame = ((500_000 + 300_000) as u64 * SAMPLE_RATE as u64 / 1_000_000) as u64;
+        let tone = mixer.read_frames(frame, 480).unwrap();
+        assert!(
+            tone.iter().any(|&s| s.unsigned_abs() > 1_000),
+            "the imported clip's tone plays"
+        );
+
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let gate = EncoderGate::new();
+        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
+            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let duration = media_duration_us(&output).unwrap();
+        assert!(
+            duration.abs_diff(total) <= AUDIO_DURATION_SLACK_US + 40_000,
+            "duration {duration}"
+        );
+        let at = |t: u64| {
+            let frame = decode_h264_frame(&output, t).unwrap();
+            let i = ((90 * frame.stride) + 160 * 4) as usize;
+            (frame.data[i], frame.data[i + 1], frame.data[i + 2])
+        };
+        let (b, _, r) = at(800_000);
+        assert!(r > 180 && b < 80, "video clip is red, got b{b} r{r}");
+        let (b, _, r) = at(500_000 + video.duration_us + 500_000);
+        assert!(b > 180 && r < 80, "image clip is blue, got b{b} r{r}");
+        crate::media::release_decoders();
     }
 
     /// Export with the clips reordered: the later recording plays first.
@@ -1484,10 +1669,12 @@ mod tests {
             RetainedInterval {
                 start_us: 1_200_000,
                 end_us: 2_000_000,
+                media: None,
             },
             RetainedInterval {
                 start_us: 0,
                 end_us: 500_000,
+                media: None,
             },
         ])
         .unwrap();
@@ -1699,10 +1886,12 @@ mod tests {
             RetainedInterval {
                 start_us: 0,
                 end_us: 500_000,
+                media: None,
             },
             RetainedInterval {
                 start_us: 1_200_000,
                 end_us: 2_000_000,
+                media: None,
             },
         ])
         .unwrap();
@@ -1724,6 +1913,7 @@ mod tests {
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
+            image_cache: std::cell::RefCell::new(None),
         };
         let mapper = evaluator.document.mapper().unwrap();
         let (_, _, y) = evaluator.caption_at(&mapper, 100_000).unwrap();

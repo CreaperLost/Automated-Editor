@@ -282,10 +282,15 @@ impl PlaybackOwner {
                 .enumerate()
                 .map(|(i, interval)| {
                     SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
+                        .with_media(interval.media.clone())
                 })
                 .collect(),
         )
         .unwrap_or_else(|_| TimelineMapper::new(Vec::new()))
+    }
+
+    fn in_media(&self, edited_us: u64) -> bool {
+        self.mapper().media_at(edited_us).is_some()
     }
 
     fn sample_source_us(&self, edited_us: u64) -> Option<u64> {
@@ -383,6 +388,10 @@ impl PlaybackOwner {
                 segments,
             ));
         }
+        // Imported media plays here: the recording tracks are not missing, just not shown.
+        if self.in_media(edited_us) {
+            plans.iter_mut().for_each(|plan| plan.gap = false);
+        }
         for plan in &plans {
             if let Some(relative) = &plan.relative_path {
                 self.touch_file(relative)?;
@@ -421,6 +430,7 @@ impl PlaybackOwner {
         let source_us = self.sample_source_us(self.position_us);
         let ended = self.position_us >= self.duration_us && self.duration_us > 0
             || self.state == PlaybackState::Ended;
+        let in_media = self.in_media(self.position_us);
         let plans = self
             .tracks
             .iter()
@@ -434,6 +444,10 @@ impl PlaybackOwner {
                     ended && self.position_us >= self.duration_us,
                     segments,
                 )
+            })
+            .map(|mut plan| {
+                plan.gap &= !in_media;
+                plan
             })
             .collect();
         PlaybackStatus {

@@ -301,6 +301,19 @@ export const api = {
   pickExportDestination: (projectHandle?: string) =>
     invokeTauri<string | null>("pick_export_destination", { projectHandle: projectHandle ?? null }),
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
+  pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
+  projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
+    invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
+  projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
+    invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
+  /** Places the asset's default clip (whole video/audio, 5 s for images) at targetUs. */
+  projectMediaInsert: (projectHandle: string, expectedRevision: number, assetId: string, targetUs: number) =>
+    invokeTauri<OpenedProject>("project_media_insert", {
+      projectHandle,
+      expectedRevision,
+      assetId,
+      targetUs: Math.max(0, Math.round(targetUs)),
+    }),
   showInFinder: (path: string): Promise<void> =>
     invokeTauri<void>("show_in_finder", { path }),
   setWindowTitle: async (title: string): Promise<void> => {

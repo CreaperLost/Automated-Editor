@@ -13,13 +13,16 @@ export function editedToSourceUs(
   return null;
 }
 
-type Range = { startUs: number; endUs: number };
+type Range = { startUs: number; endUs: number; media?: string };
 
 /** A stretch of the edited timeline between two clip edges. */
 export interface TimelineClip {
   startUs: number;
   endUs: number;
+  /** Start within the recording, or within the imported media when `media` is set. */
   sourceStartUs: number;
+  /** Imported media asset id; absent for the recording. */
+  media?: string;
 }
 
 /** A removed source range, drawn against the clip it would grow back onto. */
@@ -36,14 +39,12 @@ export function buildClips(retained: Range[], splitPointsUs: number[] = []): Tim
   const clips: TimelineClip[] = [];
   let edited = 0;
   for (const interval of retained) {
-    const edges = [
-      interval.startUs,
-      ...splitPointsUs.filter((p) => p > interval.startUs && p < interval.endUs),
-      interval.endUs,
-    ];
+    // Split points are recording times; imported media splits by being separate entries.
+    const splits = interval.media ? [] : splitPointsUs.filter((p) => p > interval.startUs && p < interval.endUs);
+    const edges = [interval.startUs, ...splits, interval.endUs];
     for (let i = 0; i + 1 < edges.length; i++) {
       const length = edges[i + 1] - edges[i];
-      clips.push({ startUs: edited, endUs: edited + length, sourceStartUs: edges[i] });
+      clips.push({ startUs: edited, endUs: edited + length, sourceStartUs: edges[i], media: interval.media });
       edited += length;
     }
   }
@@ -59,7 +60,8 @@ export function buildCutMarkers(retained: Range[], removed: Range[] = []): CutMa
   const placed: { interval: Range; editedStart: number }[] = [];
   let edited = 0;
   for (const interval of retained) {
-    placed.push({ interval, editedStart: edited });
+    // Removed ranges are recording time: only recording entries can sit next to them.
+    if (!interval.media) placed.push({ interval, editedStart: edited });
     edited += interval.endUs - interval.startUs;
   }
   return removed.map((cut) => {
@@ -102,6 +104,10 @@ export function clipTrimLimits(
 ): { minDeltaUs: number; maxDeltaUs: number } {
   const length = clip.endUs - clip.startUs;
   const inward = Math.max(0, length - MIN_CLIP_US);
+  // Imported media trims inward; growing it back out is not supported yet.
+  if (clip.media) return side === "start" ? { minDeltaUs: 0, maxDeltaUs: inward } : { minDeltaUs: -inward, maxDeltaUs: 0 };
+  const recording = retained.filter((interval) => !interval.media);
+  retained = recording;
   if (side === "start") {
     const atCut = retained.some((interval) => interval.startUs === clip.sourceStartUs);
     const before = atCut ? removed.find((range) => range.endUs === clip.sourceStartUs) : undefined;

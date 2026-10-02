@@ -5,6 +5,7 @@ export const DOCK_PANELS = {
   preview: { title: "Preview", minimumWidth: 360, minimumHeight: 220 },
   transcript: { title: "Transcript", minimumWidth: 260, minimumHeight: 110 },
   inspector: { title: "Inspector", minimumWidth: 240, minimumHeight: 200 },
+  media: { title: "Media", minimumWidth: 220, minimumHeight: 110 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -25,6 +26,11 @@ function panel(id: DockPanelId) {
   return { id, component: id, title, minimumWidth, minimumHeight };
 }
 
+/// The media bin shares the inspector's tab group, behind it.
+function addMedia(api: DockviewApi) {
+  api.addPanel({ ...panel("media"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+}
+
 /// Replaces the current layout with `preset`.
 export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
   api.clear();
@@ -33,6 +39,7 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 420 });
       api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+      addMedia(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
       break;
     }
@@ -40,12 +47,14 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 340 });
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+      addMedia(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 220 });
       break;
     }
     default: {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+      addMedia(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "preview", direction: "below" }, initialHeight: 180 });
     }
@@ -61,6 +70,11 @@ export function restoreLayout(api: DockviewApi) {
     if (stored) {
       api.fromJSON(JSON.parse(stored));
       const ids = new Set(api.panels.map((p) => p.id));
+      // Layouts saved before the media bin existed keep their arrangement and gain it.
+      if (!ids.has("media") && ids.has("inspector")) {
+        addMedia(api);
+        ids.add("media");
+      }
       if ((Object.keys(DOCK_PANELS) as DockPanelId[]).every((id) => ids.has(id))) return;
     }
   } catch {

@@ -20,8 +20,12 @@ impl TimelineMapper {
 
     pub fn try_new(mut intervals: Vec<SourceInterval>) -> Result<Self, String> {
         intervals.retain(|i| i.end_us > i.start_us);
-        let mut by_source: Vec<(u64, u64)> =
-            intervals.iter().map(|i| (i.start_us, i.end_us)).collect();
+        // Only recording entries share one source timeline; media entries may repeat.
+        let mut by_source: Vec<(u64, u64)> = intervals
+            .iter()
+            .filter(|i| i.is_recording())
+            .map(|i| (i.start_us, i.end_us))
+            .collect();
         by_source.sort_unstable();
         if by_source.windows(2).any(|pair| pair[1].0 < pair[0].1) {
             return Err("Retained intervals must be non-overlapping".into());
@@ -46,12 +50,29 @@ impl TimelineMapper {
         for interval in &self.intervals {
             let dur = interval.duration_us();
             if edited_us < accumulated_us + dur {
+                if !interval.is_recording() {
+                    return None;
+                }
                 let offset_in_interval = edited_us - accumulated_us;
                 return Some(interval.start_us + offset_in_interval);
             }
             accumulated_us += dur;
         }
 
+        None
+    }
+
+    /// The imported media playing at `edited_us`: asset id and the time within it.
+    pub fn media_at(&self, edited_us: u64) -> Option<(&str, u64)> {
+        let mut accumulated_us: u64 = 0;
+        for interval in &self.intervals {
+            let dur = interval.duration_us();
+            if edited_us < accumulated_us + dur {
+                let media = interval.media.as_deref()?;
+                return Some((media, interval.start_us + (edited_us - accumulated_us)));
+            }
+            accumulated_us += dur;
+        }
         None
     }
 
@@ -65,7 +86,7 @@ impl TimelineMapper {
             let interval_end = edited_cursor + duration;
             let a = start_us.max(edited_cursor);
             let b = end_us.min(interval_end);
-            if a < b {
+            if a < b && interval.is_recording() {
                 let source_a = interval.start_us + (a - edited_cursor);
                 let source_b = interval.start_us + (b - edited_cursor);
                 ranges.push((source_a, source_b));
@@ -88,10 +109,24 @@ impl TimelineMapper {
         if edited_end_us > duration {
             return Err("Cut exceeds edited duration".into());
         }
-        let source_ranges = self.edited_range_to_source(edited_start_us, edited_end_us);
-        for (start, end) in source_ranges {
-            self.apply_cut(start, end);
+        // Cut in edited time, so media entries are cut as well as the recording.
+        let mut kept = Vec::with_capacity(self.intervals.len() + 1);
+        let mut cursor = 0u64;
+        for interval in &self.intervals {
+            let duration = interval.duration_us();
+            let local_start = edited_start_us.saturating_sub(cursor).min(duration);
+            let local_end = edited_end_us.saturating_sub(cursor).min(duration);
+            if local_end <= local_start {
+                kept.push(interval.clone());
+            } else {
+                kept.extend(interval.exclude_range(
+                    interval.start_us + local_start,
+                    interval.start_us + local_end,
+                ));
+            }
+            cursor += duration;
         }
+        self.intervals = kept;
         Ok(())
     }
 
@@ -104,15 +139,12 @@ impl TimelineMapper {
         if edited_end_us > duration {
             return Err("Trim exceeds edited duration".into());
         }
-        let kept = self.edited_range_to_source(edited_start_us, edited_end_us);
-        self.intervals = kept
-            .into_iter()
-            .enumerate()
-            .filter(|(_, (a, b))| b > a)
-            .map(|(i, (start_us, end_us))| {
-                SourceInterval::new(format!("trim-{i}"), start_us, end_us)
-            })
-            .collect();
+        if edited_end_us < duration {
+            self.ripple_cut_edited(edited_end_us, duration)?;
+        }
+        if edited_start_us > 0 {
+            self.ripple_cut_edited(0, edited_start_us)?;
+        }
         Ok(())
     }
 
@@ -126,7 +158,7 @@ impl TimelineMapper {
             let duration = interval.duration_us();
             let a = start_us.max(interval.start_us);
             let b = end_us.min(interval.end_us);
-            if a < b {
+            if a < b && interval.is_recording() {
                 let edited_a = edited_cursor + (a - interval.start_us);
                 let edited_b = edited_cursor + (b - interval.start_us);
                 ranges.push((edited_a, edited_b));
@@ -144,7 +176,7 @@ impl TimelineMapper {
         let mid = start_us + (end_us - start_us) / 2;
         let mut accumulated_us: u64 = 0;
         for interval in &self.intervals {
-            if interval.contains_source_us(mid) {
+            if interval.is_recording() && interval.contains_source_us(mid) {
                 let a = start_us.max(interval.start_us);
                 let b = end_us.min(interval.end_us);
                 return Some((
@@ -163,7 +195,7 @@ impl TimelineMapper {
         let mut accumulated_us: u64 = 0;
 
         for interval in &self.intervals {
-            if interval.contains_source_us(source_us) {
+            if interval.is_recording() && interval.contains_source_us(source_us) {
                 let offset = source_us - interval.start_us;
                 return Some(accumulated_us + offset);
             }
