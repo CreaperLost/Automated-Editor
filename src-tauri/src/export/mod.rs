@@ -1754,13 +1754,15 @@ mod tests {
         assert_eq!(starts.len(), 2, "{text}");
         assert_eq!(starts[0], "0");
         // The second chapter starts at 1.1 s (1.0 s clip + 0.1 s into the next one).
-        let second: f64 = starts[1].parse().unwrap();
-        let timebase_ms = text.contains("TIMEBASE=1/1000");
-        let second_s = if timebase_ms {
-            second / 1000.0
-        } else {
-            second / 1e9
-        };
+        // FFmpeg may rewrite the timebase (macOS writes 1/48000, the audio track's), so read
+        // the one it reports.
+        let timebase: f64 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("TIMEBASE=1/"))
+            .unwrap_or_else(|| panic!("no timebase in {text}"))
+            .parse()
+            .unwrap();
+        let second_s = starts[1].parse::<f64>().unwrap() / timebase;
         assert!((second_s - 1.1).abs() < 0.01, "{text}");
         assert!(media_duration_us(&output).unwrap() > 1_500_000);
         assert!(decode_h264_frame(&output, 0).is_ok(), "video still decodes");
