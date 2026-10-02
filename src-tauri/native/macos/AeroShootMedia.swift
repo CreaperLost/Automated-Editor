@@ -82,7 +82,11 @@ private final class SegmentDecoder {
 }
 private let decoderLock = NSLock()
 private var decoderCache: [(String, SegmentDecoder)] = []
-private let imageContext = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: CGColorSpace(name: CGColorSpace.itur_709)!, .outputColorSpace: CGColorSpace(name: CGColorSpace.itur_709)!])
+// Colour management is off: frames keep the decoder's code values, as with the FFmpeg
+// backend. Matching colour spaces here brightened every decode, so an exported video came
+// out lighter than its source.
+private let imageContext = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: NSNull(), .outputColorSpace: NSNull()])
+private let codeValueSpace = CGColorSpace(name: CGColorSpace.itur_709)!
 
 @_cdecl("aeroshoot_media_decode_bgra")
 func mediaDecodeBgra(
@@ -110,7 +114,7 @@ func mediaDecodeBgra(
   var ci = CIImage(cvPixelBuffer: buffer).transformed(by: decoder.track.preferredTransform)
   let scale = min(1, CGFloat(maxDim) / max(ci.extent.width, ci.extent.height))
   if scale < 1 { ci = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
-  guard let image = imageContext.createCGImage(ci, from: ci.extent), let copied = copyImageBgra(image) else { return nil }
+  guard let image = imageContext.createCGImage(ci, from: ci.extent, format: .BGRA8, colorSpace: codeValueSpace), let copied = copyImageBgra(image) else { return nil }
   outWidth.pointee = copied.1; outHeight.pointee = copied.2; outStride.pointee = copied.3
   outPtsUs.pointee = Int64((CMSampleBufferGetPresentationTimeStamp(sample).seconds * 1_000_000).rounded())
   outLen.pointee = copied.2 * copied.3
@@ -120,6 +124,12 @@ func mediaDecodeBgra(
 @_cdecl("aeroshoot_media_free")
 func mediaFree(_ ptr: UnsafeMutableRawPointer?) {
   free(ptr)
+}
+
+/// Frees a C string the bridge returned with strdup (error and stats text).
+@_cdecl("aeroshoot_macos_free_string")
+func macosFreeString(_ value: UnsafeMutablePointer<CChar>?) {
+  free(value)
 }
 
 @_cdecl("aeroshoot_media_encode_bgra_mp4")

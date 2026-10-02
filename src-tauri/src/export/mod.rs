@@ -596,6 +596,14 @@ impl ExportWriter {
         }
     }
 
+    /// Called once the last audio has been written.
+    fn end_audio(&mut self) -> Result<(), String> {
+        match self {
+            Self::Native(session) => session.end_audio(),
+            Self::Ffmpeg(_) => Ok(()),
+        }
+    }
+
     fn finish(self, duration_us: u64) -> Result<(), String> {
         match self {
             Self::Native(session) => session.finish(duration_us),
@@ -1099,6 +1107,7 @@ fn export_to_temp(
     .map_err(|message| ExportFailure::Native { message })?;
 
     let mut audio_frame = 0u64;
+    let mut audio_ended = channels == 0;
     for index in 0..frames {
         if cancel.load(Ordering::SeqCst) {
             drop(session);
@@ -1117,8 +1126,11 @@ fn export_to_temp(
             .write_video(pts_us, &frame)
             .map_err(|message| ExportFailure::Native { message })?;
         if channels > 0 {
+            // Audio runs a second ahead of video: the macOS writer interleaves its
+            // tracks and can hold video back until it has audio past that point.
             let end =
-                ((index as u128 + 1) * SAMPLE_RATE as u128 / captured.settings.fps as u128) as u64;
+                ((index as u128 + 1) * SAMPLE_RATE as u128 / captured.settings.fps as u128) as u64
+                    + SAMPLE_RATE as u64;
             let end = end.min(mixer.total_frames);
             while audio_frame < end {
                 if cancel.load(Ordering::SeqCst) {
@@ -1135,6 +1147,12 @@ fn export_to_temp(
                     .write_audio(pts, &chunk, count as u32, CHANNELS)
                     .map_err(|message| ExportFailure::Native { message })?;
                 audio_frame += count as u64;
+            }
+            if !audio_ended && audio_frame >= mixer.total_frames {
+                session
+                    .end_audio()
+                    .map_err(|message| ExportFailure::Native { message })?;
+                audio_ended = true;
             }
         }
         on_progress(index + 1, frames);
@@ -1408,6 +1426,17 @@ mod tests {
         let centre = ((90 * after_cut.stride) + 160 * 4) as usize;
         let level = after_cut.data[centre + 1];
         let expected = 10 + 12 * 12;
+        let probe = |path: &Path, t: u64| {
+            let f = decode_h264_frame(path, t).unwrap();
+            let c = (((f.height / 2) * f.stride) + (f.width / 2) * 4) as usize;
+            (f.data[c], f.data[c + 1], f.data[c + 2])
+        };
+        let screen = root.join("media/screen/000001.mp4");
+        eprintln!(
+            "DIAG out@50ms={:?} out@250ms={:?} out@550ms={:?} out@750ms={:?} out@1250ms={:?} src@50ms={:?} src@1250ms={:?} src@1950ms={:?}",
+            probe(&output, 50_000), probe(&output, 250_000), probe(&output, 550_000), probe(&output, 750_000), probe(&output, 1_250_000),
+            probe(&screen, 50_000), probe(&screen, 1_250_000), probe(&screen, 1_950_000)
+        );
         assert!(
             level.abs_diff(expected) <= 14,
             "level {level} after the cut, expected about {expected}"
