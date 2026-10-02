@@ -473,9 +473,26 @@ export interface TrackSummary {
   availableSegmentCount: number;
 }
 
+/** One timeline entry in playback order: a range of the recording, or of imported media. */
 export interface RetainedInterval {
   startUs: number;
   endUs: number;
+  /** Imported media asset id; absent for the recording. */
+  media?: string;
+}
+
+export type MediaKind = "video" | "image" | "audio";
+
+/** A file imported into the project's media bin (src-tauri/src/media_bin.rs). */
+export interface MediaAsset {
+  id: string;
+  name: string;
+  kind: MediaKind;
+  relativePath: string;
+  audioPath?: string;
+  durationUs: number;
+  width: number;
+  height: number;
 }
 
 export interface OpenedProject {
@@ -502,6 +519,8 @@ export interface OpenedProject {
   webcamFocus?: WebcamFocus;
   audio?: AudioSettings;
   captions?: CaptionSettings;
+  /** Videos, images and audio imported into the project. */
+  mediaAssets?: MediaAsset[];
 }
 
 // Auto webcam layout (src-tauri/src/webcam_focus.rs)

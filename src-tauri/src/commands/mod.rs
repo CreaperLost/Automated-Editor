@@ -649,6 +649,88 @@ pub fn project_move_range_impl(
     Ok(summary)
 }
 
+/// Imports files into the project's media bin. Copying and probing run without holding
+/// the project, so playback keeps going during a long import.
+pub fn project_media_import_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    paths: Vec<String>,
+) -> Result<OpenedProject, String> {
+    if paths.is_empty() || paths.len() > 64 {
+        return Err("Choose between 1 and 64 files to import".into());
+    }
+    let root = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        reader.root().to_path_buf()
+    };
+    let mut assets = Vec::with_capacity(paths.len());
+    for path in &paths {
+        match crate::media_bin::import(&root, std::path::Path::new(path)) {
+            Ok(asset) => assets.push(asset),
+            Err(error) => {
+                for asset in &assets {
+                    crate::media_bin::remove_files(&root, asset);
+                }
+                return Err(error);
+            }
+        }
+    }
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let Some(reader) = opened
+        .as_mut()
+        .filter(|r| r.summary.project_handle == project_handle)
+    else {
+        for asset in &assets {
+            crate::media_bin::remove_files(&root, asset);
+        }
+        return Err("The project was closed during the import".into());
+    };
+    reader.add_media(expected_revision, assets)
+}
+
+pub fn project_media_remove_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let summary = reader.remove_media(expected_revision, &asset_id)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(summary)
+}
+
+pub fn project_media_insert_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    target_us: u64,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let summary = reader.insert_media(expected_revision, &asset_id, target_us, None)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(summary)
+}
+
 pub fn project_ripple_trim_impl(
     state: &AppState,
     project_handle: String,

@@ -87,6 +87,7 @@ pub fn query_waveform(
             .enumerate()
             .map(|(i, interval)| {
                 SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
+                    .with_media(interval.media.clone())
             })
             .collect(),
     );
@@ -622,6 +623,7 @@ mod tests {
             retained: vec![RetainedInterval {
                 start_us: 0,
                 end_us,
+                media: None,
             }],
             edited_duration_us: end_us,
         }
@@ -705,6 +707,7 @@ mod tests {
         ctx.retained = vec![RetainedInterval {
             start_us: 0,
             end_us: 2_100_000,
+            media: None,
         }];
         ctx.edited_duration_us = 2_100_000;
         let page = query_waveform(&ctx, 0, 2_100_000, 21, &|| false).unwrap();

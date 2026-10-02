@@ -44,11 +44,31 @@ pub struct TrackSummary {
     pub available_segment_count: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// One entry of the edited timeline, in playback order. Without `media` it is a range of the
+/// recording; with it, a range of an imported media asset (times within that file).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RetainedInterval {
     pub start_us: u64,
     pub end_us: u64,
+    /// Imported media asset id; `None` is the recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+}
+
+impl RetainedInterval {
+    /// A range of the recording.
+    pub fn recording(start_us: u64, end_us: u64) -> Self {
+        Self {
+            start_us,
+            end_us,
+            media: None,
+        }
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.media.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -83,6 +103,8 @@ pub struct OpenedProject {
     pub audio: crate::project::AudioSettings,
     #[serde(default)]
     pub captions: crate::captions::CaptionSettings,
+    #[serde(default)]
+    pub media_assets: Vec<crate::media_bin::MediaAsset>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -418,6 +440,7 @@ impl ProjectReader {
                 retained.push(RetainedInterval {
                     start_us: cursor,
                     end_us: pause.start_us,
+                    media: None,
                 });
             }
             cursor = pause.end_us;
@@ -426,6 +449,7 @@ impl ProjectReader {
             retained.push(RetainedInterval {
                 start_us: cursor,
                 end_us: duration,
+                media: None,
             });
         }
         let mut history = EditHistory::new(EditDocument::from_retained(retained.clone())?);
@@ -473,6 +497,7 @@ impl ProjectReader {
                 webcam_focus: Default::default(),
                 audio: history.current.audio.clone(),
                 captions: history.current.captions.clone(),
+                media_assets: history.current.media_assets.clone(),
             },
             segments,
             root,
@@ -716,6 +741,74 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    /// Copies files into the project and adds them to the media bin. All or nothing: a file
+    /// that cannot be imported fails the whole call.
+    pub fn import_media(
+        &mut self,
+        expected_revision: u64,
+        paths: &[std::path::PathBuf],
+    ) -> Result<OpenedProject, String> {
+        if paths.is_empty() || paths.len() > 64 {
+            return Err("Choose between 1 and 64 files to import".into());
+        }
+        let mut assets = Vec::with_capacity(paths.len());
+        for path in paths {
+            match crate::media_bin::import(&self.root, path) {
+                Ok(asset) => assets.push(asset),
+                Err(error) => {
+                    for asset in &assets {
+                        crate::media_bin::remove_files(&self.root, asset);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        self.add_media(expected_revision, assets)
+    }
+
+    /// Records media already copied into the project. On failure the copies are deleted.
+    pub fn add_media(
+        &mut self,
+        expected_revision: u64,
+        assets: Vec<crate::media_bin::MediaAsset>,
+    ) -> Result<OpenedProject, String> {
+        if let Err(error) = self
+            .history
+            .add_media(expected_revision, assets.clone(), &self.root)
+        {
+            for asset in &assets {
+                crate::media_bin::remove_files(&self.root, asset);
+            }
+            return Err(error);
+        }
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn remove_media(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .remove_media(expected_revision, asset_id, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn insert_media(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        target_us: u64,
+        range: Option<(u64, u64)>,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .insert_media(expected_revision, asset_id, target_us, range, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn update_captions(
         &mut self,
         expected_revision: u64,
@@ -770,6 +863,7 @@ impl ProjectReader {
         self.summary.webcam_focus = focus;
         self.summary.audio = self.history.current.audio.clone();
         self.summary.captions = self.history.current.captions.clone();
+        self.summary.media_assets = self.history.current.media_assets.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest
@@ -778,6 +872,7 @@ impl ProjectReader {
             .map(|p| RetainedInterval {
                 start_us: p.start_us,
                 end_us: p.end_us,
+                media: None,
             })
             .collect();
         self.summary.removed_intervals = revision::removed_intervals(
@@ -859,7 +954,8 @@ mod tests {
             summary.removed_intervals,
             vec![RetainedInterval {
                 start_us: 1_000_000,
-                end_us: 2_000_000
+                end_us: 2_000_000,
+                media: None,
             }]
         );
         let summary = reader
@@ -871,11 +967,13 @@ mod tests {
             vec![
                 RetainedInterval {
                     start_us: 0,
-                    end_us: 6_000_000
+                    end_us: 6_000_000,
+                    media: None,
                 },
                 RetainedInterval {
                     start_us: 7_000_000,
-                    end_us: 10_000_000
+                    end_us: 10_000_000,
+                    media: None,
                 },
             ]
         );

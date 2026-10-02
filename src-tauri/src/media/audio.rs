@@ -20,6 +20,9 @@ struct Span {
     source_end: u64,
     fade_in: bool,
     fade_out: bool,
+    /// For an imported media clip, its extracted audio as a one-segment track (empty when
+    /// the media has no audio). `None` is the recording.
+    media: Option<Vec<(TrackType, f64, Vec<SegmentSummary>)>>,
 }
 pub struct AudioMixer {
     root: PathBuf,
@@ -28,6 +31,34 @@ pub struct AudioMixer {
     tracks: Vec<(TrackType, f64, Vec<SegmentSummary>)>,
     polish: Option<PolishPlan>,
     pub total_frames: u64,
+}
+/// An imported clip's audio as a one-segment track spanning the whole file.
+fn media_track(
+    document: &EditDocument,
+    asset_id: &str,
+) -> Vec<(TrackType, f64, Vec<SegmentSummary>)> {
+    let Some(asset) = document.media_assets.iter().find(|a| a.id == asset_id) else {
+        return Vec::new();
+    };
+    let Some(audio_path) = &asset.audio_path else {
+        return Vec::new();
+    };
+    vec![(
+        TrackType::SystemAudio,
+        1.0,
+        vec![SegmentSummary {
+            track_id: asset_id.to_string(),
+            relative_path: audio_path.clone(),
+            start_us: 0,
+            end_us: asset.duration_us,
+            size_bytes: 0,
+            media_timescale: SAMPLE_RATE,
+            media_start_value: 0,
+            host_anchor_us: 0,
+            is_keyframe_start: None,
+            available: true,
+        }],
+    )]
 }
 fn ceil_frame(us: u64) -> u64 {
     ((us as u128 * SAMPLE_RATE as u128).div_ceil(1_000_000)) as u64
@@ -45,13 +76,19 @@ impl AudioMixer {
             .iter()
             .enumerate()
             .map(|(i, s)| {
+                let joined =
+                    |a: &crate::project::reader::RetainedInterval,
+                     b: &crate::project::reader::RetainedInterval| {
+                        a.end_us == b.start_us && a.media == b.media
+                    };
                 let span = Span {
                     edited_start: cursor,
                     edited_end: cursor + s.end_us - s.start_us,
                     source_start: s.start_us,
                     source_end: s.end_us,
-                    fade_in: i > 0 && intervals[i - 1].end_us != s.start_us,
-                    fade_out: i + 1 < intervals.len() && s.end_us != intervals[i + 1].start_us,
+                    fade_in: i > 0 && !joined(&intervals[i - 1], s),
+                    fade_out: i + 1 < intervals.len() && !joined(s, &intervals[i + 1]),
+                    media: s.media.as_ref().map(|id| media_track(document, id)),
                 };
                 cursor = span.edited_end;
                 span
@@ -71,8 +108,13 @@ impl AudioMixer {
             })
             .filter(|(_, gain, _)| *gain > 0.0)
             .collect::<Vec<_>>();
-        let polish =
-            PolishPlan::build(root, &document.audio, &document.retained_intervals, &tracks);
+        let recording: Vec<_> = document
+            .retained_intervals
+            .iter()
+            .filter(|interval| interval.is_recording())
+            .cloned()
+            .collect();
+        let polish = PolishPlan::build(root, &document.audio, &recording, &tracks);
         Ok(Self {
             root: root.into(),
             spans,
@@ -82,9 +124,16 @@ impl AudioMixer {
         })
     }
     pub fn has_audio(&self) -> bool {
-        self.tracks
-            .iter()
-            .any(|(_, _, track)| track.iter().any(|s| s.available))
+        let audible = |tracks: &[(TrackType, f64, Vec<SegmentSummary>)]| {
+            tracks
+                .iter()
+                .any(|(_, _, track)| track.iter().any(|s| s.available))
+        };
+        audible(&self.tracks)
+            || self
+                .spans
+                .iter()
+                .any(|s| s.media.as_deref().is_some_and(audible))
     }
     pub fn read_frames(&self, start: u64, count: usize) -> Result<Vec<i16>, String> {
         if count > CHUNK_FRAMES {
@@ -109,7 +158,9 @@ impl AudioMixer {
                 + ((b as u128 * 1_000_000 / SAMPLE_RATE as u128) as u64)
                     .saturating_sub(span.edited_start)
                 + 1;
-            for (track_type, track_gain, track) in &self.tracks {
+            // An imported clip plays its own audio instead of the recording's.
+            let tracks = span.media.as_ref().unwrap_or(&self.tracks);
+            for (track_type, track_gain, track) in tracks {
                 let first = track.partition_point(|s| s.end_us <= source_a);
                 for segment in track[first..].iter().take_while(|s| s.start_us < source_b) {
                     if !segment.available {
@@ -150,7 +201,9 @@ impl AudioMixer {
                     }
                     let channels = info.channels as usize;
                     let denoiser = match (track_type, &self.polish) {
-                        (TrackType::MicAudio, Some(plan)) => plan.denoiser(&segment.relative_path),
+                        (TrackType::MicAudio, Some(plan)) if span.media.is_none() => {
+                            plan.denoiser(&segment.relative_path)
+                        }
                         _ => None,
                     };
                     let (samples, got) = match denoiser {
@@ -171,7 +224,9 @@ impl AudioMixer {
                     if got == 0 {
                         continue;
                     }
-                    let ducked = *track_type == TrackType::SystemAudio && self.polish.is_some();
+                    let ducked = *track_type == TrackType::SystemAudio
+                        && self.polish.is_some()
+                        && span.media.is_none();
                     for frame in lo..hi {
                         let pos = local(frame);
                         if pos >= info.frame_count as f64 {
@@ -297,6 +352,7 @@ mod tests {
         let document = EditDocument::from_retained(vec![RetainedInterval {
             start_us: 0,
             end_us: duration,
+            media: None,
         }])
         .unwrap();
         let track = TrackSummary {
@@ -512,10 +568,12 @@ mod tests {
             RetainedInterval {
                 start_us: 0,
                 end_us: 1_100_007,
+                media: None,
             },
             RetainedInterval {
                 start_us: 1_500_013,
                 end_us: 3_000_000,
+                media: None,
             },
         ];
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
@@ -545,10 +603,12 @@ mod tests {
             RetainedInterval {
                 start_us: 0,
                 end_us: 100_013,
+                media: None,
             },
             RetainedInterval {
                 start_us: 300_017,
                 end_us: 400_099,
+                media: None,
             },
         ];
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
@@ -560,6 +620,7 @@ mod tests {
         doc.retained_intervals = vec![RetainedInterval {
             start_us: 0,
             end_us: 3_600_000_000,
+            media: None,
         }];
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
         assert_eq!(

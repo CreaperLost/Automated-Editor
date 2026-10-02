@@ -6,6 +6,10 @@ pub struct SourceInterval {
     pub id: String,
     pub start_us: u64,
     pub end_us: u64,
+    /// Imported media asset this entry plays; `None` is the recording. Times are within
+    /// that asset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
 }
 
 impl SourceInterval {
@@ -15,7 +19,17 @@ impl SourceInterval {
             id,
             start_us,
             end_us,
+            media: None,
         }
+    }
+
+    pub fn with_media(mut self, media: Option<String>) -> Self {
+        self.media = media;
+        self
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.media.is_none()
     }
 
     pub fn duration_us(&self) -> u64 {
@@ -38,20 +52,26 @@ impl SourceInterval {
 
         // Leading portion before the cut
         if cut_start > self.start_us {
-            results.push(SourceInterval::new(
-                format!("{}-a", self.id),
-                self.start_us,
-                cut_start.min(self.end_us),
-            ));
+            results.push(
+                SourceInterval::new(
+                    format!("{}-a", self.id),
+                    self.start_us,
+                    cut_start.min(self.end_us),
+                )
+                .with_media(self.media.clone()),
+            );
         }
 
         // Trailing portion after the cut
         if cut_end < self.end_us {
-            results.push(SourceInterval::new(
-                format!("{}-b", self.id),
-                cut_end.max(self.start_us),
-                self.end_us,
-            ));
+            results.push(
+                SourceInterval::new(
+                    format!("{}-b", self.id),
+                    cut_end.max(self.start_us),
+                    self.end_us,
+                )
+                .with_media(self.media.clone()),
+            );
         }
 
         results

@@ -248,6 +248,27 @@ pub fn duration_us(path: &Path) -> Result<u64, String> {
     Ok((seconds * 1_000_000.0).round() as u64)
 }
 
+/// Whether the file has at least one audio stream.
+pub fn has_audio_stream(path: &Path) -> Result<bool, String> {
+    let output = probe(
+        path,
+        &["-select_streams", "a:0", "-show_entries", "stream=index"],
+    )?;
+    Ok(!output.streams.is_empty())
+}
+
+/// Decodes the first audio stream of `source` to 48 kHz stereo 16-bit WAV at `target`, the
+/// format the audio mixer reads.
+pub fn extract_audio_wav(source: &Path, target: &Path) -> Result<(), String> {
+    let (mut cmd, log) = command(ffmpeg_path()?)?;
+    cmd.args(["-nostdin", "-y", "-i"])
+        .arg(file_arg(source))
+        .args(["-map", "0:a:0", "-vn", "-sn", "-ac", "2", "-ar", "48000"])
+        .args(["-c:a", "pcm_s16le", "-f", "wav"])
+        .arg(file_arg(target));
+    run(cmd, log, "Extracting the audio failed").map(|_| ())
+}
+
 fn seconds_arg(us: u64) -> String {
     format!("{}.{:06}", us / 1_000_000, us % 1_000_000)
 }

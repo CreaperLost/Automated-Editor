@@ -49,6 +49,9 @@ pub struct EditDocument {
     /// Captions burned into playback and export from a track's transcript.
     #[serde(default, skip_serializing_if = "CaptionSettings::is_default")]
     pub captions: CaptionSettings,
+    /// Videos, images and audio imported into the project; timeline entries refer to them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_assets: Vec<crate::media_bin::MediaAsset>,
 }
 
 impl Default for EditDocument {
@@ -64,6 +67,7 @@ impl Default for EditDocument {
             webcam_focus: WebcamFocus::default(),
             audio: AudioSettings::default(),
             captions: CaptionSettings::default(),
+            media_assets: Vec::new(),
         }
     }
 }
@@ -82,19 +86,12 @@ impl EditDocument {
             webcam_focus: WebcamFocus::default(),
             audio: AudioSettings::default(),
             captions: CaptionSettings::default(),
+            media_assets: Vec::new(),
         })
     }
 
     pub fn mapper(&self) -> Result<TimelineMapper, String> {
-        TimelineMapper::try_new(
-            self.retained_intervals
-                .iter()
-                .enumerate()
-                .map(|(i, interval)| {
-                    SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
-                })
-                .collect(),
-        )
+        mapper_for(&self.retained_intervals)
     }
 
     pub fn zoom_suggestions(&self) -> Vec<ZoomSuggestion> {
@@ -118,9 +115,12 @@ impl EditDocument {
         let mut cursor = 0u64;
         for interval in &self.retained_intervals {
             edges.push(cursor);
-            let first = self
-                .split_points_us
-                .partition_point(|&p| p <= interval.start_us);
+            let first = if interval.is_recording() {
+                self.split_points_us
+                    .partition_point(|&p| p <= interval.start_us)
+            } else {
+                self.split_points_us.len()
+            };
             for &point in &self.split_points_us[first..] {
                 if point >= interval.end_us {
                     break;
@@ -161,6 +161,20 @@ pub fn ripple_trim_range(edges: &[u64], playhead_us: u64, side: TrimSide) -> Opt
     }
 }
 
+/// The timeline mapper for a stored list of entries, in playback order.
+pub fn mapper_for(retained: &[RetainedInterval]) -> Result<TimelineMapper, String> {
+    TimelineMapper::try_new(
+        retained
+            .iter()
+            .enumerate()
+            .map(|(i, interval)| {
+                SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
+                    .with_media(interval.media.clone())
+            })
+            .collect(),
+    )
+}
+
 pub fn validate_retained(retained: &[RetainedInterval]) -> Result<(), String> {
     if retained.len() > MAX_RETAINED_INTERVALS {
         return Err("Too many retained intervals".into());
@@ -174,10 +188,21 @@ pub fn validate_retained(retained: &[RetainedInterval]) -> Result<(), String> {
             return Err("Retained interval must be a half-open range".into());
         }
     }
-    let mut by_source: Vec<(u64, u64)> = retained.iter().map(|i| (i.start_us, i.end_us)).collect();
+    let mut by_source: Vec<(u64, u64)> = retained
+        .iter()
+        .filter(|i| i.is_recording())
+        .map(|i| (i.start_us, i.end_us))
+        .collect();
     by_source.sort_unstable();
     if by_source.windows(2).any(|pair| pair[1].0 < pair[0].1) {
         return Err("Retained intervals must not overlap".into());
+    }
+    if retained.iter().any(|i| {
+        i.media
+            .as_deref()
+            .is_some_and(|id| id.is_empty() || id.len() > 128)
+    }) {
+        return Err("Invalid media asset id on the timeline".into());
     }
     Ok(())
 }
@@ -205,6 +230,7 @@ pub fn removed_intervals(
 ) -> Vec<RetainedInterval> {
     let mut covered: Vec<(u64, u64)> = retained
         .iter()
+        .filter(|i| i.is_recording())
         .chain(pauses.iter())
         .map(|i| (i.start_us, i.end_us.min(source_duration_us)))
         .filter(|(a, b)| b > a)
@@ -217,6 +243,7 @@ pub fn removed_intervals(
             removed.push(RetainedInterval {
                 start_us: cursor,
                 end_us: start,
+                media: None,
             });
         }
         cursor = cursor.max(end);
@@ -225,6 +252,7 @@ pub fn removed_intervals(
         removed.push(RetainedInterval {
             start_us: cursor,
             end_us: source_duration_us,
+            media: None,
         });
     }
     removed
@@ -254,7 +282,14 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
             continue;
         }
         match out.last_mut() {
-            Some(last) if last.end_us == interval.start_us => last.end_us = interval.end_us,
+            // Media entries are never joined: their boundaries are the user's splits.
+            Some(last)
+                if last.end_us == interval.start_us
+                    && last.is_recording()
+                    && interval.is_recording() =>
+            {
+                last.end_us = interval.end_us
+            }
             _ => out.push(interval),
         }
     }
@@ -279,6 +314,7 @@ fn split_at_edited(retained: &mut Vec<RetainedInterval>, edited_us: u64) -> Resu
                 RetainedInterval {
                     start_us: source,
                     end_us: interval.end_us,
+                    media: interval.media.clone(),
                 },
             );
             return Ok(index + 1);
@@ -353,13 +389,17 @@ pub fn restore_in_order(
     let mut list = retained.to_vec();
     let mut pieces: Vec<RetainedInterval> = ranges
         .iter()
-        .map(|&(start_us, end_us)| RetainedInterval { start_us, end_us })
+        .map(|&(start_us, end_us)| RetainedInterval {
+            start_us,
+            end_us,
+            media: None,
+        })
         .collect();
     pieces = merge_ranges(pieces);
     for piece in pieces {
         // Only restore time no clip already holds.
         let mut free = vec![(piece.start_us, piece.end_us)];
-        for interval in &list {
+        for interval in list.iter().filter(|i| i.is_recording()) {
             free = free
                 .into_iter()
                 .flat_map(|(a, b)| {
@@ -379,8 +419,12 @@ pub fn restore_in_order(
                 .collect();
         }
         for (start_us, end_us) in free {
-            let before = list.iter().position(|i| i.end_us == start_us);
-            let after = list.iter().position(|i| i.start_us == end_us);
+            let before = list
+                .iter()
+                .position(|i| i.is_recording() && i.end_us == start_us);
+            let after = list
+                .iter()
+                .position(|i| i.is_recording() && i.start_us == end_us);
             // List neighbours that touch on both sides simply join.
             let neighbours = matches!((before, after), (Some(b), Some(a)) if a == b + 1);
             let pick = match grow {
@@ -397,9 +441,16 @@ pub fn restore_in_order(
             } else {
                 let at = list
                     .iter()
-                    .position(|i| i.start_us > start_us)
+                    .position(|i| i.is_recording() && i.start_us > start_us)
                     .unwrap_or(list.len());
-                list.insert(at, RetainedInterval { start_us, end_us });
+                list.insert(
+                    at,
+                    RetainedInterval {
+                        start_us,
+                        end_us,
+                        media: None,
+                    },
+                );
             }
         }
     }
@@ -572,21 +623,24 @@ impl EditHistory {
             return Err("Stale edit revision".into());
         }
         validate_retained(&next.retained_intervals)?;
-        TimelineMapper::try_new(
-            next.retained_intervals
-                .iter()
-                .enumerate()
-                .map(|(i, interval)| {
-                    SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
-                })
-                .collect(),
-        )?;
+        mapper_for(&next.retained_intervals)?;
         validate_layout(&next.layout)?;
         validate_zooms(&next.zooms)?;
         validate_dismissed(&next.dismissed_zoom_ids)?;
         validate_split_points(&next.split_points_us)?;
         next.webcam_focus.validate()?;
         next.audio.validate()?;
+        crate::media_bin::validate_assets(&next.media_assets)?;
+        if let Some(missing) = next.retained_intervals.iter().find_map(|entry| {
+            entry
+                .media
+                .as_ref()
+                .filter(|id| !next.media_assets.iter().any(|asset| &asset.id == *id))
+        }) {
+            return Err(format!(
+                "The timeline uses media {missing} that is not imported"
+            ));
+        }
         next.schema_version = EDIT_SCHEMA_VERSION;
         next.revision = self
             .current
@@ -911,6 +965,7 @@ impl EditHistory {
                 .map(|interval| RetainedInterval {
                     start_us: interval.start_us,
                     end_us: interval.end_us,
+                    media: interval.media.clone(),
                 })
                 .collect(),
         );
@@ -954,16 +1009,25 @@ impl EditHistory {
         if expected_revision != self.current.revision {
             return Err("Stale edit revision".into());
         }
-        let source_us = self
-            .current
-            .mapper()?
+        let mapper = self.current.mapper()?;
+        if mapper.media_at(edited_us).is_some() {
+            // Imported media splits by becoming two timeline entries.
+            let mut next = self.current.clone();
+            let before = next.retained_intervals.len();
+            split_at_edited(&mut next.retained_intervals, edited_us)?;
+            if next.retained_intervals.len() == before {
+                return Err("There is already a clip edge here".into());
+            }
+            return self.commit_next(expected_revision, persist_root, next);
+        }
+        let source_us = mapper
             .edited_to_source_us(edited_us)
             .ok_or("Split point is outside the timeline")?;
         if self
             .current
             .retained_intervals
             .iter()
-            .any(|interval| interval.start_us == source_us)
+            .any(|interval| interval.is_recording() && interval.start_us == source_us)
         {
             return Err("There is already a clip edge here".into());
         }
@@ -998,6 +1062,86 @@ impl EditHistory {
         }
         let retained = restore_in_order(&self.current.retained_intervals, ranges, grow);
         self.commit(expected_revision, retained, persist_root)
+    }
+
+    /// Adds imported media to the project's media bin.
+    pub fn add_media(
+        &mut self,
+        expected_revision: u64,
+        assets: Vec<crate::media_bin::MediaAsset>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        if assets.is_empty() {
+            return Err("Nothing to import".into());
+        }
+        let mut next = self.current.clone();
+        next.media_assets.extend(assets);
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Removes media from the bin and every clip of it from the timeline. The file stays
+    /// in the project so undo can bring it back.
+    pub fn remove_media(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let mut next = self.current.clone();
+        let before = next.media_assets.len();
+        next.media_assets.retain(|asset| asset.id != asset_id);
+        if next.media_assets.len() == before {
+            return Err("No such imported media".into());
+        }
+        next.retained_intervals
+            .retain(|entry| entry.media.as_deref() != Some(asset_id));
+        if next.retained_intervals.is_empty() {
+            return Err("Removing it would leave the timeline empty".into());
+        }
+        next.retained_intervals = canonical_retained(next.retained_intervals);
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Places a clip of imported media at edited position `target`, `source_start..end`
+    /// within the file (the whole default length when `None`).
+    pub fn insert_media(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        target_us: u64,
+        range: Option<(u64, u64)>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let asset = self
+            .current
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("No such imported media")?;
+        let (start_us, end_us) = range.unwrap_or((0, asset.default_clip_us()));
+        if start_us >= end_us || end_us > asset.duration_us {
+            return Err("The clip must lie within the media's length".into());
+        }
+        let mut next = self.current.clone();
+        let at = split_at_edited(&mut next.retained_intervals, target_us)?;
+        next.retained_intervals.insert(
+            at,
+            RetainedInterval {
+                start_us,
+                end_us,
+                media: Some(asset_id.to_string()),
+            },
+        );
+        self.commit_next(expected_revision, persist_root, next)
     }
 
     /// Moves the clip (or any edited range) `[start, end)` to edited position `target`.
@@ -1078,6 +1222,7 @@ mod tests {
         let initial = EditDocument::from_retained(vec![RetainedInterval {
             start_us: 0,
             end_us: 1_000_000,
+            media: None,
         }])
         .unwrap();
         let mut history = EditHistory::new(initial.clone());
@@ -1113,10 +1258,12 @@ mod tests {
             RetainedInterval {
                 start_us: 0,
                 end_us: 4_000_000,
+                media: None,
             },
             RetainedInterval {
                 start_us: 6_000_000,
                 end_us: 10_000_000,
+                media: None,
             },
         ])
         .unwrap();
@@ -1162,6 +1309,7 @@ mod tests {
         let initial = EditDocument::from_retained(vec![RetainedInterval {
             start_us: 0,
             end_us: 1_000_000,
+            media: None,
         }])
         .unwrap();
         let mut first = EditHistory::new(initial.clone());
@@ -1185,6 +1333,7 @@ mod tests {
             EditDocument::from_retained(vec![RetainedInterval {
                 start_us: 0,
                 end_us: 10_000_000,
+                media: None,
             }])
             .unwrap(),
         );
@@ -1214,6 +1363,7 @@ mod tests {
             EditDocument::from_retained(vec![RetainedInterval {
                 start_us: 0,
                 end_us: 10_000_000,
+                media: None,
             }])
             .unwrap(),
         );
@@ -1264,6 +1414,7 @@ mod tests {
             EditDocument::from_retained(vec![RetainedInterval {
                 start_us: 0,
                 end_us: 1_000_000,
+                media: None,
             }])
             .unwrap(),
         );
@@ -1300,6 +1451,7 @@ mod tests {
             EditDocument::from_retained(vec![RetainedInterval {
                 start_us: 0,
                 end_us: 1_000_000,
+                media: None,
             }])
             .unwrap(),
         );
@@ -1329,7 +1481,11 @@ mod tests {
     }
 
     fn ri(start_us: u64, end_us: u64) -> RetainedInterval {
-        RetainedInterval { start_us, end_us }
+        RetainedInterval {
+            start_us,
+            end_us,
+            media: None,
+        }
     }
 
     #[test]
@@ -1341,6 +1497,89 @@ mod tests {
             vec![ri(1_500, 3_000), ri(6_000, 8_000)]
         );
         assert!(removed_intervals(&[ri(0, 8_000)], &[], 8_000).is_empty());
+    }
+
+    #[test]
+    fn imported_media_inserts_between_clips_and_is_removed_with_its_asset() {
+        use crate::media_bin::{MediaAsset, MediaKind};
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(
+            EditDocument::from_retained(vec![ri(0, 4_000_000), ri(6_000_000, 10_000_000)]).unwrap(),
+        );
+        let asset = MediaAsset {
+            id: "m1".into(),
+            name: "intro.png".into(),
+            kind: MediaKind::Image,
+            relative_path: "assets/media/m1.png".into(),
+            audio_path: None,
+            duration_us: crate::media_bin::IMAGE_MAX_US,
+            width: 640,
+            height: 360,
+        };
+        assert!(history.insert_media(0, "m1", 0, None, dir.path()).is_err());
+        history.add_media(0, vec![asset], dir.path()).unwrap();
+
+        // Insert at the edge between the two recording clips: a 5 s still.
+        history
+            .insert_media(1, "m1", 4_000_000, None, dir.path())
+            .unwrap();
+        let media = |start_us, end_us| RetainedInterval {
+            start_us,
+            end_us,
+            media: Some("m1".into()),
+        };
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![
+                ri(0, 4_000_000),
+                media(0, 5_000_000),
+                ri(6_000_000, 10_000_000)
+            ]
+        );
+        let mapper = history.current.mapper().unwrap();
+        assert_eq!(history.current.edited_duration_us().unwrap(), 13_000_000);
+        assert_eq!(mapper.media_at(5_000_000), Some(("m1", 1_000_000)));
+        assert_eq!(mapper.edited_to_source_us(5_000_000), None);
+        assert_eq!(mapper.edited_to_source_us(9_500_000), Some(6_500_000));
+
+        // Inserting in the middle of a clip splits it; a clip past the media's length is refused.
+        assert!(history
+            .insert_media(
+                2,
+                "m1",
+                2_000_000,
+                Some((0, crate::media_bin::IMAGE_MAX_US + 1)),
+                dir.path()
+            )
+            .is_err());
+        history
+            .insert_media(2, "m1", 2_000_000, Some((0, 1_000_000)), dir.path())
+            .unwrap();
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![
+                ri(0, 2_000_000),
+                media(0, 1_000_000),
+                ri(2_000_000, 4_000_000),
+                media(0, 5_000_000),
+                ri(6_000_000, 10_000_000)
+            ]
+        );
+        assert_eq!(
+            load_edit_document(dir.path()).unwrap().unwrap(),
+            history.current
+        );
+
+        // Removing the asset drops every clip of it and merges the recording back together.
+        history.remove_media(3, "m1", dir.path()).unwrap();
+        assert!(history.current.media_assets.is_empty());
+        assert_eq!(
+            history.current.retained_intervals,
+            vec![ri(0, 4_000_000), ri(6_000_000, 10_000_000)]
+        );
+        history.undo(4, dir.path()).unwrap();
+        assert_eq!(history.current.media_assets.len(), 1);
+        assert_eq!(history.current.retained_intervals.len(), 5);
     }
 
     #[test]

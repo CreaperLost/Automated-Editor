@@ -17,6 +17,7 @@ import {
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
+import { MEDIA_DRAG_TYPE } from "../media/MediaPanel";
 import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
 import {
@@ -183,6 +184,7 @@ export const TimelineStudio: React.FC = () => {
   const normalView: SourceRange[] = (focus.normalView ?? []).map((r) => [r.sourceStartUs, r.sourceEndUs]);
   const selectionSource: SourceRange[] = selection
     ? clips.flatMap((clip): SourceRange[] => {
+        if (clip.media) return [];
         const start = Math.max(selection.startUs, clip.startUs);
         const end = Math.min(selection.endUs, clip.endUs);
         if (end <= start) return [];
@@ -203,6 +205,30 @@ export const TimelineStudio: React.FC = () => {
         normalView: next.map(([sourceStartUs, sourceEndUs]) => ({ sourceStartUs, sourceEndUs })),
       }),
     );
+  };
+
+  const mediaName = (clip: TimelineClip) =>
+    clip.media ? openedProject?.mediaAssets?.find((asset) => asset.id === clip.media)?.name ?? "Media" : null;
+
+  // Dropping a Media panel item on the track area inserts it at the nearest clip edge.
+  const [mediaDropUs, setMediaDropUs] = useState<number | null>(null);
+  const nearestEdge = (clientX: number) => {
+    const pointerUs = clientXToUs(clientX);
+    return edges.reduce((best, edge) => (Math.abs(edge - pointerUs) < Math.abs(best - pointerUs) ? edge : best), edges[0] ?? 0);
+  };
+  const onMediaDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes(MEDIA_DRAG_TYPE) || !openedProject) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setMediaDropUs(nearestEdge(event.clientX));
+  };
+  const onMediaDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const assetId = event.dataTransfer.getData(MEDIA_DRAG_TYPE);
+    setMediaDropUs(null);
+    if (!assetId || !openedProject) return;
+    event.preventDefault();
+    const target = nearestEdge(event.clientX);
+    void runEdit((project) => api.projectMediaInsert(project.projectHandle, project.revision, assetId, target));
   };
   const jumpToEdit = (direction: -1 | 1) => {
     const target =
@@ -1134,6 +1160,9 @@ export const TimelineStudio: React.FC = () => {
           {/* Interactive Track Area */}
           <div
             ref={timelineTrackRef}
+            onDragOver={onMediaDragOver}
+            onDragLeave={() => setMediaDropUs(null)}
+            onDrop={onMediaDrop}
             onClick={handleTimelineClick}
             onPointerDown={onTrackPointerDown}
             onPointerMove={onTrackPointerMove}
@@ -1261,6 +1290,17 @@ export const TimelineStudio: React.FC = () => {
               </>
             )}
 
+            {mediaDropUs !== null && durationUs > 0 && (
+              <div
+                className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-fuchsia-300 shadow-[0_0_8px_rgba(240,171,252,0.8)] z-40 pointer-events-none"
+                style={{ left: `${(mediaDropUs / durationUs) * 100}%` }}
+              >
+                <span className="absolute -top-0.5 left-1.5 text-[9px] font-mono text-fuchsia-50 bg-studio-950/90 rounded px-1 whitespace-nowrap">
+                  Insert here
+                </span>
+              </div>
+            )}
+
             {/* Clip lane: edges come from cuts and splits; markers restore cuts */}
             <div className="h-8 relative">
               {durationUs > 0 && clips.map((clip, index) => {
@@ -1271,17 +1311,19 @@ export const TimelineStudio: React.FC = () => {
                     className={`absolute top-2.5 bottom-0 rounded border text-[9px] font-mono text-left px-1 truncate ${
                       selected
                         ? "bg-teal-500/40 border-teal-200 text-white"
-                        : "bg-teal-500/15 border-teal-400/40 text-teal-200 hover:bg-teal-500/25"
+                        : clip.media
+                          ? "bg-fuchsia-500/20 border-fuchsia-300/50 text-fuchsia-100 hover:bg-fuchsia-500/30"
+                          : "bg-teal-500/15 border-teal-400/40 text-teal-200 hover:bg-teal-500/25"
                     }`}
                     style={{
                       left: `${(clip.startUs / durationUs) * 100}%`,
                       width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
                     }}
-                    title={`Clip ${index + 1}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend, drag to move it.`}
+                    title={`Clip ${index + 1}${clip.media ? ` (${mediaName(clip)})` : ""}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend, drag to move it.`}
                     onClick={(event) => onClipClick(event, clip)}
                     {...clipMoveHandlers(clip)}
                   >
-                    {index + 1}
+                    {clip.media ? `${index + 1} · ${mediaName(clip)}` : index + 1}
                   </button>
                 );
               })}
@@ -1370,9 +1412,11 @@ export const TimelineStudio: React.FC = () => {
                       className={`absolute top-0 bottom-0 rounded-md border overflow-hidden flex items-center ${
                         selected
                           ? "bg-studio-700/80 border-teal-200 ring-1 ring-teal-200/60"
-                          : audio
-                            ? "bg-studio-800/70 border-studio-700 hover:border-studio-500"
-                            : "bg-indigo-500/15 border-indigo-400/30 hover:border-indigo-300/60"
+                          : clip.media
+                            ? "bg-fuchsia-500/15 border-fuchsia-300/40 hover:border-fuchsia-200/70"
+                            : audio
+                              ? "bg-studio-800/70 border-studio-700 hover:border-studio-500"
+                              : "bg-indigo-500/15 border-indigo-400/30 hover:border-indigo-300/60"
                       }`}
                       style={{
                         left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
@@ -1382,7 +1426,14 @@ export const TimelineStudio: React.FC = () => {
                       onClick={(event) => onClipClick(event, clip)}
                       {...clipMoveHandlers(clip)}
                     >
-                      {track.waveform && track.waveform.buckets.length > 0 ? (
+                      {clip.media ? (
+                        // Imported media replaces the recording here: name it on the screen lane.
+                        track.trackType === "screen" && (
+                          <span className="px-1.5 text-[9px] font-mono text-fuchsia-100/80 truncate pointer-events-none">
+                            {mediaName(clip)}
+                          </span>
+                        )
+                      ) : track.waveform && track.waveform.buckets.length > 0 ? (
                         <div className="w-full h-full px-0.5 py-1">
                           <WaveformRenderer
                             buckets={track.waveform.buckets}

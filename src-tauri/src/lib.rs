@@ -4,6 +4,7 @@ pub mod dsp;
 pub mod export;
 pub mod fixtures;
 pub mod media;
+pub mod media_bin;
 pub mod playback;
 pub mod project;
 pub mod render;
@@ -315,6 +316,74 @@ fn project_move_range(
         end_us,
         target_us,
     )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_media_import(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    paths: Vec<String>,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        commands::project_media_import_impl(&state, project_handle, expected_revision, paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_remove(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+) -> Result<project::OpenedProject, String> {
+    commands::project_media_remove_impl(&state, project_handle, expected_revision, asset_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_insert(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    target_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::project_media_insert_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        target_us,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn pick_media_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let picked = rfd::FileDialog::new()
+                .set_title("Import media")
+                .add_filter("Video, images and audio", &media_bin::import_extensions())
+                .pick_files()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let _ = tx.send(picked);
+        })
+        .map_err(|error| error.to_string())?;
+        rx.recv().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -889,6 +958,10 @@ pub fn run() {
             project_ripple_trim,
             project_split,
             project_move_range,
+            project_media_import,
+            project_media_remove,
+            project_media_insert,
+            pick_media_files,
             project_restore_cuts,
             project_undo,
             project_redo,
