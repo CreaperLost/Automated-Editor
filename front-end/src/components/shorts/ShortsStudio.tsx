@@ -14,6 +14,17 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
+import {
+  DockviewDefaultTab,
+  DockviewReact,
+  type DockviewApi,
+  type DockviewReadyEvent,
+  type DockviewTheme,
+  type IDockviewPanelHeaderProps,
+  type IDockviewPanelProps,
+} from "dockview-react";
+import "dockview-react/dist/styles/dockview.css";
+import "../layout/dockTheme.css";
 import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
@@ -65,6 +76,80 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === "string" && err.trim()) return err;
   return "Something went wrong.";
+}
+
+/** Each dock panel draws one part of the studio; the studio hands them over each render. */
+type ShortsPanels = Record<ShortsPanelId, () => React.ReactNode>;
+type ShortsPanelId = "list" | "preview" | "settings" | "timeline";
+const ShortsPanelsContext = React.createContext<ShortsPanels | null>(null);
+
+const SHORTS_PANELS: Record<ShortsPanelId, { title: string; minimumWidth: number; minimumHeight: number }> = {
+  list: { title: "Shorts", minimumWidth: 200, minimumHeight: 120 },
+  preview: { title: "Preview", minimumWidth: 260, minimumHeight: 260 },
+  settings: { title: "Look", minimumWidth: 240, minimumHeight: 160 },
+  timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
+};
+const SHORTS_LAYOUT_KEY = "aeroedits.shortsLayout.v1";
+
+const ShortsPanel: React.FC<{ id: ShortsPanelId }> = ({ id }) => {
+  const panels = React.useContext(ShortsPanelsContext);
+  return <div className="h-full w-full min-h-0 min-w-0 overflow-hidden bg-studio-950">{panels?.[id]()}</div>;
+};
+const SHORTS_DOCK_COMPONENTS: Record<ShortsPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
+  list: () => <ShortsPanel id="list" />,
+  preview: () => <ShortsPanel id="preview" />,
+  settings: () => <ShortsPanel id="settings" />,
+  timeline: () => <ShortsPanel id="timeline" />,
+};
+const SHORTS_DOCK_THEME: DockviewTheme = {
+  name: "aeroedits",
+  className: "dockview-theme-aero",
+  colorScheme: "dark",
+  gap: 6,
+};
+/** Panels stay open: there is no close button, so none can be lost. */
+const ShortsTab: React.FC<IDockviewPanelHeaderProps> = (props) => <DockviewDefaultTab {...props} hideClose />;
+
+function shortsPanel(id: ShortsPanelId) {
+  const { title, minimumWidth, minimumHeight } = SHORTS_PANELS[id];
+  return { id, component: id, title, minimumWidth, minimumHeight };
+}
+
+/** The default arrangement: list left, preview in the middle, look right, timeline below. */
+function defaultShortsLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel(shortsPanel("preview"));
+  api.addPanel({ ...shortsPanel("list"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 260 });
+  api.addPanel({ ...shortsPanel("settings"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+  api.addPanel({ ...shortsPanel("timeline"), position: { direction: "below" }, initialHeight: 260 });
+}
+
+let shortsDockApi: DockviewApi | null = null;
+function onShortsDockReady(event: DockviewReadyEvent) {
+  shortsDockApi = event.api;
+  try {
+    const stored = window.localStorage.getItem(SHORTS_LAYOUT_KEY);
+    if (stored) {
+      event.api.fromJSON(JSON.parse(stored));
+      const ids = new Set(event.api.panels.map((p) => p.id));
+      if (!(Object.keys(SHORTS_PANELS) as ShortsPanelId[]).every((id) => ids.has(id))) defaultShortsLayout(event.api);
+    } else {
+      defaultShortsLayout(event.api);
+    }
+  } catch {
+    defaultShortsLayout(event.api);
+  }
+  let timer = 0;
+  event.api.onDidLayoutChange(() => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(SHORTS_LAYOUT_KEY, JSON.stringify(event.api.toJSON()));
+      } catch {
+        // Not remembering the layout is harmless.
+      }
+    }, 250);
+  });
 }
 
 type ExportRow = { state: "waiting" | "running" | "completed" | "failed"; progress: number; message?: string; path?: string };
@@ -374,55 +459,10 @@ export const ShortsStudio: React.FC = () => {
     `flex-1 py-1.5 rounded-md text-xs ${active ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:bg-studio-800"}`;
   const toExport = checked.size > 0 ? shorts.filter((s) => checked.has(s.id)) : shorts;
 
-  return (
-    <div className="h-screen bg-studio-950 text-studio-100 flex flex-col text-xs select-none">
-      <header className="h-12 shrink-0 px-4 flex items-center gap-3 border-b border-studio-800 bg-studio-900">
-        <Smartphone className="w-4 h-4 text-teal-400" />
-        <span className="font-semibold text-sm">Shorts Studio</span>
-        <span className="text-studio-500 truncate">{project.manifest.projectName}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!!busy || !speechTrack}
-            onClick={() =>
-              speechTrack &&
-              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.id))
-            }
-            title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/50 border border-violet-600/50 text-violet-100 hover:bg-violet-800/60 disabled:opacity-40"
-          >
-            {busy === "Finding shorts" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            Find shorts with AI
-          </button>
-          <button
-            type="button"
-            disabled={!!busy}
-            onClick={newShort}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-850 border border-studio-700 hover:bg-studio-800 disabled:opacity-40"
-          >
-            <Plus className="w-3.5 h-3.5" /> New short
-          </button>
-          <button
-            type="button"
-            disabled={toExport.length === 0 || Object.values(exports).some((e) => e.state === "running" || e.state === "waiting")}
-            onClick={() => void exportShorts(toExport.map((s) => s.id))}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold disabled:opacity-40"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Export {checked.size > 0 ? `${checked.size} selected` : `all ${shorts.length}`}
-          </button>
-        </div>
-      </header>
-
-      {error && (
-        <p role="alert" className="px-4 py-1.5 bg-rose-950/50 border-b border-rose-900/60 text-rose-200">
-          {error}
-        </p>
-      )}
-
-      <div className="flex-1 min-h-0 flex">
-        {/* Shorts list */}
-        <aside className="w-72 shrink-0 border-r border-studio-800 overflow-y-auto p-2 space-y-1.5" aria-label="Shorts">
+  // The studio's parts, drawn inside dockable panels (rearrange and resize like the editor's).
+  const panels: ShortsPanels = {
+    list: () => (
+        <aside className="h-full overflow-y-auto p-2 space-y-1.5" aria-label="Shorts">
           {shorts.length === 0 && (
             <p className="p-2 text-studio-500 leading-relaxed">
               No shorts yet. Transcribe the video in the editor, then press Find shorts with AI, or start one with New
@@ -495,12 +535,12 @@ export const ShortsStudio: React.FC = () => {
             );
           })}
         </aside>
-
-        {/* Preview */}
-        <main className="flex-1 min-w-0 flex flex-col items-center justify-center gap-3 p-4">
+    ),
+    preview: () => (
+        <main className="h-full min-w-0 flex flex-col items-center justify-center gap-3 p-4">
           {selected && playable ? (
             <>
-              <div className="relative h-[min(70vh,720px)] aspect-[9/16] rounded-xl overflow-hidden border border-studio-700 bg-black">
+              <div className="relative h-[calc(100%-4.5rem)] max-h-[720px] aspect-[9/16] rounded-xl overflow-hidden border border-studio-700 bg-black">
                 {playing ? (
                   <canvas ref={canvasRef} aria-label="Short playing" className="w-full h-full object-contain" />
                 ) : (
@@ -538,10 +578,11 @@ export const ShortsStudio: React.FC = () => {
             <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
           )}
         </main>
-
-        {/* Settings */}
+    ),
+    settings: () => (
+      <>
         {selected && (
-          <aside className="w-80 shrink-0 border-l border-studio-800 overflow-y-auto p-4 space-y-5" aria-label="Short settings">
+          <aside className="h-full overflow-y-auto p-4 space-y-5" aria-label="Short settings">
             <label className="block space-y-1">
               <span className="text-studio-400">Title (also the file name)</span>
               <input
@@ -799,12 +840,13 @@ export const ShortsStudio: React.FC = () => {
             </div>
           </aside>
         )}
-      </div>
-
-      {/* The short's own timeline: the editor's timeline, showing only the short. Its first
-          edit makes the short its own; the video is never changed from here. */}
+        {!selected && <p className="p-4 text-studio-500">Pick or create a short.</p>}
+      </>
+    ),
+    timeline: () => (
+      <>
       {selected && playable && (
-        <section className="h-64 shrink-0 border-t border-studio-800 flex flex-col min-h-0" aria-label="Short timeline">
+        <section className="h-full flex flex-col min-h-0" aria-label="Short timeline">
           <div className="px-4 py-1 text-[11px] text-studio-500 border-b border-studio-800 bg-studio-900">
             This short's timeline. Cuts, splits, moves and clips here change only the short (the video stays as it
             is); caption text is shared with the video's transcript.
@@ -814,6 +856,81 @@ export const ShortsStudio: React.FC = () => {
           </div>
         </section>
       )}
+        {!(selected && playable) && <p className="p-4 text-studio-500">Pick a short to edit its timeline.</p>}
+      </>
+    ),
+  };
+
+
+  return (
+    <div className="h-screen bg-studio-950 text-studio-100 flex flex-col text-xs select-none">
+      <header className="h-12 shrink-0 px-4 flex items-center gap-3 border-b border-studio-800 bg-studio-900">
+        <Smartphone className="w-4 h-4 text-teal-400" />
+        <span className="font-semibold text-sm">Shorts Studio</span>
+        <span className="text-studio-500 truncate">{project.manifest.projectName}</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!!busy || !speechTrack}
+            onClick={() =>
+              speechTrack &&
+              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.id))
+            }
+            title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/50 border border-violet-600/50 text-violet-100 hover:bg-violet-800/60 disabled:opacity-40"
+          >
+            {busy === "Finding shorts" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            Find shorts with AI
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={newShort}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-850 border border-studio-700 hover:bg-studio-800 disabled:opacity-40"
+          >
+            <Plus className="w-3.5 h-3.5" /> New short
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!shortsDockApi) return;
+              defaultShortsLayout(shortsDockApi);
+            }}
+            className="px-2 py-1.5 rounded-lg text-studio-400 hover:text-white hover:bg-studio-800"
+            title="Put the panels back where they started"
+          >
+            Reset layout
+          </button>
+          <button
+            type="button"
+            disabled={toExport.length === 0 || Object.values(exports).some((e) => e.state === "running" || e.state === "waiting")}
+            onClick={() => void exportShorts(toExport.map((s) => s.id))}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold disabled:opacity-40"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export {checked.size > 0 ? `${checked.size} selected` : `all ${shorts.length}`}
+          </button>
+        </div>
+      </header>
+
+      {error && (
+        <p role="alert" className="px-4 py-1.5 bg-rose-950/50 border-b border-rose-900/60 text-rose-200">
+          {error}
+        </p>
+      )}
+
+      <div className="flex-1 min-h-0">
+        <ShortsPanelsContext.Provider value={panels}>
+          <DockviewReact
+            className="h-full w-full"
+            theme={SHORTS_DOCK_THEME}
+            components={SHORTS_DOCK_COMPONENTS}
+            defaultTabComponent={ShortsTab}
+            disableFloatingGroups
+            onReady={onShortsDockReady}
+          />
+        </ShortsPanelsContext.Provider>
+      </div>
     </div>
   );
 };
