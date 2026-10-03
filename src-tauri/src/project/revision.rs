@@ -61,6 +61,9 @@ pub struct EditDocument {
     /// Set only on the document a short renders from: draw a split-screen vertical frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_layout: Option<crate::shorts::ShortLayout>,
+    /// Video tracks V2, V3, ... above the main sequence, bottom to top.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
 }
 
 impl Default for EditDocument {
@@ -80,6 +83,7 @@ impl Default for EditDocument {
             chapters: Vec::new(),
             shorts: Vec::new(),
             short_layout: None,
+            overlay_tracks: Vec::new(),
         }
     }
 }
@@ -102,6 +106,7 @@ impl EditDocument {
             chapters: Vec::new(),
             shorts: Vec::new(),
             short_layout: None,
+            overlay_tracks: Vec::new(),
         })
     }
 
@@ -313,7 +318,10 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
 
 /// Makes `edited_us` an interval boundary in `retained` and returns the index of the
 /// interval that starts there (`retained.len()` at the end of the timeline).
-fn split_at_edited(retained: &mut Vec<RetainedInterval>, edited_us: u64) -> Result<usize, String> {
+pub(crate) fn split_at_edited(
+    retained: &mut Vec<RetainedInterval>,
+    edited_us: u64,
+) -> Result<usize, String> {
     let mut cursor = 0u64;
     for index in 0..retained.len() {
         let interval = retained[index].clone();
@@ -648,6 +656,7 @@ impl EditHistory {
         crate::media_bin::validate_assets(&next.media_assets)?;
         crate::chapters::validate(&next.chapters)?;
         crate::shorts::validate(&next.shorts)?;
+        crate::tracks::validate(&next)?;
         if next.short_layout.is_some() {
             return Err("A project's own edit cannot use a short's split layout".into());
         }
@@ -1160,6 +1169,7 @@ impl EditHistory {
         }
         next.retained_intervals
             .retain(|entry| entry.media.as_deref() != Some(asset_id));
+        crate::tracks::remove_asset(&mut next, asset_id);
         if next.retained_intervals.is_empty() {
             return Err("Removing it would leave the timeline empty".into());
         }
@@ -1200,6 +1210,20 @@ impl EditHistory {
                 media: Some(asset_id.to_string()),
             },
         );
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// One change to the video tracks above the main sequence.
+    pub fn edit_tracks(
+        &mut self,
+        expected_revision: u64,
+        edit: &crate::tracks::TrackEdit,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let next = crate::tracks::apply(&self.current, edit)?;
         self.commit_next(expected_revision, persist_root, next)
     }
 

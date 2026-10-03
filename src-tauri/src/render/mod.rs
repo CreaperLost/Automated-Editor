@@ -44,6 +44,9 @@ pub enum LayerRole {
     Screen,
     WebcamBorder,
     Webcam,
+    /// A clip on a video track above the main sequence; straight alpha, so a logo with a
+    /// transparent background shows what is below.
+    Overlay,
     /// Straight-alpha text over everything else.
     Caption,
 }
@@ -349,6 +352,31 @@ impl Scene {
         layer.uv_w = width as f32 / layer.frame.width as f32;
         layer.uv_h = height as f32 / layer.frame.height as f32;
         self.layers.push(layer);
+    }
+
+    /// A track clip over the whole canvas, under the captions: fitted inside it (`cover` false)
+    /// or filling it with the picture's edges cropped.
+    pub fn push_overlay(&mut self, frame: VideoFrame, cover: bool) {
+        if self.layers.len() >= MAX_LAYERS || frame.width == 0 || frame.height == 0 {
+            return;
+        }
+        let (canvas_w, canvas_h) = (self.width, self.height);
+        let layer = if cover {
+            Layer::placed(frame, 0, 0, canvas_w, canvas_h).cover_uv(canvas_w, canvas_h)
+        } else {
+            let scale =
+                (canvas_w as f64 / frame.width as f64).min(canvas_h as f64 / frame.height as f64);
+            let w = ((frame.width as f64 * scale).round() as u32).clamp(1, canvas_w);
+            let h = ((frame.height as f64 * scale).round() as u32).clamp(1, canvas_h);
+            Layer::placed(frame, (canvas_w - w) / 2, (canvas_h - h) / 2, w, h)
+        }
+        .with_role(LayerRole::Overlay);
+        let at = self
+            .layers
+            .iter()
+            .position(|l| l.role == LayerRole::Caption)
+            .unwrap_or(self.layers.len());
+        self.layers.insert(at, layer);
     }
 
     pub fn apply_screen_uv(&mut self, uv_x: f32, uv_y: f32, uv_w: f32, uv_h: f32) {
@@ -1429,7 +1457,7 @@ fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             let u = layer.uv_x + layer.uv_w * local_x;
             let src = sample_bilinear(&layer.frame, u, v);
             let di = (y * dest.stride + x * 4) as usize;
-            if layer.role == LayerRole::Caption {
+            if matches!(layer.role, LayerRole::Caption | LayerRole::Overlay) {
                 // Same blend as the GPU pipeline: source over, straight alpha.
                 let alpha = src[3] as u32;
                 for c in 0..3 {

@@ -27,6 +27,8 @@ struct Span {
 pub struct AudioMixer {
     root: PathBuf,
     spans: Vec<Span>,
+    /// Clips with sound on the video tracks above the main sequence; they may overlap.
+    overlays: Vec<Span>,
     /// Audible audio tracks with their mix gain; muted tracks are left out.
     tracks: Vec<(TrackType, f64, Vec<SegmentSummary>)>,
     polish: Option<PolishPlan>,
@@ -115,9 +117,27 @@ impl AudioMixer {
             .cloned()
             .collect();
         let polish = PolishPlan::build(root, &document.audio, &recording, &tracks);
+        let overlays = document
+            .overlay_tracks
+            .iter()
+            .filter(|track| !track.muted)
+            .flat_map(|track| &track.clips)
+            .filter(|clip| clip.start_us < duration)
+            .map(|clip| Span {
+                edited_start: clip.start_us,
+                edited_end: clip.end_us().min(duration),
+                source_start: clip.in_us,
+                source_end: clip.in_us + clip.end_us().min(duration) - clip.start_us,
+                fade_in: true,
+                fade_out: true,
+                media: Some(media_track(document, &clip.asset_id)),
+            })
+            .filter(|span| span.media.as_ref().is_some_and(|tracks| !tracks.is_empty()))
+            .collect();
         Ok(Self {
             root: root.into(),
             spans,
+            overlays,
             tracks,
             polish,
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
@@ -133,6 +153,7 @@ impl AudioMixer {
             || self
                 .spans
                 .iter()
+                .chain(&self.overlays)
                 .any(|s| s.media.as_deref().is_some_and(audible))
     }
     pub fn read_frames(&self, start: u64, count: usize) -> Result<Vec<i16>, String> {
@@ -145,10 +166,32 @@ impl AudioMixer {
         let first = self
             .spans
             .partition_point(|s| ceil_frame(s.edited_end) <= start);
-        for span in self.spans[first..]
+        let main = self.spans[first..]
             .iter()
-            .take_while(|s| ceil_frame(s.edited_start) < end)
+            .take_while(|s| ceil_frame(s.edited_start) < end);
+        // Clips on the tracks above play along with whatever the main sequence plays.
+        let overlays = self
+            .overlays
+            .iter()
+            .filter(|s| ceil_frame(s.edited_start) < end && ceil_frame(s.edited_end) > start);
+        for span in main.chain(overlays) {
+            self.mix_span(span, start, end, &mut out)?;
+        }
+        Ok(out
+            .into_iter()
+            .map(|s| match &self.polish {
+                Some(plan) => plan.finish(s),
+                None => s,
+            })
+            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
+            .collect())
+    }
+
+    /// Adds one span's audio, faded at its cut edges, to `out` (frames `start..end`).
+    fn mix_span(&self, span: &Span, start: u64, end: u64, out: &mut [f64]) -> Result<(), String> {
+        let mut mixed = vec![0f64; out.len()];
         {
+            let out = &mut mixed;
             let a = start.max(ceil_frame(span.edited_start));
             let b = end.min(ceil_frame(span.edited_end));
             let source_a = span.source_start
@@ -302,14 +345,10 @@ impl AudioMixer {
                 }
             }
         }
-        Ok(out
-            .into_iter()
-            .map(|s| match &self.polish {
-                Some(plan) => plan.finish(s),
-                None => s,
-            })
-            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
-            .collect())
+        for (sum, sample) in out.iter_mut().zip(mixed) {
+            *sum += sample;
+        }
+        Ok(())
     }
 }
 

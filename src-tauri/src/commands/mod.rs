@@ -903,6 +903,25 @@ pub fn project_media_insert_impl(
     Ok(summary)
 }
 
+pub fn project_tracks_edit_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    edit: crate::tracks::TrackEdit,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let summary = reader.edit_tracks(expected_revision, &edit)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(summary)
+}
+
 pub fn project_ripple_trim_impl(
     state: &AppState,
     project_handle: String,

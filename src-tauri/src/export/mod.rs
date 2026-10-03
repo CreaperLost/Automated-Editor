@@ -266,7 +266,8 @@ pub struct SceneEvaluator {
     /// The last cue drawn and its colored frame for the active word.
     caption_cache: std::cell::RefCell<CaptionCache>,
     /// The last imported image drawn, decoded once rather than per frame.
-    image_cache: std::cell::RefCell<Option<(String, VideoFrame)>>,
+    /// Decoded stills, most recently used last.
+    image_cache: std::cell::RefCell<Vec<(String, VideoFrame)>>,
 }
 
 #[derive(Default)]
@@ -341,7 +342,7 @@ impl SceneEvaluator {
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            image_cache: std::cell::RefCell::new(None),
+            image_cache: std::cell::RefCell::new(Vec::new()),
         })
     }
 
@@ -390,6 +391,16 @@ impl SceneEvaluator {
     }
 
     pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
+        let mut scene = self.main_scene_at(edited_us)?;
+        // A short's split frame shows the recording only.
+        if self.document.short_layout.is_none() {
+            self.push_overlays(&mut scene, edited_us)?;
+        }
+        Ok(scene)
+    }
+
+    /// The main sequence (V1): the recording, or media inserted into it.
+    fn main_scene_at(&self, edited_us: u64) -> Result<Scene, String> {
         let mapper = self.document.mapper()?;
         if let Some((asset_id, local_us)) = mapper.media_at(edited_us) {
             return self.media_scene(asset_id, local_us);
@@ -575,33 +586,7 @@ impl SceneEvaluator {
     /// background, padding, corners and shadow. Crop, zoom, the webcam and captions belong to
     /// the recording, so they are left out.
     fn media_scene(&self, asset_id: &str, local_us: u64) -> Result<Scene, String> {
-        use crate::media_bin::MediaKind;
-        let asset = self
-            .document
-            .media_assets
-            .iter()
-            .find(|asset| asset.id == asset_id)
-            .ok_or("Imported media is missing from the project")?;
-        let path = safe_path(&self.root, &asset.relative_path)?;
-        let frame = match asset.kind {
-            MediaKind::Video => Some(crate::media::ffmpeg::decode_bgra_limited(
-                &path,
-                local_us,
-                self.decode_limit,
-            )?),
-            MediaKind::Image => {
-                let mut cache = self.image_cache.borrow_mut();
-                match cache.as_ref() {
-                    Some((id, frame)) if id == asset_id => Some(frame.clone()),
-                    _ => {
-                        let frame = crate::media_bin::decode_image(&path)?;
-                        *cache = Some((asset_id.to_string(), frame.clone()));
-                        Some(frame)
-                    }
-                }
-            }
-            MediaKind::Audio => None,
-        };
+        let frame = self.media_frame(asset_id, local_us)?;
         let mut layout = self.document.layout.clone();
         layout.webcam_enabled = false;
         layout.screen_crop_left = 0.0;
@@ -617,6 +602,53 @@ impl SceneEvaluator {
             self.background()?,
             crate::render::layout_px_unit(self.width, self.height),
         )
+    }
+
+    /// The picture of imported media at `local_us` into the file; `None` for audio.
+    fn media_frame(&self, asset_id: &str, local_us: u64) -> Result<Option<VideoFrame>, String> {
+        use crate::media_bin::MediaKind;
+        const MAX_CACHED_IMAGES: usize = 4;
+        let asset = self
+            .document
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("Imported media is missing from the project")?;
+        let path = safe_path(&self.root, &asset.relative_path)?;
+        Ok(match asset.kind {
+            MediaKind::Video => Some(crate::media::ffmpeg::decode_bgra_limited(
+                &path,
+                local_us,
+                self.decode_limit,
+            )?),
+            MediaKind::Image => {
+                let mut cache = self.image_cache.borrow_mut();
+                let frame = match cache.iter().position(|(id, _)| id == asset_id) {
+                    Some(index) => cache.remove(index).1,
+                    None => crate::media_bin::decode_image(&path)?,
+                };
+                cache.push((asset_id.to_string(), frame.clone()));
+                if cache.len() > MAX_CACHED_IMAGES {
+                    cache.remove(0);
+                }
+                Some(frame)
+            }
+            MediaKind::Audio => None,
+        })
+    }
+
+    /// Clips on the video tracks above the main sequence, bottom track first.
+    fn push_overlays(&self, scene: &mut Scene, edited_us: u64) -> Result<(), String> {
+        for track in self.document.overlay_tracks.iter().filter(|t| !t.hidden) {
+            let Some(clip) = track.clip_at(edited_us) else {
+                continue;
+            };
+            let local_us = clip.local_us(edited_us).unwrap_or(clip.in_us);
+            if let Some(frame) = self.media_frame(&clip.asset_id, local_us)? {
+                scene.push_overlay(frame, clip.fit == crate::tracks::OverlayFit::Cover);
+            }
+        }
+        Ok(())
     }
 
     /// The transcript captions read from: the chosen track, else the first transcribed
@@ -1660,6 +1692,143 @@ mod tests {
         .unwrap()
     }
 
+    /// Video tracks above the main sequence: a higher track draws over a lower one, a hidden
+    /// track draws nothing, and a clip's sound plays unless its track is muted.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_overlay_tracks_draw_in_order_and_play_their_sound() {
+        use crate::project::reader::ProjectReader;
+        use crate::tracks::TrackEdit;
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = screen_and_mic_project(dir.path());
+        let png = dir.path().join("blue.png");
+        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
+            .save(&png)
+            .unwrap();
+        let clip = dir.path().join("red.mp4");
+        let status = Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("color=c=red:s=64x36:r=30:d=1")
+            .args(["-f", "lavfi", "-i"])
+            .arg("sine=frequency=440:sample_rate=48000:duration=1")
+            .args([
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let mut reader = ProjectReader::open(&root).unwrap();
+        let summary = reader.import_media(0, &[png, clip]).unwrap();
+        let (image_id, video_id) = (
+            summary.media_assets[0].id.clone(),
+            summary.media_assets[1].id.clone(),
+        );
+        let edits = [
+            TrackEdit::AddTrack,
+            TrackEdit::AddTrack,
+            // The red video on V2 from 0.2 s, the blue image on V3 from 0.6 s.
+            TrackEdit::PlaceMedia {
+                asset_id: video_id,
+                track_id: "track-1".into(),
+                start_us: 200_000,
+            },
+            TrackEdit::PlaceMedia {
+                asset_id: image_id,
+                track_id: "track-2".into(),
+                start_us: 600_000,
+            },
+        ];
+        for (revision, edit) in edits.iter().enumerate() {
+            reader.edit_tracks(revision as u64 + 1, edit).unwrap();
+        }
+        // The main sequence is unchanged: 2 s of recording.
+        assert_eq!(reader.summary.edited_duration_us, 2_000_000);
+        let document = reader.history().current.clone();
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        let colour = |document: &EditDocument, t: u64| {
+            let mut evaluator =
+                SceneEvaluator::new(root.clone(), document.clone(), tracks.clone(), 320, 180)
+                    .unwrap();
+            let frame = evaluator.preview_at(t).unwrap();
+            let i = ((90 * frame.stride) + 160 * 4) as usize;
+            (frame.data[i], frame.data[i + 2])
+        };
+        let (b, r) = colour(&document, 100_000);
+        assert!(b < 120 && r < 120, "recording first, got b{b} r{r}");
+        let (b, r) = colour(&document, 400_000);
+        assert!(r > 180 && b < 80, "the V2 video covers it, got b{b} r{r}");
+        let (b, r) = colour(&document, 700_000);
+        assert!(b > 180 && r < 80, "the V3 image is on top, got b{b} r{r}");
+        let mut hidden = document.clone();
+        hidden.overlay_tracks[1].hidden = true;
+        let (b, r) = colour(&hidden, 700_000);
+        assert!(
+            r > 180 && b < 80,
+            "with V3 hidden the video shows, got b{b} r{r}"
+        );
+
+        let frame = 400_000 * SAMPLE_RATE as u64 / 1_000_000;
+        let with_sound = AudioMixer::new(&root, &document, &tracks)
+            .unwrap()
+            .read_frames(frame, 480)
+            .unwrap();
+        let mut muted = document.clone();
+        muted.overlay_tracks[0].muted = true;
+        let without = AudioMixer::new(&root, &muted, &tracks)
+            .unwrap()
+            .read_frames(frame, 480)
+            .unwrap();
+        let spread = |pcm: &[i16]| {
+            let (lo, hi) = pcm
+                .iter()
+                .fold((i16::MAX, i16::MIN), |(lo, hi), &s| (lo.min(s), hi.max(s)));
+            hi as i32 - lo as i32
+        };
+        assert!(
+            spread(&with_sound) > 2_000,
+            "the clip's tone plays over the recording"
+        );
+        assert!(spread(&without) < 200, "a muted track is silent");
+
+        // Exported too: the frame at 0.4 s is the overlay's red.
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let output = run_export(
+            &captured,
+            &AtomicBool::new(false),
+            |_, _| {},
+            &EncoderGate::new(),
+        )
+        .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let frame = decode_h264_frame(&output, 450_000).unwrap();
+        let i = ((90 * frame.stride) + 160 * 4) as usize;
+        assert!(
+            frame.data[i + 2] > 180 && frame.data[i] < 80,
+            "export shows the overlay"
+        );
+        crate::media::release_decoders();
+    }
+
     /// Imported media on the timeline: an image and a video with sound play between parts of
     /// the recording, in preview and export.
     #[test]
@@ -2208,7 +2377,7 @@ mod tests {
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            image_cache: std::cell::RefCell::new(None),
+            image_cache: std::cell::RefCell::new(Vec::new()),
         };
         let mapper = evaluator.document.mapper().unwrap();
         let (_, _, y) = evaluator.caption_at(&mapper, 100_000).unwrap();

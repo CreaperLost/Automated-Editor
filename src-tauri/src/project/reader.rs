@@ -109,6 +109,9 @@ pub struct OpenedProject {
     pub chapters: Vec<crate::chapters::Chapter>,
     #[serde(default)]
     pub shorts: Vec<crate::shorts::Short>,
+    /// Video tracks V2, V3, ... above the main sequence, bottom to top.
+    #[serde(default)]
+    pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -504,6 +507,7 @@ impl ProjectReader {
                 media_assets: history.current.media_assets.clone(),
                 chapters: Vec::new(),
                 shorts: Vec::new(),
+                overlay_tracks: Vec::new(),
             },
             segments,
             root,
@@ -853,6 +857,17 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn edit_tracks(
+        &mut self,
+        expected_revision: u64,
+        edit: &crate::tracks::TrackEdit,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .edit_tracks(expected_revision, edit, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn update_captions(
         &mut self,
         expected_revision: u64,
@@ -918,6 +933,7 @@ impl ProjectReader {
             crate::shorts::attach_edited(&mut shorts, &mapper);
         }
         self.summary.shorts = shorts;
+        self.summary.overlay_tracks = self.history.current.overlay_tracks.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest

@@ -7,6 +7,10 @@ import type { MediaAsset } from "../../lib/types";
 /** dataTransfer type for dragging a media bin item onto the timeline. */
 export const MEDIA_DRAG_TYPE = "application/x-aeroedits-media";
 
+let draggedMediaId: string | null = null;
+/** The media being dragged from the bin; drag-over events cannot read the drag's data. */
+export const currentMediaDrag = () => draggedMediaId;
+
 function formatLength(asset: MediaAsset): string {
   if (asset.kind === "image") return "still image";
   const seconds = asset.durationUs / 1e6;
@@ -101,9 +105,13 @@ export const MediaPanel: React.FC = () => {
               onDragStart={(event) => {
                 event.dataTransfer.setData(MEDIA_DRAG_TYPE, asset.id);
                 event.dataTransfer.effectAllowed = "copy";
+                draggedMediaId = asset.id;
+              }}
+              onDragEnd={() => {
+                draggedMediaId = null;
               }}
               className="group flex items-center gap-2 rounded-md border border-studio-800 bg-studio-850 hover:border-fuchsia-400/50 px-2 py-1.5 cursor-grab"
-              title={`${asset.name}. Drag onto the timeline to insert it.`}
+              title={`${asset.name}. Drag onto the main track to insert it, or onto a track above to lay it over the video.`}
             >
               <Icon className="w-3.5 h-3.5 shrink-0 text-fuchsia-300" />
               <div className="min-w-0 flex-1">
