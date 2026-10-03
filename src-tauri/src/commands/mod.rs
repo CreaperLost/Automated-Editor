@@ -24,6 +24,10 @@ pub struct AppState {
     pub playback: Mutex<PlaybackOwner>,
     pub playback_shutdown: std::sync::atomic::AtomicBool,
     pub preview: Mutex<PreviewOwner>,
+    /// The quality picked in the stage toolbar; `None` uses the surface's default.
+    pub preview_quality: Mutex<Option<playback::PreviewQuality>>,
+    /// Woken whenever a new webview preview frame is stored.
+    pub preview_frame_ready: tokio::sync::Notify,
     pub encoder_gate: Arc<EncoderGate>,
     pub export: Mutex<crate::export::ExportOwner>,
     pub waveform_epoch: AtomicU64,
@@ -50,6 +54,8 @@ impl AppState {
             playback: Mutex::new(PlaybackOwner::closed()),
             playback_shutdown: std::sync::atomic::AtomicBool::new(false),
             preview: Mutex::new(PreviewOwner::new()),
+            preview_quality: Mutex::new(None),
+            preview_frame_ready: tokio::sync::Notify::new(),
             encoder_gate: Arc::new(EncoderGate::new()),
             export: Mutex::new(crate::export::ExportOwner::new()),
             waveform_epoch: AtomicU64::new(0),
@@ -1095,6 +1101,30 @@ pub fn preview_present_fixture_impl(
 
 pub fn preview_status_impl(state: &AppState) -> PreviewStatus {
     state.preview.lock().status()
+}
+
+/// The preview quality in use: the one picked, or the default for the current surface.
+pub fn preview_quality_impl(state: &AppState) -> playback::PreviewQuality {
+    let status = state.preview.lock().status();
+    let webview = if status.attached {
+        status.surface == "webview"
+    } else {
+        !cfg!(target_os = "macos")
+    };
+    state
+        .preview_quality
+        .lock()
+        .unwrap_or_else(|| playback::PreviewQuality::default_for(webview))
+}
+
+/// Takes effect on the next preview frame: the playback worker rebuilds its renderer.
+pub fn preview_quality_set_impl(
+    state: &AppState,
+    quality: playback::PreviewQuality,
+) -> Result<playback::PreviewQuality, String> {
+    quality.validate()?;
+    *state.preview_quality.lock() = Some(quality);
+    Ok(quality)
 }
 
 pub fn preview_hit_test_impl(state: &AppState, x: f64, y: f64) -> bool {

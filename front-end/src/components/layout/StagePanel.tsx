@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, Clapperboard } from "lucide-react";
+import { AlertTriangle, Clapperboard, Gauge } from "lucide-react";
 import { NativePreviewHost } from "../canvas/NativePreviewHost";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
+import {
+  PREVIEW_FPS,
+  PREVIEW_RESOLUTIONS,
+  usePreviewQualityStore,
+} from "../../stores/previewQualityStore";
 import { api } from "../../lib/ipc";
 import type { SegmentPage } from "../../lib/types";
 
@@ -22,6 +27,59 @@ function aspectValue(ratio: string): number {
       return 16 / 9;
   }
 }
+
+const selectClass =
+  "bg-studio-800 text-studio-100 rounded px-1.5 py-0.5 text-[11px] border border-studio-700 focus:outline-none focus:border-teal-500";
+
+/// Preview resolution and frame rate, changed on the fly, with the rate actually drawn.
+const PreviewQualityControls: React.FC = () => {
+  const quality = usePreviewQualityStore((s) => s.quality);
+  const measuredFps = usePreviewQualityStore((s) => s.measuredFps);
+  const error = usePreviewQualityStore((s) => s.error);
+  const init = usePreviewQualityStore((s) => s.init);
+  const setQuality = usePreviewQualityStore((s) => s.setQuality);
+  const isPlaying = useProjectStore((s) => s.isPlaying);
+
+  useEffect(() => {
+    void init();
+  }, [init]);
+
+  if (!quality) return null;
+  return (
+    <div className="flex items-center gap-1.5 shrink-0" title={error ?? "Preview quality. Export is not affected."}>
+      <Gauge className={`w-3.5 h-3.5 ${error ? "text-rose-400" : "text-studio-500"}`} />
+      <select
+        aria-label="Preview resolution"
+        value={quality.resolution}
+        onChange={(e) => setQuality({ resolution: Number(e.target.value) })}
+        className={selectClass}
+      >
+        {PREVIEW_RESOLUTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Preview frame rate"
+        value={quality.fps}
+        onChange={(e) => setQuality({ fps: Number(e.target.value) })}
+        className={selectClass}
+      >
+        {PREVIEW_FPS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {isPlaying && measuredFps !== null && (
+        <span className="font-mono text-[11px] text-teal-300 w-14" aria-label="Frames drawn per second">
+          {measuredFps} fps
+        </span>
+      )}
+    </div>
+  );
+};
 
 /// The preview stage: project summary, the video preview, and track diagnostics.
 export const StagePanel: React.FC = () => {
@@ -63,7 +121,10 @@ export const StagePanel: React.FC = () => {
           {project.tracks.length} tracks · source {formatSeconds(project.sourceDurationUs)} · edited{" "}
           {formatSeconds(project.editedDurationUs)}
         </div>
-        <span className="font-mono text-[11px] text-studio-500 shrink-0">Canvas: {aspectRatio}</span>
+        <div className="flex items-center gap-3 shrink-0">
+          <PreviewQualityControls />
+          <span className="font-mono text-[11px] text-studio-500">Canvas: {aspectRatio}</span>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden border border-studio-800 rounded-xl bg-studio-900/40 flex items-center justify-center p-2">

@@ -1,10 +1,9 @@
 //! One media worker per desktop app. Decode/mix/GPU work never runs on the UI thread.
-use super::{audio::AudioOutput, PlaybackState};
+use super::{audio::AudioOutput, PlaybackState, PreviewQuality};
 use crate::{
     commands::AppState,
     export::SceneEvaluator,
     media::audio::{AudioMixer, CHUNK_FRAMES, SAMPLE_RATE},
-    media::ffmpeg::DecodeLimit,
 };
 use std::{
     sync::{
@@ -22,8 +21,9 @@ const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
 
 struct Runtime {
     generation: u64,
-    /// Built for the webview preview: smaller canvas and rate-capped decode.
+    /// Built for the webview preview, which copies frames through JPEG.
     webview: bool,
+    quality: PreviewQuality,
     evaluator: SceneEvaluator,
     mixer: AudioMixer,
     _lease: std::fs::File,
@@ -81,6 +81,7 @@ fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> 
                     Ok(()) => {
                         owner.mark_presented(job.generation);
                         presented += 1;
+                        state.preview_frame_ready.notify_waiters();
                     }
                     Err(e) => owner.fail(job.generation, e),
                 }
@@ -111,6 +112,7 @@ pub fn start(app: tauri::AppHandle) {
                 &pending,
                 &mut last_frame,
             );
+            let playing = matches!(result, Ok(true));
             if let Err((generation, error)) = result {
                 state.playback.lock().fail(generation, error);
                 let app_copy = app.clone();
@@ -130,9 +132,16 @@ pub fn start(app: tauri::AppHandle) {
                     }
                 });
             }
-            // Right after a frame, go straight on to the next one; otherwise poll gently.
+            // Right after a frame, go straight on to the next one. While playing, check often
+            // enough to catch every frame at 60 fps; when paused, poll gently.
             let rendered = last_frame.is_some() && last_frame != before;
-            thread::sleep(Duration::from_millis(if rendered { 1 } else { 15 }));
+            thread::sleep(Duration::from_millis(if rendered {
+                1
+            } else if playing {
+                3
+            } else {
+                15
+            }));
         }
         app.state::<AppState>().playback.lock().close();
     });
@@ -145,24 +154,33 @@ fn tick(
     runtime: &mut Option<Runtime>,
     pending: &Arc<AtomicBool>,
     last_frame: &mut Option<(u64, u64, u64)>,
-) -> Result<(), (u64, String)> {
+) -> Result<bool, (u64, String)> {
     let status = state.playback.lock().status().map_err(|e| (0, e))?;
     if matches!(status.state, PlaybackState::Closed | PlaybackState::Error) {
         *runtime = None;
-        return Ok(());
+        return Ok(false);
     }
+    let playing = status.state == PlaybackState::Playing;
     let generation = status.generation;
     let error = |e| (generation, e);
     let webview = state.preview.lock().status().surface == "webview";
-    if runtime.as_ref().map(|r| (r.generation, r.webview)) != Some((generation, webview)) {
+    let quality = state
+        .preview_quality
+        .lock()
+        .unwrap_or_else(|| PreviewQuality::default_for(webview));
+    if runtime
+        .as_ref()
+        .map(|r| (r.generation, r.webview, r.quality))
+        != Some((generation, webview, quality))
+    {
         let rebuild_started = std::time::Instant::now();
         let (root, document, tracks) = {
             let opened = state.opened_project.lock();
             let Some(reader) = opened.as_ref() else {
-                return Ok(());
+                return Ok(false);
             };
             if reader.summary.project_handle != status.project_handle {
-                return Ok(());
+                return Ok(false);
             }
             (
                 reader.root().to_path_buf(),
@@ -172,25 +190,17 @@ fn tick(
         };
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
         let mixer = AudioMixer::new(&root, &document, &tracks).map_err(error)?;
-        let (mut width, mut height) = document.layout.preview_dimensions().map_err(error)?;
-        if webview {
-            (width, height) = super::preview::webview_dimensions(width, height);
-        }
+        let (width, height) = document.layout.preview_dimensions().map_err(error)?;
+        let (width, height) = quality.canvas(width, height);
         // Keep the GPU device and background across seeks; recreating them dominated seek time.
         let reuse = runtime.take().and_then(|old| old.evaluator.into_reuse());
-        let mut evaluator =
-            SceneEvaluator::new_reusing(root, document, tracks, width, height, reuse)
-                .map_err(error)?;
-        if webview {
-            evaluator = evaluator.with_decode_limit(DecodeLimit {
-                max_width: width,
-                max_height: height,
-                max_rate: super::preview::WEBVIEW_MAX_RATE,
-            });
-        }
+        let evaluator = SceneEvaluator::new_reusing(root, document, tracks, width, height, reuse)
+            .map_err(error)?
+            .with_decode_limit(quality.decode_limit((width, height), webview));
         *runtime = Some(Runtime {
             generation,
             webview,
+            quality,
             evaluator,
             mixer,
             _lease: lease,
@@ -224,7 +234,7 @@ fn tick(
             let mut owner = state.playback.lock();
             let current = owner.status().map_err(error)?;
             if current.generation != generation || current.state != PlaybackState::Playing {
-                return Ok(());
+                return Ok(playing);
             }
             owner.audio_start_frame = base;
             owner.audio_queued_frame = queued;
@@ -258,7 +268,7 @@ fn tick(
             let mut owner = state.playback.lock();
             let current = owner.status().map_err(error)?;
             if current.generation != generation || current.state != PlaybackState::Playing {
-                return Ok(());
+                return Ok(playing);
             }
             if let Some(output) = owner.audio.as_mut() {
                 output.queue(&chunk).map_err(error)?;
@@ -270,7 +280,7 @@ fn tick(
     }
     let status = state.playback.lock().status().map_err(error)?;
     if status.generation != generation {
-        return Ok(());
+        return Ok(playing);
     }
     let preview = state.preview.lock().status();
     if !preview.attached
@@ -279,19 +289,19 @@ fn tick(
         || status.position_us >= status.duration_us
         || pending.load(Ordering::Acquire)
     {
-        return Ok(());
+        return Ok(playing);
     }
-    // While playing, the webview preview shows whole frames at its capped rate. The clock moves
-    // every tick, so without this the same source frame was composited and JPEG-encoded again
-    // and again, holding up the next real frame.
-    let render_us = if runtime.webview && status.state == PlaybackState::Playing {
-        super::preview::frame_start_us(status.position_us, super::preview::WEBVIEW_MAX_RATE)
+    // While playing, the preview shows whole frames at its rate. The clock moves every tick,
+    // so without this the same source frame was composited and encoded again and again,
+    // holding up the next real frame.
+    let render_us = if status.state == PlaybackState::Playing {
+        runtime.quality.frame_time(status.position_us)
     } else {
         status.position_us
     };
     let key = (generation, render_us, preview.generation);
     if *last_frame == Some(key) {
-        return Ok(());
+        return Ok(playing);
     }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
     if preview.surface == "webview" {
@@ -304,7 +314,7 @@ fn tick(
             })
             .map_err(|_| error("The preview encoder stopped".to_string()))?;
         *last_frame = Some(key);
-        return Ok(());
+        return Ok(playing);
     }
     pending.store(true, Ordering::Release);
     let pending_done = Arc::clone(pending);
@@ -335,5 +345,5 @@ fn tick(
         error(e.to_string())
     })?;
     *last_frame = Some(key);
-    Ok(())
+    Ok(playing)
 }

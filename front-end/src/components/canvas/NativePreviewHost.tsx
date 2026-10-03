@@ -2,6 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { PreviewHitMode, PreviewStatus } from "../../lib/types";
+import { usePreviewQualityStore } from "../../stores/previewQualityStore";
+
+type Picture = ImageBitmap | HTMLImageElement;
+
+/** Decodes a JPEG off the main thread where the webview can, with an <img> as the fallback. */
+async function decodeFrame(blob: Blob): Promise<Picture> {
+  if (typeof createImageBitmap === "function") return createImageBitmap(blob);
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function closePicture(picture: Picture | null) {
+  if (picture && "close" in picture) picture.close();
+}
 
 interface NativePreviewHostProps {
   windowLabel?: string;
@@ -21,50 +42,84 @@ export function NativePreviewHost({
   const previewAvailable = useProjectStore(s => s.previewAvailable);
   const playbackError = useProjectStore(s => s.playbackError);
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const imageRef = useRef<HTMLImageElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const setMeasuredFps = usePreviewQualityStore(s => s.setMeasuredFps);
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [error, setError] = useState<string>();
   const webview = status?.attached === true && status.surface === "webview";
   const webviewGeneration = webview ? status.generation : undefined;
 
-  // Without a native child view, pull JPEG frames from the backend and show them in an <img>.
+  // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
+  // Each request waits for the next frame, so it arrives as soon as it is stored; decoding
+  // runs off the main thread while the next frame is already being fetched.
   useEffect(() => {
     if (webviewGeneration === undefined) return;
     let cancelled = false;
-    let animation = 0;
-    let inFlight = false;
     let lastSeq = 0;
-    let objectUrl: string | undefined;
-    const poll = () => {
-      if (cancelled) return;
-      animation = requestAnimationFrame(poll);
-      if (inFlight || document.hidden) return;
-      inFlight = true;
-      void api.previewFrame(lastSeq)
-        .then(buffer => {
-          if (cancelled || buffer.byteLength <= 8) return;
-          lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
-          const next = URL.createObjectURL(new Blob([buffer.slice(8)], { type: "image/jpeg" }));
-          const image = imageRef.current;
-          if (!image) {
-            URL.revokeObjectURL(next);
-            return;
+    let latest: Blob | null = null;
+    let drawing = false;
+    let drawn = 0;
+    let windowStart = performance.now();
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const draw = async () => {
+      if (drawing) return;
+      drawing = true;
+      try {
+        while (latest && !cancelled) {
+          const blob = latest;
+          latest = null;
+          const picture = await decodeFrame(blob).catch(() => null);
+          const canvas = canvasRef.current;
+          const context = canvas?.getContext("2d");
+          if (!picture || cancelled || !canvas || !context) {
+            closePicture(picture);
+            continue;
           }
-          const previous = objectUrl;
-          objectUrl = next;
-          image.src = next;
-          if (previous) URL.revokeObjectURL(previous);
-        })
-        .catch(() => undefined)
-        .finally(() => { inFlight = false; });
+          if (canvas.width !== picture.width || canvas.height !== picture.height) {
+            canvas.width = picture.width;
+            canvas.height = picture.height;
+          }
+          context.drawImage(picture, 0, 0);
+          closePicture(picture);
+          drawn += 1;
+        }
+      } finally {
+        drawing = false;
+      }
     };
-    poll();
+    const measure = window.setInterval(() => {
+      const now = performance.now();
+      const fps = Math.round((drawn * 1000) / Math.max(1, now - windowStart));
+      drawn = 0;
+      windowStart = now;
+      setMeasuredFps(fps > 0 ? fps : null);
+    }, 1000);
+    const pull = async () => {
+      while (!cancelled) {
+        if (document.hidden) {
+          await sleep(250);
+          continue;
+        }
+        let buffer: ArrayBuffer;
+        try {
+          buffer = await api.previewFrame(lastSeq, 250);
+        } catch {
+          await sleep(100);
+          continue;
+        }
+        if (cancelled || buffer.byteLength <= 8) continue;
+        lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
+        latest = new Blob([buffer.slice(8)], { type: "image/jpeg" });
+        void draw();
+      }
+    };
+    void pull();
     return () => {
       cancelled = true;
-      cancelAnimationFrame(animation);
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      window.clearInterval(measure);
+      setMeasuredFps(null);
     };
-  }, [webviewGeneration]);
+  }, [webviewGeneration, setMeasuredFps]);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,10 +191,8 @@ export function NativePreviewHost({
           data-content-aspect-ratio={fitAspectRatio}
         >
           {webview && (
-            <img
-              ref={imageRef}
-              alt=""
-              draggable={false}
+            <canvas
+              ref={canvasRef}
               className="w-full h-full object-contain rounded-xl"
             />
           )}

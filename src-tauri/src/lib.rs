@@ -547,16 +547,45 @@ fn preview_present_fixture(
 }
 
 /// The latest webview preview frame newer than `after`: an 8-byte little-endian sequence
-/// number followed by JPEG bytes, or an empty body when nothing is newer.
+/// number followed by JPEG bytes, or an empty body when nothing newer arrives within
+/// `wait_ms` (at most a second). Waiting here hands each frame over the moment it is stored,
+/// instead of on the webview's next poll.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn preview_frame(state: State<'_, AppState>, after: u64) -> tauri::ipc::Response {
-    let frame = state.preview.lock().web_frame_after(after);
-    tauri::ipc::Response::new(
-        frame
-            .map(|bytes| bytes.as_ref().clone())
-            .unwrap_or_default(),
-    )
+async fn preview_frame(
+    state: State<'_, AppState>,
+    after: u64,
+    wait_ms: Option<u64>,
+) -> Result<tauri::ipc::Response, String> {
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_millis(wait_ms.unwrap_or(0).min(1_000));
+    loop {
+        let ready = state.preview_frame_ready.notified();
+        tokio::pin!(ready);
+        // Registered before the check, so a frame stored in between still wakes this wait.
+        ready.as_mut().enable();
+        if let Some(frame) = state.preview.lock().web_frame_after(after) {
+            return Ok(tauri::ipc::Response::new(frame.as_ref().clone()));
+        }
+        if tokio::time::timeout_at(deadline, ready).await.is_err() {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        }
+    }
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preview_quality(state: State<'_, AppState>) -> playback::PreviewQuality {
+    commands::preview_quality_impl(&state)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preview_quality_set(
+    state: State<'_, AppState>,
+    quality: playback::PreviewQuality,
+) -> Result<playback::PreviewQuality, String> {
+    commands::preview_quality_set_impl(&state, quality)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1183,6 +1212,8 @@ pub fn run() {
             preview_present_fixture,
             preview_status,
             preview_frame,
+            preview_quality,
+            preview_quality_set,
             preview_hit_test,
             preview_detach,
             media_interop_status,
