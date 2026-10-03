@@ -110,8 +110,18 @@ pub fn show_in_finder_impl(path: String) -> Result<(), String> {
         {
             // explorer.exe exits with status 1 even when it opens the window,
             // so only a failure to launch it is an error.
-            std::process::Command::new("explorer")
-                .arg(format!("/select,{}", path))
+            // Explorer only understands `/select,"C:\dir\file"`: the default argument quoting
+            // wraps the whole switch in quotes (any path with a space), and it opens Documents
+            // instead. It also needs backslashes.
+            use std::os::windows::process::CommandExt;
+            let native = path.replace('/', "\\");
+            let mut command = std::process::Command::new("explorer");
+            if p.is_dir() {
+                command.raw_arg(format!("\"{native}\""));
+            } else {
+                command.raw_arg(format!("/select,\"{native}\""));
+            }
+            command
                 .spawn()
                 .map_err(|e| format!("Failed to run explorer: {e}"))?;
             Ok(())

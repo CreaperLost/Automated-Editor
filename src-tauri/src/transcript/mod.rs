@@ -334,18 +334,38 @@ impl Transcript {
     /// Replaces one word's text, e.g. to fix a misheard name before it shows in captions.
     /// Takes sentence punctuation (. , ! ? ; : quotes, brackets, dashes) off every spoken
     /// word, keeping apostrophes and hyphens inside words and separators inside numbers.
-    /// Returns how many words changed; a word that is only punctuation stays as it is.
+    /// Punctuation the provider gave as words of its own (Parakeet's "." and ",") goes; a
+    /// caption break it held moves to the next word. Returns how many words changed or went.
     pub fn strip_punctuation(&mut self) -> usize {
         let mut changed = 0;
-        for word in &mut self.words {
+        let mut index = 0;
+        while index < self.words.len() {
+            let word = &mut self.words[index];
             if word.kind != WordKind::Word {
+                index += 1;
                 continue;
             }
             let stripped = strip_punctuation(&word.text);
-            if !stripped.is_empty() && stripped != word.text {
+            if stripped.is_empty() {
+                let removed = self.words.remove(index);
+                if let Some(mark) = self.caption_marks.remove(&removed.id) {
+                    if mark.cue_break {
+                        if let Some(next) = self.words.get(index) {
+                            self.caption_marks
+                                .entry(next.id.clone())
+                                .or_default()
+                                .cue_break = true;
+                        }
+                    }
+                }
+                changed += 1;
+                continue;
+            }
+            if stripped != word.text {
                 word.text = stripped;
                 changed += 1;
             }
+            index += 1;
         }
         changed
     }
@@ -531,5 +551,28 @@ mod punctuation_tests {
         assert_eq!(strip_punctuation("(aside)"), "aside");
         assert_eq!(strip_punctuation("$20%"), "$20%");
         assert_eq!(strip_punctuation("\u{2014}"), "");
+    }
+
+    #[test]
+    fn punctuation_words_go_and_their_caption_break_moves_on() {
+        let mut transcript: super::Transcript = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "trackId": "mic",
+            "provider": "parakeet",
+            "model": "m",
+            "createdAt": "now",
+            "words": [
+                {"id": "w-0", "text": "Okay", "kind": "word", "sourceStartUs": 0, "sourceEndUs": 1},
+                {"id": "w-1", "text": ".", "kind": "word", "sourceStartUs": 1, "sourceEndUs": 2},
+                {"id": "w-2", "text": "guys,", "kind": "word", "sourceStartUs": 2, "sourceEndUs": 3},
+            ],
+            "captionMarks": {"w-1": {"cueBreak": true}},
+        }))
+        .unwrap();
+        assert_eq!(transcript.strip_punctuation(), 2);
+        let texts: Vec<_> = transcript.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["Okay", "guys"]);
+        assert!(transcript.caption_marks["w-2"].cue_break);
+        assert_eq!(transcript.strip_punctuation(), 0);
     }
 }
