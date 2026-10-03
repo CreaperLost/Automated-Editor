@@ -324,7 +324,7 @@ export const InspectorPanel: React.FC = () => {
               type="checkbox"
               checked={canvas.cursorVisible}
               onChange={(e) => setCanvas({ cursorVisible: e.target.checked })}
-              className="accent-indigo-500"
+              className=""
             />
             Show the pointer
           </label>

@@ -7,16 +7,23 @@ import type { OpenedProject } from "../../lib/types";
 interface NewProjectDialogProps {
   /** Pre-picked recording, e.g. when starting from "Edit a recording". */
   initialRecording?: string;
+  /** Opens on "edit a recording" (true) or "start empty" (false). */
+  startWithRecording?: boolean;
   onCreated: (project: OpenedProject) => void;
   onClose: () => void;
 }
 
 /// A new project gets its own folder. It can edit a recording folder, which is only read and
 /// never written to, or start empty and be built from imported media.
-export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({ initialRecording, onCreated, onClose }) => {
+export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
+  initialRecording,
+  startWithRecording,
+  onCreated,
+  onClose,
+}) => {
   const [name, setName] = useState("");
   const [location, setLocation] = useState("");
-  const [withRecording, setWithRecording] = useState(!!initialRecording);
+  const [withRecording, setWithRecording] = useState(startWithRecording ?? !!initialRecording);
   const [recording, setRecording] = useState(initialRecording ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();

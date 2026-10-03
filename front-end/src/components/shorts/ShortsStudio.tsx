@@ -444,7 +444,7 @@ export const ShortsStudio: React.FC = () => {
                       else next.delete(s.id);
                       setChecked(next);
                     }}
-                    className="accent-teal-500"
+                    className=""
                   />
                   <span className="flex-1 truncate font-medium">{s.title}</span>
                 </div>
@@ -604,7 +604,7 @@ export const ShortsStudio: React.FC = () => {
                   <span className="text-studio-400">Camera height</span>
                   <span className="font-mono">{Math.round(layout.cameraPct)}%</span>
                 </div>
-                <input type="range" aria-label="Camera height" min={20} max={70} step={1} value={layout.cameraPct} onChange={(e) => changeLayout({ cameraPct: Number(e.target.value) })} className="w-full accent-teal-500" />
+                <input type="range" aria-label="Camera height" min={20} max={70} step={1} value={layout.cameraPct} onChange={(e) => changeLayout({ cameraPct: Number(e.target.value) })} className="w-full" />
               </label>
             </div>
 
@@ -622,7 +622,7 @@ export const ShortsStudio: React.FC = () => {
                     {layout.screenZoom.toFixed(1)}×{layout.screenZoom < 1 ? " (out)" : ""}
                   </button>
                 </div>
-                <input type="range" aria-label="Screen zoom" min={0.3} max={3} step={0.05} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} onDoubleClick={() => changeLayout({ screenZoom: 1 })} className="w-full accent-teal-500" />
+                <input type="range" aria-label="Screen zoom" min={0.3} max={3} step={0.05} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} onDoubleClick={() => changeLayout({ screenZoom: 1 })} className="w-full" />
               </label>
               {(
                 [
@@ -651,12 +651,12 @@ export const ShortsStudio: React.FC = () => {
                     value={layout[key]}
                     onChange={(e) => changeLayout({ [key]: Number(e.target.value) })}
                     onDoubleClick={() => changeLayout({ [key]: 0 })}
-                    className="w-full accent-teal-500"
+                    className="w-full"
                   />
                 </label>
               ))}
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={layout.followZooms} onChange={(e) => changeLayout({ followZooms: e.target.checked })} className="accent-teal-500" />
+                <input type="checkbox" checked={layout.followZooms} onChange={(e) => changeLayout({ followZooms: e.target.checked })} className="" />
                 <span>Follow the video's zooms (clicks and manual zooms)</span>
               </label>
             </div>
@@ -716,7 +716,7 @@ export const ShortsStudio: React.FC = () => {
 
             <div className="space-y-2">
               <label className="flex items-center gap-2 font-semibold text-studio-300">
-                <input type="checkbox" checked={layout.captions} onChange={(e) => changeLayout({ captions: e.target.checked })} className="accent-teal-500" />
+                <input type="checkbox" checked={layout.captions} onChange={(e) => changeLayout({ captions: e.target.checked })} className="" />
                 Captions
               </label>
               {layout.captions && (
@@ -741,7 +741,7 @@ export const ShortsStudio: React.FC = () => {
                       <span className="text-studio-400">Words at once</span>
                       <span className="font-mono">{layout.captionMaxWords || "editor's"}</span>
                     </div>
-                    <input type="range" aria-label="Words per caption" min={0} max={12} step={1} value={layout.captionMaxWords} onChange={(e) => changeLayout({ captionMaxWords: Number(e.target.value) })} className="w-full accent-teal-500" />
+                    <input type="range" aria-label="Words per caption" min={0} max={12} step={1} value={layout.captionMaxWords} onChange={(e) => changeLayout({ captionMaxWords: Number(e.target.value) })} className="w-full" />
                   </label>
                   <div className="space-y-1">
                     <span className="text-studio-400">Lines</span>
@@ -758,7 +758,7 @@ export const ShortsStudio: React.FC = () => {
                       <span className="text-studio-400">Text size</span>
                       <span className="font-mono">{layout.captionSizePct ? `${layout.captionSizePct.toFixed(1)}%` : "editor's"}</span>
                     </div>
-                    <input type="range" aria-label="Caption size" min={0} max={15} step={0.5} value={layout.captionSizePct} onChange={(e) => { const v = Number(e.target.value); changeLayout({ captionSizePct: v > 0 && v < 2 ? 2 : v }); }} className="w-full accent-teal-500" />
+                    <input type="range" aria-label="Caption size" min={0} max={15} step={0.5} value={layout.captionSizePct} onChange={(e) => { const v = Number(e.target.value); changeLayout({ captionSizePct: v > 0 && v < 2 ? 2 : v }); }} className="w-full" />
                   </label>
                 </div>
               )}

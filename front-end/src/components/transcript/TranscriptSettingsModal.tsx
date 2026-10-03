@@ -159,7 +159,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                     name="provider"
                     checked={draft.provider === value}
                     onChange={() => setDraft({ ...draft, provider: value })}
-                    className="mt-0.5 accent-teal-500"
+                    className="mt-0.5"
                   />
                   <span>
                     <span className="block text-studio-100">{label}</span>

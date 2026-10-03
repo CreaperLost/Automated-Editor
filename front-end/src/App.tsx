@@ -1,15 +1,10 @@
 import { useShallow } from "zustand/react/shallow";
 import React, { useEffect, useState } from "react";
 import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
-import {
-  Folder,
-  FolderOpen,
-  MonitorPlay,
-  Clock,
-  X,
-  FilePlus2,
-} from "lucide-react";
+import { ChevronRight, Clock, FilePlus2, Film, Folder, FolderOpen, X } from "lucide-react";
 import { EditorTopBar } from "./components/navigation/EditorTopBar";
+import { StatusBar } from "./components/navigation/StatusBar";
+import { Button, Notice } from "./components/ui";
 import { SilenceModal } from "./components/silence-modal/SilenceModal";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -69,7 +64,8 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  // The new-project dialog, opened on "edit a recording" or "start empty" (null: closed).
+  const [newProject, setNewProject] = useState<null | { withRecording?: boolean }>(null);
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
 
@@ -154,10 +150,10 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleShowInFinder = async () => {
-    if (!path) return;
+  const showInFileManager = async (target: string | null | undefined) => {
+    if (!target) return;
     try {
-      await api.showInFinder(path);
+      await api.showInFinder(target);
     } catch (err) {
       setError(String(err));
     }
@@ -202,149 +198,62 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-950 text-studio-100 select-none">
-      {/* 1. Editor Header */}
       <EditorTopBar
         onOpenExport={() => setExportOpen(true)}
         exportJob={exportJob}
         busy={busy}
         onOpenFolder={handleOpenFolder}
-        onNewProject={() => setNewProjectOpen(true)}
+        onNewProject={() => setNewProject({})}
+        onOpenRecent={(recent) => void openPath(recent)}
         onCloseProject={handleCloseProject}
-        onShowInFinder={handleShowInFinder}
+        onShowInFinder={() => void showInFileManager(path)}
+        onError={setError}
       />
 
-      {/* 2. Notification & Error Alerts */}
       {error && (
-        <div role="alert" className="px-5 py-2 bg-rose-950/60 border-b border-rose-800/80 text-rose-200 text-xs flex items-center justify-between">
-          <span>{error}</span>
-          <button onClick={() => setError(undefined)} className="text-rose-400 hover:text-rose-100">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        <Notice tone="danger" onDismiss={() => setError(undefined)}>
+          {error}
+        </Notice>
       )}
 
-      {exportJob && exportJob.state !== "idle" && (
-        <div className="px-5 py-1.5 bg-teal-950/40 border-b border-teal-800/60 text-xs text-teal-300 flex items-center gap-3">
-          <span className="font-semibold capitalize">Export {exportJob.state}:</span>
-          {exportJob.progressDenominator > 0 && (
-            <span>{Math.round((exportJob.progressNumerator / exportJob.progressDenominator) * 100)}%</span>
-          )}
-          {exportJob.outputPath && <span className="font-mono truncate">{exportJob.outputPath}</span>}
-          {exportJob.state === "completed" && <span className="text-emerald-400">✓ Video saved successfully</span>}
-        </div>
-      )}
-
-      {/* 3. Main Editor Workspace */}
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         {project ? (
-          <div className="flex-1 min-h-0 overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-hidden p-1.5">
             <DockWorkspace />
           </div>
         ) : (
-          /* Empty / Welcome State */
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-studio-950 overflow-y-auto">
-            <div className="w-16 h-16 rounded-2xl bg-teal-900/30 border border-teal-700/40 flex items-center justify-center text-teal-400 mb-4 shadow-xl shadow-teal-950/50">
-              <MonitorPlay className="w-8 h-8" />
-            </div>
-            <h2 className="text-xl font-bold text-white mb-2">
-              AeroEdits
-            </h2>
-            <p className="text-sm text-studio-400 max-w-md mb-6 leading-relaxed">
-              Start a project from a <strong>.aero</strong> recording (smart zoom from mouse telemetry, dead-air trimming) or from nothing, with imported video, images and audio. Projects live in their own folders; recordings are never changed.
-            </p>
-
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setNewProjectOpen(true)}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-semibold text-sm shadow-lg shadow-teal-900/40 transition-all hover:scale-102"
-              >
-                <FilePlus2 className="w-4 h-4" />
-                <span>New Project</span>
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={handleOpenFolder}
-                title="Open a project folder, or a recording folder to edit it in place"
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-studio-700 bg-studio-900 hover:bg-studio-850 text-studio-100 font-semibold text-sm transition-colors"
-              >
-                <FolderOpen className="w-4 h-4" />
-                <span>Open Project</span>
-              </button>
-            </div>
-
-            {/* Recent Projects List */}
-            {recentProjects.length > 0 && (
-              <div className="w-full max-w-md mt-10 text-left border-t border-studio-800/80 pt-6">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-studio-400 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-studio-400" />
-                    Recent Projects
-                  </span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => clearRecentProjects()}
-                    className="text-[11px] text-studio-500 hover:text-studio-300 transition-colors"
-                  >
-                    Clear all
-                  </button>
-                </div>
-                <ul className="space-y-2">
-                  {recentProjects.map((recentPath) => {
-                    const folderName = getProjectFolderName(recentPath);
-                    const displayPath = shortenPath(recentPath);
-                    return (
-                      <li
-                        key={recentPath}
-                        className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-studio-900/80 hover:bg-studio-850 border border-studio-800 transition-colors group cursor-pointer"
-                        onClick={() => void openPath(recentPath)}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          <Folder className="w-4 h-4 text-teal-400 shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium text-studio-200 group-hover:text-white truncate">
-                              {folderName}
-                            </p>
-                            <p className="text-[10px] text-studio-500 font-mono truncate">
-                              {displayPath}
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeRecentProject(recentPath);
-                          }}
-                          className="p-1 rounded text-studio-500 hover:text-studio-300 opacity-60 group-hover:opacity-100"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-          </div>
+          <Welcome
+            busy={busy}
+            recentProjects={recentProjects}
+            onEditRecording={() => setNewProject({ withRecording: true })}
+            onStartEmpty={() => setNewProject({ withRecording: false })}
+            onOpenFolder={handleOpenFolder}
+            onOpenRecent={(recent) => void openPath(recent)}
+            onRemoveRecent={removeRecentProject}
+            onClearRecent={clearRecentProjects}
+          />
         )}
       </main>
 
-      {newProjectOpen && (
+      <StatusBar
+        exportJob={exportJob}
+        onOpenExport={() => setExportOpen(true)}
+        onShowExport={(output) => void showInFileManager(output)}
+      />
+
+      {newProject && (
         <NewProjectDialog
-          onClose={() => setNewProjectOpen(false)}
+          startWithRecording={newProject.withRecording}
+          onClose={() => setNewProject(null)}
           onCreated={(opened) => {
-            setNewProjectOpen(false);
+            setNewProject(null);
             loadOpenedProject(opened, opened.projectPath ?? "");
             setExportDestination("");
           }}
         />
       )}
 
-      {/* 4. Global Silence Cuts Modal */}
+      {/* Jump Cuts */}
       <SilenceModal />
 
       {project && exportOpen && (
@@ -362,3 +271,131 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
+/// The start screen: edit a recording, start empty, or pick up a recent project.
+const Welcome: React.FC<{
+  busy: boolean;
+  recentProjects: string[];
+  onEditRecording: () => void;
+  onStartEmpty: () => void;
+  onOpenFolder: () => void;
+  onOpenRecent: (path: string) => void;
+  onRemoveRecent: (path: string) => void;
+  onClearRecent: () => void;
+}> = ({ busy, recentProjects, onEditRecording, onStartEmpty, onOpenFolder, onOpenRecent, onRemoveRecent, onClearRecent }) => (
+  <div className="flex-1 overflow-y-auto bg-studio-950">
+    <div className="mx-auto w-full max-w-3xl px-6 py-14">
+      <div className="flex items-center gap-3">
+        <img src="/aeroedits-icon.svg" alt="" className="w-11 h-11" draggable={false} />
+        <div>
+          <h1 className="font-display text-display text-studio-100">AeroEdits</h1>
+          <p className="text-body text-studio-400">Turn screen recordings into polished videos.</p>
+        </div>
+      </div>
+
+      <div className="mt-10 grid gap-3 sm:grid-cols-2">
+        <StartCard
+          icon={Film}
+          title="Edit a recording"
+          detail="Start from a .aero recording: zooms from your clicks, the camera and every sound track."
+          onClick={onEditRecording}
+          disabled={busy}
+          primary
+        />
+        <StartCard
+          icon={FilePlus2}
+          title="Start an empty project"
+          detail="Build a video from imported clips, images and audio."
+          onClick={onStartEmpty}
+          disabled={busy}
+        />
+      </div>
+      <div className="mt-3">
+        <Button variant="ghost" icon={FolderOpen} onClick={onOpenFolder} disabled={busy}>
+          Open a project or recording folder…
+        </Button>
+      </div>
+
+      <section className="mt-10">
+        <div className="flex items-center justify-between border-b border-studio-800 pb-2">
+          <h2 className="flex items-center gap-2 text-label font-semibold text-studio-300">
+            <Clock className="w-4 h-4 text-studio-500" /> Recent projects
+          </h2>
+          {recentProjects.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={onClearRecent} disabled={busy}>
+              Clear list
+            </Button>
+          )}
+        </div>
+        {recentProjects.length === 0 ? (
+          <p className="py-6 text-label text-studio-500">Projects you open show up here.</p>
+        ) : (
+          <ul className="mt-2 divide-y divide-studio-800/70">
+            {recentProjects.map((recentPath) => (
+              <li key={recentPath} className="group flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onOpenRecent(recentPath)}
+                  className="flex flex-1 min-w-0 items-center gap-3 rounded-control px-2 py-2.5 text-left hover:bg-studio-900"
+                >
+                  <Folder className="w-5 h-5 text-accent-fg shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-body font-medium text-studio-100 truncate">
+                      {getProjectFolderName(recentPath)}
+                    </span>
+                    <span className="block text-meta text-studio-500 truncate">{shortenPath(recentPath)}</span>
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-studio-600 group-hover:text-studio-300" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Remove ${getProjectFolderName(recentPath)} from recent projects`}
+                  title="Remove from the list (the project stays on disk)"
+                  onClick={() => onRemoveRecent(recentPath)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-control text-studio-500 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-studio-200 hover:bg-studio-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  </div>
+);
+
+const StartCard: React.FC<{
+  icon: typeof Film;
+  title: string;
+  detail: string;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+}> = ({ icon: Icon, title, detail, onClick, disabled, primary }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    className={
+      "group flex items-start gap-3 rounded-panel border p-4 text-left transition-colors disabled:opacity-50 " +
+      (primary
+        ? "border-accent/50 bg-accent/10 hover:bg-accent/15 hover:border-accent-hover"
+        : "border-studio-700 bg-studio-900 hover:bg-studio-850 hover:border-studio-600")
+    }
+  >
+    <span
+      className={
+        "h-10 w-10 shrink-0 inline-flex items-center justify-center rounded-control " +
+        (primary ? "bg-accent text-white" : "bg-studio-800 text-studio-200")
+      }
+    >
+      <Icon className="w-5 h-5" />
+    </span>
+    <span className="min-w-0">
+      <span className="block text-body font-semibold text-studio-100">{title}</span>
+      <span className="mt-0.5 block text-label text-studio-400">{detail}</span>
+    </span>
+  </button>
+);

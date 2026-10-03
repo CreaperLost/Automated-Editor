@@ -155,7 +155,7 @@ export const SilenceModal: React.FC = () => {
                 max={-20}
                 value={config.thresholdDb}
                 onChange={(e) => setConfig({ ...config, thresholdDb: Number(e.target.value) })}
-                className="w-full accent-emerald-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+                className="w-full h-1.5 bg-studio-800 rounded-lg cursor-pointer"
               />
               <div className="flex justify-between text-[10px] text-studio-500">
                 <span>-60 dB (Very Sensitive)</span>
@@ -176,7 +176,7 @@ export const SilenceModal: React.FC = () => {
                 step={50}
                 value={config.minDurationMs}
                 onChange={(e) => setConfig({ ...config, minDurationMs: Number(e.target.value) })}
-                className="w-full accent-emerald-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+                className="w-full h-1.5 bg-studio-800 rounded-lg cursor-pointer"
               />
             </div>
 
@@ -193,7 +193,7 @@ export const SilenceModal: React.FC = () => {
                 step={10}
                 value={config.paddingMs}
                 onChange={(e) => setConfig({ ...config, paddingMs: Number(e.target.value) })}
-                className="w-full accent-emerald-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+                className="w-full h-1.5 bg-studio-800 rounded-lg cursor-pointer"
               />
               <p className="text-[10px] text-studio-400">
                 Preserves milliseconds around words to avoid clipping consonants.

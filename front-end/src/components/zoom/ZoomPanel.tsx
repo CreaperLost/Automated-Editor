@@ -45,7 +45,7 @@ function Slider(props: {
         step={props.step}
         value={props.value}
         onChange={(event) => props.onChange(Number(event.target.value))}
-        className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+        className="w-full h-1.5 bg-studio-800 rounded-lg cursor-pointer"
       />
     </label>
   );
@@ -259,7 +259,7 @@ export const ZoomPanel: React.FC = () => {
             type="checkbox"
             checked={settings.follow}
             onChange={(e) => setSettings({ follow: e.target.checked })}
-            className="accent-indigo-500"
+            className=""
           />
           Follow the mouse while zoomed
         </label>
@@ -402,7 +402,7 @@ export const ZoomPanel: React.FC = () => {
                             api.projectZoomUpdate(project.projectHandle, project.revision, { ...zoom, fixed: !e.target.checked }),
                           )
                         }
-                        className="accent-indigo-500"
+                        className=""
                       />
                       Follow the mouse (off: stays on its center)
                     </label>

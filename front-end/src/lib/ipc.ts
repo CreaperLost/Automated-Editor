@@ -1,3 +1,4 @@
+import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
   OpenedProject,
   SegmentPage,
@@ -58,11 +59,18 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
   if (!isTauriEnvironment()) {
     throw new Error(`${cmd} requires the desktop app.`);
   }
+  // Edits carry the revision they expect; their answer means the project was written.
+  const edit = !!args && "expectedRevision" in args;
+  const status = useSaveStatusStore.getState();
+  if (edit) status.begin();
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<T>(cmd, args);
+    const result = await invoke<T>(cmd, args);
+    if (edit) useSaveStatusStore.getState().succeed();
+    return result;
   } catch (err) {
     console.warn(`[Tauri IPC] Failed invoking ${cmd}:`, err);
+    if (edit) useSaveStatusStore.getState().fail(String(err));
     throw err;
   }
 }

@@ -58,7 +58,7 @@ const EffectRow: React.FC<EffectRowProps> = ({
           step={1}
           value={value}
           onChange={(e) => onValue(Number(e.target.value))}
-          className="flex-1 accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+          className="flex-1 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
         />
         <span className="w-16 text-right font-mono text-[11px] text-studio-300">{valueLabel}</span>
       </div>
@@ -138,7 +138,7 @@ const LaneRow: React.FC<{
         onChange={(e) => onVolume(Number(e.target.value))}
         onDoubleClick={() => onVolume(0)}
         title="Double-click to reset"
-        className="w-full min-w-0 accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer disabled:opacity-40"
+        className="w-full min-w-0 h-1.5 bg-studio-800 rounded-lg cursor-pointer disabled:opacity-40"
       />
       <span className="w-11 text-right font-mono text-[10px] text-studio-300">{formatDb(volumeDb)}</span>
       <LaneToggle

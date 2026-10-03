@@ -1,20 +1,38 @@
 import React, { useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  AlertCircle,
+  Check,
+  Clock,
+  Download,
+  FilePlus2,
   Folder,
   FolderOpen,
-  Pencil,
-  Scissors,
-  Download,
-  Smartphone,
-  FilePlus2,
   Keyboard,
+  LayoutGrid,
+  Loader2,
+  Redo2,
+  RotateCcw,
+  Scissors,
+  Undo2,
+  X,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import { useSaveStatusStore } from "../../stores/saveStatusStore";
+import { useWorkspaceStore } from "../../stores/workspaceStore";
+import { useHotkeyStore, formatBinding } from "../../stores/hotkeyStore";
 import { api } from "../../lib/ipc";
 import { ExportStatus } from "../../lib/types";
-import { LayoutMenu } from "../layout/LayoutMenu";
+import { FILE_MANAGER, redoProject, undoProject } from "../../lib/projectActions";
+import {
+  LAYOUT_PRESETS,
+  WORKSPACES,
+  applyPresetToWorkspace,
+  resetWorkspaceLayout,
+  type LayoutPreset,
+} from "../layout/dockLayout";
 import { HotkeysDialog } from "../settings/HotkeysDialog";
+import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
 
 interface EditorTopBarProps {
   onOpenExport: () => void;
@@ -22,230 +40,283 @@ interface EditorTopBarProps {
   busy: boolean;
   onOpenFolder: () => void;
   onNewProject: () => void;
+  onOpenRecent: (path: string) => void;
   onCloseProject: () => void;
   onShowInFinder: () => void;
+  onError: (message: string) => void;
 }
 
+function folderName(path: string) {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+/// The window's header: the File menu, the project and whether it is saved, undo and redo,
+/// the workspaces, and Export.
 export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   onOpenExport,
   exportJob,
   busy,
   onOpenFolder,
   onNewProject,
+  onOpenRecent,
   onCloseProject,
   onShowInFinder,
+  onError,
 }) => {
-  const {
-    openedProject: project,
-    projectPath,
-    applyOpenedProject,
-    setIsSilenceModalOpen,
-  } = useProjectStore(
+  const { project, projectPath, recentProjects, setIsSilenceModalOpen } = useProjectStore(
     useShallow((s) => ({
-      openedProject: s.openedProject,
+      project: s.openedProject,
       projectPath: s.projectPath,
-      applyOpenedProject: s.applyOpenedProject,
+      recentProjects: s.recentProjects,
       setIsSilenceModalOpen: s.setIsSilenceModalOpen,
     })),
   );
-
-  const [projectNameInput, setProjectNameInput] = useState(
-    project?.manifest.projectName ?? "",
-  );
-  const [isRenaming, setIsRenaming] = useState(false);
+  const workspace = useWorkspaceStore((s) => s.workspace);
+  const setWorkspace = useWorkspaceStore((s) => s.setWorkspace);
+  const bindings = useHotkeyStore((s) => s.bindings);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
-  const projectNameInputRef = useRef<HTMLInputElement>(null);
 
-  React.useEffect(() => {
-    setProjectNameInput(project?.manifest.projectName ?? "");
-  }, [project?.projectHandle, project?.manifest.projectName]);
+  const shortcut = (action: "undo" | "redo") => (bindings[action][0] ? formatBinding(bindings[action][0]) : undefined);
+  const run = (work: () => Promise<unknown>) => void work().catch((err) => onError(String(err)));
 
-  const handleRename = async () => {
-    if (!project || isRenaming) return;
-    const trimmed = projectNameInput.trim();
-    if (!trimmed || trimmed === project.manifest.projectName) {
-      setProjectNameInput(project.manifest.projectName);
-      return;
-    }
-    setIsRenaming(true);
-    try {
-      const updated = await api.projectRename(project.projectHandle, trimmed);
-      applyOpenedProject(updated);
-    } catch {
-      setProjectNameInput(project.manifest.projectName);
-    } finally {
-      setIsRenaming(false);
-    }
-  };
+  const exporting = exportJob?.state === "queued" || exportJob?.state === "running";
+  const exportPercent =
+    exportJob && exportJob.progressDenominator > 0
+      ? Math.round((exportJob.progressNumerator / exportJob.progressDenominator) * 100)
+      : 0;
 
-  const exporting =
-    exportJob?.state === "queued" || exportJob?.state === "running";
+  const fileMenu: MenuEntry[] = [
+    { label: "New project…", icon: FilePlus2, onSelect: onNewProject, disabled: busy },
+    { label: "Open project…", icon: FolderOpen, onSelect: onOpenFolder, disabled: busy },
+    {
+      kind: "submenu",
+      label: "Open recent",
+      icon: Clock,
+      disabled: recentProjects.length === 0,
+      entries: recentProjects.slice(0, 10).map((path) => ({
+        label: folderName(path),
+        hint: undefined,
+        onSelect: () => onOpenRecent(path),
+      })),
+    },
+    { kind: "separator" },
+    {
+      label: `Show in ${FILE_MANAGER}`,
+      icon: Folder,
+      onSelect: onShowInFinder,
+      disabled: !project || !projectPath,
+      disabledReason: "Open a project first",
+    },
+    { label: "Close project", icon: X, onSelect: onCloseProject, disabled: !project || busy },
+    { kind: "separator" },
+    { kind: "heading", label: `Layout · ${WORKSPACES[workspace].label}` },
+    ...(Object.keys(LAYOUT_PRESETS) as LayoutPreset[]).map(
+      (preset): MenuEntry => ({
+        label: LAYOUT_PRESETS[preset].label,
+        icon: LayoutGrid,
+        onSelect: () => applyPresetToWorkspace(preset),
+        disabled: !project,
+      }),
+    ),
+    { label: "Reset this workspace", icon: RotateCcw, onSelect: resetWorkspaceLayout, disabled: !project },
+    { kind: "separator" },
+    { label: "Keyboard shortcuts…", icon: Keyboard, onSelect: () => setHotkeysOpen(true) },
+  ];
 
   return (
-    <header className="h-14 border-b border-studio-800/80 bg-studio-900/90 backdrop-blur-xl px-4 flex items-center justify-between gap-4 select-none z-30 shrink-0">
-      {/* 1. Left: Brand & Studio Name */}
-      <div className="flex items-center space-x-3 shrink-0">
-        <img src="/aeroedits-icon.svg" alt="" className="w-9 h-9 drop-shadow-md" draggable={false} />
-        <div className="hidden xl:flex items-center space-x-2">
-          <span className="font-bold text-white tracking-tight text-sm">
+    <header className="h-header shrink-0 z-30 flex items-center gap-2 border-b border-studio-800 bg-studio-900 px-3 select-none">
+      {/* Brand and File */}
+      <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-2 pr-2">
+          <img src="/aeroedits-icon.svg" alt="" className="w-7 h-7" draggable={false} />
+          <span className="hidden lg:inline font-display text-body font-semibold text-studio-100 tracking-tight">
             AeroEdits
           </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300 font-mono font-medium">
-            Video Editor
-          </span>
         </div>
+        <Menu
+          label="File"
+          entries={fileMenu}
+          width={280}
+          trigger={({ open, toggle, ref }) => (
+            <MenuButton ref={ref} open={open} onClick={toggle}>
+              File
+            </MenuButton>
+          )}
+        />
       </div>
 
-      {/* 2. Center: Project Information & Rename */}
-      <div className="flex items-center gap-3 min-w-0 flex-1 max-w-xl">
-        {project ? (
-          <div className="flex items-center gap-2 group min-w-0">
-            <input
-              ref={projectNameInputRef}
-              type="text"
-              aria-label="Project name"
-              value={projectNameInput}
-              disabled={isRenaming}
-              maxLength={80}
-              onChange={(e) => setProjectNameInput(e.target.value)}
-              onBlur={() => void handleRename()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                if (e.key === "Escape") {
-                  setProjectNameInput(project.manifest.projectName);
-                  e.currentTarget.blur();
-                }
-              }}
-              className="text-sm text-white font-semibold bg-transparent hover:bg-studio-950/60 focus:bg-studio-950 border border-transparent hover:border-studio-700/60 focus:border-teal-500/80 rounded px-2 py-1 outline-none transition-colors truncate select-text"
-              title="Click to rename project"
+      {project && (
+        <>
+          <div className="h-6 w-px bg-studio-800 mx-1 shrink-0" aria-hidden />
+          <ProjectName />
+          <SaveIndicator />
+          <div className="h-6 w-px bg-studio-800 mx-1 shrink-0" aria-hidden />
+          <div className="flex items-center gap-0.5 shrink-0">
+            <IconButton
+              icon={Undo2}
+              label={`Undo${shortcut("undo") ? ` (${shortcut("undo")})` : ""}`}
+              disabled={!project.undoAvailable}
+              onClick={() => run(undoProject)}
             />
-            <button
-              type="button"
-              aria-label="Rename project"
-              title="Rename project"
-              disabled={isRenaming}
-              onClick={() => {
-                projectNameInputRef.current?.focus();
-                projectNameInputRef.current?.select();
-              }}
-              className="p-1 rounded text-studio-500 hover:text-studio-300 hover:bg-studio-800/60 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-studio-800 text-studio-400 shrink-0">
-              rev {project.revision}
-            </span>
+            <IconButton
+              icon={Redo2}
+              label={`Redo${shortcut("redo") ? ` (${shortcut("redo")})` : ""}`}
+              disabled={!project.redoAvailable}
+              onClick={() => run(redoProject)}
+            />
           </div>
-        ) : (
-          <span className="text-xs text-studio-500 font-mono">
-            No project open: start a new one or open an existing one
-          </span>
+        </>
+      )}
+
+      {/* Workspaces, centred in the window */}
+      <div className="flex-1 flex justify-center self-stretch min-w-0">
+        {project && (
+          <Tabs
+            label="Workspace"
+            className="self-stretch"
+            value={workspace}
+            onChange={(next) => {
+              if (next === "shorts") {
+                run(() => api.openShortsWindow());
+                return;
+              }
+              setWorkspace(next);
+            }}
+            items={[
+              { value: "edit", label: "Edit", title: "Edit the video on the timeline" },
+              { value: "cleanup", label: "Cleanup", title: "Edit by text: a tall transcript, the preview and the timeline" },
+              { value: "shorts", label: "Shorts", title: "Open the Shorts Studio: vertical clips from this video, in their own window" },
+            ]}
+          />
         )}
       </div>
 
-      {/* 3. Right: Action Controls */}
+      {/* Actions */}
       <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onNewProject}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-200 text-xs font-medium disabled:opacity-40 transition-colors"
-          title="Start a new project, empty or from a recording"
-        >
-          <FilePlus2 className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">New</span>
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onOpenFolder}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600/20 border border-teal-500/40 text-teal-300 text-xs font-medium hover:bg-teal-600/30 disabled:opacity-40 transition-colors"
-          title="Open a project folder, or a recording folder to edit it in place"
-        >
-          <FolderOpen className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">Open</span>
-        </button>
-
-        {project && projectPath && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onShowInFinder}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-300 hover:text-white text-xs font-medium transition-colors"
-            title="Reveal project bundle in Finder"
-          >
-            <Folder className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="hidden xl:inline">Finder</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setHotkeysOpen(true)}
-          aria-label="Keyboard shortcuts"
-          className="p-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-300 hover:text-white transition-colors"
-          title="Keyboard shortcuts: see and change them"
-        >
-          <Keyboard className="w-3.5 h-3.5" />
-        </button>
-        {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
-
-        {project && (
+        {project ? (
           <>
-            <LayoutMenu />
-
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              icon={Scissors}
               onClick={() => setIsSilenceModalOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-amber-300 hover:text-amber-200 text-xs font-medium transition-colors"
               title="Find the silent pauses and cut them out (jump cuts)"
             >
-              <Scissors className="w-3.5 h-3.5" />
-              <span>Jump Cuts</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void api.openShortsWindow().catch(() => undefined)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-200 text-xs font-medium transition-colors"
-              title="Open the Shorts Studio: vertical split-screen clips from this video"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span>Shorts</span>
-            </button>
-
-            {/* Export: settings, destination and progress live in the export dialog. */}
-            <button
-              type="button"
+              <span className="hidden md:inline">Jump Cuts</span>
+            </Button>
+            <Button
+              variant="primary"
+              icon={exporting ? Loader2 : Download}
               disabled={busy}
               onClick={onOpenExport}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold shadow-md shadow-teal-900/40 disabled:opacity-40 transition-all"
+              className={cn(exporting && "[&>svg]:animate-spin", "min-w-[104px]")}
               title="Choose resolution, frame rate and quality, then export an MP4"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>
-                {exporting
-                  ? `Exporting ${
-                      exportJob && exportJob.progressDenominator > 0
-                        ? Math.round((exportJob.progressNumerator / exportJob.progressDenominator) * 100)
-                        : 0
-                    }%`
-                  : "Export…"}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onCloseProject}
-              className="text-xs text-studio-400 hover:text-studio-200 px-2 py-1 transition-colors"
-              title="Close current project"
-            >
-              Close
-            </button>
+              {exporting ? `Exporting ${exportPercent}%` : "Export"}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" icon={FolderOpen} onClick={onOpenFolder} disabled={busy}>
+              Open
+            </Button>
+            <Button variant="primary" icon={FilePlus2} onClick={onNewProject} disabled={busy}>
+              New project
+            </Button>
           </>
         )}
       </div>
+      {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
     </header>
+  );
+};
+
+/** The project's name; click to rename. */
+const ProjectName: React.FC = () => {
+  const project = useProjectStore((s) => s.openedProject);
+  const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
+  const [value, setValue] = useState(project?.manifest.projectName ?? "");
+  const [renaming, setRenaming] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    setValue(project?.manifest.projectName ?? "");
+  }, [project?.projectHandle, project?.manifest.projectName]);
+
+  if (!project) return null;
+  const rename = async () => {
+    const trimmed = value.trim();
+    if (renaming || !trimmed || trimmed === project.manifest.projectName) {
+      setValue(project.manifest.projectName);
+      return;
+    }
+    setRenaming(true);
+    try {
+      applyOpenedProject(await api.projectRename(project.projectHandle, trimmed));
+    } catch {
+      setValue(project.manifest.projectName);
+    } finally {
+      setRenaming(false);
+    }
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      aria-label="Project name"
+      title="Project name: click to rename"
+      value={value}
+      disabled={renaming}
+      maxLength={80}
+      size={Math.min(32, Math.max(8, value.length + 1))}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => void rename()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") {
+          setValue(project.manifest.projectName);
+          e.currentTarget.blur();
+        }
+      }}
+      className="h-control min-w-0 max-w-[18rem] rounded-control border border-transparent bg-transparent px-2 text-body font-semibold text-studio-100 truncate select-text transition-colors hover:border-studio-700 hover:bg-studio-850 focus:border-accent-hover focus:bg-studio-950 focus:outline-none"
+    />
+  );
+};
+
+/** Saved, Saving… or Not saved, from the answers to the project's edits. */
+const SaveIndicator: React.FC = () => {
+  const pending = useSaveStatusStore((s) => s.pending);
+  const failed = useSaveStatusStore((s) => s.failed);
+  const clearFailure = useSaveStatusStore((s) => s.clearFailure);
+  const revision = useProjectStore((s) => s.openedProject?.revision);
+
+  if (pending > 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-label text-studio-400 shrink-0" role="status">
+        <Loader2 className="w-4 h-4 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (failed) {
+    return (
+      <button
+        type="button"
+        onClick={clearFailure}
+        title={`The last change was not saved: ${failed}\nClick to dismiss.`}
+        className="inline-flex items-center gap-1.5 h-control px-2 rounded-control text-label text-danger-fg hover:bg-danger/10 shrink-0"
+      >
+        <AlertCircle className="w-4 h-4" /> Not saved
+      </button>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-label text-studio-400 shrink-0"
+      title={`Every change is saved as you make it (revision ${revision ?? 0}).`}
+      role="status"
+    >
+      <Check className="w-4 h-4 text-success" /> Saved
+    </span>
   );
 };

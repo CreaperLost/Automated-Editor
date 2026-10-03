@@ -2,16 +2,71 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Design tokens. Colours are RGB channels so Tailwind can add opacity (`bg-accent/20`);
+ * tailwind.config.js maps them to class names. One meaning per colour:
+ *   accent  teal     primary actions, selection, focus
+ *   video   indigo   pictures: screen, camera, video clips
+ *   audio   emerald  sound
+ *   caption violet   captions
+ *   zoom    amber    zooms (suggested ones dashed)
+ *   suggest amber    anything proposed and waiting for a decision
+ *   danger  rose     removing, cutting, errors
+ *   success emerald  done
+ */
+:root {
+  --studio-950: 9 9 11;
+  --studio-900: 18 18 21;
+  --studio-850: 24 24 27;
+  --studio-800: 32 32 36;
+  --studio-700: 46 46 52;
+  --studio-600: 63 63 70;
+  --studio-500: 113 113 122;
+  --studio-400: 161 161 170;
+  --studio-300: 196 196 204;
+  --studio-200: 220 220 226;
+  --studio-100: 244 244 245;
+
+  --accent: 13 148 136;
+  --accent-hover: 20 184 166;
+  --accent-fg: 94 234 212;
+
+  --video: 99 102 241;
+  --video-fg: 165 180 252;
+  --audio: 16 185 129;
+  --audio-fg: 110 231 183;
+  --caption: 167 139 250;
+  --caption-fill: 48 36 70;
+  --zoom: 245 158 11;
+  --zoom-fg: 252 211 77;
+  --suggest: 245 158 11;
+  --suggest-fg: 252 211 77;
+  --danger: 244 63 94;
+  --danger-fg: 253 164 175;
+  --success: 16 185 129;
+  --success-fg: 110 231 183;
+
+  --focus-ring: 0 0 0 2px rgb(var(--studio-950)), 0 0 0 4px rgb(var(--accent-hover));
+}
+
 @layer base {
   * {
     box-sizing: border-box;
     user-select: none;
   }
 
+  html {
+    font-size: 14px;
+  }
+
   body {
     margin: 0;
     padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: theme("fontFamily.sans");
+    font-size: 14px;
+    line-height: 20px;
+    color: rgb(var(--studio-100));
+    background: rgb(var(--studio-950));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -20,6 +75,41 @@
   textarea {
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.45);
+  }
+
+  /* One focus ring, keyboard only. */
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: 4px;
+  }
+
+  /* Sliders, checkboxes and radios all take the accent. */
+  input[type="range"],
+  input[type="checkbox"],
+  input[type="radio"],
+  progress {
+    accent-color: rgb(var(--accent-hover));
+  }
+
+  /* Native selects and their lists follow the dark theme. */
+  select {
+    color-scheme: dark;
+  }
+  select option {
+    background: rgb(var(--studio-850));
+    color: rgb(var(--studio-100));
+  }
+
+  button:disabled {
+    cursor: not-allowed;
   }
 }
 
@@ -34,25 +124,35 @@
       padding: 1rem;
     }
   }
+
+  /* A text field or select that matches the buttons. */
+  .ui-field {
+    @apply h-control rounded-control border border-studio-700 bg-studio-850 px-2.5 text-label text-studio-100 placeholder:text-studio-500 transition-colors hover:border-studio-600 focus:border-accent-hover focus:outline-none disabled:opacity-50;
+  }
 }
 
-/* Custom scrollbars */
+/* Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #121215;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2e2e34;
-  border-radius: 3px;
+  background: rgb(var(--studio-700));
+  border-radius: 5px;
+  border: 2px solid rgb(var(--studio-900));
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: rgb(var(--studio-600));
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* The timeline's left/right scrollbar is a real control: make it easy to grab. */
@@ -60,15 +160,15 @@
   height: 14px;
 }
 .timeline-scroll::-webkit-scrollbar-track {
-  background: #0d0d10;
-  border-top: 1px solid #202024;
+  background: rgb(var(--studio-950));
+  border-top: 1px solid rgb(var(--studio-800));
 }
 .timeline-scroll::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: rgb(var(--studio-600));
   border-radius: 7px;
-  border: 3px solid #0d0d10;
+  border: 3px solid rgb(var(--studio-950));
   min-width: 48px;
 }
 .timeline-scroll::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+  background: rgb(82 82 91);
 }

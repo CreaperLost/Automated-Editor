@@ -204,7 +204,7 @@ export const RangeRow: React.FC<{
       step={step}
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
-      className="w-full min-w-0 accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+      className="w-full min-w-0 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
     />
     <ScrubNumber label={label} value={value} min={min} max={max} step={step} unit={unit} onChange={onChange} />
   </div>
