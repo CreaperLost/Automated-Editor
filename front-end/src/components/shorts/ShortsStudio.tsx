@@ -17,6 +17,7 @@ import { api } from "../../lib/ipc";
 import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
+import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
 import { transcribableSounds } from "../../lib/trackUtils";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 
@@ -32,6 +33,10 @@ const DEFAULT_LAYOUT: ShortLayout = {
   captionMaxWords: 0,
   captionLines: 2,
   captionSizePct: 0,
+  backgroundType: "project",
+  backgroundColorStart: "#000000",
+  backgroundColorEnd: "#1e1b4b",
+  backgroundPreset: "aurora",
 };
 
 /** Which clock edited time `editedUs` plays on (the recording, or an imported file) and
@@ -527,9 +532,16 @@ export const ShortsStudio: React.FC = () => {
               <label className="block space-y-1">
                 <div className="flex justify-between">
                   <span className="text-studio-400">Zoom</span>
-                  <span className="font-mono">{layout.screenZoom.toFixed(1)}×</span>
+                  <button
+                    type="button"
+                    onClick={() => changeLayout({ screenZoom: 1 })}
+                    className="font-mono text-studio-300 hover:text-white"
+                    title="1×: the screen fills its part of the frame. Below 1× it zooms out and the background shows around it."
+                  >
+                    {layout.screenZoom.toFixed(1)}×{layout.screenZoom < 1 ? " (out)" : ""}
+                  </button>
                 </div>
-                <input type="range" aria-label="Screen zoom" min={1} max={3} step={0.1} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} className="w-full accent-teal-500" />
+                <input type="range" aria-label="Screen zoom" min={0.3} max={3} step={0.05} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} onDoubleClick={() => changeLayout({ screenZoom: 1 })} className="w-full accent-teal-500" />
               </label>
               {(
                 [
@@ -566,6 +578,59 @@ export const ShortsStudio: React.FC = () => {
                 <input type="checkbox" checked={layout.followZooms} onChange={(e) => changeLayout({ followZooms: e.target.checked })} className="accent-teal-500" />
                 <span>Follow the video's zooms (clicks and manual zooms)</span>
               </label>
+            </div>
+
+            <div className="space-y-2">
+              <span className="font-semibold text-studio-300">Background</span>
+              <div className="grid grid-cols-5 gap-1 bg-studio-900 border border-studio-800 rounded-lg p-1">
+                {(
+                  [
+                    ["project", "Video's"],
+                    ["solid", "Colour"],
+                    ["gradient", "Gradient"],
+                    ["preset", "Built-in"],
+                    ["wallpaper", "Image"],
+                  ] as const
+                ).map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    aria-pressed={layout.backgroundType === kind}
+                    onClick={() => changeLayout({ backgroundType: kind })}
+                    disabled={kind === "wallpaper" && !project.layout?.wallpaperAsset}
+                    title={kind === "wallpaper" && !project.layout?.wallpaperAsset ? "Choose an image in the editor's Background settings first" : undefined}
+                    className={`${segmented(layout.backgroundType === kind)} text-[10px] disabled:opacity-40`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {(layout.backgroundType === "solid" || layout.backgroundType === "gradient") && (
+                <div className="flex gap-2">
+                  <input type="color" aria-label="Background colour" value={layout.backgroundColorStart} onChange={(e) => changeLayout({ backgroundColorStart: e.target.value })} className="h-7 flex-1 bg-studio-850 border border-studio-800 rounded cursor-pointer" />
+                  {layout.backgroundType === "gradient" && (
+                    <input type="color" aria-label="Background end colour" value={layout.backgroundColorEnd} onChange={(e) => changeLayout({ backgroundColorEnd: e.target.value })} className="h-7 flex-1 bg-studio-850 border border-studio-800 rounded cursor-pointer" />
+                  )}
+                </div>
+              )}
+              {layout.backgroundType === "preset" && (
+                <div className="grid grid-cols-3 gap-1">
+                  {BACKGROUND_PRESETS.map((preset) => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      aria-pressed={layout.backgroundPreset === preset.key}
+                      onClick={() => changeLayout({ backgroundPreset: preset.key })}
+                      className={`h-9 rounded border text-[9px] text-white/90 flex items-end p-1 ${
+                        layout.backgroundPreset === preset.key ? "border-teal-400" : "border-studio-700"
+                      }`}
+                      style={{ background: presetBackgroundCss(preset.key) }}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">

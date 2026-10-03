@@ -542,14 +542,15 @@ impl SceneEvaluator {
                     short.screen_zoom,
                 )
             };
-            // The short's pan moves the view by up to half the crop each way.
-            let center = (
-                center.0 + short.screen_pan_x * crop.2 / 2.0,
-                center.1 + short.screen_pan_y * crop.3 / 2.0,
+            let ((x, y, w, h), (uv_x, uv_y, uv_w, uv_h)) = crate::shorts::screen_placement(
+                screen.width,
+                screen.height,
+                crop,
+                rects.screen,
+                zoom,
+                center,
+                (short.screen_pan_x, short.screen_pan_y),
             );
-            let (x, y, w, h) = rects.screen;
-            let (uv_x, uv_y, uv_w, uv_h) =
-                crate::shorts::screen_window(screen.width, screen.height, crop, w, h, zoom, center);
             let mut layer = Layer::placed(screen, x, y, w, h).with_role(LayerRole::Screen);
             layer.uv_x = uv_x;
             layer.uv_y = uv_y;
@@ -566,10 +567,20 @@ impl SceneEvaluator {
             }
             layers.push(layer);
         }
+        // The short's background (the video's own unless it chose another), behind everything.
+        let background_layout = crate::shorts::background_layout(layout, short);
+        if let Some(paper) = self.background()? {
+            layers.insert(
+                0,
+                Layer::placed(paper, 0, 0, self.width, self.height)
+                    .with_role(LayerRole::Background)
+                    .cover_uv(self.width, self.height),
+            );
+        }
         let mut scene = Scene {
             width: self.width,
             height: self.height,
-            background: [0.0, 0.0, 0.0, 1.0],
+            background: background_layout.background_rgba()?.0,
             layers,
         };
         if let Some((frame, x, _)) = self.caption_at(mapper, edited_us) {
@@ -579,17 +590,17 @@ impl SceneEvaluator {
         Ok(scene)
     }
 
-    /// The wallpaper or gradient, built once per evaluator.
+    /// The wallpaper or gradient, built once per evaluator. A short draws its own choice.
     fn background(&self) -> Result<Option<VideoFrame>, String> {
         Ok(match self.wallpaper.get() {
             Some(cached) => cached.clone(),
             None => {
-                let loaded = crate::render::background_frame(
-                    &self.root,
-                    &self.document.layout,
-                    self.width,
-                    self.height,
-                )?;
+                let layout = match &self.document.short_layout {
+                    Some(short) => crate::shorts::background_layout(&self.document.layout, short),
+                    None => self.document.layout.clone(),
+                };
+                let loaded =
+                    crate::render::background_frame(&self.root, &layout, self.width, self.height)?;
                 self.wallpaper.get_or_init(|| loaded).clone()
             }
         })

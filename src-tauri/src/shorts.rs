@@ -33,6 +33,8 @@ pub enum CaptionSpot {
 pub const MIN_CAMERA_PCT: f32 = 20.0;
 pub const MAX_CAMERA_PCT: f32 = 70.0;
 pub const MAX_SCREEN_ZOOM: f32 = 3.0;
+/// Below 1 the screen zooms out: smaller than its part of the frame, background around it.
+pub const MIN_SCREEN_ZOOM: f32 = 0.3;
 
 /// The split-screen look of a short: the camera across the top or bottom, the screen in the
 /// rest, cut to that shape and following the project's zooms.
@@ -58,6 +60,12 @@ pub struct ShortLayout {
     pub caption_lines: u32,
     /// Caption text size in this short, as a percentage of its height; 0 uses the editor's.
     pub caption_size_pct: f32,
+    /// The background behind the screen and camera: `project` (the video's own), `solid`,
+    /// `gradient`, `preset` or `wallpaper` (the project's image).
+    pub background_type: String,
+    pub background_color_start: String,
+    pub background_color_end: String,
+    pub background_preset: String,
 }
 
 impl Default for ShortLayout {
@@ -74,6 +82,10 @@ impl Default for ShortLayout {
             caption_max_words: 0,
             caption_lines: 2,
             caption_size_pct: 0.0,
+            background_type: "project".into(),
+            background_color_start: "#000000".into(),
+            background_color_end: "#1e1b4b".into(),
+            background_preset: "aurora".into(),
         }
     }
 }
@@ -85,8 +97,21 @@ impl ShortLayout {
                 "The camera takes {MIN_CAMERA_PCT}% to {MAX_CAMERA_PCT}% of a short's height"
             ));
         }
-        if !(1.0..=MAX_SCREEN_ZOOM).contains(&self.screen_zoom) {
-            return Err(format!("Screen zoom is 1x to {MAX_SCREEN_ZOOM}x"));
+        if !(MIN_SCREEN_ZOOM..=MAX_SCREEN_ZOOM).contains(&self.screen_zoom) {
+            return Err(format!(
+                "Screen zoom is {MIN_SCREEN_ZOOM}x to {MAX_SCREEN_ZOOM}x"
+            ));
+        }
+        if !matches!(
+            self.background_type.as_str(),
+            "project" | "solid" | "gradient" | "preset" | "wallpaper"
+        ) {
+            return Err("Unknown short background".into());
+        }
+        crate::project::layout::parse_hex_rgb(&self.background_color_start)?;
+        crate::project::layout::parse_hex_rgb(&self.background_color_end)?;
+        if self.background_preset.is_empty() || self.background_preset.len() > 32 {
+            return Err("Unknown background preset".into());
         }
         if !(-1.0..=1.0).contains(&self.screen_pan_x) || !(-1.0..=1.0).contains(&self.screen_pan_y)
         {
@@ -169,6 +194,65 @@ pub fn screen_window(
     let x = (center.0 - uv_w / 2.0).clamp(cx, cx + cw - uv_w);
     let y = (center.1 - uv_h / 2.0).clamp(cy, cy + ch - uv_h);
     (x, y, uv_w, uv_h)
+}
+
+/// The short's background as the project layout it is drawn from: the video's own, or the
+/// short's choice of colour, gradient, built-in or the project's image.
+pub fn background_layout(
+    project: &crate::project::EditLayout,
+    short: &ShortLayout,
+) -> crate::project::EditLayout {
+    let mut layout = project.clone();
+    if short.background_type != "project" {
+        layout.background_type = short.background_type.clone();
+        layout.color_start = short.background_color_start.clone();
+        layout.color_end = short.background_color_end.clone();
+        layout.background_preset = short.background_preset.clone();
+    }
+    layout
+}
+
+/// Where the screen goes in its `region` (x, y, w, h) and which part of it (UV) shows.
+/// `zoom` 1 fills the region (cutting what does not fit); above 1 it is closer; below 1 the
+/// whole picture shrinks inside the region with background around it. `center` (UV in the
+/// full frame) is what the view centres on; `pan` (-1..1 each way) moves it within reach.
+#[allow(clippy::too_many_arguments)]
+pub fn screen_placement(
+    frame_w: u32,
+    frame_h: u32,
+    crop: (f32, f32, f32, f32),
+    region: (u32, u32, u32, u32),
+    zoom: f32,
+    center: (f32, f32),
+    pan: (f32, f32),
+) -> ((u32, u32, u32, u32), (f32, f32, f32, f32)) {
+    let (rx, ry, rw, rh) = region;
+    let (cx, cy, cw, ch) = crop;
+    let crop_px = (
+        (cw * frame_w.max(1) as f32).max(1.0),
+        (ch * frame_h.max(1) as f32).max(1.0),
+    );
+    // Screen pixels to frame pixels: covering the region at zoom 1.
+    let scale = (rw as f32 / crop_px.0).max(rh as f32 / crop_px.1) * zoom.max(MIN_SCREEN_ZOOM);
+    // One axis at a time: (layer start, layer length, uv start, uv length).
+    let axis = |r0: u32, rl: u32, c0: f32, cl: f32, frame: u32, center: f32, pan: f32| {
+        let shown = cl * frame.max(1) as f32 * scale;
+        if shown >= rl as f32 {
+            // Bigger than the region: a window of it, panned, kept inside the crop.
+            let window = rl as f32 / (frame.max(1) as f32 * scale);
+            let middle = center + pan * cl / 2.0;
+            let start = (middle - window / 2.0).clamp(c0, c0 + cl - window);
+            (r0, rl, start, window)
+        } else {
+            // Smaller: all of it, centred, and the pan slides it through the free space.
+            let free = rl as f32 - shown;
+            let start = r0 as f32 + free / 2.0 + pan.clamp(-1.0, 1.0) * free / 2.0;
+            (start.round() as u32, (shown.round() as u32).max(1), c0, cl)
+        }
+    };
+    let (x, w, uv_x, uv_w) = axis(rx, rw, cx, cw, frame_w, center.0, pan.0);
+    let (y, h, uv_y, uv_h) = axis(ry, rh, cy, ch, frame_h, center.1, pan.1);
+    ((x, y, w, h), (uv_x, uv_y, uv_w, uv_h))
 }
 
 /// The caption's top edge in a split frame.
@@ -535,5 +619,48 @@ mod tests {
         );
         on_file.layout.screen_pan_x = 2.0;
         assert!(validate(&[on_file]).is_err());
+    }
+
+    #[test]
+    fn screen_placement_fills_zooms_in_and_zooms_out() {
+        let full = (0.0, 0.0, 1.0, 1.0);
+        // A 1600x900 screen in a 1080x1000 region: covered by height, a window of it shows.
+        let region = (0, 920, 1080, 1000);
+        let ((x, y, w, h), (_, _, uv_w, uv_h)) =
+            screen_placement(1600, 900, full, region, 1.0, (0.5, 0.5), (0.0, 0.0));
+        assert_eq!((x, y, w, h), region);
+        assert!((uv_h - 1.0).abs() < 1e-4 && uv_w < 1.0);
+        // Zoomed in: a smaller window, still filling the region.
+        let (_, (_, _, uv_w2, _)) =
+            screen_placement(1600, 900, full, region, 2.0, (0.5, 0.5), (0.0, 0.0));
+        assert!((uv_w2 - uv_w / 2.0).abs() < 1e-4);
+        // Zoomed out far: all of it, smaller than the region and centred in it.
+        let ((x, y, w, h), uv) =
+            screen_placement(1600, 900, full, region, 0.3, (0.5, 0.5), (0.0, 0.0));
+        assert_eq!(uv, full);
+        assert!(w < 1080 && h < 1000);
+        assert_eq!(x, (1080 - w) / 2);
+        assert_eq!(y, 920 + (1000 - h) / 2);
+        // Panning left moves the window toward the screen's left edge.
+        let (_, (uv_x, _, _, _)) =
+            screen_placement(1600, 900, full, region, 1.0, (0.5, 0.5), (-1.0, 0.0));
+        assert!(uv_x.abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_short_can_pick_its_own_background() {
+        let project = crate::project::EditLayout::default();
+        let mut short = ShortLayout::default();
+        assert_eq!(background_layout(&project, &short), project);
+        short.background_type = "gradient".into();
+        short.background_color_start = "#112233".into();
+        short.validate().unwrap();
+        let layout = background_layout(&project, &short);
+        assert_eq!(
+            (layout.background_type.as_str(), layout.color_start.as_str()),
+            ("gradient", "#112233")
+        );
+        short.background_color_end = "blue".into();
+        assert!(short.validate().is_err());
     }
 }

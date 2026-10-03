@@ -1011,7 +1011,7 @@ export interface ShortLayout {
   cameraPosition: "top" | "bottom";
   /** Share of the frame height the camera takes, 20 to 70. */
   cameraPct: number;
-  /** Extra zoom on the screen part, 1 to 3. */
+  /** Zoom on the screen part, 0.3 to 3: 1 fills its part, below 1 shows all of it smaller. */
   screenZoom: number;
   followZooms: boolean;
   /** Moves the screen view, -1 to 1 each way, on top of where the zooms point. */
@@ -1025,6 +1025,11 @@ export interface ShortLayout {
   captionLines: number;
   /** Caption size as a percentage of the short's height; 0 uses the editor's. */
   captionSizePct: number;
+  /** "project" (the video's own background), "solid", "gradient", "preset" or "wallpaper". */
+  backgroundType: "project" | "solid" | "gradient" | "preset" | "wallpaper";
+  backgroundColorStart: string;
+  backgroundColorEnd: string;
+  backgroundPreset: string;
 }
 
 /** A vertical clip of the video, anchored in source time at its first and last word. */
