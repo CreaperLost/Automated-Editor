@@ -44,6 +44,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     shadowBlurPx: 24,
     shadowOpacity: 0.5,
     aspectRatio: "16:9",
+    cursorVisible: true,
+    cursorSizePct: 150,
   },
 
   layoutOwnedByProject: false,

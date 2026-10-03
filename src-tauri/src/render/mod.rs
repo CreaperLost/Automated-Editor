@@ -410,6 +410,73 @@ impl Scene {
         self.layers.extend(captions);
     }
 
+    /// Draws the pointer `frame` over the screen picture: its tip (`hotspot`, source pixels
+    /// into the picture) at recorded position `at` (0..1 of the recorded screen), sized
+    /// `size` source pixels, scaled with the screen and its zoom, cut to the screen's area.
+    pub fn push_cursor(
+        &mut self,
+        frame: VideoFrame,
+        at: (f64, f64),
+        hotspot: (f64, f64),
+        size: (f64, f64),
+        source: (f64, f64),
+        cache_key: u64,
+    ) {
+        let Some(index) = self.layers.iter().position(|l| l.role == LayerRole::Screen) else {
+            return;
+        };
+        if self.layers.len() >= MAX_LAYERS || frame.width == 0 || frame.height == 0 {
+            return;
+        }
+        let screen = &self.layers[index];
+        let (sx, sy, sw, sh) = (
+            screen.x as f64,
+            screen.y as f64,
+            screen.width as f64,
+            screen.height as f64,
+        );
+        let (uv_x, uv_y, uv_w, uv_h) = (
+            screen.uv_x as f64,
+            screen.uv_y as f64,
+            screen.uv_w.max(1e-6) as f64,
+            screen.uv_h.max(1e-6) as f64,
+        );
+        // Canvas pixels per recorded pixel, zoom included.
+        let per_x = sw / (uv_w * source.0.max(1.0));
+        let per_y = sh / (uv_h * source.1.max(1.0));
+        let tip_x = sx + (at.0 - uv_x) / uv_w * sw;
+        let tip_y = sy + (at.1 - uv_y) / uv_h * sh;
+        if tip_x < sx || tip_y < sy || tip_x > sx + sw || tip_y > sy + sh {
+            return;
+        }
+        let left = tip_x - hotspot.0 * per_x;
+        let top = tip_y - hotspot.1 * per_y;
+        let (w, h) = (size.0 * per_x, size.1 * per_y);
+        // Cut to the screen's area, cropping the picture to match.
+        let x0 = left.max(sx);
+        let y0 = top.max(sy);
+        let x1 = (left + w).min(sx + sw).min(self.width as f64);
+        let y1 = (top + h).min(sy + sh).min(self.height as f64);
+        if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+            return;
+        }
+        let mut layer = Layer::placed(
+            frame,
+            x0.round() as u32,
+            y0.round() as u32,
+            ((x1 - x0).round() as u32).max(1),
+            ((y1 - y0).round() as u32).max(1),
+        )
+        .with_role(LayerRole::Overlay);
+        layer.uv_x = ((x0 - left) / w) as f32;
+        layer.uv_y = ((y0 - top) / h) as f32;
+        layer.uv_w = ((x1 - x0) / w) as f32;
+        layer.uv_h = ((y1 - y0) / h) as f32;
+        layer.cache_key = Some(cache_key);
+        // Right over the screen: under the camera, the tracks above and the captions.
+        self.layers.insert(index + 1, layer);
+    }
+
     pub fn push_overlay(&mut self, frame: VideoFrame, cover: bool) {
         if self.layers.len() >= MAX_LAYERS || frame.width == 0 || frame.height == 0 {
             return;

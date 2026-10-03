@@ -152,6 +152,16 @@ pub struct EditLayout {
     pub webcam_mirror: bool,
     #[serde(default)]
     pub webcam_shadow: bool,
+    /// Draw the recorded mouse pointer (recordings that left it out of the video).
+    #[serde(default = "default_true")]
+    pub cursor_visible: bool,
+    /// The pointer's size, percent of its recorded size (a little larger reads better).
+    #[serde(default = "default_cursor_size")]
+    pub cursor_size_pct: f32,
+}
+
+fn default_cursor_size() -> f32 {
+    150.0
 }
 
 impl Default for EditLayout {
@@ -184,6 +194,8 @@ impl Default for EditLayout {
             webcam_border_width: 0,
             webcam_mirror: true,
             webcam_shadow: false,
+            cursor_visible: true,
+            cursor_size_pct: default_cursor_size(),
         }
     }
 }
@@ -221,6 +233,9 @@ impl EditLayout {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if !self.cursor_size_pct.is_finite() || !(25.0..=400.0).contains(&self.cursor_size_pct) {
+            return Err("Cursor size is out of range".into());
+        }
         if !SUPPORTED_ASPECTS.contains(&self.aspect_ratio.as_str()) {
             return Err(format!("Unknown aspect ratio: {}", self.aspect_ratio));
         }

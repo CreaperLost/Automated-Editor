@@ -165,6 +165,10 @@ export interface CanvasSettings {
   shadowBlurPx: number; // 0 to 40
   shadowOpacity: number; // 0.0 to 1.0
   aspectRatio: "16:9" | "9:16" | "4:3" | "1:1";
+  /** Draw the recorded mouse pointer (recordings that left it out of the video). */
+  cursorVisible: boolean;
+  /** Pointer size, percent of its recorded size: 25 to 400. */
+  cursorSizePct: number;
 }
 
 /** Audio polish. Each effect has its own switch and applies to playback and export. */
@@ -280,6 +284,8 @@ export interface EditLayout {
   webcamBorderWidth?: number;
   webcamMirror?: boolean;
   webcamShadow?: boolean;
+  cursorVisible?: boolean;
+  cursorSizePct?: number;
 }
 
 export const LAYOUT_UNSUPPORTED = {
@@ -353,6 +359,8 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
       aspect === "9:16" || aspect === "4:3" || aspect === "1:1" || aspect === "16:9"
         ? aspect
         : "16:9",
+    cursorVisible: layout.cursorVisible ?? true,
+    cursorSizePct: layout.cursorSizePct ?? 150,
   };
 }
 
@@ -421,6 +429,8 @@ export function layoutFromSettings(
     webcamBorderWidth: camera.borderWidth,
     webcamMirror: camera.mirror,
     webcamShadow: camera.shadow,
+    cursorVisible: canvas.cursorVisible,
+    cursorSizePct: canvas.cursorSizePct,
   };
 }
 

@@ -314,6 +314,33 @@ export const InspectorPanel: React.FC = () => {
           onChange={(shadowBlurPx) => setCanvas({ shadowBlurPx })}
         />
 
+        <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-2">
+          <span className="text-xs text-studio-400">Cursor</span>
+          <label
+            className="flex items-center gap-2 text-xs text-studio-300"
+            title="Draw the mouse pointer the recorder tracked (it follows zooms and moves smoothly). Recordings with the pointer already in the video are left as they are."
+          >
+            <input
+              type="checkbox"
+              checked={canvas.cursorVisible}
+              onChange={(e) => setCanvas({ cursorVisible: e.target.checked })}
+              className="accent-indigo-500"
+            />
+            Show the pointer
+          </label>
+        </div>
+        {canvas.cursorVisible && (
+          <RangeRow
+            label="Cursor Size"
+            value={canvas.cursorSizePct}
+            min={25}
+            max={400}
+            step={5}
+            unit="%"
+            onChange={(cursorSizePct) => setCanvas({ cursorSizePct })}
+          />
+        )}
+
         <NumberGrid
           title="Crop"
           min={0}

@@ -268,6 +268,15 @@ pub struct SceneEvaluator {
     /// The last imported image drawn, decoded once rather than per frame.
     /// Decoded stills, most recently used last.
     image_cache: std::cell::RefCell<Vec<(String, VideoFrame)>>,
+    /// Recorded pointers, read once per evaluator: by imported recording, `None` the project's.
+    cursors: std::cell::RefCell<
+        std::collections::HashMap<
+            Option<String>,
+            Option<std::sync::Arc<crate::cursor::CursorTrack>>,
+        >,
+    >,
+    /// Pointer pictures by file, decoded once.
+    cursor_images: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<VideoFrame>>>,
     /// Imported recordings' tracks, indexed once per evaluator, by asset id.
     recordings:
         std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<RecordingTracks>>>,
@@ -349,6 +358,8 @@ impl SceneEvaluator {
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             image_cache: std::cell::RefCell::new(Vec::new()),
             recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
+            cursors: Default::default(),
+            cursor_images: Default::default(),
         })
     }
 
@@ -507,6 +518,9 @@ impl SceneEvaluator {
             let crop = self.document.layout.screen_crop_uv();
             let (uv_x, uv_y, uv_w, uv_h) = crate::render::zoom_within_crop(crop, camera.uv_rect());
             scene.apply_screen_uv(uv_x, uv_y, uv_w, uv_h);
+            if let Some(source) = source_us {
+                self.push_cursor(&mut scene, None, source)?;
+            }
         }
         let focus = &self.document.webcam_focus;
         let ranges = self
@@ -596,6 +610,9 @@ impl SceneEvaluator {
             background: background_layout.background_rgba()?.0,
             layers,
         };
+        if let Some(source) = mapper.edited_to_source_us(edited_us) {
+            self.push_cursor(&mut scene, None, source)?;
+        }
         if let Some((frame, x, _)) = self.caption_at(mapper, edited_us) {
             let y = crate::shorts::caption_y(short.caption_spot, &rects, frame.height, self.height);
             scene.push_caption(frame, x, y);
@@ -665,7 +682,79 @@ impl SceneEvaluator {
                 crate::render::zoom_within_crop(layout.screen_crop_uv(), camera.uv_rect());
             scene.apply_screen_uv(x, y, w, h);
         }
+        if screen && has_picture {
+            self.push_cursor(&mut scene, Some(asset_id), local_us)?;
+        }
         Ok(scene)
+    }
+
+    /// The recorded pointer of the project's recording (`media` `None`) or of an imported
+    /// one, read once.
+    fn cursor_track(
+        &self,
+        media: Option<&str>,
+    ) -> Option<std::sync::Arc<crate::cursor::CursorTrack>> {
+        let key = media.map(str::to_string);
+        if let Some(track) = self.cursors.borrow().get(&key) {
+            return track.clone();
+        }
+        let folder = match media {
+            None => Some(self.root.clone()),
+            Some(id) => self
+                .document
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == id)
+                .and_then(|asset| asset.recording_path.as_ref().map(PathBuf::from)),
+        };
+        // A pointer that cannot be read is simply not drawn.
+        let track = folder
+            .and_then(|folder| crate::cursor::CursorTrack::load(&folder).ok().flatten())
+            .map(std::sync::Arc::new);
+        self.cursors.borrow_mut().insert(key, track.clone());
+        track
+    }
+
+    /// Draws the recorded pointer at `source_us` on its recording's clock over the screen.
+    fn push_cursor(
+        &self,
+        scene: &mut Scene,
+        media: Option<&str>,
+        source_us: u64,
+    ) -> Result<(), String> {
+        let layout = &self.document.layout;
+        if !layout.cursor_visible {
+            return Ok(());
+        }
+        let Some(track) = self.cursor_track(media) else {
+            return Ok(());
+        };
+        let Some(pose) = track.at(source_us) else {
+            return Ok(());
+        };
+        let path = track.image_path(&pose.shape);
+        let frame = {
+            let mut images = self.cursor_images.borrow_mut();
+            images
+                .entry(path.clone())
+                .or_insert_with(|| crate::media_bin::decode_image(&path).ok())
+                .clone()
+        };
+        let Some(frame) = frame else {
+            return Ok(());
+        };
+        let size = (layout.cursor_size_pct as f64 / 100.0) * pose.scale;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&path, &mut hasher);
+        scene.push_cursor(
+            frame,
+            (pose.x, pose.y),
+            (pose.shape.hotspot_x * size, pose.shape.hotspot_y * size),
+            (pose.shape.width * size, pose.shape.height * size),
+            (track.source_width, track.source_height),
+            std::hash::Hasher::finish(&hasher),
+        );
+        Ok(())
     }
 
     /// The tracks of an imported recording, read from its folder once.
@@ -1932,7 +2021,10 @@ mod tests {
         }
         // The main sequence is unchanged: 2 s of recording.
         assert_eq!(reader.summary.edited_duration_us, 2_000_000);
-        let document = reader.history().current.clone();
+        let mut document = reader.history().current.clone();
+        if std::env::var("NOCURSOR").is_ok() {
+            document.layout.cursor_visible = false;
+        }
         let tracks = crate::playback::tracks_from_reader(&reader);
         let colour = |document: &EditDocument, t: u64| {
             let mut evaluator =
@@ -2701,6 +2793,8 @@ mod tests {
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             image_cache: std::cell::RefCell::new(Vec::new()),
             recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
+            cursors: Default::default(),
+            cursor_images: Default::default(),
         };
         let mapper = evaluator.document.mapper().unwrap();
         let (_, _, y) = evaluator.caption_at(&mapper, 100_000).unwrap();

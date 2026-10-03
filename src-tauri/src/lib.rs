@@ -2,6 +2,7 @@ pub mod ai;
 pub mod captions;
 pub mod chapters;
 pub mod commands;
+pub mod cursor;
 pub mod dsp;
 pub mod export;
 pub mod fixtures;
