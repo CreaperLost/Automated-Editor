@@ -140,6 +140,8 @@ export function setActiveWorkspace(workspace: Workspace) {
 
 export function setActiveDockApi(api: DockviewApi | null) {
   activeApi = api;
+  // Development only: lets the browser preview arrange panels from the console.
+  if (import.meta.env.DEV) (window as unknown as { __aeroDock?: DockviewApi | null }).__aeroDock = api;
 }
 
 export function applyPresetToWorkspace(preset: LayoutPreset) {
