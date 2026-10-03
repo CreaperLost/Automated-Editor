@@ -178,10 +178,10 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
               <div className="space-y-2 p-3 rounded-lg border border-studio-800 bg-studio-850/60">
                 <div className="flex justify-between">
                   <span className="text-studio-400">Accelerator</span>
-                  <span className={view.parakeetAvailable ? "text-teal-300" : "text-amber-300"}>{view.parakeetAccelerator}</span>
+                  <span className={view.parakeetAvailable ? "text-accent-fg" : "text-suggest-fg"}>{view.parakeetAccelerator}</span>
                 </div>
                 {!view.parakeetAvailable && (
-                  <p className="text-amber-300">
+                  <p className="text-suggest-fg">
                     This build has no local transcription. Rebuild with <code>--features tauri-app,parakeet-cuda</code> (or
                     <code> parakeet-directml</code>), or use ElevenLabs.
                   </p>
@@ -197,7 +197,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                 </label>
                 <div className="flex items-center gap-2">
                   {view.parakeetModelPresent ? (
-                    <span className="flex items-center gap-1 text-teal-300">
+                    <span className="flex items-center gap-1 text-accent-fg">
                       <Check className="w-3 h-3" /> Model installed
                     </span>
                   ) : (
@@ -208,7 +208,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                       type="button"
                       disabled={downloading}
                       onClick={() => void downloadModel()}
-                      className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white"
+                      className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent disabled:opacity-50 text-white"
                     >
                       <Download className="w-3 h-3" />
                       {downloading
@@ -231,7 +231,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   <span className="flex items-center gap-1 text-studio-400">
                     <KeyRound className="w-3 h-3" /> API key
                     {view.elevenlabsKeySource && (
-                      <span className="ml-auto text-teal-300">
+                      <span className="ml-auto text-accent-fg">
                         saved ({view.elevenlabsKeySource === "environment" ? "from ELEVENLABS_API_KEY" : view.elevenlabsKeySource})
                       </span>
                     )}
@@ -246,7 +246,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   />
                 </label>
                 {view.elevenlabsKeySource && view.elevenlabsKeySource !== "environment" && (
-                  <button type="button" onClick={() => void removeKey()} className="text-rose-300 hover:text-rose-200">
+                  <button type="button" onClick={() => void removeKey()} className="text-danger-fg hover:text-danger-fg">
                     Remove saved key
                   </button>
                 )}
@@ -282,7 +282,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                       aria-pressed={aiDraft.provider === value}
                       onClick={() => setAiDraft({ ...aiDraft, provider: value })}
                       className={`py-1.5 rounded-md ${
-                        aiDraft.provider === value ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:bg-studio-800"
+                        aiDraft.provider === value ? "bg-accent text-white font-semibold" : "text-studio-300 hover:bg-studio-800"
                       }`}
                     >
                       {label}
@@ -299,7 +299,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                         <span className="flex items-center gap-1 text-studio-400">
                           <KeyRound className="w-3 h-3" /> {openAi ? "OpenAI" : "OpenRouter"} API key
                           {source && (
-                            <span className="ml-auto text-teal-300">
+                            <span className="ml-auto text-accent-fg">
                               saved ({source === "environment" ? `from ${envName}` : source})
                             </span>
                           )}
@@ -314,7 +314,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                         />
                       </label>
                       {source && source !== "environment" && (
-                        <button type="button" onClick={() => void removeAiKey()} className="text-rose-300 hover:text-rose-200">
+                        <button type="button" onClick={() => void removeAiKey()} className="text-danger-fg hover:text-danger-fg">
                           Remove saved key
                         </button>
                       )}
@@ -348,8 +348,8 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
             )}
 
             {error && (
-              <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-600/40 flex items-start gap-2 text-rose-200">
-                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <div className="p-3 rounded-lg bg-danger/10 border border-danger/40 flex items-start gap-2 text-danger-fg">
+                <AlertCircle className="w-4 h-4 text-danger shrink-0" />
                 <span>{error}</span>
               </div>
             )}
@@ -357,7 +357,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
         )}
 
         <div className="px-6 py-4 border-t border-studio-800 bg-studio-850 flex items-center justify-end gap-3">
-          {saved && <span className="text-teal-300">Saved</span>}
+          {saved && <span className="text-accent-fg">Saved</span>}
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-studio-400 hover:text-white">
             Close
           </button>
@@ -365,7 +365,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
             type="button"
             disabled={!draft}
             onClick={() => void save()}
-            className="px-5 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white font-semibold"
+            className="px-5 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-40 text-white font-semibold"
           >
             Save
           </button>

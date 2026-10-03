@@ -52,28 +52,28 @@ export const TrackClipSection: React.FC = () => {
 
   return (
     <InspectorSection id="track-clip" title={`Track clip · ${trackLabel(tracks, track.id)}`} icon={Layers}>
-      <div className="text-xs text-studio-200 truncate" title={asset?.name}>
+      <div className="text-label text-studio-200 truncate" title={asset?.name}>
         {asset?.name ?? "Missing media"}
         <span className="ml-1.5 text-studio-500 font-mono">{(clip.durationUs / 1e6).toFixed(2)}s</span>
       </div>
       {clip.audioStream !== undefined && (
-        <div className="text-[11px] text-studio-400">
+        <div className="text-meta text-studio-400">
           Sound: {audioStreamName(asset, clip.audioStream)}
           {clip.link && " · unlinked from its picture (select both and press U to relink)"}
         </div>
       )}
       {clip.audioUnlinked && (
-        <div className="text-[11px] text-studio-400">Sound unlinked onto audio tracks.</div>
+        <div className="text-meta text-studio-400">Sound unlinked onto audio tracks.</div>
       )}
       {asset?.kind !== "audio" && !isAudioTrack(track) && (
-        <label className="block text-xs text-studio-300 space-y-1">
+        <label className="block text-label text-studio-300 space-y-1">
           <span>Picture</span>
           <select
             aria-label="How the clip fills the frame"
             value={clip.fit}
             disabled={busy}
             onChange={(event) => update({ ...clip, fit: event.target.value as OverlayFit })}
-            className="w-full min-w-0 truncate bg-studio-800 text-studio-100 text-xs rounded px-2 py-1 border border-studio-700 focus:outline-none focus:border-teal-500"
+            className="w-full min-w-0 truncate bg-studio-800 text-studio-100 text-label rounded px-2 py-1 border border-studio-700 focus:outline-none focus:border-accent-hover"
           >
             {FITS.map((fit) => (
               <option key={fit.value} value={fit.value}>
@@ -83,7 +83,7 @@ export const TrackClipSection: React.FC = () => {
           </select>
         </label>
       )}
-      <label className="flex items-center justify-between text-xs text-studio-300">
+      <label className="flex items-center justify-between text-label text-studio-300">
         <span>Starts at (s)</span>
         <input
           key={`${clip.id}-${clip.startUs}`}
@@ -100,7 +100,7 @@ export const TrackClipSection: React.FC = () => {
           className="w-24 bg-studio-950 px-2 py-1 rounded border border-studio-700 text-right"
         />
       </label>
-      <p className="text-[11px] text-studio-500">
+      <p className="text-meta text-studio-500">
         {isAudioTrack(track)
           ? "Drag the clip to move it along or between audio tracks, its edges to trim it."
           : "Drag the clip on the timeline to move it, its edges to trim it, or down onto V1 to insert it into the main video."}
@@ -111,13 +111,13 @@ export const TrackClipSection: React.FC = () => {
           setSelectedId(undefined);
           void edit({ kind: "removeClip", clipId: clip.id });
         }}
-        className="flex items-center gap-1.5 px-2 py-1 rounded border border-rose-900/60 text-xs text-rose-300 hover:bg-rose-950/40 disabled:opacity-40"
+        className="flex items-center gap-1.5 px-2 py-1 rounded border border-danger/40 text-label text-danger-fg hover:bg-danger/10 disabled:opacity-40"
       >
         <Trash2 className="w-3.5 h-3.5" />
         Remove clip
       </button>
       {error && (
-        <p role="alert" className="text-[11px] text-rose-300">
+        <p role="alert" className="text-meta text-danger-fg">
           {error}
         </p>
       )}

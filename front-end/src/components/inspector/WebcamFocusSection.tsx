@@ -151,27 +151,27 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
           disabled={!openedProject || busy}
           checked={saved.enabled}
           onChange={(e) => toggleEnabled(e.target.checked)}
-          className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-40"
+          className="rounded bg-studio-800 border-studio-700 focus:ring-0 cursor-pointer disabled:opacity-40"
         />
       }
     >
-      <p className="text-[11px] text-studio-400">
+      <p className="text-meta text-studio-400">
         The webcam fills the frame once the mouse has rested for the time below, and goes back
         to its bubble just before you click, scroll or move the mouse. Select clips on the
         timeline and use Normal view to keep the bubble there.
       </p>
-      {!openedProject && <p className="text-[11px] text-studio-500">Open a project to use this.</p>}
+      {!openedProject && <p className="text-meta text-studio-500">Open a project to use this.</p>}
       {openedProject && !webcamShown && (
-        <p className="text-[11px] text-amber-300">Turn on the webcam above to see this layout.</p>
+        <p className="text-meta text-suggest-fg">Turn on the webcam above to see this layout.</p>
       )}
       {error && (
-        <p role="alert" className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
+        <p role="alert" className="text-meta text-danger-fg bg-danger/10 border border-danger/30 rounded p-2">
           {error}
         </p>
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-studio-300">
+        <span className="text-meta text-studio-300">
           {saved.segments.length === 0
             ? "Not detected yet"
             : `${onCount} of ${visible.length} on · ${onSeconds.toFixed(1)}s`}
@@ -180,10 +180,10 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
           type="button"
           disabled={!openedProject || busy}
           onClick={() => detect(draft)}
-          className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors disabled:opacity-40 ${
+          className={`px-2.5 py-1 rounded-md text-label font-medium border transition-colors disabled:opacity-40 ${
             stale
-              ? "bg-amber-500/20 border-amber-400/50 text-amber-200 hover:bg-amber-500/30"
-              : "bg-indigo-600/20 border-indigo-500/30 text-indigo-300 hover:bg-indigo-600/30"
+              ? "bg-suggest/20 border-suggest/50 text-suggest-fg hover:bg-suggest/30"
+              : "bg-accent/20 border-accent-hover/30 text-accent-fg hover:bg-accent/30"
           }`}
           title="Find stretches where the mouse rests. Segments you added or switched off are kept."
         >
@@ -191,16 +191,16 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
         </button>
       </div>
       {stale && !busy && (
-        <p className="text-[10px] text-amber-300">Detection settings changed. Re-detect to apply them.</p>
+        <p className="text-meta text-suggest-fg">Detection settings changed. Re-detect to apply them.</p>
       )}
       {notes.map((note) => (
-        <p key={note} className="text-[10px] text-studio-500">
+        <p key={note} className="text-meta text-studio-500">
           {note}
         </p>
       ))}
 
       <div className="space-y-3">
-        <label className="text-xs text-studio-400">Look</label>
+        <label className="text-label text-studio-400">Look</label>
         <RangeRow
           label="Full-frame webcam size"
           value={draft.focusSizePct}
@@ -221,7 +221,7 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
       </div>
 
       <div className="space-y-3">
-        <label className="text-xs text-studio-400">Detection</label>
+        <label className="text-label text-studio-400">Detection</label>
         <RangeRow
           label="Mouse idle before full frame"
           value={draft.idleMs / 1000}
@@ -231,13 +231,13 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
           unit="s"
           onChange={(seconds) => setSetting({ idleMs: Math.round(seconds * 1000) })}
         />
-        <label className="flex items-center justify-between text-xs text-studio-400">
+        <label className="flex items-center justify-between text-label text-studio-400">
           <span>Only while I'm talking</span>
           <input
             type="checkbox"
             checked={draft.requireSpeech}
             onChange={(e) => setSetting({ requireSpeech: e.target.checked })}
-            className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
+            className="rounded bg-studio-800 border-studio-700 focus:ring-0 cursor-pointer"
           />
         </label>
         {draft.requireSpeech && (
@@ -270,21 +270,21 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
           unit="ms"
           onChange={(minFocusMs) => setSetting({ minFocusMs })}
         />
-        <label className="flex items-center justify-between text-xs text-studio-400">
+        <label className="flex items-center justify-between text-label text-studio-400">
           <span>Mouse movement counts as activity</span>
           <input
             type="checkbox"
             checked={draft.cursorMovesAreActivity}
             onChange={(e) => setSetting({ cursorMovesAreActivity: e.target.checked })}
-            className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
+            className="rounded bg-studio-800 border-studio-700 focus:ring-0 cursor-pointer"
           />
         </label>
       </div>
 
       {visible.length > 0 && (
         <div className="space-y-1.5">
-          <label className="text-xs text-studio-400">Segments</label>
-          <p className="text-[10px] text-studio-500">
+          <label className="text-label text-studio-400">Segments</label>
+          <p className="text-meta text-studio-500">
             Untick a segment to keep the bubble there. Select a range on the timeline and use
             Cam Focus to add your own.
           </p>
@@ -292,9 +292,9 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
             {visible.map(({ segment, span }) => (
               <div
                 key={segment.id}
-                className={`flex items-center gap-2 rounded px-2 py-1 text-[11px] border ${
+                className={`flex items-center gap-2 rounded px-2 py-1 text-meta border ${
                   segment.enabled
-                    ? "bg-amber-500/10 border-amber-400/30 text-studio-200"
+                    ? "bg-suggest/10 border-suggest/30 text-studio-200"
                     : "bg-studio-850 border-studio-800 text-studio-500"
                 }`}
               >
@@ -303,7 +303,7 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
                   aria-label="Use this segment"
                   checked={segment.enabled}
                   onChange={(e) => void patchSegment(segment.id, { enabled: e.target.checked })}
-                  className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
+                  className="rounded bg-studio-800 border-studio-700 focus:ring-0 cursor-pointer"
                 />
                 <button
                   type="button"
@@ -313,12 +313,12 @@ export const WebcamFocusSection: React.FC<{ webcamShown: boolean }> = ({ webcamS
                 >
                   {formatTimeUs(span!.startUs)} · {(span!.durationUs / 1e6).toFixed(1)}s
                 </button>
-                <span className="text-[9px] uppercase text-studio-500">{segment.source}</span>
+                <span className="text-meta uppercase text-studio-500">{segment.source}</span>
                 <button
                   type="button"
                   aria-label="Delete segment"
                   onClick={() => void patchSegment(segment.id, null)}
-                  className="text-studio-500 hover:text-rose-300"
+                  className="text-studio-500 hover:text-danger-fg"
                 >
                   <Trash2 className="w-3 h-3" />
                 </button>

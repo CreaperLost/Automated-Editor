@@ -114,15 +114,9 @@
 }
 
 @layer components {
-  /* The shell sizes the inspector (see App.tsx); the panel just fills its slot. */
+  /* The dock sizes the inspector; the panel just fills its slot. */
   .studio-inspector {
     width: 100%;
-  }
-
-  @media (max-width: 1180px) {
-    .studio-inspector {
-      padding: 1rem;
-    }
   }
 
   /* A text field or select that matches the buttons. */

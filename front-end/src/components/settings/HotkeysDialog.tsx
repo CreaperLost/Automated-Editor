@@ -53,9 +53,9 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
   const groups = [...new Set(HOTKEY_ACTIONS.map((a) => a.group))];
   const chip = (active: boolean) =>
-    `h-6 px-2 rounded border font-mono text-[11px] transition-colors ${
+    `h-6 px-2 rounded border font-mono text-meta transition-colors ${
       active
-        ? "border-indigo-400 bg-indigo-600/30 text-white animate-pulse"
+        ? "border-accent-hover bg-accent/30 text-white animate-pulse"
         : "border-studio-700 bg-studio-850 text-studio-200 hover:border-studio-500"
     }`;
 
@@ -76,7 +76,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-studio-800">
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <Keyboard className="w-4 h-4 text-indigo-400" />
+            <Keyboard className="w-4 h-4 text-studio-400" />
             Keyboard shortcuts
           </div>
           <div className="flex items-center gap-1">
@@ -86,7 +86,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                 reset();
                 setNotice("All shortcuts are back to their defaults.");
               }}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-studio-400 hover:text-white hover:bg-studio-800"
+              className="flex items-center gap-1 px-2 py-1 rounded text-meta text-studio-400 hover:text-white hover:bg-studio-800"
             >
               <RotateCcw className="w-3 h-3" />
               Reset all
@@ -102,17 +102,17 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           </div>
         </div>
 
-        <p className="px-4 pt-3 text-[11px] text-studio-500">
+        <p className="px-4 pt-3 text-meta text-studio-500">
           {capture
             ? "Press the new keys now. Esc cancels."
             : "Click a shortcut to change it, + to add another key for the same action."}
-          {notice && <span className="block mt-1 text-amber-300">{notice}</span>}
+          {notice && <span className="block mt-1 text-suggest-fg">{notice}</span>}
         </p>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
           {groups.map((group) => (
             <section key={group}>
-              <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-studio-500">{group}</h3>
+              <h3 className="mb-1.5 text-meta font-semibold uppercase tracking-wider text-studio-500">{group}</h3>
               <div className="divide-y divide-studio-800/60">
                 {HOTKEY_ACTIONS.filter((a) => a.group === group).map(({ action, label }) => {
                   const list = bindings[action];
@@ -121,7 +121,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                       <span className="text-xs text-studio-300">{label}</span>
                       <div className="flex flex-wrap items-center justify-end gap-1">
                         {list.length === 0 && capture?.action !== action && (
-                          <span className="text-[11px] text-studio-600">None</span>
+                          <span className="text-meta text-studio-600">None</span>
                         )}
                         {list.map((binding, index) => {
                           const active = capture?.action === action && capture.index === index;
@@ -140,7 +140,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                                   type="button"
                                   aria-label={`Remove ${formatBinding(binding)} from ${label}`}
                                   onClick={() => setBindings(action, list.filter((b) => b !== binding))}
-                                  className="absolute -top-1.5 -right-1.5 hidden group-hover:flex w-3.5 h-3.5 items-center justify-center rounded-full bg-studio-700 text-studio-200 hover:bg-rose-600"
+                                  className="absolute -top-1.5 -right-1.5 hidden group-hover:flex w-3.5 h-3.5 items-center justify-center rounded-full bg-studio-700 text-studio-200 hover:bg-danger"
                                 >
                                   <X className="w-2.5 h-2.5" />
                                 </button>

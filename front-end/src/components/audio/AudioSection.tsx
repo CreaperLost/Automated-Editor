@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Mic, Music, Volume2, VolumeX, Wand2 } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
@@ -37,32 +38,29 @@ const EffectRow: React.FC<EffectRowProps> = ({
   value,
   onValue,
 }) => (
-  <div className="space-y-1.5">
-    <label className="flex items-center justify-between text-xs cursor-pointer">
-      <span className="text-studio-300" title={hint}>
+  <div className="space-y-2">
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-label text-studio-200" title={hint}>
         {label}
       </span>
-      <input
-        type="checkbox"
-        checked={enabled}
-        onChange={(e) => onToggle(e.target.checked)}
-        className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
-      />
-    </label>
+      <Switch checked={enabled} onChange={onToggle} title={hint} />
+    </div>
     {enabled && (
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         <input
           type="range"
+          aria-label={label}
           min={min}
           max={max}
           step={1}
           value={value}
           onChange={(e) => onValue(Number(e.target.value))}
-          className="flex-1 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+          className="flex-1 h-1.5 cursor-pointer"
         />
-        <span className="w-16 text-right font-mono text-[11px] text-studio-300">{valueLabel}</span>
+        <span className="w-[4.5rem] text-right font-mono text-meta tabular-nums text-studio-200">{valueLabel}</span>
       </div>
     )}
+    <p className="text-meta text-studio-500">{hint}</p>
   </div>
 );
 
@@ -87,8 +85,8 @@ const LaneToggle: React.FC<{
     title={title}
     disabled={disabled}
     onClick={onClick}
-    className={`p-1 rounded transition-colors disabled:opacity-30 ${
-      on ? "bg-indigo-600/40 text-indigo-100" : "text-studio-500 hover:text-studio-200 hover:bg-studio-800"
+    className={`h-7 w-7 inline-flex items-center justify-center rounded-control transition-colors disabled:opacity-30 ${
+      on ? "bg-accent/20 text-accent-fg shadow-[inset_0_0_0_1px_rgb(var(--accent-hover)/0.5)]" : "text-studio-500 hover:text-studio-100 hover:bg-studio-800"
     }`}
   >
     {children}
@@ -111,7 +109,7 @@ const LaneRow: React.FC<{
   onDuck: (db: number | undefined) => void;
 }> = ({ lane, role, muted, volumeDb, denoiseDb, duckDb, onRole, onMute, onVolume, onDenoise, onDuck }) => (
   <div className="space-y-1">
-    <div className="grid grid-cols-[auto_5.5rem_minmax(0,1fr)_auto_auto_auto_auto] items-center gap-1.5">
+    <div className="grid grid-cols-[auto_6rem_minmax(0,1fr)_auto_auto_auto_auto] items-center gap-1">
       <LaneToggle
         on={role === "mic"}
         label={`${lane.label}: ${role === "mic" ? "speech" : "background"}`}
@@ -122,9 +120,9 @@ const LaneRow: React.FC<{
         }
         onClick={() => onRole(role === "mic" ? "background" : "mic")}
       >
-        {role === "mic" ? <Mic className="w-3.5 h-3.5" /> : <Music className="w-3.5 h-3.5" />}
+        {role === "mic" ? <Mic className="w-4 h-4" /> : <Music className="w-4 h-4" />}
       </LaneToggle>
-      <span className={`text-xs truncate ${muted ? "text-studio-500 line-through" : "text-studio-300"}`} title={lane.label}>
+      <span className={`text-label truncate ${muted ? "text-studio-500 line-through" : "text-studio-200"}`} title={lane.label}>
         {lane.label}
       </span>
       <input
@@ -138,16 +136,16 @@ const LaneRow: React.FC<{
         onChange={(e) => onVolume(Number(e.target.value))}
         onDoubleClick={() => onVolume(0)}
         title="Double-click to reset"
-        className="w-full min-w-0 h-1.5 bg-studio-800 rounded-lg cursor-pointer disabled:opacity-40"
+        className="w-full min-w-0 h-1.5 cursor-pointer disabled:opacity-40"
       />
-      <span className="w-11 text-right font-mono text-[10px] text-studio-300">{formatDb(volumeDb)}</span>
+      <span className="w-14 text-right font-mono text-meta tabular-nums text-studio-200">{formatDb(volumeDb)}</span>
       <LaneToggle
         on={denoiseDb !== undefined}
         label={`Reduce noise on ${lane.label}`}
         title="Reduce steady background noise (fans, hum, hiss)"
         onClick={() => onDenoise(denoiseDb === undefined ? DEFAULT_DENOISE_DB : undefined)}
       >
-        <Wand2 className="w-3.5 h-3.5" />
+        <Wand2 className="w-4 h-4" />
       </LaneToggle>
       <LaneToggle
         on={duckDb !== undefined}
@@ -156,16 +154,16 @@ const LaneRow: React.FC<{
         title={role === "mic" ? "Speech lanes are what others duck under" : "Lower this lane while speech plays on a speech lane"}
         onClick={() => onDuck(duckDb === undefined ? DEFAULT_DUCK_DB : undefined)}
       >
-        <ArrowDownToLine className="w-3.5 h-3.5" />
+        <ArrowDownToLine className="w-4 h-4" />
       </LaneToggle>
       <button
         type="button"
         onClick={onMute}
         aria-pressed={muted}
         aria-label={`${muted ? "Unmute" : "Mute"} ${lane.label}`}
-        className={`p-1 rounded hover:bg-studio-800 ${muted ? "text-rose-300" : "text-studio-400 hover:text-white"}`}
+        className={`h-7 w-7 inline-flex items-center justify-center rounded-control hover:bg-studio-800 ${muted ? "text-danger-fg" : "text-studio-400 hover:text-studio-100"}`}
       >
-        {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+        {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
       </button>
     </div>
     {denoiseDb !== undefined && (
@@ -301,14 +299,14 @@ export const AudioSection: React.FC = () => {
   return (
     <InspectorSection id="audio" title="Audio" icon={Volume2}>
       {error && (
-        <p role="alert" className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
+        <Notice tone="danger" className="rounded-control border" onDismiss={() => setError(undefined)}>
           {error}
-        </p>
+        </Notice>
       )}
       {lanes.length === 0 ? (
-        <p className="text-[11px] text-studio-500">No sound yet.</p>
+        <p className="text-label text-studio-500">No sound yet.</p>
       ) : (
-        <div className="space-y-2 pb-2 border-b border-studio-800">
+        <div className="space-y-2 pb-3 border-b border-studio-800">
           {lanes.map((lane) => (
             <LaneRow
               key={lane.id}
@@ -326,8 +324,10 @@ export const AudioSection: React.FC = () => {
             />
           ))}
           {audioTracks.length > 0 && (
-            <button
-              type="button"
+            <Button
+              variant={allMuted ? "subtle" : "danger"}
+              size="sm"
+              className="w-full mt-1"
               onClick={() =>
                 void saveMix(Object.fromEntries(audioTracks.map((t) => [t.id, { muted: !allMuted }])))
               }
@@ -336,14 +336,9 @@ export const AudioSection: React.FC = () => {
                   ? "Bring every recorded track back"
                   : "Mute every recorded track. With nothing else playing, export writes no audio stream."
               }
-              className={`w-full py-1 rounded text-xs font-medium border transition-colors ${
-                allMuted
-                  ? "border-teal-500/40 text-teal-300 hover:bg-teal-600/20"
-                  : "border-rose-500/30 text-rose-300 hover:bg-rose-950/40"
-              }`}
             >
               {allMuted ? "Restore recorded audio" : "Mute recorded audio"}
-            </button>
+            </Button>
           )}
         </div>
       )}

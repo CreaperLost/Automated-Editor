@@ -12,7 +12,7 @@ const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChang
   checked,
   onChange,
 }) => (
-  <label className="flex items-center justify-between text-xs cursor-pointer">
+  <label className="flex items-center justify-between text-label cursor-pointer">
     <span className="text-studio-300" title={hint}>
       {label}
     </span>
@@ -20,7 +20,7 @@ const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChang
       type="checkbox"
       checked={checked}
       onChange={(e) => onChange(e.target.checked)}
-      className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
+      className="rounded bg-studio-800 border-studio-700 focus:ring-0 cursor-pointer"
     />
   </label>
 );
@@ -30,7 +30,7 @@ const ColorRow: React.FC<{ label: string; value: string; onChange: (value: strin
   value,
   onChange,
 }) => (
-  <label className="flex items-center justify-between text-xs text-studio-400">
+  <label className="flex items-center justify-between text-label text-studio-400">
     <span>{label}</span>
     <input
       type="color"
@@ -94,27 +94,27 @@ export const CaptionsSection: React.FC = () => {
           title="Show captions in the preview and export"
           checked={draft.enabled}
           onChange={(e) => update({ enabled: e.target.checked })}
-          className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0 cursor-pointer"
+          className="rounded bg-studio-800 border-studio-700 focus:ring-0 cursor-pointer"
         />
       }
     >
       {error && (
-        <p role="alert" className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
+        <p role="alert" className="text-meta text-danger-fg bg-danger/10 border border-danger/30 rounded p-2">
           {error}
         </p>
       )}
-      <p className="text-[11px] text-studio-500">
+      <p className="text-meta text-studio-500">
         Captions come from the transcript, so transcribe a track first. Cut words disappear from them and fixed words
         show corrected.
       </p>
       <fieldset disabled={!draft.enabled} className="space-y-4 disabled:opacity-50">
         {audioTracks.length > 1 && (
-          <label className="flex items-center justify-between text-xs text-studio-400">
+          <label className="flex items-center justify-between text-label text-studio-400">
             <span>Track</span>
             <select
               value={draft.trackId ?? ""}
               onChange={(e) => update({ trackId: e.target.value || undefined })}
-              className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
+              className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-label rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-accent-hover"
             >
               <option value="">Automatic</option>
               {audioTracks.map((t) => (
@@ -131,9 +131,9 @@ export const CaptionsSection: React.FC = () => {
               key={position}
               type="button"
               onClick={() => update({ position })}
-              className={`py-1 rounded text-xs capitalize border ${
+              className={`py-1 rounded text-label capitalize border ${
                 draft.position === position
-                  ? "bg-indigo-600/30 border-indigo-500 text-white"
+                  ? "bg-accent/30 border-accent-hover text-white"
                   : "bg-studio-850 border-studio-800 text-studio-400 hover:text-white"
               }`}
             >

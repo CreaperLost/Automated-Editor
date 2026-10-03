@@ -353,7 +353,7 @@ export const TranscriptPanel: React.FC = () => {
   return (
     <div className="h-full flex flex-col min-h-0 bg-studio-900/40 border border-studio-800 rounded-xl text-xs">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-studio-800">
-        <AudioLines className="w-3.5 h-3.5 text-teal-400" />
+        <AudioLines className="w-3.5 h-3.5 text-accent-hover" />
         <span className="font-semibold text-studio-200">Transcript</span>
         {tracks.length > 1 && (
           <select
@@ -363,7 +363,7 @@ export const TranscriptPanel: React.FC = () => {
               setTrackId(e.target.value);
               setSelection(null);
             }}
-            className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
+            className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-accent-hover"
           >
             {tracks.map((t) => (
               <option key={t.id} value={t.id}>
@@ -378,7 +378,7 @@ export const TranscriptPanel: React.FC = () => {
           </span>
         )}
         {view && view.words.length > 0 && view.words.every((w) => w.editedStartUs === null) && trackId.startsWith("msound-") && (
-          <span className="text-amber-300 truncate" title="Its words show once a clip of it is on the timeline, on any track">
+          <span className="text-suggest-fg truncate" title="Its words show once a clip of it is on the timeline, on any track">
             Not on the timeline yet: place it to edit and caption it
           </span>
         )}
@@ -391,8 +391,8 @@ export const TranscriptPanel: React.FC = () => {
               aria-pressed={reviewOpen}
               className={`flex items-center gap-1 px-2 py-1 rounded border ${
                 reviewOpen
-                  ? "bg-amber-800/60 border-amber-600 text-amber-100"
-                  : "bg-amber-900/40 border-amber-700/50 text-amber-200 hover:bg-amber-800/50"
+                  ? "bg-suggest/15 border-suggest text-suggest-fg"
+                  : "bg-suggest/10 border-suggest/50 text-suggest-fg hover:bg-suggest/15"
               }`}
             >
               <Sparkles className="w-3 h-3" /> Review {pending.length}
@@ -449,7 +449,7 @@ export const TranscriptPanel: React.FC = () => {
             <button
               type="button"
               onClick={() => void cutWords(selectedIds, `Cut ${selectedIds.length} words`)}
-              className="flex items-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
+              className="flex items-center gap-1 px-2 py-1 rounded bg-danger/15 border border-danger/50 text-danger-fg hover:bg-danger/15"
             >
               <Scissors className="w-3 h-3" /> Cut {selectedIds.length} selected
             </button>
@@ -488,7 +488,7 @@ export const TranscriptPanel: React.FC = () => {
               type="button"
               disabled={!trackId}
               onClick={() => void runTranscription()}
-              className="px-2 py-1 rounded bg-teal-700 hover:bg-teal-600 disabled:opacity-40 text-white font-semibold"
+              className="px-2 py-1 rounded bg-accent hover:bg-accent disabled:opacity-40 text-white font-semibold"
             >
               {view ? "Re-transcribe" : "Transcribe"}
             </button>
@@ -505,17 +505,17 @@ export const TranscriptPanel: React.FC = () => {
       </div>
 
       {running && (
-        <div className="px-3 py-1.5 border-b border-studio-800 flex items-center gap-2 text-teal-300">
+        <div className="px-3 py-1.5 border-b border-studio-800 flex items-center gap-2 text-accent-fg">
           <div className="flex-1 h-1 bg-studio-800 rounded overflow-hidden">
-            <div className="h-full bg-teal-500 transition-all" style={{ width: `${Math.round((progress?.fraction ?? 0) * 100)}%` }} />
+            <div className="h-full bg-accent-hover transition-all" style={{ width: `${Math.round((progress?.fraction ?? 0) * 100)}%` }} />
           </div>
           <span>{progress?.message ?? "Starting"}</span>
         </div>
       )}
       {error && (
-        <div role="alert" className="px-3 py-1.5 border-b border-rose-900/60 bg-rose-950/40 text-rose-200 flex items-center gap-2">
+        <div role="alert" className="px-3 py-1.5 border-b border-danger/40 bg-danger/10 text-danger-fg flex items-center gap-2">
           <span className="flex-1">{error}</span>
-          <button type="button" onClick={() => setError(null)} className="text-rose-400 hover:text-rose-100">
+          <button type="button" onClick={() => setError(null)} className="text-danger hover:text-danger-fg">
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -549,14 +549,14 @@ export const TranscriptPanel: React.FC = () => {
           return (
             <div
               key={line.words[0].w.id}
-              className={`flex gap-3 rounded-md px-1.5 py-1 ${playing ? "bg-teal-950/40" : lineIndex % 2 ? "bg-studio-900/30" : ""}`}
+              className={`flex gap-3 rounded-md px-1.5 py-1 ${playing ? "bg-accent/10" : lineIndex % 2 ? "bg-studio-900/30" : ""}`}
             >
               <button
                 type="button"
                 disabled={line.startUs === null}
                 onClick={() => line.startUs !== null && seekTo(line.startUs)}
-                className={`shrink-0 w-14 text-left font-mono text-[11px] leading-6 tabular-nums disabled:cursor-default ${
-                  playing ? "text-teal-300" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-teal-300"
+                className={`shrink-0 w-14 text-left font-mono text-meta leading-6 tabular-nums disabled:cursor-default ${
+                  playing ? "text-accent-fg" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-accent-fg"
                 }`}
                 title={line.startUs === null ? "This line is cut" : "Jump here"}
               >
@@ -585,7 +585,7 @@ export const TranscriptPanel: React.FC = () => {
                             else if (e.key === "Escape") setEditing(null);
                           }}
                           onBlur={() => void commitEdit()}
-                          className="bg-studio-800 text-white rounded px-1 outline outline-1 outline-teal-500"
+                          className="bg-studio-800 text-white rounded px-1 outline outline-1 outline-accent-hover"
                         />{" "}
                       </React.Fragment>
                     );
@@ -593,10 +593,10 @@ export const TranscriptPanel: React.FC = () => {
                   const classes = [
                     "rounded px-0.5 cursor-pointer",
                     cut ? "line-through text-studio-600" : "hover:bg-studio-800",
-                    selected && !cut ? "bg-rose-800/60 text-white" : "",
-                    i === activeIndex ? "bg-teal-800/70 text-white" : "",
-                    kind === "filler" && !cut ? "underline decoration-amber-400 decoration-2" : "",
-                    kind === "retake" && !cut ? "underline decoration-violet-400 decoration-2" : "",
+                    selected && !cut ? "bg-danger/15 text-white" : "",
+                    i === activeIndex ? "bg-accent/15 text-white" : "",
+                    kind === "filler" && !cut ? "underline decoration-suggest decoration-2" : "",
+                    kind === "retake" && !cut ? "underline decoration-studio-400 decoration-2" : "",
                     w.kind === "audioEvent" ? "italic text-studio-400" : "",
                     // Heard but left out of the captions.
                     w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
@@ -605,7 +605,7 @@ export const TranscriptPanel: React.FC = () => {
                     <React.Fragment key={w.id}>
                       {w.captionBreak && !cut && (
                         <span
-                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-amber-400/80 rounded"
+                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-suggest/80 rounded"
                           title="A new caption starts here"
                           aria-label="Caption break"
                         />
@@ -672,7 +672,7 @@ export const TranscriptPanel: React.FC = () => {
               type="button"
               disabled={running}
               onClick={() => void runAiReview()}
-              className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded bg-violet-900/40 border border-violet-600/40 text-violet-100 hover:bg-violet-800/50 disabled:opacity-40"
+              className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded bg-studio-800/40 border border-studio-600/40 text-studio-100 hover:bg-studio-700/50 disabled:opacity-40"
               title="Ask the AI provider from Transcription and AI settings to find filler words and retakes in context. Sends the transcript text."
             >
               <Sparkles className="w-3 h-3" /> Find with AI
@@ -687,7 +687,7 @@ export const TranscriptPanel: React.FC = () => {
                   `Removed ${reviewed.length} suggestion${reviewed.length === 1 ? "" : "s"}`,
                 )
               }
-              className="mx-2 mt-2 flex items-center justify-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
+              className="mx-2 mt-2 flex items-center justify-center gap-1 px-2 py-1 rounded bg-danger/15 border border-danger/50 text-danger-fg hover:bg-danger/15"
             >
               <Scissors className="w-3 h-3" /> Accept all {reviewed.length}
             </button>
@@ -704,14 +704,14 @@ export const TranscriptPanel: React.FC = () => {
               >
                 <div className="flex items-center gap-1.5">
                   <span
-                    className={`px-1 rounded text-[10px] uppercase font-semibold ${
-                      s.kind === "filler" ? "bg-amber-900/60 text-amber-200" : "bg-violet-900/60 text-violet-200"
+                    className={`px-1 rounded text-meta uppercase font-semibold ${
+                      s.kind === "filler" ? "bg-suggest/15 text-suggest-fg" : "bg-studio-800/60 text-studio-200"
                     }`}
                   >
                     {s.kind === "filler" ? "Filler" : "Retake"}
                   </span>
                   {s.source === "ai" && (
-                    <span className="px-1 rounded text-[10px] font-semibold bg-sky-900/60 text-sky-200" title="Found by the AI review">
+                    <span className="px-1 rounded text-meta font-semibold bg-studio-800/60 text-studio-200" title="Found by the AI review">
                       AI
                     </span>
                   )}
@@ -742,7 +742,7 @@ export const TranscriptPanel: React.FC = () => {
                           onClick={() =>
                             void cutWords(s.wordIds, `Cut ${s.kind === "filler" ? "filler" : "retake"} "${s.text}"`)
                           }
-                          className="p-1 rounded text-emerald-400 hover:text-white hover:bg-emerald-800/60"
+                          className="p-1 rounded text-audio hover:text-white hover:bg-audio/15"
                         >
                           <Check className="w-3 h-3" />
                         </button>
@@ -750,7 +750,7 @@ export const TranscriptPanel: React.FC = () => {
                           type="button"
                           title="Reject: keep these words"
                           onClick={() => void dismiss([s.id], true)}
-                          className="p-1 rounded text-rose-400 hover:text-white hover:bg-rose-900/60"
+                          className="p-1 rounded text-danger hover:text-white hover:bg-danger/15"
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -759,7 +759,7 @@ export const TranscriptPanel: React.FC = () => {
                   </div>
                 </div>
                 <p className={`mt-1 text-studio-200 ${s.dismissed ? "text-studio-500" : ""}`}>&ldquo;{s.text}&rdquo;</p>
-                {s.reason && <p className="mt-0.5 text-[11px] text-studio-500 italic">{s.reason}</p>}
+                {s.reason && <p className="mt-0.5 text-meta text-studio-500 italic">{s.reason}</p>}
               </li>
             ))}
           </ul>

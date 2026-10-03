@@ -408,7 +408,7 @@ export const ShortsStudio: React.FC = () => {
   }
 
   const segmented = (active: boolean) =>
-    `flex-1 py-1.5 rounded-md text-xs ${active ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:bg-studio-800"}`;
+    `flex-1 py-1.5 rounded-md text-xs ${active ? "bg-accent text-white font-semibold" : "text-studio-300 hover:bg-studio-800"}`;
   const toExport = checked.size > 0 ? shorts.filter((s) => checked.has(s.id)) : shorts;
 
   // The studio's parts, drawn inside dockable panels (rearrange and resize like the editor's).
@@ -429,7 +429,7 @@ export const ShortsStudio: React.FC = () => {
                 key={s.id}
                 onClick={() => setSelectedId(s.id)}
                 className={`rounded-lg border p-2 cursor-pointer ${
-                  s.id === selected?.id ? "border-teal-400/70 bg-teal-950/30" : "border-studio-800 bg-studio-900 hover:border-studio-600"
+                  s.id === selected?.id ? "border-accent-hover/70 bg-accent/10" : "border-studio-800 bg-studio-900 hover:border-studio-600"
                 }`}
               >
                 <div className="flex items-center gap-2">
@@ -448,17 +448,17 @@ export const ShortsStudio: React.FC = () => {
                   />
                   <span className="flex-1 truncate font-medium">{s.title}</span>
                 </div>
-                <div className="mt-1 pl-5 font-mono text-[11px] text-studio-500">
+                <div className="mt-1 pl-5 font-mono text-meta text-studio-500">
                   {ok
                     ? `${formatTime(s.editedStartUs!)} · ${((s.editedEndUs! - s.editedStartUs!) / 1e6).toFixed(1)}s`
                     : "Part of it was cut; trim it again"}
                 </div>
                 {row && (
-                  <div className="mt-1 pl-5 flex items-center gap-1 text-[11px]">
+                  <div className="mt-1 pl-5 flex items-center gap-1 text-meta">
                     {row.state === "completed" ? (
                       <>
-                        <Check className="w-3 h-3 text-emerald-300" />
-                        <span className="text-emerald-300">Exported</span>
+                        <Check className="w-3 h-3 text-audio-fg" />
+                        <span className="text-audio-fg">Exported</span>
                         {row.path && (
                           <button
                             type="button"
@@ -473,11 +473,11 @@ export const ShortsStudio: React.FC = () => {
                         )}
                       </>
                     ) : row.state === "failed" ? (
-                      <span className="text-rose-300 truncate" title={row.message}>
+                      <span className="text-danger-fg truncate" title={row.message}>
                         Failed: {row.message}
                       </span>
                     ) : (
-                      <span className="text-teal-300">
+                      <span className="text-accent-fg">
                         {row.state === "waiting" ? "Waiting" : `Exporting ${Math.round(row.progress * 100)}%`}
                       </span>
                     )}
@@ -496,7 +496,7 @@ export const ShortsStudio: React.FC = () => {
             </span>
             <div className="flex items-center gap-3 shrink-0">
               <PreviewQualityControls />
-              <span className="font-mono text-[11px] text-studio-500">Canvas: 9:16</span>
+              <span className="font-mono text-meta text-studio-500">Canvas: 9:16</span>
             </div>
           </div>
           <div
@@ -514,7 +514,7 @@ export const ShortsStudio: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => takeShortPlayback()}
-                    className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-md bg-studio-900/90 border border-studio-700 text-[11px] text-studio-200 hover:bg-studio-800"
+                    className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-md bg-studio-900/90 border border-studio-700 text-meta text-studio-200 hover:bg-studio-800"
                     title="The editor has the preview. Click to show this short here (the editor keeps its place)."
                   >
                     Show this short
@@ -545,11 +545,11 @@ export const ShortsStudio: React.FC = () => {
                 className="w-full bg-studio-800 border border-studio-700 rounded px-2 py-1"
               />
             </label>
-            {selected.reason && <p className="text-[11px] text-studio-500 italic">AI: {selected.reason}</p>}
+            {selected.reason && <p className="text-meta text-studio-500 italic">AI: {selected.reason}</p>}
 
             {ownEdit && (
-              <div className="space-y-1.5 rounded-lg border border-amber-700/50 bg-amber-950/30 p-2">
-                <p className="text-[11px] text-amber-100">
+              <div className="space-y-1.5 rounded-lg border border-suggest/50 bg-suggest/10 p-2">
+                <p className="text-meta text-suggest-fg">
                   Edited on its own: cuts and clips on its timeline below change only this short. Trim it by dragging
                   its first or last clip's edge.
                 </p>
@@ -559,7 +559,7 @@ export const ShortsStudio: React.FC = () => {
                   onClick={() =>
                     void run("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
                   }
-                  className="px-2 py-1 rounded border border-amber-600/60 text-amber-100 hover:bg-amber-900/40 disabled:opacity-40"
+                  className="px-2 py-1 rounded border border-suggest/60 text-suggest-fg hover:bg-suggest/10 disabled:opacity-40"
                   title="Drop this short's own edits so it follows the video again"
                 >
                   Follow the video again
@@ -680,7 +680,7 @@ export const ShortsStudio: React.FC = () => {
                     onClick={() => changeLayout({ backgroundType: kind })}
                     disabled={kind === "wallpaper" && !project.layout?.wallpaperAsset}
                     title={kind === "wallpaper" && !project.layout?.wallpaperAsset ? "Choose an image in the editor's Background settings first" : undefined}
-                    className={`${segmented(layout.backgroundType === kind)} text-[10px] disabled:opacity-40`}
+                    className={`${segmented(layout.backgroundType === kind)} text-meta disabled:opacity-40`}
                   >
                     {label}
                   </button>
@@ -702,8 +702,8 @@ export const ShortsStudio: React.FC = () => {
                       type="button"
                       aria-pressed={layout.backgroundPreset === preset.key}
                       onClick={() => changeLayout({ backgroundPreset: preset.key })}
-                      className={`h-9 rounded border text-[9px] text-white/90 flex items-end p-1 ${
-                        layout.backgroundPreset === preset.key ? "border-teal-400" : "border-studio-700"
+                      className={`h-9 rounded border text-meta text-white/90 flex items-end p-1 ${
+                        layout.backgroundPreset === preset.key ? "border-accent-hover" : "border-studio-700"
                       }`}
                       style={{ background: presetBackgroundCss(preset.key) }}
                     >
@@ -762,7 +762,7 @@ export const ShortsStudio: React.FC = () => {
                   </label>
                 </div>
               )}
-              <p className="text-[11px] text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the timeline below.</p>
+              <p className="text-meta text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the timeline below.</p>
             </div>
 
             <div className="flex flex-col gap-2 pt-2 border-t border-studio-800">
@@ -781,7 +781,7 @@ export const ShortsStudio: React.FC = () => {
                   setSelectedId(undefined);
                   void saveShorts(shorts.filter((s) => s.id !== selected.id));
                 }}
-                className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-rose-300 hover:bg-rose-950/40 disabled:opacity-40"
+                className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-danger-fg hover:bg-danger/10 disabled:opacity-40"
               >
                 <Trash2 className="w-3.5 h-3.5" /> Remove this short
               </button>
@@ -795,7 +795,7 @@ export const ShortsStudio: React.FC = () => {
       <>
       {selected && playable && (
         <section className="h-full flex flex-col min-h-0" aria-label="Short timeline">
-          <div className="px-4 py-1 text-[11px] text-studio-500 border-b border-studio-800 bg-studio-900">
+          <div className="px-4 py-1 text-meta text-studio-500 border-b border-studio-800 bg-studio-900">
             This short's timeline. Cuts, splits, moves and clips here change only the short (the video stays as it
             is); caption text is shared with the video's transcript.
           </div>
@@ -813,7 +813,7 @@ export const ShortsStudio: React.FC = () => {
   return (
     <div className="h-screen bg-studio-950 text-studio-100 flex flex-col text-xs select-none">
       <header className="h-12 shrink-0 px-4 flex items-center gap-3 border-b border-studio-800 bg-studio-900">
-        <Smartphone className="w-4 h-4 text-teal-400" />
+        <Smartphone className="w-4 h-4 text-accent-hover" />
         <span className="font-semibold text-sm">Shorts Studio</span>
         <span className="text-studio-500 truncate">{project.manifest.projectName}</span>
         <div className="ml-auto flex items-center gap-2">
@@ -825,7 +825,7 @@ export const ShortsStudio: React.FC = () => {
               void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.id))
             }
             title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/50 border border-violet-600/50 text-violet-100 hover:bg-violet-800/60 disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-800/50 border border-studio-600/50 text-studio-100 hover:bg-studio-700/60 disabled:opacity-40"
           >
             {busy === "Finding shorts" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             Find shorts with AI
@@ -853,7 +853,7 @@ export const ShortsStudio: React.FC = () => {
             type="button"
             disabled={toExport.length === 0 || Object.values(exports).some((e) => e.state === "running" || e.state === "waiting")}
             onClick={() => void exportShorts(toExport.map((s) => s.id))}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold disabled:opacity-40"
           >
             <Download className="w-3.5 h-3.5" />
             Export {checked.size > 0 ? `${checked.size} selected` : `all ${shorts.length}`}
@@ -862,7 +862,7 @@ export const ShortsStudio: React.FC = () => {
       </header>
 
       {error && (
-        <p role="alert" className="px-4 py-1.5 bg-rose-950/50 border-b border-rose-900/60 text-rose-200">
+        <p role="alert" className="px-4 py-1.5 bg-danger/15 border-b border-danger/40 text-danger-fg">
           {error}
         </p>
       )}

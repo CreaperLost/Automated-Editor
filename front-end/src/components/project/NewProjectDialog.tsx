@@ -68,7 +68,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
 
   const option = (selected: boolean) =>
     `flex-1 text-left rounded-lg border px-3 py-2.5 transition-colors ${
-      selected ? "border-teal-400/70 bg-teal-500/10 text-white" : "border-studio-700 hover:border-studio-500 text-studio-300"
+      selected ? "border-accent-hover/70 bg-accent-hover/10 text-white" : "border-studio-700 hover:border-studio-500 text-studio-300"
     }`;
 
   return createPortal(
@@ -80,7 +80,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
       >
         <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <FilePlus2 className="w-4 h-4 text-teal-400" />
+            <FilePlus2 className="w-4 h-4 text-accent-hover" />
             New Project
           </div>
           <button aria-label="Close" onClick={onClose} className="p-1 rounded hover:bg-studio-700 text-studio-400">
@@ -104,14 +104,14 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
               maxLength={80}
               placeholder="Untitled (today's date)"
               onChange={(event) => setName(event.target.value)}
-              className="w-full bg-studio-950 border border-studio-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
+              className="w-full bg-studio-950 border border-studio-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-hover"
             />
           </label>
 
           <div className="space-y-1.5">
             <span className="text-studio-300 font-medium">Saved in</span>
             <div className="flex items-center gap-2">
-              <span className="flex-1 truncate font-mono text-[11px] text-studio-400 bg-studio-950 border border-studio-800 rounded-lg px-3 py-2" title={location}>
+              <span className="flex-1 truncate font-mono text-meta text-studio-400 bg-studio-950 border border-studio-800 rounded-lg px-3 py-2" title={location}>
                 {location || "Documents/AeroEdits"}
               </span>
               <button
@@ -144,8 +144,8 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
             </div>
             {withRecording && (
               <div className="flex items-center gap-2 pt-1">
-                <Film className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                <span className="flex-1 truncate font-mono text-[11px] text-studio-300" title={recording}>
+                <Film className="w-3.5 h-3.5 text-accent-hover shrink-0" />
+                <span className="flex-1 truncate font-mono text-meta text-studio-300" title={recording}>
                   {recording || "No recording chosen"}
                 </span>
                 <button
@@ -161,7 +161,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
           </div>
 
           {error && (
-            <p role="alert" className="text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded-lg p-2">
+            <p role="alert" className="text-danger-fg bg-danger/10 border border-danger/30 rounded-lg p-2">
               {error}
             </p>
           )}
@@ -173,7 +173,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
             <button
               type="submit"
               disabled={busy}
-              className="px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold disabled:opacity-50"
+              className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold disabled:opacity-50"
             >
               {busy ? "Creating…" : "Create Project"}
             </button>

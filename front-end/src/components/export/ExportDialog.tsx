@@ -129,7 +129,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
 
   const option = (active: boolean) =>
     `py-1.5 rounded-md text-xs transition-colors disabled:opacity-40 ${
-      active ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:text-white hover:bg-studio-800"
+      active ? "bg-accent text-white font-semibold" : "text-studio-300 hover:text-white hover:bg-studio-800"
     }`;
   const seconds = editedDurationUs / 1e6;
 
@@ -226,7 +226,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                     onChange={(event) => update({ mbps: event.target.valueAsNumber })}
                     aria-label="Video bitrate in megabits per second"
                     className={`w-24 bg-studio-800 border rounded px-2 py-1 text-studio-100 font-mono ${
-                      mbpsValid ? "border-studio-700" : "border-rose-500"
+                      mbpsValid ? "border-studio-700" : "border-danger"
                     }`}
                   />
                   <span className="text-studio-400">Mbps</span>
@@ -235,7 +235,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                       ≈ {formatBytes(((preferences.mbps * 1e6 + 192_000) * seconds) / 8)}
                     </span>
                   ) : (
-                    <span className="text-rose-300 ml-auto">
+                    <span className="text-danger-fg ml-auto">
                       {MIN_MBPS} to {MAX_MBPS} Mbps
                     </span>
                   )}
@@ -271,18 +271,18 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               </div>
               <div className="h-1.5 rounded-full bg-studio-800 overflow-hidden">
                 <div
-                  className={`h-full transition-[width] ${exportJob.state === "failed" ? "bg-rose-500" : "bg-teal-500"}`}
+                  className={`h-full transition-[width] ${exportJob.state === "failed" ? "bg-danger" : "bg-accent-hover"}`}
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
               {exportJob.failure && (
-                <p role="alert" className="text-rose-300">
+                <p role="alert" className="text-danger-fg">
                   {exportJob.failure.message}
                 </p>
               )}
               {exportJob.state === "completed" && exportJob.outputPath && (
                 <div className="flex items-center gap-2">
-                  <span className="flex-1 min-w-0 truncate font-mono text-emerald-300" title={exportJob.outputPath}>
+                  <span className="flex-1 min-w-0 truncate font-mono text-audio-fg" title={exportJob.outputPath}>
                     {exportJob.outputPath}
                   </span>
                   <button
@@ -304,7 +304,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             <button
               type="button"
               onClick={onCancel}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-800 text-rose-200 font-medium"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-danger/15 hover:bg-danger/15 border border-danger/30 text-danger-fg font-medium"
             >
               <XCircle className="w-3.5 h-3.5" />
               Cancel export
@@ -322,7 +322,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 type="button"
                 disabled={custom && !mbpsValid}
                 onClick={start}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold shadow-md shadow-teal-900/40 disabled:opacity-40"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold shadow-md shadow-accent/20 disabled:opacity-40"
               >
                 <Download className="w-3.5 h-3.5" />
                 Export

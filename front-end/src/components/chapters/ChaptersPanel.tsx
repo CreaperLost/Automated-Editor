@@ -126,7 +126,7 @@ export const ChaptersPanel: React.FC = () => {
     "flex items-center justify-center gap-1 px-2 py-1.5 rounded-md border disabled:opacity-40";
 
   return (
-    <div className="h-full overflow-y-auto p-3 space-y-3 bg-studio-900/95 text-xs select-none">
+    <div className="h-full overflow-y-auto p-3 space-y-3 bg-studio-900/95 text-label select-none">
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
@@ -137,7 +137,7 @@ export const ChaptersPanel: React.FC = () => {
               api.projectChaptersGenerate(project.projectHandle, speechTrack.descriptor.id),
             )
           }
-          className={`${button} bg-violet-900/40 border-violet-600/40 text-violet-100 hover:bg-violet-800/50`}
+          className={`${button} bg-studio-800/40 border-studio-600/40 text-studio-100 hover:bg-studio-700/50`}
           title="Ask the AI provider from Transcription and AI settings to split the transcript into chapters. Replaces the current chapters (undoable)."
         >
           {busy === "Finding chapters" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -152,15 +152,15 @@ export const ChaptersPanel: React.FC = () => {
           <Plus className="w-3.5 h-3.5" /> Add at playhead
         </button>
       </div>
-      {!speechTrack && <p className="text-[11px] text-studio-500">Finding chapters needs a microphone or system audio track.</p>}
+      {!speechTrack && <p className="text-meta text-studio-500">Finding chapters needs a microphone or system audio track.</p>}
       {error && (
-        <p role="alert" className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
+        <p role="alert" className="text-meta text-danger-fg bg-danger/10 border border-danger/30 rounded p-2">
           {error}
         </p>
       )}
 
       {chapters.length === 0 ? (
-        <p className="text-[11px] text-studio-500 leading-relaxed">
+        <p className="text-meta text-studio-500 leading-relaxed">
           No chapters yet. Transcribe the video, then press Find with AI, or add them at the playhead. Chapters are
           written into exported MP4 files, and you can copy them as a YouTube description list.
         </p>
@@ -173,7 +173,7 @@ export const ChaptersPanel: React.FC = () => {
                   type="button"
                   disabled={atUs === null}
                   onClick={() => chapter.editedUs != null && seek(chapter.editedUs)}
-                  className={`w-12 shrink-0 text-left font-mono ${atUs === null ? "text-studio-600 line-through" : "text-studio-400 hover:text-teal-300"}`}
+                  className={`w-12 shrink-0 text-left font-mono ${atUs === null ? "text-studio-600 line-through" : "text-studio-400 hover:text-accent-fg"}`}
                   title={atUs === null ? "This moment was cut; the chapter is left out" : "Jump here"}
                 >
                   {atUs === null ? "cut" : formatChapterTime(atUs)}
@@ -189,14 +189,14 @@ export const ChaptersPanel: React.FC = () => {
                     if (e.key === "Enter") e.currentTarget.blur();
                     if (e.key === "Escape") setTitles(({ [chapter.id]: _, ...rest }) => rest);
                   }}
-                  className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-studio-700 focus:border-teal-500 rounded px-1 py-0.5 text-studio-100 outline-none"
+                  className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-studio-700 focus:border-accent-hover rounded px-1 py-0.5 text-studio-100 outline-none"
                 />
                 <button
                   type="button"
                   aria-label={`Delete chapter ${chapter.title}`}
                   disabled={!!busy}
                   onClick={() => void save(chapters.filter((c) => c.id !== chapter.id))}
-                  className="p-1 rounded text-studio-500 hover:text-rose-300 hover:bg-studio-700 disabled:opacity-40"
+                  className="p-1 rounded text-studio-500 hover:text-danger-fg hover:bg-studio-700 disabled:opacity-40"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -213,7 +213,7 @@ export const ChaptersPanel: React.FC = () => {
             <button
               type="button"
               onClick={() => void copy()}
-              className="flex items-center gap-1 px-2 py-1 rounded-md bg-teal-700 hover:bg-teal-600 text-white"
+              className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent hover:bg-accent text-white"
             >
               {copied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
               {copied ? "Copied" : "Copy"}
@@ -224,10 +224,10 @@ export const ChaptersPanel: React.FC = () => {
             aria-label="YouTube chapter list"
             value={youtube}
             rows={Math.min(10, placed.length + 1)}
-            className="w-full bg-studio-950 border border-studio-800 rounded p-2 font-mono text-[11px] text-studio-200 select-text"
+            className="w-full bg-studio-950 border border-studio-800 rounded p-2 font-mono text-meta text-studio-200 select-text"
           />
           {problems.map((p) => (
-            <p key={p} className="text-[11px] text-amber-300">
+            <p key={p} className="text-meta text-suggest-fg">
               {p}
             </p>
           ))}

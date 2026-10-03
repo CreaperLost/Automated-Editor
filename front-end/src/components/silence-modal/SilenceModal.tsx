@@ -115,7 +115,7 @@ export const SilenceModal: React.FC = () => {
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-lg bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
+            <div className="p-2 rounded-lg bg-audio/20 text-audio border border-audio/30">
               <Scissors className="w-5 h-5" />
             </div>
             <div>
@@ -139,7 +139,7 @@ export const SilenceModal: React.FC = () => {
           {/* DSP Configuration Parameters */}
           <div className="space-y-4 bg-studio-850 p-4 rounded-xl border border-studio-800">
             <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-300">
-              <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+              <Sliders className="w-3.5 h-3.5 text-audio" />
               <span>Detection Sensitivity</span>
             </div>
 
@@ -147,7 +147,7 @@ export const SilenceModal: React.FC = () => {
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs">
                 <span className="text-studio-400">Silence Threshold</span>
-                <span className="font-mono text-emerald-400">{config.thresholdDb} dBFS</span>
+                <span className="font-mono text-audio">{config.thresholdDb} dBFS</span>
               </div>
               <input
                 type="range"
@@ -157,7 +157,7 @@ export const SilenceModal: React.FC = () => {
                 onChange={(e) => setConfig({ ...config, thresholdDb: Number(e.target.value) })}
                 className="w-full h-1.5 bg-studio-800 rounded-lg cursor-pointer"
               />
-              <div className="flex justify-between text-[10px] text-studio-500">
+              <div className="flex justify-between text-meta text-studio-500">
                 <span>-60 dB (Very Sensitive)</span>
                 <span>-20 dB (Aggressive)</span>
               </div>
@@ -167,7 +167,7 @@ export const SilenceModal: React.FC = () => {
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs">
                 <span className="text-studio-400">Min Silence Duration</span>
-                <span className="font-mono text-emerald-400">{config.minDurationMs} ms</span>
+                <span className="font-mono text-audio">{config.minDurationMs} ms</span>
               </div>
               <input
                 type="range"
@@ -184,7 +184,7 @@ export const SilenceModal: React.FC = () => {
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs">
                 <span className="text-studio-400">Speech Padding Buffer</span>
-                <span className="font-mono text-emerald-400">±{config.paddingMs} ms</span>
+                <span className="font-mono text-audio">±{config.paddingMs} ms</span>
               </div>
               <input
                 type="range"
@@ -195,7 +195,7 @@ export const SilenceModal: React.FC = () => {
                 onChange={(e) => setConfig({ ...config, paddingMs: Number(e.target.value) })}
                 className="w-full h-1.5 bg-studio-800 rounded-lg cursor-pointer"
               />
-              <p className="text-[10px] text-studio-400">
+              <p className="text-meta text-studio-400">
                 Preserves milliseconds around words to avoid clipping consonants.
               </p>
             </div>
@@ -210,7 +210,7 @@ export const SilenceModal: React.FC = () => {
                     setChosenTrack(e.target.value);
                     setSilenceBlocks([]);
                   }}
-                  className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
+                  className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-accent-hover"
                 >
                   {sounds.map((sound) => (
                     <option key={sound.id} value={sound.id}>
@@ -224,21 +224,21 @@ export const SilenceModal: React.FC = () => {
             <button
               onClick={() => void handleRunDetection()}
               disabled={isDetecting || !openedProject || !audioTrackId}
-              className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md transition-all"
+              className="w-full py-2 rounded-lg bg-audio hover:bg-audio disabled:opacity-50 text-white text-xs font-semibold shadow-md transition-all"
             >
               {isDetecting ? "Scanning Audio Waveforms..." : "Scan & Preview Cuts"}
             </button>
           </div>
 
           {error && (
-            <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-600/40 flex items-start space-x-3 text-rose-200 text-xs">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="p-4 rounded-xl bg-danger/10 border border-danger/40 flex items-start space-x-3 text-danger-fg text-xs">
+              <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {diagnostics.length > 0 && !error && (
-            <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-600/30 text-amber-200 text-xs space-y-1">
+            <div className="p-4 rounded-xl bg-suggest/10 border border-suggest/30 text-suggest-fg text-xs space-y-1">
               {diagnostics.map((item) => (
                 <p key={item}>{item}</p>
               ))}
@@ -252,7 +252,7 @@ export const SilenceModal: React.FC = () => {
                 <span className="font-semibold text-studio-300">
                   Detected Silence Blocks ({activeSilenceBlocks.length})
                 </span>
-                <span className="text-[11px] font-mono text-studio-400">
+                <span className="text-meta font-mono text-studio-400">
                   Total dead air: {(totalTrimDurationMs / 1000).toFixed(1)}s
                 </span>
               </div>
@@ -264,7 +264,7 @@ export const SilenceModal: React.FC = () => {
                     onClick={() => toggleSilenceBlock(block.id)}
                     className={`flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer transition-colors ${
                       block.selected
-                        ? "bg-rose-950/40 border-rose-600/40 text-rose-200"
+                        ? "bg-danger/10 border-danger/40 text-danger-fg"
                         : "bg-studio-850/50 border-studio-800 text-studio-400 opacity-60"
                     }`}
                   >
@@ -272,7 +272,7 @@ export const SilenceModal: React.FC = () => {
                       <div
                         className={`w-4 h-4 rounded flex items-center justify-center border ${
                           block.selected
-                            ? "bg-rose-600 border-rose-500 text-white"
+                            ? "bg-danger border-danger text-white"
                             : "border-studio-600"
                         }`}
                       >
@@ -284,7 +284,7 @@ export const SilenceModal: React.FC = () => {
                       </span>
                     </div>
 
-                    <span className="font-mono text-[11px]">
+                    <span className="font-mono text-meta">
                       -{(block.durationMs / 1000).toFixed(2)}s
                     </span>
                   </div>
@@ -341,7 +341,7 @@ export const SilenceModal: React.FC = () => {
                 })
                 .catch((err) => setError(errorMessage(err)));
             }}
-            className="flex items-center space-x-2 px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold shadow-lg transition-all"
+            className="flex items-center space-x-2 px-5 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-40 text-white text-xs font-semibold shadow-lg transition-all"
           >
             <Scissors className="w-3.5 h-3.5" />
             <span>Apply {selectedCount} Cuts (Ripple Delete)</span>

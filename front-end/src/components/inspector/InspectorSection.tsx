@@ -33,23 +33,23 @@ export const InspectorSection: React.FC<{
     }
   };
   return (
-    <section className="rounded-lg border border-studio-800 bg-studio-900">
-      <div className="flex items-center justify-between px-3 py-2">
+    <section className="border-b border-studio-800">
+      <div className="flex items-center gap-2 h-11 pl-2 pr-3">
         <button
           type="button"
           onClick={toggle}
           aria-expanded={open}
-          className="flex flex-1 items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-studio-400 hover:text-studio-200"
+          className="flex flex-1 min-w-0 items-center gap-2 h-8 px-1 rounded-control text-label font-semibold text-studio-100 hover:bg-studio-850"
         >
           <ChevronDown
-            className={`w-3.5 h-3.5 transition-transform ${open ? "" : "-rotate-90"}`}
+            className={`w-4 h-4 shrink-0 text-studio-500 transition-transform ${open ? "" : "-rotate-90"}`}
           />
-          <Icon className="w-3.5 h-3.5 text-indigo-400" />
-          <span>{title}</span>
+          <Icon className="w-4 h-4 shrink-0 text-studio-400" />
+          <span className="truncate">{title}</span>
         </button>
         {extra}
       </div>
-      {open && <div className="space-y-3 px-3 pb-3 pt-1">{children}</div>}
+      {open && <div className="space-y-3 px-4 pb-4 pt-1">{children}</div>}
     </section>
   );
 };
@@ -170,12 +170,12 @@ export const ScrubNumber: React.FC<{
         drag.current = null;
         setScrubbing(false);
       }}
-      className={`h-6 w-16 shrink-0 rounded border bg-studio-850 px-1.5 text-right font-mono text-[11px] tabular-nums outline-none transition-colors ${
+      className={`h-7 w-[4.5rem] shrink-0 rounded-control border bg-studio-850 px-2 text-right font-mono text-meta tabular-nums outline-none transition-colors ${
         draft !== null
-          ? "border-indigo-500 text-white cursor-text"
+          ? "border-accent-hover text-white cursor-text"
           : scrubbing
-            ? "border-indigo-500/70 text-white cursor-ew-resize"
-            : "border-studio-800 text-studio-300 hover:border-studio-600 cursor-ew-resize"
+            ? "border-accent-hover/70 text-white cursor-ew-resize"
+            : "border-studio-700 text-studio-200 hover:border-studio-600 cursor-ew-resize"
       } ${className}`}
     />
   );
@@ -192,8 +192,8 @@ export const RangeRow: React.FC<{
   unit: string;
   onChange: (value: number) => void;
 }> = ({ label, value, min, max, step = 1, unit, onChange }) => (
-  <div className="grid grid-cols-[6.5rem_minmax(0,1fr)_auto] items-center gap-2">
-    <span className="text-xs leading-tight text-studio-400 line-clamp-2" title={label}>
+  <div className="grid grid-cols-[7rem_minmax(0,1fr)_auto] items-center gap-3">
+    <span className="text-label leading-tight text-studio-400 line-clamp-2" title={label}>
       {label}
     </span>
     <input
@@ -204,7 +204,7 @@ export const RangeRow: React.FC<{
       step={step}
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
-      className="w-full min-w-0 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+      className="w-full min-w-0 h-1.5 cursor-pointer"
     />
     <ScrubNumber label={label} value={value} min={min} max={max} step={step} unit={unit} onChange={onChange} />
   </div>
@@ -221,12 +221,12 @@ export const NumberGrid: React.FC<{
   onChange: (key: string, value: number) => void;
 }> = ({ title, fields, min, max, step, unit, onChange }) => (
   <fieldset className="space-y-1.5">
-    <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-studio-500">
+    <legend className="mb-1.5 text-label text-studio-400">
       {title}
     </legend>
     <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
       {fields.map((field) => (
-        <label key={field.key} className="flex items-center justify-between gap-2 text-xs text-studio-400">
+        <label key={field.key} className="flex items-center justify-between gap-2 text-label text-studio-400">
           <span>{field.label}</span>
           <ScrubNumber
             label={`${title} ${field.label}`}
