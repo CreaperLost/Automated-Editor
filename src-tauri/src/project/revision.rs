@@ -4,8 +4,7 @@ use super::reader::{open_regular, safe_path, RetainedInterval};
 use crate::timeline::{SourceInterval, TimelineMapper};
 use crate::webcam_focus::WebcamFocus;
 use crate::zoom::{
-    attach_zoom_edited_ranges, validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion,
-    MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
+    validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion, MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -114,8 +113,9 @@ impl EditDocument {
         mapper_for(&self.retained_intervals)
     }
 
+    /// The project recording's zooms (imported recordings keep their own).
     pub fn zoom_suggestions(&self) -> Vec<ZoomSuggestion> {
-        self.zooms.iter().map(ZoomKeyframe::as_suggestion).collect()
+        self.media_zoom_suggestions(None)
     }
 
     /// Maps the time of the file behind transcript `track_id` onto the edited timeline. A
@@ -126,26 +126,45 @@ impl EditDocument {
         &self,
         track_id: &str,
     ) -> Result<crate::timeline::TimelineMapper, String> {
-        let Some(asset_id) = media_sound_asset(track_id) else {
-            return self.mapper();
-        };
-        Ok(crate::timeline::TimelineMapper::new(
+        match media_sound_asset(track_id) {
+            None => self.mapper(),
+            Some(asset_id) => Ok(self.mapper_for_media(asset_id)),
+        }
+    }
+
+    /// The zooms on the clock of `media` (an imported recording), or of the project's own
+    /// recording when `None`.
+    pub fn media_zoom_suggestions(&self, media: Option<&str>) -> Vec<ZoomSuggestion> {
+        self.zooms
+            .iter()
+            .filter(|zoom| zoom.media.as_deref() == media)
+            .map(ZoomKeyframe::as_suggestion)
+            .collect()
+    }
+
+    /// Maps the clock of imported media `asset_id` onto the edited timeline through its
+    /// clips on V1 (everything else on V1 maps nothing).
+    pub fn mapper_for_media(&self, asset_id: &str) -> crate::timeline::TimelineMapper {
+        crate::timeline::TimelineMapper::new(
             self.retained_intervals
                 .iter()
                 .enumerate()
                 .map(|(i, interval)| {
                     let own = interval.media.as_deref() == Some(asset_id);
                     SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
-                        // The file's own clips read as "source"; the rest map nowhere.
                         .with_media((!own).then(|| "other".to_string()))
                 })
                 .collect(),
-        ))
+        )
     }
 
     pub fn attach_zoom_ranges(&mut self) -> Result<(), String> {
         let mapper = self.mapper()?;
-        attach_zoom_edited_ranges(&mut self.zooms, &mapper);
+        let document = self.clone();
+        crate::zoom::attach_zoom_edited_ranges_with(&mut self.zooms, &|media| match media {
+            None => Some(mapper.clone()),
+            Some(asset) => Some(document.mapper_for_media(asset)),
+        });
         Ok(())
     }
 
@@ -1082,6 +1101,7 @@ impl EditHistory {
         existing.center_y = patch.center_y;
         existing.scale = patch.scale;
         existing.transition_us = patch.transition_us;
+        // A zoom stays on its own clock.
         // Moving/resizing a generated zoom keeps its id so regeneration cannot
         // replace it, and marks it manual so a later accept cannot reset it.
         existing.source = ZoomSource::Manual;
@@ -1101,13 +1121,21 @@ impl EditHistory {
         if edited_end_us <= edited_start_us {
             return Err("Zoom must be a half-open edited range".into());
         }
-        let mapper = self.current.mapper()?;
+        let main = self.current.mapper()?;
+        // Over an imported clip the zoom is on that file's clock.
+        let media = main
+            .media_at(edited_start_us)
+            .map(|(asset, _)| asset.to_string());
+        let mapper = match &media {
+            Some(asset) => self.current.mapper_for_media(asset),
+            None => main,
+        };
         let source_start = mapper
             .edited_to_source_us(edited_start_us)
             .ok_or("Zoom start is not on retained media")?;
         let source_end_sample = mapper
             .edited_to_source_us(edited_end_us.saturating_sub(1))
-            .ok_or("Zoom end is not on retained media")?;
+            .ok_or("Zoom end must be on the same clip as its start")?;
         let source_end = source_end_sample.saturating_add(1);
         if source_end <= source_start {
             return Err("Zoom range does not map onto source time".into());
@@ -1133,6 +1161,7 @@ impl EditHistory {
             contributing_event_seqs: Vec::new(),
             source: ZoomSource::Manual,
             edited_ranges: Vec::new(),
+            media,
         });
         next.zooms.sort_by(|a, b| {
             a.source_start_us
@@ -1692,6 +1721,7 @@ mod tests {
             origin: ZoomOrigin::Click,
             contributing_event_seqs: vec![1],
             edited_ranges: Vec::new(),
+            media: None,
         };
         history
             .accept_zooms(0, &[suggestion.clone()], dir.path())
@@ -1832,6 +1862,7 @@ mod tests {
             missing: false,
             picture_role: Default::default(),
             sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -1926,6 +1957,7 @@ mod tests {
             missing: false,
             picture_role: Default::default(),
             sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -1998,6 +2030,7 @@ mod tests {
             missing: false,
             picture_role: Default::default(),
             sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),

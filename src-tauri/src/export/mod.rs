@@ -268,7 +268,11 @@ pub struct SceneEvaluator {
     /// The last imported image drawn, decoded once rather than per frame.
     /// Decoded stills, most recently used last.
     image_cache: std::cell::RefCell<Vec<(String, VideoFrame)>>,
+    /// Imported recordings' tracks, indexed once per evaluator, by asset id.
+    recordings: std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<RecordingTracks>>>,
 }
+
+type RecordingTracks = Vec<(TrackSummary, Vec<SegmentSummary>)>;
 
 #[derive(Default)]
 struct CaptionCache {
@@ -343,6 +347,7 @@ impl SceneEvaluator {
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             image_cache: std::cell::RefCell::new(Vec::new()),
+            recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
         })
     }
 
@@ -590,28 +595,106 @@ impl SceneEvaluator {
     fn media_scene(&self, asset_id: &str, local_us: u64) -> Result<Scene, String> {
         let frame = self.media_frame(asset_id, local_us)?;
         let mut layout = self.document.layout.clone();
-        layout.webcam_enabled = false;
-        let screen = self
+        let asset = self
             .document
             .media_assets
             .iter()
-            .find(|asset| asset.id == asset_id)
-            .is_none_or(|asset| asset.picture_role == crate::media_bin::PictureRole::Screen);
+            .find(|asset| asset.id == asset_id);
+        // An imported recording brings its own camera into the bubble.
+        let webcam = match asset {
+            Some(asset) if layout.webcam_enabled && asset.recording_path.is_some() => {
+                self.recording_frame(asset, TrackType::Webcam, local_us)?
+            }
+            _ => None,
+        };
+        layout.webcam_enabled = webcam.is_some();
+        let screen =
+            asset.is_none_or(|asset| asset.picture_role == crate::media_bin::PictureRole::Screen);
         if !screen {
             layout.screen_crop_left = 0.0;
             layout.screen_crop_top = 0.0;
             layout.screen_crop_right = 0.0;
             layout.screen_crop_bottom = 0.0;
         }
-        Scene::from_layout_scaled(
+        let has_picture = frame.is_some();
+        let mut scene = Scene::from_layout_scaled(
             self.width,
             self.height,
             &layout,
             frame,
-            None,
+            webcam,
             self.background()?,
             crate::render::layout_px_unit(self.width, self.height),
-        )
+        )?;
+        // Zooms on this file's own clock (an imported recording's, or drawn over the clip).
+        let zooms = self.document.media_zoom_suggestions(Some(asset_id));
+        if screen && has_picture && !zooms.is_empty() {
+            let config = crate::zoom::eval_config_for(&self.document.zooms);
+            let camera = crate::zoom::evaluate_at_source(&zooms, local_us, &config);
+            let (x, y, w, h) =
+                crate::render::zoom_within_crop(layout.screen_crop_uv(), camera.uv_rect());
+            scene.apply_screen_uv(x, y, w, h);
+        }
+        Ok(scene)
+    }
+
+    /// The tracks of an imported recording, read from its folder once.
+    fn recording_tracks(
+        &self,
+        asset: &crate::media_bin::MediaAsset,
+    ) -> Result<Option<std::sync::Arc<RecordingTracks>>, String> {
+        let Some(folder) = &asset.recording_path else {
+            return Ok(None);
+        };
+        if let Some(tracks) = self.recordings.borrow().get(&asset.id) {
+            return Ok(Some(tracks.clone()));
+        }
+        if !Path::new(folder).is_dir() {
+            return Ok(None);
+        }
+        let (tracks, _) = crate::project::reader::recording_tracks(Path::new(folder))?;
+        let tracks = std::sync::Arc::new(tracks);
+        self.recordings
+            .borrow_mut()
+            .insert(asset.id.clone(), tracks.clone());
+        Ok(Some(tracks))
+    }
+
+    /// An imported recording's screen or camera picture at `local_us` on its clock. In a gap
+    /// between segments the screen holds its last picture; the camera shows nothing.
+    fn recording_frame(
+        &self,
+        asset: &crate::media_bin::MediaAsset,
+        kind: TrackType,
+        local_us: u64,
+    ) -> Result<Option<VideoFrame>, String> {
+        let Some(tracks) = self.recording_tracks(asset)? else {
+            return Ok(None);
+        };
+        let Some((_, segments)) = tracks.iter().find(|(t, _)| t.descriptor.track_type == kind)
+        else {
+            return Ok(None);
+        };
+        let containing = segments
+            .iter()
+            .find(|s| s.available && s.start_us <= local_us && local_us < s.end_us)
+            .map(|s| (s, local_us));
+        let job = containing.or_else(|| {
+            (kind == TrackType::Screen)
+                .then(|| {
+                    segments
+                        .iter()
+                        .rev()
+                        .find(|s| s.available && s.end_us <= local_us)
+                        .map(|s| (s, s.end_us.saturating_sub(1)))
+                })
+                .flatten()
+        });
+        let Some((segment, time)) = job else {
+            return Ok(None);
+        };
+        let folder = Path::new(asset.recording_path.as_deref().unwrap_or_default());
+        decode_layer(folder, segment, time, self.decode_limit).map(Some)
     }
 
     /// The picture of imported media at `local_us` into the file; `None` for audio.
@@ -624,6 +707,9 @@ impl SceneEvaluator {
             .iter()
             .find(|asset| asset.id == asset_id)
             .ok_or("Imported media is missing from the project")?;
+        if asset.recording_path.is_some() {
+            return self.recording_frame(asset, TrackType::Screen, local_us);
+        }
         let path = asset.file_path(&self.root)?;
         // A file moved or deleted since import shows nothing; its extracted sound still plays.
         if !path.is_file() {
@@ -1936,6 +2022,77 @@ mod tests {
         crate::media::release_decoders();
     }
 
+    /// A recording imported into an empty project plays as one source: its screen on V1,
+    /// its camera in the bubble, its microphone as sound, with a zoom on its own clock.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_imported_recording_plays_with_its_camera_sound_and_zoom() {
+        use crate::project::reader::ProjectReader;
+        let dir = tempfile::tempdir().unwrap();
+        let recording = project_with_tracks(&dir.path().join("rec"), true);
+        let folder =
+            crate::project::folder::create_project_folder(dir.path(), "Joined", None).unwrap();
+        let mut reader = ProjectReader::open(&folder).unwrap();
+        let summary = reader.import_media(0, &[recording.clone()]).unwrap();
+        let asset = summary.media_assets[0].clone();
+        assert!(asset.recording_path.is_some());
+        assert_eq!(asset.audio_names, vec!["Microphone".to_string()]);
+        assert_eq!(
+            asset.sound_role(0),
+            crate::media_bin::SoundRole::Mic,
+            "the recording's microphone is speech"
+        );
+        assert!(folder.join(asset.audio_path.as_ref().unwrap()).is_file());
+        reader
+            .insert_media(1, &asset.id, 0, Some((0, 1_000_000)))
+            .unwrap();
+        // A zoom drawn over the clip is on the recording's clock.
+        reader
+            .add_manual_zoom(2, 100_000, 900_000, 0.25, 0.25, 2.0)
+            .unwrap();
+        let document = reader.history().current.clone();
+        assert_eq!(document.zooms[0].media.as_deref(), Some(asset.id.as_str()));
+        assert!(!document.zooms[0].edited_ranges.is_empty());
+
+        let mut layout_only = document.clone();
+        layout_only.zooms.clear();
+        let evaluator =
+            SceneEvaluator::new(folder.clone(), layout_only, Vec::new(), 320, 180).unwrap();
+        let scene = evaluator.scene_at(500_000).unwrap();
+        assert!(
+            scene
+                .layers
+                .iter()
+                .any(|l| l.role == crate::render::LayerRole::Screen),
+            "the recording's screen is on V1"
+        );
+        assert!(
+            scene
+                .layers
+                .iter()
+                .any(|l| l.role == crate::render::LayerRole::Webcam),
+            "its camera is in the bubble"
+        );
+        let zoomed = SceneEvaluator::new(folder.clone(), document, Vec::new(), 320, 180)
+            .unwrap()
+            .scene_at(500_000)
+            .unwrap();
+        let screen = zoomed
+            .layers
+            .iter()
+            .find(|l| l.role == crate::render::LayerRole::Screen)
+            .unwrap();
+        assert!(
+            screen.uv_w < 0.9,
+            "its zoom crops into the screen: {}",
+            screen.uv_w
+        );
+        crate::media::release_decoders();
+    }
+
     /// Imported media on the timeline: an image and a video with sound play between parts of
     /// the recording, in preview and export.
     #[test]
@@ -2492,6 +2649,7 @@ mod tests {
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             image_cache: std::cell::RefCell::new(Vec::new()),
+            recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
         };
         let mapper = evaluator.document.mapper().unwrap();
         let (_, _, y) = evaluator.caption_at(&mapper, 100_000).unwrap();

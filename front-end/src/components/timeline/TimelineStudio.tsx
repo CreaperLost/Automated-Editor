@@ -1701,30 +1701,29 @@ export const TimelineStudio: React.FC = () => {
     const deltaUs = ((event.clientX - drag.startX) / rect.width) * durationUs;
     if (Math.abs(deltaUs) < 1_000) return;
     const retained = openedProject.retainedIntervals;
+    const zoom = openedProject.zooms?.find((item) => item.id === bar.zoomId);
+    if (!zoom) return;
+    // A zoom on an imported file's clock moves along that file's clips.
+    const toSource = (editedUs: number) => editedToSourceUs(retained, editedUs, zoom.media);
     let sourceStart = drag.originStart;
     let sourceEnd = drag.originEnd;
     if (drag.mode === "move") {
       const editedStart = bar.tUs + deltaUs;
-      const mapped = editedToSourceUs(retained, Math.max(0, Math.min(durationUs - 1, editedStart)));
+      const mapped = toSource(Math.max(0, Math.min(durationUs - 1, editedStart)));
       if (mapped == null) return;
       const duration = drag.originEnd - drag.originStart;
       sourceStart = mapped;
       sourceEnd = mapped + duration;
     } else if (drag.mode === "start") {
-      const mapped = editedToSourceUs(retained, Math.max(0, Math.min(bar.endUs - 1, bar.tUs + deltaUs)));
+      const mapped = toSource(Math.max(0, Math.min(bar.endUs - 1, bar.tUs + deltaUs)));
       if (mapped == null) return;
       sourceStart = mapped;
     } else {
-      const mapped = editedToSourceUs(
-        retained,
-        Math.max(bar.tUs + 1, Math.min(durationUs, bar.endUs + deltaUs)),
-      );
+      const mapped = toSource(Math.max(bar.tUs + 1, Math.min(durationUs, bar.endUs + deltaUs)));
       if (mapped == null) return;
       sourceEnd = mapped + 1;
     }
     if (sourceEnd <= sourceStart + 2) return;
-    const zoom = openedProject.zooms?.find((item) => item.id === bar.zoomId);
-    if (!zoom) return;
     patchPersisted(zoom, sourceStart, sourceEnd);
   };
 

@@ -95,6 +95,8 @@ export interface ProjectZoom {
   contributingEventSeqs: number[];
   source: ZoomSource;
   editedRanges: EditedRange[];
+  /** The imported recording (or file) whose clock the times are on; absent: the recording. */
+  media?: string;
 }
 
 export interface ManualZoomInput {
@@ -506,6 +508,8 @@ export interface MediaAsset {
   /** The file is no longer where it was imported from. */
   missing?: boolean;
   pictureRole?: PictureRole;
+  /** An imported recording: its folder (screen, camera, sound and mouse data). */
+  recordingPath?: string;
   /** A role per audio stream; missing entries take `soundRole`'s default. */
   soundRoles?: SoundRole[];
   /** The first audio stream, extracted. */

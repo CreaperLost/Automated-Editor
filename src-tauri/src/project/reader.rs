@@ -326,6 +326,27 @@ fn reject_writer_lock(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The tracks, with their segments, and the length of the recording in `folder`: what an
+/// imported recording plays from.
+pub fn recording_tracks(
+    folder: &Path,
+) -> Result<(Vec<(TrackSummary, Vec<SegmentSummary>)>, u64), String> {
+    let index = index_recording(folder)?;
+    let tracks = index
+        .summaries
+        .iter()
+        .map(|track| {
+            let segments = index
+                .segments
+                .get(&track.descriptor.id)
+                .cloned()
+                .unwrap_or_default();
+            (track.clone(), segments)
+        })
+        .collect();
+    Ok((tracks, index.duration))
+}
+
 fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
     let root = root.to_path_buf();
     let bytes = bounded_read(&safe_path(&root, "manifest.json")?, MANIFEST_LIMIT)?;
@@ -1107,7 +1128,7 @@ impl ProjectReader {
         for asset in &mut self.summary.media_assets {
             asset.missing = asset
                 .file_path(&self.root)
-                .map_or(true, |path| !path.is_file());
+                .map_or(true, |path| !path.exists());
         }
         let mut chapters = self.history.current.chapters.clone();
         if let Ok(mapper) = self.history.current.mapper() {

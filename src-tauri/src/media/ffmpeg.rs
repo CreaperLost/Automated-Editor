@@ -315,6 +315,42 @@ pub fn extract_audio_wav(source: &Path, stream: usize, target: &Path) -> Result<
     run(cmd, log, "Extracting the audio failed").map(|_| ())
 }
 
+/// Lays audio files out on one timeline (each at its start time, silence between) and writes
+/// `duration_us` of it as 48 kHz stereo 16-bit WAV: a recording's audio segments as one file.
+pub fn assemble_audio_wav(
+    parts: &[(PathBuf, u64)],
+    duration_us: u64,
+    target: &Path,
+) -> Result<(), String> {
+    if parts.is_empty() || parts.len() > 256 {
+        return Err("A recording track needs 1 to 256 audio segments".into());
+    }
+    let (mut cmd, log) = command(ffmpeg_path()?)?;
+    cmd.arg("-nostdin").arg("-y");
+    for (path, _) in parts {
+        cmd.arg("-i").arg(file_arg(path));
+    }
+    let mut graph = String::new();
+    for (i, (_, start_us)) in parts.iter().enumerate() {
+        let delay = (*start_us as u128 * 48_000 / 1_000_000) as u64;
+        graph.push_str(&format!(
+            "[{i}:a:0]aresample=48000,aformat=channel_layouts=stereo,adelay=delays={delay}S:all=1[a{i}];"
+        ));
+    }
+    for i in 0..parts.len() {
+        graph.push_str(&format!("[a{i}]"));
+    }
+    graph.push_str(&format!(
+        "amix=inputs={}:normalize=0:dropout_transition=0,apad,atrim=end={}[out]",
+        parts.len(),
+        seconds_arg(duration_us)
+    ));
+    cmd.args(["-filter_complex", &graph, "-map", "[out]"])
+        .args(["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-f", "wav"])
+        .arg(file_arg(target));
+    run(cmd, log, "Joining the recording's audio failed").map(|_| ())
+}
+
 /// Copies `source` to `target` with the chapters from an FFmpeg metadata file, keeping every
 /// stream and the source's own metadata.
 pub fn add_chapters(source: &Path, metadata: &Path, target: &Path) -> Result<(), String> {

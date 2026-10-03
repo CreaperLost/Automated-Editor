@@ -402,6 +402,51 @@ pub fn project_waveform_impl(
     })
 }
 
+/// Zoom suggestions from the mouse data of the project's recording (if it has one) and of
+/// each imported recording, each on its own clock and placed where its clips play.
+fn all_zoom_suggestions(
+    reader: &crate::project::reader::ProjectReader,
+    config: &crate::zoom::ZoomConfig,
+) -> Result<crate::zoom::ZoomGeneration, String> {
+    let document = &reader.history().current;
+    let mut generation = if reader.has_recording() {
+        let stream = crate::telemetry::reader::read_telemetry(&reader.source_root())?;
+        let mut own = crate::zoom::generate_zoom_suggestions(&stream, config)?;
+        crate::zoom::attach_edited_ranges(&mut own, &document.mapper()?);
+        own
+    } else {
+        crate::zoom::ZoomGeneration {
+            version: config.generation_version,
+            config: config.clone(),
+            suggestions: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    };
+    for asset in &document.media_assets {
+        let Some(folder) = &asset.recording_path else {
+            continue;
+        };
+        let stream = match crate::telemetry::reader::read_telemetry(std::path::Path::new(folder)) {
+            Ok(stream) => stream,
+            Err(error) => {
+                generation
+                    .diagnostics
+                    .push(format!("{}: {error}", asset.name));
+                continue;
+            }
+        };
+        let mut theirs = crate::zoom::generate_zoom_suggestions(&stream, config)?;
+        crate::zoom::attach_edited_ranges(&mut theirs, &document.mapper_for_media(&asset.id));
+        for mut suggestion in theirs.suggestions {
+            // Ids stay unique across recordings.
+            suggestion.id = format!("{}:{}", asset.id, suggestion.id);
+            suggestion.media = Some(asset.id.clone());
+            generation.suggestions.push(suggestion);
+        }
+    }
+    Ok(generation)
+}
+
 pub fn project_zoom_suggestions_impl(
     state: &AppState,
     project_handle: String,
@@ -414,10 +459,7 @@ pub fn project_zoom_suggestions_impl(
     if reader.summary.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
-    let stream = crate::telemetry::reader::read_telemetry(&reader.source_root())?;
-    let mut generation = crate::zoom::generate_zoom_suggestions(&stream, &config)?;
-    let mapper = reader.history().current.mapper()?;
-    crate::zoom::attach_edited_ranges(&mut generation, &mapper);
+    let mut generation = all_zoom_suggestions(reader, &config)?;
     let taken: std::collections::BTreeSet<_> = reader
         .summary
         .zooms
@@ -466,8 +508,7 @@ pub fn project_zoom_accept_impl(
 ) -> Result<OpenedProject, String> {
     let config = crate::zoom::ZoomConfig::default();
     mutate_opened(state, project_handle, |reader| {
-        let stream = crate::telemetry::reader::read_telemetry(&reader.source_root())?;
-        let generation = crate::zoom::generate_zoom_suggestions(&stream, &config)?;
+        let generation = all_zoom_suggestions(reader, &config)?;
         let selected: Vec<_> = if ids.is_empty() {
             generation.suggestions
         } else {

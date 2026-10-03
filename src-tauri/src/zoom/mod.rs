@@ -141,6 +141,10 @@ pub struct ZoomSuggestion {
     pub contributing_event_seqs: Vec<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edited_ranges: Vec<EditedRange>,
+    /// The imported recording whose clock the times are on; `None` is the project's own
+    /// recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -171,6 +175,10 @@ pub struct ZoomKeyframe {
     pub source: ZoomSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edited_ranges: Vec<EditedRange>,
+    /// The imported recording whose clock the times are on; `None` is the project's own
+    /// recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
 }
 
 impl ZoomKeyframe {
@@ -187,6 +195,7 @@ impl ZoomKeyframe {
             contributing_event_seqs: suggestion.contributing_event_seqs,
             source,
             edited_ranges: suggestion.edited_ranges,
+            media: suggestion.media,
         }
     }
 
@@ -202,6 +211,7 @@ impl ZoomKeyframe {
             origin: self.origin,
             contributing_event_seqs: self.contributing_event_seqs.clone(),
             edited_ranges: self.edited_ranges.clone(),
+            media: self.media.clone(),
         }
     }
 }
@@ -240,6 +250,25 @@ pub fn validate_zooms(zooms: &[ZoomKeyframe]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Where each zoom lands on the edited timeline. `mapper_for` gives the mapper of a zoom's
+/// source (the recording, or an imported recording's own clips).
+pub fn attach_zoom_edited_ranges_with(
+    zooms: &mut [ZoomKeyframe],
+    mapper_for: &dyn Fn(Option<&str>) -> Option<TimelineMapper>,
+) {
+    for zoom in zooms {
+        zoom.edited_ranges = mapper_for(zoom.media.as_deref())
+            .map(|mapper| {
+                mapper
+                    .source_range_to_edited(zoom.source_start_us, zoom.source_end_us)
+                    .into_iter()
+                    .map(|(start_us, end_us)| EditedRange { start_us, end_us })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
 }
 
 pub fn attach_zoom_edited_ranges(zooms: &mut [ZoomKeyframe], mapper: &TimelineMapper) {
@@ -688,6 +717,7 @@ fn suggestion_from_cluster(
         origin,
         contributing_event_seqs: seqs,
         edited_ranges: Vec::new(),
+        media: None,
     })
 }
 
@@ -1060,6 +1090,7 @@ mod tests {
             origin: ZoomOrigin::Click,
             contributing_event_seqs: vec![1],
             edited_ranges: Vec::new(),
+            media: None,
         };
         let identity = evaluate_at_source(&[suggestion.clone()], 0, &config);
         assert_eq!(identity.scale, 1.0);
@@ -1122,6 +1153,7 @@ mod tests {
                 origin: ZoomOrigin::Click,
                 contributing_event_seqs: vec![1],
                 edited_ranges: Vec::new(),
+                media: None,
             }],
             diagnostics: Vec::new(),
         };
