@@ -17,6 +17,7 @@ import {
   SilenceDetectionResult,
   ZoomGeneration,
   ZoomConfig,
+  ZoomSettings,
   ProjectZoom,
   ManualZoomInput,
   WebcamFocus,
@@ -107,9 +108,12 @@ export const api = {
       ids,
       config: config ?? null,
     }),
+  /** Saves the project's auto-zoom settings; automatic zooms take the new amounts. */
+  projectZoomSettingsSet: (projectHandle: string, expectedRevision: number, settings: ZoomSettings) =>
+    invokeTauri<OpenedProject>("project_zoom_settings_set", { projectHandle, expectedRevision, settings }),
   /** Puts the recording's zooms back with these settings; yours stay, none overlap. */
-  projectZoomReload: (projectHandle: string, expectedRevision: number, config: ZoomConfig) =>
-    invokeTauri<OpenedProject>("project_zoom_reload", { projectHandle, expectedRevision, config }),
+  projectZoomReload: (projectHandle: string, expectedRevision: number) =>
+    invokeTauri<OpenedProject>("project_zoom_reload", { projectHandle, expectedRevision, config: null }),
   projectZoomDismiss: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_zoom_dismiss", {
       projectHandle,

@@ -1,9 +1,8 @@
 import React, { useState } from "react";
 import { Check, Crosshair, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
-import { DEFAULT_AUTO_ZOOM, useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsStore";
 import { api } from "../../lib/ipc";
-import type { OpenedProject, ProjectZoom, ZoomSuggestion } from "../../lib/types";
+import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
 import { InspectorSection } from "../inspector/InspectorSection";
 
 function formatTime(us: number): string {
@@ -14,7 +13,6 @@ function formatTime(us: number): string {
 }
 
 const ORIGIN_LABEL = { click: "Click", dwell: "Hover", cluster: "Clicks" } as const;
-const MANUAL_SCALE = 1.8;
 /** One click, one undoable edit: preset amounts rather than a slider for saved zooms. */
 const SCALES = [1.25, 1.5, 1.8, 2, 2.5, 3] as const;
 
@@ -67,9 +65,29 @@ export const ZoomPanel: React.FC = () => {
   const selection = useProjectStore((s) => s.timelineSelection);
   const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const durationUs = useProjectStore((s) => s.durationUs);
-  const options = useZoomSettingsStore((s) => s.options);
-  const setOptions = useZoomSettingsStore((s) => s.setOptions);
-  const resetOptions = useZoomSettingsStore((s) => s.reset);
+  // The project's settings, shown at once while a change is being saved.
+  const saved = openedProject?.zoomSettings ?? DEFAULT_ZOOM_SETTINGS;
+  const [draft, setDraft] = useState<ZoomSettings | null>(null);
+  const settings = draft ?? saved;
+  const saveTimer = React.useRef<number>();
+  React.useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+  const setSettings = (patch: Partial<ZoomSettings>) => {
+    const next = { ...settings, ...patch };
+    setDraft(next);
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      const project = useProjectStore.getState().openedProject;
+      if (!project) return;
+      api
+        .projectZoomSettingsSet(project.projectHandle, project.revision, next)
+        .then((updated) => {
+          applyOpenedProject(updated);
+          setDraft(null);
+          setError(undefined);
+        })
+        .catch((err) => setError(String(err)));
+    }, 350);
+  };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -120,12 +138,12 @@ export const ZoomPanel: React.FC = () => {
         editedEndUs: endUs,
         centerX: 0.5,
         centerY: 0.5,
-        scale: MANUAL_SCALE,
+        scale: settings.clickScale,
       }),
     );
   };
 
-  const optionsChanged = JSON.stringify(options) !== JSON.stringify(DEFAULT_AUTO_ZOOM);
+  const optionsChanged = JSON.stringify(settings) !== JSON.stringify(DEFAULT_ZOOM_SETTINGS);
   const rowClass = (selected: boolean) =>
     `group flex items-center gap-2 rounded-md border px-2 py-1.5 cursor-pointer ${
       selected ? "border-indigo-300/70 bg-indigo-500/15" : "border-studio-800 bg-studio-850 hover:border-indigo-400/40"
@@ -158,63 +176,104 @@ export const ZoomPanel: React.FC = () => {
         icon={RefreshCw}
         extra={
           optionsChanged ? (
-            <button type="button" onClick={resetOptions} className="text-[11px] text-studio-400 hover:text-studio-200">
+            <button
+              type="button"
+              onClick={() => setSettings(DEFAULT_ZOOM_SETTINGS)}
+              className="text-[11px] text-studio-400 hover:text-studio-200"
+            >
               Reset
             </button>
           ) : undefined
         }
       >
         <p className="text-[11px] text-studio-500 leading-relaxed">
-          Suggested from the recorder's mouse tracking. Click zooms come first; hover zooms only fill the time
-          between them, so zooms never overlap.
+          A few strong zooms, not many: activity close together is one zoom, the camera follows the mouse through
+          it, and only the strongest moments are kept. These settings belong to the project; changing an amount
+          changes every automatic zoom.
         </p>
         <button
           type="button"
           disabled={busy}
-          onClick={() =>
-            void run((project) => api.projectZoomReload(project.projectHandle, project.revision, zoomConfigFor(options)))
-          }
+          onClick={() => void run((project) => api.projectZoomReload(project.projectHandle, project.revision))}
           className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-indigo-400/40 text-indigo-100 hover:bg-indigo-600/25 disabled:opacity-40"
-          title="Take the automatic zooms off and put the recording's zooms back with these settings (dismissed ones too). Zooms you added or changed stay. Undo brings the old ones back."
+          title="Take the automatic zooms off and find the recording's zooms again with these settings (dismissed ones too). Zooms you added or changed stay. Undo brings the old ones back."
         >
           <RefreshCw className="w-3.5 h-3.5" /> Reload zooms from the recording
         </button>
         <Slider
-          label="Click zoom"
-          value={options.clickScale}
+          label="Zoom amount"
+          value={settings.clickScale}
           min={1.1}
           max={4}
-          step={0.1}
-          format={(v) => `${v.toFixed(1)}×`}
-          onChange={(clickScale) => setOptions({ clickScale })}
+          step={0.05}
+          format={(v) => `${v.toFixed(2)}×`}
+          onChange={(clickScale) => setSettings({ clickScale })}
         />
         <Slider
-          label="Hover zoom"
-          value={options.dwellScale}
+          label="Hover zoom (mouse resting)"
+          value={settings.hoverScale}
           min={1}
           max={4}
-          step={0.1}
-          format={(v) => (v <= 1 ? "Off" : `${v.toFixed(1)}×`)}
-          onChange={(dwellScale) => setOptions({ dwellScale })}
+          step={0.05}
+          format={(v) => (v <= 1 ? "Off" : `${v.toFixed(2)}×`)}
+          onChange={(hoverScale) => setSettings({ hoverScale })}
+        />
+        <Slider
+          label="Most zooms"
+          value={settings.maxZooms}
+          min={1}
+          max={40}
+          step={1}
+          format={(v) => `${v}`}
+          onChange={(maxZooms) => setSettings({ maxZooms })}
+        />
+        <Slider
+          label="Join activity closer than"
+          value={settings.mergeGapMs}
+          min={0}
+          max={10000}
+          step={250}
+          format={(v) => `${(v / 1000).toFixed(1)} s`}
+          onChange={(mergeGapMs) => setSettings({ mergeGapMs })}
         />
         <Slider
           label="Transition"
-          value={options.transitionMs}
-          min={50}
-          max={1500}
+          value={settings.transitionMs}
+          min={100}
+          max={3000}
           step={50}
           format={(v) => `${v} ms`}
-          onChange={(transitionMs) => setOptions({ transitionMs })}
+          onChange={(transitionMs) => setSettings({ transitionMs })}
         />
         <Slider
           label="Shortest zoom"
-          value={options.minHoldMs}
+          value={settings.minHoldMs}
           min={500}
-          max={8000}
+          max={20000}
           step={100}
           format={(v) => `${(v / 1000).toFixed(1)} s`}
-          onChange={(minHoldMs) => setOptions({ minHoldMs })}
+          onChange={(minHoldMs) => setSettings({ minHoldMs })}
         />
+        <label className="flex items-center gap-2 text-xs text-studio-300">
+          <input
+            type="checkbox"
+            checked={settings.follow}
+            onChange={(e) => setSettings({ follow: e.target.checked })}
+            className="accent-indigo-500"
+          />
+          Follow the mouse while zoomed
+        </label>
+        {settings.follow && (
+          <Slider
+            label="Camera"
+            value={settings.followMs}
+            min={100}
+            max={3000}
+            step={50}
+            format={(v) => (v < 450 ? "Snappy" : v < 1100 ? "Smooth" : "Calm") + ` · ${v} ms`}
+            onChange={(followMs) => setSettings({ followMs })}
+          />
+        )}
       </InspectorSection>
 
       <InspectorSection
@@ -236,7 +295,7 @@ export const ZoomPanel: React.FC = () => {
                 disabled={busy}
                 onClick={() =>
                   void run((project) =>
-                    api.projectZoomAccept(project.projectHandle, project.revision, suggestions.map((s) => s.id), zoomConfigFor(options)),
+                    api.projectZoomAccept(project.projectHandle, project.revision, suggestions.map((s) => s.id)),
                   )
                 }
                 className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-indigo-600/30 hover:bg-indigo-600/40 text-indigo-100 disabled:opacity-40"
@@ -273,7 +332,7 @@ export const ZoomPanel: React.FC = () => {
                       disabled={busy}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void run((project) => api.projectZoomAccept(project.projectHandle, project.revision, [s.id], zoomConfigFor(options)));
+                        void run((project) => api.projectZoomAccept(project.projectHandle, project.revision, [s.id]));
                       }}
                       className="p-1 rounded text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-40"
                     >
@@ -332,6 +391,22 @@ export const ZoomPanel: React.FC = () => {
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
+                  {selected && settings.follow && (
+                    <label className="pl-2 flex items-center gap-2 text-[11px] text-studio-300">
+                      <input
+                        type="checkbox"
+                        checked={!zoom.fixed}
+                        disabled={busy}
+                        onChange={(e) =>
+                          void run((project) =>
+                            api.projectZoomUpdate(project.projectHandle, project.revision, { ...zoom, fixed: !e.target.checked }),
+                          )
+                        }
+                        className="accent-indigo-500"
+                      />
+                      Follow the mouse (off: stays on its center)
+                    </label>
+                  )}
                   {selected && (
                     <div className="pl-2 pr-1 pb-1 flex items-center gap-1" role="group" aria-label="Zoom amount">
                       <span className="text-studio-400 mr-1">Zoom</span>

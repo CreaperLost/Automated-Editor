@@ -97,7 +97,39 @@ export interface ProjectZoom {
   editedRanges: EditedRange[];
   /** The imported recording (or file) whose clock the times are on; absent: the recording. */
   media?: string;
+  /** Stays on its center instead of following the mouse. */
+  fixed?: boolean;
 }
+
+/** The project's auto-zoom settings (src-tauri/src/zoom/mod.rs `ZoomSettings`). */
+export interface ZoomSettings {
+  /** How far a zoom on clicks goes in. */
+  clickScale: number;
+  /** How far a zoom where the mouse rests goes in; 1 is off. */
+  hoverScale: number;
+  transitionMs: number;
+  /** The shortest zoom. */
+  minHoldMs: number;
+  /** Activity closer than this is one zoom that follows the mouse. */
+  mergeGapMs: number;
+  /** The most zooms per recording: the strongest moments are kept. */
+  maxZooms: number;
+  /** The camera follows the mouse inside a zoom. */
+  follow: boolean;
+  /** How calmly: the camera's lag behind the mouse. */
+  followMs: number;
+}
+
+export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
+  clickScale: 1.8,
+  hoverScale: 1.4,
+  transitionMs: 700,
+  minHoldMs: 1800,
+  mergeGapMs: 2500,
+  maxZooms: 10,
+  follow: true,
+  followMs: 700,
+};
 
 export interface ManualZoomInput {
   editedStartUs: number;
@@ -578,6 +610,8 @@ export interface OpenedProject {
   overlayTracks?: OverlayTrack[];
   /** V1 as a track; absent: magnetic, shown, unmuted, at the bottom. */
   mainTrack?: MainTrack;
+  /** Auto-zoom settings; absent: the defaults. */
+  zoomSettings?: ZoomSettings;
   /** Set when this is a short's own timeline: the timeline fields are the short's. */
   shortView?: string;
 }

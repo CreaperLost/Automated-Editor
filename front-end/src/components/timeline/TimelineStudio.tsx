@@ -35,7 +35,6 @@ import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
 import { MEDIA_DRAG_TYPE, currentMediaDrag } from "../media/MediaPanel";
 import { placedChapters } from "../chapters/ChaptersPanel";
-import { useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsStore";
 import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
 import { hotkeyHint, useHotkeyStore, type HotkeyAction } from "../../stores/hotkeyStore";
@@ -63,6 +62,7 @@ import {
   type ZoomKeyframe,
   type MainTrack,
   DEFAULT_MAIN_TRACK,
+  DEFAULT_ZOOM_SETTINGS,
 } from "../../lib/types";
 import {
   audioStreamCount,
@@ -191,7 +191,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   const setSelectedZoomId = useProjectStore((s) => s.setSelectedZoomId);
   const setTimelineSelection = useProjectStore((s) => s.setTimelineSelection);
   const setSelectedOverlayClipId = useProjectStore((s) => s.setSelectedOverlayClipId);
-  const autoZoomOptions = useZoomSettingsStore((s) => s.options);
+  // The project's auto-zoom settings: the same in every window.
+  const zoomSettings = openedProject?.zoomSettings ?? DEFAULT_ZOOM_SETTINGS;
   const [zoomBusy, setZoomBusy] = useState(false);
   const dragging = useRef<{
     mode: DragMode;
@@ -943,7 +944,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     if (!openedProject) return;
     let active = true;
     void api
-      .projectZoomSuggestions(openedProject.projectHandle, zoomConfigFor(autoZoomOptions))
+      .projectZoomSuggestions(openedProject.projectHandle)
       .then((generation) => {
         if (active) applyZoomGeneration(generation);
       })
@@ -954,7 +955,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     return () => {
       active = false;
     };
-  }, [openedProject?.projectHandle, openedProject?.revision, applyZoomGeneration, autoZoomOptions]);
+  }, [openedProject?.projectHandle, openedProject?.revision, applyZoomGeneration]);
 
   useEffect(() => {
     if (selectedZoomId && !zoomKeyframes.some((bar) => bar.zoomId === selectedZoomId)) {
@@ -984,7 +985,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       return;
     }
     // The auto-zoom transition, as long as in and out both fit.
-    const transitionUs = Math.max(1, Math.min(Math.round(autoZoomOptions.transitionMs * 1000), Math.floor((duration - 1) / 2)));
+    const transitionUs = Math.max(1, Math.min(Math.round(zoomSettings.transitionMs * 1000), Math.floor((duration - 1) / 2)));
     void persistZoom(() =>
       api.projectZoomUpdate(openedProject.projectHandle, openedProject.revision, {
         ...zoom,
@@ -1963,7 +1964,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   const acceptZoom = (zoomId: string) => {
     if (!openedProject) return;
     void persistZoom(() =>
-      api.projectZoomAccept(openedProject.projectHandle, openedProject.revision, [zoomId], zoomConfigFor(autoZoomOptions)),
+      api.projectZoomAccept(openedProject.projectHandle, openedProject.revision, [zoomId]),
     );
   };
   const addZoomHere = () => {
@@ -1976,14 +1977,14 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
         editedEndUs: endUs,
         centerX: 0.5,
         centerY: 0.5,
-        scale: Math.max(1.25, autoZoomOptions.clickScale),
+        scale: zoomSettings.clickScale,
       }),
     );
   };
   const reloadZooms = () => {
     if (!openedProject) return;
     void persistZoom(() =>
-      api.projectZoomReload(openedProject.projectHandle, openedProject.revision, zoomConfigFor(autoZoomOptions)),
+      api.projectZoomReload(openedProject.projectHandle, openedProject.revision),
     );
   };
 

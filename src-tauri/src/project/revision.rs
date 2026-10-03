@@ -66,6 +66,9 @@ pub struct EditDocument {
     /// V1 as a track: magnetic or not, hidden, muted, and where it sits among the video tracks.
     #[serde(default, skip_serializing_if = "MainTrack::is_default")]
     pub main_track: MainTrack,
+    /// Auto-zoom settings: how far zooms go, how many, how the camera follows.
+    #[serde(default, skip_serializing_if = "crate::zoom::ZoomSettings::is_default")]
+    pub zoom_settings: crate::zoom::ZoomSettings,
 }
 
 /// A V1 entry that is empty time: black where nothing else is drawn, silent.
@@ -119,6 +122,7 @@ impl Default for EditDocument {
             short_layout: None,
             overlay_tracks: Vec::new(),
             main_track: MainTrack::default(),
+            zoom_settings: Default::default(),
         }
     }
 }
@@ -143,6 +147,7 @@ impl EditDocument {
             short_layout: None,
             overlay_tracks: Vec::new(),
             main_track: MainTrack::default(),
+            zoom_settings: Default::default(),
         })
     }
 
@@ -1306,6 +1311,7 @@ impl EditHistory {
         existing.center_y = patch.center_y;
         existing.scale = patch.scale;
         existing.transition_us = patch.transition_us;
+        existing.fixed = patch.fixed;
         // A zoom stays on its own clock.
         // Moving/resizing a generated zoom keeps its id so regeneration cannot
         // replace it, and marks it manual so a later accept cannot reset it.
@@ -1313,6 +1319,33 @@ impl EditHistory {
         let moved = existing.clone();
         if next.zoom_overlaps(&moved) {
             return Err("Zooms can't overlap: it stops where the next zoom starts".into());
+        }
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// New auto-zoom settings. Automatic zooms take the new amounts and transition at once,
+    /// so every zoom of a kind looks the same; zooms you set yourself keep theirs.
+    pub fn set_zoom_settings(
+        &mut self,
+        expected_revision: u64,
+        settings: crate::zoom::ZoomSettings,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        settings.validate()?;
+        let mut next = self.current.clone();
+        let transition = settings.transition_ms as u64 * 1_000;
+        for zoom in next
+            .zooms
+            .iter_mut()
+            .filter(|z| z.source == ZoomSource::Generated)
+        {
+            zoom.scale = settings.scale_for(zoom.origin);
+            let length = zoom.source_end_us - zoom.source_start_us;
+            zoom.transition_us = transition.min(length.saturating_sub(1) / 2).max(1);
+        }
+        next.zoom_settings = settings;
+        if next == self.current {
+            return Ok(&self.current);
         }
         self.commit_next(expected_revision, persist_root, next)
     }
@@ -1426,6 +1459,7 @@ impl EditHistory {
             source: ZoomSource::Manual,
             edited_ranges: Vec::new(),
             media,
+            fixed: false,
         });
         next.zooms.sort_by(|a, b| {
             a.source_start_us
@@ -2020,6 +2054,59 @@ mod tests {
     }
 
     #[test]
+    fn zoom_settings_give_every_automatic_zoom_the_same_amount() {
+        use crate::zoom::{ZoomOrigin, ZoomSettings, ZoomSuggestion};
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(
+            EditDocument::from_retained(vec![RetainedInterval::recording(0, 20_000_000)]).unwrap(),
+        );
+        let zoom = |id: &str, start: u64, origin, scale| ZoomSuggestion {
+            path: Vec::new(),
+            id: id.into(),
+            source_start_us: start,
+            source_end_us: start + 3_000_000,
+            center_x: 0.5,
+            center_y: 0.5,
+            scale,
+            transition_us: 400_000,
+            origin,
+            contributing_event_seqs: vec![1],
+            edited_ranges: Vec::new(),
+            media: None,
+        };
+        history
+            .accept_zooms(
+                0,
+                &[
+                    zoom("a", 1_000_000, ZoomOrigin::Click, 2.0),
+                    zoom("b", 6_000_000, ZoomOrigin::Dwell, 1.5),
+                    zoom("c", 11_000_000, ZoomOrigin::Cluster, 2.5),
+                ],
+                dir.path(),
+            )
+            .unwrap();
+        // One zoom set by hand keeps its amount.
+        let mut mine = history.current.zooms[2].clone();
+        mine.scale = 3.0;
+        history.update_zoom(1, mine, dir.path()).unwrap();
+        let settings = ZoomSettings {
+            click_scale: 1.6,
+            hover_scale: 1.3,
+            transition_ms: 900,
+            ..ZoomSettings::default()
+        };
+        history
+            .set_zoom_settings(2, settings.clone(), dir.path())
+            .unwrap();
+        let scales: Vec<f64> = history.current.zooms.iter().map(|z| z.scale).collect();
+        assert_eq!(scales, vec![1.6, 1.3, 3.0]);
+        assert_eq!(history.current.zooms[0].transition_us, 900_000);
+        assert_eq!(history.current.zoom_settings, settings);
+        let loaded = load_edit_document(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded.zoom_settings, settings);
+    }
+
+    #[test]
     fn zoom_edits_undo_and_do_not_revive_dismissed_or_overwrite_manual() {
         use crate::zoom::{ZoomOrigin, ZoomSuggestion};
         let dir = tempdir().unwrap();
@@ -2033,6 +2120,7 @@ mod tests {
             .unwrap(),
         );
         let suggestion = ZoomSuggestion {
+            path: Vec::new(),
             id: "z-1-n1".into(),
             source_start_us: 1_000_000,
             source_end_us: 3_000_000,

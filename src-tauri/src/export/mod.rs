@@ -275,6 +275,11 @@ pub struct SceneEvaluator {
             Option<std::sync::Arc<crate::cursor::CursorTrack>>,
         >,
     >,
+    /// Zooms by clock (`None` the project's recording), with the camera paths that follow
+    /// the mouse, worked out once.
+    zooms: std::cell::RefCell<
+        std::collections::HashMap<Option<String>, std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>>,
+    >,
     /// Pointer pictures by file, decoded once.
     cursor_images: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<VideoFrame>>>,
     /// Imported recordings' tracks, indexed once per evaluator, by asset id.
@@ -359,6 +364,7 @@ impl SceneEvaluator {
             image_cache: std::cell::RefCell::new(Vec::new()),
             recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
             cursors: Default::default(),
+            zooms: Default::default(),
             cursor_images: Default::default(),
         })
     }
@@ -510,7 +516,7 @@ impl SceneEvaluator {
             wallpaper,
             crate::render::layout_px_unit(self.width, self.height),
         )?;
-        let zooms = self.document.zoom_suggestions();
+        let zooms = self.zooms_for(None);
         let config = crate::zoom::eval_config_for(&self.document.zooms);
         let camera = crate::zoom::evaluate_at_edited(&zooms, &mapper, edited_us, &config)
             .unwrap_or_else(crate::zoom::CameraTransform::identity);
@@ -555,7 +561,7 @@ impl SceneEvaluator {
         if let Some(screen) = screen {
             let crop = layout.screen_crop_uv();
             let (center, zoom) = if short.follow_zooms {
-                let zooms = self.document.zoom_suggestions();
+                let zooms = self.zooms_for(None);
                 let config = crate::zoom::eval_config_for(&self.document.zooms);
                 let camera = crate::zoom::evaluate_at_edited(&zooms, mapper, edited_us, &config)
                     .unwrap_or_else(crate::zoom::CameraTransform::identity);
@@ -674,7 +680,7 @@ impl SceneEvaluator {
             crate::render::layout_px_unit(self.width, self.height),
         )?;
         // Zooms on this file's own clock (an imported recording's, or drawn over the clip).
-        let zooms = self.document.media_zoom_suggestions(Some(asset_id));
+        let zooms = self.zooms_for(Some(asset_id));
         if screen && has_picture && !zooms.is_empty() {
             let config = crate::zoom::eval_config_for(&self.document.zooms);
             let camera = crate::zoom::evaluate_at_source(&zooms, local_us, &config);
@@ -686,6 +692,48 @@ impl SceneEvaluator {
             self.push_cursor(&mut scene, Some(asset_id), local_us)?;
         }
         Ok(scene)
+    }
+
+    /// The zooms on one clock, each following the mouse along its recording (unless fixed or
+    /// following is off).
+    fn zooms_for(&self, media: Option<&str>) -> std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>> {
+        let key = media.map(str::to_string);
+        if let Some(zooms) = self.zooms.borrow().get(&key) {
+            return zooms.clone();
+        }
+        let settings = &self.document.zoom_settings;
+        let folder = match media {
+            None => Some(self.root.clone()),
+            Some(id) => self
+                .document
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == id)
+                .and_then(|asset| asset.recording_path.as_ref().map(PathBuf::from)),
+        };
+        let samples = folder
+            .filter(|_| settings.follow)
+            .map(|folder| crate::zoom::recording_cursor_samples(&folder));
+        let zooms: Vec<crate::zoom::ZoomSuggestion> = self
+            .document
+            .zooms
+            .iter()
+            .filter(|zoom| zoom.media.as_deref() == media)
+            .map(|zoom| {
+                let mut suggestion = zoom.as_suggestion();
+                if let Some(samples) = samples.as_ref().filter(|_| !zoom.fixed) {
+                    suggestion.path = crate::zoom::follow_path(
+                        samples,
+                        &suggestion,
+                        settings.follow_ms as u64 * 1_000,
+                    );
+                }
+                suggestion
+            })
+            .collect();
+        let zooms = std::sync::Arc::new(zooms);
+        self.zooms.borrow_mut().insert(key, zooms.clone());
+        zooms
     }
 
     /// The recorded pointer of the project's recording (`media` `None`) or of an imported
@@ -2794,6 +2842,7 @@ mod tests {
             image_cache: std::cell::RefCell::new(Vec::new()),
             recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
             cursors: Default::default(),
+            zooms: Default::default(),
             cursor_images: Default::default(),
         };
         let mapper = evaluator.document.mapper().unwrap();

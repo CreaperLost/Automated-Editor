@@ -478,15 +478,15 @@ fn all_zoom_suggestions(
 pub fn project_zoom_suggestions_impl(
     state: &AppState,
     project_handle: String,
-    config: Option<crate::zoom::ZoomConfig>,
+    _config: Option<crate::zoom::ZoomConfig>,
 ) -> Result<crate::zoom::ZoomGeneration, String> {
-    let config = config.unwrap_or_default();
-    config.validate()?;
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     if reader.summary.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
+    // The project's own settings, so every window finds the same zooms.
+    let config = reader.history().current.zoom_settings.config();
     let mut generation = all_zoom_suggestions(reader, &config)?;
     let taken: std::collections::BTreeSet<_> = reader
         .summary
@@ -528,16 +528,27 @@ pub(crate) fn mutate_opened(
     Ok(summary)
 }
 
-/// Puts the recording's zooms back, found with `config` (the auto-zoom settings).
+/// Saves the project's auto-zoom settings (automatic zooms take the new amounts).
+pub fn project_zoom_settings_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    settings: crate::zoom::ZoomSettings,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.set_zoom_settings(expected_revision, settings)
+    })
+}
+
+/// Puts the recording's zooms back, found with the project's auto-zoom settings.
 pub fn project_zoom_reload_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
-    config: Option<crate::zoom::ZoomConfig>,
+    _config: Option<crate::zoom::ZoomConfig>,
 ) -> Result<OpenedProject, String> {
-    let config = config.unwrap_or_default();
-    config.validate()?;
     mutate_opened(state, project_handle, |reader| {
+        let config = reader.history().current.zoom_settings.config();
         let generation = all_zoom_suggestions(reader, &config)?;
         if generation.suggestions.is_empty() {
             return Err(generation
@@ -555,12 +566,11 @@ pub fn project_zoom_accept_impl(
     project_handle: String,
     expected_revision: u64,
     ids: Vec<String>,
-    config: Option<crate::zoom::ZoomConfig>,
+    _config: Option<crate::zoom::ZoomConfig>,
 ) -> Result<OpenedProject, String> {
-    // The settings the suggestions were found with, so what is accepted is what was shown.
-    let config = config.unwrap_or_default();
-    config.validate()?;
     mutate_opened(state, project_handle, |reader| {
+        // The settings the suggestions were found with, so what is accepted is what was shown.
+        let config = reader.history().current.zoom_settings.config();
         let generation = all_zoom_suggestions(reader, &config)?;
         let selected: Vec<_> = if ids.is_empty() {
             generation.suggestions

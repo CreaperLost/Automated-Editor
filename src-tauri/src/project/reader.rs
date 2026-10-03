@@ -133,6 +133,9 @@ pub struct OpenedProject {
     /// V1 as a track: magnetic, hidden, muted, stack position.
     #[serde(default)]
     pub main_track: crate::project::revision::MainTrack,
+    /// Auto-zoom settings.
+    #[serde(default)]
+    pub zoom_settings: crate::zoom::ZoomSettings,
     /// Set when this is short `id`'s own timeline (the timeline fields are the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
@@ -671,6 +674,7 @@ impl ProjectReader {
                 shorts: Vec::new(),
                 overlay_tracks: Vec::new(),
                 main_track: history.current.main_track.clone(),
+                zoom_settings: history.current.zoom_settings.clone(),
                 short_view: None,
             },
             segments,
@@ -830,6 +834,17 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .accept_zooms(expected_revision, suggestions, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn set_zoom_settings(
+        &mut self,
+        expected_revision: u64,
+        settings: crate::zoom::ZoomSettings,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .set_zoom_settings(expected_revision, settings, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
@@ -1234,6 +1249,7 @@ impl ProjectReader {
         self.summary.shorts = shorts;
         self.summary.overlay_tracks = self.history.current.overlay_tracks.clone();
         self.summary.main_track = self.history.current.main_track.clone();
+        self.summary.zoom_settings = self.history.current.zoom_settings.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest

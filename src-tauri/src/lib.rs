@@ -197,6 +197,17 @@ fn project_zoom_accept(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_zoom_settings_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    settings: zoom::ZoomSettings,
+) -> Result<project::OpenedProject, String> {
+    commands::project_zoom_settings_set_impl(&state, project_handle, expected_revision, settings)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_zoom_reload(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1382,6 +1393,7 @@ pub fn run() {
             project_zoom_suggestions,
             project_zoom_accept,
             project_zoom_reload,
+            project_zoom_settings_set,
             project_zoom_dismiss,
             project_zoom_update,
             project_zoom_add,

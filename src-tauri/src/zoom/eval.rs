@@ -134,6 +134,9 @@ fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, 
         1.0
     };
     let target = suggestion.scale.max(1.0);
+    // Following the mouse: the camera's center moves along its path.
+    let (center_x, center_y) = super::path_center(&suggestion.path, source_us)
+        .unwrap_or((suggestion.center_x, suggestion.center_y));
     let scale = target.powf(amount);
     let target_width = 1.0 / target;
     let width = 1.0 / scale;
@@ -146,7 +149,7 @@ fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, 
         let fixed = end / (1.0 - target_width);
         fixed * (1.0 - width) + width * 0.5
     };
-    (axis(suggestion.center_x), axis(suggestion.center_y), scale)
+    (axis(center_x), axis(center_y), scale)
 }
 
 /// Quintic smootherstep: starts and ends with no speed and no jolt in acceleration.
