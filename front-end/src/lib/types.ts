@@ -609,6 +609,29 @@ export type TrackEdit =
   | { kind: "moveClips"; clipIds: string[]; deltaUs: number }
   | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number };
 
+/** One caption on the timeline's caption track (src-tauri/src/commands/transcript.rs). */
+export interface CaptionCueView {
+  startUs: number;
+  endUs: number;
+  text: string;
+  wordIds: string[];
+  wordStartsUs: number[];
+}
+
+export interface CaptionTrackView {
+  /** The transcript captions read from; absent until something is transcribed. */
+  trackId?: string | null;
+  cues: CaptionCueView[];
+}
+
+/** A change made on the caption track, saved in the transcript. */
+export type CaptionEdit =
+  | { kind: "setText"; wordIds: string[]; text: string }
+  | { kind: "retime"; wordIds: string[]; startUs: number; endUs: number }
+  | { kind: "split"; wordId: string }
+  | { kind: "merge"; wordId: string }
+  | { kind: "hide"; wordIds: string[]; hidden: boolean };
+
 /** A span of the edited timeline. */
 export interface EditedSpan {
   startUs: number;

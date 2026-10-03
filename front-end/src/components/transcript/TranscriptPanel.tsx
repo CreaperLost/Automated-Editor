@@ -94,6 +94,8 @@ export const TranscriptPanel: React.FC = () => {
 
   const handle = openedProject?.projectHandle;
   const revision = openedProject?.revision;
+  const captionsVersion = useProjectStore((s) => s.captionsVersion);
+  const bumpCaptions = useProjectStore((s) => s.bumpCaptions);
 
   useEffect(() => {
     setTrackId(audioTracks(openedProject)[0]?.id ?? "");
@@ -118,7 +120,7 @@ export const TranscriptPanel: React.FC = () => {
   // Edited positions change with every cut and undo, so reload on each revision.
   useEffect(() => {
     void refresh();
-  }, [refresh, revision]);
+  }, [refresh, revision, captionsVersion]);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -194,6 +196,7 @@ export const TranscriptPanel: React.FC = () => {
     try {
       const result = await api.transcriptRun(handle, trackId);
       setView(result.view);
+      bumpCaptions();
       setSuggestions(await api.transcriptSuggestions(handle, trackId));
       const count = result.view.words.length;
       setNotice(
@@ -280,6 +283,7 @@ export const TranscriptPanel: React.FC = () => {
     setError(null);
     try {
       setView(await api.transcriptSetWordText(handle, trackId, word.id, editing.text));
+      bumpCaptions();
       setNotice(`Changed "${word.text}" to "${editing.text.trim()}".`);
     } catch (err) {
       setError(errorMessage(err));

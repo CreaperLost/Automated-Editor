@@ -986,6 +986,28 @@ fn transcript_suggestions(
     commands::transcript::transcript_suggestions_impl(&state, project_handle, track_id)
 }
 
+/// The caption track: the captioned transcript's cues in edited time.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_caption_cues(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<commands::transcript::CaptionTrackView, String> {
+    commands::transcript::project_caption_cues_impl(&state, project_handle)
+}
+
+/// Edits a caption from the timeline (text, timing, split, merge, hide), saved in the transcript.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_caption_edit(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+    edit: commands::transcript::CaptionEdit,
+) -> Result<commands::transcript::CaptionTrackView, String> {
+    commands::transcript::transcript_caption_edit_impl(&state, project_handle, track_id, edit)
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn transcript_set_word_text(
@@ -1298,6 +1320,8 @@ pub fn run() {
             project_move_range,
             project_media_import,
             project_media_roles,
+            project_caption_cues,
+            transcript_caption_edit,
             project_media_remove,
             project_media_insert,
             project_tracks_edit,

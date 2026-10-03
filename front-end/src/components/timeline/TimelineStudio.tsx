@@ -20,6 +20,7 @@ import {
   Unlink,
   Film,
   AudioLines,
+  Captions,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -43,6 +44,8 @@ import {
 import {
   DEFAULT_WEBCAM_FOCUS,
   type EditedSpan as EditedRangeSpan,
+  type CaptionEdit,
+  type CaptionTrackView,
   type WaveformBucket,
   type OpenedProject,
   type OverlayClip,
@@ -603,12 +606,13 @@ export const TimelineStudio: React.FC = () => {
   const actions = useRef<Partial<Record<HotkeyAction, () => void>>>({});
   actions.current = {
     playPause: togglePlayPause,
-    split: () => void splitAtPlayhead(),
+    split: () => (cueAtSelection ? splitCue() : void splitAtPlayhead()),
     rippleTrimPrevious: () => void rippleTrim("previous"),
     rippleTrimNext: () => void rippleTrim("next"),
-    deleteSelection: () => void deleteSelection(),
+    deleteSelection: () => (cueAtSelection ? hideCue() : void deleteSelection()),
     deselect: () => {
       setSelectedOverlayClipId(undefined);
+      setSelectedCue(null);
       clearSelection();
     },
     selectAll: () => {
@@ -928,6 +932,7 @@ export const TimelineStudio: React.FC = () => {
       return;
     }
     setRange(null);
+    setSelectedCue(null);
     pickClip(
       { kind: "main", startUs: clip.startUs, endUs: clip.endUs },
       event.shiftKey || event.ctrlKey || event.metaKey,
@@ -1196,6 +1201,7 @@ export const TimelineStudio: React.FC = () => {
       return;
     }
     setRange(null);
+    setSelectedCue(null);
     pickClip({ kind: "track", clipId: clip.id }, event.shiftKey || event.ctrlKey || event.metaKey);
   };
 
@@ -1299,6 +1305,181 @@ export const TimelineStudio: React.FC = () => {
   const linkedSoundLanes = Math.max(
     0,
     ...clips.filter((clip) => clip.media && !clip.audioUnlinked).map((clip) => audioStreamCount(assetOf(clip.media!))),
+  );
+
+  // The caption track: the captioned transcript's cues, editable in place.
+  const captionsVersion = useProjectStore((s) => s.captionsVersion);
+  const bumpCaptions = useProjectStore((s) => s.bumpCaptions);
+  const [captionTrack, setCaptionTrack] = useState<CaptionTrackView>({ cues: [] });
+  const [selectedCue, setSelectedCue] = useState<number | null>(null);
+  const [cueText, setCueText] = useState<{ index: number; text: string } | null>(null);
+  const [cueDrag, setCueDrag] = useState<{
+    index: number;
+    side: "start" | "end" | "move";
+    startX: number;
+    deltaUs: number;
+    pointerId: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!openedProject) return;
+    let active = true;
+    void api
+      .projectCaptionCues(openedProject.projectHandle)
+      .then((view) => {
+        if (active) setCaptionTrack(view);
+      })
+      .catch(() => {
+        if (active) setCaptionTrack({ cues: [] });
+      });
+    return () => {
+      active = false;
+    };
+  }, [openedProject?.projectHandle, openedProject?.revision, captionsVersion, openedProject?.captions?.trackId]);
+  useEffect(() => setSelectedCue(null), [openedProject?.projectHandle]);
+  const editCaption = async (change: CaptionEdit) => {
+    const trackId = captionTrack.trackId;
+    if (!openedProject || !trackId) return false;
+    try {
+      setCaptionTrack(await api.transcriptCaptionEdit(openedProject.projectHandle, trackId, change));
+      setEditError(undefined);
+      bumpCaptions();
+      return true;
+    } catch (err) {
+      setEditError(String(err));
+      return false;
+    }
+  };
+  const cueAtSelection = selectedCue !== null ? captionTrack.cues[selectedCue] : undefined;
+  /** S on a selected caption: a new caption starts at the first word at or after the playhead. */
+  const splitCue = () => {
+    const cue = cueAtSelection;
+    if (!cue) return;
+    const index = cue.wordStartsUs.findIndex((start, i) => i > 0 && start >= currentTimeUs);
+    if (index <= 0) {
+      setEditError("Put the playhead between two words of the caption to split it.");
+      return;
+    }
+    void editCaption({ kind: "split", wordId: cue.wordIds[index] });
+  };
+  const mergeCue = () => {
+    if (!cueAtSelection || selectedCue === 0) return;
+    void editCaption({ kind: "merge", wordId: cueAtSelection.wordIds[0] });
+  };
+  const hideCue = () => {
+    if (!cueAtSelection) return;
+    void editCaption({ kind: "hide", wordIds: cueAtSelection.wordIds, hidden: true });
+    setSelectedCue(null);
+  };
+  const endCueDrag = () => {
+    const drag = cueDrag;
+    setCueDrag(null);
+    if (!drag || Math.abs(drag.deltaUs) < 10_000) return;
+    const cue = captionTrack.cues[drag.index];
+    if (!cue) return;
+    const startUs = drag.side === "end" ? cue.startUs : Math.max(0, cue.startUs + drag.deltaUs);
+    const endUs = drag.side === "start" ? cue.endUs : cue.endUs + drag.deltaUs;
+    void editCaption({ kind: "retime", wordIds: cue.wordIds, startUs, endUs });
+  };
+  const cueDragHandlers = (index: number, side: "start" | "end" | "move") => ({
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+      if (event.button !== 0 || cueText) return;
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setSelectedCue(index);
+      setCueDrag({ index, side, startX: event.clientX, deltaUs: 0, pointerId: event.pointerId });
+    },
+    onPointerMove: (event: React.PointerEvent<HTMLElement>) => {
+      if (!cueDrag || cueDrag.pointerId !== event.pointerId || pxPerUs <= 0) return;
+      event.stopPropagation();
+      const deltaUs = Math.round((event.clientX - cueDrag.startX) / pxPerUs);
+      if (deltaUs !== cueDrag.deltaUs) setCueDrag({ ...cueDrag, deltaUs });
+    },
+    onPointerUp: (event: React.PointerEvent<HTMLElement>) => {
+      event.stopPropagation();
+      suppressSeek.current = true;
+      endCueDrag();
+    },
+    onPointerCancel: () => setCueDrag(null),
+  });
+
+  const renderCaptionLane = () => (
+    <div data-track-row="captions" className="relative rounded-md bg-studio-850/40" style={{ height: OVERLAY_ROW_PX }}>
+      {durationUs > 0 &&
+        captionTrack.cues.map((cue, index) => {
+          const selected = index === selectedCue;
+          const drag = cueDrag?.index === index ? cueDrag : null;
+          const startUs = drag && drag.side !== "end" ? cue.startUs + drag.deltaUs : cue.startUs;
+          const endUs = drag && drag.side !== "start" ? cue.endUs + drag.deltaUs : cue.endUs;
+          const typing = cueText?.index === index;
+          return (
+            <div
+              key={`${cue.wordIds[0]}-${index}`}
+              role="button"
+              aria-label={`Caption: ${cue.text}`}
+              aria-pressed={selected}
+              className={`absolute top-1 bottom-1 rounded-md border overflow-hidden flex items-center px-1.5 cursor-grab ${
+                selected
+                  ? "bg-amber-400/35 border-white ring-1 ring-white/70 z-10"
+                  : "bg-amber-400/15 border-amber-300/50 hover:border-amber-200/80"
+              }`}
+              style={{
+                left: `${(Math.max(0, startUs) / durationUs) * 100}%`,
+                width: `${(Math.max(1, endUs - startUs) / durationUs) * 100}%`,
+                minWidth: typing ? 160 : undefined,
+              }}
+              title={`${cue.text}\nDouble-click to edit the text, drag to move it, drag an edge to retime. With it selected: ${
+                "S splits at the playhead, Delete hides it"
+              }.`}
+              onClick={(event) => {
+                event.stopPropagation();
+                setSelectedCue(index);
+                setSelectedClips([]);
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                setCueText({ index, text: cue.text });
+              }}
+              {...cueDragHandlers(index, "move")}
+            >
+              {typing ? (
+                <input
+                  autoFocus
+                  aria-label="Caption text"
+                  value={cueText.text}
+                  onChange={(e) => setCueText({ index, text: e.target.value })}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const text = cueText.text.trim();
+                      setCueText(null);
+                      if (text && text !== cue.text) void editCaption({ kind: "setText", wordIds: cue.wordIds, text });
+                    } else if (e.key === "Escape") {
+                      setCueText(null);
+                    }
+                  }}
+                  onBlur={() => setCueText(null)}
+                  className="w-full bg-studio-950/90 text-[10px] text-white px-1 rounded outline-none border border-amber-300"
+                />
+              ) : (
+                <span className="text-[9px] text-amber-50/90 truncate pointer-events-none">{cue.text}</span>
+              )}
+              {!typing &&
+                (["start", "end"] as const).map((side) => (
+                  <div
+                    key={side}
+                    role="separator"
+                    aria-label={`Retime the caption ${side}`}
+                    className={`absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100 hover:bg-amber-100/70 ${
+                      side === "start" ? "left-0" : "right-0"
+                    }`}
+                    onClick={(event) => event.stopPropagation()}
+                    {...cueDragHandlers(index, side)}
+                  />
+                ))}
+            </div>
+          );
+        })}
+    </div>
   );
 
   const renderNewTrackRow = (audio: boolean) => {
@@ -1479,6 +1660,7 @@ export const TimelineStudio: React.FC = () => {
     // Clips stop their clicks, so a click that lands here hit empty track space: deselect.
     if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
       clearSelection();
+      setSelectedCue(null);
       setSelectedOverlayClipId(undefined);
     }
     const rect = timelineTrackRef.current.getBoundingClientRect();
@@ -1859,6 +2041,48 @@ export const TimelineStudio: React.FC = () => {
             ))}
             {audioTracks.map(renderTrackHeader)}
             {addTrackButton(true)}
+            {captionTrack.trackId && (
+              <div
+                className="px-3 flex items-center justify-between border-b border-studio-800/40"
+                style={{ height: OVERLAY_ROW_PX }}
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <Captions className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                  <div className="truncate">
+                    <div className="text-xs font-medium text-studio-200">Captions</div>
+                    <div className="text-[10px] font-mono text-studio-400">
+                      {openedProject?.captions?.enabled ? `${captionTrack.cues.length} shown` : "off in export"}
+                    </div>
+                  </div>
+                </div>
+                {cueAtSelection && (
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      onClick={splitCue}
+                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700"
+                      title={`Split the caption at the playhead${hint("split")}`}
+                    >
+                      Split
+                    </button>
+                    <button
+                      onClick={mergeCue}
+                      disabled={selectedCue === 0}
+                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700 disabled:opacity-40"
+                      title="Join this caption to the one before it"
+                    >
+                      Merge
+                    </button>
+                    <button
+                      onClick={hideCue}
+                      className="px-1 py-0.5 rounded text-[10px] text-rose-300 hover:bg-studio-700"
+                      title={`Hide this caption (the sound stays)${hint("deleteSelection")}`}
+                    >
+                      Hide
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2389,6 +2613,9 @@ export const TimelineStudio: React.FC = () => {
             {/* Audio tracks: sound unlinked from its picture, or placed on its own */}
             {audioTracks.map(renderTrackLane)}
             {renderNewTrackRow(true)}
+
+            {/* Captions from the transcript: edit, retime, split, merge or hide them here */}
+            {captionTrack.trackId && renderCaptionLane()}
           </div>
           </div>
         </div>

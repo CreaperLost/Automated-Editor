@@ -694,9 +694,6 @@ impl SceneEvaluator {
                 .ok()
                 .flatten()
         };
-        if let Some(id) = &settings.track_id {
-            return load(id);
-        }
         let recorded = [TrackType::MicAudio, TrackType::SystemAudio]
             .iter()
             .flat_map(|kind| {
@@ -710,7 +707,7 @@ impl SceneEvaluator {
                 .filter(|&stream| asset.sound_role(stream) == crate::media_bin::SoundRole::Mic)
                 .map(|stream| crate::project::revision::media_sound_id(stream, &asset.id))
         });
-        recorded.chain(imported).find_map(|id| load(&id))
+        crate::captions::caption_source(settings, recorded, imported, load)
     }
 
     fn caption_at(

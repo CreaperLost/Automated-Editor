@@ -38,6 +38,8 @@ import {
   TranscriptView,
   PictureRole,
   SoundRole,
+  CaptionEdit,
+  CaptionTrackView,
 } from "./types";
 
 declare global {
@@ -326,6 +328,10 @@ export const api = {
       trackId,
       wordIds,
     }),
+  projectCaptionCues: (projectHandle: string) =>
+    invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle }),
+  transcriptCaptionEdit: (projectHandle: string, trackId: string, edit: CaptionEdit) =>
+    invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit }),
   transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
     invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text }),
   transcriptDismissSuggestions: (projectHandle: string, trackId: string, ids: string[], dismissed: boolean) =>

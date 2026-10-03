@@ -105,6 +105,9 @@ interface ProjectStore {
   selectedZoomId?: string;
   /** The clip picked on a video track above the main sequence. */
   selectedOverlayClipId?: string;
+  /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
+  captionsVersion: number;
+  bumpCaptions: () => void;
   /** The timeline's selection, shared so other panels can act on it. */
   timelineSelection: { startUs: number; endUs: number } | null;
   currentTimeUs: number;
@@ -227,6 +230,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   zoomDiagnostics: [],
   selectedZoomId: undefined,
   selectedOverlayClipId: undefined,
+  captionsVersion: 0,
+  bumpCaptions: () => set((state) => ({ captionsVersion: state.captionsVersion + 1 })),
   timelineSelection: null,
   currentTimeUs: 0,
   durationUs: 0,

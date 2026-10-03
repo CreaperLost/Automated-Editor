@@ -69,6 +69,30 @@ pub struct Transcript {
     /// `provider/model` of the last AI pass, when there was one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_model: Option<String>,
+    /// Caption edits made on the timeline's caption track, by word id.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub caption_marks: std::collections::BTreeMap<String, CaptionMark>,
+}
+
+/// How a word sits in the captions, when the user changed it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionMark {
+    /// A new caption starts at this word.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cue_break: bool,
+    /// This word stays in the caption before it, wherever captions would otherwise break.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cue_join: bool,
+    /// Heard but not shown in the captions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+impl CaptionMark {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// A run of words an AI pass suggested cutting, from `first_word_id` to `last_word_id`.
@@ -110,7 +134,158 @@ impl Transcript {
             dismissed_suggestions: Vec::new(),
             ai_suggestions: Vec::new(),
             ai_model: None,
+            caption_marks: Default::default(),
         }
+    }
+
+    /// The caption mark of a word (all off when it has none).
+    pub fn caption_mark(&self, word_id: &str) -> CaptionMark {
+        self.caption_marks.get(word_id).copied().unwrap_or_default()
+    }
+
+    /// Changes one word's caption mark; an all-off mark is dropped.
+    pub fn set_caption_mark(
+        &mut self,
+        word_id: &str,
+        change: impl FnOnce(&mut CaptionMark),
+    ) -> Result<(), String> {
+        if !self.words.iter().any(|w| w.id == word_id) {
+            return Err("Unknown word".into());
+        }
+        let mut mark = self.caption_mark(word_id);
+        change(&mut mark);
+        if mark.is_default() {
+            self.caption_marks.remove(word_id);
+        } else {
+            self.caption_marks.insert(word_id.to_string(), mark);
+        }
+        Ok(())
+    }
+
+    /// Replaces the words `word_ids` (in order, side by side) with `text`. The same number
+    /// of words keeps their timing; otherwise the new words share the old span by length.
+    pub fn replace_words(&mut self, word_ids: &[String], text: &str) -> Result<(), String> {
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        if tokens.is_empty() {
+            return Err("A caption cannot be empty; hide it instead".into());
+        }
+        if tokens.iter().any(|t| t.chars().count() > MAX_WORD_CHARS) {
+            return Err("A word is too long".into());
+        }
+        let positions: Vec<usize> = word_ids
+            .iter()
+            .map(|id| {
+                self.words
+                    .iter()
+                    .position(|w| &w.id == id)
+                    .ok_or_else(|| "Unknown word".to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        if positions.is_empty() || positions.windows(2).any(|p| p[1] <= p[0]) {
+            return Err("Choose the caption's words in order".into());
+        }
+        if tokens.len() == positions.len() {
+            for (&at, token) in positions.iter().zip(&tokens) {
+                self.words[at].text = token.to_string();
+            }
+            return Ok(());
+        }
+        let first = &self.words[positions[0]];
+        let start = first.source_start_us;
+        let end = self.words[*positions.last().unwrap()]
+            .source_end_us
+            .max(start + 1);
+        let speaker = first.speaker.clone();
+        let weights: Vec<u64> = tokens
+            .iter()
+            .map(|t| t.chars().count() as u64 + 1)
+            .collect();
+        let total: u64 = weights.iter().sum();
+        let mut next_id = self
+            .words
+            .iter()
+            .filter_map(|w| w.id.strip_prefix("w-c").and_then(|n| n.parse::<u64>().ok()))
+            .max()
+            .map_or(0, |n| n + 1);
+        let mut cursor = start;
+        let mut done = 0u64;
+        let mut replacement = Vec::with_capacity(tokens.len());
+        for (i, (token, weight)) in tokens.iter().zip(&weights).enumerate() {
+            done += weight;
+            let word_end = start + (end - start) * done / total;
+            let id = match word_ids.get(i) {
+                Some(id) => id.clone(),
+                None => {
+                    next_id += 1;
+                    format!("w-c{}", next_id - 1)
+                }
+            };
+            replacement.push(TranscriptWord {
+                id,
+                text: token.to_string(),
+                kind: WordKind::Word,
+                source_start_us: cursor,
+                source_end_us: word_end.max(cursor),
+                confidence: None,
+                speaker: speaker.clone(),
+            });
+            cursor = word_end;
+        }
+        for id in word_ids.iter().skip(tokens.len()) {
+            self.caption_marks.remove(id);
+        }
+        // The listed words go; the new ones take the first one's place.
+        for &at in positions.iter().rev() {
+            self.words.remove(at);
+        }
+        let at = positions[0];
+        self.words.splice(at..at, replacement);
+        self.validate()
+    }
+
+    /// Moves and stretches the words `word_ids` to source span `[start, end)`, keeping their
+    /// spacing, and keeping every word in time order.
+    pub fn retime_words(
+        &mut self,
+        word_ids: &[String],
+        start: u64,
+        end: u64,
+    ) -> Result<(), String> {
+        if end <= start {
+            return Err("A caption needs some length".into());
+        }
+        let positions: Vec<usize> = word_ids
+            .iter()
+            .map(|id| {
+                self.words
+                    .iter()
+                    .position(|w| &w.id == id)
+                    .ok_or_else(|| "Unknown word".to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        let (Some(&first), Some(&last)) = (positions.first(), positions.last()) else {
+            return Err("Choose the caption's words".into());
+        };
+        let old_start = self.words[first].source_start_us;
+        let old_end = self.words[last].source_end_us.max(old_start + 1);
+        let scale = |t: u64| {
+            start
+                + ((t.saturating_sub(old_start)) as u128 * (end - start) as u128
+                    / (old_end - old_start) as u128) as u64
+        };
+        let before = first.checked_sub(1).map(|i| self.words[i].source_start_us);
+        let after = self.words.get(last + 1).map(|w| w.source_start_us);
+        if before.is_some_and(|b| start < b)
+            || after.is_some_and(|a| scale(self.words[last].source_start_us) > a)
+        {
+            return Err("A caption cannot move past the words around it".into());
+        }
+        for &at in &positions {
+            let word = &mut self.words[at];
+            word.source_start_us = scale(word.source_start_us);
+            word.source_end_us = scale(word.source_end_us).max(word.source_start_us);
+        }
+        self.validate()
     }
 
     pub fn validate(&self) -> Result<(), String> {

@@ -163,6 +163,8 @@ impl CaptionSettings {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CueWord {
+    /// The transcript word it shows.
+    pub id: String,
     pub text: String,
     pub start_us: u64,
     pub end_us: u64,
@@ -193,7 +195,10 @@ pub fn build_cues(
     // (word, source start, source end), in playback order once clips are reordered.
     let mut words = Vec::new();
     for word in &transcript.words {
-        if word.kind != WordKind::Word || word.text.trim().is_empty() {
+        if word.kind != WordKind::Word
+            || word.text.trim().is_empty()
+            || transcript.caption_mark(&word.id).hidden
+        {
             continue;
         }
         let Some((start_us, end_us)) =
@@ -208,6 +213,7 @@ pub fn build_cues(
         };
         words.push((
             CueWord {
+                id: word.id.clone(),
                 text,
                 start_us,
                 end_us: end_us.max(start_us + 1),
@@ -227,11 +233,15 @@ pub fn build_cues(
             // Playing earlier recording time next means a clip was reordered here: never
             // join across it. (A cut jumps forward and keeps the cue together.)
             let jumped = source_start < last_source_end;
-            let breaks = current.len() >= max_words
-                || ends_sentence(&last.text)
+            let mark = transcript.caption_mark(&word.id);
+            // A user's break or join (from the caption track) wins over the automatic rules.
+            let breaks = mark.cue_break
                 || jumped
-                || word.start_us.saturating_sub(last.end_us) >= CUE_PAUSE_US
-                || word.end_us.saturating_sub(first_start) > MAX_CUE_US;
+                || (!mark.cue_join
+                    && (current.len() >= max_words
+                        || ends_sentence(&last.text)
+                        || word.start_us.saturating_sub(last.end_us) >= CUE_PAUSE_US
+                        || word.end_us.saturating_sub(first_start) > MAX_CUE_US));
             if breaks {
                 cues.push(cue_from(std::mem::take(&mut current)));
             }
@@ -259,6 +269,24 @@ fn cue_from(words: Vec<CueWord>) -> CaptionCue {
         end_us: words.last().map(|w| w.end_us).unwrap_or(words[0].end_us),
         words,
     }
+}
+
+/// Which transcript captions read from: the chosen one, else the first transcribed of the
+/// recording's microphones, then its system audio, then imported speech. `recorded` lists
+/// the recording's audio track ids, microphones first; `imported` the imported speech ids.
+pub fn caption_source(
+    settings: &CaptionSettings,
+    recorded: impl IntoIterator<Item = String>,
+    imported: impl IntoIterator<Item = String>,
+    load: impl Fn(&str) -> Option<Transcript>,
+) -> Option<Transcript> {
+    if let Some(id) = &settings.track_id {
+        return load(id);
+    }
+    recorded
+        .into_iter()
+        .chain(imported)
+        .find_map(|id| load(&id))
 }
 
 /// The cue on screen at `edited_us`, by index.
@@ -587,6 +615,76 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn caption_track_edits_split_merge_hide_retext_and_retime() {
+        // Times in ms: "one two three four" in 1 s, then a pause and "five".
+        let mut t = transcript(&[
+            ("one", 0, 200),
+            ("two", 250, 450),
+            ("three", 500, 700),
+            ("four", 750, 950),
+            ("five", 2000, 2200),
+        ]);
+        let map = mapper(&[(0, 3000)]);
+        let settings = CaptionSettings::default();
+        let texts = |t: &Transcript| -> Vec<String> {
+            build_cues(t, &map, &settings)
+                .iter()
+                .map(|c| {
+                    c.words
+                        .iter()
+                        .map(|w| w.text.clone())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect()
+        };
+        assert_eq!(texts(&t), ["one two three four", "five"]);
+
+        // Split before "three"; merge "five" back over the pause.
+        t.set_caption_mark("w-2", |m| m.cue_break = true).unwrap();
+        t.set_caption_mark("w-4", |m| m.cue_join = true).unwrap();
+        assert_eq!(texts(&t), ["one two", "three four five"]);
+        // Hide "two": still heard, not shown.
+        t.set_caption_mark("w-1", |m| m.hidden = true).unwrap();
+        assert_eq!(texts(&t), ["one", "three four five"]);
+        t.set_caption_mark("w-1", |m| m.hidden = false).unwrap();
+        assert!(
+            !t.caption_marks.contains_key("w-1"),
+            "an all-off mark is dropped"
+        );
+
+        // Same word count keeps the timing; a different count shares the old span.
+        t.replace_words(&["w-0".into(), "w-1".into()], "One, two")
+            .unwrap();
+        assert_eq!(texts(&t)[0], "One, two");
+        t.replace_words(&["w-0".into(), "w-1".into()], "Hello there everyone")
+            .unwrap();
+        assert_eq!(texts(&t)[0], "Hello there everyone");
+        let words: Vec<_> = t
+            .words
+            .iter()
+            .take(3)
+            .map(|w| (w.source_start_us, w.source_end_us))
+            .collect();
+        assert_eq!(words.first().unwrap().0, 0);
+        assert_eq!(words.last().unwrap().1, 450_000);
+        t.validate().unwrap();
+
+        // Retime "five" later; it cannot jump back over "four".
+        let five = t.words.last().unwrap().id.clone();
+        t.retime_words(&[five.clone()], 2_400_000, 2_800_000)
+            .unwrap();
+        assert_eq!(
+            (
+                t.words.last().unwrap().source_start_us,
+                t.words.last().unwrap().source_end_us
+            ),
+            (2_400_000, 2_800_000)
+        );
+        assert!(t.retime_words(&[five], 100_000, 300_000).is_err());
     }
 
     #[test]
