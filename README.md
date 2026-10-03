@@ -85,6 +85,27 @@ cargo tauri dev --features tauri-app
 
 Without `--features tauri-app` the binary builds the editor core only, with no window.
 
+### Installer builder scripts
+
+The VibeRunner **Build** action calls a builder for the current platform:
+
+| Platform | Command from the repository root | Installer output |
+|---|---|---|
+| Windows | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1` | `src-tauri/target/release/bundle/nsis/` |
+| macOS | `bash scripts/build-macos.sh` | `src-tauri/target/release/bundle/dmg/` |
+| Linux | `bash scripts/build-linux.sh` | `src-tauri/target/release/bundle/deb/` and `appimage/` |
+
+Each script installs the locked frontend dependencies, including TypeScript, before
+Tauri builds the frontend and packages the installer. Windows and Linux also fetch
+and bundle FFmpeg. The prerequisites listed above must already be installed;
+Linux additionally needs the native Tauri/WebKit and packaging dependencies.
+
+The Windows builder enables CUDA local transcription by default
+(`tauri-app,parakeet-cuda`). For CPU transcription, append `-Transcription cpu`
+to the Windows command; for DirectML, append `-Transcription directml`.
+CUDA runtime prerequisites are listed under Transcription below. The macOS and
+Linux builders currently build without local transcription.
+
 ### Bundled FFmpeg
 
 Release builds ship `ffmpeg` and `ffprobe` as Tauri sidecars, so users need no separate

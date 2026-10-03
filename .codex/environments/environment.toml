@@ -1,0 +1,47 @@
+# Commands run from the repository root through cmd /C (Windows) or sh -c (Unix).
+# Prerequisites: Node.js 18+, Rust, Tauri CLI v2, and native build tools.
+# Windows playback/export also needs FFmpeg; see README.md.
+version = 1
+name = "AeroEdits"
+
+[setup]
+script = "npm --prefix front-end ci --include=dev"
+
+# Tauri starts Vite via beforeDevCommand and stays in the foreground.
+# VibeRunner handles Stop by ending the process tree it started.
+[[actions]]
+name = "Run"
+icon = "run"
+command = "cd src-tauri && cargo tauri dev --features tauri-app"
+
+# Tauri builds the frontend through beforeBuildCommand and packages the app.
+# Install build dependencies here too: VibeRunner Build does not run Setup first.
+# Windows and Linux bundle FFmpeg; macOS uses the native Swift bridges.
+[[actions]]
+name = "Build"
+icon = "build"
+platform = "windows"
+command = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\build-windows.ps1"'
+
+[[actions]]
+name = "Build"
+icon = "build"
+platform = "macos"
+command = "bash scripts/build-macos.sh"
+
+[[actions]]
+name = "Build"
+icon = "build"
+platform = "linux"
+command = "bash scripts/build-linux.sh"
+
+[[actions]]
+name = "Test"
+icon = "test"
+command = "cd front-end && npx tsc --noEmit && cd ../src-tauri && cargo test"
+
+# Optional: downloads the FFmpeg sidecars used by bundled release builds.
+[[actions]]
+name = "Fetch FFmpeg"
+icon = "tool"
+command = "node src-tauri/scripts/fetch-ffmpeg.mjs"
