@@ -73,7 +73,7 @@ export const TrackClipSection: React.FC = () => {
             value={clip.fit}
             disabled={busy}
             onChange={(event) => update({ ...clip, fit: event.target.value as OverlayFit })}
-            className="w-full bg-studio-800 text-studio-100 rounded px-2 py-1 border border-studio-700"
+            className="w-full min-w-0 truncate bg-studio-800 text-studio-100 text-xs rounded px-2 py-1 border border-studio-700 focus:outline-none focus:border-teal-500"
           >
             {FITS.map((fit) => (
               <option key={fit.value} value={fit.value}>

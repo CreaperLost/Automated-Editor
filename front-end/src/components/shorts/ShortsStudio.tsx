@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpToLine,
@@ -6,32 +6,66 @@ import {
   Download,
   FolderOpen,
   Loader2,
-  Pause,
-  Play,
   Plus,
   Smartphone,
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { api } from "../../lib/ipc";
-import { editedToSourceUs } from "../../lib/projectUtils";
-import { listenForProjects } from "../../lib/windowSync";
+import { api, setEditTarget } from "../../lib/ipc";
+import { GAP } from "../../lib/projectUtils";
+import { releaseShortPlayback, takeShortPlayback } from "../../lib/playbackControl";
+import { useEngineFrames } from "../canvas/NativePreviewHost";
+import { PreviewQualityControls } from "../layout/StagePanel";
+import {
+  DockviewDefaultTab,
+  DockviewReact,
+  type DockviewApi,
+  type DockviewReadyEvent,
+  type DockviewTheme,
+  type IDockviewPanelHeaderProps,
+  type IDockviewPanelProps,
+} from "dockview-react";
+import "dockview-react/dist/styles/dockview.css";
+import "../layout/dockTheme.css";
+import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
+import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
+import { transcribableSounds } from "../../lib/trackUtils";
+import { TimelineStudio } from "../timeline/TimelineStudio";
 
 const DEFAULT_LAYOUT: ShortLayout = {
   cameraPosition: "top",
   cameraPct: 35,
   screenZoom: 1,
   followZooms: true,
+  screenPanX: 0,
+  screenPanY: 0,
   captions: true,
   captionSpot: "seam",
+  captionMaxWords: 0,
+  captionLines: 2,
+  captionSizePct: 0,
+  backgroundType: "project",
+  backgroundColorStart: "#000000",
+  backgroundColorEnd: "#1e1b4b",
+  backgroundPreset: "aurora",
 };
+
+/** Which clock edited time `editedUs` plays on (the recording, or an imported file) and
+ *  where on it; `null` past the end. */
+function clockAt(project: OpenedProject, editedUs: number): { media?: string; us: number } | null {
+  let cursor = 0;
+  for (const interval of project.retainedIntervals) {
+    const length = interval.endUs - interval.startUs;
+    if (editedUs < cursor + length) return { media: interval.media, us: interval.startUs + (editedUs - cursor) };
+    cursor += length;
+  }
+  return null;
+}
 const NEW_SHORT_US = 30_000_000;
 const MIN_SHORT_US = 3_000_000;
 const MAX_SHORT_US = 180_000_000;
-/** Preview playback asks for frames this often; there is no audio in the preview. */
-const PLAY_FRAME_MS = 100;
 
 function formatTime(us: number): string {
   const total = Math.max(0, us) / 1_000_000;
@@ -46,6 +80,80 @@ function errorMessage(err: unknown): string {
   return "Something went wrong.";
 }
 
+/** Each dock panel draws one part of the studio; the studio hands them over each render. */
+type ShortsPanels = Record<ShortsPanelId, () => React.ReactNode>;
+type ShortsPanelId = "list" | "preview" | "settings" | "timeline";
+const ShortsPanelsContext = React.createContext<ShortsPanels | null>(null);
+
+const SHORTS_PANELS: Record<ShortsPanelId, { title: string; minimumWidth: number; minimumHeight: number }> = {
+  list: { title: "Shorts", minimumWidth: 200, minimumHeight: 120 },
+  preview: { title: "Preview", minimumWidth: 260, minimumHeight: 260 },
+  settings: { title: "Look", minimumWidth: 240, minimumHeight: 160 },
+  timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
+};
+const SHORTS_LAYOUT_KEY = "aeroedits.shortsLayout.v1";
+
+const ShortsPanel: React.FC<{ id: ShortsPanelId }> = ({ id }) => {
+  const panels = React.useContext(ShortsPanelsContext);
+  return <div className="h-full w-full min-h-0 min-w-0 overflow-hidden bg-studio-950">{panels?.[id]()}</div>;
+};
+const SHORTS_DOCK_COMPONENTS: Record<ShortsPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
+  list: () => <ShortsPanel id="list" />,
+  preview: () => <ShortsPanel id="preview" />,
+  settings: () => <ShortsPanel id="settings" />,
+  timeline: () => <ShortsPanel id="timeline" />,
+};
+const SHORTS_DOCK_THEME: DockviewTheme = {
+  name: "aeroedits",
+  className: "dockview-theme-aero",
+  colorScheme: "dark",
+  gap: 6,
+};
+/** Panels stay open: there is no close button, so none can be lost. */
+const ShortsTab: React.FC<IDockviewPanelHeaderProps> = (props) => <DockviewDefaultTab {...props} hideClose />;
+
+function shortsPanel(id: ShortsPanelId) {
+  const { title, minimumWidth, minimumHeight } = SHORTS_PANELS[id];
+  return { id, component: id, title, minimumWidth, minimumHeight };
+}
+
+/** The default arrangement: list left, preview in the middle, look right, timeline below. */
+function defaultShortsLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel(shortsPanel("preview"));
+  api.addPanel({ ...shortsPanel("list"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 260 });
+  api.addPanel({ ...shortsPanel("settings"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+  api.addPanel({ ...shortsPanel("timeline"), position: { direction: "below" }, initialHeight: 260 });
+}
+
+let shortsDockApi: DockviewApi | null = null;
+function onShortsDockReady(event: DockviewReadyEvent) {
+  shortsDockApi = event.api;
+  try {
+    const stored = window.localStorage.getItem(SHORTS_LAYOUT_KEY);
+    if (stored) {
+      event.api.fromJSON(JSON.parse(stored));
+      const ids = new Set(event.api.panels.map((p) => p.id));
+      if (!(Object.keys(SHORTS_PANELS) as ShortsPanelId[]).every((id) => ids.has(id))) defaultShortsLayout(event.api);
+    } else {
+      defaultShortsLayout(event.api);
+    }
+  } catch {
+    defaultShortsLayout(event.api);
+  }
+  let timer = 0;
+  event.api.onDidLayoutChange(() => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(SHORTS_LAYOUT_KEY, JSON.stringify(event.api.toJSON()));
+      } catch {
+        // Not remembering the layout is harmless.
+      }
+    }, 250);
+  });
+}
+
 type ExportRow = { state: "waiting" | "running" | "completed" | "failed"; progress: number; message?: string; path?: string };
 
 /// The Shorts Studio: its own window for picking vertical clips from the video, setting their
@@ -58,15 +166,14 @@ export const ShortsStudio: React.FC = () => {
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState<ShortLayout | null>(null);
-  const [offsetUs, setOffsetUs] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [frameUrl, setFrameUrl] = useState<string>();
+  // The whole video (new shorts and trims are placed on it); the store holds the short's view.
+  const [main, setMain] = useState<OpenedProject | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [exports, setExports] = useState<Record<string, ExportRow>>({});
   const saveTimer = useRef<number>();
-  const frameRequest = useRef(0);
 
   // Load the project open in the editor, then follow its edits.
   useEffect(() => {
@@ -74,32 +181,97 @@ export const ShortsStudio: React.FC = () => {
     void api
       .projectCurrent()
       .then((current) => {
-        if (current) loadOpenedProject(current);
+        if (current) {
+          loadOpenedProject(current);
+          setMain(current);
+        }
       })
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoaded(true));
-    return listenForProjects((next) => {
+    const stopCaptions = listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true));
+    const stopProjects = listenForProjects((next) => {
       const state = useProjectStore.getState();
       if (state.openedProject?.projectHandle !== next.projectHandle) state.loadOpenedProject(next);
       else state.applyOpenedProject(next, { remote: true });
     });
+    return () => {
+      stopCaptions();
+      stopProjects();
+    };
   }, [loadOpenedProject]);
 
   const shorts = project?.shorts ?? [];
   const selected = shorts.find((s) => s.id === selectedId) ?? shorts[0];
-  const layout = draft ?? selected?.layout ?? DEFAULT_LAYOUT;
-  const playable = selected?.editedStartUs !== undefined && selected?.editedEndUs !== undefined;
-  const lengthUs = playable ? selected!.editedEndUs! - selected!.editedStartUs! : 0;
+  // Older shorts lack the newer settings: fill them from the defaults. Kept stable between
+  // renders, since the preview reloads whenever the layout changes.
+  const baseLayout = draft ?? selected?.layout;
+  const layout = useMemo(() => ({ ...DEFAULT_LAYOUT, ...(baseLayout ?? {}) }), [baseLayout]);
+  // The store shows the selected short's own timeline once its view has arrived.
+  const viewing = !!selected && project?.shortView === selected.id;
+  const lengthUs = viewing ? project!.editedDurationUs : 0;
+  const playable = viewing && lengthUs > 0;
+  const ownEdit = !!selected?.edit;
 
   useEffect(() => {
     setDraft(null);
-    setOffsetUs(0);
-    setPlaying(false);
   }, [selected?.id]);
 
-  const speechTrack =
-    project?.tracks.find((t) => t.descriptor.trackType === "mic_audio") ??
-    project?.tracks.find((t) => t.descriptor.trackType === "system_audio");
+  // The selected short is what this window edits and what playback plays (with its sound).
+  const selectedId_ = selected?.id;
+  const handle_ = project?.projectHandle;
+  useEffect(() => {
+    if (!handle_) return;
+    const shortId = selectedId_ ?? null;
+    setEditTarget(shortId);
+    useProjectStore.getState().setViewShort(shortId ?? undefined);
+    if (shortId) {
+      void api
+        .projectShortView(handle_, shortId)
+        .then((view) => useProjectStore.getState().applyOpenedProject(view, { remote: true }))
+        .catch((err) => setError(errorMessage(err)));
+    }
+    // Switching shorts: the new one starts at 0, live in the preview while this window is active.
+    useProjectStore.getState().setCurrentTimeUs(0);
+    if (shortId && document.hasFocus()) {
+      void api
+        .playbackFocusShort(handle_, shortId, 0, false)
+        .then(useProjectStore.getState().applyPlaybackStatus)
+        .catch(() => undefined);
+    }
+  }, [selectedId_, handle_]);
+  // Active, this window has the engine; the editor takes it back when it is clicked.
+  useEffect(() => {
+    const take = () => takeShortPlayback();
+    window.addEventListener("focus", take);
+    return () => window.removeEventListener("focus", take);
+  }, []);
+  // The short's own view arrives after selecting it: take the engine once it is there.
+  const viewReady = project?.shortView;
+  useEffect(() => {
+    if (viewReady && document.hasFocus()) takeShortPlayback();
+  }, [viewReady]);
+  // Closing the window hands playback back to the video.
+  useEffect(() => {
+    const release = () => {
+      setEditTarget(null);
+      releaseShortPlayback();
+    };
+    window.addEventListener("beforeunload", release);
+    return () => {
+      window.removeEventListener("beforeunload", release);
+      release();
+    };
+  }, []);
+  // The whole video, refreshed with each revision.
+  useEffect(() => {
+    void api
+      .projectCurrent()
+      .then((current) => setMain(current ?? null))
+      .catch(() => undefined);
+  }, [project?.revision, project?.projectHandle]);
+
+  // Speech first, the recording's or an imported file's.
+  const speechTrack = transcribableSounds(project)[0];
 
   const run = async (label: string, work: (p: OpenedProject) => Promise<OpenedProject>) => {
     const current = useProjectStore.getState().openedProject;
@@ -129,94 +301,63 @@ export const ShortsStudio: React.FC = () => {
     const next = { ...layout, ...patch };
     setDraft(next);
     window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => patchSelected({ layout: next }), 400);
+    // While it plays, the playing short picks the change up as soon as it is saved.
+    saveTimer.current = window.setTimeout(
+      () => patchSelected({ layout: next }),
+      useProjectStore.getState().isPlaying ? 120 : 200,
+    );
   };
 
-  // Preview frames: the latest request wins.
-  const showFrame = useCallback(
-    async (at: number) => {
-      const current = useProjectStore.getState().openedProject;
-      if (!current || !selected || !playable) return;
-      const request = ++frameRequest.current;
-      try {
-        const bytes = await api.shortPreviewFrame(current.projectHandle, selected.id, layout, at);
-        if (request !== frameRequest.current) return;
-        const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
-        setFrameUrl((old) => {
-          if (old) URL.revokeObjectURL(old);
-          return url;
-        });
-      } catch (err) {
-        if (request === frameRequest.current) setError(errorMessage(err));
-      }
-    },
-    [selected, playable, layout],
-  );
+  // The engine's frames while it has this short; the canvas keeps the last one otherwise.
+  const playbackShortId = useProjectStore((s) => s.playbackShortId);
+  const hasEngine = !!selected && playbackShortId === selected.id;
+  useEngineFrames(canvasRef, playable, selected?.id, () => {
+    const state = useProjectStore.getState();
+    return !!state.viewShort && state.playbackShortId === state.viewShort;
+  });
 
-  useEffect(() => {
-    if (!playing) void showFrame(offsetUs);
-  }, [showFrame, offsetUs, playing, project?.revision]);
 
-  useEffect(() => {
-    if (!playing) return;
-    let at = offsetUs;
-    let stopped = false;
-    const started = performance.now();
-    const tick = async () => {
-      while (!stopped) {
-        at = offsetUs + (performance.now() - started) * 1000;
-        if (at >= lengthUs) {
-          setPlaying(false);
-          setOffsetUs(0);
-          return;
-        }
-        await showFrame(at);
-        await new Promise((resolve) => window.setTimeout(resolve, PLAY_FRAME_MS));
-      }
-    };
-    void tick();
-    return () => {
-      stopped = true;
-      setOffsetUs(Math.min(at, Math.max(0, lengthUs - 1)));
-    };
-    // Playback restarts only when started or stopped.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
+  /** A short's ends on the clock they play on: the recording's or one imported file's. */
+  const anchors = (startEdited: number, endEdited: number) => {
+    if (!main) return null;
+    const start = clockAt(main, startEdited);
+    const end = clockAt(main, endEdited - 1);
+    if (!start || !end) return null;
+    if (start.media === GAP || end.media === GAP) {
+      setError("A short cannot start or end in a gap on V1.");
+      return null;
+    }
+    if (start.media !== end.media) {
+      setError("A short starts and ends on the same recording or file; trim it so both ends are on one.");
+      return null;
+    }
+    return { media: start.media, sourceStartUs: start.us, sourceEndUs: end.us + 1 };
+  };
 
   const newShort = () => {
-    if (!project) return;
-    const start = editedToSourceUs(project.retainedIntervals, 0);
-    const endEdited = Math.min(project.editedDurationUs, NEW_SHORT_US);
-    const end = editedToSourceUs(project.retainedIntervals, endEdited - 1);
-    if (start === null || end === null) {
-      setError("The video starts or ends with imported media; trim a short over the recording instead.");
-      return;
-    }
+    if (!main) return;
+    // From the start of the video: the playhead here is in the selected short.
+    const startEdited = 0;
+    const ends = anchors(startEdited, Math.min(main.editedDurationUs, startEdited + NEW_SHORT_US));
+    if (!ends) return;
     const id = `short-${Date.now().toString(36)}`;
     setSelectedId(id);
-    void saveShorts([
-      ...shorts,
-      { id, title: `Short ${shorts.length + 1}`, sourceStartUs: start, sourceEndUs: end + 1, layout: DEFAULT_LAYOUT },
-    ]);
+    void saveShorts([...shorts, { id, title: `Short ${shorts.length + 1}`, layout: DEFAULT_LAYOUT, ...ends }]);
   };
 
   /** Moves the short's start or end on the edited timeline. */
   const trim = (edge: "start" | "end", editedUs: number) => {
-    if (!project || !selected || !playable) return;
+    if (!main || !selected || selected.editedStartUs === undefined || selected.editedEndUs === undefined) return;
     const start = edge === "start" ? editedUs : selected.editedStartUs!;
     const end = edge === "end" ? editedUs : selected.editedEndUs!;
     if (end - start < MIN_SHORT_US || end - start > MAX_SHORT_US) {
       setError("A short is between 3 seconds and 3 minutes long.");
       return;
     }
-    const sourceStart = editedToSourceUs(project.retainedIntervals, start);
-    const sourceEnd = editedToSourceUs(project.retainedIntervals, end - 1);
-    if (sourceStart === null || sourceEnd === null) {
-      setError("A short starts and ends on the recording, not on imported media.");
-      return;
-    }
+    const ends = anchors(start, end);
+    if (!ends) return;
     setError(undefined);
-    patchSelected({ sourceStartUs: sourceStart, sourceEndUs: sourceEnd + 1 });
+    patchSelected(ends);
   };
 
   const exportShorts = async (ids: string[]) => {
@@ -270,55 +411,10 @@ export const ShortsStudio: React.FC = () => {
     `flex-1 py-1.5 rounded-md text-xs ${active ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:bg-studio-800"}`;
   const toExport = checked.size > 0 ? shorts.filter((s) => checked.has(s.id)) : shorts;
 
-  return (
-    <div className="h-screen bg-studio-950 text-studio-100 flex flex-col text-xs select-none">
-      <header className="h-12 shrink-0 px-4 flex items-center gap-3 border-b border-studio-800 bg-studio-900">
-        <Smartphone className="w-4 h-4 text-teal-400" />
-        <span className="font-semibold text-sm">Shorts Studio</span>
-        <span className="text-studio-500 truncate">{project.manifest.projectName}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!!busy || !speechTrack}
-            onClick={() =>
-              speechTrack &&
-              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.descriptor.id))
-            }
-            title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/50 border border-violet-600/50 text-violet-100 hover:bg-violet-800/60 disabled:opacity-40"
-          >
-            {busy === "Finding shorts" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            Find shorts with AI
-          </button>
-          <button
-            type="button"
-            disabled={!!busy}
-            onClick={newShort}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-850 border border-studio-700 hover:bg-studio-800 disabled:opacity-40"
-          >
-            <Plus className="w-3.5 h-3.5" /> New short
-          </button>
-          <button
-            type="button"
-            disabled={toExport.length === 0 || Object.values(exports).some((e) => e.state === "running" || e.state === "waiting")}
-            onClick={() => void exportShorts(toExport.map((s) => s.id))}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold disabled:opacity-40"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Export {checked.size > 0 ? `${checked.size} selected` : `all ${shorts.length}`}
-          </button>
-        </div>
-      </header>
-
-      {error && (
-        <p role="alert" className="px-4 py-1.5 bg-rose-950/50 border-b border-rose-900/60 text-rose-200">
-          {error}
-        </p>
-      )}
-
-      <div className="flex-1 min-h-0 flex">
-        {/* Shorts list */}
-        <aside className="w-72 shrink-0 border-r border-studio-800 overflow-y-auto p-2 space-y-1.5" aria-label="Shorts">
+  // The studio's parts, drawn inside dockable panels (rearrange and resize like the editor's).
+  const panels: ShortsPanels = {
+    list: () => (
+        <aside className="h-full overflow-y-auto p-2 space-y-1.5" aria-label="Shorts">
           {shorts.length === 0 && (
             <p className="p-2 text-studio-500 leading-relaxed">
               No shorts yet. Transcribe the video in the editor, then press Find shorts with AI, or start one with New
@@ -391,50 +487,50 @@ export const ShortsStudio: React.FC = () => {
             );
           })}
         </aside>
-
-        {/* Preview */}
-        <main className="flex-1 min-w-0 flex flex-col items-center justify-center gap-3 p-4">
-          {selected && playable ? (
-            <>
-              <div className="relative h-[min(70vh,720px)] aspect-[9/16] rounded-xl overflow-hidden border border-studio-700 bg-black">
-                {frameUrl && <img src={frameUrl} alt="Short preview" className="w-full h-full object-contain" />}
-              </div>
-              <div className="w-[min(70vh*9/16,405px)] min-w-[280px] flex items-center gap-2">
-                <button
-                  type="button"
-                  aria-label={playing ? "Pause" : "Play"}
-                  onClick={() => setPlaying(!playing)}
-                  className="p-1.5 rounded-md bg-studio-800 hover:bg-studio-700"
-                >
-                  {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                </button>
-                <input
-                  type="range"
-                  aria-label="Position in the short"
-                  min={0}
-                  max={Math.max(0, lengthUs - 1)}
-                  step={100_000}
-                  value={Math.min(offsetUs, Math.max(0, lengthUs - 1))}
-                  onChange={(e) => {
-                    setPlaying(false);
-                    setOffsetUs(Number(e.target.value));
-                  }}
-                  className="flex-1 accent-teal-500"
+    ),
+    preview: () => (
+        <main className="h-full min-w-0 min-h-0 flex flex-col gap-2 p-3 bg-studio-950">
+          <div className="flex items-center justify-between gap-2 text-xs text-studio-400 px-1 shrink-0">
+            <span className="truncate">
+              {selected ? `${selected.title} · ${formatTime(lengthUs)}` : "No short selected"}
+            </span>
+            <div className="flex items-center gap-3 shrink-0">
+              <PreviewQualityControls />
+              <span className="font-mono text-[11px] text-studio-500">Canvas: 9:16</span>
+            </div>
+          </div>
+          <div
+            className="relative flex-1 min-h-0 overflow-hidden border border-studio-800 rounded-xl bg-studio-900/40 flex items-center justify-center p-2"
+            onPointerDown={() => takeShortPlayback()}
+          >
+            {selected && playable ? (
+              <>
+                <canvas
+                  ref={canvasRef}
+                  aria-label="Short preview"
+                  className="h-full max-w-full aspect-[9/16] object-contain rounded-lg bg-black"
                 />
-                <span className="font-mono text-studio-400 w-20 text-right">
-                  {formatTime(offsetUs)} / {formatTime(lengthUs)}
-                </span>
-              </div>
-              <p className="text-[11px] text-studio-500">Preview without sound. The export has the audio.</p>
-            </>
-          ) : (
-            <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
-          )}
+                {!hasEngine && (
+                  <button
+                    type="button"
+                    onClick={() => takeShortPlayback()}
+                    className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-md bg-studio-900/90 border border-studio-700 text-[11px] text-studio-200 hover:bg-studio-800"
+                    title="The editor has the preview. Click to show this short here (the editor keeps its place)."
+                  >
+                    Show this short
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
+            )}
+          </div>
         </main>
-
-        {/* Settings */}
+    ),
+    settings: () => (
+      <>
         {selected && (
-          <aside className="w-80 shrink-0 border-l border-studio-800 overflow-y-auto p-4 space-y-5" aria-label="Short settings">
+          <aside className="h-full overflow-y-auto p-4 space-y-5" aria-label="Short settings">
             <label className="block space-y-1">
               <span className="text-studio-400">Title (also the file name)</span>
               <input
@@ -451,7 +547,26 @@ export const ShortsStudio: React.FC = () => {
             </label>
             {selected.reason && <p className="text-[11px] text-studio-500 italic">AI: {selected.reason}</p>}
 
-            {playable && (
+            {ownEdit && (
+              <div className="space-y-1.5 rounded-lg border border-amber-700/50 bg-amber-950/30 p-2">
+                <p className="text-[11px] text-amber-100">
+                  Edited on its own: cuts and clips on its timeline below change only this short. Trim it by dragging
+                  its first or last clip's edge.
+                </p>
+                <button
+                  type="button"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void run("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
+                  }
+                  className="px-2 py-1 rounded border border-amber-600/60 text-amber-100 hover:bg-amber-900/40 disabled:opacity-40"
+                  title="Drop this short's own edits so it follows the video again"
+                >
+                  Follow the video again
+                </button>
+              </div>
+            )}
+            {!ownEdit && selected.editedStartUs !== undefined && (
               <div className="space-y-2">
                 <span className="font-semibold text-studio-300">Trim</span>
                 {(["start", "end"] as const).map((edge) => {
@@ -463,7 +578,7 @@ export const ShortsStudio: React.FC = () => {
                         −1s
                       </button>
                       <span className="flex-1 text-center font-mono">{formatTime(at)}</span>
-                      <button type="button" disabled={!!busy} onClick={() => trim(edge, Math.min(project.editedDurationUs, at + 1_000_000))} className="px-2 py-0.5 rounded bg-studio-800 hover:bg-studio-700 disabled:opacity-40">
+                      <button type="button" disabled={!!busy} onClick={() => trim(edge, Math.min(main?.editedDurationUs ?? at, at + 1_000_000))} className="px-2 py-0.5 rounded bg-studio-800 hover:bg-studio-700 disabled:opacity-40">
                         +1s
                       </button>
                     </div>
@@ -498,14 +613,105 @@ export const ShortsStudio: React.FC = () => {
               <label className="block space-y-1">
                 <div className="flex justify-between">
                   <span className="text-studio-400">Zoom</span>
-                  <span className="font-mono">{layout.screenZoom.toFixed(1)}×</span>
+                  <button
+                    type="button"
+                    onClick={() => changeLayout({ screenZoom: 1 })}
+                    className="font-mono text-studio-300 hover:text-white"
+                    title="1×: the screen fills its part of the frame. Below 1× it zooms out and the background shows around it."
+                  >
+                    {layout.screenZoom.toFixed(1)}×{layout.screenZoom < 1 ? " (out)" : ""}
+                  </button>
                 </div>
-                <input type="range" aria-label="Screen zoom" min={1} max={3} step={0.1} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} className="w-full accent-teal-500" />
+                <input type="range" aria-label="Screen zoom" min={0.3} max={3} step={0.05} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} onDoubleClick={() => changeLayout({ screenZoom: 1 })} className="w-full accent-teal-500" />
               </label>
+              {(
+                [
+                  ["screenPanX", "Left / right"],
+                  ["screenPanY", "Up / down"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="block space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-studio-400">{label}</span>
+                    <button
+                      type="button"
+                      onClick={() => changeLayout({ [key]: 0 })}
+                      className="font-mono text-studio-300 hover:text-white"
+                      title="Back to the centre"
+                    >
+                      {layout[key] === 0 ? "centre" : `${layout[key] > 0 ? "+" : ""}${Math.round(layout[key] * 100)}%`}
+                    </button>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label={`Screen ${label}`}
+                    min={-1}
+                    max={1}
+                    step={0.02}
+                    value={layout[key]}
+                    onChange={(e) => changeLayout({ [key]: Number(e.target.value) })}
+                    onDoubleClick={() => changeLayout({ [key]: 0 })}
+                    className="w-full accent-teal-500"
+                  />
+                </label>
+              ))}
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={layout.followZooms} onChange={(e) => changeLayout({ followZooms: e.target.checked })} className="accent-teal-500" />
                 <span>Follow the video's zooms (clicks and manual zooms)</span>
               </label>
+            </div>
+
+            <div className="space-y-2">
+              <span className="font-semibold text-studio-300">Background</span>
+              <div className="grid grid-cols-5 gap-1 bg-studio-900 border border-studio-800 rounded-lg p-1">
+                {(
+                  [
+                    ["project", "Video's"],
+                    ["solid", "Colour"],
+                    ["gradient", "Gradient"],
+                    ["preset", "Built-in"],
+                    ["wallpaper", "Image"],
+                  ] as const
+                ).map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    aria-pressed={layout.backgroundType === kind}
+                    onClick={() => changeLayout({ backgroundType: kind })}
+                    disabled={kind === "wallpaper" && !project.layout?.wallpaperAsset}
+                    title={kind === "wallpaper" && !project.layout?.wallpaperAsset ? "Choose an image in the editor's Background settings first" : undefined}
+                    className={`${segmented(layout.backgroundType === kind)} text-[10px] disabled:opacity-40`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {(layout.backgroundType === "solid" || layout.backgroundType === "gradient") && (
+                <div className="flex gap-2">
+                  <input type="color" aria-label="Background colour" value={layout.backgroundColorStart} onChange={(e) => changeLayout({ backgroundColorStart: e.target.value })} className="h-7 flex-1 bg-studio-850 border border-studio-800 rounded cursor-pointer" />
+                  {layout.backgroundType === "gradient" && (
+                    <input type="color" aria-label="Background end colour" value={layout.backgroundColorEnd} onChange={(e) => changeLayout({ backgroundColorEnd: e.target.value })} className="h-7 flex-1 bg-studio-850 border border-studio-800 rounded cursor-pointer" />
+                  )}
+                </div>
+              )}
+              {layout.backgroundType === "preset" && (
+                <div className="grid grid-cols-3 gap-1">
+                  {BACKGROUND_PRESETS.map((preset) => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      aria-pressed={layout.backgroundPreset === preset.key}
+                      onClick={() => changeLayout({ backgroundPreset: preset.key })}
+                      className={`h-9 rounded border text-[9px] text-white/90 flex items-end p-1 ${
+                        layout.backgroundPreset === preset.key ? "border-teal-400" : "border-studio-700"
+                      }`}
+                      style={{ background: presetBackgroundCss(preset.key) }}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -528,7 +734,35 @@ export const ShortsStudio: React.FC = () => {
                   ))}
                 </div>
               )}
-              <p className="text-[11px] text-studio-500">Caption style comes from the editor's Captions settings.</p>
+              {layout.captions && (
+                <div className="space-y-2">
+                  <label className="block space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-studio-400">Words at once</span>
+                      <span className="font-mono">{layout.captionMaxWords || "editor's"}</span>
+                    </div>
+                    <input type="range" aria-label="Words per caption" min={0} max={12} step={1} value={layout.captionMaxWords} onChange={(e) => changeLayout({ captionMaxWords: Number(e.target.value) })} className="w-full accent-teal-500" />
+                  </label>
+                  <div className="space-y-1">
+                    <span className="text-studio-400">Lines</span>
+                    <div className="flex gap-1 bg-studio-900 border border-studio-800 rounded-lg p-1">
+                      {[1, 2, 3].map((lines) => (
+                        <button key={lines} type="button" aria-pressed={layout.captionLines === lines} onClick={() => changeLayout({ captionLines: lines })} className={segmented(layout.captionLines === lines)}>
+                          {lines}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <label className="block space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-studio-400">Text size</span>
+                      <span className="font-mono">{layout.captionSizePct ? `${layout.captionSizePct.toFixed(1)}%` : "editor's"}</span>
+                    </div>
+                    <input type="range" aria-label="Caption size" min={0} max={15} step={0.5} value={layout.captionSizePct} onChange={(e) => { const v = Number(e.target.value); changeLayout({ captionSizePct: v > 0 && v < 2 ? 2 : v }); }} className="w-full accent-teal-500" />
+                  </label>
+                </div>
+              )}
+              <p className="text-[11px] text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the timeline below.</p>
             </div>
 
             <div className="flex flex-col gap-2 pt-2 border-t border-studio-800">
@@ -554,6 +788,96 @@ export const ShortsStudio: React.FC = () => {
             </div>
           </aside>
         )}
+        {!selected && <p className="p-4 text-studio-500">Pick or create a short.</p>}
+      </>
+    ),
+    timeline: () => (
+      <>
+      {selected && playable && (
+        <section className="h-full flex flex-col min-h-0" aria-label="Short timeline">
+          <div className="px-4 py-1 text-[11px] text-studio-500 border-b border-studio-800 bg-studio-900">
+            This short's timeline. Cuts, splits, moves and clips here change only the short (the video stays as it
+            is); caption text is shared with the video's transcript.
+          </div>
+          <div className="flex-1 min-h-0">
+            <TimelineStudio />
+          </div>
+        </section>
+      )}
+        {!(selected && playable) && <p className="p-4 text-studio-500">Pick a short to edit its timeline.</p>}
+      </>
+    ),
+  };
+
+
+  return (
+    <div className="h-screen bg-studio-950 text-studio-100 flex flex-col text-xs select-none">
+      <header className="h-12 shrink-0 px-4 flex items-center gap-3 border-b border-studio-800 bg-studio-900">
+        <Smartphone className="w-4 h-4 text-teal-400" />
+        <span className="font-semibold text-sm">Shorts Studio</span>
+        <span className="text-studio-500 truncate">{project.manifest.projectName}</span>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!!busy || !speechTrack}
+            onClick={() =>
+              speechTrack &&
+              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.id))
+            }
+            title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/50 border border-violet-600/50 text-violet-100 hover:bg-violet-800/60 disabled:opacity-40"
+          >
+            {busy === "Finding shorts" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            Find shorts with AI
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={newShort}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-850 border border-studio-700 hover:bg-studio-800 disabled:opacity-40"
+          >
+            <Plus className="w-3.5 h-3.5" /> New short
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!shortsDockApi) return;
+              defaultShortsLayout(shortsDockApi);
+            }}
+            className="px-2 py-1.5 rounded-lg text-studio-400 hover:text-white hover:bg-studio-800"
+            title="Put the panels back where they started"
+          >
+            Reset layout
+          </button>
+          <button
+            type="button"
+            disabled={toExport.length === 0 || Object.values(exports).some((e) => e.state === "running" || e.state === "waiting")}
+            onClick={() => void exportShorts(toExport.map((s) => s.id))}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold disabled:opacity-40"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export {checked.size > 0 ? `${checked.size} selected` : `all ${shorts.length}`}
+          </button>
+        </div>
+      </header>
+
+      {error && (
+        <p role="alert" className="px-4 py-1.5 bg-rose-950/50 border-b border-rose-900/60 text-rose-200">
+          {error}
+        </p>
+      )}
+
+      <div className="flex-1 min-h-0">
+        <ShortsPanelsContext.Provider value={panels}>
+          <DockviewReact
+            className="h-full w-full"
+            theme={SHORTS_DOCK_THEME}
+            components={SHORTS_DOCK_COMPONENTS}
+            defaultTabComponent={ShortsTab}
+            disableFloatingGroups
+            onReady={onShortsDockReady}
+          />
+        </ShortsPanelsContext.Provider>
       </div>
     </div>
   );

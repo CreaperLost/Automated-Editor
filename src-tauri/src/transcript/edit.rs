@@ -17,11 +17,21 @@ const PHRASE_PAUSE_US: u64 = 400_000;
 const RESTART_PAUSE_US: u64 = 250_000;
 /// A retake repeats at least this many words of the abandoned attempt.
 const MIN_RETAKE_WORDS: usize = 3;
-/// Only look this far back for the abandoned attempt.
-const MAX_RETAKE_SPAN_WORDS: usize = 40;
-const MAX_RETAKE_SPAN_US: u64 = 30_000_000;
+/// Only look this far back for the abandoned attempt: a retake follows its false start
+/// closely, and a long first attempt is a sentence of its own, not a false start.
+const MAX_RETAKE_SPAN_WORDS: usize = 16;
+const MAX_RETAKE_SPAN_US: u64 = 12_000_000;
+/// A finished first attempt (it ends a sentence) counts only if it is little more than the
+/// repeated words: at most this many words beyond them.
+const MAX_FINISHED_EXTRA_WORDS: usize = 2;
 /// Padding at the very start or end of the transcript, where there is no neighbour word.
 const EDGE_PAD_US: u64 = 50_000;
+
+/// Punctuation on its own, as some providers give it ("." or ",").
+fn is_punctuation(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty() && text.chars().all(|c| !c.is_alphanumeric())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +41,15 @@ pub struct TranscriptViewWord {
     /// Edited-time position, or `None` when the word has been cut.
     pub edited_start_us: Option<u64>,
     pub edited_end_us: Option<u64>,
+    /// Not shown in the captions (hidden on the caption track).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub caption_hidden: bool,
+    /// A caption starts at this word (split on the caption track).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub caption_break: bool,
+    /// Kept in the caption before it (merged on the caption track).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub caption_join: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -104,10 +123,14 @@ pub fn view(transcript: &Transcript, mapper: &TimelineMapper, revision: u64) -> 
         .iter()
         .map(|word| {
             let span = mapper.edited_span_of(word.source_start_us, word.source_end_us);
+            let mark = transcript.caption_mark(&word.id);
             TranscriptViewWord {
                 word: word.clone(),
                 edited_start_us: span.map(|s| s.0),
                 edited_end_us: span.map(|s| s.1),
+                caption_hidden: mark.hidden,
+                caption_break: mark.cue_break,
+                caption_join: mark.cue_join,
             }
         })
         .collect();
@@ -215,11 +238,24 @@ pub fn suggestions(
     transcript: &Transcript,
     mapper: &TimelineMapper,
 ) -> Vec<TranscriptCutSuggestion> {
-    let live: Vec<&TranscriptWord> = transcript
+    // Some providers give punctuation as words of its own ("video" "."): fold it into the
+    // word before, so phrases and sentence ends read as they were said.
+    let mut live: Vec<&TranscriptWord> = Vec::new();
+    let mut ends: Vec<bool> = Vec::new();
+    for word in transcript
         .words
         .iter()
         .filter(|w| w.kind == WordKind::Word && kept(w, mapper))
-        .collect();
+    {
+        if is_punctuation(&word.text) {
+            if let Some(last) = ends.last_mut() {
+                *last |= ends_clause(&word.text);
+            }
+            continue;
+        }
+        ends.push(ends_clause(&word.text));
+        live.push(word);
+    }
     let normalized: Vec<String> = live.iter().map(|w| normalize(&w.text)).collect();
     let mut out = Vec::new();
 
@@ -247,7 +283,7 @@ pub fn suggestions(
     // attempt is suggested for removal and the later take is kept.
     let phrase_start = |k: usize| {
         k == 0
-            || ends_clause(&live[k - 1].text)
+            || ends[k - 1]
             || live[k]
                 .source_start_us
                 .saturating_sub(live[k - 1].source_end_us)
@@ -255,7 +291,7 @@ pub fn suggestions(
     };
     let restart = |k: usize| {
         k > 0
-            && (ends_clause(&live[k - 1].text)
+            && (ends[k - 1]
                 || live[k]
                     .source_start_us
                     .saturating_sub(live[k - 1].source_end_us)
@@ -287,7 +323,20 @@ pub fn suggestions(
                 .count();
             // The first attempt must be repeated from its first word, by at least three words
             // or entirely if it was shorter (e.g. "So the. So the next step").
-            if matched >= MIN_RETAKE_WORDS || (matched >= 2 && matched == b - a) {
+            let length = b - a;
+            if !(matched >= MIN_RETAKE_WORDS || (matched >= 2 && matched == length)) {
+                continue;
+            }
+            // And it must have been abandoned: cut off before its sentence ended, or (when it
+            // did end) barely more than the words said again. Two whole sentences that open
+            // alike ("I'm going to ...") are not a retake.
+            let finished = ends[b - 1];
+            let abandoned = if finished {
+                length <= matched + MAX_FINISHED_EXTRA_WORDS
+            } else {
+                length <= matched * 3 + 2
+            };
+            if abandoned {
                 found = Some(a);
                 break;
             }
@@ -579,5 +628,51 @@ mod tests {
         ]);
         let m = mapper(&[(0, 1000)]);
         assert!(suggestions(&t, &m).is_empty());
+    }
+
+    #[test]
+    fn retakes_read_punctuation_given_as_words_and_skip_whole_sentences_that_open_alike() {
+        // "I'm going to show you the app ." ... "I'm going to explain the price ."
+        let t = transcript(&[
+            ("I'm", 0, 200),
+            ("going", 220, 400),
+            ("to", 420, 500),
+            ("show", 520, 800),
+            ("you", 820, 900),
+            ("the", 920, 1000),
+            ("app", 1020, 1300),
+            (".", 1300, 1300),
+            ("I'm", 2000, 2200),
+            ("going", 2220, 2400),
+            ("to", 2420, 2500),
+            ("explain", 2520, 2900),
+            ("the", 2920, 3000),
+            ("price", 3020, 3300),
+            (".", 3300, 3300),
+        ]);
+        let m = mapper(&[(0, 4000)]);
+        assert!(
+            suggestions(&t, &m).is_empty(),
+            "two whole sentences, not a retake"
+        );
+
+        // "So today we , so today we build a farm ." with a separate comma token.
+        let t = transcript(&[
+            ("So", 0, 200),
+            ("today", 220, 500),
+            ("we", 520, 600),
+            (",", 600, 600),
+            ("so", 1200, 1400),
+            ("today", 1420, 1700),
+            ("we", 1720, 1800),
+            ("build", 1820, 2100),
+            ("a", 2120, 2200),
+            ("farm", 2220, 2500),
+            (".", 2500, 2500),
+        ]);
+        let s = suggestions(&t, &m);
+        assert_eq!(s.len(), 1, "{s:?}");
+        assert_eq!(s[0].kind, TranscriptSuggestionKind::Retake);
+        assert_eq!(s[0].text, "So today we");
     }
 }

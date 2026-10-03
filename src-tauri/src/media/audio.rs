@@ -65,7 +65,8 @@ fn media_track(
                 TrackType::SystemAudio,
                 document.audio.track_gain(&lane(index)),
                 vec![SegmentSummary {
-                    track_id: asset_id.to_string(),
+                    // The lane, so polish set on it (noise reduction, ducking) applies.
+                    track_id: lane(index),
                     relative_path: audio_path.clone(),
                     start_us: 0,
                     end_us: asset.duration_us,
@@ -80,6 +81,106 @@ fn media_track(
         })
         .collect()
 }
+/// Sub-sample phases the resampling table holds; a 1/1024-sample step is far below hearing.
+const SINC_PHASES: usize = 1024;
+const SINC_TAPS: usize = (2 * RADIUS) as usize;
+
+/// Windowed-sinc weights for every phase, for low-pass `cutoff`: row `p` holds the taps
+/// `center - RADIUS + 1 ..= center + RADIUS` for a position `p / SINC_PHASES` past `center`.
+/// Built once per cutoff and kept, so the mixer does no trigonometry per sample.
+fn sinc_table(cutoff: f64) -> std::sync::Arc<Vec<f64>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static TABLES: OnceLock<Mutex<HashMap<u64, Arc<Vec<f64>>>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut tables = tables.lock().unwrap_or_else(|e| e.into_inner());
+    tables
+        .entry(cutoff.to_bits())
+        .or_insert_with(|| {
+            let mut table = Vec::with_capacity((SINC_PHASES + 1) * SINC_TAPS);
+            for phase in 0..=SINC_PHASES {
+                let frac = phase as f64 / SINC_PHASES as f64;
+                for j in 0..SINC_TAPS {
+                    let distance = (j as i64 - RADIUS + 1) as f64 - frac;
+                    let x = std::f64::consts::PI * distance * cutoff;
+                    let sinc = if x.abs() < 1e-12 { 1.0 } else { x.sin() / x };
+                    table.push(
+                        sinc * (0.5
+                            + 0.5 * (std::f64::consts::PI * distance / RADIUS as f64).cos()),
+                    );
+                }
+            }
+            Arc::new(table)
+        })
+        .clone()
+}
+
+/// A clip of imported sound where it plays: its lane, file and stream, where it starts on the
+/// edited timeline, where it starts in the file, and how long it plays.
+pub(crate) struct MediaPlacement {
+    pub lane: String,
+    pub asset_id: String,
+    pub stream: usize,
+    pub edited_start: u64,
+    pub in_us: u64,
+    pub len: u64,
+}
+
+/// Every clip of imported sound that is heard: V1's linked clips (a lane per stream), the
+/// video tracks' linked clips (likewise), and the audio tracks' clips.
+pub(crate) fn media_placements(document: &EditDocument) -> Vec<MediaPlacement> {
+    let streams = |asset_id: &str| {
+        document
+            .media_assets
+            .iter()
+            .find(|a| a.id == asset_id)
+            .map_or(0, |a| a.audio_paths().count())
+    };
+    let mut out = Vec::new();
+    let mut cursor = 0u64;
+    for interval in &document.retained_intervals {
+        let len = interval.end_us - interval.start_us;
+        if let Some(asset) = interval
+            .media
+            .as_deref()
+            .filter(|_| !interval.audio_unlinked)
+        {
+            for stream in 0..streams(asset) {
+                out.push(MediaPlacement {
+                    lane: main_sound_lane(stream),
+                    asset_id: asset.to_string(),
+                    stream,
+                    edited_start: cursor,
+                    in_us: interval.start_us,
+                    len,
+                });
+            }
+        }
+        cursor += len;
+    }
+    for track in document.overlay_tracks.iter().filter(|t| !t.muted) {
+        for clip in track.clips.iter().filter(|c| !c.audio_unlinked) {
+            let placed = |stream: usize, lane: String| MediaPlacement {
+                lane,
+                asset_id: clip.asset_id.clone(),
+                stream,
+                edited_start: clip.start_us,
+                in_us: clip.in_us,
+                len: clip.duration_us,
+            };
+            match clip.audio_stream {
+                Some(stream) => out.push(placed(stream, track.id.clone())),
+                None => {
+                    for stream in 0..streams(&clip.asset_id) {
+                        out.push(placed(stream, track_sound_lane(&track.id, stream)));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn ceil_frame(us: u64) -> u64 {
     ((us as u128 * SAMPLE_RATE as u128).div_ceil(1_000_000)) as u64
 }
@@ -110,14 +211,19 @@ impl AudioMixer {
                     source_end: s.end_us,
                     fade_in: i > 0 && !joined(&intervals[i - 1], s),
                     fade_out: i + 1 < intervals.len() && !joined(s, &intervals[i + 1]),
-                    // An unlinked clip's sound plays from the audio tracks instead.
-                    media: s.media.as_ref().map(|id| {
-                        if s.audio_unlinked {
-                            Vec::new()
-                        } else {
-                            media_track(document, id, None, &main_sound_lane)
-                        }
-                    }),
+                    // An unlinked clip's sound plays from the audio tracks instead; a muted
+                    // V1 plays nothing at all (an empty list is silence).
+                    media: if document.main_track.muted {
+                        Some(Vec::new())
+                    } else {
+                        s.media.as_ref().map(|id| {
+                            if s.audio_unlinked {
+                                Vec::new()
+                            } else {
+                                media_track(document, id, None, &main_sound_lane)
+                            }
+                        })
+                    },
                 };
                 cursor = span.edited_end;
                 span
@@ -143,7 +249,7 @@ impl AudioMixer {
             .filter(|interval| interval.is_recording())
             .cloned()
             .collect();
-        let polish = PolishPlan::build(root, &document.audio, &recording, &tracks);
+        let polish = PolishPlan::build(root, document, &recording, &tracks);
         let overlays = document
             .overlay_tracks
             .iter()
@@ -242,7 +348,7 @@ impl AudioMixer {
                 + 1;
             // An imported clip plays its own audio instead of the recording's.
             let tracks = span.media.as_ref().unwrap_or(&self.tracks);
-            for (track_type, track_gain, track) in tracks {
+            for (_, track_gain, track) in tracks {
                 let first = track.partition_point(|s| s.end_us <= source_a);
                 for segment in track[first..].iter().take_while(|s| s.start_us < source_b) {
                     if !segment.available {
@@ -282,12 +388,11 @@ impl AudioMixer {
                         continue;
                     }
                     let channels = info.channels as usize;
-                    let denoiser = match (track_type, &self.polish) {
-                        (TrackType::MicAudio, Some(plan)) if span.media.is_none() => {
-                            plan.denoiser(&segment.relative_path)
-                        }
-                        _ => None,
-                    };
+                    // Noise reduction where its lane has it on, recorded or imported.
+                    let denoiser = self
+                        .polish
+                        .as_ref()
+                        .and_then(|plan| plan.denoiser(&segment.relative_path));
                     let (samples, got) = match denoiser {
                         Some(denoiser) => {
                             let (from, to) = denoiser.input_range(read_start, read_end);
@@ -306,57 +411,72 @@ impl AudioMixer {
                     if got == 0 {
                         continue;
                     }
-                    let ducked = *track_type == TrackType::SystemAudio
-                        && self.polish.is_some()
-                        && span.media.is_none();
+                    // Ducking where its lane has it on, under speech anywhere on the timeline.
+                    let ducked = self
+                        .polish
+                        .as_ref()
+                        .is_some_and(|plan| plan.ducks(&segment.track_id));
+                    // Fold a sample frame to stereo: stereo stays stereo; more channels
+                    // average even ones left and odd ones right.
+                    let fold = |values: &[f32]| -> [f64; 2] {
+                        match values {
+                            [mono] => [*mono as f64, *mono as f64],
+                            [left, right] => [*left as f64, *right as f64],
+                            _ => {
+                                let mut sums = [0.0f64; 2];
+                                let mut counts = [0usize; 2];
+                                for (c, v) in values.iter().enumerate() {
+                                    sums[c % 2] += *v as f64;
+                                    counts[c % 2] += 1;
+                                }
+                                [
+                                    sums[0] / counts[0].max(1) as f64,
+                                    sums[1] / counts[1].max(1) as f64,
+                                ]
+                            }
+                        }
+                    };
+                    let frame_at = |tap: i64| {
+                        let index = tap.clamp(read_start as i64, read_start as i64 + got as i64 - 1)
+                            as usize
+                            - read_start as usize;
+                        &samples[index * channels..(index + 1) * channels]
+                    };
+                    // Already at the output rate (imported sound, most recordings): take the
+                    // nearest sample, at most half a sample (10 us) off.
+                    let direct = info.sample_rate == SAMPLE_RATE;
+                    let table = (!direct).then(|| sinc_table((SAMPLE_RATE as f64 / rate).min(1.0)));
                     for frame in lo..hi {
                         let pos = local(frame);
                         if pos >= info.frame_count as f64 {
                             continue;
                         }
-                        let mut stereo = [0f64; 2];
-                        let mut weights = 0.0;
-                        // Windowed-sinc low-pass resampling prevents aliasing when downsampling.
-                        let cutoff = (SAMPLE_RATE as f64 / rate).min(1.0);
-                        let center = pos.floor() as i64;
-                        for tap in (center - RADIUS + 1)..=(center + RADIUS) {
-                            let distance = tap as f64 - pos;
-                            let x = std::f64::consts::PI * distance * cutoff;
-                            let sinc = if x.abs() < 1e-12 { 1.0 } else { x.sin() / x };
-                            let weight = sinc
-                                * (0.5
-                                    + 0.5
-                                        * (std::f64::consts::PI * distance / RADIUS as f64).cos());
-                            let sample_frame = tap
-                                .clamp(read_start as i64, read_start as i64 + got as i64 - 1)
-                                as usize
-                                - read_start as usize;
-                            let values =
-                                &samples[sample_frame * channels..(sample_frame + 1) * channels];
-                            for ch in 0..2 {
-                                let v = if channels == 1 {
-                                    values[0] as f64
-                                } else {
-                                    // Stereo stays stereo; multichannel uses an explicit even/odd fold-down.
-                                    let mut n = 0;
-                                    let mut sum = 0.0;
-                                    for c in (ch..channels).step_by(2) {
-                                        sum += values[c] as f64;
-                                        n += 1;
-                                    }
-                                    sum / n as f64
-                                };
-                                stereo[ch] += weight * v;
+                        let (stereo, weights) = match &table {
+                            None => (fold(frame_at(pos.round() as i64)), 1.0),
+                            Some(table) => {
+                                // Windowed-sinc low-pass resampling prevents aliasing when
+                                // downsampling; the weights come from a table by sub-sample phase.
+                                let center = pos.floor() as i64;
+                                let phase =
+                                    ((pos - center as f64) * SINC_PHASES as f64).round() as usize;
+                                let row = &table[phase * SINC_TAPS..(phase + 1) * SINC_TAPS];
+                                let mut stereo = [0f64; 2];
+                                let mut weights = 0.0;
+                                for (j, weight) in row.iter().enumerate() {
+                                    let v = fold(frame_at(center - RADIUS + 1 + j as i64));
+                                    stereo[0] += weight * v[0];
+                                    stereo[1] += weight * v[1];
+                                    weights += weight;
+                                }
+                                (stereo, weights)
                             }
-                            weights += weight;
-                        }
+                        };
                         if weights.abs() > 1e-12 {
                             let gain = track_gain
                                 * match &self.polish {
-                                    Some(plan) if ducked => plan.duck_gain(
-                                        frame as f64 * 1e6 / SAMPLE_RATE as f64
-                                            - span.edited_start as f64
-                                            + span.source_start as f64,
+                                    Some(plan) if ducked => plan.lane_duck_gain(
+                                        &segment.track_id,
+                                        frame as f64 * 1e6 / SAMPLE_RATE as f64,
                                     ),
                                     _ => 1.0,
                                 };
@@ -556,6 +676,125 @@ mod tests {
         assert!(rms(seconds(&diff, 2.8, 3.0)) < 1e-3);
     }
 
+    /// Imported speech on V1 and imported music on an audio track: ducking set on the music
+    /// lane lowers it under the speech; nothing is recorded at all.
+    #[test]
+    fn an_imported_background_lane_ducks_under_imported_speech() {
+        use crate::media_bin::{MediaAsset, MediaKind};
+        use crate::project::audio::TrackMix;
+        use crate::tracks::{OverlayClip, OverlayFit, OverlayTrack, TrackKind};
+        let rate = 48_000usize;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("assets/media")).unwrap();
+        // Speech from 1 s to 2 s over faint hiss; music a steady 1 kHz tone. 3 s each.
+        let mut state = 9u64;
+        let speech: Vec<i16> = (0..rate * 3)
+            .map(|i| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let hiss = ((state >> 40) as f64 / (1u64 << 24) as f64 - 0.5) * 600.0;
+                let voice = if (rate..rate * 2).contains(&i) {
+                    9000.0 * (std::f64::consts::TAU * 220.0 * i as f64 / rate as f64).sin()
+                } else {
+                    0.0
+                };
+                (hiss + voice) as i16
+            })
+            .collect();
+        let music: Vec<i16> = (0..rate * 3)
+            .map(|i| {
+                (8000.0 * (std::f64::consts::TAU * 1000.0 * i as f64 / rate as f64).sin()) as i16
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("assets/media/talk.audio.wav"),
+            generate_pcm16_wav(rate as u32, 1, &speech),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("assets/media/song.audio.wav"),
+            generate_pcm16_wav(rate as u32, 1, &music),
+        )
+        .unwrap();
+        let asset = |id: &str, kind: MediaKind, wav: &str| MediaAsset {
+            id: id.into(),
+            name: format!("{id}.file"),
+            kind,
+            relative_path: format!("assets/media/{id}.mp4"),
+            source_path: None,
+            missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
+            audio_path: Some(wav.into()),
+            extra_audio_paths: Vec::new(),
+            audio_names: Vec::new(),
+            duration_us: 3_000_000,
+            width: 0,
+            height: 0,
+        };
+        let mut doc = EditDocument::from_retained(vec![RetainedInterval {
+            start_us: 0,
+            end_us: 3_000_000,
+            media: Some("talk".into()),
+            audio_unlinked: false,
+        }])
+        .unwrap();
+        doc.media_assets = vec![
+            asset("talk", MediaKind::Video, "assets/media/talk.audio.wav"),
+            asset("song", MediaKind::Audio, "assets/media/song.audio.wav"),
+        ];
+        doc.overlay_tracks = vec![OverlayTrack {
+            id: "track-1".into(),
+            kind: TrackKind::Audio,
+            clips: vec![OverlayClip {
+                id: "clip-1".into(),
+                asset_id: "song".into(),
+                start_us: 0,
+                in_us: 0,
+                duration_us: 3_000_000,
+                fit: OverlayFit::default(),
+                audio_stream: Some(0),
+                audio_unlinked: false,
+                link: None,
+            }],
+            hidden: false,
+            muted: false,
+            role: None,
+        }];
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc, &[]).unwrap());
+        doc.audio.tracks.insert(
+            "track-1".into(),
+            TrackMix {
+                duck_db: Some(12.0),
+                ..Default::default()
+            },
+        );
+        let ducked = mix_all(&AudioMixer::new(dir.path(), &doc, &[]).unwrap());
+        let diff: Vec<f64> = plain.iter().zip(&ducked).map(|(a, b)| a - b).collect();
+        let music_rms = 8000.0 / 32767.0 / 2f64.sqrt();
+        assert!(
+            rms(seconds(&diff, 0.2, 0.6)) < 1e-3,
+            "no speech, no ducking"
+        );
+        let removed = rms(seconds(&diff, 1.2, 1.8)) / music_rms;
+        let expected = 1.0 - 10f64.powf(-12.0 / 20.0);
+        assert!((removed - expected).abs() < 0.03, "removed {removed}");
+
+        // Marking the V1 lane as background takes the speech away: nothing ducks.
+        doc.audio.tracks.insert(
+            main_sound_lane(0),
+            TrackMix {
+                role: Some(crate::media_bin::SoundRole::Background),
+                ..Default::default()
+            },
+        );
+        let unmarked = mix_all(&AudioMixer::new(dir.path(), &doc, &[]).unwrap());
+        let diff: Vec<f64> = plain.iter().zip(&unmarked).map(|(a, b)| a - b).collect();
+        assert!(rms(seconds(&diff, 1.2, 1.8)) < 1e-3);
+    }
+
     #[test]
     fn track_mute_and_volume_apply_to_the_mix() {
         use crate::project::audio::TrackMix;
@@ -566,6 +805,7 @@ mod tests {
             TrackMix {
                 muted: true,
                 volume_db: 0.0,
+                ..Default::default()
             },
         );
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
@@ -591,6 +831,7 @@ mod tests {
             TrackMix {
                 muted: true,
                 volume_db: 0.0,
+                ..Default::default()
             },
         );
         doc.audio.tracks.get_mut("system").unwrap().muted = true;

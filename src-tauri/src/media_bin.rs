@@ -34,6 +34,27 @@ pub enum MediaKind {
     Audio,
 }
 
+/// What a file's picture stands for, so it is edited and drawn like that part of a recording.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PictureRole {
+    /// The screen: the canvas layout's size, corners, shadow and crop apply, and zooms.
+    #[default]
+    Screen,
+    /// A camera: on a track above V1 it is drawn in the webcam bubble.
+    Webcam,
+}
+
+/// What a sound stream is, so it is treated like that part of a recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundRole {
+    /// Speech: it can be transcribed and captioned.
+    Mic,
+    /// Music, game or desktop sound.
+    Background,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaAsset {
@@ -51,6 +72,16 @@ pub struct MediaAsset {
     /// The file is no longer there. Worked out when the project is read, never saved.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub missing: bool,
+    #[serde(default)]
+    pub picture_role: PictureRole,
+    /// A role per audio stream; streams past the end take [`MediaAsset::sound_role`]'s default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sound_roles: Vec<SoundRole>,
+    /// An imported recording: its folder. The picture is its screen, the webcam bubble shows
+    /// its camera, the sound streams are its microphone and system audio, and its mouse
+    /// data gives its own zooms. Times in the asset are the recording's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_path: Option<String>,
     /// Extracted 48 kHz stereo WAV of the first audio stream, relative to the root, when
     /// the file has audio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +102,18 @@ pub struct MediaAsset {
 }
 
 impl MediaAsset {
+    /// What stream `stream` is: as set, else a video's first stream is speech and every
+    /// other stream (and an audio file, usually music) is background.
+    pub fn sound_role(&self, stream: usize) -> SoundRole {
+        self.sound_roles.get(stream).copied().unwrap_or(
+            if stream == 0 && self.kind == MediaKind::Video {
+                SoundRole::Mic
+            } else {
+                SoundRole::Background
+            },
+        )
+    }
+
     /// Where the media's own file is.
     pub fn file_path(&self, root: &Path) -> Result<std::path::PathBuf, String> {
         match &self.source_path {
@@ -150,6 +193,16 @@ pub fn validate_assets(assets: &[MediaAsset]) -> Result<(), String> {
         {
             return Err("Invalid imported media audio".into());
         }
+        if asset
+            .recording_path
+            .as_ref()
+            .is_some_and(|p| p.is_empty() || p.len() > 4096 || !Path::new(p).is_absolute())
+        {
+            return Err("An imported recording needs its absolute folder".into());
+        }
+        if asset.sound_roles.len() > asset.audio_paths().count() {
+            return Err("More sound roles than audio streams".into());
+        }
         if asset.duration_us == 0 {
             return Err("Imported media has no duration".into());
         }
@@ -168,12 +221,10 @@ pub fn expand_import_paths(
             out.push(path.clone());
             continue;
         }
-        if path.join("manifest.json").is_file() {
-            return Err(format!(
-                "{} is a recording. Open it as a project (or start a project from it); \
-                 recordings cannot be added as media yet",
-                path.display()
-            ));
+        if is_recording(path) {
+            // A recording comes in whole: screen, camera, sound and mouse data.
+            out.push(path.clone());
+            continue;
         }
         let mut files: Vec<_> = fs::read_dir(path)
             .map_err(|e| format!("{}: {e}", path.display()))?
@@ -189,9 +240,17 @@ pub fn expand_import_paths(
     Ok(out)
 }
 
+/// Whether `path` is a recorder folder.
+pub fn is_recording(path: &Path) -> bool {
+    path.is_dir() && path.join("manifest.json").is_file()
+}
+
 /// Describes `source` for the project, which refers to it where it is, and extracts its
 /// sound. The caller records the asset in the edit document.
 pub fn import(root: &Path, source: &Path) -> Result<MediaAsset, String> {
+    if is_recording(source) {
+        return import_recording(root, source);
+    }
     let kind = kind_for(source).ok_or_else(|| {
         format!(
             "{} is not a supported video, image or audio file",
@@ -224,6 +283,9 @@ pub fn import(root: &Path, source: &Path) -> Result<MediaAsset, String> {
         relative_path: String::new(),
         source_path: Some(source_text),
         missing: false,
+        picture_role: Default::default(),
+        sound_roles: Vec::new(),
+        recording_path: None,
         audio_path: audio_paths.next(),
         extra_audio_paths: audio_paths.collect(),
         audio_names: audio.names,
@@ -295,6 +357,122 @@ fn remove_paths<'a>(root: &Path, paths: impl IntoIterator<Item = &'a String>) {
     }
 }
 
+fn plain_path(path: &Path) -> String {
+    // Windows canonical paths carry a \\?\ prefix other tools do not expect.
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
+}
+
+/// A recording as one piece of media: its screen with its camera, microphone and system
+/// audio (each joined into one WAV in the project), on the recording's own clock.
+fn import_recording(root: &Path, folder: &Path) -> Result<MediaAsset, String> {
+    use crate::project::TrackType;
+    let folder = fs::canonicalize(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let (tracks, duration_us) = crate::project::reader::recording_tracks(&folder)?;
+    if duration_us == 0 {
+        return Err("That recording is empty".into());
+    }
+    let screen = tracks
+        .iter()
+        .find(|(t, s)| t.descriptor.track_type == TrackType::Screen && !s.is_empty())
+        .ok_or("That recording has no screen video")?;
+    let (mut width, mut height) = (
+        screen.0.descriptor.width.unwrap_or(0),
+        screen.0.descriptor.height.unwrap_or(0),
+    );
+    if width == 0 || height == 0 {
+        let first = safe_path(&folder, &screen.1[0].relative_path)?;
+        let info = crate::media::ffmpeg::probe_video(&first)?;
+        (width, height) = (info.width, info.height);
+    }
+    let id = format!("m-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+    fs::create_dir_all(safe_path(root, MEDIA_DIR)?)
+        .map_err(|e| format!("Could not create {MEDIA_DIR}: {e}"))?;
+    let mut audio = ExtractedAudio::default();
+    let mut roles = Vec::new();
+    for (kind, name, role) in [
+        (TrackType::MicAudio, "Microphone", SoundRole::Mic),
+        (
+            TrackType::SystemAudio,
+            "System audio",
+            SoundRole::Background,
+        ),
+    ] {
+        for (track, segments) in tracks
+            .iter()
+            .filter(|(t, _)| t.descriptor.track_type == kind)
+        {
+            let parts: Vec<_> = segments
+                .iter()
+                .filter(|s| s.available)
+                .map(|s| Ok((safe_path(&folder, &s.relative_path)?, s.start_us)))
+                .collect::<Result<_, String>>()?;
+            if parts.is_empty() {
+                continue;
+            }
+            let stream = audio.paths.len();
+            let relative = if stream == 0 {
+                format!("{MEDIA_DIR}/{id}.audio.wav")
+            } else {
+                format!("{MEDIA_DIR}/{id}.audio{}.wav", stream + 1)
+            };
+            let joined = safe_path(root, &relative).and_then(|target| {
+                crate::media::ffmpeg::assemble_audio_wav(&parts, duration_us, &target)
+            });
+            if let Err(error) = joined {
+                remove_paths(root, audio.paths.iter().chain([&relative]));
+                return Err(error);
+            }
+            audio.paths.push(relative);
+            let several = tracks
+                .iter()
+                .filter(|(t, _)| t.descriptor.track_type == kind)
+                .count()
+                > 1;
+            audio.names.push(if several {
+                format!("{name} ({})", track.descriptor.id)
+            } else {
+                name.to_string()
+            });
+            roles.push(role);
+        }
+    }
+    let name = fs::read(folder.join("manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|m| {
+            m.get("projectName")
+                .and_then(|n| n.as_str())
+                .map(String::from)
+        })
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| {
+            folder
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Recording".into())
+        });
+    let mut paths = audio.paths.into_iter();
+    Ok(MediaAsset {
+        id,
+        name,
+        kind: MediaKind::Video,
+        relative_path: String::new(),
+        source_path: Some(plain_path(&folder)),
+        missing: false,
+        picture_role: PictureRole::Screen,
+        sound_roles: roles,
+        recording_path: Some(plain_path(&folder)),
+        audio_path: paths.next(),
+        extra_audio_paths: paths.collect(),
+        audio_names: audio.names,
+        duration_us,
+        width,
+        height,
+    })
+}
+
 /// Deletes the files an import made in the project; used when an import is abandoned before
 /// it is recorded. A file referenced in place belongs to the user and is never touched.
 pub fn remove_files(root: &Path, asset: &MediaAsset) {
@@ -347,6 +525,9 @@ mod tests {
             relative_path: "assets/media/m-1.png".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -456,7 +637,11 @@ mod tests {
         let recording = dir.path().join("rec");
         fs::create_dir_all(&recording).unwrap();
         fs::write(recording.join("manifest.json"), b"{}").unwrap();
-        assert!(expand_import_paths(&[recording]).is_err());
+        // A recording comes in whole, as one import.
+        assert_eq!(
+            expand_import_paths(&[recording.clone()]).unwrap(),
+            vec![recording]
+        );
         let empty = dir.path().join("empty");
         fs::create_dir_all(&empty).unwrap();
         assert!(expand_import_paths(&[empty]).is_err());

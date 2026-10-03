@@ -4,8 +4,7 @@ use super::reader::{open_regular, safe_path, RetainedInterval};
 use crate::timeline::{SourceInterval, TimelineMapper};
 use crate::webcam_focus::WebcamFocus;
 use crate::zoom::{
-    attach_zoom_edited_ranges, validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion,
-    MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
+    validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion, MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -64,6 +63,44 @@ pub struct EditDocument {
     /// Video tracks V2, V3, ... above the main sequence, bottom to top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
+    /// V1 as a track: magnetic or not, hidden, muted, and where it sits among the video tracks.
+    #[serde(default, skip_serializing_if = "MainTrack::is_default")]
+    pub main_track: MainTrack,
+    /// Auto-zoom settings: how far zooms go, how many, how the camera follows.
+    #[serde(default, skip_serializing_if = "crate::zoom::ZoomSettings::is_default")]
+    pub zoom_settings: crate::zoom::ZoomSettings,
+}
+
+/// A V1 entry that is empty time: black where nothing else is drawn, silent.
+pub const GAP: &str = "@gap";
+
+/// V1's settings as a track.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MainTrack {
+    /// Cuts close up and moves insert (on by default); off, they leave gaps and overwrite.
+    pub magnetic: bool,
+    pub hidden: bool,
+    pub muted: bool,
+    /// How many video tracks are below V1 (0: V1 is at the bottom).
+    pub position: usize,
+}
+
+impl Default for MainTrack {
+    fn default() -> Self {
+        Self {
+            magnetic: true,
+            hidden: false,
+            muted: false,
+            position: 0,
+        }
+    }
+}
+
+impl MainTrack {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Default for EditDocument {
@@ -84,6 +121,8 @@ impl Default for EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             overlay_tracks: Vec::new(),
+            main_track: MainTrack::default(),
+            zoom_settings: Default::default(),
         }
     }
 }
@@ -107,6 +146,8 @@ impl EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             overlay_tracks: Vec::new(),
+            main_track: MainTrack::default(),
+            zoom_settings: Default::default(),
         })
     }
 
@@ -114,13 +155,155 @@ impl EditDocument {
         mapper_for(&self.retained_intervals)
     }
 
+    /// What stream `stream` of `asset` is when it plays on V1: the V1 sound lane's mark,
+    /// else the file's own role.
+    pub fn main_stream_role(
+        &self,
+        asset: &crate::media_bin::MediaAsset,
+        stream: usize,
+    ) -> crate::media_bin::SoundRole {
+        self.audio
+            .lane_role(&crate::media::audio::main_sound_lane(stream))
+            .unwrap_or_else(|| asset.sound_role(stream))
+    }
+
+    /// The project recording's zooms (imported recordings keep their own).
     pub fn zoom_suggestions(&self) -> Vec<ZoomSuggestion> {
-        self.zooms.iter().map(ZoomKeyframe::as_suggestion).collect()
+        self.media_zoom_suggestions(None)
+    }
+
+    /// Maps the time of the file behind transcript `track_id` onto the edited timeline. A
+    /// recording track's transcript is in recording time: the usual mapper. Imported sound
+    /// (`msound-<stream>-<asset>`) is in that file's own time: wherever its clips play it, on
+    /// any track.
+    pub fn mapper_for_transcript(
+        &self,
+        track_id: &str,
+    ) -> Result<crate::timeline::TimelineMapper, String> {
+        match media_sound(track_id) {
+            None => self.mapper(),
+            Some((stream, asset_id)) => Ok(self.mapper_for_sound(asset_id, stream)),
+        }
+    }
+
+    /// The zooms on the clock of `media` (an imported recording), or of the project's own
+    /// recording when `None`.
+    pub fn media_zoom_suggestions(&self, media: Option<&str>) -> Vec<ZoomSuggestion> {
+        self.zooms
+            .iter()
+            .filter(|zoom| zoom.media.as_deref() == media)
+            .map(ZoomKeyframe::as_suggestion)
+            .collect()
+    }
+
+    /// Maps the clock of imported media `asset_id` onto the edited timeline through its
+    /// clips on V1 (everything else on V1 maps nothing).
+    pub fn mapper_for_media(&self, asset_id: &str) -> crate::timeline::TimelineMapper {
+        crate::timeline::TimelineMapper::new(
+            self.retained_intervals
+                .iter()
+                .enumerate()
+                .map(|(i, interval)| {
+                    let own = interval.media.as_deref() == Some(asset_id);
+                    SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
+                        .with_media((!own).then(|| "other".to_string()))
+                })
+                .collect(),
+        )
+    }
+
+    /// Maps one sound stream of imported file `asset_id` (its own time) onto the edited
+    /// timeline through every clip that plays it: on V1, on video tracks and on audio tracks.
+    /// Where clips of it overlap (in the timeline or in the file), the earlier one counts.
+    pub fn mapper_for_sound(
+        &self,
+        asset_id: &str,
+        stream: usize,
+    ) -> crate::timeline::TimelineMapper {
+        crate::timeline::TimelineMapper::new(
+            self.sound_retained(asset_id, stream)
+                .iter()
+                .enumerate()
+                .map(|(i, entry)| {
+                    SourceInterval::new(format!("snd-{i}"), entry.start_us, entry.end_us)
+                        .with_media(entry.media.clone())
+                })
+                .collect(),
+        )
+    }
+
+    /// Where one sound stream of an imported file plays, as timeline entries in its own time:
+    /// each clip of it (on any track) as a "recording" range, and the time between as gaps
+    /// that map nowhere. Overlapping uses keep the earlier one.
+    pub fn sound_retained(&self, asset_id: &str, stream: usize) -> Vec<RetainedInterval> {
+        let mut placements: Vec<_> = crate::media::audio::media_placements(self)
+            .into_iter()
+            .filter(|p| p.asset_id == asset_id && p.stream == stream && p.len > 0)
+            .collect();
+        placements.sort_by_key(|p| (p.edited_start, p.in_us));
+        let mut intervals = Vec::new();
+        let mut used: Vec<(u64, u64)> = Vec::new();
+        let mut cursor = 0u64;
+        for placed in placements {
+            let file = (placed.in_us, placed.in_us + placed.len);
+            if placed.edited_start < cursor || used.iter().any(|&(a, b)| file.0 < b && a < file.1) {
+                continue;
+            }
+            if placed.edited_start > cursor {
+                // Time where this sound does not play: maps to nothing.
+                intervals.push(RetainedInterval {
+                    start_us: 0,
+                    end_us: placed.edited_start - cursor,
+                    media: Some("gap".into()),
+                    audio_unlinked: false,
+                });
+            }
+            intervals.push(RetainedInterval::recording(file.0, file.1));
+            used.push(file);
+            cursor = placed.edited_start + placed.len;
+        }
+        intervals
+    }
+
+    /// Where `zoom` shows on the edited timeline (nothing if its time was all cut).
+    pub fn zoom_edited(&self, zoom: &ZoomKeyframe) -> Vec<(u64, u64)> {
+        let mapper = match zoom.media.as_deref() {
+            None => self.mapper().ok(),
+            Some(asset) => Some(self.mapper_for_media(asset)),
+        };
+        mapper
+            .map(|m| m.source_range_to_edited(zoom.source_start_us, zoom.source_end_us))
+            .unwrap_or_default()
+    }
+
+    /// Whether `zoom` shares edited time with any other zoom: zooms never overlap.
+    pub fn zoom_overlaps(&self, zoom: &ZoomKeyframe) -> bool {
+        let mine = self.zoom_edited(zoom);
+        self.zooms.iter().filter(|z| z.id != zoom.id).any(|other| {
+            let theirs = self.zoom_edited(other);
+            mine.iter()
+                .any(|&(a, b)| theirs.iter().any(|&(c, d)| a < d && c < b))
+        })
+    }
+
+    /// The zooms with where each lands on the edited timeline, each on its own clock.
+    pub fn zooms_with_ranges(&self) -> Vec<ZoomKeyframe> {
+        let mut zooms = self.zooms.clone();
+        let main = self.mapper().ok();
+        crate::zoom::attach_zoom_edited_ranges_with(&mut zooms, &|media| match media {
+            None => main.clone(),
+            Some(asset) => Some(self.mapper_for_media(asset)),
+        });
+        zooms
     }
 
     pub fn attach_zoom_ranges(&mut self) -> Result<(), String> {
         let mapper = self.mapper()?;
-        attach_zoom_edited_ranges(&mut self.zooms, &mapper);
+        let document = self.clone();
+        crate::zoom::attach_zoom_edited_ranges_with(&mut self.zooms, &|media| match media {
+            None => Some(mapper.clone()),
+            Some(asset) => Some(document.mapper_for_media(asset)),
+        });
         Ok(())
     }
 
@@ -304,6 +487,10 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
             continue;
         }
         match out.last_mut() {
+            // Gaps side by side are one gap.
+            Some(last) if last.is_gap() && interval.is_gap() => {
+                last.end_us += interval.end_us - interval.start_us;
+            }
             // Media entries are never joined: their boundaries are the user's splits.
             Some(last)
                 if last.end_us == interval.start_us
@@ -315,7 +502,83 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
             _ => out.push(interval),
         }
     }
+    // Nothing after the last clip: the timeline ends there.
+    while out.last().is_some_and(RetainedInterval::is_gap) {
+        out.pop();
+    }
     out
+}
+
+/// Empty V1 time `len_us` long.
+pub fn gap(len_us: u64) -> RetainedInterval {
+    RetainedInterval {
+        start_us: 0,
+        end_us: len_us,
+        media: Some(GAP.into()),
+        audio_unlinked: false,
+    }
+}
+
+/// Without magnetism: the V1 ranges become gaps; nothing moves.
+pub(crate) fn lift_main(document: &mut EditDocument, cuts: &[(u64, u64)]) -> Result<(), String> {
+    let mut ordered = cuts.to_vec();
+    ordered.sort_unstable();
+    let retained = &mut document.retained_intervals;
+    let duration: u64 = retained.iter().map(|i| i.end_us - i.start_us).sum();
+    for &(start, end) in ordered.iter().rev() {
+        if start >= end || end > duration {
+            return Err("That range is not on the timeline".into());
+        }
+        let first = split_at_edited(retained, start)?;
+        let last = split_at_edited(retained, end)?;
+        retained.splice(first..last, [gap(end - start)]);
+    }
+    document.retained_intervals =
+        canonical_retained(std::mem::take(&mut document.retained_intervals));
+    Ok(())
+}
+
+/// Without magnetism: puts `entries` on V1 at `start_us`, over whatever was there (past the
+/// end, the time before it becomes a gap).
+pub(crate) fn place_main(
+    document: &mut EditDocument,
+    entries: Vec<RetainedInterval>,
+    start_us: u64,
+) -> Result<(), String> {
+    let length: u64 = entries.iter().map(|e| e.end_us - e.start_us).sum();
+    if length == 0 {
+        return Err("Nothing to place".into());
+    }
+    let retained = &mut document.retained_intervals;
+    let duration: u64 = retained.iter().map(|i| i.end_us - i.start_us).sum();
+    if start_us + length > duration {
+        retained.push(gap(start_us + length - duration));
+    }
+    let first = split_at_edited(retained, start_us)?;
+    let last = split_at_edited(retained, start_us + length)?;
+    retained.splice(first..last, entries);
+    document.retained_intervals =
+        canonical_retained(std::mem::take(&mut document.retained_intervals));
+    Ok(())
+}
+
+/// The imported file behind a sound id `msound-<stream>-<asset>`.
+pub fn media_sound_asset(track_id: &str) -> Option<&str> {
+    track_id
+        .strip_prefix("msound-")?
+        .split_once('-')
+        .map(|(_, asset)| asset)
+}
+
+/// The stream and imported file behind a sound id `msound-<stream>-<asset>`.
+pub fn media_sound(track_id: &str) -> Option<(usize, &str)> {
+    let (stream, asset) = track_id.strip_prefix("msound-")?.split_once('-')?;
+    Some((stream.parse().ok()?, asset))
+}
+
+/// The sound id of stream `stream` of imported file `asset_id`.
+pub fn media_sound_id(stream: usize, asset_id: &str) -> String {
+    format!("msound-{stream}-{asset_id}")
 }
 
 /// Splits V1 at `edited_us`: imported media becomes two entries, the recording gets a split
@@ -772,6 +1035,7 @@ impl EditHistory {
         crate::media_bin::validate_assets(&next.media_assets)?;
         crate::chapters::validate(&next.chapters)?;
         crate::shorts::validate(&next.shorts)?;
+        crate::shorts::validate_edits(&next)?;
         crate::tracks::validate(&next)?;
         if next.short_layout.is_some() {
             return Err("A project's own edit cannot use a short's split layout".into());
@@ -780,6 +1044,7 @@ impl EditHistory {
             entry
                 .media
                 .as_ref()
+                .filter(|id| *id != GAP)
                 .filter(|id| !next.media_assets.iter().any(|asset| &asset.id == *id))
         }) {
             return Err(format!(
@@ -974,17 +1239,25 @@ impl EditHistory {
             next.zooms.iter().map(|z| z.id.clone()).collect();
         let dismissed: std::collections::BTreeSet<_> =
             next.dismissed_zoom_ids.iter().cloned().collect();
+        let mut overlapping = 0;
         for suggestion in suggestions {
             if existing.contains(&suggestion.id) || dismissed.contains(&suggestion.id) {
                 continue;
             }
-            next.zooms.push(ZoomKeyframe::from_suggestion(
-                suggestion.clone(),
-                ZoomSource::Generated,
-            ));
+            let zoom = ZoomKeyframe::from_suggestion(suggestion.clone(), ZoomSource::Generated);
+            // Zooms never overlap: one landing on a zoom already there is left out.
+            if next.zoom_overlaps(&zoom) {
+                overlapping += 1;
+                continue;
+            }
+            next.zooms.push(zoom);
         }
         if next.zooms.len() == self.current.zooms.len() {
-            return Err("Those zoom suggestions are already applied or dismissed".into());
+            return Err(if overlapping > 0 {
+                "Those zooms would overlap zooms already on the timeline".into()
+            } else {
+                "Those zoom suggestions are already applied or dismissed".into()
+            });
         }
         if next.zooms.len() > MAX_ZOOMS {
             return Err("Too many zoom keyframes".into());
@@ -1038,9 +1311,76 @@ impl EditHistory {
         existing.center_y = patch.center_y;
         existing.scale = patch.scale;
         existing.transition_us = patch.transition_us;
+        existing.fixed = patch.fixed;
+        // A zoom stays on its own clock.
         // Moving/resizing a generated zoom keeps its id so regeneration cannot
         // replace it, and marks it manual so a later accept cannot reset it.
         existing.source = ZoomSource::Manual;
+        let moved = existing.clone();
+        if next.zoom_overlaps(&moved) {
+            return Err("Zooms can't overlap: it stops where the next zoom starts".into());
+        }
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// New auto-zoom settings. Automatic zooms take the new amounts and transition at once,
+    /// so every zoom of a kind looks the same; zooms you set yourself keep theirs.
+    pub fn set_zoom_settings(
+        &mut self,
+        expected_revision: u64,
+        settings: crate::zoom::ZoomSettings,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        settings.validate()?;
+        let mut next = self.current.clone();
+        let transition = settings.transition_ms as u64 * 1_000;
+        for zoom in next
+            .zooms
+            .iter_mut()
+            .filter(|z| z.source == ZoomSource::Generated)
+        {
+            zoom.scale = settings.scale_for(zoom.origin);
+            let length = zoom.source_end_us - zoom.source_start_us;
+            zoom.transition_us = transition.min(length.saturating_sub(1) / 2).max(1);
+        }
+        next.zoom_settings = settings;
+        if next == self.current {
+            return Ok(&self.current);
+        }
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Takes the generated zooms off and puts the recording's zooms back on, found again with
+    /// the current auto-zoom settings (dismissed ones included); zooms you made or changed
+    /// stay, and new ones never overlap them.
+    pub fn reload_zooms(
+        &mut self,
+        expected_revision: u64,
+        suggestions: &[ZoomSuggestion],
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        let mut next = self.current.clone();
+        next.zooms.retain(|z| z.source == ZoomSource::Manual);
+        next.dismissed_zoom_ids.clear();
+        for suggestion in suggestions {
+            if next.zooms.iter().any(|z| z.id == suggestion.id) {
+                continue;
+            }
+            let zoom = ZoomKeyframe::from_suggestion(suggestion.clone(), ZoomSource::Generated);
+            if !next.zoom_overlaps(&zoom) && next.zooms.len() < MAX_ZOOMS {
+                next.zooms.push(zoom);
+            }
+        }
+        next.zooms.sort_by(|a, b| {
+            a.source_start_us
+                .cmp(&b.source_start_us)
+                .then(a.id.cmp(&b.id))
+        });
+        if next.zooms == self.current.zooms
+            && next.dismissed_zoom_ids == self.current.dismissed_zoom_ids
+        {
+            return Err("The recording's zooms are already on the timeline".into());
+        }
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1057,13 +1397,42 @@ impl EditHistory {
         if edited_end_us <= edited_start_us {
             return Err("Zoom must be a half-open edited range".into());
         }
-        let mapper = self.current.mapper()?;
+        // Zooms never overlap: the new one fits into the free time around its start.
+        let (mut edited_start_us, mut edited_end_us) = (edited_start_us, edited_end_us);
+        let mut taken: Vec<(u64, u64)> = self
+            .current
+            .zooms
+            .iter()
+            .flat_map(|z| self.current.zoom_edited(z))
+            .collect();
+        taken.sort_unstable();
+        for (a, b) in taken {
+            if a < edited_end_us && edited_start_us < b {
+                if a <= edited_start_us {
+                    edited_start_us = b;
+                } else {
+                    edited_end_us = edited_end_us.min(a);
+                }
+            }
+        }
+        if edited_end_us <= edited_start_us || edited_end_us - edited_start_us < 300_000 {
+            return Err("There's a zoom here already: zooms can't overlap".into());
+        }
+        let main = self.current.mapper()?;
+        // Over an imported clip the zoom is on that file's clock.
+        let media = main
+            .media_at(edited_start_us)
+            .map(|(asset, _)| asset.to_string());
+        let mapper = match &media {
+            Some(asset) => self.current.mapper_for_media(asset),
+            None => main,
+        };
         let source_start = mapper
             .edited_to_source_us(edited_start_us)
             .ok_or("Zoom start is not on retained media")?;
         let source_end_sample = mapper
             .edited_to_source_us(edited_end_us.saturating_sub(1))
-            .ok_or("Zoom end is not on retained media")?;
+            .ok_or("Zoom end must be on the same clip as its start")?;
         let source_end = source_end_sample.saturating_add(1);
         if source_end <= source_start {
             return Err("Zoom range does not map onto source time".into());
@@ -1089,6 +1458,8 @@ impl EditHistory {
             contributing_event_seqs: Vec::new(),
             source: ZoomSource::Manual,
             edited_ranges: Vec::new(),
+            media,
+            fixed: false,
         });
         next.zooms.sort_by(|a, b| {
             a.source_start_us
@@ -1254,8 +1625,46 @@ impl EditHistory {
         next.retained_intervals
             .retain(|entry| entry.media.as_deref() != Some(asset_id));
         crate::tracks::remove_asset(&mut next, asset_id);
+        // Shorts edited on their own lose it too.
+        for short in &mut next.shorts {
+            if let Some(own) = &mut short.edit {
+                own.retained_intervals
+                    .retain(|entry| entry.media.as_deref() != Some(asset_id));
+                own.retained_intervals =
+                    canonical_retained(std::mem::take(&mut own.retained_intervals));
+                for track in &mut own.overlay_tracks {
+                    track.clips.retain(|clip| clip.asset_id != asset_id);
+                }
+            }
+        }
         // An empty timeline is valid: a project can be built from nothing but imports.
         next.retained_intervals = canonical_retained(next.retained_intervals);
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Sets what an imported file's picture and sound streams are.
+    pub fn set_media_roles(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        picture_role: crate::media_bin::PictureRole,
+        sound_roles: Vec<crate::media_bin::SoundRole>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let mut next = self.current.clone();
+        let asset = next
+            .media_assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("No such imported media")?;
+        if asset.picture_role == picture_role && asset.sound_roles == sound_roles {
+            return Err("Nothing changed".into());
+        }
+        asset.picture_role = picture_role;
+        asset.sound_roles = sound_roles;
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1293,6 +1702,52 @@ impl EditHistory {
                 audio_unlinked: false,
             },
         );
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// One timeline change made in short `short_id`'s own timeline. The short's first edit
+    /// copies its stretch of the video into it; from then on it is edited on its own.
+    pub fn edit_short_tracks(
+        &mut self,
+        expected_revision: u64,
+        short_id: &str,
+        edit: &crate::tracks::TrackEdit,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let short = self
+            .current
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let timeline = crate::shorts::short_timeline(&self.current, short)?;
+        let changed = crate::tracks::apply(&timeline, edit)?;
+        let next = crate::shorts::with_short_timeline(&self.current, short_id, &changed)?;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Lets a short follow the video again: its own edit is dropped.
+    pub fn resync_short(
+        &mut self,
+        expected_revision: u64,
+        short_id: &str,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let mut next = self.current.clone();
+        let short = next
+            .shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        if short.edit.take().is_none() {
+            return Err("This short already follows the video".into());
+        }
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1599,6 +2054,59 @@ mod tests {
     }
 
     #[test]
+    fn zoom_settings_give_every_automatic_zoom_the_same_amount() {
+        use crate::zoom::{ZoomOrigin, ZoomSettings, ZoomSuggestion};
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(
+            EditDocument::from_retained(vec![RetainedInterval::recording(0, 20_000_000)]).unwrap(),
+        );
+        let zoom = |id: &str, start: u64, origin, scale| ZoomSuggestion {
+            path: Vec::new(),
+            id: id.into(),
+            source_start_us: start,
+            source_end_us: start + 3_000_000,
+            center_x: 0.5,
+            center_y: 0.5,
+            scale,
+            transition_us: 400_000,
+            origin,
+            contributing_event_seqs: vec![1],
+            edited_ranges: Vec::new(),
+            media: None,
+        };
+        history
+            .accept_zooms(
+                0,
+                &[
+                    zoom("a", 1_000_000, ZoomOrigin::Click, 2.0),
+                    zoom("b", 6_000_000, ZoomOrigin::Dwell, 1.5),
+                    zoom("c", 11_000_000, ZoomOrigin::Cluster, 2.5),
+                ],
+                dir.path(),
+            )
+            .unwrap();
+        // One zoom set by hand keeps its amount.
+        let mut mine = history.current.zooms[2].clone();
+        mine.scale = 3.0;
+        history.update_zoom(1, mine, dir.path()).unwrap();
+        let settings = ZoomSettings {
+            click_scale: 1.6,
+            hover_scale: 1.3,
+            transition_ms: 900,
+            ..ZoomSettings::default()
+        };
+        history
+            .set_zoom_settings(2, settings.clone(), dir.path())
+            .unwrap();
+        let scales: Vec<f64> = history.current.zooms.iter().map(|z| z.scale).collect();
+        assert_eq!(scales, vec![1.6, 1.3, 3.0]);
+        assert_eq!(history.current.zooms[0].transition_us, 900_000);
+        assert_eq!(history.current.zoom_settings, settings);
+        let loaded = load_edit_document(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded.zoom_settings, settings);
+    }
+
+    #[test]
     fn zoom_edits_undo_and_do_not_revive_dismissed_or_overwrite_manual() {
         use crate::zoom::{ZoomOrigin, ZoomSuggestion};
         let dir = tempdir().unwrap();
@@ -1612,6 +2120,7 @@ mod tests {
             .unwrap(),
         );
         let suggestion = ZoomSuggestion {
+            path: Vec::new(),
             id: "z-1-n1".into(),
             source_start_us: 1_000_000,
             source_end_us: 3_000_000,
@@ -1622,6 +2131,7 @@ mod tests {
             origin: ZoomOrigin::Click,
             contributing_event_seqs: vec![1],
             edited_ranges: Vec::new(),
+            media: None,
         };
         history
             .accept_zooms(0, &[suggestion.clone()], dir.path())
@@ -1760,6 +2270,9 @@ mod tests {
             relative_path: "assets/media/m1.png".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -1852,6 +2365,9 @@ mod tests {
             relative_path: "assets/media/m1.mp4".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -1879,6 +2395,230 @@ mod tests {
     }
 
     #[test]
+    fn imported_sound_transcripts_map_through_their_own_clips() {
+        // Recording 0..4 s, then 2 s of m1 (from 1 s into the file), then 1 s of m2.
+        let media = |id: &str, start_us, end_us| RetainedInterval {
+            start_us,
+            end_us,
+            media: Some(id.into()),
+            audio_unlinked: false,
+        };
+        let document = EditDocument::from_retained(vec![
+            ri(0, 4_000_000),
+            media("m1", 1_000_000, 3_000_000),
+            media("m2", 0, 1_000_000),
+        ])
+        .unwrap();
+        let mut document = document;
+        document.media_assets = ["m1", "m2"]
+            .map(|id| crate::media_bin::MediaAsset {
+                id: id.into(),
+                name: id.into(),
+                kind: crate::media_bin::MediaKind::Video,
+                relative_path: format!("assets/media/{id}.mp4"),
+                source_path: None,
+                missing: false,
+                picture_role: Default::default(),
+                sound_roles: Vec::new(),
+                recording_path: None,
+                audio_path: Some(format!("assets/media/{id}.audio.wav")),
+                extra_audio_paths: Vec::new(),
+                audio_names: Vec::new(),
+                duration_us: 10_000_000,
+                width: 0,
+                height: 0,
+            })
+            .to_vec();
+        let id = media_sound_id(0, "m1");
+        assert_eq!(media_sound(&id), Some((0, "m1")));
+        let mapper = document.mapper_for_transcript(&id).unwrap();
+        // A word 1.5 s into m1 plays 0.5 s into its clip, which starts at 4 s.
+        assert_eq!(
+            mapper.edited_span_of(1_500_000, 1_700_000),
+            Some((4_500_000, 4_700_000))
+        );
+        // Words outside the used part, and the recording's own time, map nowhere.
+        assert_eq!(mapper.edited_span_of(200_000, 300_000), None);
+        // A recording track keeps the usual mapping.
+        let usual = document.mapper_for_transcript("mic-1").unwrap();
+        assert_eq!(
+            usual.edited_span_of(1_000_000, 2_000_000),
+            Some((1_000_000, 2_000_000))
+        );
+    }
+
+    #[test]
+    fn a_zoom_whose_footage_is_all_cut_has_no_place_on_the_timeline() {
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 10_000_000)]).unwrap());
+        history
+            .add_manual_zoom(0, 2_000_000, 4_000_000, 0.5, 0.5, 2.0, dir.path())
+            .unwrap();
+        assert!(!history.current.zooms_with_ranges()[0]
+            .edited_ranges
+            .is_empty());
+        history
+            .ripple_cuts(1, &[(1_000_000, 5_000_000)], dir.path())
+            .unwrap();
+        assert!(
+            history.current.zooms_with_ranges()[0]
+                .edited_ranges
+                .is_empty(),
+            "nothing of it is left to show"
+        );
+    }
+
+    #[test]
+    fn transcripts_follow_sound_on_any_track_and_files_used_twice() {
+        use crate::tracks::{OverlayClip, OverlayFit, OverlayTrack, TrackKind};
+        // A song only on an audio track at 5 s; a talk on V1 twice (overlapping in the file).
+        let talk = |start_us, end_us| RetainedInterval {
+            start_us,
+            end_us,
+            media: Some("talk".into()),
+            audio_unlinked: false,
+        };
+        let mut document =
+            EditDocument::from_retained(vec![talk(0, 3_000_000), talk(1_000_000, 4_000_000)])
+                .unwrap();
+        let asset = |id: &str, kind| crate::media_bin::MediaAsset {
+            id: id.into(),
+            name: id.into(),
+            kind,
+            relative_path: format!("assets/media/{id}.wav"),
+            source_path: None,
+            missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
+            audio_path: Some(format!("assets/media/{id}.audio.wav")),
+            extra_audio_paths: Vec::new(),
+            audio_names: Vec::new(),
+            duration_us: 10_000_000,
+            width: 0,
+            height: 0,
+        };
+        document.media_assets = vec![
+            asset("talk", crate::media_bin::MediaKind::Video),
+            asset("song", crate::media_bin::MediaKind::Audio),
+        ];
+        document.overlay_tracks = vec![OverlayTrack {
+            id: "track-1".into(),
+            kind: TrackKind::Audio,
+            clips: vec![OverlayClip {
+                id: "clip-1".into(),
+                asset_id: "song".into(),
+                start_us: 5_000_000,
+                in_us: 2_000_000,
+                duration_us: 3_000_000,
+                fit: OverlayFit::default(),
+                audio_stream: Some(0),
+                audio_unlinked: false,
+                link: None,
+            }],
+            hidden: false,
+            muted: false,
+            role: None,
+        }];
+        // A word 3 s into the song plays 1 s into its clip: at 6 s.
+        let song = document
+            .mapper_for_transcript(&media_sound_id(0, "song"))
+            .unwrap();
+        assert_eq!(
+            song.edited_span_of(3_000_000, 3_200_000),
+            Some((6_000_000, 6_200_000))
+        );
+        // The talk's first use maps; the overlapping second use is skipped, not fatal.
+        let talk = document
+            .mapper_for_transcript(&media_sound_id(0, "talk"))
+            .unwrap();
+        assert_eq!(
+            talk.edited_span_of(500_000, 700_000),
+            Some((500_000, 700_000))
+        );
+        assert_eq!(talk.edited_span_of(3_500_000, 3_700_000), None);
+    }
+
+    #[test]
+    fn a_short_edited_on_its_own_leaves_the_video_alone() {
+        use crate::tracks::{EditedRange, TrackEdit};
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 60_000_000)]).unwrap());
+        let short = crate::shorts::Short {
+            id: "s1".into(),
+            title: "Best bit".into(),
+            source_start_us: 10_000_000,
+            source_end_us: 30_000_000,
+            reason: String::new(),
+            layout: Default::default(),
+            media: None,
+            edit: None,
+            length_us: None,
+            edited_start_us: None,
+            edited_end_us: None,
+        };
+        history.set_shorts(0, vec![short], dir.path()).unwrap();
+
+        // Cutting 2 s out of the short's own timeline: the short is 18 s, the video still 60 s.
+        history
+            .edit_short_tracks(
+                1,
+                "s1",
+                &TrackEdit::RippleDelete {
+                    ranges: vec![EditedRange {
+                        start_us: 0,
+                        end_us: 2_000_000,
+                    }],
+                    all_tracks: true,
+                },
+                dir.path(),
+            )
+            .unwrap();
+        assert_eq!(history.current.edited_duration_us().unwrap(), 60_000_000);
+        let own = history.current.shorts[0].edit.clone().unwrap();
+        assert_eq!(own.retained_intervals, vec![ri(12_000_000, 30_000_000)]);
+        let exported =
+            crate::shorts::short_document(&history.current, &history.current.shorts[0], false)
+                .unwrap();
+        assert_eq!(exported.edited_duration_us().unwrap(), 18_000_000);
+
+        // A cut in the video no longer reaches it.
+        history
+            .ripple_cuts(2, &[(0, 20_000_000)], dir.path())
+            .unwrap();
+        let after =
+            crate::shorts::short_timeline(&history.current, &history.current.shorts[0]).unwrap();
+        assert_eq!(after.edited_duration_us().unwrap(), 18_000_000);
+
+        // The 2 s come back on the short's timeline; and a re-sync follows the video again.
+        history
+            .edit_short_tracks(
+                3,
+                "s1",
+                &TrackEdit::Restore {
+                    ranges: vec![EditedRange {
+                        start_us: 10_000_000,
+                        end_us: 12_000_000,
+                    }],
+                    grow: RestoreGrow::Start,
+                    shift_tracks_at: Some(0),
+                },
+                dir.path(),
+            )
+            .unwrap();
+        let own = history.current.shorts[0].edit.clone().unwrap();
+        assert_eq!(own.retained_intervals, vec![ri(10_000_000, 30_000_000)]);
+        history.resync_short(4, "s1", dir.path()).unwrap();
+        assert!(history.current.shorts[0].edit.is_none());
+        // Following the video now, whose first 20 s were cut: the short's start is gone.
+        assert!(
+            crate::shorts::short_timeline(&history.current, &history.current.shorts[0]).is_err()
+        );
+    }
+
+    #[test]
     fn removing_the_only_clip_leaves_an_empty_timeline() {
         let dir = tempdir().unwrap();
         let mut history = EditHistory::new(EditDocument::from_retained(vec![]).unwrap());
@@ -1889,6 +2629,9 @@ mod tests {
             relative_path: "assets/media/m1.mp4".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),

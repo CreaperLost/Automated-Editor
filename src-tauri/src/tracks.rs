@@ -83,6 +83,9 @@ pub struct OverlayTrack {
     /// Not heard.
     #[serde(default)]
     pub muted: bool,
+    /// What a video track's clips stand for, set on the timeline; unset, each file's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<crate::media_bin::PictureRole>,
 }
 
 impl OverlayTrack {
@@ -117,6 +120,11 @@ pub enum TrackEdit {
         track_id: String,
         hidden: bool,
         muted: bool,
+    },
+    /// Marks a video track's clips as the screen or a webcam (`None`: each file decides).
+    SetTrackRole {
+        track_id: String,
+        role: Option<crate::media_bin::PictureRole>,
     },
     /// Media from the bin onto a track at `start_us`, at its default length.
     PlaceMedia {
@@ -202,6 +210,38 @@ pub enum TrackEdit {
     MoveMain {
         ranges: Vec<EditedRange>,
         target_us: u64,
+    },
+    /// Puts cut recording time (`ranges`, in recording time) back on V1; `grow` picks the clip
+    /// that grows. With `shift_tracks_at`, the tracks' clips from there on move right with it.
+    Restore {
+        ranges: Vec<EditedRange>,
+        #[serde(default)]
+        grow: crate::project::revision::RestoreGrow,
+        #[serde(default)]
+        shift_tracks_at: Option<u64>,
+    },
+    /// Inserts imported media into V1 at edited position `target_us`, at its default length.
+    InsertMedia {
+        asset_id: String,
+        target_us: u64,
+    },
+    /// Without magnetism: moves V1 clips to start at `start_us`, over what is there, leaving
+    /// gaps where they were.
+    PlaceMain {
+        ranges: Vec<EditedRange>,
+        start_us: u64,
+    },
+    /// V1's switches: magnetic, hidden, muted.
+    SetMainTrack {
+        magnetic: bool,
+        hidden: bool,
+        muted: bool,
+    },
+    /// Moves a track one place up or down in its stack: a video track (or V1, `track_id`
+    /// "main") among the video tracks, an audio track among the audio tracks.
+    MoveTrack {
+        track_id: String,
+        up: bool,
     },
 }
 
@@ -301,6 +341,123 @@ fn ripple_cut_tracks(document: &mut EditDocument, cuts: &[(u64, u64)]) {
     }
 }
 
+/// Without magnetism: the ranges are emptied on every track; nothing moves. A clip across a
+/// range keeps the parts either side where they were.
+fn lift_tracks(document: &mut EditDocument, cuts: &[(u64, u64)]) {
+    for &(a, b) in cuts {
+        let mut new_ids = Vec::new();
+        for index in 0..document.overlay_tracks.len() {
+            let stills: Vec<String> = document
+                .media_assets
+                .iter()
+                .filter(|m| m.kind == MediaKind::Image)
+                .map(|m| m.id.clone())
+                .collect();
+            let clips = std::mem::take(&mut document.overlay_tracks[index].clips);
+            let mut kept = Vec::with_capacity(clips.len() + 1);
+            for clip in clips {
+                let (s, e) = (clip.start_us, clip.end_us());
+                if e <= a || s >= b {
+                    kept.push(clip);
+                    continue;
+                }
+                if s < a && a - s >= MIN_CLIP_US {
+                    kept.push(OverlayClip {
+                        duration_us: a - s,
+                        ..clip.clone()
+                    });
+                }
+                if e > b && e - b >= MIN_CLIP_US {
+                    let image = stills.contains(&clip.asset_id);
+                    let after = OverlayClip {
+                        id: if s < a {
+                            String::new()
+                        } else {
+                            clip.id.clone()
+                        },
+                        start_us: b,
+                        in_us: if image { 0 } else { clip.in_us + (b - s) },
+                        duration_us: e - b,
+                        ..clip
+                    };
+                    if after.id.is_empty() {
+                        new_ids.push((index, kept.len()));
+                    }
+                    kept.push(after);
+                }
+            }
+            document.overlay_tracks[index].clips = kept;
+        }
+        for (track, position) in new_ids {
+            let id = new_id(document, "clip");
+            document.overlay_tracks[track].clips[position].id = id;
+        }
+    }
+}
+
+/// One step up or down the stack. Video tracks and V1 ("main") share the picture's stack;
+/// audio tracks only move among themselves.
+fn move_track(document: &mut EditDocument, track_id: &str, up: bool) -> Result<(), String> {
+    let audio = track_id != "main"
+        && document
+            .overlay_tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .ok_or("No such track")?
+            .is_audio();
+    if audio {
+        let ids: Vec<usize> = (0..document.overlay_tracks.len())
+            .filter(|&i| document.overlay_tracks[i].is_audio())
+            .collect();
+        let at = ids
+            .iter()
+            .position(|&i| document.overlay_tracks[i].id == track_id)
+            .ok_or("No such track")?;
+        // Audio tracks list top to bottom: "up" is earlier.
+        let other = if up {
+            at.checked_sub(1)
+        } else {
+            Some(at + 1).filter(|&o| o < ids.len())
+        }
+        .ok_or("It is already at the end")?;
+        document.overlay_tracks.swap(ids[at], ids[other]);
+        return Ok(());
+    }
+    // The picture's stack, bottom to top, with V1 among the video tracks.
+    let videos: Vec<usize> = (0..document.overlay_tracks.len())
+        .filter(|&i| !document.overlay_tracks[i].is_audio())
+        .collect();
+    let mut stack: Vec<Option<usize>> = videos.iter().map(|&i| Some(i)).collect();
+    let main_at = document.main_track.position.min(stack.len());
+    stack.insert(main_at, None);
+    let at = stack
+        .iter()
+        .position(|item| match item {
+            None => track_id == "main",
+            Some(i) => document.overlay_tracks[*i].id == track_id,
+        })
+        .ok_or("No such track")?;
+    let other = if up {
+        Some(at + 1).filter(|&o| o < stack.len())
+    } else {
+        at.checked_sub(1)
+    }
+    .ok_or("It is already at the end")?;
+    stack.swap(at, other);
+    document.main_track.position = stack.iter().position(Option::is_none).unwrap_or(0);
+    // Rewrite the video tracks in their new order, keeping the audio tracks where they are.
+    let order: Vec<crate::tracks::OverlayTrack> = stack
+        .into_iter()
+        .flatten()
+        .map(|i| document.overlay_tracks[i].clone())
+        .collect();
+    let mut order = order.into_iter();
+    for i in videos {
+        document.overlay_tracks[i] = order.next().ok_or("Track order went wrong")?;
+    }
+    Ok(())
+}
+
 fn split_clip(document: &mut EditDocument, clip_id: &str, at_us: u64) -> Result<bool, String> {
     let clip = find_clip(document, clip_id)?.clone();
     if at_us <= clip.start_us || at_us >= clip.end_us() {
@@ -347,11 +504,16 @@ fn take_clip(document: &mut EditDocument, clip_id: &str) -> Result<OverlayClip, 
 }
 
 fn new_id(document: &EditDocument, prefix: &str) -> String {
+    // Links count: a reused link would tie a new unlink to an older one, and relinking
+    // either would take the other's sound away.
     let taken = |id: &str| {
-        document
-            .overlay_tracks
-            .iter()
-            .any(|track| track.id == id || track.clips.iter().any(|clip| clip.id == id))
+        document.overlay_tracks.iter().any(|track| {
+            track.id == id
+                || track
+                    .clips
+                    .iter()
+                    .any(|clip| clip.id == id || clip.link.as_deref() == Some(id))
+        })
     };
     (1..)
         .map(|n| format!("{prefix}-{n}"))
@@ -394,6 +556,13 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
             let track = &mut next.overlay_tracks[index];
             track.hidden = *hidden;
             track.muted = *muted;
+        }
+        TrackEdit::SetTrackRole { track_id, role } => {
+            let index = track_index(&next, track_id)?;
+            if next.overlay_tracks[index].is_audio() {
+                return Err("Audio tracks are marked as speech or background in the mix".into());
+            }
+            next.overlay_tracks[index].role = *role;
         }
         TrackEdit::PlaceMedia {
             asset_id,
@@ -448,10 +617,23 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
         } => {
             let (asset_id, in_us, audio_unlinked) =
                 media_under(&next.retained_intervals, *start_us, *end_us)?;
+            // A still shows the same picture throughout: a split part of it starts at 0.
+            let still = next
+                .media_assets
+                .iter()
+                .any(|m| m.id == asset_id && m.kind == MediaKind::Image);
+            let in_us = if still { 0 } else { in_us };
             let retained = &mut next.retained_intervals;
             let first = crate::project::revision::split_at_edited(retained, *start_us)?;
             let last = crate::project::revision::split_at_edited(retained, *end_us)?;
-            retained.drain(first..last);
+            // Not magnetic: the clip leaves a gap behind.
+            let left = if next.main_track.magnetic {
+                Vec::new()
+            } else {
+                vec![crate::project::revision::gap(end_us - start_us)]
+            };
+            let retained = &mut next.retained_intervals;
+            retained.splice(first..last, left);
             if retained.is_empty() {
                 return Err("The main track cannot be left empty".into());
             }
@@ -475,19 +657,21 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
             if clip.audio_stream.is_some() {
                 return Err("Audio clips stay on audio tracks".into());
             }
-            let at = crate::project::revision::split_at_edited(
-                &mut next.retained_intervals,
-                *target_us,
-            )?;
-            next.retained_intervals.insert(
-                at,
-                RetainedInterval {
-                    start_us: clip.in_us,
-                    end_us: clip.in_us + clip.duration_us,
-                    media: Some(clip.asset_id),
-                    audio_unlinked: clip.audio_unlinked,
-                },
-            );
+            let entry = RetainedInterval {
+                start_us: clip.in_us,
+                end_us: clip.in_us + clip.duration_us,
+                media: Some(clip.asset_id),
+                audio_unlinked: clip.audio_unlinked,
+            };
+            if next.main_track.magnetic {
+                let at = crate::project::revision::split_at_edited(
+                    &mut next.retained_intervals,
+                    *target_us,
+                )?;
+                next.retained_intervals.insert(at, entry);
+            } else {
+                crate::project::revision::place_main(&mut next, vec![entry], *target_us)?;
+            }
         }
         TrackEdit::UnlinkMain { start_us, end_us } => {
             let (asset_id, in_us, unlinked) =
@@ -543,9 +727,17 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
             if cuts.is_empty() {
                 return Err("Nothing to cut".into());
             }
-            crate::project::revision::cut_main(&mut next, &cuts)?;
-            if *all_tracks {
-                ripple_cut_tracks(&mut next, &cuts);
+            if next.main_track.magnetic {
+                crate::project::revision::cut_main(&mut next, &cuts)?;
+                if *all_tracks {
+                    ripple_cut_tracks(&mut next, &cuts);
+                }
+            } else {
+                // Not magnetic: the time is emptied where it is; nothing moves.
+                crate::project::revision::lift_main(&mut next, &cuts)?;
+                if *all_tracks {
+                    lift_tracks(&mut next, &cuts);
+                }
             }
         }
         TrackEdit::DeleteSelection { ranges, clip_ids } => {
@@ -556,7 +748,11 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
                 take_clip(&mut next, clip_id)?;
             }
             if !ranges.is_empty() {
-                crate::project::revision::cut_main(&mut next, &pairs(ranges))?;
+                if next.main_track.magnetic {
+                    crate::project::revision::cut_main(&mut next, &pairs(ranges))?;
+                } else {
+                    crate::project::revision::lift_main(&mut next, &pairs(ranges))?;
+                }
             }
         }
         TrackEdit::Split {
@@ -638,6 +834,132 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
         TrackEdit::MoveMain { ranges, target_us } => {
             crate::project::revision::move_main(&mut next, &pairs(ranges), *target_us)?;
         }
+        TrackEdit::Restore {
+            ranges,
+            grow,
+            shift_tracks_at,
+        } => {
+            // Only time no V1 clip already shows can come back.
+            let shown: Vec<(u64, u64)> = next
+                .retained_intervals
+                .iter()
+                .filter(|i| i.is_recording())
+                .map(|i| (i.start_us, i.end_us))
+                .collect();
+            let mut wanted = Vec::new();
+            for (start, end) in pairs(ranges) {
+                let mut pieces = vec![(start, end)];
+                for &(a, b) in &shown {
+                    pieces = pieces
+                        .into_iter()
+                        .flat_map(|(s, e)| {
+                            if b <= s || a >= e {
+                                vec![(s, e)]
+                            } else {
+                                [(s, a.max(s)), (b.min(e), e)]
+                                    .into_iter()
+                                    .filter(|(x, y)| y > x)
+                                    .collect()
+                            }
+                        })
+                        .collect();
+                }
+                wanted.extend(pieces);
+            }
+            if wanted.is_empty() {
+                return Err("Nothing to restore there".into());
+            }
+            let before = next.edited_duration_us()?;
+            next.retained_intervals = crate::project::revision::restore_in_order(
+                &next.retained_intervals,
+                &wanted,
+                *grow,
+            );
+            let grown = next.edited_duration_us()?.saturating_sub(before);
+            if let (false, Some(at)) = (next.main_track.magnetic, *shift_tracks_at) {
+                // Not magnetic: the clip grows into the gap beside it, and nothing moves.
+                // (Without a place, as in restoring every cut, the cuts simply come back.)
+                let mut cursor = 0u64;
+                let mut room = None;
+                for (index, entry) in next.retained_intervals.iter().enumerate() {
+                    let len = entry.end_us - entry.start_us;
+                    let beside = match grow {
+                        crate::project::revision::RestoreGrow::End => cursor == at + grown,
+                        crate::project::revision::RestoreGrow::Start => cursor + len == at,
+                    };
+                    if entry.is_gap() && beside {
+                        room = Some(index);
+                        break;
+                    }
+                    cursor += len;
+                }
+                let index = room
+                    .filter(|&i| {
+                        let e = &next.retained_intervals[i];
+                        e.end_us - e.start_us >= grown
+                    })
+                    .ok_or("No room there: leave a gap beside the clip, or turn magnetic on")?;
+                next.retained_intervals[index].end_us -= grown;
+                next.retained_intervals =
+                    crate::project::revision::canonical_retained(next.retained_intervals);
+            } else if let Some(at_us) = shift_tracks_at {
+                shift_from(&mut next, *at_us, grown as i64);
+            }
+        }
+        TrackEdit::InsertMedia {
+            asset_id,
+            target_us,
+        } => {
+            let asset = next
+                .media_assets
+                .iter()
+                .find(|asset| &asset.id == asset_id)
+                .ok_or("No such imported media")?;
+            let length = asset.default_clip_us();
+            let entry = RetainedInterval {
+                start_us: 0,
+                end_us: length,
+                media: Some(asset_id.clone()),
+                audio_unlinked: false,
+            };
+            if next.main_track.magnetic {
+                let at = crate::project::revision::split_at_edited(
+                    &mut next.retained_intervals,
+                    *target_us,
+                )?;
+                next.retained_intervals.insert(at, entry);
+            } else {
+                crate::project::revision::place_main(&mut next, vec![entry], *target_us)?;
+            }
+        }
+        TrackEdit::PlaceMain { ranges, start_us } => {
+            let mut ordered = pairs(ranges);
+            ordered.sort_unstable();
+            if ordered.is_empty() {
+                return Err("Choose clips to move".into());
+            }
+            // The clips, in timeline order, then emptied where they were and put down anew.
+            let mut entries = Vec::new();
+            for &(a, b) in &ordered {
+                entries.extend(crate::shorts::slice_retained(
+                    &next.retained_intervals,
+                    a,
+                    b,
+                ));
+            }
+            crate::project::revision::lift_main(&mut next, &ordered)?;
+            crate::project::revision::place_main(&mut next, entries, *start_us)?;
+        }
+        TrackEdit::SetMainTrack {
+            magnetic,
+            hidden,
+            muted,
+        } => {
+            next.main_track.magnetic = *magnetic;
+            next.main_track.hidden = *hidden;
+            next.main_track.muted = *muted;
+        }
+        TrackEdit::MoveTrack { track_id, up } => move_track(&mut next, track_id, *up)?,
         TrackEdit::RelinkClip {
             clip_id,
             audio_clip_ids,
@@ -677,6 +999,7 @@ fn add_track(document: &mut EditDocument, audio: bool) -> Result<String, String>
         clips: Vec::new(),
         hidden: false,
         muted: false,
+        role: None,
     });
     Ok(id)
 }
@@ -920,6 +1243,9 @@ mod tests {
                 relative_path: "assets/media/v.mp4".into(),
                 source_path: None,
                 missing: false,
+                picture_role: Default::default(),
+                sound_roles: Vec::new(),
+                recording_path: None,
                 audio_path: None,
                 extra_audio_paths: Vec::new(),
                 audio_names: Vec::new(),
@@ -934,6 +1260,9 @@ mod tests {
                 relative_path: "assets/media/img.png".into(),
                 source_path: None,
                 missing: false,
+                picture_role: Default::default(),
+                sound_roles: Vec::new(),
+                recording_path: None,
                 audio_path: None,
                 extra_audio_paths: Vec::new(),
                 audio_names: Vec::new(),
@@ -1471,5 +1800,224 @@ mod tests {
             // The recording pieces left behind touch again, so they are one clip.
             vec![(5 * S, 20 * S), (0, 5 * S), (S, 5 * S)]
         );
+    }
+
+    #[test]
+    fn independent_unlinks_get_their_own_links_and_relink_alone() {
+        // Two separate pictures of the video on V2, each unlinked.
+        let mut doc = apply(
+            &with_two_audio_streams(document()),
+            &TrackEdit::AddTrack { audio: false },
+        )
+        .unwrap();
+        doc = place(doc, "v", "track-1", 0);
+        doc = place(doc, "v", "track-1", 12 * S);
+        let pictures: Vec<String> = doc.overlay_tracks[0]
+            .clips
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        for id in &pictures {
+            doc = apply(
+                &doc,
+                &TrackEdit::UnlinkClip {
+                    clip_id: id.clone(),
+                },
+            )
+            .unwrap();
+        }
+        let sounds: Vec<OverlayClip> = doc
+            .overlay_tracks
+            .iter()
+            .filter(|t| t.is_audio())
+            .flat_map(|t| t.clips.clone())
+            .collect();
+        let links: std::collections::BTreeSet<_> = sounds.iter().map(|c| c.link.clone()).collect();
+        assert_eq!(links.len(), 2, "each unlink has its own link");
+        // Relinking the first leaves the second's sound in place.
+        let first_sound = sounds.iter().find(|c| c.start_us == 0).unwrap().id.clone();
+        let relinked = apply(
+            &doc,
+            &TrackEdit::RelinkClip {
+                clip_id: pictures[0].clone(),
+                audio_clip_ids: vec![first_sound],
+            },
+        )
+        .unwrap();
+        validate(&relinked).unwrap();
+        let left: Vec<_> = relinked
+            .overlay_tracks
+            .iter()
+            .filter(|t| t.is_audio())
+            .flat_map(|t| t.clips.iter().map(|c| c.start_us))
+            .collect();
+        assert_eq!(
+            left,
+            vec![12 * S, 12 * S],
+            "the other picture keeps both its streams"
+        );
+    }
+
+    #[test]
+    fn a_split_still_moves_from_v1_to_a_track() {
+        // A 5 s still on V1 at 24 s (after the 24 s of document()), split after 2 s.
+        let mut doc = document();
+        doc.retained_intervals.push(RetainedInterval {
+            start_us: 0,
+            end_us: 5 * S,
+            media: Some("img".into()),
+            audio_unlinked: false,
+        });
+        crate::project::revision::split_main(&mut doc, 26 * S).unwrap();
+        doc = apply(&doc, &TrackEdit::AddTrack { audio: false }).unwrap();
+        let lifted = apply(
+            &doc,
+            &TrackEdit::LiftFromMain {
+                start_us: 26 * S,
+                end_us: 29 * S,
+                track_id: "track-1".into(),
+                at_us: 0,
+            },
+        )
+        .unwrap();
+        validate(&lifted).unwrap();
+        assert_eq!(clips_of(&lifted, 0), vec![(0, 0, 3 * S)]);
+    }
+
+    fn secs(a: u64, b: u64) -> EditedRange {
+        range(a * S, b * S)
+    }
+
+    fn not_magnetic(document: &EditDocument) -> EditDocument {
+        apply(
+            document,
+            &TrackEdit::SetMainTrack {
+                magnetic: false,
+                hidden: false,
+                muted: false,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn without_magnetism_cuts_leave_gaps_and_moves_overwrite() {
+        let document = not_magnetic(&document());
+        // Cutting 2–4 s leaves a gap: the timeline keeps its length.
+        let cut = apply(
+            &document,
+            &TrackEdit::RippleDelete {
+                ranges: vec![secs(2, 4)],
+                all_tracks: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(cut.edited_duration_us().unwrap(), 24 * S);
+        assert!(cut.retained_intervals[1].is_gap());
+        assert_eq!(
+            cut.retained_intervals[1].end_us - cut.retained_intervals[1].start_us,
+            2 * S
+        );
+        // A cut at the end shortens it: nothing follows the gap.
+        let tail = apply(
+            &cut,
+            &TrackEdit::RippleDelete {
+                ranges: vec![secs(20, 24)],
+                all_tracks: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(tail.edited_duration_us().unwrap(), 20 * S);
+
+        // The b-roll (10–14 s) placed at 2 s fills the gap and covers 4–6 s; it leaves a gap.
+        let moved = apply(
+            &cut,
+            &TrackEdit::PlaceMain {
+                ranges: vec![secs(10, 14)],
+                start_us: 2 * S,
+            },
+        )
+        .unwrap();
+        assert_eq!(moved.edited_duration_us().unwrap(), 24 * S);
+        let mapper = moved.mapper().unwrap();
+        assert_eq!(mapper.media_at(3 * S).map(|(id, _)| id), Some("v"));
+        assert_eq!(
+            mapper.media_at(11 * S).map(|(id, _)| id),
+            Some(crate::project::revision::GAP)
+        );
+        // Placing past the end extends the timeline with a gap before the clip.
+        let far = apply(
+            &document,
+            &TrackEdit::InsertMedia {
+                asset_id: "v".into(),
+                target_us: 30 * S,
+            },
+        )
+        .unwrap();
+        assert!(far.edited_duration_us().unwrap() > 30 * S);
+        assert_eq!(
+            far.mapper().unwrap().media_at(27 * S).map(|(id, _)| id),
+            Some(crate::project::revision::GAP)
+        );
+    }
+
+    #[test]
+    fn tracks_reorder_with_main_among_the_video_tracks() {
+        let mut document = document();
+        document = apply(&document, &TrackEdit::AddTrack { audio: false }).unwrap();
+        document = apply(&document, &TrackEdit::AddTrack { audio: true }).unwrap();
+        document = apply(&document, &TrackEdit::AddTrack { audio: true }).unwrap();
+        let video = document.overlay_tracks[0].id.clone();
+        assert_eq!(document.main_track.position, 0);
+        // V1 up: the video track goes under it.
+        let up = apply(
+            &document,
+            &TrackEdit::MoveTrack {
+                track_id: "main".into(),
+                up: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(up.main_track.position, 1);
+        assert!(apply(
+            &up,
+            &TrackEdit::MoveTrack {
+                track_id: "main".into(),
+                up: true
+            }
+        )
+        .is_err());
+        // Moving the video track back up puts V1 at the bottom again.
+        let back = apply(
+            &up,
+            &TrackEdit::MoveTrack {
+                track_id: video,
+                up: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(back.main_track.position, 0);
+        // Audio tracks swap among themselves.
+        let audio: Vec<String> = document
+            .overlay_tracks
+            .iter()
+            .filter(|t| t.is_audio())
+            .map(|t| t.id.clone())
+            .collect();
+        let swapped = apply(
+            &document,
+            &TrackEdit::MoveTrack {
+                track_id: audio[1].clone(),
+                up: true,
+            },
+        )
+        .unwrap();
+        let order: Vec<String> = swapped
+            .overlay_tracks
+            .iter()
+            .filter(|t| t.is_audio())
+            .map(|t| t.id.clone())
+            .collect();
+        assert_eq!(order, vec![audio[1].clone(), audio[0].clone()]);
     }
 }

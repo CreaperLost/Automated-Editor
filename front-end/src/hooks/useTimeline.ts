@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { api } from "../lib/ipc";
+import { seekPlayback, togglePlayback } from "../lib/playbackControl";
 
 
 export function formatTimeUs(timeUs: number): string {
@@ -59,27 +60,9 @@ export function useTimeline() {
     // Display smoothing only. Rust playback_status is the media clock.
   }, [isPlaying, currentTimeUs]);
 
-  const togglePlayPause = useCallback(() => {
-    if (!handle) return;
-    const action = isPlaying ? api.playbackPause(handle) : api.playbackPlay(handle);
-    void action
-      .then((status) => applyPlaybackStatus(status))
-      .catch((err) => console.warn("[Timeline] playback toggle failed:", err));
-  }, [handle, isPlaying, setCurrentTimeUs, setIsPlaying, applyPlaybackStatus]);
-
-  const seekToUs = useCallback(
-    (timeUs: number) => {
-      if (!handle) {
-        setCurrentTimeUs(Math.max(0, Math.min(timeUs, durationUs)));
-        return;
-      }
-      void api
-        .playbackSeek(handle, Math.max(0, Math.min(timeUs, durationUs)))
-        .then((status) => applyPlaybackStatus(status))
-        .catch((err) => console.warn("[Timeline] seek failed:", err));
-    },
-    [handle, durationUs, setCurrentTimeUs, setIsPlaying, applyPlaybackStatus],
-  );
+  // Play/pause and seeking know whether this window shows the video or a short.
+  const togglePlayPause = useCallback(() => togglePlayback(), []);
+  const seekToUs = useCallback((timeUs: number) => seekPlayback(timeUs), []);
 
   const seekRelativeUs = useCallback(
     (offsetUs: number) => {

@@ -68,6 +68,9 @@ pub struct PlaybackStatus {
     pub position_us: u64,
     pub duration_us: u64,
     pub clock_kind: ClockKind,
+    /// The short playing instead of the video, when the Shorts Studio has one in focus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_id: Option<String>,
     pub preview_available: bool,
     pub open_files: usize,
     pub plans: Vec<TrackDecodePlan>,
@@ -100,9 +103,63 @@ pub struct PlaybackOwner {
     play_anchor: Option<(Instant, u64)>,
     error: Option<String>,
     diagnostics: Vec<String>,
+    /// The short that plays instead of the video.
+    short_focus: Option<String>,
+    /// Where the video was when a short took over playback.
+    main_position_us: u64,
 }
 
 impl PlaybackOwner {
+    /// What plays: the project's edit, or the short in focus as its own vertical video.
+    pub fn playable_document(&self, document: &EditDocument) -> Result<EditDocument, String> {
+        match &self.short_focus {
+            Some(id) => {
+                let short = document
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or("That short no longer exists")?;
+                crate::shorts::short_document(document, short, true)
+            }
+            None => Ok(document.clone()),
+        }
+    }
+
+    /// Plays short `short` instead of the video (or the video again with `None`), from its start.
+    pub fn focus_short(
+        &mut self,
+        short: Option<String>,
+        document: &EditDocument,
+        start_us: u64,
+    ) -> Result<(), String> {
+        if self.short_focus == short {
+            if short.is_some() {
+                self.seek(start_us)?;
+            }
+            return Ok(());
+        }
+        // Whatever played stops: the caller plays or pauses what comes next.
+        self.advance();
+        if self.state == PlaybackState::Playing {
+            self.state = PlaybackState::Paused;
+            self.play_anchor = None;
+            self.audio = None;
+        }
+        // The video's place is kept while a short plays, and comes back after.
+        let position = match (&self.short_focus, &short) {
+            (None, Some(_)) => {
+                self.advance();
+                self.main_position_us = self.position_us;
+                start_us
+            }
+            (Some(_), None) => self.main_position_us,
+            _ => start_us,
+        };
+        self.short_focus = short;
+        self.position_us = position;
+        self.apply_document(document)
+    }
+
     pub fn closed() -> Self {
         Self {
             native_enabled: false,
@@ -123,6 +180,8 @@ impl PlaybackOwner {
             play_anchor: None,
             error: None,
             diagnostics: Vec::new(),
+            short_focus: None,
+            main_position_us: 0,
         }
     }
 
@@ -157,6 +216,8 @@ impl PlaybackOwner {
             play_anchor: None,
             error: None,
             diagnostics: Vec::new(),
+            short_focus: None,
+            main_position_us: 0,
         };
         owner.touch_plans(0)?;
         Ok(owner)
@@ -164,7 +225,19 @@ impl PlaybackOwner {
 
     pub fn apply_document(&mut self, document: &EditDocument) -> Result<(), String> {
         self.advance();
+        // An edit while playing keeps playing (with the new edit): changing a short's look as
+        // it plays, or a caption, no longer stops it.
+        let was_playing = self.state == PlaybackState::Playing;
         self.bump_generation();
+        // A short that is gone or no longer valid hands playback back to the video.
+        let playable = match self.playable_document(document) {
+            Ok(playable) => playable,
+            Err(_) => {
+                self.short_focus = None;
+                document.clone()
+            }
+        };
+        let document = &playable;
         self.retained = document.retained_intervals.clone();
         self.duration_us = document.edited_duration_us()?;
         if self.position_us > self.duration_us {
@@ -179,6 +252,11 @@ impl PlaybackOwner {
             self.state = PlaybackState::Ended;
         } else if self.state == PlaybackState::Ended || self.state == PlaybackState::Closed {
             self.state = PlaybackState::Paused;
+        }
+        if was_playing && self.state == PlaybackState::Paused {
+            self.state = PlaybackState::Playing;
+            // Audio restarts from here once the engine has the new edit, as after a seek.
+            self.play_anchor = (!self.needs_audio()).then(|| (Instant::now(), self.position_us));
         }
         self.touch_plans(self.position_us)?;
         Ok(())
@@ -457,6 +535,7 @@ impl PlaybackOwner {
             position_us: self.position_us,
             duration_us: self.duration_us,
             clock_kind: self.clock_kind(source_us),
+            short_id: self.short_focus.clone(),
             preview_available: self.preview_available,
             open_files: self.open_files.len(),
             plans,
@@ -671,5 +750,35 @@ mod tests {
         let playing = owner.status().unwrap();
         assert!(playing.position_us > 0 || playing.state == PlaybackState::Ended);
         assert_eq!(playing.clock_kind, ClockKind::Monotonic);
+    }
+
+    #[test]
+    fn edits_keep_playing_and_switching_to_a_short_stops_what_played() {
+        let mut document =
+            EditDocument::from_retained(vec![RetainedInterval::recording(0, 10_000_000)]).unwrap();
+        document.shorts.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "s",
+                "title": "Short",
+                "sourceStartUs": 1_000_000,
+                "sourceEndUs": 4_000_000,
+            }))
+            .unwrap(),
+        );
+        let mut owner =
+            PlaybackOwner::open("h".into(), PathBuf::new(), &document, Vec::new()).unwrap();
+        owner.play().unwrap();
+        // A change to the project (a short's look, a caption) does not stop playback.
+        owner.apply_document(&document).unwrap();
+        assert_eq!(owner.status().unwrap().state, PlaybackState::Playing);
+        // Handing over to a short stops the video; the caller then plays the short or not.
+        owner.focus_short(Some("s".into()), &document, 0).unwrap();
+        let status = owner.status().unwrap();
+        assert_eq!(status.short_id.as_deref(), Some("s"));
+        assert_eq!(status.state, PlaybackState::Paused);
+        assert_eq!(status.duration_us, 3_000_000);
+        owner.play().unwrap();
+        owner.focus_short(None, &document, 0).unwrap();
+        assert_eq!(owner.status().unwrap().state, PlaybackState::Paused);
     }
 }

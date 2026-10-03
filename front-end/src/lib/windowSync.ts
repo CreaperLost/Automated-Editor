@@ -18,6 +18,35 @@ export function broadcastProject(project: OpenedProject) {
     .catch(() => undefined);
 }
 
+const CAPTIONS_EVENT = "aeroedits-captions-changed";
+
+/** Tells the other windows a transcript or its captions changed. */
+export function broadcastCaptionsChanged() {
+  if (!isTauriEnvironment()) return;
+  void import("@tauri-apps/api/event")
+    .then(({ emit }) => emit(CAPTIONS_EVENT, { source: SOURCE }))
+    .catch(() => undefined);
+}
+
+/** Calls `onChange` when another window changed a transcript; returns the unsubscribe. */
+export function listenForCaptionChanges(onChange: () => void): () => void {
+  if (!isTauriEnvironment()) return () => undefined;
+  let unlisten: (() => void) | undefined;
+  let disposed = false;
+  void import("@tauri-apps/api/event").then(({ listen }) =>
+    listen<{ source: string }>(CAPTIONS_EVENT, (event) => {
+      if (event.payload.source !== SOURCE) onChange();
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }),
+  );
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
 /** Calls `onProject` with projects other windows broadcast; returns the unsubscribe. */
 export function listenForProjects(onProject: (project: OpenedProject) => void): () => void {
   if (!isTauriEnvironment()) return () => undefined;

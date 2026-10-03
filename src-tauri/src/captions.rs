@@ -92,6 +92,13 @@ pub struct CaptionSettings {
     /// Most words shown at once.
     #[serde(default = "default_max_words")]
     pub max_words: u32,
+    /// Most lines a caption takes; a longer one is drawn smaller to fit.
+    #[serde(default = "default_max_lines")]
+    pub max_lines: u32,
+}
+
+fn default_max_lines() -> u32 {
+    MAX_LINES as u32
 }
 
 impl Default for CaptionSettings {
@@ -111,6 +118,7 @@ impl Default for CaptionSettings {
             background_opacity: default_background_opacity(),
             uppercase: false,
             max_words: default_max_words(),
+            max_lines: default_max_lines(),
         }
     }
 }
@@ -141,6 +149,9 @@ impl CaptionSettings {
                 MAX_WORDS_RANGE.0, MAX_WORDS_RANGE.1
             ));
         }
+        if !(1..=MAX_LINES as u32).contains(&self.max_lines) {
+            return Err(format!("A caption takes 1 to {MAX_LINES} lines"));
+        }
         if !matches!(self.position.as_str(), "bottom" | "middle" | "top") {
             return Err("Caption position must be bottom, middle or top".into());
         }
@@ -163,6 +174,8 @@ impl CaptionSettings {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CueWord {
+    /// The transcript word it shows.
+    pub id: String,
     pub text: String,
     pub start_us: u64,
     pub end_us: u64,
@@ -193,7 +206,10 @@ pub fn build_cues(
     // (word, source start, source end), in playback order once clips are reordered.
     let mut words = Vec::new();
     for word in &transcript.words {
-        if word.kind != WordKind::Word || word.text.trim().is_empty() {
+        if word.kind != WordKind::Word
+            || word.text.trim().is_empty()
+            || transcript.caption_mark(&word.id).hidden
+        {
             continue;
         }
         let Some((start_us, end_us)) =
@@ -206,8 +222,17 @@ pub fn build_cues(
         } else {
             word.text.trim().to_string()
         };
+        // Punctuation given as a word of its own joins the word before ("video" "." → "video.").
+        if text.chars().all(|c| !c.is_alphanumeric()) {
+            if let Some((last, _, _)) = words.last_mut() {
+                let last: &mut CueWord = last;
+                last.text.push_str(&text);
+                continue;
+            }
+        }
         words.push((
             CueWord {
+                id: word.id.clone(),
                 text,
                 start_us,
                 end_us: end_us.max(start_us + 1),
@@ -227,11 +252,15 @@ pub fn build_cues(
             // Playing earlier recording time next means a clip was reordered here: never
             // join across it. (A cut jumps forward and keeps the cue together.)
             let jumped = source_start < last_source_end;
-            let breaks = current.len() >= max_words
-                || ends_sentence(&last.text)
+            let mark = transcript.caption_mark(&word.id);
+            // A user's break or join (from the caption track) wins over the automatic rules.
+            let breaks = mark.cue_break
                 || jumped
-                || word.start_us.saturating_sub(last.end_us) >= CUE_PAUSE_US
-                || word.end_us.saturating_sub(first_start) > MAX_CUE_US;
+                || (!mark.cue_join
+                    && (current.len() >= max_words
+                        || ends_sentence(&last.text)
+                        || word.start_us.saturating_sub(last.end_us) >= CUE_PAUSE_US
+                        || word.end_us.saturating_sub(first_start) > MAX_CUE_US));
             if breaks {
                 cues.push(cue_from(std::mem::take(&mut current)));
             }
@@ -259,6 +288,24 @@ fn cue_from(words: Vec<CueWord>) -> CaptionCue {
         end_us: words.last().map(|w| w.end_us).unwrap_or(words[0].end_us),
         words,
     }
+}
+
+/// Which transcript captions read from: the chosen one, else the first transcribed of the
+/// recording's microphones, then its system audio, then imported speech. `recorded` lists
+/// the recording's audio track ids, microphones first; `imported` the imported speech ids.
+pub fn caption_source(
+    settings: &CaptionSettings,
+    recorded: impl IntoIterator<Item = String>,
+    imported: impl IntoIterator<Item = String>,
+    load: impl Fn(&str) -> Option<Transcript>,
+) -> Option<Transcript> {
+    if let Some(id) = &settings.track_id {
+        return load(id);
+    }
+    recorded
+        .into_iter()
+        .chain(imported)
+        .find_map(|id| load(&id))
 }
 
 /// The cue on screen at `edited_us`, by index.
@@ -322,12 +369,34 @@ pub fn rasterize_cue(
         return None;
     }
     let font = font();
-    let px = (settings.font_size_pct / 100.0 * canvas_h as f32).clamp(6.0, 400.0);
+    let max_line = canvas_w as f32 * MAX_LINE_WIDTH;
+    let max_lines = (settings.max_lines as usize).clamp(1, MAX_LINES);
+    // Lines the words need at `px`, wrapping greedily.
+    let lines_at = |px: f32| {
+        let space = font.metrics(' ', px).advance_width;
+        let mut lines = 1;
+        let mut current = 0.0f32;
+        for word in &cue.words {
+            let width = word_width(font, &word.text, px);
+            if current > 0.0 && current + space + width > max_line {
+                lines += 1;
+                current = width;
+            } else {
+                current += if current > 0.0 { space + width } else { width };
+            }
+        }
+        lines
+    };
+    let wanted = (settings.font_size_pct / 100.0 * canvas_h as f32).clamp(6.0, 400.0);
+    let mut px = wanted;
+    // Too many lines for the limit: smaller text, down to half size.
+    while lines_at(px) > max_lines && px > (wanted * 0.5).max(6.0) {
+        px *= 0.92;
+    }
     let space = font.metrics(' ', px).advance_width;
     let line_metrics = font.horizontal_line_metrics(px)?;
     let ascent = line_metrics.ascent;
     let line_height = (line_metrics.ascent - line_metrics.descent) * 1.12;
-    let max_line = canvas_w as f32 * MAX_LINE_WIDTH;
 
     // Greedy wrap; the widths of each line center it later.
     let mut placed = Vec::with_capacity(cue.words.len());
@@ -338,7 +407,7 @@ pub fn rasterize_cue(
         let current = line_widths[line];
         let x = if current == 0.0 {
             0.0
-        } else if current + space + width <= max_line || line_widths.len() >= MAX_LINES {
+        } else if current + space + width <= max_line || line_widths.len() >= max_lines {
             current + space
         } else {
             line_widths.push(0.0);
@@ -590,6 +659,76 @@ mod tests {
     }
 
     #[test]
+    fn caption_track_edits_split_merge_hide_retext_and_retime() {
+        // Times in ms: "one two three four" in 1 s, then a pause and "five".
+        let mut t = transcript(&[
+            ("one", 0, 200),
+            ("two", 250, 450),
+            ("three", 500, 700),
+            ("four", 750, 950),
+            ("five", 2000, 2200),
+        ]);
+        let map = mapper(&[(0, 3000)]);
+        let settings = CaptionSettings::default();
+        let texts = |t: &Transcript| -> Vec<String> {
+            build_cues(t, &map, &settings)
+                .iter()
+                .map(|c| {
+                    c.words
+                        .iter()
+                        .map(|w| w.text.clone())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect()
+        };
+        assert_eq!(texts(&t), ["one two three four", "five"]);
+
+        // Split before "three"; merge "five" back over the pause.
+        t.set_caption_mark("w-2", |m| m.cue_break = true).unwrap();
+        t.set_caption_mark("w-4", |m| m.cue_join = true).unwrap();
+        assert_eq!(texts(&t), ["one two", "three four five"]);
+        // Hide "two": still heard, not shown.
+        t.set_caption_mark("w-1", |m| m.hidden = true).unwrap();
+        assert_eq!(texts(&t), ["one", "three four five"]);
+        t.set_caption_mark("w-1", |m| m.hidden = false).unwrap();
+        assert!(
+            !t.caption_marks.contains_key("w-1"),
+            "an all-off mark is dropped"
+        );
+
+        // Same word count keeps the timing; a different count shares the old span.
+        t.replace_words(&["w-0".into(), "w-1".into()], "One, two")
+            .unwrap();
+        assert_eq!(texts(&t)[0], "One, two");
+        t.replace_words(&["w-0".into(), "w-1".into()], "Hello there everyone")
+            .unwrap();
+        assert_eq!(texts(&t)[0], "Hello there everyone");
+        let words: Vec<_> = t
+            .words
+            .iter()
+            .take(3)
+            .map(|w| (w.source_start_us, w.source_end_us))
+            .collect();
+        assert_eq!(words.first().unwrap().0, 0);
+        assert_eq!(words.last().unwrap().1, 450_000);
+        t.validate().unwrap();
+
+        // Retime "five" later; it cannot jump back over "four".
+        let five = t.words.last().unwrap().id.clone();
+        t.retime_words(&[five.clone()], 2_400_000, 2_800_000)
+            .unwrap();
+        assert_eq!(
+            (
+                t.words.last().unwrap().source_start_us,
+                t.words.last().unwrap().source_end_us
+            ),
+            (2_400_000, 2_800_000)
+        );
+        assert!(t.retime_words(&[five], 100_000, 300_000).is_err());
+    }
+
+    #[test]
     fn defaults_validate_and_bad_values_fail() {
         CaptionSettings::default().validate().unwrap();
         let bad = CaptionSettings {
@@ -736,7 +875,16 @@ mod tests {
         )
         .unwrap();
         let wrapped = rasterize_cue(&cues[0], &settings, 1280, 720).unwrap();
-        assert!(wrapped.height > one_line.height * 2);
+        // Several lines, drawn smaller where three would not hold it, never past the edge.
+        assert!(wrapped.height > one_line.height * 3 / 2);
         assert!(wrapped.width <= 1280);
+
+        // One line allowed: the same words on one line, smaller.
+        let single = CaptionSettings {
+            max_lines: 1,
+            ..settings.clone()
+        };
+        let one = rasterize_cue(&cues[0], &single, 1280, 720).unwrap();
+        assert!(one.height < wrapped.height);
     }
 }

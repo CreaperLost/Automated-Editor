@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles, X } from "lucide-react";
+import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles, X } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import {
@@ -10,16 +10,11 @@ import {
   TranscriptView,
 } from "../../lib/types";
 import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
+import { transcribableSounds } from "../../lib/trackUtils";
 
+/** The recording's audio tracks and imported sound, speech first. */
 function audioTracks(project: OpenedProject | null) {
-  if (!project) return [];
-  const tracks = project.tracks.filter(
-    (t) => t.descriptor.trackType === "mic_audio" || t.descriptor.trackType === "system_audio",
-  );
-  // Microphone first: that is where the speech is.
-  return tracks.sort((a, b) =>
-    a.descriptor.trackType === b.descriptor.trackType ? 0 : a.descriptor.trackType === "mic_audio" ? -1 : 1,
-  );
+  return transcribableSounds(project);
 }
 
 function formatTime(us: number): string {
@@ -99,13 +94,24 @@ export const TranscriptPanel: React.FC = () => {
 
   const handle = openedProject?.projectHandle;
   const revision = openedProject?.revision;
+  const captionsVersion = useProjectStore((s) => s.captionsVersion);
+  const bumpCaptions = useProjectStore((s) => s.bumpCaptions);
 
   useEffect(() => {
-    setTrackId(audioTracks(openedProject)[0]?.descriptor.id ?? "");
+    setTrackId(audioTracks(openedProject)[0]?.id ?? "");
     setSelection(null);
   }, [handle]);
+  // Sound added after opening (media imported into an empty project), or the chosen sound
+  // removed: pick the first one there is.
+  const trackIds = tracks.map((t) => t.id).join("|");
+  useEffect(() => {
+    if (!tracks.some((t) => t.id === trackId)) setTrackId(tracks[0]?.id ?? "");
+  }, [trackIds]);
 
+  // Only the latest refresh may apply: a slow older reply must not replace a newer one.
+  const refreshGeneration = useRef(0);
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     if (!handle || !trackId) {
       setView(null);
       setSuggestions([]);
@@ -113,17 +119,32 @@ export const TranscriptPanel: React.FC = () => {
     }
     try {
       const next = await api.transcriptGet(handle, trackId);
+      const nextSuggestions = next ? await api.transcriptSuggestions(handle, trackId) : [];
+      if (generation !== refreshGeneration.current) return;
       setView(next);
-      setSuggestions(next ? await api.transcriptSuggestions(handle, trackId) : []);
+      setSuggestions(nextSuggestions);
+    } catch (err) {
+      if (generation === refreshGeneration.current) setError(errorMessage(err));
+    }
+  }, [handle, trackId]);
+
+  /** A caption change from here: saved in the transcript, then the caption track reloads. */
+  const editCaptions = async (change: Parameters<typeof api.transcriptCaptionEdit>[2], label: string) => {
+    if (!handle || !trackId) return;
+    setError(null);
+    try {
+      await api.transcriptCaptionEdit(handle, trackId, change);
+      bumpCaptions();
+      setNotice(label);
     } catch (err) {
       setError(errorMessage(err));
     }
-  }, [handle, trackId]);
+  };
 
   // Edited positions change with every cut and undo, so reload on each revision.
   useEffect(() => {
     void refresh();
-  }, [refresh, revision]);
+  }, [refresh, revision, captionsVersion]);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -199,6 +220,7 @@ export const TranscriptPanel: React.FC = () => {
     try {
       const result = await api.transcriptRun(handle, trackId);
       setView(result.view);
+      bumpCaptions();
       setSuggestions(await api.transcriptSuggestions(handle, trackId));
       const count = result.view.words.length;
       setNotice(
@@ -277,6 +299,19 @@ export const TranscriptPanel: React.FC = () => {
     setEditing({ index, text: words[index].text });
   };
 
+  /** Takes the punctuation off every word; captions follow. */
+  const stripPunctuation = async () => {
+    if (!handle || !trackId) return;
+    setError(null);
+    try {
+      setView(await api.transcriptStripPunctuation(handle, trackId));
+      bumpCaptions();
+      setNotice("Removed the punctuation. Fix a word by hand (Enter) to put any back.");
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const commitEdit = async () => {
     if (!editing || !handle || !trackId) return;
     const word = words[editing.index];
@@ -285,6 +320,7 @@ export const TranscriptPanel: React.FC = () => {
     setError(null);
     try {
       setView(await api.transcriptSetWordText(handle, trackId, word.id, editing.text));
+      bumpCaptions();
       setNotice(`Changed "${word.text}" to "${editing.text.trim()}".`);
     } catch (err) {
       setError(errorMessage(err));
@@ -327,11 +363,11 @@ export const TranscriptPanel: React.FC = () => {
               setTrackId(e.target.value);
               setSelection(null);
             }}
-            className="bg-studio-800 text-studio-100 rounded px-1.5 py-0.5"
+            className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
           >
             {tracks.map((t) => (
-              <option key={t.descriptor.id} value={t.descriptor.id}>
-                {t.descriptor.trackType === "mic_audio" ? "Microphone" : "System audio"} ({t.descriptor.id})
+              <option key={t.id} value={t.id}>
+                {t.label}
               </option>
             ))}
           </select>
@@ -339,6 +375,11 @@ export const TranscriptPanel: React.FC = () => {
         {view && (
           <span className="text-studio-500 truncate">
             {view.model} · {view.words.filter((w) => w.editedStartUs !== null).length}/{view.words.length} words kept
+          </span>
+        )}
+        {view && view.words.length > 0 && view.words.every((w) => w.editedStartUs === null) && trackId.startsWith("msound-") && (
+          <span className="text-amber-300 truncate" title="Its words show once a clip of it is on the timeline, on any track">
+            Not on the timeline yet: place it to edit and caption it
           </span>
         )}
         <div className="ml-auto flex items-center gap-1.5">
@@ -367,6 +408,43 @@ export const TranscriptPanel: React.FC = () => {
               <Pencil className="w-3 h-3" /> Fix word
             </button>
           )}
+          {selectedIds.length > 0 && (() => {
+            const chosen = selectedIds.map((id) => words[wordIndex.get(id) ?? -1]).filter(Boolean);
+            const hidden = chosen.length > 0 && chosen.every((w) => w.captionHidden);
+            const first = chosen[0];
+            return (
+              <>
+                <button
+                  type="button"
+                  title={hidden ? "Show these words in the captions again" : "Keep the sound but leave these words out of the captions"}
+                  onClick={() =>
+                    void editCaptions(
+                      { kind: "hide", wordIds: selectedIds, hidden: !hidden },
+                      hidden ? "Shown in the captions again." : "Hidden from the captions; the sound stays.",
+                    )
+                  }
+                  className="flex items-center gap-1 px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
+                >
+                  <Captions className="w-3 h-3" /> {hidden ? "Show in captions" : "Hide in captions"}
+                </button>
+                {first && (
+                  <button
+                    type="button"
+                    title={first.captionBreak ? "Let this caption join the one before" : "Start a new caption at this word"}
+                    onClick={() =>
+                      void editCaptions(
+                        first.captionBreak ? { kind: "merge", wordId: first.id } : { kind: "split", wordId: first.id },
+                        first.captionBreak ? "Captions merged." : "A new caption starts here.",
+                      )
+                    }
+                    className="px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
+                  >
+                    {first.captionBreak ? "Merge caption" : "New caption here"}
+                  </button>
+                )}
+              </>
+            );
+          })()}
           {selectedIds.length > 0 && (
             <button
               type="button"
@@ -374,6 +452,17 @@ export const TranscriptPanel: React.FC = () => {
               className="flex items-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
             >
               <Scissors className="w-3 h-3" /> Cut {selectedIds.length} selected
+            </button>
+          )}
+          {view && (
+            <button
+              type="button"
+              disabled={running}
+              title="Remove punctuation (. , ! ? : ; quotes, brackets) from every word, and so from the captions. Apostrophes, hyphens and numbers stay."
+              onClick={() => void stripPunctuation()}
+              className="px-1.5 py-0.5 rounded font-mono text-studio-400 hover:text-white hover:bg-studio-800 disabled:opacity-40"
+            >
+              .,?<span className="sr-only"> Remove punctuation</span>
             </button>
           )}
           {view && (
@@ -448,7 +537,7 @@ export const TranscriptPanel: React.FC = () => {
       >
         {!view && !running && (
           <p className="text-studio-500">
-            Transcribe the {tracks[0]?.descriptor.trackType === "system_audio" ? "system audio" : "microphone"} track to edit
+            Transcribe {tracks.find((t) => t.id === trackId)?.label ?? "a sound track"} to edit
             the video by deleting words. Click a word to select it, shift-click to extend, then press Delete. Double-click a
             word to jump to it, or press Enter to fix a misheard word. Review lists every filler sound and restarted sentence so
             you can keep or cut each one.
@@ -509,13 +598,30 @@ export const TranscriptPanel: React.FC = () => {
                     kind === "filler" && !cut ? "underline decoration-amber-400 decoration-2" : "",
                     kind === "retake" && !cut ? "underline decoration-violet-400 decoration-2" : "",
                     w.kind === "audioEvent" ? "italic text-studio-400" : "",
+                    // Heard but left out of the captions.
+                    w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
                   ].join(" ");
                   return (
                     <React.Fragment key={w.id}>
+                      {w.captionBreak && !cut && (
+                        <span
+                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-amber-400/80 rounded"
+                          title="A new caption starts here"
+                          aria-label="Caption break"
+                        />
+                      )}
                       <span
                         ref={i === activeIndex ? activeRef : undefined}
                         className={classes}
-                        title={kind === "filler" ? "Filler sound" : kind === "retake" ? "Abandoned take" : undefined}
+                        title={
+                          kind === "filler"
+                            ? "Filler sound"
+                            : kind === "retake"
+                              ? "Abandoned take"
+                              : w.captionHidden
+                                ? "Hidden from the captions"
+                                : undefined
+                        }
                         onClick={(e) => {
                           if (cut) return;
                           setSelection(e.shiftKey && selection ? { anchor: selection.anchor, focus: i } : { anchor: i, focus: i });
@@ -525,7 +631,9 @@ export const TranscriptPanel: React.FC = () => {
                         }}
                       >
                         {w.text}
-                      </span>{" "}
+                      </span>
+                      {/* No space before punctuation that comes as a word of its own. */}
+                      {/^[^\p{L}\p{N}]+$/u.test(line.words[line.words.findIndex((x) => x.i === i) + 1]?.w.text ?? "") ? "" : " "}
                     </React.Fragment>
                   );
                         })}

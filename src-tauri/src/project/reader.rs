@@ -78,6 +78,11 @@ impl RetainedInterval {
     pub fn is_recording(&self) -> bool {
         self.media.is_none()
     }
+
+    /// Empty V1 time.
+    pub fn is_gap(&self) -> bool {
+        self.media.as_deref() == Some(crate::project::revision::GAP)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -125,6 +130,15 @@ pub struct OpenedProject {
     /// Video tracks V2, V3, ... above the main sequence, bottom to top.
     #[serde(default)]
     pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
+    /// V1 as a track: magnetic, hidden, muted, stack position.
+    #[serde(default)]
+    pub main_track: crate::project::revision::MainTrack,
+    /// Auto-zoom settings.
+    #[serde(default)]
+    pub zoom_settings: crate::zoom::ZoomSettings,
+    /// Set when this is short `id`'s own timeline (the timeline fields are the short's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_view: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -324,6 +338,27 @@ fn reject_writer_lock(root: &Path) -> Result<(), String> {
         return Err("Project has a writer lock; close recording or recover it first".into());
     }
     Ok(())
+}
+
+/// The tracks, with their segments, and the length of the recording in `folder`: what an
+/// imported recording plays from.
+pub fn recording_tracks(
+    folder: &Path,
+) -> Result<(Vec<(TrackSummary, Vec<SegmentSummary>)>, u64), String> {
+    let index = index_recording(folder)?;
+    let tracks = index
+        .summaries
+        .iter()
+        .map(|track| {
+            let segments = index
+                .segments
+                .get(&track.descriptor.id)
+                .cloned()
+                .unwrap_or_default();
+            (track.clone(), segments)
+        })
+        .collect();
+    Ok((tracks, index.duration))
 }
 
 fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
@@ -607,8 +642,7 @@ impl ProjectReader {
         }
         let retained = history.current.retained_intervals.clone();
         let edited_duration_us = history.current.edited_duration_us()?;
-        let mut zooms = history.current.zooms.clone();
-        crate::zoom::attach_zoom_edited_ranges(&mut zooms, &history.current.mapper()?);
+        let zooms = history.current.zooms_with_ranges();
         let mut reader = Self {
             summary: OpenedProject {
                 project_handle: uuid::Uuid::new_v4().to_string(),
@@ -639,6 +673,9 @@ impl ProjectReader {
                 chapters: Vec::new(),
                 shorts: Vec::new(),
                 overlay_tracks: Vec::new(),
+                main_track: history.current.main_track.clone(),
+                zoom_settings: history.current.zoom_settings.clone(),
+                short_view: None,
             },
             segments,
             root,
@@ -797,6 +834,28 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .accept_zooms(expected_revision, suggestions, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn set_zoom_settings(
+        &mut self,
+        expected_revision: u64,
+        settings: crate::zoom::ZoomSettings,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .set_zoom_settings(expected_revision, settings, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
+    pub fn reload_zooms(
+        &mut self,
+        expected_revision: u64,
+        suggestions: &[crate::zoom::ZoomSuggestion],
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .reload_zooms(expected_revision, suggestions, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
@@ -998,6 +1057,24 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn set_media_roles(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        picture_role: crate::media_bin::PictureRole,
+        sound_roles: Vec<crate::media_bin::SoundRole>,
+    ) -> Result<OpenedProject, String> {
+        self.history.set_media_roles(
+            expected_revision,
+            asset_id,
+            picture_role,
+            sound_roles,
+            &self.root,
+        )?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn insert_media(
         &mut self,
         expected_revision: u64,
@@ -1009,6 +1086,81 @@ impl ProjectReader {
             .insert_media(expected_revision, asset_id, target_us, range, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
+    }
+
+    /// The project as short `short_id` sees it: the timeline fields are the short's own (or
+    /// its stretch of the video), in the short's time; everything else is the project's.
+    pub fn short_view(&self, short_id: &str) -> Result<OpenedProject, String> {
+        let base = &self.history.current;
+        let short = base
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let timeline = crate::shorts::short_timeline(base, short)?;
+        let mut view = self.summary.clone();
+        view.short_view = Some(short_id.to_string());
+        view.retained_intervals = timeline.retained_intervals.clone();
+        view.split_points_us = timeline.split_points_us.clone();
+        view.overlay_tracks = timeline.overlay_tracks.clone();
+        view.edited_duration_us = timeline.edited_duration_us()?;
+        view.zooms = timeline.zooms_with_ranges();
+        let mut focus = base.webcam_focus.clone();
+        if let Ok(mapper) = timeline.mapper() {
+            focus.attach_edited_ranges(&mapper);
+        }
+        view.webcam_focus = focus;
+        view.chapters = Vec::new();
+        view.removed_intervals = revision::removed_intervals(
+            &timeline.retained_intervals,
+            &self.pauses(),
+            self.summary.source_duration_us,
+        );
+        Ok(view)
+    }
+
+    /// The short's view when `short` names one that still exists, else the project.
+    pub fn view_or_summary(&self, short: Option<&str>) -> OpenedProject {
+        short
+            .and_then(|id| self.short_view(id).ok())
+            .unwrap_or_else(|| self.summary.clone())
+    }
+
+    /// A timeline edit made in the project's timeline or (with `short`) in a short's own.
+    pub fn edit_tracks_in(
+        &mut self,
+        expected_revision: u64,
+        edit: &crate::tracks::TrackEdit,
+        short: Option<&str>,
+    ) -> Result<OpenedProject, String> {
+        let Some(short_id) = short else {
+            return self.edit_tracks(expected_revision, edit);
+        };
+        self.history
+            .edit_short_tracks(expected_revision, short_id, edit, &self.root)?;
+        self.sync_summary();
+        self.short_view(short_id)
+    }
+
+    /// Lets a short follow the video again.
+    pub fn resync_short(
+        &mut self,
+        expected_revision: u64,
+        short_id: &str,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .resync_short(expected_revision, short_id, &self.root)?;
+        self.sync_summary();
+        self.short_view(short_id)
+    }
+
+    fn pauses(&self) -> Vec<RetainedInterval> {
+        self.summary
+            .manifest
+            .pause_intervals
+            .iter()
+            .map(|p| RetainedInterval::recording(p.start_us, p.end_us))
+            .collect()
     }
 
     pub fn edit_tracks(
@@ -1070,11 +1222,7 @@ impl ProjectReader {
             .unwrap_or(self.summary.edited_duration_us);
         self.summary.undo_available = self.history.undo_available();
         self.summary.redo_available = self.history.redo_available();
-        let mut zooms = self.history.current.zooms.clone();
-        if let Ok(mapper) = self.history.current.mapper() {
-            crate::zoom::attach_zoom_edited_ranges(&mut zooms, &mapper);
-        }
-        self.summary.zooms = zooms;
+        self.summary.zooms = self.history.current.zooms_with_ranges();
         self.summary.dismissed_zoom_ids = self.history.current.dismissed_zoom_ids.clone();
         self.summary.layout = self.history.current.layout.clone();
         self.summary.split_points_us = self.history.current.split_points_us.clone();
@@ -1089,7 +1237,7 @@ impl ProjectReader {
         for asset in &mut self.summary.media_assets {
             asset.missing = asset
                 .file_path(&self.root)
-                .map_or(true, |path| !path.is_file());
+                .map_or(true, |path| !path.exists());
         }
         let mut chapters = self.history.current.chapters.clone();
         if let Ok(mapper) = self.history.current.mapper() {
@@ -1097,11 +1245,11 @@ impl ProjectReader {
         }
         self.summary.chapters = chapters;
         let mut shorts = self.history.current.shorts.clone();
-        if let Ok(mapper) = self.history.current.mapper() {
-            crate::shorts::attach_edited(&mut shorts, &mapper);
-        }
+        crate::shorts::attach_edited(&mut shorts, &self.history.current);
         self.summary.shorts = shorts;
         self.summary.overlay_tracks = self.history.current.overlay_tracks.clone();
+        self.summary.main_track = self.history.current.main_track.clone();
+        self.summary.zoom_settings = self.history.current.zoom_settings.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest

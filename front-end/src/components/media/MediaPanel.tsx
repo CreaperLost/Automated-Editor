@@ -137,7 +137,8 @@ export const MediaPanel: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
         {assets.length === 0 && (
           <p className="px-1 py-2 text-[11px] text-studio-500 leading-relaxed">
-            Import intros, B-roll, images or music, one by one or a whole folder. Drag an item onto
+            Import intros, B-roll, images or music, one by one or a whole folder. A recorder
+            folder comes in as one recording, with its camera, sound and mouse data. Drag an item onto
             the timeline to insert it at a clip edge, or use + to insert it at the playhead. Files
             stay where they are: moving or deleting one later shows it as missing here.
           </p>
@@ -167,6 +168,14 @@ export const MediaPanel: React.FC = () => {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-studio-100">
                   {asset.missing && <span className="mr-1 text-amber-300">Missing ·</span>}
+                  {asset.recordingPath && (
+                    <span
+                      className="mr-1 px-1 rounded bg-teal-500/20 text-teal-200 text-[9px] font-semibold uppercase"
+                      title="A recording: its screen, camera, sound and mouse data (for its own auto-zoom)"
+                    >
+                      Rec
+                    </span>
+                  )}
                   {asset.name}
                 </div>
                 <div className="text-[10px] text-studio-500 font-mono">

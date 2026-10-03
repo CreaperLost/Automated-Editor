@@ -1,5 +1,6 @@
+import { useShallow } from "zustand/react/shallow";
 import React, { useEffect, useState } from "react";
-import { listenForProjects } from "./lib/windowSync";
+import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
 import {
   Folder,
   FolderOpen,
@@ -52,7 +53,17 @@ export const App: React.FC = () => {
     clearProject,
     removeRecentProject,
     clearRecentProjects,
-  } = useProjectStore();
+  } = useProjectStore(
+    useShallow((s) => ({
+      openedProject: s.openedProject,
+      projectPath: s.projectPath,
+      recentProjects: s.recentProjects,
+      loadOpenedProject: s.loadOpenedProject,
+      clearProject: s.clearProject,
+      removeRecentProject: s.removeRecentProject,
+      clearRecentProjects: s.clearRecentProjects,
+    })),
+  );
   const { canvas } = useSettingsStore();
 
   const [error, setError] = useState<string>();
@@ -64,9 +75,21 @@ export const App: React.FC = () => {
 
   // Edits made in the Shorts Studio window.
   useEffect(
-    () => listenForProjects((next) => useProjectStore.getState().applyOpenedProject(next, { remote: true })),
+    () =>
+      listenForProjects((next) => {
+        // The Shorts Studio may send a short's view: the editor shows the whole project.
+        if (next.shortView) {
+          void api
+            .projectCurrent()
+            .then((project) => project && useProjectStore.getState().applyOpenedProject(project, { remote: true }))
+            .catch(() => undefined);
+          return;
+        }
+        useProjectStore.getState().applyOpenedProject(next, { remote: true });
+      }),
     [],
   );
+  useEffect(() => listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true)), []);
 
   useEffect(() => {
     if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running")) {

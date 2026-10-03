@@ -9,6 +9,7 @@ import {
   usePreviewQualityStore,
 } from "../../stores/previewQualityStore";
 import { api } from "../../lib/ipc";
+import { releaseShortPlayback } from "../../lib/playbackControl";
 import type { SegmentPage } from "../../lib/types";
 
 function formatSeconds(us: number): string {
@@ -29,10 +30,10 @@ function aspectValue(ratio: string): number {
 }
 
 const selectClass =
-  "bg-studio-800 text-studio-100 rounded px-1.5 py-0.5 text-[11px] border border-studio-700 focus:outline-none focus:border-teal-500";
+  "min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 rounded px-1.5 py-0.5 text-[11px] border border-studio-700 focus:outline-none focus:border-teal-500";
 
 /// Preview resolution and frame rate, changed on the fly, with the rate actually drawn.
-const PreviewQualityControls: React.FC = () => {
+export const PreviewQualityControls: React.FC = () => {
   const quality = usePreviewQualityStore((s) => s.quality);
   const measuredFps = usePreviewQualityStore((s) => s.measuredFps);
   const error = usePreviewQualityStore((s) => s.error);
@@ -84,6 +85,7 @@ const PreviewQualityControls: React.FC = () => {
 /// The preview stage: project summary, the video preview, and track diagnostics.
 export const StagePanel: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
+  const playbackShortId = useProjectStore((s) => s.playbackShortId);
   const aspectRatio = useSettingsStore((s) => s.canvas.aspectRatio);
   const [trackId, setTrackId] = useState("");
   const [page, setPage] = useState<SegmentPage>();
@@ -112,10 +114,38 @@ export const StagePanel: React.FC = () => {
     };
   }, [project?.projectHandle, trackId]);
 
+  // Clicking back into the editor gives it the video again, at its place.
+  useEffect(() => {
+    const takeBack = () => releaseShortPlayback();
+    window.addEventListener("focus", takeBack);
+    return () => window.removeEventListener("focus", takeBack);
+  }, []);
+
   if (!project) return null;
+  const playingShort = project.shorts?.find((short) => short.id === playbackShortId);
 
   return (
     <div className="h-full flex flex-col min-w-0 min-h-0 overflow-hidden p-3 gap-2 bg-studio-950">
+      {playbackShortId && (
+        // The Shorts Studio is playing a short through this preview and its sound.
+        <div className="flex items-center gap-2 rounded-md border border-teal-700/60 bg-teal-950/40 px-2 py-1 text-[11px] text-teal-100">
+          <span className="flex-1 truncate">
+            Playing the short {playingShort ? `"${playingShort.title}"` : ""} from the Shorts Studio
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              void api
+                .playbackFocusShort(project.projectHandle, null)
+                .then(useProjectStore.getState().applyPlaybackStatus)
+                .catch(() => undefined)
+            }
+            className="px-2 py-0.5 rounded border border-teal-600/60 hover:bg-teal-900/50"
+          >
+            Back to the video
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between text-xs text-studio-400 px-1">
         <div className="truncate">
           {project.tracks.length} tracks · source {formatSeconds(project.sourceDurationUs)} · edited{" "}
@@ -160,7 +190,7 @@ export const StagePanel: React.FC = () => {
               aria-label="Track selector"
               value={trackId}
               onChange={(e) => setTrackId(e.target.value)}
-              className="bg-studio-800 text-studio-100 rounded px-2 py-0.5"
+              className={selectClass}
             >
               {project.tracks.map((t) => (
                 <option key={t.descriptor.id} value={t.descriptor.id}>

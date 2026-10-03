@@ -34,6 +34,9 @@ struct WebviewJob {
     frame: crate::media::VideoFrame,
     generation: u64,
     surface_generation: u64,
+    /// A short is playing: the Shorts Studio shows these frames even while the editor's
+    /// preview is hidden (its window minimized or covered).
+    for_short: bool,
 }
 
 /// Encodes and presents webview frames on their own thread, so the next frame decodes and
@@ -76,7 +79,10 @@ fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> 
             };
             let mut surface = state.preview.lock();
             let current = surface.status();
-            if current.attached && current.generation == job.surface_generation && current.visible {
+            if current.attached
+                && current.generation == job.surface_generation
+                && (current.visible || job.for_short)
+            {
                 match surface.present_encoded(jpeg, job.surface_generation) {
                     Ok(()) => {
                         owner.mark_presented(job.generation);
@@ -188,6 +194,12 @@ fn tick(
                 super::tracks_from_reader(reader),
             )
         };
+        // The short in focus plays as its own vertical video.
+        let document = state
+            .playback
+            .lock()
+            .playable_document(&document)
+            .map_err(error)?;
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
         let mixer = AudioMixer::new(&root, &document, &tracks).map_err(error)?;
         let (width, height) = document.layout.preview_dimensions().map_err(error)?;
@@ -283,8 +295,10 @@ fn tick(
         return Ok(playing);
     }
     let preview = state.preview.lock().status();
+    // A short in focus is watched in the Shorts Studio, whatever the editor's window does.
+    let for_short = status.short_id.is_some() && preview.surface == "webview";
     if !preview.attached
-        || !preview.visible
+        || !(preview.visible || for_short)
         || status.duration_us == 0
         || status.position_us >= status.duration_us
         || pending.load(Ordering::Acquire)
@@ -311,6 +325,7 @@ fn tick(
                 frame,
                 generation,
                 surface_generation: preview.generation,
+                for_short,
             })
             .map_err(|_| error("The preview encoder stopped".to_string()))?;
         *last_frame = Some(key);

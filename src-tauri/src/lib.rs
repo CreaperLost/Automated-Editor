@@ -2,6 +2,7 @@ pub mod ai;
 pub mod captions;
 pub mod chapters;
 pub mod commands;
+pub mod cursor;
 pub mod dsp;
 pub mod export;
 pub mod fixtures;
@@ -151,6 +152,7 @@ async fn project_waveform(
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
+    short_id: Option<String>,
 ) -> Result<project::WaveformPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::project_waveform_impl(
@@ -160,6 +162,7 @@ async fn project_waveform(
             start_us,
             end_us,
             bucket_count,
+            short_id,
         )
     })
     .await
@@ -187,8 +190,31 @@ fn project_zoom_accept(
     project_handle: String,
     expected_revision: u64,
     ids: Vec<String>,
+    config: Option<zoom::ZoomConfig>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_zoom_accept_impl(&state, project_handle, expected_revision, ids)
+    commands::project_zoom_accept_impl(&state, project_handle, expected_revision, ids, config)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_zoom_settings_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    settings: zoom::ZoomSettings,
+) -> Result<project::OpenedProject, String> {
+    commands::project_zoom_settings_set_impl(&state, project_handle, expected_revision, settings)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_zoom_reload(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    config: Option<zoom::ZoomConfig>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_zoom_reload_impl(&state, project_handle, expected_revision, config)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -412,6 +438,28 @@ fn project_media_remove(
     commands::project_media_remove_impl(&state, project_handle, expected_revision, asset_id)
 }
 
+/// Sets what an imported file's picture and sound streams are (screen or webcam; mic or
+/// background).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_roles(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    picture_role: media_bin::PictureRole,
+    sound_roles: Vec<media_bin::SoundRole>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_media_roles_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        picture_role,
+        sound_roles,
+    )
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_media_insert(
@@ -438,8 +486,51 @@ fn project_tracks_edit(
     project_handle: String,
     expected_revision: u64,
     edit: tracks::TrackEdit,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_tracks_edit_impl(&state, project_handle, expected_revision, edit)
+    commands::project_tracks_edit_in(&state, project_handle, expected_revision, edit, short_id)
+}
+
+/// Short `short_id`'s own timeline, as a project the timeline can show.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_view(
+    state: State<'_, AppState>,
+    project_handle: String,
+    short_id: String,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_view_impl(&state, project_handle, short_id)
+}
+
+/// Drops a short's own edit, so it follows the video again.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_resync(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_resync_impl(&state, project_handle, expected_revision, short_id)
+}
+
+/// Plays a short instead of the video (or the video again).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn playback_focus_short(
+    state: State<'_, AppState>,
+    project_handle: String,
+    short_id: Option<String>,
+    start_us: Option<u64>,
+    play: Option<bool>,
+) -> Result<playback::PlaybackStatus, String> {
+    commands::playback_focus_short_impl(
+        &state,
+        project_handle,
+        short_id,
+        start_us.unwrap_or(0),
+        play.unwrap_or(false),
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -522,8 +613,9 @@ fn project_undo(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_undo_impl(&state, project_handle, expected_revision)
+    commands::project_undo_impl(&state, project_handle, expected_revision, short_id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -532,8 +624,9 @@ fn project_redo(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_redo_impl(&state, project_handle, expected_revision)
+    commands::project_redo_impl(&state, project_handle, expected_revision, short_id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -964,6 +1057,46 @@ fn transcript_suggestions(
     commands::transcript::transcript_suggestions_impl(&state, project_handle, track_id)
 }
 
+/// The caption track: the captioned transcript's cues in edited time.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_caption_cues(
+    state: State<'_, AppState>,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<commands::transcript::CaptionTrackView, String> {
+    commands::transcript::project_caption_cues_impl(&state, project_handle, short_id)
+}
+
+/// Edits a caption from the timeline (text, timing, split, merge, hide), saved in the transcript.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_caption_edit(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+    edit: commands::transcript::CaptionEdit,
+    short_id: Option<String>,
+) -> Result<commands::transcript::CaptionTrackView, String> {
+    commands::transcript::transcript_caption_edit_impl(
+        &state,
+        project_handle,
+        track_id,
+        edit,
+        short_id,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn transcript_strip_punctuation(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+) -> Result<transcript::TranscriptView, String> {
+    commands::transcript::transcript_strip_punctuation_impl(&state, project_handle, track_id)
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn transcript_set_word_text(
@@ -1259,6 +1392,8 @@ pub fn run() {
             project_waveform,
             project_zoom_suggestions,
             project_zoom_accept,
+            project_zoom_reload,
+            project_zoom_settings_set,
             project_zoom_dismiss,
             project_zoom_update,
             project_zoom_add,
@@ -1275,6 +1410,12 @@ pub fn run() {
             project_split,
             project_move_range,
             project_media_import,
+            project_media_roles,
+            project_caption_cues,
+            transcript_caption_edit,
+            project_short_view,
+            project_short_resync,
+            playback_focus_short,
             project_media_remove,
             project_media_insert,
             project_tracks_edit,
@@ -1325,6 +1466,7 @@ pub fn run() {
             transcript_suggestions,
             transcript_cut_words,
             transcript_set_word_text,
+            transcript_strip_punctuation,
             transcript_dismiss_suggestions,
             transcript_download_model,
             get_default_projects_dir,

@@ -17,6 +17,7 @@ import {
   SilenceDetectionResult,
   ZoomGeneration,
   ZoomConfig,
+  ZoomSettings,
   ProjectZoom,
   ManualZoomInput,
   WebcamFocus,
@@ -36,6 +37,10 @@ import {
   TranscriptSettings,
   TranscriptSettingsView,
   TranscriptView,
+  PictureRole,
+  SoundRole,
+  CaptionEdit,
+  CaptionTrackView,
 } from "./types";
 
 declare global {
@@ -62,6 +67,13 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
   }
 }
 
+/** The short whose own timeline this window edits (the Shorts Studio), or none: the video. */
+let editTarget: string | null = null;
+export const setEditTarget = (shortId: string | null) => {
+  editTarget = shortId;
+};
+export const currentEditTarget = () => editTarget;
+
 // One wrapper per command registered in src-tauri/src/lib.rs.
 export const api = {
   openProject: (path: string) => invokeTauri<OpenedProject>("open_project", { path }),
@@ -81,18 +93,27 @@ export const api = {
       startUs,
       endUs,
       bucketCount,
+      shortId: editTarget,
     }),
   projectZoomSuggestions: (projectHandle: string, config?: ZoomConfig) =>
     invokeTauri<ZoomGeneration>(
       "project_zoom_suggestions",
       config ? { projectHandle, config } : { projectHandle },
     ),
-  projectZoomAccept: (projectHandle: string, expectedRevision: number, ids: string[]) =>
+  /** `config`: the auto-zoom settings the suggestions were found with. */
+  projectZoomAccept: (projectHandle: string, expectedRevision: number, ids: string[], config?: ZoomConfig) =>
     invokeTauri<OpenedProject>("project_zoom_accept", {
       projectHandle,
       expectedRevision,
       ids,
+      config: config ?? null,
     }),
+  /** Saves the project's auto-zoom settings; automatic zooms take the new amounts. */
+  projectZoomSettingsSet: (projectHandle: string, expectedRevision: number, settings: ZoomSettings) =>
+    invokeTauri<OpenedProject>("project_zoom_settings_set", { projectHandle, expectedRevision, settings }),
+  /** Puts the recording's zooms back with these settings; yours stay, none overlap. */
+  projectZoomReload: (projectHandle: string, expectedRevision: number) =>
+    invokeTauri<OpenedProject>("project_zoom_reload", { projectHandle, expectedRevision, config: null }),
   projectZoomDismiss: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_zoom_dismiss", {
       projectHandle,
@@ -246,9 +267,21 @@ export const api = {
       shiftTracksAt: shiftTracksAtUs === undefined ? null : Math.round(shiftTracksAtUs),
     }),
   projectUndo: (projectHandle: string, expectedRevision: number) =>
-    invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision }),
+    invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision, shortId: editTarget }),
   projectRedo: (projectHandle: string, expectedRevision: number) =>
-    invokeTauri<OpenedProject>("project_redo", { projectHandle, expectedRevision }),
+    invokeTauri<OpenedProject>("project_redo", { projectHandle, expectedRevision, shortId: editTarget }),
+  projectShortView: (projectHandle: string, shortId: string) =>
+    invokeTauri<OpenedProject>("project_short_view", { projectHandle, shortId }),
+  projectShortResync: (projectHandle: string, expectedRevision: number, shortId: string) =>
+    invokeTauri<OpenedProject>("project_short_resync", { projectHandle, expectedRevision, shortId }),
+  /** Plays `shortId` instead of the video from `startUs` (or gives the video back with null). */
+  playbackFocusShort: (projectHandle: string, shortId: string | null, startUs = 0, play = false) =>
+    invokeTauri<PlaybackStatus>("playback_focus_short", {
+      projectHandle,
+      shortId,
+      startUs: Math.max(0, Math.round(startUs)),
+      play,
+    }),
   projectRename: (projectHandle: string, newName: string) =>
     invokeTauri<OpenedProject>("project_rename", { projectHandle, newName }),
   playbackStatus: (projectHandle: string) =>
@@ -278,7 +311,7 @@ export const api = {
   previewQualitySet: (quality: PreviewQuality) =>
     invokeTauri<PreviewQuality>("preview_quality_set", { quality }),
   projectTracksEdit: (projectHandle: string, expectedRevision: number, edit: TrackEdit) =>
-    invokeTauri<OpenedProject>("project_tracks_edit", { projectHandle, expectedRevision, edit }),
+    invokeTauri<OpenedProject>("project_tracks_edit", { projectHandle, expectedRevision, edit, shortId: editTarget }),
   previewHitTest: (x: number, y: number) => invokeTauri<boolean>("preview_hit_test", { x, y }),
   previewDetach: (windowLabel: string, generation?: number) =>
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),
@@ -324,8 +357,15 @@ export const api = {
       trackId,
       wordIds,
     }),
+  projectCaptionCues: (projectHandle: string) =>
+    invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle, shortId: editTarget }),
+  transcriptCaptionEdit: (projectHandle: string, trackId: string, edit: CaptionEdit) =>
+    invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit, shortId: editTarget }),
   transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
     invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text }),
+  /** Takes . , ! ? and the like off every word (apostrophes, hyphens and numbers stay). */
+  transcriptStripPunctuation: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptView>("transcript_strip_punctuation", { projectHandle, trackId }),
   transcriptDismissSuggestions: (projectHandle: string, trackId: string, ids: string[], dismissed: boolean) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_dismiss_suggestions", {
       projectHandle,
@@ -351,6 +391,20 @@ export const api = {
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
   pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
   pickMediaFolder: () => invokeTauri<string | null>("pick_media_folder"),
+  projectMediaRoles: (
+    projectHandle: string,
+    expectedRevision: number,
+    assetId: string,
+    pictureRole: PictureRole,
+    soundRoles: SoundRole[],
+  ) =>
+    invokeTauri<OpenedProject>("project_media_roles", {
+      projectHandle,
+      expectedRevision,
+      assetId,
+      pictureRole,
+      soundRoles,
+    }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>

@@ -95,7 +95,41 @@ export interface ProjectZoom {
   contributingEventSeqs: number[];
   source: ZoomSource;
   editedRanges: EditedRange[];
+  /** The imported recording (or file) whose clock the times are on; absent: the recording. */
+  media?: string;
+  /** Stays on its center instead of following the mouse. */
+  fixed?: boolean;
 }
+
+/** The project's auto-zoom settings (src-tauri/src/zoom/mod.rs `ZoomSettings`). */
+export interface ZoomSettings {
+  /** How far a zoom on clicks goes in. */
+  clickScale: number;
+  /** How far a zoom where the mouse rests goes in; 1 is off. */
+  hoverScale: number;
+  transitionMs: number;
+  /** The shortest zoom. */
+  minHoldMs: number;
+  /** Activity closer than this is one zoom that follows the mouse. */
+  mergeGapMs: number;
+  /** The most zooms per recording: the strongest moments are kept. */
+  maxZooms: number;
+  /** The camera follows the mouse inside a zoom. */
+  follow: boolean;
+  /** How calmly: the camera's lag behind the mouse. */
+  followMs: number;
+}
+
+export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
+  clickScale: 1.8,
+  hoverScale: 1.4,
+  transitionMs: 700,
+  minHoldMs: 1800,
+  mergeGapMs: 2500,
+  maxZooms: 10,
+  follow: true,
+  followMs: 700,
+};
 
 export interface ManualZoomInput {
   editedStartUs: number;
@@ -163,6 +197,10 @@ export interface CanvasSettings {
   shadowBlurPx: number; // 0 to 40
   shadowOpacity: number; // 0.0 to 1.0
   aspectRatio: "16:9" | "9:16" | "4:3" | "1:1";
+  /** Draw the recorded mouse pointer (recordings that left it out of the video). */
+  cursorVisible: boolean;
+  /** Pointer size, percent of its recorded size: 25 to 400. */
+  cursorSizePct: number;
 }
 
 /** Audio polish. Each effect has its own switch and applies to playback and export. */
@@ -184,6 +222,12 @@ export interface TrackMix {
   muted: boolean;
   /** Gain in dB, -30 to +12. */
   volumeDb: number;
+  /** What the lane carries, when marked on the timeline. */
+  role?: SoundRole;
+  /** Noise reduction in dB (3 to 30); absent is off. */
+  denoiseDb?: number;
+  /** Lowered this many dB under speech (3 to 30); absent is off. */
+  duckDb?: number;
 }
 
 export const DEFAULT_TRACK_MIX: TrackMix = { muted: false, volumeDb: 0 };
@@ -224,6 +268,8 @@ export interface CaptionSettings {
   uppercase: boolean;
   /** Most words on screen at once, 1 to 12. */
   maxWords: number;
+  /** Most lines a caption takes (1 to 3). */
+  maxLines?: number;
 }
 
 export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
@@ -270,6 +316,8 @@ export interface EditLayout {
   webcamBorderWidth?: number;
   webcamMirror?: boolean;
   webcamShadow?: boolean;
+  cursorVisible?: boolean;
+  cursorSizePct?: number;
 }
 
 export const LAYOUT_UNSUPPORTED = {
@@ -343,6 +391,8 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
       aspect === "9:16" || aspect === "4:3" || aspect === "1:1" || aspect === "16:9"
         ? aspect
         : "16:9",
+    cursorVisible: layout.cursorVisible ?? true,
+    cursorSizePct: layout.cursorSizePct ?? 150,
   };
 }
 
@@ -411,6 +461,8 @@ export function layoutFromSettings(
     webcamBorderWidth: camera.borderWidth,
     webcamMirror: camera.mirror,
     webcamShadow: camera.shadow,
+    cursorVisible: canvas.cursorVisible,
+    cursorSizePct: canvas.cursorSizePct,
   };
 }
 
@@ -489,6 +541,10 @@ export interface RetainedInterval {
 }
 
 export type MediaKind = "video" | "image" | "audio";
+/** What a file's picture stands for: drawn and edited like the screen, or in the webcam bubble. */
+export type PictureRole = "screen" | "webcam";
+/** What a sound stream is: speech (transcribed, captioned) or background (music, desktop). */
+export type SoundRole = "mic" | "background";
 
 /** A file imported into the project's media bin (src-tauri/src/media_bin.rs). */
 export interface MediaAsset {
@@ -501,6 +557,11 @@ export interface MediaAsset {
   sourcePath?: string;
   /** The file is no longer where it was imported from. */
   missing?: boolean;
+  pictureRole?: PictureRole;
+  /** An imported recording: its folder (screen, camera, sound and mouse data). */
+  recordingPath?: string;
+  /** A role per audio stream; missing entries take `soundRole`'s default. */
+  soundRoles?: SoundRole[];
   /** The first audio stream, extracted. */
   audioPath?: string;
   /** Further audio streams (e.g. mic and desktop recorded separately); they play together. */
@@ -547,7 +608,25 @@ export interface OpenedProject {
   shorts?: Short[];
   /** Video tracks V2, V3, ... above the main sequence, bottom to top. */
   overlayTracks?: OverlayTrack[];
+  /** V1 as a track; absent: magnetic, shown, unmuted, at the bottom. */
+  mainTrack?: MainTrack;
+  /** Auto-zoom settings; absent: the defaults. */
+  zoomSettings?: ZoomSettings;
+  /** Set when this is a short's own timeline: the timeline fields are the short's. */
+  shortView?: string;
 }
+
+/** V1's settings as a track (src-tauri/src/project/revision.rs). */
+export interface MainTrack {
+  /** Cuts close up and moves insert; off, they leave gaps and overwrite. */
+  magnetic: boolean;
+  hidden: boolean;
+  muted: boolean;
+  /** How many video tracks are below V1. */
+  position: number;
+}
+
+export const DEFAULT_MAIN_TRACK: MainTrack = { magnetic: true, hidden: false, muted: false, position: 0 };
 
 // Video tracks above the main sequence (src-tauri/src/tracks.rs)
 /** "contain" fits the whole picture in the canvas; "cover" fills the canvas, cropping it. */
@@ -579,11 +658,14 @@ export interface OverlayTrack {
   clips: OverlayClip[];
   hidden: boolean;
   muted: boolean;
+  /** A video track's clips as the screen or a webcam; absent: each file's own. */
+  role?: PictureRole;
 }
 
 /** One undoable change to the tracks beside the main sequence. */
 export type TrackEdit =
   | { kind: "addTrack"; audio?: boolean }
+  | { kind: "setTrackRole"; trackId: string; role: PictureRole | null }
   | { kind: "removeTrack"; trackId: string }
   | { kind: "setTrack"; trackId: string; hidden: boolean; muted: boolean }
   | { kind: "placeMedia"; assetId: string; trackId: string; startUs: number }
@@ -600,7 +682,36 @@ export type TrackEdit =
   | { kind: "split"; atUs: number; main: boolean; clipIds: string[] }
   | { kind: "rippleTrimClip"; clipId: string; side: "start" | "end"; atUs: number }
   | { kind: "moveClips"; clipIds: string[]; deltaUs: number }
-  | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number };
+  | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number }
+  | { kind: "restore"; ranges: EditedSpan[]; grow: "end" | "start"; shiftTracksAt?: number | null }
+  | { kind: "insertMedia"; assetId: string; targetUs: number }
+  | { kind: "placeMain"; ranges: EditedSpan[]; startUs: number }
+  | { kind: "setMainTrack"; magnetic: boolean; hidden: boolean; muted: boolean }
+  /** `trackId` "main" is V1. */
+  | { kind: "moveTrack"; trackId: string; up: boolean };
+
+/** One caption on the timeline's caption track (src-tauri/src/commands/transcript.rs). */
+export interface CaptionCueView {
+  startUs: number;
+  endUs: number;
+  text: string;
+  wordIds: string[];
+  wordStartsUs: number[];
+}
+
+export interface CaptionTrackView {
+  /** The transcript captions read from; absent until something is transcribed. */
+  trackId?: string | null;
+  cues: CaptionCueView[];
+}
+
+/** A change made on the caption track, saved in the transcript. */
+export type CaptionEdit =
+  | { kind: "setText"; wordIds: string[]; text: string }
+  | { kind: "retime"; wordIds: string[]; startUs: number; endUs: number }
+  | { kind: "split"; wordId: string }
+  | { kind: "merge"; wordId: string }
+  | { kind: "hide"; wordIds: string[]; hidden: boolean };
 
 /** A span of the edited timeline. */
 export interface EditedSpan {
@@ -700,6 +811,8 @@ export interface PlaybackStatus {
   positionUs: number;
   durationUs: number;
   clockKind: ClockKind;
+  /** The short playing instead of the video, while the Shorts Studio has one in focus. */
+  shortId?: string;
   previewAvailable: boolean;
   openFiles: number;
   plans: TrackDecodePlan[];
@@ -913,6 +1026,12 @@ export interface TranscriptViewWord {
   /** Null when the word has been cut. */
   editedStartUs: number | null;
   editedEndUs: number | null;
+  /** Heard but not shown in the captions. */
+  captionHidden?: boolean;
+  /** A caption starts at this word. */
+  captionBreak?: boolean;
+  /** Kept in the caption before it. */
+  captionJoin?: boolean;
 }
 
 export interface TranscriptView {
@@ -969,11 +1088,25 @@ export interface ShortLayout {
   cameraPosition: "top" | "bottom";
   /** Share of the frame height the camera takes, 20 to 70. */
   cameraPct: number;
-  /** Extra zoom on the screen part, 1 to 3. */
+  /** Zoom on the screen part, 0.3 to 3: 1 fills its part, below 1 shows all of it smaller. */
   screenZoom: number;
   followZooms: boolean;
+  /** Moves the screen view, -1 to 1 each way, on top of where the zooms point. */
+  screenPanX: number;
+  screenPanY: number;
   captions: boolean;
   captionSpot: "seam" | "screen" | "camera";
+  /** Words per caption in this short; 0 uses the editor's setting. */
+  captionMaxWords: number;
+  /** Lines a caption may take, 1 to 3; longer ones are drawn smaller. */
+  captionLines: number;
+  /** Caption size as a percentage of the short's height; 0 uses the editor's. */
+  captionSizePct: number;
+  /** "project" (the video's own background), "solid", "gradient", "preset" or "wallpaper". */
+  backgroundType: "project" | "solid" | "gradient" | "preset" | "wallpaper";
+  backgroundColorStart: string;
+  backgroundColorEnd: string;
+  backgroundPreset: string;
 }
 
 /** A vertical clip of the video, anchored in source time at its first and last word. */
@@ -984,6 +1117,12 @@ export interface Short {
   sourceEndUs: number;
   reason?: string;
   layout: ShortLayout;
+  /** The imported file whose clock the start and end are on; absent: the recording. */
+  media?: string;
+  /** Present once the short was edited on its own; it then no longer follows the video. */
+  edit?: unknown;
+  /** How long it plays now. */
+  lengthUs?: number;
   /** Absent when an end was cut from the video. Filled in by the backend. */
   editedStartUs?: number;
   editedEndUs?: number;

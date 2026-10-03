@@ -1,6 +1,7 @@
+import { api } from "../lib/ipc";
 import { create } from "zustand";
 import { Track, ZoomKeyframe, SilenceBlock, ProjectManifest, OpenedProject, WaveformPage, PlaybackStatus, studioTrackType, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
-import { broadcastProject } from "../lib/windowSync";
+import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
 import { useSettingsStore } from "./settingsStore";
 
 const RECENT_PROJECTS_KEY = "aeroedits.recentProjects";
@@ -40,9 +41,8 @@ function trackMixFields(project: OpenedProject, trackId: string): Pick<Track, "m
 }
 
 function barsFromSuggestion(suggestion: ZoomSuggestion, pending: boolean, source?: ProjectZoom["source"]): ZoomKeyframe[] {
-  const ranges = suggestion.editedRanges.filter((range) => range.endUs > range.startUs);
-  const fallback = [{ startUs: suggestion.sourceStartUs, endUs: suggestion.sourceEndUs }];
-  const used = ranges.length > 0 ? ranges : fallback;
+  // The backend places every zoom; none left (its footage was cut) means no bar at all.
+  const used = (suggestion.editedRanges ?? []).filter((range) => range.endUs > range.startUs);
   return used.map((range, index) => ({
     id: used.length === 1 ? suggestion.id : `${suggestion.id}-${index}`,
     zoomId: suggestion.id,
@@ -105,6 +105,15 @@ interface ProjectStore {
   selectedZoomId?: string;
   /** The clip picked on a video track above the main sequence. */
   selectedOverlayClipId?: string;
+  /** The short this window shows as its timeline (the Shorts Studio), if any. */
+  viewShort?: string;
+  setViewShort: (shortId: string | undefined) => void;
+  /** The short playing instead of the video (set by the Shorts Studio). */
+  playbackShortId?: string;
+  /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
+  captionsVersion: number;
+  /** Marks transcripts changed here (and tells the other windows) or in another window. */
+  bumpCaptions: (fromOtherWindow?: boolean) => void;
   /** The timeline's selection, shared so other panels can act on it. */
   timelineSelection: { startUs: number; endUs: number } | null;
   currentTimeUs: number;
@@ -167,7 +176,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
   applyPlaybackStatus: (status) => set((state) => {
     if (state.openedProject?.projectHandle !== status.projectHandle || status.generation < state.playbackGeneration) return state;
-    return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable };
+    // The engine plays something this window does not show (a short in the editor, or the
+    // video in the Shorts Studio): note it, but keep this window's own playhead.
+    if ((status.shortId ?? undefined) !== state.viewShort) {
+      return { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation };
+    }
+    return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable, playbackShortId: status.shortId };
   }),
   loadOpenedProject: (project, projectPath) => {
     const resolvedPath = projectPath ?? project.projectPath ?? get().projectPath ?? undefined;
@@ -227,6 +241,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   zoomDiagnostics: [],
   selectedZoomId: undefined,
   selectedOverlayClipId: undefined,
+  captionsVersion: 0,
+  viewShort: undefined,
+  setViewShort: (viewShort) => set({ viewShort }),
+  playbackShortId: undefined,
+  bumpCaptions: (fromOtherWindow?: boolean) => {
+    set((state) => ({ captionsVersion: state.captionsVersion + 1 }));
+    if (!fromOtherWindow) broadcastCaptionsChanged();
+  },
   timelineSelection: null,
   currentTimeUs: 0,
   durationUs: 0,
@@ -297,7 +319,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   applyOpenedProject: (project, options) => {
     const current = get().openedProject;
-    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle) {
+    // A window showing a short turns every project it is handed into that short's view.
+    const viewShort = get().viewShort;
+    if (viewShort && project.shortView !== viewShort) {
+      void api
+        .projectShortView(project.projectHandle, viewShort)
+        .then((view) => get().applyOpenedProject(view, options))
+        .catch(() => undefined);
+      if (!options?.remote) broadcastProject(project);
+      return;
+    }
+    // An older (or the same) revision is stale, unless it is a different view of it (a short's).
+    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle && project.shortView === current.shortView) {
       return;
     }
     if (!options?.remote && current?.projectHandle === project.projectHandle) broadcastProject(project);

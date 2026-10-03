@@ -1,4 +1,5 @@
 import React, { useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   Folder,
   FolderOpen,
@@ -39,7 +40,14 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     projectPath,
     applyOpenedProject,
     setIsSilenceModalOpen,
-  } = useProjectStore();
+  } = useProjectStore(
+    useShallow((s) => ({
+      openedProject: s.openedProject,
+      projectPath: s.projectPath,
+      applyOpenedProject: s.applyOpenedProject,
+      setIsSilenceModalOpen: s.setIsSilenceModalOpen,
+    })),
+  );
 
   const [projectNameInput, setProjectNameInput] = useState(
     project?.manifest.projectName ?? "",

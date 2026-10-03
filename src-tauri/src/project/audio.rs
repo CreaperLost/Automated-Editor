@@ -58,6 +58,15 @@ pub struct TrackMix {
     /// Gain applied to the track, in dB. 0 leaves it as recorded.
     #[serde(default)]
     pub volume_db: f32,
+    /// What the lane carries, when set on the timeline: speech or background sound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<crate::media_bin::SoundRole>,
+    /// Noise reduction on this lane, in dB; `None` is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denoise_db: Option<f32>,
+    /// Lowered by this many dB while speech plays on a speech lane; `None` is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duck_db: Option<f32>,
 }
 
 impl TrackMix {
@@ -91,7 +100,36 @@ impl AudioSettings {
     }
 
     pub fn any_enabled(&self) -> bool {
-        self.normalize || self.noise_reduction || self.duck_system_audio
+        self.normalize
+            || self.noise_reduction
+            || self.duck_system_audio
+            || self
+                .tracks
+                .values()
+                .any(|mix| mix.denoise_db.is_some() || mix.duck_db.is_some())
+    }
+
+    /// The role set on lane `lane`, if any.
+    pub fn lane_role(&self, lane: &str) -> Option<crate::media_bin::SoundRole> {
+        self.tracks.get(lane).and_then(|mix| mix.role)
+    }
+
+    /// Noise reduction on a lane: its own setting, else (for a recording's microphone) the
+    /// older project-wide switch.
+    pub fn lane_denoise_db(&self, lane: &str, recorded_mic: bool) -> Option<f32> {
+        self.tracks
+            .get(lane)
+            .and_then(|mix| mix.denoise_db)
+            .or((recorded_mic && self.noise_reduction).then_some(self.noise_reduction_db))
+    }
+
+    /// Ducking on a lane: its own setting, else (for a recording's system audio) the older
+    /// project-wide switch.
+    pub fn lane_duck_db(&self, lane: &str, recorded_system: bool) -> Option<f32> {
+        self.tracks
+            .get(lane)
+            .and_then(|mix| mix.duck_db)
+            .or((recorded_system && self.duck_system_audio).then_some(self.duck_db))
     }
 
     /// Linear gain for the audio track `track_id`, 0 when muted.
@@ -116,6 +154,12 @@ impl AudioSettings {
         check("Ducking amount", self.duck_db, DUCK_DB_RANGE)?;
         for mix in self.tracks.values() {
             check("Track volume", mix.volume_db, TRACK_VOLUME_DB_RANGE)?;
+            if let Some(db) = mix.denoise_db {
+                check("Noise reduction", db, NOISE_REDUCTION_DB_RANGE)?;
+            }
+            if let Some(db) = mix.duck_db {
+                check("Ducking amount", db, DUCK_DB_RANGE)?;
+            }
         }
         Ok(())
     }
@@ -151,6 +195,7 @@ mod tests {
                     TrackMix {
                         muted: false,
                         volume_db: 40.0,
+                        ..Default::default()
                     },
                 )]),
                 ..Default::default()
