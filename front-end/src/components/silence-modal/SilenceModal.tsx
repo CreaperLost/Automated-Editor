@@ -4,12 +4,11 @@ import { X, Scissors, Check, Sliders, AlertCircle } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { OpenedProject, SilenceConfig } from "../../lib/types";
+import { transcribableSounds } from "../../lib/trackUtils";
 
+/** Speech first: the recording's mic, else an imported speech lane, else any sound. */
 function preferredAudioTrackId(project: OpenedProject | null): string | undefined {
-  if (!project) return undefined;
-  const mic = project.tracks.find((track) => track.descriptor.trackType === "mic_audio");
-  const system = project.tracks.find((track) => track.descriptor.trackType === "system_audio");
-  return (mic ?? system)?.descriptor.id;
+  return transcribableSounds(project)[0]?.id;
 }
 
 function errorMessage(err: unknown): string {
@@ -53,10 +52,13 @@ export const SilenceModal: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const detectGeneration = useRef(0);
+  const [chosenTrack, setChosenTrack] = useState<string>();
 
   if (!isSilenceModalOpen) return null;
 
-  const audioTrackId = preferredAudioTrackId(openedProject);
+  const sounds = transcribableSounds(openedProject);
+  const audioTrackId =
+    chosenTrack && sounds.some((sound) => sound.id === chosenTrack) ? chosenTrack : preferredAudioTrackId(openedProject);
 
   const handleRunDetection = async () => {
     if (!openedProject) {
@@ -64,7 +66,7 @@ export const SilenceModal: React.FC = () => {
       return;
     }
     if (!audioTrackId) {
-      setError("No microphone or system audio track is available.");
+      setError("There is no sound to scan yet: import or record some first.");
       return;
     }
     const analyzedHandle = openedProject.projectHandle;
@@ -198,6 +200,27 @@ export const SilenceModal: React.FC = () => {
               </p>
             </div>
 
+            {sounds.length > 1 && (
+              <label className="flex items-center justify-between gap-2 text-xs text-studio-400">
+                <span>Sound to scan</span>
+                <select
+                  aria-label="Sound to scan"
+                  value={audioTrackId ?? ""}
+                  onChange={(e) => {
+                    setChosenTrack(e.target.value);
+                    setSilenceBlocks([]);
+                  }}
+                  className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
+                >
+                  {sounds.map((sound) => (
+                    <option key={sound.id} value={sound.id}>
+                      {sound.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             <button
               onClick={() => void handleRunDetection()}
               disabled={isDetecting || !openedProject || !audioTrackId}
@@ -304,12 +327,13 @@ export const SilenceModal: React.FC = () => {
               const cuts = activeSilenceBlocks
                 .filter((block) => block.selected)
                 .map((block) => ({ startUs: block.startUs, endUs: block.endUs }));
+              // Every track loses the same time, so unlinked sound and clips above stay in step.
               void api
-                .projectRippleCuts(
-                  silenceAnalysis.projectHandle,
-                  silenceAnalysis.revision,
-                  cuts,
-                )
+                .projectTracksEdit(silenceAnalysis.projectHandle, silenceAnalysis.revision, {
+                  kind: "rippleDelete",
+                  ranges: cuts,
+                  allTracks: true,
+                })
                 .then((next) => {
                   applyOpenedProject(next);
                   applySilenceCuts();

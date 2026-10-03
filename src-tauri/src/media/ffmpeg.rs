@@ -288,6 +288,8 @@ pub fn audio_stream_names(path: &Path) -> Result<Vec<String>, String> {
                             name.to_ascii_lowercase().as_str(),
                             "soundhandler" | "sound handler" | "core media audio"
                         )
+                        // Encoders' handler names ("#Mainconcept MP4 Sound Media Handler").
+                        && !name.to_ascii_lowercase().contains("handler")
                 })
                 .unwrap_or_else(|| format!("Audio {}", i + 1))
         })

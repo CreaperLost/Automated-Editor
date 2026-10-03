@@ -29,7 +29,7 @@ function aspectValue(ratio: string): number {
 }
 
 const selectClass =
-  "bg-studio-800 text-studio-100 rounded px-1.5 py-0.5 text-[11px] border border-studio-700 focus:outline-none focus:border-teal-500";
+  "min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 rounded px-1.5 py-0.5 text-[11px] border border-studio-700 focus:outline-none focus:border-teal-500";
 
 /// Preview resolution and frame rate, changed on the fly, with the rate actually drawn.
 const PreviewQualityControls: React.FC = () => {
@@ -182,7 +182,7 @@ export const StagePanel: React.FC = () => {
               aria-label="Track selector"
               value={trackId}
               onChange={(e) => setTrackId(e.target.value)}
-              className="bg-studio-800 text-studio-100 rounded px-2 py-0.5"
+              className={selectClass}
             >
               {project.tracks.map((t) => (
                 <option key={t.descriptor.id} value={t.descriptor.id}>

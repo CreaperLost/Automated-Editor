@@ -178,6 +178,22 @@ impl EditDocument {
         asset_id: &str,
         stream: usize,
     ) -> crate::timeline::TimelineMapper {
+        crate::timeline::TimelineMapper::new(
+            self.sound_retained(asset_id, stream)
+                .iter()
+                .enumerate()
+                .map(|(i, entry)| {
+                    SourceInterval::new(format!("snd-{i}"), entry.start_us, entry.end_us)
+                        .with_media(entry.media.clone())
+                })
+                .collect(),
+        )
+    }
+
+    /// Where one sound stream of an imported file plays, as timeline entries in its own time:
+    /// each clip of it (on any track) as a "recording" range, and the time between as gaps
+    /// that map nowhere. Overlapping uses keep the earlier one.
+    pub fn sound_retained(&self, asset_id: &str, stream: usize) -> Vec<RetainedInterval> {
         let mut placements: Vec<_> = crate::media::audio::media_placements(self)
             .into_iter()
             .filter(|p| p.asset_id == asset_id && p.stream == stream && p.len > 0)
@@ -193,24 +209,18 @@ impl EditDocument {
             }
             if placed.edited_start > cursor {
                 // Time where this sound does not play: maps to nothing.
-                intervals.push(
-                    SourceInterval::new(
-                        format!("gap-{}", intervals.len()),
-                        0,
-                        placed.edited_start - cursor,
-                    )
-                    .with_media(Some("gap".into())),
-                );
+                intervals.push(RetainedInterval {
+                    start_us: 0,
+                    end_us: placed.edited_start - cursor,
+                    media: Some("gap".into()),
+                    audio_unlinked: false,
+                });
             }
-            intervals.push(SourceInterval::new(
-                format!("snd-{}", intervals.len()),
-                file.0,
-                file.1,
-            ));
+            intervals.push(RetainedInterval::recording(file.0, file.1));
             used.push(file);
             cursor = placed.edited_start + placed.len;
         }
-        crate::timeline::TimelineMapper::new(intervals)
+        intervals
     }
 
     /// The zooms with where each lands on the edited timeline, each on its own clock.

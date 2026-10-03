@@ -189,8 +189,9 @@ pub fn detect_silence_impl(
                     is_keyframe_start: None,
                     available: true,
                 }],
-                retained: vec![crate::project::RetainedInterval::recording(0, duration)],
-                edited_duration_us: duration,
+                // Silence is found where its clips play, on any track, in edited time.
+                retained: reader.history().current.sound_retained(asset_id, stream),
+                edited_duration_us: reader.summary.edited_duration_us.max(duration),
             }
         } else {
             let track = reader
@@ -734,15 +735,25 @@ pub fn project_chapters_set_impl(
 
 /// Whether a microphone or system audio track has a transcript to caption from.
 fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
-    reader.summary.tracks.iter().any(|track| {
-        matches!(
-            track.descriptor.track_type,
-            TrackType::MicAudio | TrackType::SystemAudio
-        ) && crate::transcript::store::load_transcript(reader.root(), &track.descriptor.id)
+    let has = |id: &str| {
+        crate::transcript::store::load_transcript(reader.root(), id)
             .ok()
             .flatten()
             .is_some()
-    })
+    };
+    let document = &reader.history().current;
+    // The chosen caption track, the recording's tracks, or any imported sound.
+    document.captions.track_id.as_deref().is_some_and(has)
+        || reader.summary.tracks.iter().any(|track| {
+            matches!(
+                track.descriptor.track_type,
+                TrackType::MicAudio | TrackType::SystemAudio
+            ) && has(&track.descriptor.id)
+        })
+        || document.media_assets.iter().any(|asset| {
+            (0..asset.audio_paths().count())
+                .any(|stream| has(&crate::project::revision::media_sound_id(stream, &asset.id)))
+        })
 }
 
 /// One preview frame of a short, `offset_us` into it, drawn with `layout` (which may not be

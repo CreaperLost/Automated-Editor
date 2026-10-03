@@ -344,7 +344,7 @@ export const TranscriptPanel: React.FC = () => {
               setTrackId(e.target.value);
               setSelection(null);
             }}
-            className="bg-studio-800 text-studio-100 rounded px-1.5 py-0.5"
+            className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
           >
             {tracks.map((t) => (
               <option key={t.id} value={t.id}>

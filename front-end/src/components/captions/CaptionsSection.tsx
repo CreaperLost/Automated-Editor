@@ -114,7 +114,7 @@ export const CaptionsSection: React.FC = () => {
             <select
               value={draft.trackId ?? ""}
               onChange={(e) => update({ trackId: e.target.value || undefined })}
-              className="bg-studio-800 text-studio-100 rounded px-1.5 py-0.5"
+              className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
             >
               <option value="">Automatic</option>
               {audioTracks.map((t) => (

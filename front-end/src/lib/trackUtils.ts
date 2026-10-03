@@ -66,7 +66,7 @@ export function transcribableSounds(project: OpenedProject | null): { id: string
   const imported = (project.mediaAssets ?? []).flatMap((asset) =>
     Array.from({ length: audioStreamCount(asset) }, (_, stream) => ({
       id: `msound-${stream}-${asset.id}`,
-      label: `${asset.name} · ${audioStreamName(asset, stream)}`,
+      label: `${shortLabel(asset.name)} · ${audioStreamName(asset, stream)}`,
       // V1's lane mark wins over the file's own role.
       speech: (project.audio?.tracks?.[`main-sound-${stream + 1}`]?.role ?? soundRole(asset, stream)) === "mic",
     })),
@@ -143,9 +143,15 @@ export function laneRole(project: OpenedProject | null, lane: SoundLane): SoundR
   return project?.audio?.tracks?.[lane.id]?.role ?? lane.defaultRole;
 }
 
-/** "Mic", or "Audio 2" when the stream has no name. */
+/** "Mic", or "Audio 2" when the stream has no real name (encoders' handler names don't count). */
 export function audioStreamName(asset: MediaAsset | undefined, stream: number): string {
-  return asset?.audioNames?.[stream] ?? `Audio ${stream + 1}`;
+  const name = asset?.audioNames?.[stream];
+  return name && !/handler/i.test(name) ? shortLabel(name, 18) : `Audio ${stream + 1}`;
+}
+
+/** `text` cut to `max` characters with an ellipsis, so lists and pickers keep their width. */
+export function shortLabel(text: string, max = 24): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
 export function clipEndUs(clip: Pick<OverlayClip, "startUs" | "durationUs">): number {
