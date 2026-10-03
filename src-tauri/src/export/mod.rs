@@ -766,10 +766,15 @@ impl SceneEvaluator {
                 continue;
             };
             let local_us = clip.local_us(edited_us).unwrap_or(clip.in_us);
-            let webcam = self.document.media_assets.iter().any(|asset| {
-                asset.id == clip.asset_id
-                    && asset.picture_role == crate::media_bin::PictureRole::Webcam
-            });
+            // The track's mark wins; unmarked, the file's own role.
+            let webcam = track.role.unwrap_or_else(|| {
+                self.document
+                    .media_assets
+                    .iter()
+                    .find(|asset| asset.id == clip.asset_id)
+                    .map(|asset| asset.picture_role)
+                    .unwrap_or_default()
+            }) == crate::media_bin::PictureRole::Webcam;
             if let Some(frame) = self.media_frame(&clip.asset_id, local_us)? {
                 if webcam {
                     // A camera file sits in the webcam bubble, shaped like the recording's.
@@ -805,9 +810,13 @@ impl SceneEvaluator {
                     .filter(move |(t, _)| t.descriptor.track_type == *kind)
             })
             .map(|(t, _)| t.descriptor.id.clone());
+        let document_for_roles = &self.document;
         let imported = self.document.media_assets.iter().flat_map(|asset| {
             (0..asset.audio_paths().count())
-                .filter(|&stream| asset.sound_role(stream) == crate::media_bin::SoundRole::Mic)
+                .filter(|&stream| {
+                    document_for_roles.main_stream_role(asset, stream)
+                        == crate::media_bin::SoundRole::Mic
+                })
                 .map(|stream| crate::project::revision::media_sound_id(stream, &asset.id))
         });
         crate::captions::caption_source(settings, recorded, imported, load)

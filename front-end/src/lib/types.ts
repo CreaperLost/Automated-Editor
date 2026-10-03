@@ -186,6 +186,12 @@ export interface TrackMix {
   muted: boolean;
   /** Gain in dB, -30 to +12. */
   volumeDb: number;
+  /** What the lane carries, when marked on the timeline. */
+  role?: SoundRole;
+  /** Noise reduction in dB (3 to 30); absent is off. */
+  denoiseDb?: number;
+  /** Lowered this many dB under speech (3 to 30); absent is off. */
+  duckDb?: number;
 }
 
 export const DEFAULT_TRACK_MIX: TrackMix = { muted: false, volumeDb: 0 };
@@ -592,11 +598,14 @@ export interface OverlayTrack {
   clips: OverlayClip[];
   hidden: boolean;
   muted: boolean;
+  /** A video track's clips as the screen or a webcam; absent: each file's own. */
+  role?: PictureRole;
 }
 
 /** One undoable change to the tracks beside the main sequence. */
 export type TrackEdit =
   | { kind: "addTrack"; audio?: boolean }
+  | { kind: "setTrackRole"; trackId: string; role: PictureRole | null }
   | { kind: "removeTrack"; trackId: string }
   | { kind: "setTrack"; trackId: string; hidden: boolean; muted: boolean }
   | { kind: "placeMedia"; assetId: string; trackId: string; startUs: number }

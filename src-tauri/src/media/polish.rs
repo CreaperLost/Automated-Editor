@@ -10,7 +10,7 @@ use crate::dsp::loudness::{integrated_lufs, KWeighting};
 use crate::project::{
     pcm::{PcmReader, READ_FRAME_CHUNK},
     reader::{safe_path, RetainedInterval, SegmentSummary},
-    AudioSettings, TrackType,
+    TrackType,
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -229,20 +229,24 @@ pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
     gain: f64,
     limit: bool,
-    /// System-audio gain per 10 ms of source time; empty when ducking is off.
+    /// System-audio gain per 10 ms of source time, for measuring the edit's loudness; empty
+    /// when the project-wide ducking switch is off.
     duck: Vec<f32>,
-    /// Noise reduction for microphone files, by relative path.
+    /// Noise reduction for speech files, by relative path.
     denoisers: HashMap<String, Arc<Denoiser>>,
+    /// Gain per 10 ms of edited time for each ducked lane, under speech on any speech lane.
+    lane_ducks: HashMap<String, Arc<Vec<f32>>>,
 }
 
 impl PolishPlan {
     /// `None` when every effect is off. Files that cannot be analyzed are left unpolished.
     pub fn build(
         root: &Path,
-        settings: &AudioSettings,
+        document: &crate::project::revision::EditDocument,
         retained: &[RetainedInterval],
         tracks: &[(TrackType, f64, Vec<SegmentSummary>)],
     ) -> Option<Self> {
+        let settings = &document.audio;
         if !settings.any_enabled() {
             return None;
         }
@@ -278,21 +282,61 @@ impl PolishPlan {
             Vec::new()
         };
         let mut denoisers = HashMap::new();
-        if settings.noise_reduction {
-            for (track_type, _, segment, analysis) in &analyses {
-                if let (TrackType::MicAudio, Some(profile)) = (track_type, &analysis.noise) {
-                    denoisers.insert(
-                        segment.relative_path.clone(),
-                        Arc::new(Denoiser::new(profile, settings.noise_reduction_db)),
-                    );
+        // A recording's lanes: noise reduction where on (the mic by default).
+        for (track_type, _, segments) in tracks {
+            for segment in segments.iter().filter(|s| s.available) {
+                let mic = *track_type == TrackType::MicAudio;
+                let Some(db) = settings.lane_denoise_db(&segment.track_id, mic) else {
+                    continue;
+                };
+                let Ok(path) = safe_path(root, &segment.relative_path) else {
+                    continue;
+                };
+                if let Ok(analysis) = analyze_cached(&path) {
+                    if let Some(profile) = &analysis.noise {
+                        denoisers.insert(
+                            segment.relative_path.clone(),
+                            Arc::new(Denoiser::new(profile, db)),
+                        );
+                    }
                 }
             }
         }
+        // Imported sound: noise reduction where its lane has it on.
+        let placements = crate::media::audio::media_placements(document);
+        let wav = |asset_id: &str, stream: usize| {
+            document
+                .media_assets
+                .iter()
+                .find(|a| a.id == asset_id)
+                .and_then(|a| a.audio_paths().nth(stream).cloned())
+        };
+        for placed in &placements {
+            let (Some(db), Some(relative)) = (
+                settings.lane_denoise_db(&placed.lane, false),
+                wav(&placed.asset_id, placed.stream),
+            ) else {
+                continue;
+            };
+            if denoisers.contains_key(&relative) {
+                continue;
+            }
+            let Ok(path) = safe_path(root, &relative) else {
+                continue;
+            };
+            if let Ok(analysis) = analyze_cached(&path) {
+                if let Some(profile) = &analysis.noise {
+                    denoisers.insert(relative, Arc::new(Denoiser::new(profile, db)));
+                }
+            }
+        }
+        let lane_ducks = lane_ducks(root, document, tracks, &placements, &wav);
         let mut plan = Self {
             gain: 1.0,
             limit: settings.normalize,
             duck,
             denoisers,
+            lane_ducks,
         };
         if settings.normalize {
             if let Some(lufs) = plan.edit_loudness(&analyses, retained) {
@@ -355,6 +399,24 @@ impl PolishPlan {
         a + (b - a) * t
     }
 
+    /// Whether lane `lane` is lowered under speech.
+    pub fn ducks(&self, lane: &str) -> bool {
+        self.lane_ducks.contains_key(lane)
+    }
+
+    /// The ducking gain of lane `lane` at edited time `edited_us` (1 when it is not ducked).
+    pub fn lane_duck_gain(&self, lane: &str, edited_us: f64) -> f64 {
+        let Some(envelope) = self.lane_ducks.get(lane) else {
+            return 1.0;
+        };
+        let pos = (edited_us / VOICE_BLOCK_US as f64 - 0.5).max(0.0);
+        let i = pos.floor() as usize;
+        let t = pos - i as f64;
+        let a = envelope.get(i).copied().unwrap_or(1.0) as f64;
+        let b = envelope.get(i + 1).copied().unwrap_or(1.0) as f64;
+        a + (b - a) * t
+    }
+
     pub fn denoiser(&self, relative_path: &str) -> Option<&Denoiser> {
         self.denoisers.get(relative_path).map(|d| d.as_ref())
     }
@@ -368,6 +430,150 @@ impl PolishPlan {
         let headroom = 1.0 - LIMIT_THRESHOLD;
         x.signum() * (LIMIT_THRESHOLD + headroom * ((x.abs() - LIMIT_THRESHOLD) / headroom).tanh())
     }
+}
+
+/// Speech on the edited timeline, per 10 ms, from every speech lane (a recording's mic, or
+/// any lane marked as speech), and from it the gain of every ducked lane.
+fn lane_ducks(
+    root: &Path,
+    document: &crate::project::revision::EditDocument,
+    tracks: &[(TrackType, f64, Vec<SegmentSummary>)],
+    placements: &[crate::media::audio::MediaPlacement],
+    wav: &dyn Fn(&str, usize) -> Option<String>,
+) -> HashMap<String, Arc<Vec<f32>>> {
+    use crate::media_bin::SoundRole;
+    let settings = &document.audio;
+    // Which lanes duck, and by how much.
+    let mut ducked: Vec<(String, f32)> = Vec::new();
+    for (track_type, _, segments) in tracks {
+        let system = *track_type == TrackType::SystemAudio;
+        if let Some(lane) = segments.first().map(|s| s.track_id.clone()) {
+            let role = settings.lane_role(&lane).unwrap_or(if system {
+                SoundRole::Background
+            } else {
+                SoundRole::Mic
+            });
+            if role == SoundRole::Background {
+                if let Some(db) = settings.lane_duck_db(&lane, system) {
+                    ducked.push((lane, db));
+                }
+            }
+        }
+    }
+    for placed in placements {
+        if ducked.iter().any(|(lane, _)| lane == &placed.lane) {
+            continue;
+        }
+        if let Some(db) = settings.lane_duck_db(&placed.lane, false) {
+            ducked.push((placed.lane.clone(), db));
+        }
+    }
+    if ducked.is_empty() {
+        return HashMap::new();
+    }
+    let mut speech: Vec<bool> = Vec::new();
+    let mut mark =
+        |edited_start: u64, file_start: u64, len: u64, voice_start: u64, voice: &[bool]| {
+            let first = edited_start / VOICE_BLOCK_US;
+            let last = (edited_start + len).div_ceil(VOICE_BLOCK_US);
+            for block in first..last {
+                let edited = (block * VOICE_BLOCK_US).max(edited_start);
+                let Some(file) = (file_start + (edited - edited_start)).checked_sub(voice_start)
+                else {
+                    continue;
+                };
+                if voice.get((file / VOICE_BLOCK_US) as usize) == Some(&true) {
+                    if speech.len() <= block as usize {
+                        speech.resize(block as usize + 1, false);
+                    }
+                    speech[block as usize] = true;
+                }
+            }
+        };
+    // The recording's speech lanes, through its clips on V1.
+    for (track_type, _, segments) in tracks {
+        let Some(lane) = segments.first().map(|s| s.track_id.as_str()) else {
+            continue;
+        };
+        let default = if *track_type == TrackType::MicAudio {
+            SoundRole::Mic
+        } else {
+            SoundRole::Background
+        };
+        if settings.lane_role(lane).unwrap_or(default) != SoundRole::Mic {
+            continue;
+        }
+        for segment in segments.iter().filter(|s| s.available) {
+            let Ok(analysis) =
+                safe_path(root, &segment.relative_path).and_then(|p| analyze_cached(&p))
+            else {
+                continue;
+            };
+            let mut cursor = 0u64;
+            for entry in &document.retained_intervals {
+                let len = entry.end_us - entry.start_us;
+                if entry.is_recording() {
+                    mark(
+                        cursor,
+                        entry.start_us,
+                        len,
+                        segment.start_us,
+                        &analysis.voice,
+                    );
+                }
+                cursor += len;
+            }
+        }
+    }
+    // Imported speech, where its clips play.
+    for placed in placements {
+        let asset = document
+            .media_assets
+            .iter()
+            .find(|a| a.id == placed.asset_id);
+        let role = settings
+            .lane_role(&placed.lane)
+            .or_else(|| asset.map(|a| a.sound_role(placed.stream)));
+        if role != Some(SoundRole::Mic) {
+            continue;
+        }
+        let Some(relative) = wav(&placed.asset_id, placed.stream) else {
+            continue;
+        };
+        let Ok(analysis) = safe_path(root, &relative).and_then(|p| analyze_cached(&p)) else {
+            continue;
+        };
+        mark(
+            placed.edited_start,
+            placed.in_us,
+            placed.len,
+            0,
+            &analysis.voice,
+        );
+    }
+    // Cover the whole timeline, so the hold and release after the last words still apply.
+    let blocks = document
+        .edited_duration_us()
+        .unwrap_or(0)
+        .div_ceil(VOICE_BLOCK_US) as usize
+        + 1;
+    if speech.len() < blocks {
+        speech.resize(blocks, false);
+    }
+    // One envelope per depth, shared by the lanes that duck by it.
+    let mut by_depth: HashMap<u32, Arc<Vec<f32>>> = HashMap::new();
+    ducked
+        .into_iter()
+        .map(|(lane, db)| {
+            let envelope = by_depth
+                .entry(db.to_bits())
+                .or_insert_with(|| {
+                    Arc::new(duck_envelope(db, std::iter::once((0, speech.as_slice()))))
+                })
+                .clone();
+            (lane, envelope)
+        })
+        .collect()
 }
 
 /// System-audio gain per 10 ms block of source time from microphone speech activity.
@@ -467,6 +673,7 @@ mod tests {
     #[test]
     fn limiter_is_transparent_below_threshold_and_bounded_above() {
         let plan = PolishPlan {
+            lane_ducks: HashMap::new(),
             gain: 2.0,
             limit: true,
             duck: Vec::new(),

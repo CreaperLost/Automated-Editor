@@ -83,6 +83,9 @@ pub struct OverlayTrack {
     /// Not heard.
     #[serde(default)]
     pub muted: bool,
+    /// What a video track's clips stand for, set on the timeline; unset, each file's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<crate::media_bin::PictureRole>,
 }
 
 impl OverlayTrack {
@@ -117,6 +120,11 @@ pub enum TrackEdit {
         track_id: String,
         hidden: bool,
         muted: bool,
+    },
+    /// Marks a video track's clips as the screen or a webcam (`None`: each file decides).
+    SetTrackRole {
+        track_id: String,
+        role: Option<crate::media_bin::PictureRole>,
     },
     /// Media from the bin onto a track at `start_us`, at its default length.
     PlaceMedia {
@@ -399,6 +407,13 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
             let track = &mut next.overlay_tracks[index];
             track.hidden = *hidden;
             track.muted = *muted;
+        }
+        TrackEdit::SetTrackRole { track_id, role } => {
+            let index = track_index(&next, track_id)?;
+            if next.overlay_tracks[index].is_audio() {
+                return Err("Audio tracks are marked as speech or background in the mix".into());
+            }
+            next.overlay_tracks[index].role = *role;
         }
         TrackEdit::PlaceMedia {
             asset_id,
@@ -688,6 +703,7 @@ fn add_track(document: &mut EditDocument, audio: bool) -> Result<String, String>
         clips: Vec::new(),
         hidden: false,
         muted: false,
+        role: None,
     });
     Ok(id)
 }

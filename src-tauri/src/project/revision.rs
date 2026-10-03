@@ -113,6 +113,18 @@ impl EditDocument {
         mapper_for(&self.retained_intervals)
     }
 
+    /// What stream `stream` of `asset` is when it plays on V1: the V1 sound lane's mark,
+    /// else the file's own role.
+    pub fn main_stream_role(
+        &self,
+        asset: &crate::media_bin::MediaAsset,
+        stream: usize,
+    ) -> crate::media_bin::SoundRole {
+        self.audio
+            .lane_role(&crate::media::audio::main_sound_lane(stream))
+            .unwrap_or_else(|| asset.sound_role(stream))
+    }
+
     /// The project recording's zooms (imported recordings keep their own).
     pub fn zoom_suggestions(&self) -> Vec<ZoomSuggestion> {
         self.media_zoom_suggestions(None)

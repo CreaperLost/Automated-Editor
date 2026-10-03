@@ -594,12 +594,16 @@ fn caption_track(
                 .map(|t| t.descriptor.id.clone())
         })
         .collect();
+    let document_for_roles = document;
     let imported: Vec<String> = document
         .media_assets
         .iter()
         .flat_map(|asset| {
             (0..asset.audio_paths().count())
-                .filter(|&stream| asset.sound_role(stream) == crate::media_bin::SoundRole::Mic)
+                .filter(|&stream| {
+                    document_for_roles.main_stream_role(asset, stream)
+                        == crate::media_bin::SoundRole::Mic
+                })
                 .map(|stream| crate::project::revision::media_sound_id(stream, &asset.id))
                 .collect::<Vec<_>>()
         })

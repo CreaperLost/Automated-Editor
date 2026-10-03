@@ -21,6 +21,10 @@ import {
   Film,
   AudioLines,
   Captions,
+  Mic,
+  Music,
+  Camera,
+  Monitor,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -31,6 +35,7 @@ import { useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsSt
 import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
 import { hotkeyHint, useHotkeyStore, type HotkeyAction } from "../../stores/hotkeyStore";
+import { saveTrackMix } from "../../lib/trackMix";
 import {
   buildClips,
   buildCutMarkers,
@@ -61,6 +66,8 @@ import {
   defaultClipUs,
   fitsOnTrack,
   isAudioTrack,
+  laneRole,
+  soundLanes,
   rowAtPoint,
   rowFromElement,
   sameRow,
@@ -185,7 +192,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   } | null>(null);
   const suppressSeek = useRef(false);
   const [trackHeights, setTrackHeights] = useState(loadTrackHeights);
-  const trackHeight = (trackType: string) => trackHeights[trackType] ?? DEFAULT_TRACK_HEIGHT;
+  /** A lane's height: as resized (remembered per kind of lane), else `fallback`. */
+  const trackHeight = (trackType: string, fallback = DEFAULT_TRACK_HEIGHT) => trackHeights[trackType] ?? fallback;
   const setTrackHeight = (trackType: string, height: number | null) =>
     setTrackHeights((current) => {
       const next = { ...current };
@@ -199,6 +207,36 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       return next;
     });
   const trackResize = useRef<{ trackType: string; startY: number; startHeight: number } | null>(null);
+  /** The grip under a lane header: drag to resize every lane of its kind, double-click to reset. */
+  const resizeGrip = (key: string, label: string, fallback = DEFAULT_TRACK_HEIGHT) => (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={`Resize ${label}`}
+      title="Drag to resize, double-click to reset"
+      className="absolute left-0 right-0 -bottom-1.5 h-3 z-10 cursor-ns-resize group flex items-center justify-center"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        trackResize.current = { trackType: key, startY: event.clientY, startHeight: trackHeight(key, fallback) };
+      }}
+      onPointerMove={(event) => {
+        const resize = trackResize.current;
+        if (!resize) return;
+        setTrackHeight(resize.trackType, resize.startHeight + event.clientY - resize.startY);
+      }}
+      onPointerUp={() => {
+        trackResize.current = null;
+      }}
+      onPointerCancel={() => {
+        trackResize.current = null;
+      }}
+      onDoubleClick={() => setTrackHeight(key, null)}
+    >
+      <span className="h-1 w-10 rounded-full bg-studio-700 group-hover:bg-teal-400 transition-colors" />
+    </div>
+  );
   useEffect(() => {
     setRange(null);
     setSelectedClips([]);
@@ -1422,7 +1460,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   });
 
   const renderCaptionLane = () => (
-    <div data-track-row="captions" className="relative rounded-md bg-studio-850/40" style={{ height: OVERLAY_ROW_PX }}>
+    <div data-track-row="captions" className="relative rounded-md bg-studio-850/40" style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}>
       {durationUs > 0 &&
         captionTrack.cues.map((cue, index) => {
           const selected = index === selectedCue;
@@ -1529,7 +1567,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
         key={track.id}
         data-track-row={`track:${track.id}`}
         className={`relative rounded-md bg-studio-850/40 ${track.hidden || (audio && track.muted) ? "opacity-50" : ""}`}
-        style={{ height: OVERLAY_ROW_PX }}
+        style={{ height: trackHeight(audio ? "lane:audio" : "lane:video", OVERLAY_ROW_PX) }}
       >
         {durationUs > 0 &&
           track.clips.map((clip) => {
@@ -1599,15 +1637,62 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     );
   };
 
+  // What a lane carries, marked on its header: speech or background sound; screen or webcam.
+  const lanesByMix = soundLanes(openedProject);
+  const roleFlag = (laneId: string) => {
+    const lane = lanesByMix.find((l) => l.id === laneId);
+    if (!lane) return null;
+    const role = laneRole(openedProject, lane);
+    return (
+      <button
+        type="button"
+        aria-label={`${lane.label}: ${role === "mic" ? "speech" : "background sound"}`}
+        title={
+          role === "mic"
+            ? "Speech: transcribed, captioned, and what background sound ducks under. Click to mark as background."
+            : "Background sound (music, game, desktop). Click to mark as speech."
+        }
+        onClick={() => void saveTrackMix({ [lane.id]: { role: role === "mic" ? "background" : "mic" } }).catch((err) => setEditError(String(err)))}
+        className={`p-1 rounded hover:bg-studio-700 ${role === "mic" ? "text-emerald-300" : "text-sky-300"}`}
+      >
+        {role === "mic" ? <Mic className="w-3.5 h-3.5" /> : <Music className="w-3.5 h-3.5" />}
+      </button>
+    );
+  };
+  const pictureFlag = (track: (typeof overlayTracks)[number]) => {
+    // Unmarked, each file keeps its own role; a click cycles: screen, webcam, unmarked.
+    const next = track.role === undefined || track.role === null ? "screen" : track.role === "screen" ? "webcam" : null;
+    const label = track.role === "webcam" ? "webcam" : track.role === "screen" ? "screen" : "each file's own role";
+    return (
+      <button
+        type="button"
+        disabled={editing}
+        aria-label={`${trackLabel(overlayTracks, track.id)}: ${label}`}
+        title={
+          track.role === "webcam"
+            ? "Webcam: its clips show in the webcam bubble. Click to unmark."
+            : track.role === "screen"
+              ? "Screen: its clips fill the frame over the video. Click to mark as webcam."
+              : "Unmarked: each file's own role. Click to mark this track as the screen."
+        }
+        onClick={() => void editTracks({ kind: "setTrackRole", trackId: track.id, role: next })}
+        className={`p-1 rounded hover:bg-studio-700 disabled:opacity-40 ${track.role ? "text-violet-200" : "text-studio-500"}`}
+      >
+        {track.role === "webcam" ? <Camera className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+      </button>
+    );
+  };
+
   const renderTrackHeader = (track: (typeof overlayTracks)[number]) => {
     const audio = isAudioTrack(track);
     const label = trackLabel(overlayTracks, track.id);
     return (
       <div
         key={track.id}
-        className="px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
-        style={{ height: OVERLAY_ROW_PX }}
+        className="relative px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
+        style={{ height: trackHeight(audio ? "lane:audio" : "lane:video", OVERLAY_ROW_PX) }}
       >
+        {resizeGrip(audio ? "lane:audio" : "lane:video", audio ? "audio tracks" : "video tracks", OVERLAY_ROW_PX)}
         <div className="truncate">
           <div className="text-xs font-medium text-studio-200">{label}</div>
           <div className="text-[10px] font-mono text-studio-400">
@@ -1616,6 +1701,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           </div>
         </div>
         <div className="flex items-center gap-0.5">
+          {audio ? roleFlag(track.id) : pictureFlag(track)}
           {!audio && (
             <button
               disabled={editing}
@@ -1994,37 +2080,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 className="relative px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
                 style={{ height: trackHeight(track.trackType) }}
               >
-                <div
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label={`Resize the ${track.name} track`}
-                  title="Drag to resize the track, double-click to reset"
-                  className="absolute left-0 right-0 -bottom-1.5 h-3 z-10 cursor-ns-resize group flex items-center justify-center"
-                  onPointerDown={(event) => {
-                    if (event.button !== 0) return;
-                    event.preventDefault();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    trackResize.current = {
-                      trackType: track.trackType,
-                      startY: event.clientY,
-                      startHeight: trackHeight(track.trackType),
-                    };
-                  }}
-                  onPointerMove={(event) => {
-                    const resize = trackResize.current;
-                    if (!resize) return;
-                    setTrackHeight(resize.trackType, resize.startHeight + event.clientY - resize.startY);
-                  }}
-                  onPointerUp={() => {
-                    trackResize.current = null;
-                  }}
-                  onPointerCancel={() => {
-                    trackResize.current = null;
-                  }}
-                  onDoubleClick={() => setTrackHeight(track.trackType, null)}
-                >
-                  <span className="h-1 w-10 rounded-full bg-studio-700 group-hover:bg-teal-400 transition-colors" />
-                </div>
+                {resizeGrip(track.trackType, `the ${track.name} track`)}
                 <div className="truncate">
                   <div className="text-xs font-medium text-studio-200 truncate">{track.name}</div>
                   <div className="text-[10px] uppercase font-mono text-studio-400">
@@ -2032,38 +2088,46 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                   </div>
                 </div>
 
-                <TrackHeaderButtons track={track} />
+                <div className="flex items-center gap-0.5">
+                  {roleFlag(track.id)}
+                  <TrackHeaderButtons track={track} />
+                </div>
               </div>
             ))}
             {Array.from({ length: linkedSoundLanes }, (_, stream) => (
               <div
                 key={`linked-${stream}`}
-                className="px-3 flex items-center border-b border-studio-800/40"
-                style={{ height: LINKED_SOUND_ROW_PX }}
+                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
+                style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}
                 title="The sound of the imported clips on V1. Select a clip and press U to unlink it onto an audio track."
               >
+                {resizeGrip("lane:sound", "sound lanes", LINKED_SOUND_ROW_PX)}
                 <span className="text-[10px] font-mono uppercase text-studio-400 truncate">V1 sound {stream + 1}</span>
+                {roleFlag(`main-sound-${stream + 1}`)}
               </div>
             ))}
             {trackSoundLanes.map(({ track, stream }) => (
               <div
                 key={`tsound-${track.id}-${stream}`}
-                className="px-3 flex items-center border-b border-studio-800/40"
-                style={{ height: LINKED_SOUND_ROW_PX }}
+                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
+                style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}
                 title={`The sound of the clips on ${trackLabel(overlayTracks, track.id)}. Select a clip and press U to unlink it.`}
               >
+                {resizeGrip("lane:sound", "sound lanes", LINKED_SOUND_ROW_PX)}
                 <span className="text-[10px] font-mono uppercase text-studio-400 truncate">
                   {trackLabel(overlayTracks, track.id)} sound {stream + 1}
                 </span>
+                {roleFlag(`${track.id}-sound-${stream + 1}`)}
               </div>
             ))}
             {audioTracks.map(renderTrackHeader)}
             {addTrackButton(true)}
             {captionTrack.trackId && (
               <div
-                className="px-3 flex items-center justify-between border-b border-studio-800/40"
-                style={{ height: OVERLAY_ROW_PX }}
+                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
+                style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}
               >
+                {resizeGrip("lane:captions", "the captions track", OVERLAY_ROW_PX)}
                 <div className="flex items-center gap-1.5 truncate">
                   <Captions className="w-3.5 h-3.5 text-amber-300 shrink-0" />
                   <div className="truncate">
@@ -2573,7 +2637,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
             {/* V1's imported clips' sound, one lane per audio stream: part of the clip until unlinked */}
             {Array.from({ length: linkedSoundLanes }, (_, stream) => (
-              <div key={`linked-${stream}`} data-track-row="main" className="relative" style={{ height: LINKED_SOUND_ROW_PX }}>
+              <div key={`linked-${stream}`} data-track-row="main" className="relative" style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}>
                 {durationUs > 0 &&
                   clips.map((clip, index) => {
                     if (!clip.media || clip.audioUnlinked) return null;
@@ -2609,7 +2673,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
             {/* The linked sound of the video tracks' clips */}
             {trackSoundLanes.map(({ track, stream }) => (
-              <div key={`tsound-${track.id}-${stream}`} className="relative" style={{ height: LINKED_SOUND_ROW_PX }}>
+              <div key={`tsound-${track.id}-${stream}`} className="relative" style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}>
                 {durationUs > 0 &&
                   track.clips.map((clip) => {
                     const asset = assetOf(clip.assetId);
