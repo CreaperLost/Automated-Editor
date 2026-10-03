@@ -182,7 +182,8 @@ pub fn detect_silence_impl(
                     relative_path: path.clone(),
                     start_us: 0,
                     end_us: duration,
-                    size_bytes: 0,
+                    // Its real size: readers check it to catch a file being rewritten.
+                    size_bytes: crate::project::file_len(reader.root(), path),
                     media_timescale: crate::media::audio::SAMPLE_RATE,
                     media_start_value: 0,
                     host_anchor_us: 0,
@@ -360,7 +361,8 @@ pub fn project_waveform_impl(
                     relative_path: path.clone(),
                     start_us: 0,
                     end_us: duration,
-                    size_bytes: 0,
+                    // Its real size: readers check it to catch a file being rewritten.
+                    size_bytes: crate::project::file_len(reader.root(), path),
                     media_timescale: crate::media::audio::SAMPLE_RATE,
                     media_start_value: 0,
                     host_anchor_us: 0,

@@ -101,6 +101,12 @@ export const TranscriptPanel: React.FC = () => {
     setTrackId(audioTracks(openedProject)[0]?.id ?? "");
     setSelection(null);
   }, [handle]);
+  // Sound added after opening (media imported into an empty project), or the chosen sound
+  // removed: pick the first one there is.
+  const trackIds = tracks.map((t) => t.id).join("|");
+  useEffect(() => {
+    if (!tracks.some((t) => t.id === trackId)) setTrackId(tracks[0]?.id ?? "");
+  }, [trackIds]);
 
   // Only the latest refresh may apply: a slow older reply must not replace a newer one.
   const refreshGeneration = useRef(0);

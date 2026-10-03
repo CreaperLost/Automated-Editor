@@ -92,7 +92,7 @@ fn audio_track(
                 relative_path: path.clone(),
                 start_us: 0,
                 end_us: asset.duration_us,
-                size_bytes: 0,
+                size_bytes: crate::project::file_len(reader.root(), path),
                 media_timescale: crate::media::audio::SAMPLE_RATE,
                 media_start_value: 0,
                 host_anchor_us: 0,

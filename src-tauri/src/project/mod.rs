@@ -67,3 +67,10 @@ mod tests {
         );
     }
 }
+
+/// The size of a project file, 0 when it cannot be read (readers then skip it as a gap).
+pub fn file_len(root: &std::path::Path, relative_path: &str) -> u64 {
+    std::fs::metadata(root.join(relative_path))
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
