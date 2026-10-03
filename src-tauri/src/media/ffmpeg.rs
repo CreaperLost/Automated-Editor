@@ -182,6 +182,14 @@ struct ProbeStream {
     height: Option<u32>,
     avg_frame_rate: Option<String>,
     r_frame_rate: Option<String>,
+    #[serde(default)]
+    tags: Option<ProbeTags>,
+}
+
+#[derive(Deserialize)]
+struct ProbeTags {
+    title: Option<String>,
+    handler_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -252,22 +260,56 @@ pub fn duration_us(path: &Path) -> Result<u64, String> {
     Ok((seconds * 1_000_000.0).round() as u64)
 }
 
-/// Whether the file has at least one audio stream.
-pub fn has_audio_stream(path: &Path) -> Result<bool, String> {
+/// Display names of the file's audio streams, in stream order: the stream's title, or
+/// "Audio N" when it has none. Empty when the file has no audio.
+pub fn audio_stream_names(path: &Path) -> Result<Vec<String>, String> {
     let output = probe(
         path,
-        &["-select_streams", "a:0", "-show_entries", "stream=index"],
+        &[
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index:stream_tags=title,handler_name",
+        ],
     )?;
-    Ok(!output.streams.is_empty())
+    Ok(output
+        .streams
+        .into_iter()
+        .enumerate()
+        .map(|(i, stream)| {
+            stream
+                .tags
+                .and_then(|tags| tags.title.or(tags.handler_name))
+                .map(|name| name.trim().chars().take(64).collect::<String>())
+                // Containers fill handler_name with generic values; those say nothing.
+                .filter(|name| {
+                    !name.is_empty()
+                        && !matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            "soundhandler" | "sound handler" | "core media audio"
+                        )
+                })
+                .unwrap_or_else(|| format!("Audio {}", i + 1))
+        })
+        .collect())
 }
 
-/// Decodes the first audio stream of `source` to 48 kHz stereo 16-bit WAV at `target`, the
-/// format the audio mixer reads.
-pub fn extract_audio_wav(source: &Path, target: &Path) -> Result<(), String> {
+/// Decodes audio stream `stream` (0-based among the audio streams) of `source` to 48 kHz
+/// stereo 16-bit WAV at `target`, the format the audio mixer reads.
+pub fn extract_audio_wav(source: &Path, stream: usize, target: &Path) -> Result<(), String> {
     let (mut cmd, log) = command(ffmpeg_path()?)?;
     cmd.args(["-nostdin", "-y", "-i"])
         .arg(file_arg(source))
-        .args(["-map", "0:a:0", "-vn", "-sn", "-ac", "2", "-ar", "48000"])
+        .args([
+            "-map",
+            &format!("0:a:{stream}"),
+            "-vn",
+            "-sn",
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
+        ])
         .args(["-c:a", "pcm_s16le", "-f", "wav"])
         .arg(file_arg(target));
     run(cmd, log, "Extracting the audio failed").map(|_| ())
@@ -956,28 +998,39 @@ impl H264Encoder {
     }
 }
 
-/// Encodes one small frame to check the encoder's device and driver are actually present.
-fn encoder_works(ffmpeg: &Path, encoder: &H264Encoder) -> bool {
+/// Encodes one frame at `width`x`height` to check the encoder's device and driver are present
+/// and accept that size (NVENC, for one, refuses frames below a minimum size).
+fn encoder_works(ffmpeg: &Path, encoder: &H264Encoder, width: u32, height: u32) -> bool {
     let Ok((mut cmd, log)) = command(ffmpeg) else {
         return false;
     };
-    cmd.args(["-f", "lavfi", "-i", "color=black:size=256x256:rate=30"])
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            "format=yuv420p",
-            "-c:v",
-            encoder.name,
-        ])
-        .args(encoder.rate_args(RateControl::default(), 256, 256, 30))
-        .args(["-f", "null", "-"]);
+    cmd.args([
+        "-f",
+        "lavfi",
+        "-i",
+        &format!("color=black:size={width}x{height}:rate=30"),
+    ])
+    .args([
+        "-frames:v",
+        "1",
+        "-vf",
+        "format=yuv420p",
+        "-c:v",
+        encoder.name,
+    ])
+    .args(encoder.rate_args(RateControl::default(), width, height, 30))
+    .args(["-f", "null", "-"]);
     run(cmd, log, "Test encode failed").is_ok()
 }
 
-fn h264_encoder() -> Result<&'static H264Encoder, String> {
-    static ENCODER: OnceLock<Result<&'static H264Encoder, String>> = OnceLock::new();
-    ENCODER
+/// The size the first test encode uses; it shows whether a GPU encoder works at all.
+const PROBE_DIM: u32 = 256;
+
+/// The usable H.264 encoders, in order of preference: present in this FFmpeg build and, for
+/// GPU encoders, able to encode a frame on this machine. Only the forced one, when forced.
+fn h264_encoders() -> Result<&'static [&'static H264Encoder], String> {
+    static ENCODERS: OnceLock<Result<Vec<&'static H264Encoder>, String>> = OnceLock::new();
+    ENCODERS
         .get_or_init(|| {
             let ffmpeg = ffmpeg_path()?;
             let (mut cmd, log) = command(ffmpeg)?;
@@ -994,19 +1047,69 @@ fn h264_encoder() -> Result<&'static H264Encoder, String> {
                 return H264_ENCODERS
                     .iter()
                     .find(|encoder| encoder.name == forced && has(encoder.name))
+                    .map(|encoder| vec![encoder])
                     .ok_or_else(|| format!("{ENCODER_ENV}={forced} is not available"));
             }
-            H264_ENCODERS
+            let usable: Vec<_> = H264_ENCODERS
                 .iter()
                 .filter(|encoder| has(encoder.name))
-                .find(|encoder| !encoder.hardware || encoder_works(ffmpeg, encoder))
-                .ok_or_else(|| "This FFmpeg build has no H.264 encoder".to_string())
+                .filter(|encoder| {
+                    !encoder.hardware || encoder_works(ffmpeg, encoder, PROBE_DIM, PROBE_DIM)
+                })
+                .collect();
+            if usable.is_empty() {
+                Err("This FFmpeg build has no H.264 encoder".to_string())
+            } else {
+                Ok(usable)
+            }
         })
-        .clone()
+        .as_ref()
+        .map(Vec::as_slice)
+        .map_err(Clone::clone)
+}
+
+/// The preferred encoder that accepts `width`x`height` frames. GPU encoders have size limits
+/// of their own, so each is checked once per size; libx264 takes any size.
+fn h264_encoder_for(width: u32, height: u32) -> Result<&'static H264Encoder, String> {
+    static SIZES: Mutex<Vec<(&'static str, u32, u32, bool)>> = Mutex::new(Vec::new());
+    let encoders = h264_encoders()?;
+    // A forced encoder is used as is, so its own error shows if it cannot take the size.
+    if encoders.len() == 1 {
+        return Ok(encoders[0]);
+    }
+    let ffmpeg = ffmpeg_path()?;
+    for &encoder in encoders {
+        if !encoder.hardware || (width, height) == (PROBE_DIM, PROBE_DIM) {
+            return Ok(encoder);
+        }
+        let known = SIZES
+            .lock()
+            .iter()
+            .find(|(name, w, h, _)| *name == encoder.name && (*w, *h) == (width, height))
+            .map(|entry| entry.3);
+        let works = known.unwrap_or_else(|| {
+            let works = encoder_works(ffmpeg, encoder, width, height);
+            let mut sizes = SIZES.lock();
+            if sizes.len() >= 64 {
+                sizes.remove(0);
+            }
+            sizes.push((encoder.name, width, height, works));
+            works
+        });
+        if works {
+            return Ok(encoder);
+        }
+    }
+    Err(format!(
+        "No H.264 encoder here can encode {width}x{height} video"
+    ))
 }
 
 pub fn encoder_name() -> Option<&'static str> {
-    h264_encoder().ok().map(|encoder| encoder.name)
+    h264_encoders()
+        .ok()
+        .and_then(|encoders| encoders.first())
+        .map(|encoder| encoder.name)
 }
 
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
@@ -1068,7 +1171,7 @@ impl FfmpegExport {
             return Err("Export canvas exceeds the working-set limit".into());
         }
         let fps = fps.max(1);
-        let encoder = h264_encoder()?;
+        let encoder = h264_encoder_for(width, height)?;
         let video_path = sibling(path, ".video.mp4");
         let (mut cmd, log) = command(ffmpeg_path()?)?;
         cmd.args(["-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgra"])

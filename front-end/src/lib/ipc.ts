@@ -235,12 +235,15 @@ export const api = {
     expectedRevision: number,
     ranges: EditCut[],
     grow: "end" | "start" = "end",
+    /** Clips on the other tracks from here on move right by what comes back. */
+    shiftTracksAtUs?: number,
   ) =>
     invokeTauri<OpenedProject>("project_restore_cuts", {
       projectHandle,
       expectedRevision,
       ranges,
       grow,
+      shiftTracksAt: shiftTracksAtUs === undefined ? null : Math.round(shiftTracksAtUs),
     }),
   projectUndo: (projectHandle: string, expectedRevision: number) =>
     invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision }),
@@ -347,6 +350,7 @@ export const api = {
     invokeTauri<string | null>("pick_export_destination", { projectHandle: projectHandle ?? null }),
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
   pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
+  pickMediaFolder: () => invokeTauri<string | null>("pick_media_folder"),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>

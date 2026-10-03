@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Palette, Sliders, Camera, Monitor, Frame } from "lucide-react";
-import { InspectorSection, RangeRow } from "./InspectorSection";
+import { Palette, Sliders, Camera, Monitor } from "lucide-react";
+import { InspectorSection, NumberGrid, RangeRow } from "./InspectorSection";
 import { WebcamFocusSection } from "./WebcamFocusSection";
 import { TrackClipSection } from "./TrackClipSection";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -247,27 +247,6 @@ export const InspectorPanel: React.FC = () => {
 
       </InspectorSection>
 
-      <InspectorSection id="canvas" title="Canvas" icon={Frame}>
-        <div className="space-y-1.5">
-          <label className="text-xs text-studio-400">Aspect Ratio</label>
-          <div className="grid grid-cols-4 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
-            {(["16:9", "9:16", "4:3", "1:1"] as const).map((ratio) => (
-              <button
-                key={ratio}
-                onClick={() => setCanvas({ aspectRatio: ratio })}
-                className={`py-1 text-xs font-mono rounded transition-colors ${
-                  canvas.aspectRatio === ratio
-                    ? "bg-indigo-600 text-white font-semibold"
-                    : "text-studio-400 hover:text-studio-200"
-                }`}
-              >
-                {ratio}
-              </button>
-            ))}
-          </div>
-        </div>
-      </InspectorSection>
-
       <InspectorSection
         id="screen"
         title="Screen"
@@ -284,6 +263,31 @@ export const InspectorPanel: React.FC = () => {
           </button>
         }
       >
+        <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-2">
+          <span className="text-xs text-studio-400">Canvas</span>
+          <div
+            role="radiogroup"
+            aria-label="Canvas aspect ratio"
+            className="grid grid-cols-4 gap-1 bg-studio-850 p-0.5 rounded-md border border-studio-800"
+          >
+            {(["16:9", "9:16", "4:3", "1:1"] as const).map((ratio) => (
+              <button
+                key={ratio}
+                type="button"
+                role="radio"
+                aria-checked={canvas.aspectRatio === ratio}
+                onClick={() => setCanvas({ aspectRatio: ratio })}
+                className={`py-0.5 text-[11px] font-mono rounded transition-colors ${
+                  canvas.aspectRatio === ratio
+                    ? "bg-indigo-600 text-white font-semibold"
+                    : "text-studio-400 hover:text-studio-200"
+                }`}
+              >
+                {ratio}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <RangeRow
           label="Screen Size"
@@ -293,61 +297,39 @@ export const InspectorPanel: React.FC = () => {
           unit="%"
           onChange={(screenScalePct) => setCanvas({ screenScalePct })}
         />
+        <RangeRow
+          label="Corner Radius"
+          value={canvas.cornerRadiusPx}
+          min={0}
+          max={32}
+          unit="px"
+          onChange={(cornerRadiusPx) => setCanvas({ cornerRadiusPx })}
+        />
+        <RangeRow
+          label="Drop Shadow"
+          value={canvas.shadowBlurPx}
+          min={0}
+          max={40}
+          unit="px"
+          onChange={(shadowBlurPx) => setCanvas({ shadowBlurPx })}
+        />
 
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-xs">
-            <span className="text-studio-400">Corner Radius</span>
-            <span className="font-mono text-studio-300">{canvas.cornerRadiusPx}px</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={32}
-            value={canvas.cornerRadiusPx}
-            onChange={(e) => setCanvas({ cornerRadiusPx: Number(e.target.value) })}
-            className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-xs">
-            <span className="text-studio-400">Drop Shadow</span>
-            <span className="font-mono text-studio-300">{canvas.shadowBlurPx}px</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={40}
-            value={canvas.shadowBlurPx}
-            onChange={(e) => setCanvas({ shadowBlurPx: Number(e.target.value) })}
-            className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-xs text-studio-400">Crop</label>
-          {(
-            [
-              { key: "left", label: "Left" },
-              { key: "right", label: "Right" },
-              { key: "top", label: "Top" },
-              { key: "bottom", label: "Bottom" },
-            ] as const
-          ).map(({ key, label }) => (
-            <RangeRow
-              key={key}
-              label={label}
-              value={canvas.screenCrop[key]}
-              min={0}
-              max={45}
-              step={0.5}
-              unit="%"
-              onChange={(value) =>
-                setCanvas({ screenCrop: { ...canvas.screenCrop, [key]: value } as ScreenCrop })
-              }
-            />
-          ))}
-        </div>
+        <NumberGrid
+          title="Crop"
+          min={0}
+          max={45}
+          step={0.5}
+          unit="%"
+          fields={[
+            { key: "left", label: "Left", value: canvas.screenCrop.left },
+            { key: "right", label: "Right", value: canvas.screenCrop.right },
+            { key: "top", label: "Top", value: canvas.screenCrop.top },
+            { key: "bottom", label: "Bottom", value: canvas.screenCrop.bottom },
+          ]}
+          onChange={(key, value) =>
+            setCanvas({ screenCrop: { ...canvas.screenCrop, [key]: value } as ScreenCrop })
+          }
+        />
       </InspectorSection>
 
       <InspectorSection
@@ -426,7 +408,7 @@ export const InspectorPanel: React.FC = () => {
                 unit="%"
                 onChange={(sizePct) => setCamera({ sizePct })}
               />
-              <div className="grid grid-cols-4 gap-1.5 bg-studio-850 p-1 rounded-lg border border-studio-800">
+              <div className="ml-[7rem] grid grid-cols-4 gap-1 bg-studio-850 p-0.5 rounded-md border border-studio-800">
                 {(["sm", "md", "lg", "xl"] as const).map((size) => (
                   <button
                     key={size}
@@ -434,7 +416,7 @@ export const InspectorPanel: React.FC = () => {
                     onClick={() =>
                       setCamera({ size: size as CameraBubbleSize, sizePct: WEBCAM_SIZE_PRESET_PCT[size] })
                     }
-                    className={`py-1 text-xs uppercase font-mono rounded transition-colors ${
+                    className={`py-0.5 text-[11px] uppercase font-mono rounded transition-colors ${
                       cameraBubble.sizePct === WEBCAM_SIZE_PRESET_PCT[size]
                         ? "bg-indigo-600 text-white font-medium"
                         : "text-studio-400 hover:text-studio-200"
@@ -474,32 +456,24 @@ export const InspectorPanel: React.FC = () => {
             </div>
 
             {cameraBubble.position === "custom" && (
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs">
-                  <span className="text-studio-400">Custom X</span>
-                  <span className="font-mono text-studio-300">{Math.round(cameraBubble.customX)}%</span>
-                </div>
-                <input
-                  type="range"
+              <>
+                <RangeRow
+                  label="Custom X"
+                  value={Math.round(cameraBubble.customX)}
                   min={0}
                   max={100}
-                  value={cameraBubble.customX}
-                  onChange={(e) => setCamera({ customX: Number(e.target.value) })}
-                  className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+                  unit="%"
+                  onChange={(customX) => setCamera({ customX })}
                 />
-                <div className="flex justify-between text-xs">
-                  <span className="text-studio-400">Custom Y</span>
-                  <span className="font-mono text-studio-300">{Math.round(cameraBubble.customY)}%</span>
-                </div>
-                <input
-                  type="range"
+                <RangeRow
+                  label="Custom Y"
+                  value={Math.round(cameraBubble.customY)}
                   min={0}
                   max={100}
-                  value={cameraBubble.customY}
-                  onChange={(e) => setCamera({ customY: Number(e.target.value) })}
-                  className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+                  unit="%"
+                  onChange={(customY) => setCamera({ customY })}
                 />
-              </div>
+              </>
             )}
 
             <label className="flex items-center justify-between text-xs text-studio-400">
@@ -522,20 +496,14 @@ export const InspectorPanel: React.FC = () => {
               />
             </label>
 
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-studio-400">Border Width</span>
-                <span className="font-mono text-studio-300">{cameraBubble.borderWidth}px</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={8}
-                value={cameraBubble.borderWidth}
-                onChange={(e) => setCamera({ borderWidth: Number(e.target.value) })}
-                className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
-              />
-            </div>
+            <RangeRow
+              label="Border Width"
+              value={cameraBubble.borderWidth}
+              min={0}
+              max={8}
+              unit="px"
+              onChange={(borderWidth) => setCamera({ borderWidth })}
+            />
           </>
         )}
       </InspectorSection>

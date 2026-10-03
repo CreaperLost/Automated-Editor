@@ -16,6 +16,10 @@ import {
   Volume2,
   VolumeX,
   Trash2,
+  Link2,
+  Unlink,
+  Film,
+  AudioLines,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -25,6 +29,7 @@ import { placedChapters } from "../chapters/ChaptersPanel";
 import { useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsStore";
 import { TrackHeaderButtons } from "../audio/TrackHeaderButtons";
 import { api } from "../../lib/ipc";
+import { hotkeyHint, useHotkeyStore, type HotkeyAction } from "../../stores/hotkeyStore";
 import {
   buildClips,
   buildCutMarkers,
@@ -37,6 +42,8 @@ import {
 } from "../../lib/projectUtils";
 import {
   DEFAULT_WEBCAM_FOCUS,
+  type EditedSpan as EditedRangeSpan,
+  type WaveformBucket,
   type OpenedProject,
   type OverlayClip,
   type ProjectZoom,
@@ -44,15 +51,20 @@ import {
   type ZoomKeyframe,
 } from "../../lib/types";
 import {
+  audioStreamCount,
+  audioStreamName,
+  audioTracks as audioTracksOf,
   clipEndUs,
   defaultClipUs,
   fitsOnTrack,
+  isAudioTrack,
   rowAtPoint,
   rowFromElement,
   sameRow,
   snapStart,
   trackLabel,
   trimClip,
+  videoTracks as videoTracksOf,
   type TrackRow,
 } from "../../lib/trackUtils";
 
@@ -84,16 +96,18 @@ const MAX_TIMELINE_ZOOM = 64;
 const SNAP_PX = 8;
 /** Pointer travel, in pixels, before a press on a clip becomes a drag that reorders it. */
 const CLIP_DRAG_PX = 8;
-/** Pointer travel, in pixels, before a press on the track becomes a range selection instead of a seek. */
-const RANGE_DRAG_PX = 6;
+/** Pointer travel, in pixels, before a Shift+drag on the ruler becomes a range selection. */
+const RANGE_DRAG_PX = 4;
 
 /** Track lane heights, per track type, remembered on this machine. */
 const TRACK_HEIGHT_KEY = "aeroedits.trackHeights.v1";
 const DEFAULT_TRACK_HEIGHT = 56;
 const MIN_TRACK_HEIGHT = 28;
 const MAX_TRACK_HEIGHT = 240;
-/** Height of a video track above the main sequence, and of the "new track" drop row. */
+/** Height of a video or audio track, and of the "new track" drop row. */
 const OVERLAY_ROW_PX = 40;
+/** Height of a lane showing the sound of the main sequence's imported clips. */
+const LINKED_SOUND_ROW_PX = 28;
 const NEW_TRACK_ROW_PX = 22;
 
 function loadTrackHeights(): Record<string, number> {
@@ -107,6 +121,10 @@ function loadTrackHeights(): Record<string, number> {
 }
 
 /** A clip edge being dragged: inward ripple-deletes, outward restores cut media. */
+/** A selected clip: one on the main sequence (by its place on the timeline), or on a track. */
+type ClipRef = { kind: "main"; startUs: number; endUs: number } | { kind: "track"; clipId: string };
+type EditedSpan = { startUs: number; endUs: number };
+
 interface EdgeDrag {
   clip: TimelineClip;
   side: "start" | "end";
@@ -136,13 +154,19 @@ export const TimelineStudio: React.FC = () => {
     1e6 / (openedProject?.manifest.tracks.find((track) => track.trackType === "screen")?.fps || 30),
   );
 
-  const [rangeStart, setRangeStart] = useState("0");
-  const [rangeEnd, setRangeEnd] = useState("0");
+  // Range selection (Shift+drag on the ruler, or mark in/out): Cam Focus, Normal view and
+  // Delete / Keep only work on it.
+  const [range, setRange] = useState<EditedSpan | null>(null);
+  // Clip selection: click a clip, Shift/Ctrl+click to add or remove one.
+  const [selectedClips, setSelectedClips] = useState<ClipRef[]>([]);
   const [editError, setEditError] = useState<string>();
+  const bindings = useHotkeyStore((s) => s.bindings);
+  const hint = (action: HotkeyAction) => hotkeyHint(bindings, action);
   const [editing, setEditing] = useState(false);
   const selectedZoomId = useProjectStore((s) => s.selectedZoomId);
   const setSelectedZoomId = useProjectStore((s) => s.setSelectedZoomId);
   const setTimelineSelection = useProjectStore((s) => s.setTimelineSelection);
+  const setSelectedOverlayClipId = useProjectStore((s) => s.setSelectedOverlayClipId);
   const autoZoomOptions = useZoomSettingsStore((s) => s.options);
   const [zoomBusy, setZoomBusy] = useState(false);
   const dragging = useRef<{
@@ -168,7 +192,11 @@ export const TimelineStudio: React.FC = () => {
       return next;
     });
   const trackResize = useRef<{ trackType: string; startY: number; startHeight: number } | null>(null);
-  useEffect(() => { setRangeStart("0"); setRangeEnd(String(durationUs / 1e6)); setEditError(undefined); }, [openedProject?.projectHandle, durationUs]);
+  useEffect(() => {
+    setRange(null);
+    setSelectedClips([]);
+    setEditError(undefined);
+  }, [openedProject?.projectHandle]);
   /** Runs one edit; resolves to whether it was applied. */
   const runEdit = async (work: (project: OpenedProject) => Promise<OpenedProject>) => {
     if (!openedProject || editing) return false;
@@ -177,33 +205,78 @@ export const TimelineStudio: React.FC = () => {
     catch (err) { setEditError(String(err)); return false; }
     finally { setEditing(false); }
   };
+  const tracksEdit = (edit: TrackEdit) =>
+    runEdit((project) => api.projectTracksEdit(project.projectHandle, project.revision, edit));
+  /** Delete / Keep only on the range: every track loses the same time. */
   const editRange = async (trim: boolean) => {
-    if (!openedProject || editing) return;
-    const startUs = Math.round(Number(rangeStart) * 1e6);
-    const endUs = Math.round(Number(rangeEnd) * 1e6);
-    if (!Number.isSafeInteger(startUs) || !Number.isSafeInteger(endUs) || startUs < 0 || startUs >= endUs || endUs > durationUs) {
-      setEditError("Choose a start and end within the timeline, with start before end."); return;
-    }
+    if (!openedProject || editing || !range) return;
+    const { startUs, endUs } = range;
     const cuts = trim ? [
       ...(startUs > 0 ? [{ startUs: 0, endUs: startUs }] : []),
       ...(endUs < durationUs ? [{ startUs: endUs, endUs: durationUs }] : []),
     ] : [{startUs, endUs}];
     if (!cuts.length) return;
-    await runEdit((project) => api.projectRippleCuts(project.projectHandle, project.revision, cuts));
+    if (await tracksEdit({ kind: "rippleDelete", ranges: cuts, allTracks: true })) {
+      setRange(null);
+    }
   };
-  const splitAtPlayhead = () =>
-    runEdit((project) => api.projectSplit(project.projectHandle, project.revision, currentTimeUs));
-  const restoreCut = (startUs: number, endUs: number, grow: "end" | "start" = "end") =>
-    runEdit((project) => api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }], grow));
-  // Q and E: ripple-delete from the playhead to the previous or next edit point.
-  const rippleTrim = (side: "previous" | "next") =>
-    runEdit(async (project) => {
-      const playheadUs = currentTimeUs;
-      const next = await api.projectRippleTrim(project.projectHandle, project.revision, playheadUs, side);
-      // Q pulls the later media back to the previous edit point; the playhead follows it.
-      if (side === "previous") seekToUs(playheadUs - (project.editedDurationUs - next.editedDurationUs));
-      return next;
+  /** Every clip under `atUs` on the tracks beside V1. */
+  const trackClipsAt = (atUs: number) =>
+    overlayTracks.flatMap((t) => t.clips.filter((c) => c.startUs < atUs && atUs < clipEndUs(c)).map((c) => c.id));
+  // S: selected clips split alone; with nothing selected, V1 and every track split together.
+  const splitAtPlayhead = () => {
+    const at = currentTimeUs;
+    if (selectedClips.length > 0) {
+      const main = selectedMain.some((r) => r.startUs < at && at < r.endUs);
+      const clipIds = selectedTrackIds.filter((id) => trackClipsAt(at).includes(id));
+      if (!main && clipIds.length === 0) {
+        setEditError("Put the playhead over a selected clip to split it, or deselect (Ctrl+D) to split everything.");
+        return;
+      }
+      return tracksEdit({ kind: "split", atUs: at, main, clipIds });
+    }
+    return tracksEdit({ kind: "split", atUs: at, main: at > 0 && at < durationUs, clipIds: trackClipsAt(at) });
+  };
+  /** Puts cut media back; with `shiftAtUs`, the other tracks move right with it. */
+  const restoreCut = (startUs: number, endUs: number, grow: "end" | "start" = "end", shiftAtUs?: number) =>
+    runEdit((project) =>
+      api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }], grow, shiftAtUs),
+    );
+  // Q and E: ripple-delete from the playhead to the previous or next edit point. A selected
+  // clip is trimmed alone; with nothing selected, every track loses the same time.
+  const rippleTrim = (side: "previous" | "next") => {
+    const at = currentTimeUs;
+    if (selectedClips.length > 1) {
+      setEditError("Select one clip to trim, or deselect (Ctrl+D) to trim every track.");
+      return;
+    }
+    const trackId = selectedTrackIds[0];
+    if (trackId) {
+      return tracksEdit({ kind: "rippleTrimClip", clipId: trackId, side: side === "previous" ? "start" : "end", atUs: at });
+    }
+    let cut: EditedRangeSpan;
+    let allTracks = true;
+    const clip = selectedMain[0];
+    if (clip) {
+      if (!(clip.startUs < at && at < clip.endUs)) {
+        setEditError("Put the playhead inside the selected clip to trim it.");
+        return;
+      }
+      cut = side === "previous" ? { startUs: clip.startUs, endUs: at } : { startUs: at, endUs: clip.endUs };
+      allTracks = false;
+    } else {
+      const points = [0, durationUs, ...edges, ...overlayTracks.flatMap((t) => t.clips.flatMap((c) => [c.startUs, clipEndUs(c)]))];
+      const before = Math.max(...points.filter((p) => p < at));
+      const after = Math.min(...points.filter((p) => p > at && p <= durationUs));
+      if (side === "previous" ? !Number.isFinite(before) : !Number.isFinite(after)) return;
+      cut = side === "previous" ? { startUs: before, endUs: at } : { startUs: at, endUs: after };
+    }
+    return tracksEdit({ kind: "rippleDelete", ranges: [cut], allTracks }).then((applied) => {
+      // Q pulls the later media back to the cut's start; the playhead follows it.
+      if (applied && side === "previous") seekToUs(cut.startUs);
+      return applied;
     });
+  };
   const undo = () => {
     if (openedProject?.undoAvailable) void runEdit((project) => api.projectUndo(project.projectHandle, project.revision));
   };
@@ -211,29 +284,78 @@ export const TimelineStudio: React.FC = () => {
     if (openedProject?.redoAvailable) void runEdit((project) => api.projectRedo(project.projectHandle, project.revision));
   };
 
-  // The range fields double as the timeline selection; the full range means nothing is selected.
-  const selectedStartUs = Math.round(Number(rangeStart) * 1e6);
-  const selectedEndUs = Math.round(Number(rangeEnd) * 1e6);
-  const selection =
-    Number.isSafeInteger(selectedStartUs) &&
-    Number.isSafeInteger(selectedEndUs) &&
-    selectedStartUs >= 0 &&
-    selectedStartUs < selectedEndUs &&
-    selectedEndUs <= durationUs &&
-    !(selectedStartUs === 0 && selectedEndUs === durationUs)
-      ? { startUs: selectedStartUs, endUs: selectedEndUs }
-      : null;
   const selectRange = (startUs: number, endUs: number) => {
-    setRangeStart(String(startUs / 1e6));
-    setRangeEnd(String(endUs / 1e6));
+    const a = Math.max(0, Math.min(startUs, endUs));
+    const b = Math.min(durationUs, Math.max(startUs, endUs));
+    setRange(b > a ? { startUs: a, endUs: b } : null);
   };
-  const clearSelection = () => selectRange(0, durationUs);
-  useEffect(() => {
-    setTimelineSelection(selection);
-  }, [selection?.startUs, selection?.endUs, setTimelineSelection]);
 
   const retained = openedProject?.retainedIntervals ?? [];
   const clips = buildClips(retained, openedProject?.splitPointsUs);
+  const overlayTracks = openedProject?.overlayTracks ?? [];
+  const videoTracks = videoTracksOf(overlayTracks);
+  const audioTracks = audioTracksOf(overlayTracks);
+  const trackOfClip = (clipId: string) => overlayTracks.find((t) => t.clips.some((c) => c.id === clipId));
+  const findTrackClip = (clipId: string) => trackOfClip(clipId)?.clips.find((c) => c.id === clipId);
+
+  const selectedMain = selectedClips.filter((ref): ref is Extract<ClipRef, { kind: "main" }> => ref.kind === "main");
+  const selectedTrackIds = selectedClips.flatMap((ref) => (ref.kind === "track" ? [ref.clipId] : []));
+  const clipSelected = (clip: EditedSpan) =>
+    selectedMain.some((ref) => ref.startUs === clip.startUs && ref.endUs === clip.endUs);
+  const trackClipSelected = (clipId: string) => selectedTrackIds.includes(clipId);
+  /** Clicking selects one clip; Shift/Ctrl/Cmd+click adds it to (or takes it out of) the selection. */
+  const pickClip = (ref: ClipRef, additive: boolean) => {
+    const same = (other: ClipRef) =>
+      ref.kind === "main"
+        ? other.kind === "main" && other.startUs === ref.startUs && other.endUs === ref.endUs
+        : other.kind === "track" && other.clipId === ref.clipId;
+    setSelectedClips((current) =>
+      additive ? (current.some(same) ? current.filter((o) => !same(o)) : [...current, ref]) : [ref],
+    );
+    if (ref.kind === "track") setSelectedOverlayClipId(ref.clipId);
+    else if (!additive) setSelectedOverlayClipId(undefined);
+  };
+  const clearSelection = () => {
+    setRange(null);
+    setSelectedClips([]);
+  };
+  // After an edit, keep the selected clips that still exist; a pending span selects the clips
+  // inside it (a moved block lands somewhere new).
+  const pendingSelect = useRef<EditedSpan | null>(null);
+  useEffect(() => {
+    const pending = pendingSelect.current;
+    pendingSelect.current = null;
+    if (pending) {
+      setSelectedClips(
+        clips
+          .filter((clip) => clip.startUs >= pending.startUs && clip.endUs <= pending.endUs)
+          .map((clip) => ({ kind: "main", startUs: clip.startUs, endUs: clip.endUs })),
+      );
+      return;
+    }
+    setSelectedClips((current) => {
+      const kept = current.filter((ref) =>
+        ref.kind === "main"
+          ? clips.some((clip) => clip.startUs === ref.startUs && clip.endUs === ref.endUs)
+          : !!findTrackClip(ref.clipId),
+      );
+      return kept.length === current.length ? current : kept;
+    });
+    setRange((current) => (current && current.endUs > durationUs ? null : current));
+  }, [openedProject?.revision]);
+
+  // The selected main clips, when they sit side by side: they move as one block.
+  const selectedBlock = (() => {
+    if (selectedMain.length === 0 || selectedTrackIds.length > 0) return null;
+    const sorted = [...selectedMain].sort((a, b) => a.startUs - b.startUs);
+    for (let i = 1; i < sorted.length; i++) if (sorted[i].startUs !== sorted[i - 1].endUs) return null;
+    return { startUs: sorted[0].startUs, endUs: sorted[sorted.length - 1].endUs };
+  })();
+  // What Cam Focus, Normal view and the Zoom panel act on: the range, else the selected clips.
+  const selection = range ?? selectedBlock;
+  useEffect(() => {
+    setTimelineSelection(selection);
+  }, [selection?.startUs, selection?.endUs, setTimelineSelection]);
   const cutMarkers = buildCutMarkers(retained, openedProject?.removedIntervals);
   const edges = clipEdges(clips);
 
@@ -286,10 +408,8 @@ export const TimelineStudio: React.FC = () => {
   const mediaName = (clip: TimelineClip) =>
     clip.media ? openedProject?.mediaAssets?.find((asset) => asset.id === clip.media)?.name ?? "Media" : null;
 
-  // Video tracks above the main sequence (V2, V3, ...), bottom to top.
-  const overlayTracks = openedProject?.overlayTracks ?? [];
+  // Video tracks above the main sequence (V2, V3, ...) and audio tracks below it (A1, A2, ...).
   const selectedOverlayClipId = useProjectStore((s) => s.selectedOverlayClipId);
-  const setSelectedOverlayClipId = useProjectStore((s) => s.setSelectedOverlayClipId);
   const assetOf = (assetId: string) => openedProject?.mediaAssets?.find((asset) => asset.id === assetId);
   useEffect(() => {
     if (selectedOverlayClipId && !overlayTracks.some((t) => t.clips.some((c) => c.id === selectedOverlayClipId))) {
@@ -305,10 +425,15 @@ export const TimelineStudio: React.FC = () => {
       let trackId: string;
       if (row.kind === "track") {
         trackId = row.trackId;
-      } else {
-        current = await api.projectTracksEdit(current.projectHandle, current.revision, { kind: "addTrack" });
-        const added = current.overlayTracks ?? [];
+      } else if (row.kind === "new") {
+        current = await api.projectTracksEdit(current.projectHandle, current.revision, {
+          kind: "addTrack",
+          audio: row.audio,
+        });
+        const added = (current.overlayTracks ?? []).filter((t) => isAudioTrack(t) === row.audio);
         trackId = added[added.length - 1]?.id ?? "";
+      } else {
+        throw new Error("Clips on V1 are inserted, not placed");
       }
       try {
         return await api.projectTracksEdit(current.projectHandle, current.revision, makeEdit(trackId));
@@ -328,12 +453,26 @@ export const TimelineStudio: React.FC = () => {
   ];
   // Read in event handlers only, after the timeline scale below is known.
   const snapUs = () => (pxPerUs > 0 ? SNAP_PX / pxPerUs : 0);
-  /** Whether a block of `durationUs` can land at `startUs` on `row`. */
-  const placeable = (row: TrackRow, startUs: number, lengthUs: number, ignoreId?: string) =>
-    startUs < durationUs &&
-    (row.kind === "new" ||
-      (row.kind === "track" &&
-        fitsOnTrack(overlayTracks.find((track) => track.id === row.trackId), startUs, lengthUs, ignoreId)));
+  /** Whether a block of `lengthUs` can land at `startUs` on `row`; `kinds` are the track kinds it may go on. */
+  const placeable = (
+    row: TrackRow,
+    startUs: number,
+    lengthUs: number,
+    kinds: { video: boolean; audio: boolean },
+    ignoreId?: string,
+  ) => {
+    if (startUs >= durationUs) return false;
+    if (row.kind === "new") return row.audio ? kinds.audio : kinds.video;
+    if (row.kind !== "track") return false;
+    const track = overlayTracks.find((t) => t.id === row.trackId);
+    if (!(isAudioTrack(track) ? kinds.audio : kinds.video)) return false;
+    return fitsOnTrack(track, startUs, lengthUs, ignoreId);
+  };
+  /** Where media from the bin may go: sound onto audio tracks, pictures onto video tracks. */
+  const assetKinds = (asset: { kind: string } & Parameters<typeof audioStreamCount>[0]) => ({
+    video: asset?.kind !== "audio",
+    audio: audioStreamCount(asset) > 0,
+  });
 
   // Dropping a Media panel item on the main track inserts it at the nearest clip edge; on a
   // track above, it lands where it is dropped.
@@ -353,7 +492,7 @@ export const TimelineStudio: React.FC = () => {
       const durationUs = defaultClipUs(asset);
       const startUs = snapStart(clientXToUs(event.clientX), durationUs, snapPoints(), snapUs());
       setMediaDropUs(null);
-      setMediaGhost({ row, startUs, durationUs, valid: placeable(row, startUs, durationUs) });
+      setMediaGhost({ row, startUs, durationUs, valid: placeable(row, startUs, durationUs, assetKinds(asset)) });
     } else {
       setMediaGhost(null);
       setMediaDropUs(nearestEdge(event.clientX));
@@ -368,7 +507,7 @@ export const TimelineStudio: React.FC = () => {
     event.preventDefault();
     if (ghost) {
       if (!ghost.valid) {
-        setEditError("There is already a clip there on that track.");
+        setEditError("That media cannot go there: the track is the wrong kind, or another clip is in the way.");
         return;
       }
       void editOnRow(ghost.row, (trackId) => ({ kind: "placeMedia", assetId, trackId, startUs: ghost.startUs }));
@@ -385,120 +524,135 @@ export const TimelineStudio: React.FC = () => {
     if (target !== undefined) seekToUs(target);
   };
 
-  const shortcuts = useRef({
-    splitAtPlayhead,
-    deleteSelection: () => {},
-    clearSelection,
-    rippleTrim,
-    undo,
-    redo,
-    togglePlayPause,
-    jumpToEdit,
-    stepUs: (_offsetUs: number) => {},
-    seekToUs,
-  });
-  shortcuts.current = {
-    splitAtPlayhead,
-    deleteSelection: () => {
-      if (selectedOverlayClipId) void editTracks({ kind: "removeClip", clipId: selectedOverlayClipId });
-      else if (selection) void editRange(false);
-    },
-    clearSelection: () => {
+  /** Delete: the selected clips in one undo step (V1 clips close up, track clips go), else the range. */
+  const deleteSelection = async () => {
+    if (selectedClips.length === 0) {
+      if (range) await editRange(false);
+      return;
+    }
+    const ranges = selectedMain.map(({ startUs, endUs }) => ({ startUs, endUs }));
+    const clipIds = [...selectedTrackIds];
+    if (await tracksEdit({ kind: "deleteSelection", ranges, clipIds })) {
+      setSelectedClips([]);
+      setSelectedOverlayClipId(undefined);
+    }
+  };
+
+  /**
+   * U: a selected picture with its sound attached is unlinked (its sound goes onto audio
+   * tracks); a picture selected together with its unlinked sound is relinked.
+   */
+  const toggleLink = () => {
+    const sounds = selectedTrackIds.filter((id) => findTrackClip(id)?.audioStream !== undefined);
+    const pictures: ({ kind: "main"; startUs: number; endUs: number; assetId: string; unlinked: boolean } | { kind: "track"; clipId: string; assetId: string; unlinked: boolean })[] = [
+      ...selectedMain.flatMap((ref) => {
+        const clip = clips.find((c) => c.startUs === ref.startUs && c.endUs === ref.endUs);
+        return clip?.media ? [{ ...ref, assetId: clip.media, unlinked: !!clip.audioUnlinked }] : [];
+      }),
+      ...selectedTrackIds.flatMap((clipId) => {
+        const clip = findTrackClip(clipId);
+        return clip && clip.audioStream === undefined
+          ? [{ kind: "track" as const, clipId, assetId: clip.assetId, unlinked: !!clip.audioUnlinked }]
+          : [];
+      }),
+    ];
+    if (pictures.length !== 1) {
+      setEditError(
+        selectedMain.length > 0 && pictures.length === 0
+          ? "The recording's sound is on its own tracks already. Unlink works on imported clips."
+          : "Select one imported clip (and, to relink, its sound) and press U.",
+      );
+      return;
+    }
+    const picture = pictures[0];
+    if (!picture.unlinked) {
+      if (audioStreamCount(assetOf(picture.assetId)) === 0) {
+        setEditError("That clip has no sound to unlink.");
+        return;
+      }
+      void editTracks(
+        picture.kind === "main"
+          ? { kind: "unlinkMain", startUs: picture.startUs, endUs: picture.endUs }
+          : { kind: "unlinkClip", clipId: picture.clipId },
+      );
+      return;
+    }
+    if (sounds.length === 0) {
+      setEditError("Its sound is unlinked. Select the clip and its sound together, then press U to relink.");
+      return;
+    }
+    void editTracks(
+      picture.kind === "main"
+        ? { kind: "relinkMain", startUs: picture.startUs, endUs: picture.endUs, audioClipIds: sounds }
+        : { kind: "relinkClip", clipId: picture.clipId, audioClipIds: sounds },
+    );
+  };
+  const linkState = (() => {
+    const one = selectedMain.length + selectedTrackIds.filter((id) => findTrackClip(id)?.audioStream === undefined).length === 1;
+    if (!one) return null;
+    const main = selectedMain[0] && clips.find((c) => c.startUs === selectedMain[0].startUs && c.endUs === selectedMain[0].endUs);
+    if (main) return main.media ? (main.audioUnlinked ? "unlinked" : "linked") : null;
+    const clip = selectedTrackIds.map(findTrackClip).find((c) => c && c.audioStream === undefined);
+    return clip ? (clip.audioUnlinked ? "unlinked" : "linked") : null;
+  })();
+
+  /** I and O: the range starts or ends at the playhead. */
+  const markIn = () => selectRange(currentTimeUs, range && range.endUs > currentTimeUs ? range.endUs : durationUs);
+  const markOut = () => selectRange(range && range.startUs < currentTimeUs ? range.startUs : 0, currentTimeUs);
+
+  const actions = useRef<Partial<Record<HotkeyAction, () => void>>>({});
+  actions.current = {
+    playPause: togglePlayPause,
+    split: () => void splitAtPlayhead(),
+    rippleTrimPrevious: () => void rippleTrim("previous"),
+    rippleTrimNext: () => void rippleTrim("next"),
+    deleteSelection: () => void deleteSelection(),
+    deselect: () => {
       setSelectedOverlayClipId(undefined);
       clearSelection();
     },
-    rippleTrim,
+    selectAll: () => {
+      setRange(null);
+      setSelectedClips([
+        ...clips.map((clip): ClipRef => ({ kind: "main", startUs: clip.startUs, endUs: clip.endUs })),
+        ...overlayTracks.flatMap((t) => t.clips.map((c): ClipRef => ({ kind: "track", clipId: c.id }))),
+      ]);
+    },
+    deselectAll: () => {
+      setSelectedOverlayClipId(undefined);
+      setSelectedClips([]);
+    },
+    toggleLink,
+    markIn,
+    markOut,
     undo,
     redo,
-    togglePlayPause,
-    jumpToEdit,
-    stepUs: (offsetUs: number) => seekToUs(currentTimeUs + offsetUs),
-    seekToUs,
+    stepBack: () => seekToUs(currentTimeUs - frameUs),
+    stepForward: () => seekToUs(currentTimeUs + frameUs),
+    stepBackLong: () => seekToUs(currentTimeUs - 1_000_000),
+    stepForwardLong: () => seekToUs(currentTimeUs + 1_000_000),
+    previousEdit: () => jumpToEdit(-1),
+    nextEdit: () => jumpToEdit(1),
+    zoomIn: () => zoomRef.current(2),
+    zoomOut: () => zoomRef.current(0.5),
+    goToStart: () => seekToUs(0),
+    goToEnd: () => seekToUs(Number.MAX_SAFE_INTEGER),
   };
+  // Actions that act once per press; the rest (stepping, zoom) repeat while the key is held.
+  const ONCE: HotkeyAction[] = ["playPause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "deleteSelection", "selectAll", "deselectAll"];
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      const keys = shortcuts.current;
-      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-        const key = event.key.toLowerCase();
-        if (key === "z") {
-          event.preventDefault();
-          if (event.shiftKey) keys.redo();
-          else keys.undo();
-        } else if (key === "y") {
-          event.preventDefault();
-          keys.redo();
-        }
-        return;
-      }
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
-      switch (event.key) {
-        case "s":
-        case "S":
-          event.preventDefault();
-          if (!event.repeat) void keys.splitAtPlayhead();
-          break;
-        case "q":
-        case "Q":
-          event.preventDefault();
-          if (!event.repeat) void keys.rippleTrim("previous");
-          break;
-        case "e":
-        case "E":
-          event.preventDefault();
-          if (!event.repeat) void keys.rippleTrim("next");
-          break;
-        case "Delete":
-        case "Backspace":
-          event.preventDefault();
-          keys.deleteSelection();
-          break;
-        case "Escape":
-          keys.clearSelection();
-          break;
-        case " ":
-          event.preventDefault();
-          if (!event.repeat) keys.togglePlayPause();
-          break;
-        case "ArrowLeft":
-          event.preventDefault();
-          keys.stepUs(-(event.shiftKey ? 1_000_000 : frameUs));
-          break;
-        case "ArrowRight":
-          event.preventDefault();
-          keys.stepUs(event.shiftKey ? 1_000_000 : frameUs);
-          break;
-        case "ArrowUp":
-          event.preventDefault();
-          keys.jumpToEdit(-1);
-          break;
-        case "ArrowDown":
-          event.preventDefault();
-          keys.jumpToEdit(1);
-          break;
-        case "=":
-        case "+":
-          event.preventDefault();
-          zoomRef.current(2);
-          break;
-        case "-":
-          event.preventDefault();
-          zoomRef.current(0.5);
-          break;
-        case "Home":
-          event.preventDefault();
-          keys.seekToUs(0);
-          break;
-        case "End":
-          event.preventDefault();
-          keys.seekToUs(Number.MAX_SAFE_INTEGER);
-          break;
-      }
+      const action = useHotkeyStore.getState().actionFor(event);
+      if (!action) return;
+      event.preventDefault();
+      if (event.repeat && ONCE.includes(action)) return;
+      actions.current[action]?.();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [frameUs]);
+  }, []);
 
   const timelineTrackRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -588,14 +742,32 @@ export const TimelineStudio: React.FC = () => {
       seekToUs(scrub.current.targetUs);
     });
   };
+  const rangeDrag = useRef<{ startX: number; active: boolean } | null>(null);
   const onRulerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !openedProject || durationUs <= 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.shiftKey) {
+      rangeDrag.current = { startX: event.clientX, active: false };
+      return;
+    }
     scrub.current = { frame: null, targetUs: 0 };
     scrubTo(event.clientX);
   };
-  const onRulerPointerMove = (event: React.PointerEvent<HTMLDivElement>) => scrubTo(event.clientX);
+  const onRulerPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = rangeDrag.current;
+    if (drag) {
+      if (!drag.active && Math.abs(event.clientX - drag.startX) < RANGE_DRAG_PX) return;
+      drag.active = true;
+      selectRange(clientXToUs(drag.startX), clientXToUs(event.clientX));
+      return;
+    }
+    scrubTo(event.clientX);
+  };
   const onRulerPointerUp = () => {
+    if (rangeDrag.current) {
+      rangeDrag.current = null;
+      return;
+    }
     const state = scrub.current;
     scrub.current = null;
     if (state?.frame != null) {
@@ -631,30 +803,19 @@ export const TimelineStudio: React.FC = () => {
     setEdgeDrag(null);
     if (Math.abs(deltaUs) < 1_000) return;
     const sourceEndUs = clip.sourceStartUs + (clip.endUs - clip.startUs);
-    void runEdit((project) => {
-      if (side === "start") {
-        return deltaUs > 0
-          ? api.projectRippleCuts(project.projectHandle, project.revision, [
-              { startUs: clip.startUs, endUs: clip.startUs + deltaUs },
-            ])
-          : api.projectRestoreCuts(
-              project.projectHandle,
-              project.revision,
-              [{ startUs: clip.sourceStartUs + deltaUs, endUs: clip.sourceStartUs }],
-              "start",
-            );
-      }
-      return deltaUs < 0
-        ? api.projectRippleCuts(project.projectHandle, project.revision, [
-            { startUs: clip.endUs + deltaUs, endUs: clip.endUs },
-          ])
-        : api.projectRestoreCuts(
-            project.projectHandle,
-            project.revision,
-            [{ startUs: sourceEndUs, endUs: sourceEndUs + deltaUs }],
-            "end",
-          );
-    });
+    // A selected clip is trimmed alone; otherwise the other tracks keep in step.
+    const allTracks = !clipSelected(clip);
+    const ripple = (startUs: number, endUs: number) =>
+      tracksEdit({ kind: "rippleDelete", ranges: [{ startUs, endUs }], allTracks });
+    if (side === "start") {
+      void (deltaUs > 0
+        ? ripple(clip.startUs, clip.startUs + deltaUs)
+        : restoreCut(clip.sourceStartUs + deltaUs, clip.sourceStartUs, "start", allTracks ? clip.startUs : undefined));
+      return;
+    }
+    void (deltaUs < 0
+      ? ripple(clip.endUs + deltaUs, clip.endUs)
+      : restoreCut(sourceEndUs, sourceEndUs + deltaUs, "end", allTracks ? clip.endUs : undefined));
   };
 
   useEffect(() => {
@@ -749,54 +910,29 @@ export const TimelineStudio: React.FC = () => {
     );
   };
 
-  const rangeDrag = useRef<{ startX: number; active: boolean } | null>(null);
   const clientXToUs = (clientX: number) => {
     const rect = timelineTrackRef.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0) return 0;
     return Math.round(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * durationUs);
   };
-  const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+  const onTrackPointerDown = () => {
     // A drag that ended on a handle never delivers its click here, so clear the flag it left.
     suppressSeek.current = false;
-    if (event.button !== 0 || !openedProject || durationUs <= 0) return;
-    rangeDrag.current = { startX: event.clientX, active: false };
-  };
-  const onTrackPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = rangeDrag.current;
-    if (!drag) return;
-    if (!drag.active) {
-      if (Math.abs(event.clientX - drag.startX) < RANGE_DRAG_PX) return;
-      // Capture only once it is a drag, so a plain click still reaches the clip under it.
-      drag.active = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-    const a = clientXToUs(drag.startX);
-    const b = clientXToUs(event.clientX);
-    if (a !== b) selectRange(Math.min(a, b), Math.max(a, b));
-  };
-  const onTrackPointerUp = () => {
-    if (rangeDrag.current?.active) suppressSeek.current = true;
-    rangeDrag.current = null;
   };
 
-  /** Clicking a clip block, in any lane, selects it and moves the playhead to the click point. */
+  /** Clicking a clip selects it; Shift/Ctrl+click adds or removes it. The playhead stays put. */
   const onClipClick = (event: React.MouseEvent, clip: TimelineClip) => {
     event.stopPropagation();
     if (suppressSeek.current) {
       suppressSeek.current = false;
       return;
     }
-    const extend = (event.shiftKey || event.ctrlKey || event.metaKey) && selection;
-    if (extend) {
-      selectRange(Math.min(selection.startUs, clip.startUs), Math.max(selection.endUs, clip.endUs));
-    } else if (!selection || clip.startUs < selection.startUs || clip.endUs > selection.endUs) {
-      // A click inside the current selection only moves the playhead.
-      selectRange(clip.startUs, clip.endUs);
-    }
-    seekToUs(clientXToUs(event.clientX));
+    setRange(null);
+    pickClip(
+      { kind: "main", startUs: clip.startUs, endUs: clip.endUs },
+      event.shiftKey || event.ctrlKey || event.metaKey,
+    );
   };
-  const clipSelected = (clip: TimelineClip) =>
-    !!selection && clip.startUs >= selection.startUs && clip.endUs <= selection.endUs;
 
   // Drag a clip (or the selection that holds it) to another clip edge to reorder.
   type ClipMove = {
@@ -804,6 +940,8 @@ export const TimelineStudio: React.FC = () => {
     startX: number;
     startY: number;
     range: { startUs: number; endUs: number };
+    /** The clips that move: the selection when the pressed clip is in it. */
+    ranges: EditedRangeSpan[];
     active: boolean;
     targetUs: number | null;
     /** Pointer time minus the range start at the press. */
@@ -818,7 +956,11 @@ export const TimelineStudio: React.FC = () => {
     // The track would otherwise start a range selection from this press.
     event.stopPropagation();
     suppressSeek.current = false;
-    const range = clipSelected(clip) && selection ? selection : { startUs: clip.startUs, endUs: clip.endUs };
+    const ranges =
+      clipSelected(clip) && selectedMain.length > 1
+        ? [...selectedMain].sort((a, b) => a.startUs - b.startUs).map(({ startUs, endUs }) => ({ startUs, endUs }))
+        : [{ startUs: clip.startUs, endUs: clip.endUs }];
+    const range = { startUs: ranges[0].startUs, endUs: ranges[ranges.length - 1].endUs };
     // Captured at once: a drag straight up to another track leaves the block within a few pixels.
     event.currentTarget.setPointerCapture(event.pointerId);
     clipMoveRef.current = {
@@ -826,6 +968,7 @@ export const TimelineStudio: React.FC = () => {
       startX: event.clientX,
       startY: event.clientY,
       range,
+      ranges,
       active: false,
       targetUs: null,
       grabUs: clientXToUs(event.clientX) - range.startUs,
@@ -849,17 +992,20 @@ export const TimelineStudio: React.FC = () => {
       const length = move.range.endUs - move.range.startUs;
       const startUs = snapStart(pointerUs - move.grabUs, length, snapPoints(), snapUs());
       move.targetUs = null;
-      move.lift = media ? { row, startUs, valid: placeable(row, startUs, length) } : { row, startUs, valid: false };
+      move.lift = media
+        ? { row, startUs, valid: placeable(row, startUs, length, { video: true, audio: false }) }
+        : { row, startUs, valid: false };
       setClipMove({ ...move });
       return;
     }
     move.lift = null;
-    const candidates = edges.filter((edge) => edge <= move.range.startUs || edge >= move.range.endUs);
+    const candidates = edges.filter((edge) => move.ranges.every((r) => edge <= r.startUs || edge >= r.endUs));
     const nearest = candidates.reduce(
       (best, edge) => (Math.abs(edge - pointerUs) < Math.abs(best - pointerUs) ? edge : best),
       candidates[0] ?? 0,
     );
-    move.targetUs = nearest === move.range.startUs || nearest === move.range.endUs ? null : nearest;
+    const stays = move.ranges.length === 1 && (nearest === move.range.startUs || nearest === move.range.endUs);
+    move.targetUs = stays ? null : nearest;
     setClipMove({ ...move });
   };
   const endClipMove = (event: React.PointerEvent<HTMLElement>) => {
@@ -876,7 +1022,7 @@ export const TimelineStudio: React.FC = () => {
       if (!isMedia) {
         setEditError("The recording stays on V1. Imported media can move to the tracks above.");
       } else if (!lift.valid) {
-        setEditError("There is already a clip there on that track.");
+        setEditError("It can't go there: pictures go on video tracks, and another clip may be in the way.");
       } else {
         clearSelection();
         void editOnRow(lift.row, (trackId) => ({ kind: "liftFromMain", startUs, endUs, trackId, atUs: lift.startUs }));
@@ -885,14 +1031,19 @@ export const TimelineStudio: React.FC = () => {
     }
     const target = move.targetUs;
     if (target === null) return;
-    const { startUs, endUs } = move.range;
-    const length = endUs - startUs;
-    void runEdit((project) =>
-      api.projectMoveRange(project.projectHandle, project.revision, startUs, endUs, target),
-    ).then((applied) => {
-      if (!applied) return;
-      const movedStart = target < startUs ? target : target - length;
-      selectRange(movedStart, movedStart + length);
+    // The moved clips land together at the target, in timeline order, and stay selected.
+    const length = move.ranges.reduce((sum, r) => sum + r.endUs - r.startUs, 0);
+    const before = move.ranges.filter((r) => r.endUs <= target).reduce((sum, r) => sum + r.endUs - r.startUs, 0);
+    const movedStart = target - before;
+    pendingSelect.current = { startUs: movedStart, endUs: movedStart + length };
+    const work =
+      move.ranges.length === 1
+        ? runEdit((project) =>
+            api.projectMoveRange(project.projectHandle, project.revision, move.range.startUs, move.range.endUs, target),
+          )
+        : tracksEdit({ kind: "moveMain", ranges: move.ranges, targetUs: target });
+    void work.then((applied) => {
+      if (!applied) pendingSelect.current = null;
     });
   };
   const clipMoveHandlers = (clip: TimelineClip) => ({
@@ -970,14 +1121,26 @@ export const TimelineStudio: React.FC = () => {
       return;
     }
     drag.row = rowAtPoint(event.clientX, event.clientY) ?? drag.row;
-    if (drag.row?.kind === "main") {
+    const sound = drag.clip.audioStream !== undefined;
+    const multi = trackClipSelected(drag.clip.id) && selectedTrackIds.length > 1;
+    if (multi) {
+      // Several clips move along their own tracks by the same amount.
+      const startUs = snapStart(pointerUs - drag.grabUs, drag.clip.durationUs, snapPoints(drag.clip.id), snapUs());
+      drag.row = { kind: "track", trackId: drag.trackId };
+      drag.mainUs = null;
+      drag.preview = { ...drag.clip, startUs };
+      const delta = startUs - drag.clip.startUs;
+      drag.valid = selectedTrackIds.every((id) => (findTrackClip(id)?.startUs ?? 0) + delta >= 0);
+    } else if (drag.row?.kind === "main" && !sound) {
       drag.mainUs = nearestEdge(event.clientX);
       drag.valid = true;
     } else {
       drag.mainUs = null;
       const startUs = snapStart(pointerUs - drag.grabUs, drag.clip.durationUs, snapPoints(drag.clip.id), snapUs());
       drag.preview = { ...drag.clip, startUs };
-      drag.valid = !!drag.row && placeable(drag.row, startUs, drag.clip.durationUs, drag.clip.id);
+      drag.valid =
+        !!drag.row &&
+        placeable(drag.row, startUs, drag.clip.durationUs, { video: !sound, audio: sound }, drag.clip.id);
     }
     setOverlayDrag({ ...drag });
   };
@@ -998,10 +1161,17 @@ export const TimelineStudio: React.FC = () => {
     }
     if (!row) return;
     if (!drag.valid) {
-      setEditError("There is already a clip there on that track.");
+      setEditError(
+        drag.clip.audioStream !== undefined
+          ? "Sound clips go on audio tracks, where there is room."
+          : "Pictures go on video tracks, where there is room.",
+      );
       return;
     }
-    if (row.kind === "main" && drag.mainUs !== null) {
+    if (trackClipSelected(clip.id) && selectedTrackIds.length > 1) {
+      const deltaUs = preview.startUs - clip.startUs;
+      if (deltaUs !== 0) void tracksEdit({ kind: "moveClips", clipIds: selectedTrackIds, deltaUs });
+    } else if (row.kind === "main" && drag.mainUs !== null) {
       setSelectedOverlayClipId(undefined);
       void editTracks({ kind: "dropToMain", clipId: clip.id, targetUs: drag.mainUs });
     } else if (row.kind === "track" && row.trackId === drag.trackId && preview.startUs === clip.startUs) {
@@ -1025,8 +1195,8 @@ export const TimelineStudio: React.FC = () => {
       suppressSeek.current = false;
       return;
     }
-    setSelectedOverlayClipId(clip.id);
-    seekToUs(clientXToUs(event.clientX));
+    setRange(null);
+    pickClip({ kind: "track", clipId: clip.id }, event.shiftKey || event.ctrlKey || event.metaKey);
   };
 
   /** Where a dragged block would land on `row`, if anywhere: a clip moving or trimming, imported media lifted off V1, or media from the bin. */
@@ -1060,6 +1230,246 @@ export const TimelineStudio: React.FC = () => {
     );
   };
 
+  // What is being dragged decides which "new track" row appears: none shows otherwise.
+  const draggingKinds = (() => {
+    if (overlayDrag?.active && overlayDrag.mode === "move") {
+      const sound = overlayDrag.clip.audioStream !== undefined;
+      return { video: !sound, audio: sound };
+    }
+    if (clipMove?.active) return { video: true, audio: false };
+    if (mediaGhost || mediaDropUs !== null) {
+      const asset = assetOf(currentMediaDrag() ?? "");
+      return asset ? assetKinds(asset) : { video: true, audio: true };
+    }
+    return null;
+  })();
+
+  // Waveforms of imported sound, per file and stream, over the file's own time.
+  const [soundWaves, setSoundWaves] = useState<Record<string, WaveformBucket[]>>({});
+  const soundAssets = (openedProject?.mediaAssets ?? []).filter((a) => audioStreamCount(a) > 0);
+  const soundKey = soundAssets.map((a) => `${a.id}:${audioStreamCount(a)}`).join(",");
+  useEffect(() => {
+    if (!openedProject) return;
+    let active = true;
+    for (const asset of soundAssets) {
+      for (let stream = 0; stream < audioStreamCount(asset); stream++) {
+        const key = `msound-${stream}-${asset.id}`;
+        if (soundWaves[key]) continue;
+        void api
+          .projectWaveform(openedProject.projectHandle, key, 0, asset.durationUs, 512)
+          .then((page) => {
+            if (active && !page.cancelled) setSoundWaves((current) => ({ ...current, [key]: page.buckets }));
+          })
+          .catch((err) => console.warn("[Timeline] Sound waveform failed:", err));
+      }
+    }
+    return () => {
+      active = false;
+    };
+  }, [openedProject?.projectHandle, soundKey]);
+  /** The waveform of the part of a file's stream a clip plays, behind its label. */
+  const renderSoundWave = (assetId: string, stream: number, inUs: number, lengthUs: number, startUs: number) => {
+    const buckets = soundWaves[`msound-${stream}-${assetId}`];
+    if (!buckets?.length) return null;
+    return (
+      <div className="absolute inset-0 px-0.5 py-0.5 pointer-events-none opacity-80">
+        <WaveformRenderer
+          buckets={buckets}
+          startUs={inUs}
+          endUs={inUs + lengthUs}
+          currentTimeUs={currentTimeUs - startUs + inUs}
+          activeBarColor="#34d399"
+          barColor="#065f46"
+          className="w-full h-full"
+        />
+      </div>
+    );
+  };
+
+  // Sound of the clips on the video tracks above, per track and stream, while linked.
+  const trackSoundLanes = videoTracks.flatMap((track) => {
+    const streams = Math.max(
+      0,
+      ...track.clips.filter((c) => !c.audioUnlinked).map((c) => audioStreamCount(assetOf(c.assetId))),
+    );
+    return Array.from({ length: streams }, (_, stream) => ({ track, stream }));
+  });
+
+  // Sound of the imported clips on V1, one lane per audio stream (while linked).
+  const linkedSoundLanes = Math.max(
+    0,
+    ...clips.filter((clip) => clip.media && !clip.audioUnlinked).map((clip) => audioStreamCount(assetOf(clip.media!))),
+  );
+
+  const renderNewTrackRow = (audio: boolean) => {
+    const shown = audio ? draggingKinds?.audio : draggingKinds?.video;
+    return (
+      <div
+        data-track-row={audio ? "new-audio" : "new"}
+        // The top row: the playhead and overlays before it are absolute, so drop the gap
+        // space-y would put above it and keep the lanes level with their headers.
+        className={`relative rounded-md flex items-center px-2 text-[10px] transition-colors ${audio ? "" : "!mt-0"} ${
+          shown ? "border border-dashed border-studio-600 text-studio-400" : "border border-transparent text-transparent"
+        }`}
+        style={{ height: NEW_TRACK_ROW_PX }}
+      >
+        <span className="pointer-events-none truncate">
+          {shown ? `Drop here for a new ${audio ? "audio" : "video"} track` : ""}
+        </span>
+        {renderGhost({ kind: "new", audio })}
+      </div>
+    );
+  };
+
+  const renderTrackLane = (track: (typeof overlayTracks)[number]) => {
+    const audio = isAudioTrack(track);
+    const label = trackLabel(overlayTracks, track.id);
+    return (
+      <div
+        key={track.id}
+        data-track-row={`track:${track.id}`}
+        className={`relative rounded-md bg-studio-850/40 ${track.hidden || (audio && track.muted) ? "opacity-50" : ""}`}
+        style={{ height: OVERLAY_ROW_PX }}
+      >
+        {durationUs > 0 &&
+          track.clips.map((clip) => {
+            const dragging = overlayDrag?.active && overlayDrag.clip.id === clip.id;
+            const selected = trackClipSelected(clip.id);
+            const asset = assetOf(clip.assetId);
+            const name =
+              clip.audioStream !== undefined
+                ? `${asset?.name ?? "Missing media"} · ${audioStreamName(asset, clip.audioStream)}`
+                : (asset?.name ?? "Missing media");
+            const tint = audio
+              ? selected
+                ? "bg-emerald-500/35 border-white ring-1 ring-white/70"
+                : "bg-emerald-500/20 border-emerald-300/50 hover:border-emerald-200/80"
+              : selected
+                ? "bg-violet-500/45 border-white ring-1 ring-white/70"
+                : "bg-violet-500/25 border-violet-300/50 hover:border-violet-200/80";
+            return (
+              <div
+                key={clip.id}
+                role="button"
+                aria-label={`${name} on ${label}`}
+                aria-pressed={selected}
+                className={`absolute top-1 bottom-1 rounded-md border overflow-hidden flex items-center gap-1 px-1.5 cursor-grab ${tint} ${
+                  dragging && overlayDrag?.mode === "move" ? "opacity-40" : ""
+                }`}
+                style={{
+                  left: `${(clip.startUs / durationUs) * 100}%`,
+                  width: `${(clip.durationUs / durationUs) * 100}%`,
+                }}
+                title={`${name}: ${(clip.durationUs / 1e6).toFixed(2)}s on ${label}. Click to select (Shift/Ctrl+click for more), drag to move${
+                  audio ? " between audio tracks" : " along or between tracks (down to V1 inserts it)"
+                }, drag an edge to trim.${clip.link ? " Unlinked sound: select it with its picture and press U to relink." : ""}`}
+                onClick={(event) => onOverlayClipClick(event, clip)}
+                {...overlayDragHandlers(clip, track.id, "move")}
+              >
+                {audio && clip.audioStream !== undefined &&
+                  renderSoundWave(clip.assetId, clip.audioStream, clip.inUs, clip.durationUs, clip.startUs)}
+                {audio ? (
+                  <AudioLines className="relative w-2.5 h-2.5 shrink-0 text-white/70 pointer-events-none" aria-label="Audio" />
+                ) : (
+                  <Film className="relative w-2.5 h-2.5 shrink-0 text-white/70 pointer-events-none" aria-label="Video" />
+                )}
+                {(clip.link || clip.audioUnlinked) && (
+                  <Unlink className="relative w-2.5 h-2.5 shrink-0 text-white/70 pointer-events-none" aria-label="Sound unlinked" />
+                )}
+                <span className={`relative text-[9px] font-mono truncate pointer-events-none ${audio ? "text-emerald-50/90" : "text-violet-50/90"}`}>
+                  {name}
+                </span>
+                {(["start", "end"] as const).map((side) => (
+                  <div
+                    key={side}
+                    role="separator"
+                    aria-label={`Trim ${name} ${side}`}
+                    className={`absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100 ${
+                      audio ? "hover:bg-emerald-100/70" : "hover:bg-violet-100/70"
+                    } ${side === "start" ? "left-0" : "right-0"}`}
+                    onClick={(event) => event.stopPropagation()}
+                    {...overlayDragHandlers(clip, track.id, side)}
+                  />
+                ))}
+              </div>
+            );
+          })}
+        {renderGhost({ kind: "track", trackId: track.id })}
+      </div>
+    );
+  };
+
+  const renderTrackHeader = (track: (typeof overlayTracks)[number]) => {
+    const audio = isAudioTrack(track);
+    const label = trackLabel(overlayTracks, track.id);
+    return (
+      <div
+        key={track.id}
+        className="px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
+        style={{ height: OVERLAY_ROW_PX }}
+      >
+        <div className="truncate">
+          <div className="text-xs font-medium text-studio-200">{label}</div>
+          <div className="text-[10px] font-mono text-studio-400">
+            {audio ? "audio · " : ""}
+            {track.clips.length} clip{track.clips.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        <div className="flex items-center gap-0.5">
+          {!audio && (
+            <button
+              disabled={editing}
+              aria-pressed={track.hidden}
+              aria-label={`${track.hidden ? "Show" : "Hide"} ${label}`}
+              title={track.hidden ? "Show this track" : "Hide this track"}
+              onClick={() => void editTracks({ kind: "setTrack", trackId: track.id, hidden: !track.hidden, muted: track.muted })}
+              className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+            >
+              {track.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
+          )}
+          <button
+            disabled={editing}
+            aria-pressed={track.muted}
+            aria-label={`${track.muted ? "Unmute" : "Mute"} ${label}`}
+            title={track.muted ? "Unmute this track" : "Mute this track"}
+            onClick={() => void editTracks({ kind: "setTrack", trackId: track.id, hidden: track.hidden, muted: !track.muted })}
+            className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+          >
+            {track.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            disabled={editing}
+            aria-label={`Remove ${label}`}
+            title="Remove this track and its clips (Undo brings it back)"
+            onClick={() => void editTracks({ kind: "removeTrack", trackId: track.id })}
+            className="p-1 rounded hover:bg-rose-900/40 text-studio-400 hover:text-rose-300 disabled:opacity-40"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const addTrackButton = (audio: boolean) => (
+    <div className="px-2 flex items-center" style={{ height: NEW_TRACK_ROW_PX }}>
+      <button
+        disabled={!openedProject || editing || (audio ? audioTracks : videoTracks).length >= 8}
+        onClick={() => void editTracks({ kind: "addTrack", audio })}
+        className="flex items-center gap-1 px-2 py-0.5 rounded border border-studio-700 text-[11px] text-studio-200 hover:bg-studio-800 hover:border-teal-500/60 disabled:opacity-40"
+        title={
+          audio
+            ? "Add an audio track below the others"
+            : "Add a video track above the others. Clips on higher tracks draw over the ones below."
+        }
+      >
+        <Plus className="w-3 h-3" />
+        {audio ? "Add audio track" : "Add video track"}
+      </button>
+    </div>
+  );
+
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (suppressSeek.current) {
       suppressSeek.current = false;
@@ -1067,8 +1477,10 @@ export const TimelineStudio: React.FC = () => {
     }
     if (!timelineTrackRef.current) return;
     // Clips stop their clicks, so a click that lands here hit empty track space: deselect.
-    clearSelection();
-    setSelectedOverlayClipId(undefined);
+    if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
+      clearSelection();
+      setSelectedOverlayClipId(undefined);
+    }
     const rect = timelineTrackRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const progress = Math.max(0, Math.min(1, clickX / rect.width));
@@ -1139,7 +1551,7 @@ export const TimelineStudio: React.FC = () => {
   const persistedCount = openedProject?.zooms?.length ?? 0;
 
   return (
-    <div className="flex flex-col h-full bg-studio-900 border-t border-studio-800 select-none">
+    <div className="relative flex flex-col h-full bg-studio-900 border-t border-studio-800 select-none">
       {/* Timeline Toolbar */}
       <div className="h-12 px-6 flex items-center justify-between border-b border-studio-800 bg-studio-850">
         {/* Playback Controls & Timecode */}
@@ -1157,7 +1569,7 @@ export const TimelineStudio: React.FC = () => {
             disabled={!openedProject}
             onClick={togglePlayPause}
             className="p-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
-            title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+            title={`${isPlaying ? "Pause" : "Play"}${hint("playPause")}`}
           >
             {isPlaying ? (
               <Pause className="w-4 h-4 fill-white" />
@@ -1179,7 +1591,7 @@ export const TimelineStudio: React.FC = () => {
             disabled={!openedProject || editing || durationUs === 0}
             onClick={() => void splitAtPlayhead()}
             className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title="Split the clip at the playhead (S)"
+            title={`Split the clip at the playhead${hint("split")}`}
           >
             <Scissors className="w-3.5 h-3.5" />
             <span>Split</span>
@@ -1188,23 +1600,23 @@ export const TimelineStudio: React.FC = () => {
             disabled={!openedProject || editing || durationUs === 0}
             onClick={() => void rippleTrim("previous")}
             className="px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title="Ripple delete from the playhead back to the previous edit (Q)"
+            title={`Ripple delete from the playhead back to the previous edit${hint("rippleTrimPrevious")}`}
           >
-            Trim ← Q
+            ← Trim
           </button>
           <button
             disabled={!openedProject || editing || durationUs === 0}
             onClick={() => void rippleTrim("next")}
             className="px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title="Ripple delete from the playhead to the next edit (E)"
+            title={`Ripple delete from the playhead to the next edit${hint("rippleTrimNext")}`}
           >
-            E → Trim
+            Trim →
           </button>
           <button
             disabled={!openedProject?.undoAvailable || editing}
             onClick={undo}
             className="px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-            title="Undo edit (Ctrl+Z)"
+            title={`Undo edit${hint("undo")}`}
           >
             Undo
           </button>
@@ -1212,10 +1624,35 @@ export const TimelineStudio: React.FC = () => {
             disabled={!openedProject?.redoAvailable || editing}
             onClick={redo}
             className="px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-            title="Redo edit (Ctrl+Shift+Z)"
+            title={`Redo edit${hint("redo")}`}
           >
             Redo
           </button>
+          <button
+            disabled={!openedProject || editing || !linkState}
+            onClick={toggleLink}
+            aria-pressed={linkState === "unlinked"}
+            className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
+            title={
+              linkState === "unlinked"
+                ? `Relink: select this clip and its sound, then press this${hint("toggleLink")}`
+                : `Unlink the selected clip's sound onto audio tracks, to move or trim it on its own${hint("toggleLink")}`
+            }
+          >
+            {linkState === "unlinked" ? <Link2 className="w-3.5 h-3.5" /> : <Unlink className="w-3.5 h-3.5" />}
+            <span>{linkState === "unlinked" ? "Relink" : "Unlink"}</span>
+          </button>
+          {cutMarkers.length > 0 && openedProject && (
+            <button
+              disabled={editing}
+              onClick={() => void restoreCut(0, openedProject.sourceDurationUs)}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs text-amber-300 hover:bg-studio-700 disabled:opacity-40"
+              title={`Put all ${cutMarkers.length} cut${cutMarkers.length === 1 ? "" : "s"} back on the timeline`}
+            >
+              <RotateCcw className="w-3 h-3" />
+              Restore cuts
+            </button>
+          )}
 
 
           <button
@@ -1270,7 +1707,7 @@ export const TimelineStudio: React.FC = () => {
             disabled={!openedProject || timelineZoom <= MIN_TIMELINE_ZOOM}
             onClick={() => zoomTimeline(0.5)}
             className="p-1.5 rounded hover:bg-studio-700 text-studio-400 disabled:opacity-40"
-            title="Zoom the timeline out (-)"
+            title={`Zoom the timeline out${hint("zoomOut")}`}
           >
             <ZoomOut className="w-4 h-4" />
           </button>
@@ -1278,46 +1715,65 @@ export const TimelineStudio: React.FC = () => {
             disabled={!openedProject || timelineZoom >= MAX_TIMELINE_ZOOM}
             onClick={() => zoomTimeline(2)}
             className="p-1.5 rounded hover:bg-studio-700 text-studio-400 disabled:opacity-40"
-            title="Zoom the timeline in (+)"
+            title={`Zoom the timeline in${hint("zoomIn")}`}
           >
             <ZoomIn className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {openedProject && <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-xs border-b border-studio-800">
-        <label>Start (s) <input aria-label="Selection start in seconds" type="number" min="0" step="0.001" value={rangeStart} onChange={e => setRangeStart(e.target.value)} className="w-24 bg-studio-950 px-2 py-1 rounded" /></label>
-        <button onClick={() => setRangeStart(String(currentTimeUs / 1e6))}>Set start here</button>
-        <label>End (s) <input aria-label="Selection end in seconds" type="number" min="0" step="0.001" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} className="w-24 bg-studio-950 px-2 py-1 rounded" /></label>
-        <button onClick={() => setRangeEnd(String(currentTimeUs / 1e6))}>Set end here</button>
-        <button disabled={editing || durationUs === 0} onClick={() => void editRange(false)} className="text-rose-300 disabled:opacity-40" title="Cut the selection and close the gap (Delete)">Delete range</button>
-        <button disabled={editing || durationUs === 0} onClick={() => void editRange(true)} className="text-teal-300 disabled:opacity-40">Keep range</button>
-        {selection && (
-          <button
-            onClick={clearSelection}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-studio-700 text-studio-200 hover:bg-studio-800"
-            title="Deselect (Esc, or click empty track space)"
-          >
-            <X className="w-3 h-3" />
-            Clear selection
-          </button>
-        )}
-        {cutMarkers.length > 0 && (
-          <button
-            disabled={editing}
-            onClick={() => void restoreCut(0, openedProject.sourceDurationUs)}
-            className="flex items-center gap-1 text-amber-300 disabled:opacity-40"
-            title="Put every cut back on the timeline"
-          >
-            <RotateCcw className="w-3 h-3" />
-            Restore all {cutMarkers.length} cut{cutMarkers.length === 1 ? "" : "s"}
-          </button>
-        )}
-        <span className="text-studio-500">Drag on the timeline to select, drag a clip to move it, drag a clip edge to trim it. Drag imported media up onto a track (or the row above them) to lay it over the video; higher tracks draw on top. S splits, Q/E ripple-trim to the previous/next edit, Delete removes the selection, Esc deselects.</span>
-        {editError && <span role="alert" className="text-rose-300">{editError}</span>}
-      </div>}
+      {openedProject && (range || editError) && (
+        <div className="absolute bottom-3 right-3 z-50 flex flex-col items-end gap-1.5 pointer-events-none">
+          {editError && (
+            <div
+              role="alert"
+              className="pointer-events-auto flex items-start gap-2 max-w-md rounded-lg border border-rose-900/60 bg-studio-950/95 px-3 py-2 text-xs text-rose-200 shadow-lg"
+            >
+              <span>{editError}</span>
+              <button
+                aria-label="Dismiss"
+                onClick={() => setEditError(undefined)}
+                className="text-rose-300/70 hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {range && (
+            <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-studio-700 bg-studio-950/95 pl-3 pr-1 py-1 text-xs text-studio-200 shadow-lg">
+              <span className="font-mono text-studio-300 mr-1">
+                {((range.endUs - range.startUs) / 1e6).toFixed(2)}s range
+              </span>
+              <button
+                disabled={editing}
+                onClick={() => void editRange(false)}
+                className="px-2 py-0.5 rounded text-rose-300 hover:bg-studio-800 disabled:opacity-40"
+                title={`Cut the range and close the gap${hint("deleteSelection")}`}
+              >
+                Delete
+              </button>
+              <button
+                disabled={editing}
+                onClick={() => void editRange(true)}
+                className="px-2 py-0.5 rounded text-teal-300 hover:bg-studio-800 disabled:opacity-40"
+                title="Cut everything outside the range"
+              >
+                Keep only
+              </button>
+              <button
+                aria-label="Clear range"
+                onClick={() => setRange(null)}
+                className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
+                title={`Clear the range${hint("deselect")}`}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Multi-Track Workspace */}
+      {/* Multi-Track Workspace */}      {/* Multi-Track Workspace */}
       <div className="flex-1 flex min-h-0 overflow-x-hidden overflow-y-auto">
         {/* Left Track Headers */}
         <div className="w-56 border-r border-studio-800 bg-studio-900 shrink-0 flex flex-col">
@@ -1327,65 +1783,8 @@ export const TimelineStudio: React.FC = () => {
           </div>
 
           <div className="flex-1 space-y-2 py-2">
-            <div className="px-2 flex items-center" style={{ height: NEW_TRACK_ROW_PX }}>
-              <button
-                disabled={!openedProject || editing || overlayTracks.length >= 8}
-                onClick={() => void editTracks({ kind: "addTrack" })}
-                className="flex items-center gap-1 px-2 py-0.5 rounded border border-studio-700 text-[11px] text-studio-200 hover:bg-studio-800 hover:border-teal-500/60 disabled:opacity-40"
-                title="Add a video track above the others. Clips on higher tracks draw over the ones below."
-              >
-                <Plus className="w-3 h-3" />
-                Add track
-              </button>
-            </div>
-            {[...overlayTracks].reverse().map((track) => {
-              const label = trackLabel(overlayTracks, track.id);
-              return (
-                <div
-                  key={track.id}
-                  className="px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
-                  style={{ height: OVERLAY_ROW_PX }}
-                >
-                  <div className="truncate">
-                    <div className="text-xs font-medium text-studio-200">{label}</div>
-                    <div className="text-[10px] font-mono text-studio-400">
-                      {track.clips.length} clip{track.clips.length === 1 ? "" : "s"}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      disabled={editing}
-                      aria-pressed={track.hidden}
-                      aria-label={`${track.hidden ? "Show" : "Hide"} ${label}`}
-                      title={track.hidden ? "Show this track" : "Hide this track"}
-                      onClick={() => void editTracks({ kind: "setTrack", trackId: track.id, hidden: !track.hidden, muted: track.muted })}
-                      className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
-                    >
-                      {track.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                    <button
-                      disabled={editing}
-                      aria-pressed={track.muted}
-                      aria-label={`${track.muted ? "Unmute" : "Mute"} ${label}`}
-                      title={track.muted ? "Unmute this track" : "Mute this track"}
-                      onClick={() => void editTracks({ kind: "setTrack", trackId: track.id, hidden: track.hidden, muted: !track.muted })}
-                      className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
-                    >
-                      {track.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                    </button>
-                    <button
-                      disabled={editing}
-                      aria-label={`Remove ${label}`}
-                      title="Remove this track and its clips (Undo brings it back)"
-                      onClick={() => void editTracks({ kind: "removeTrack", trackId: track.id })}
-                      className="p-1 rounded hover:bg-rose-900/40 text-studio-400 hover:text-rose-300 disabled:opacity-40"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+            {addTrackButton(false)}
+            {[...videoTracks].reverse().map(renderTrackHeader)}
             <div className="h-8 px-3 flex items-end text-[10px] font-semibold tracking-wider uppercase text-studio-400">
               V1 · Main
             </div>
@@ -1436,6 +1835,30 @@ export const TimelineStudio: React.FC = () => {
                 <TrackHeaderButtons track={track} />
               </div>
             ))}
+            {Array.from({ length: linkedSoundLanes }, (_, stream) => (
+              <div
+                key={`linked-${stream}`}
+                className="px-3 flex items-center border-b border-studio-800/40"
+                style={{ height: LINKED_SOUND_ROW_PX }}
+                title="The sound of the imported clips on V1. Select a clip and press U to unlink it onto an audio track."
+              >
+                <span className="text-[10px] font-mono uppercase text-studio-400 truncate">V1 sound {stream + 1}</span>
+              </div>
+            ))}
+            {trackSoundLanes.map(({ track, stream }) => (
+              <div
+                key={`tsound-${track.id}-${stream}`}
+                className="px-3 flex items-center border-b border-studio-800/40"
+                style={{ height: LINKED_SOUND_ROW_PX }}
+                title={`The sound of the clips on ${trackLabel(overlayTracks, track.id)}. Select a clip and press U to unlink it.`}
+              >
+                <span className="text-[10px] font-mono uppercase text-studio-400 truncate">
+                  {trackLabel(overlayTracks, track.id)} sound {stream + 1}
+                </span>
+              </div>
+            ))}
+            {audioTracks.map(renderTrackHeader)}
+            {addTrackButton(true)}
           </div>
         </div>
 
@@ -1449,8 +1872,17 @@ export const TimelineStudio: React.FC = () => {
             onPointerMove={onRulerPointerMove}
             onPointerUp={onRulerPointerUp}
             onPointerCancel={onRulerPointerUp}
-            title="Drag to scrub"
+            title="Drag to scrub. Shift+drag to select a range."
           >
+            {range && durationUs > 0 && (
+              <div
+                className="absolute top-0 bottom-0 bg-sky-400/25 border-x border-sky-300 pointer-events-none"
+                style={{
+                  left: `${(range.startUs / durationUs) * 100}%`,
+                  width: `${((range.endUs - range.startUs) / durationUs) * 100}%`,
+                }}
+              />
+            )}
             {rulerTicks.map((tickUs) => (
               <div
                 key={tickUs}
@@ -1492,9 +1924,6 @@ export const TimelineStudio: React.FC = () => {
             onDrop={onMediaDrop}
             onClick={handleTimelineClick}
             onPointerDown={onTrackPointerDown}
-            onPointerMove={onTrackPointerMove}
-            onPointerUp={onTrackPointerUp}
-            onPointerCancel={onTrackPointerUp}
             className="flex-1 relative cursor-pointer py-2 space-y-2"
           >
             {/* Playhead Vertical Line */}
@@ -1531,13 +1960,13 @@ export const TimelineStudio: React.FC = () => {
               onClick={(event) => event.stopPropagation()}
             />
 
-            {/* Drag selection */}
-            {selection && durationUs > 0 && (
+            {/* Range (Shift+drag on the ruler, or mark in/out) */}
+            {range && durationUs > 0 && (
               <div
-                className="absolute top-0 bottom-0 bg-white/10 border-x border-white/60 z-10 pointer-events-none"
+                className="absolute top-0 bottom-0 bg-sky-300/[0.07] border-x border-sky-300/60 z-10 pointer-events-none"
                 style={{
-                  left: `${(selection.startUs / durationUs) * 100}%`,
-                  width: `${((selection.endUs - selection.startUs) / durationUs) * 100}%`,
+                  left: `${(range.startUs / durationUs) * 100}%`,
+                  width: `${((range.endUs - range.startUs) / durationUs) * 100}%`,
                 }}
               />
             )}
@@ -1587,66 +2016,11 @@ export const TimelineStudio: React.FC = () => {
               </div>
             )}
 
-            {/* New track: drop a clip here to put it on a new track above the others */}
-            <div
-              data-track-row="new"
-              className="relative border border-dashed border-studio-800 rounded-md flex items-center px-2 text-[10px] text-studio-600"
-              style={{ height: NEW_TRACK_ROW_PX }}
-            >
-              <span className="pointer-events-none truncate">Drop a clip here for a new track</span>
-              {renderGhost({ kind: "new" })}
-            </div>
+            {/* New video track: a drop row that shows only while something can be dropped on it */}
+            {renderNewTrackRow(false)}
 
             {/* Video tracks above the main sequence, top track first */}
-            {[...overlayTracks].reverse().map((track) => (
-              <div
-                key={track.id}
-                data-track-row={`track:${track.id}`}
-                className={`relative rounded-md bg-studio-850/40 ${track.hidden ? "opacity-50" : ""}`}
-                style={{ height: OVERLAY_ROW_PX }}
-              >
-                {durationUs > 0 &&
-                  track.clips.map((clip) => {
-                    const dragging = overlayDrag?.active && overlayDrag.clip.id === clip.id;
-                    const selected = clip.id === selectedOverlayClipId;
-                    const asset = assetOf(clip.assetId);
-                    return (
-                      <div
-                        key={clip.id}
-                        role="button"
-                        aria-label={`${asset?.name ?? "Clip"} on ${trackLabel(overlayTracks, track.id)}`}
-                        className={`absolute top-1 bottom-1 rounded-md border overflow-hidden flex items-center cursor-grab ${
-                          selected
-                            ? "bg-violet-500/45 border-violet-100 ring-1 ring-violet-200/70"
-                            : "bg-violet-500/25 border-violet-300/50 hover:border-violet-200/80"
-                        } ${dragging && overlayDrag?.mode === "move" ? "opacity-40" : ""}`}
-                        style={{
-                          left: `${(clip.startUs / durationUs) * 100}%`,
-                          width: `${(clip.durationUs / durationUs) * 100}%`,
-                        }}
-                        title={`${asset?.name ?? "Clip"}: ${(clip.durationUs / 1e6).toFixed(2)}s on ${trackLabel(overlayTracks, track.id)}. Drag to move it along or between tracks (down to V1 inserts it), drag an edge to trim, Delete removes it.`}
-                        onClick={(event) => onOverlayClipClick(event, clip)}
-                        {...overlayDragHandlers(clip, track.id, "move")}
-                      >
-                        <span className="px-1.5 text-[9px] font-mono text-violet-50/90 truncate pointer-events-none">
-                          {asset?.name ?? "Missing media"}
-                        </span>
-                        {(["start", "end"] as const).map((side) => (
-                          <div
-                            key={side}
-                            role="separator"
-                            aria-label={`Trim ${asset?.name ?? "clip"} ${side}`}
-                            className={`absolute inset-y-0 w-1.5 cursor-ew-resize hover:bg-violet-100/70 ${side === "start" ? "left-0" : "right-0"}`}
-                            onClick={(event) => event.stopPropagation()}
-                            {...overlayDragHandlers(clip, track.id, side)}
-                          />
-                        ))}
-                      </div>
-                    );
-                  })}
-                {renderGhost({ kind: "track", trackId: track.id })}
-              </div>
-            ))}
+            {[...videoTracks].reverse().map(renderTrackLane)}
 
             {/* Clip lane (V1): edges come from cuts and splits; markers restore cuts */}
             <div className="h-8 relative" data-track-row="main">
@@ -1714,20 +2088,24 @@ export const TimelineStudio: React.FC = () => {
                   <button
                     key={`${clip.sourceStartUs}-${index}`}
                     className={`absolute top-2.5 bottom-0 rounded border text-[9px] font-mono text-left px-1 truncate ${
-                      selected
-                        ? "bg-teal-500/40 border-teal-200 text-white"
-                        : clip.media
-                          ? "bg-fuchsia-500/20 border-fuchsia-300/50 text-fuchsia-100 hover:bg-fuchsia-500/30"
+                      clip.media
+                        ? selected
+                          ? "bg-fuchsia-500/45 border-white text-white ring-1 ring-white/70"
+                          : "bg-fuchsia-500/20 border-fuchsia-300/50 text-fuchsia-100 hover:bg-fuchsia-500/30"
+                        : selected
+                          ? "bg-teal-500/45 border-white text-white ring-1 ring-white/70"
                           : "bg-teal-500/15 border-teal-400/40 text-teal-200 hover:bg-teal-500/25"
                     }`}
                     style={{
                       left: `${(clip.startUs / durationUs) * 100}%`,
                       width: `${((clip.endUs - clip.startUs) / durationUs) * 100}%`,
                     }}
-                    title={`Clip ${index + 1}${clip.media ? ` (${mediaName(clip)})` : ""}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select and move the playhead, Shift+click to extend, drag to move it.`}
+                    title={`Clip ${index + 1}${clip.media ? ` (${mediaName(clip)})` : ""}: ${((clip.endUs - clip.startUs) / 1e6).toFixed(2)}s. Click to select, Shift/Ctrl+click to add to the selection, drag to move it.${clip.audioUnlinked ? " Its sound is unlinked onto an audio track." : ""}`}
                     onClick={(event) => onClipClick(event, clip)}
                     {...clipMoveHandlers(clip)}
                   >
+                    <Film className="inline w-2.5 h-2.5 mr-0.5 -mt-px opacity-70" aria-label="Video" />
+                    {clip.audioUnlinked && <Unlink className="inline w-2.5 h-2.5 mr-0.5 -mt-px" aria-label="Sound unlinked" />}
                     {clip.media ? `${index + 1} · ${mediaName(clip)}` : index + 1}
                   </button>
                 );
@@ -1793,7 +2171,7 @@ export const TimelineStudio: React.FC = () => {
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void restoreCut(marker.sourceStartUs, marker.sourceEndUs, marker.grow);
+                    void restoreCut(marker.sourceStartUs, marker.sourceEndUs, marker.grow, marker.editedUs);
                   }}
                 >
                   <span className="w-2.5 h-2 shrink-0 rounded-sm bg-rose-400 group-hover:bg-rose-200" />
@@ -1817,14 +2195,12 @@ export const TimelineStudio: React.FC = () => {
                     <div
                       key={`${clip.sourceStartUs}-${index}`}
                       className={`absolute top-0 bottom-0 rounded-md border overflow-hidden flex items-center ${
-                        selected
-                          ? "bg-studio-700/80 border-teal-200 ring-1 ring-teal-200/60"
-                          : clip.media
-                            ? "bg-fuchsia-500/15 border-fuchsia-300/40 hover:border-fuchsia-200/70"
-                            : audio
-                              ? "bg-studio-800/70 border-studio-700 hover:border-studio-500"
-                              : "bg-indigo-500/15 border-indigo-400/30 hover:border-indigo-300/60"
-                      }`}
+                        clip.media
+                          ? "bg-fuchsia-500/15 border-fuchsia-300/40 hover:border-fuchsia-200/70"
+                          : audio
+                            ? "bg-studio-800/70 border-studio-700 hover:border-studio-500"
+                            : "bg-indigo-500/15 border-indigo-400/30 hover:border-indigo-300/60"
+                      } ${selected ? "!border-white ring-1 ring-white/70" : ""}`}
                       style={{
                         left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
                         width: `max(1px, calc(${((clip.endUs - clip.startUs) / durationUs) * 100}% - 2px))`,
@@ -1938,6 +2314,81 @@ export const TimelineStudio: React.FC = () => {
                   })}
               </div>
             ))}
+
+            {/* V1's imported clips' sound, one lane per audio stream: part of the clip until unlinked */}
+            {Array.from({ length: linkedSoundLanes }, (_, stream) => (
+              <div key={`linked-${stream}`} data-track-row="main" className="relative" style={{ height: LINKED_SOUND_ROW_PX }}>
+                {durationUs > 0 &&
+                  clips.map((clip, index) => {
+                    if (!clip.media || clip.audioUnlinked) return null;
+                    const asset = assetOf(clip.media);
+                    if (stream >= audioStreamCount(asset)) return null;
+                    const selected = clipSelected(clip);
+                    return (
+                      <div
+                        key={`${clip.sourceStartUs}-${index}`}
+                        className={`absolute top-0.5 bottom-0.5 rounded border overflow-hidden flex items-center ${
+                          selected
+                            ? "bg-emerald-500/30 border-white ring-1 ring-white/70"
+                            : "bg-emerald-500/15 border-emerald-300/40 hover:border-emerald-200/70"
+                        }`}
+                        style={{
+                          left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
+                          width: `max(1px, calc(${((clip.endUs - clip.startUs) / durationUs) * 100}% - 2px))`,
+                        }}
+                        title={`${asset?.name ?? "Media"} · ${audioStreamName(asset, stream)}: linked to its picture on V1. Select the clip and press U to unlink its sound.`}
+                        onClick={(event) => onClipClick(event, clip)}
+                        {...clipMoveHandlers(clip)}
+                      >
+                        {renderSoundWave(clip.media, stream, clip.sourceStartUs, clip.endUs - clip.startUs, clip.startUs)}
+                        <span className="relative flex items-center gap-1 px-1.5 text-[9px] font-mono text-emerald-50/80 truncate pointer-events-none">
+                          <AudioLines className="w-2.5 h-2.5 shrink-0" aria-label="Audio" />
+                          {audioStreamName(asset, stream)}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            ))}
+
+            {/* The linked sound of the video tracks' clips */}
+            {trackSoundLanes.map(({ track, stream }) => (
+              <div key={`tsound-${track.id}-${stream}`} className="relative" style={{ height: LINKED_SOUND_ROW_PX }}>
+                {durationUs > 0 &&
+                  track.clips.map((clip) => {
+                    const asset = assetOf(clip.assetId);
+                    if (clip.audioUnlinked || stream >= audioStreamCount(asset)) return null;
+                    const selected = trackClipSelected(clip.id);
+                    return (
+                      <div
+                        key={clip.id}
+                        className={`absolute top-0.5 bottom-0.5 rounded border overflow-hidden flex items-center cursor-pointer ${
+                          selected
+                            ? "bg-emerald-500/30 border-white ring-1 ring-white/70"
+                            : "bg-emerald-500/15 border-emerald-300/40 hover:border-emerald-200/70"
+                        }`}
+                        style={{
+                          left: `${(clip.startUs / durationUs) * 100}%`,
+                          width: `${(clip.durationUs / durationUs) * 100}%`,
+                        }}
+                        title={`${asset?.name ?? "Media"} · ${audioStreamName(asset, stream)}: linked to its picture on ${trackLabel(overlayTracks, track.id)}. Select it and press U to unlink.`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => onOverlayClipClick(event, clip)}
+                      >
+                        {renderSoundWave(clip.assetId, stream, clip.inUs, clip.durationUs, clip.startUs)}
+                        <span className="relative flex items-center gap-1 px-1.5 text-[9px] font-mono text-emerald-50/80 truncate pointer-events-none">
+                          <AudioLines className="w-2.5 h-2.5 shrink-0" aria-label="Audio" />
+                          {audioStreamName(asset, stream)}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            ))}
+
+            {/* Audio tracks: sound unlinked from its picture, or placed on its own */}
+            {audioTracks.map(renderTrackLane)}
+            {renderNewTrackRow(true)}
           </div>
           </div>
         </div>

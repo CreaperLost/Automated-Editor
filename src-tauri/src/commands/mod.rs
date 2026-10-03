@@ -154,22 +154,62 @@ pub fn detect_silence_impl(
         if reader.summary.project_handle != project_handle {
             return Err("Stale project handle".into());
         }
-        let track = reader
-            .summary
-            .tracks
-            .iter()
-            .find(|track| track.descriptor.id == track_id)
-            .ok_or("Unknown track")?;
-        WaveformTrackContext {
-            root: reader.root().to_path_buf(),
-            track_id: track_id.clone(),
-            track_type: track.descriptor.track_type,
-            segments: reader
-                .segments_for(&track_id)
-                .ok_or("Unknown track")?
-                .to_vec(),
-            retained: reader.summary.retained_intervals.clone(),
-            edited_duration_us: reader.summary.edited_duration_us,
+        // "msound-<stream>-<asset id>": one audio stream of imported media, over the file's
+        // own time, so a clip draws the part it plays wherever it sits on the timeline.
+        if let Some((stream, asset_id)) = track_id
+            .strip_prefix(MEDIA_SOUND_PREFIX)
+            .and_then(|rest| rest.split_once('-'))
+        {
+            let stream: usize = stream.parse().map_err(|_| "Unknown track")?;
+            let asset = reader
+                .history()
+                .current
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == asset_id)
+                .ok_or("Unknown imported media")?;
+            let path = asset
+                .audio_paths()
+                .nth(stream)
+                .ok_or("That media has no such audio stream")?;
+            let duration = asset.duration_us;
+            WaveformTrackContext {
+                root: reader.root().to_path_buf(),
+                track_id: track_id.clone(),
+                track_type: crate::project::TrackType::SystemAudio,
+                segments: vec![crate::project::reader::SegmentSummary {
+                    track_id: track_id.clone(),
+                    relative_path: path.clone(),
+                    start_us: 0,
+                    end_us: duration,
+                    size_bytes: 0,
+                    media_timescale: crate::media::audio::SAMPLE_RATE,
+                    media_start_value: 0,
+                    host_anchor_us: 0,
+                    is_keyframe_start: None,
+                    available: true,
+                }],
+                retained: vec![crate::project::RetainedInterval::recording(0, duration)],
+                edited_duration_us: duration,
+            }
+        } else {
+            let track = reader
+                .summary
+                .tracks
+                .iter()
+                .find(|track| track.descriptor.id == track_id)
+                .ok_or("Unknown track")?;
+            WaveformTrackContext {
+                root: reader.root().to_path_buf(),
+                track_id: track_id.clone(),
+                track_type: track.descriptor.track_type,
+                segments: reader
+                    .segments_for(&track_id)
+                    .ok_or("Unknown track")?
+                    .to_vec(),
+                retained: reader.summary.retained_intervals.clone(),
+                edited_duration_us: reader.summary.edited_duration_us,
+            }
         }
     };
     crate::project::silence::detect_track_silence(&ctx, &config)
@@ -266,6 +306,9 @@ pub fn project_segments_impl(
     reader.page(&track_id, offset, limit)
 }
 
+/// Waveform ids for imported sound: `msound-<stream>-<asset id>`.
+pub const MEDIA_SOUND_PREFIX: &str = "msound-";
+
 pub fn project_waveform_impl(
     state: &AppState,
     project_handle: String,
@@ -287,22 +330,62 @@ pub fn project_waveform_impl(
         if reader.summary.project_handle != project_handle {
             return Err("Stale project handle".into());
         }
-        let track = reader
-            .summary
-            .tracks
-            .iter()
-            .find(|track| track.descriptor.id == track_id)
-            .ok_or("Unknown track")?;
-        WaveformTrackContext {
-            root: reader.root().to_path_buf(),
-            track_id: track_id.clone(),
-            track_type: track.descriptor.track_type,
-            segments: reader
-                .segments_for(&track_id)
-                .ok_or("Unknown track")?
-                .to_vec(),
-            retained: reader.summary.retained_intervals.clone(),
-            edited_duration_us: reader.summary.edited_duration_us,
+        // "msound-<stream>-<asset id>": one audio stream of imported media, over the file's
+        // own time, so a clip draws the part it plays wherever it sits on the timeline.
+        if let Some((stream, asset_id)) = track_id
+            .strip_prefix(MEDIA_SOUND_PREFIX)
+            .and_then(|rest| rest.split_once('-'))
+        {
+            let stream: usize = stream.parse().map_err(|_| "Unknown track")?;
+            let asset = reader
+                .history()
+                .current
+                .media_assets
+                .iter()
+                .find(|asset| asset.id == asset_id)
+                .ok_or("Unknown imported media")?;
+            let path = asset
+                .audio_paths()
+                .nth(stream)
+                .ok_or("That media has no such audio stream")?;
+            let duration = asset.duration_us;
+            WaveformTrackContext {
+                root: reader.root().to_path_buf(),
+                track_id: track_id.clone(),
+                track_type: crate::project::TrackType::SystemAudio,
+                segments: vec![crate::project::reader::SegmentSummary {
+                    track_id: track_id.clone(),
+                    relative_path: path.clone(),
+                    start_us: 0,
+                    end_us: duration,
+                    size_bytes: 0,
+                    media_timescale: crate::media::audio::SAMPLE_RATE,
+                    media_start_value: 0,
+                    host_anchor_us: 0,
+                    is_keyframe_start: None,
+                    available: true,
+                }],
+                retained: vec![crate::project::RetainedInterval::recording(0, duration)],
+                edited_duration_us: duration,
+            }
+        } else {
+            let track = reader
+                .summary
+                .tracks
+                .iter()
+                .find(|track| track.descriptor.id == track_id)
+                .ok_or("Unknown track")?;
+            WaveformTrackContext {
+                root: reader.root().to_path_buf(),
+                track_id: track_id.clone(),
+                track_type: track.descriptor.track_type,
+                segments: reader
+                    .segments_for(&track_id)
+                    .ok_or("Unknown track")?
+                    .to_vec(),
+                retained: reader.summary.retained_intervals.clone(),
+                edited_duration_us: reader.summary.edited_duration_us,
+            }
         }
     };
     crate::project::waveform::query_waveform(&ctx, start_us, end_us, bucket_count, &|| {
@@ -834,9 +917,14 @@ pub fn project_media_import_impl(
         require_handle(reader, &project_handle)?;
         reader.root().to_path_buf()
     };
+    let chosen: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+    let paths = crate::media_bin::expand_import_paths(&chosen)?;
+    if paths.len() > 256 {
+        return Err("Choose at most 256 files to import at once".into());
+    }
     let mut assets = Vec::with_capacity(paths.len());
     for path in &paths {
-        match crate::media_bin::import(&root, std::path::Path::new(path)) {
+        match crate::media_bin::import(&root, path) {
             Ok(asset) => assets.push(asset),
             Err(error) => {
                 for asset in &assets {
@@ -958,6 +1046,7 @@ pub fn project_restore_cuts_impl(
     expected_revision: u64,
     ranges: Vec<EditCut>,
     grow: crate::project::revision::RestoreGrow,
+    shift_tracks_at: Option<u64>,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
@@ -967,7 +1056,7 @@ pub fn project_restore_cuts_impl(
         .into_iter()
         .map(|range| (range.start_us, range.end_us))
         .collect();
-    let summary = reader.restore_cuts(expected_revision, &ranges, grow)?;
+    let summary = reader.restore_cuts(expected_revision, &ranges, grow, shift_tracks_at)?;
     state
         .playback
         .lock()

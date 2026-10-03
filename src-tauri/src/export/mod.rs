@@ -614,7 +614,11 @@ impl SceneEvaluator {
             .iter()
             .find(|asset| asset.id == asset_id)
             .ok_or("Imported media is missing from the project")?;
-        let path = safe_path(&self.root, &asset.relative_path)?;
+        let path = asset.file_path(&self.root)?;
+        // A file moved or deleted since import shows nothing; its extracted sound still plays.
+        if !path.is_file() {
+            return Ok(None);
+        }
         Ok(match asset.kind {
             MediaKind::Video => Some(crate::media::ffmpeg::decode_bgra_limited(
                 &path,
@@ -639,7 +643,12 @@ impl SceneEvaluator {
 
     /// Clips on the video tracks above the main sequence, bottom track first.
     fn push_overlays(&self, scene: &mut Scene, edited_us: u64) -> Result<(), String> {
-        for track in self.document.overlay_tracks.iter().filter(|t| !t.hidden) {
+        for track in self
+            .document
+            .overlay_tracks
+            .iter()
+            .filter(|t| !t.hidden && !t.is_audio())
+        {
             let Some(clip) = track.clip_at(edited_us) else {
                 continue;
             };
@@ -1682,11 +1691,13 @@ mod tests {
                 start_us: 0,
                 end_us: 500_000,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 1_200_000,
                 end_us: 2_000_000,
                 media: None,
+                audio_unlinked: false,
             },
         ])
         .unwrap()
@@ -1737,8 +1748,8 @@ mod tests {
             summary.media_assets[1].id.clone(),
         );
         let edits = [
-            TrackEdit::AddTrack,
-            TrackEdit::AddTrack,
+            TrackEdit::AddTrack { audio: false },
+            TrackEdit::AddTrack { audio: false },
             // The red video on V2 from 0.2 s, the blue image on V3 from 0.6 s.
             TrackEdit::PlaceMedia {
                 asset_id: video_id,
@@ -2036,11 +2047,13 @@ mod tests {
                 start_us: 1_000_000,
                 end_us: 2_000_000,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 0,
                 end_us: 600_000,
                 media: None,
+                audio_unlinked: false,
             },
         ])
         .unwrap();
@@ -2122,6 +2135,7 @@ mod tests {
             start_us: 0,
             end_us: 2_000_000,
             media: None,
+            audio_unlinked: false,
         }])
         .unwrap();
         let short = Short {
@@ -2199,11 +2213,13 @@ mod tests {
                 start_us: 1_200_000,
                 end_us: 2_000_000,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 0,
                 end_us: 500_000,
                 media: None,
+                audio_unlinked: false,
             },
         ])
         .unwrap();
@@ -2416,11 +2432,13 @@ mod tests {
                 start_us: 0,
                 end_us: 500_000,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 1_200_000,
                 end_us: 2_000_000,
                 media: None,
+                audio_unlinked: false,
             },
         ])
         .unwrap();

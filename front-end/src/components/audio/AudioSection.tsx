@@ -4,6 +4,8 @@ import { InspectorSection } from "../inspector/InspectorSection";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
+import { audioStreamCount, audioTracks as audioTracksOf, trackLabel, videoTracks as videoTracksOf } from "../../lib/trackUtils";
+import { buildClips } from "../../lib/projectUtils";
 import {
   AudioSettings,
   DEFAULT_AUDIO_SETTINGS,
@@ -109,6 +111,51 @@ const TrackRow: React.FC<TrackRowProps> = ({ track, volumeDb, onMute, onVolume }
   </div>
 );
 
+/** One timeline lane of imported sound, by the mix id the backend plays it under. */
+interface SoundLane {
+  id: string;
+  label: string;
+  /** An audio track mutes as a track; other lanes mute in the mix. */
+  trackId?: string;
+}
+
+const LaneRow: React.FC<{
+  lane: SoundLane;
+  muted: boolean;
+  volumeDb: number;
+  onMute: () => void;
+  onVolume: (volumeDb: number) => void;
+}> = ({ lane, muted, volumeDb, onMute, onVolume }) => (
+  <div className="grid grid-cols-[6.5rem_minmax(0,1fr)_auto_auto] items-center gap-2">
+    <span className={`text-xs truncate ${muted ? "text-studio-500 line-through" : "text-studio-300"}`} title={lane.label}>
+      {lane.label}
+    </span>
+    <input
+      type="range"
+      aria-label={`${lane.label} volume`}
+      min={TRACK_VOLUME_DB_RANGE.min}
+      max={TRACK_VOLUME_DB_RANGE.max}
+      step={1}
+      value={volumeDb}
+      disabled={muted}
+      onChange={(e) => onVolume(Number(e.target.value))}
+      onDoubleClick={() => onVolume(0)}
+      title="Double-click to reset"
+      className="w-full min-w-0 accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer disabled:opacity-40"
+    />
+    <span className="w-12 text-right font-mono text-[11px] text-studio-300">{formatDb(volumeDb)}</span>
+    <button
+      type="button"
+      onClick={onMute}
+      aria-pressed={muted}
+      aria-label={`${muted ? "Unmute" : "Mute"} ${lane.label}`}
+      className={`p-1 rounded hover:bg-studio-800 ${muted ? "text-rose-300" : "text-studio-400 hover:text-white"}`}
+    >
+      {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+    </button>
+  </div>
+);
+
 /** Track mix and audio polish. Saved to the project, so playback and export both use them. */
 export const AudioSection: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
@@ -138,6 +185,50 @@ export const AudioSection: React.FC = () => {
   );
 
   if (!openedProject) return null;
+
+  // The lanes of imported sound, named as on the timeline (ids match src-tauri/src/media/audio.rs).
+  const assetOf = (id: string) => openedProject.mediaAssets?.find((a) => a.id === id);
+  const overlay = openedProject.overlayTracks ?? [];
+  const mainStreams = Math.max(
+    0,
+    ...buildClips(openedProject.retainedIntervals)
+      .filter((c) => c.media && !c.audioUnlinked)
+      .map((c) => audioStreamCount(assetOf(c.media!))),
+  );
+  const soundLanes: SoundLane[] = [
+    ...Array.from({ length: mainStreams }, (_, k) => ({ id: `main-sound-${k + 1}`, label: `V1 sound ${k + 1}` })),
+    ...videoTracksOf(overlay).flatMap((track) => {
+      const streams = Math.max(
+        0,
+        ...track.clips.filter((c) => !c.audioUnlinked).map((c) => audioStreamCount(assetOf(c.assetId))),
+      );
+      return Array.from({ length: streams }, (_, k) => ({
+        id: `${track.id}-sound-${k + 1}`,
+        label: `${trackLabel(overlay, track.id)} sound ${k + 1}`,
+      }));
+    }),
+    ...audioTracksOf(overlay).map((track) => ({ id: track.id, label: trackLabel(overlay, track.id), trackId: track.id })),
+  ];
+  const laneMuted = (lane: SoundLane) =>
+    lane.trackId
+      ? !!overlay.find((t) => t.id === lane.trackId)?.muted
+      : !!openedProject.audio?.tracks?.[lane.id]?.muted;
+  const muteLane = (lane: SoundLane) => {
+    const track = overlay.find((t) => t.id === lane.trackId);
+    if (!track) {
+      void saveMix({ [lane.id]: { muted: !laneMuted(lane) } });
+      return;
+    }
+    void api
+      .projectTracksEdit(openedProject.projectHandle, openedProject.revision, {
+        kind: "setTrack",
+        trackId: track.id,
+        hidden: track.hidden,
+        muted: !track.muted,
+      })
+      .then(applyOpenedProject)
+      .catch((err) => setError(String(err)));
+  };
 
   const update = (patch: Partial<AudioSettings>) => {
     const next = { ...draft, ...patch };
@@ -188,8 +279,23 @@ export const AudioSection: React.FC = () => {
           {error}
         </p>
       )}
+      {soundLanes.length > 0 && (
+        <div className="space-y-1.5 pb-2 border-b border-studio-800">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-studio-500">Imported sound</div>
+          {soundLanes.map((lane) => (
+            <LaneRow
+              key={lane.id}
+              lane={lane}
+              muted={laneMuted(lane)}
+              volumeDb={volumeDraft[lane.id] ?? openedProject.audio?.tracks?.[lane.id]?.volumeDb ?? 0}
+              onMute={() => muteLane(lane)}
+              onVolume={(db) => setVolume(lane.id, db)}
+            />
+          ))}
+        </div>
+      )}
       {audioTracks.length === 0 ? (
-        <p className="text-[11px] text-studio-500">This recording has no audio tracks.</p>
+        soundLanes.length === 0 && <p className="text-[11px] text-studio-500">No audio tracks yet.</p>
       ) : (
         <div className="space-y-2.5 pb-2 border-b border-studio-800">
           {audioTracks.map((track) => (

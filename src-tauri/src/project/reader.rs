@@ -58,6 +58,10 @@ pub struct RetainedInterval {
     /// Imported media asset id; `None` is the recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
+    /// For imported media: its sound was split off onto audio tracks, so this clip plays
+    /// silent here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio_unlinked: bool,
 }
 
 impl RetainedInterval {
@@ -67,6 +71,7 @@ impl RetainedInterval {
             start_us,
             end_us,
             media: None,
+            audio_unlinked: false,
         }
     }
 
@@ -507,6 +512,7 @@ fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
                 start_us: cursor,
                 end_us: pause.start_us,
                 media: None,
+                audio_unlinked: false,
             });
         }
         cursor = pause.end_us;
@@ -516,6 +522,7 @@ fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
             start_us: cursor,
             end_us: duration,
             media: None,
+            audio_unlinked: false,
         });
     }
     Ok(RecordingIndex {
@@ -742,6 +749,7 @@ impl ProjectReader {
         expected_revision: u64,
         ranges: &[(u64, u64)],
         grow: crate::project::revision::RestoreGrow,
+        shift_tracks_at: Option<u64>,
     ) -> Result<OpenedProject, String> {
         let mut restorable = Vec::new();
         for &(start, end) in ranges {
@@ -759,8 +767,13 @@ impl ProjectReader {
         if restorable.is_empty() {
             return Err("Nothing to restore in that range".into());
         }
-        self.history
-            .restore(expected_revision, &restorable, grow, &self.root)?;
+        self.history.restore(
+            expected_revision,
+            &restorable,
+            grow,
+            shift_tracks_at,
+            &self.root,
+        )?;
         self.sync_summary();
         Ok(self.summary.clone())
     }
@@ -1073,6 +1086,11 @@ impl ProjectReader {
         self.summary.audio = self.history.current.audio.clone();
         self.summary.captions = self.history.current.captions.clone();
         self.summary.media_assets = self.history.current.media_assets.clone();
+        for asset in &mut self.summary.media_assets {
+            asset.missing = asset
+                .file_path(&self.root)
+                .map_or(true, |path| !path.is_file());
+        }
         let mut chapters = self.history.current.chapters.clone();
         if let Ok(mapper) = self.history.current.mapper() {
             crate::chapters::attach_edited(&mut chapters, &mapper);
@@ -1093,6 +1111,7 @@ impl ProjectReader {
                 start_us: p.start_us,
                 end_us: p.end_us,
                 media: None,
+                audio_unlinked: false,
             })
             .collect();
         self.summary.removed_intervals = revision::removed_intervals(
@@ -1166,7 +1185,7 @@ mod tests {
         let mut reader = ProjectReader::open(&root).unwrap();
         assert!(reader.summary.removed_intervals.is_empty());
         assert!(reader
-            .restore_cuts(0, &[(0, 10_000_000)], Default::default())
+            .restore_cuts(0, &[(0, 10_000_000)], Default::default(), None)
             .is_err());
 
         let summary = reader.ripple_cuts(0, &[(1_000_000, 2_000_000)]).unwrap();
@@ -1176,10 +1195,11 @@ mod tests {
                 start_us: 1_000_000,
                 end_us: 2_000_000,
                 media: None,
+                audio_unlinked: false,
             }]
         );
         let summary = reader
-            .restore_cuts(1, &[(0, 10_000_000)], Default::default())
+            .restore_cuts(1, &[(0, 10_000_000)], Default::default(), None)
             .unwrap();
         assert!(summary.removed_intervals.is_empty());
         assert_eq!(
@@ -1189,11 +1209,13 @@ mod tests {
                     start_us: 0,
                     end_us: 6_000_000,
                     media: None,
+                    audio_unlinked: false,
                 },
                 RetainedInterval {
                     start_us: 7_000_000,
                     end_us: 10_000_000,
                     media: None,
+                    audio_unlinked: false,
                 },
             ]
         );

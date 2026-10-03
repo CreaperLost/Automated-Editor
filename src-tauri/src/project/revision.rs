@@ -264,6 +264,7 @@ pub fn removed_intervals(
                 start_us: cursor,
                 end_us: start,
                 media: None,
+                audio_unlinked: false,
             });
         }
         cursor = cursor.max(end);
@@ -273,6 +274,7 @@ pub fn removed_intervals(
             start_us: cursor,
             end_us: source_duration_us,
             media: None,
+            audio_unlinked: false,
         });
     }
     removed
@@ -316,6 +318,117 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
     out
 }
 
+/// Splits V1 at `edited_us`: imported media becomes two entries, the recording gets a split
+/// point. Errors when there is already an edge there.
+pub(crate) fn split_main(document: &mut EditDocument, edited_us: u64) -> Result<(), String> {
+    let mapper = document.mapper()?;
+    if mapper.media_at(edited_us).is_some() {
+        let before = document.retained_intervals.len();
+        split_at_edited(&mut document.retained_intervals, edited_us)?;
+        if document.retained_intervals.len() == before {
+            return Err("There is already a clip edge here".into());
+        }
+        return Ok(());
+    }
+    let source_us = mapper
+        .edited_to_source_us(edited_us)
+        .ok_or("Split point is outside the timeline")?;
+    if document
+        .retained_intervals
+        .iter()
+        .any(|interval| interval.is_recording() && interval.start_us == source_us)
+    {
+        return Err("There is already a clip edge here".into());
+    }
+    match document.split_points_us.binary_search(&source_us) {
+        Ok(_) => Err("There is already a clip edge here".into()),
+        Err(index) => {
+            document.split_points_us.insert(index, source_us);
+            Ok(())
+        }
+    }
+}
+
+/// Removes the edited ranges from V1 and closes the gaps, keeping each entry's own fields.
+pub(crate) fn cut_main(document: &mut EditDocument, cuts: &[(u64, u64)]) -> Result<(), String> {
+    let mut ordered = cuts.to_vec();
+    ordered.sort_unstable();
+    if ordered.windows(2).any(|w| w[0].1 > w[1].0) {
+        return Err("Cut ranges overlap".into());
+    }
+    let retained = &mut document.retained_intervals;
+    let duration: u64 = retained.iter().map(|i| i.end_us - i.start_us).sum();
+    for &(start, end) in ordered.iter().rev() {
+        if start >= end {
+            return Err("Cut must be a half-open interval".into());
+        }
+        if end > duration {
+            return Err("Cut exceeds edited duration".into());
+        }
+        let first = split_at_edited(retained, start)?;
+        let last = split_at_edited(retained, end)?;
+        retained.drain(first..last);
+    }
+    document.retained_intervals =
+        canonical_retained(std::mem::take(&mut document.retained_intervals));
+    Ok(())
+}
+
+/// Moves the V1 ranges (which need not touch) to edited position `target`, in timeline
+/// order, as one block.
+pub(crate) fn move_main(
+    document: &mut EditDocument,
+    ranges: &[(u64, u64)],
+    target_us: u64,
+) -> Result<(), String> {
+    let mut ordered = ranges.to_vec();
+    ordered.sort_unstable();
+    if ordered.is_empty() || ordered.iter().any(|(a, b)| a >= b) {
+        return Err("Choose clips to move".into());
+    }
+    if ordered.windows(2).any(|w| w[0].1 > w[1].0) {
+        return Err("Move ranges overlap".into());
+    }
+    if ordered.iter().any(|&(a, b)| target_us > a && target_us < b) {
+        return Err("Clips cannot move inside themselves".into());
+    }
+    let list = &mut document.retained_intervals;
+    let duration: u64 = list.iter().map(|i| i.end_us - i.start_us).sum();
+    if ordered.last().is_some_and(|r| r.1 > duration) || target_us > duration {
+        return Err("Move is outside the timeline".into());
+    }
+    let mut points: Vec<u64> = ordered.iter().flat_map(|&(a, b)| [a, b]).collect();
+    points.push(target_us);
+    points.sort_unstable();
+    points.dedup();
+    for &point in points.iter().rev() {
+        split_at_edited(list, point)?;
+    }
+    let original = list.clone();
+    // Every entry now lies wholly inside or outside each range, and before or after the target.
+    let (mut before, mut moved, mut after) = (Vec::new(), Vec::new(), Vec::new());
+    let mut cursor = 0u64;
+    for entry in list.drain(..) {
+        let (a, b) = (cursor, cursor + entry.end_us - entry.start_us);
+        cursor = b;
+        if ordered.iter().any(|&(s, e)| a >= s && b <= e) {
+            moved.push(entry);
+        } else if b <= target_us {
+            before.push(entry);
+        } else {
+            after.push(entry);
+        }
+    }
+    before.extend(moved);
+    before.extend(after);
+    if before == original {
+        document.retained_intervals = canonical_retained(before);
+        return Err("The clips are already there".into());
+    }
+    document.retained_intervals = canonical_retained(before);
+    Ok(())
+}
+
 /// Makes `edited_us` an interval boundary in `retained` and returns the index of the
 /// interval that starts there (`retained.len()` at the end of the timeline).
 pub(crate) fn split_at_edited(
@@ -338,6 +451,7 @@ pub(crate) fn split_at_edited(
                     start_us: source,
                     end_us: interval.end_us,
                     media: interval.media.clone(),
+                    audio_unlinked: interval.audio_unlinked,
                 },
             );
             return Ok(index + 1);
@@ -416,6 +530,7 @@ pub fn restore_in_order(
             start_us,
             end_us,
             media: None,
+            audio_unlinked: false,
         })
         .collect();
     pieces = merge_ranges(pieces);
@@ -472,6 +587,7 @@ pub fn restore_in_order(
                         start_us,
                         end_us,
                         media: None,
+                        audio_unlinked: false,
                     },
                 );
             }
@@ -1016,28 +1132,9 @@ impl EditHistory {
         if expected_revision != self.current.revision {
             return Err("Stale edit revision".into());
         }
-        let mut mapper = self.current.mapper()?;
-        let mut ordered = cuts.to_vec();
-        ordered.sort_unstable();
-        if ordered.windows(2).any(|w| w[0].1 > w[1].0) {
-            return Err("Cut ranges overlap".into());
-        }
-        ordered.reverse();
-        for (start, end) in ordered {
-            mapper.ripple_cut_edited(start, end)?;
-        }
-        let retained = canonical_retained(
-            mapper
-                .intervals()
-                .iter()
-                .map(|interval| RetainedInterval {
-                    start_us: interval.start_us,
-                    end_us: interval.end_us,
-                    media: interval.media.clone(),
-                })
-                .collect(),
-        );
-        self.commit(expected_revision, retained, persist_root)
+        let mut next = self.current.clone();
+        cut_main(&mut next, cuts)?;
+        self.commit_next(expected_revision, persist_root, next)
     }
 
     /// Premiere-style Q/E: ripple-deletes from the playhead back to the
@@ -1077,43 +1174,22 @@ impl EditHistory {
         if expected_revision != self.current.revision {
             return Err("Stale edit revision".into());
         }
-        let mapper = self.current.mapper()?;
-        if mapper.media_at(edited_us).is_some() {
-            // Imported media splits by becoming two timeline entries.
-            let mut next = self.current.clone();
-            let before = next.retained_intervals.len();
-            split_at_edited(&mut next.retained_intervals, edited_us)?;
-            if next.retained_intervals.len() == before {
-                return Err("There is already a clip edge here".into());
-            }
-            return self.commit_next(expected_revision, persist_root, next);
-        }
-        let source_us = mapper
-            .edited_to_source_us(edited_us)
-            .ok_or("Split point is outside the timeline")?;
-        if self
-            .current
-            .retained_intervals
-            .iter()
-            .any(|interval| interval.is_recording() && interval.start_us == source_us)
-        {
-            return Err("There is already a clip edge here".into());
-        }
         let mut next = self.current.clone();
-        match next.split_points_us.binary_search(&source_us) {
-            Ok(_) => return Err("There is already a clip edge here".into()),
-            Err(index) => next.split_points_us.insert(index, source_us),
-        }
+        split_main(&mut next, edited_us)?;
         self.commit_next(expected_revision, persist_root, next)
     }
 
     /// Puts removed source ranges back on the timeline. The caller clips the
     /// ranges to media that was actually removed.
+    ///
+    /// With `shift_tracks_at`, clips on the other tracks that start there or later move
+    /// right by the restored length, so they stay in step with V1.
     pub fn restore(
         &mut self,
         expected_revision: u64,
         ranges: &[(u64, u64)],
         grow: RestoreGrow,
+        shift_tracks_at: Option<u64>,
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         if ranges.is_empty() {
@@ -1129,7 +1205,15 @@ impl EditHistory {
             return Err("Stale edit revision".into());
         }
         let retained = restore_in_order(&self.current.retained_intervals, ranges, grow);
-        self.commit(expected_revision, retained, persist_root)
+        let mut next = self.current.clone();
+        next.retained_intervals = retained;
+        if let Some(at_us) = shift_tracks_at {
+            let grown = next
+                .edited_duration_us()?
+                .saturating_sub(self.current.edited_duration_us()?);
+            crate::tracks::shift_from(&mut next, at_us, grown as i64);
+        }
+        self.commit_next(expected_revision, persist_root, next)
     }
 
     /// Adds imported media to the project's media bin.
@@ -1170,9 +1254,7 @@ impl EditHistory {
         next.retained_intervals
             .retain(|entry| entry.media.as_deref() != Some(asset_id));
         crate::tracks::remove_asset(&mut next, asset_id);
-        if next.retained_intervals.is_empty() {
-            return Err("Removing it would leave the timeline empty".into());
-        }
+        // An empty timeline is valid: a project can be built from nothing but imports.
         next.retained_intervals = canonical_retained(next.retained_intervals);
         self.commit_next(expected_revision, persist_root, next)
     }
@@ -1208,6 +1290,7 @@ impl EditHistory {
                 start_us,
                 end_us,
                 media: Some(asset_id.to_string()),
+                audio_unlinked: false,
             },
         );
         self.commit_next(expected_revision, persist_root, next)
@@ -1306,6 +1389,7 @@ mod tests {
             start_us: 0,
             end_us: 1_000_000,
             media: None,
+            audio_unlinked: false,
         }])
         .unwrap();
         let mut history = EditHistory::new(initial.clone());
@@ -1342,11 +1426,13 @@ mod tests {
                 start_us: 0,
                 end_us: 4_000_000,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 6_000_000,
                 end_us: 10_000_000,
                 media: None,
+                audio_unlinked: false,
             },
         ])
         .unwrap();
@@ -1465,6 +1551,7 @@ mod tests {
             start_us: 0,
             end_us: 1_000_000,
             media: None,
+            audio_unlinked: false,
         }])
         .unwrap();
         let mut first = EditHistory::new(initial.clone());
@@ -1489,6 +1576,7 @@ mod tests {
                 start_us: 0,
                 end_us: 10_000_000,
                 media: None,
+                audio_unlinked: false,
             }])
             .unwrap(),
         );
@@ -1519,6 +1607,7 @@ mod tests {
                 start_us: 0,
                 end_us: 10_000_000,
                 media: None,
+                audio_unlinked: false,
             }])
             .unwrap(),
         );
@@ -1570,6 +1659,7 @@ mod tests {
                 start_us: 0,
                 end_us: 1_000_000,
                 media: None,
+                audio_unlinked: false,
             }])
             .unwrap(),
         );
@@ -1607,6 +1697,7 @@ mod tests {
                 start_us: 0,
                 end_us: 1_000_000,
                 media: None,
+                audio_unlinked: false,
             }])
             .unwrap(),
         );
@@ -1640,6 +1731,7 @@ mod tests {
             start_us,
             end_us,
             media: None,
+            audio_unlinked: false,
         }
     }
 
@@ -1666,7 +1758,11 @@ mod tests {
             name: "intro.png".into(),
             kind: MediaKind::Image,
             relative_path: "assets/media/m1.png".into(),
+            source_path: None,
+            missing: false,
             audio_path: None,
+            extra_audio_paths: Vec::new(),
+            audio_names: Vec::new(),
             duration_us: crate::media_bin::IMAGE_MAX_US,
             width: 640,
             height: 360,
@@ -1682,6 +1778,7 @@ mod tests {
             start_us,
             end_us,
             media: Some("m1".into()),
+            audio_unlinked: false,
         };
         assert_eq!(
             history.current.retained_intervals,
@@ -1738,6 +1835,75 @@ mod tests {
     }
 
     #[test]
+    fn unlinked_media_stays_unlinked_through_cuts_and_splits() {
+        let dir = tempdir().unwrap();
+        let clip = RetainedInterval {
+            start_us: 0,
+            end_us: 6_000_000,
+            media: Some("m1".into()),
+            audio_unlinked: true,
+        };
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 4_000_000), clip]).unwrap());
+        history.current.media_assets = vec![crate::media_bin::MediaAsset {
+            id: "m1".into(),
+            name: "clip.mp4".into(),
+            kind: crate::media_bin::MediaKind::Video,
+            relative_path: "assets/media/m1.mp4".into(),
+            source_path: None,
+            missing: false,
+            audio_path: None,
+            extra_audio_paths: Vec::new(),
+            audio_names: Vec::new(),
+            duration_us: 6_000_000,
+            width: 1920,
+            height: 1080,
+        }];
+        history
+            .ripple_cuts(
+                0,
+                &[(1_000_000, 2_000_000), (5_000_000, 6_000_000)],
+                dir.path(),
+            )
+            .unwrap();
+        history.split(1, 7_000_000, dir.path()).unwrap();
+        let media: Vec<_> = history
+            .current
+            .retained_intervals
+            .iter()
+            .filter(|i| i.media.is_some())
+            .collect();
+        // The second cut and the split each divide the clip: three pieces, all unlinked.
+        assert_eq!(media.len(), 3);
+        assert!(media.iter().all(|i| i.audio_unlinked));
+    }
+
+    #[test]
+    fn removing_the_only_clip_leaves_an_empty_timeline() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(EditDocument::from_retained(vec![]).unwrap());
+        let asset = crate::media_bin::MediaAsset {
+            id: "m1".into(),
+            name: "clip.mp4".into(),
+            kind: crate::media_bin::MediaKind::Video,
+            relative_path: "assets/media/m1.mp4".into(),
+            source_path: None,
+            missing: false,
+            audio_path: None,
+            extra_audio_paths: Vec::new(),
+            audio_names: Vec::new(),
+            duration_us: 5_000_000,
+            width: 1920,
+            height: 1080,
+        };
+        history.add_media(0, vec![asset], dir.path()).unwrap();
+        history.insert_media(1, "m1", 0, None, dir.path()).unwrap();
+        history.remove_media(2, "m1", dir.path()).unwrap();
+        assert!(history.current.media_assets.is_empty());
+        assert!(history.current.retained_intervals.is_empty());
+    }
+
+    #[test]
     fn split_keeps_media_and_survives_cut_restore_and_undo() {
         let dir = tempdir().unwrap();
         let mut history =
@@ -1762,7 +1928,13 @@ mod tests {
         // The split now sits on an interval start, so no second split there.
         assert!(history.split(2, 2_000_000, dir.path()).is_err());
         history
-            .restore(2, &[(2_000_000, 4_000_000)], RestoreGrow::End, dir.path())
+            .restore(
+                2,
+                &[(2_000_000, 4_000_000)],
+                RestoreGrow::End,
+                None,
+                dir.path(),
+            )
             .unwrap();
         assert_eq!(history.current.retained_intervals, vec![ri(0, 10_000_000)]);
         assert_eq!(history.current.split_points_us, vec![4_000_000]);
@@ -1782,7 +1954,7 @@ mod tests {
             EditDocument::from_retained(vec![ri(0, 1_000), ri(5_000, 6_000)]).unwrap(),
         );
         history
-            .restore(0, &[(2_000, 3_000)], RestoreGrow::End, dir.path())
+            .restore(0, &[(2_000, 3_000)], RestoreGrow::End, None, dir.path())
             .unwrap();
         assert_eq!(
             history.current.retained_intervals,
@@ -1793,15 +1965,16 @@ mod tests {
                 1,
                 &[(1_000, 2_000), (3_000, 5_000)],
                 RestoreGrow::End,
+                None,
                 dir.path(),
             )
             .unwrap();
         assert_eq!(history.current.retained_intervals, vec![ri(0, 6_000)]);
         assert!(history
-            .restore(2, &[], RestoreGrow::End, dir.path())
+            .restore(2, &[], RestoreGrow::End, None, dir.path())
             .is_err());
         assert!(history
-            .restore(2, &[(10, 10)], RestoreGrow::End, dir.path())
+            .restore(2, &[(10, 10)], RestoreGrow::End, None, dir.path())
             .is_err());
     }
 
