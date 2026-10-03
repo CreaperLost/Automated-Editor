@@ -72,6 +72,35 @@ fn audio_track(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, project_handle)?;
+    // Imported sound: one stream of a file, over the file's own time.
+    if let Some((stream, asset_id)) = crate::project::revision::media_sound(track_id) {
+        let asset = reader
+            .history()
+            .current
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("Unknown imported media")?;
+        let path = asset
+            .audio_paths()
+            .nth(stream)
+            .ok_or("That media has no such audio stream")?;
+        return Ok(TrackContext {
+            root: reader.root().to_path_buf(),
+            segments: vec![SegmentSummary {
+                track_id: track_id.to_string(),
+                relative_path: path.clone(),
+                start_us: 0,
+                end_us: asset.duration_us,
+                size_bytes: 0,
+                media_timescale: crate::media::audio::SAMPLE_RATE,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: None,
+                available: true,
+            }],
+        });
+    }
     let track = reader
         .summary
         .tracks
@@ -107,7 +136,7 @@ fn current_view(
     let document = &reader.history().current;
     Ok(Some(edit::view(
         &transcript,
-        &document.mapper()?,
+        &document.mapper_for_transcript(track_id)?,
         document.revision,
     )))
 }
@@ -250,7 +279,7 @@ pub fn transcript_suggestions_impl(
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
     Ok(edit::suggestions(
         &transcript,
-        &reader.history().current.mapper()?,
+        &reader.history().current.mapper_for_transcript(&track_id)?,
     ))
 }
 
@@ -298,7 +327,11 @@ pub fn transcript_cut_words_impl(
         }
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        edit::word_cuts(&transcript, &word_ids, &document.mapper()?)?
+        edit::word_cuts(
+            &transcript,
+            &word_ids,
+            &document.mapper_for_transcript(&track_id)?,
+        )?
     };
     project_ripple_cuts_impl(
         state,
@@ -384,7 +417,10 @@ pub fn transcript_ai_suggest_impl(
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        let mapper = reader.history().current.mapper()?;
+        let mapper = reader
+            .history()
+            .current
+            .mapper_for_transcript(&track_id)?;
         let words: Vec<crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
@@ -440,7 +476,12 @@ pub fn project_chapters_generate_impl(
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
         let document = &reader.history().current;
-        edit::view(&transcript, &document.mapper()?, document.revision).words
+        edit::view(
+            &transcript,
+            &document.mapper_for_transcript(&track_id)?,
+            document.revision,
+        )
+        .words
     };
     let chapters = crate::ai::chapters::suggest(&mut client, &words)?;
     if transcripts.cancel.load(Ordering::SeqCst) {
@@ -472,7 +513,12 @@ pub fn project_shorts_generate_impl(
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
         let document = &reader.history().current;
-        edit::view(&transcript, &document.mapper()?, document.revision).words
+        edit::view(
+            &transcript,
+            &document.mapper_for_transcript(&track_id)?,
+            document.revision,
+        )
+        .words
     };
     let shorts = crate::ai::shorts::suggest(&mut client, &words)?;
     if transcripts.cancel.load(Ordering::SeqCst) {

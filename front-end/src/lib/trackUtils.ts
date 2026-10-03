@@ -1,4 +1,4 @@
-import type { MediaAsset, OverlayClip, OverlayTrack } from "./types";
+import type { MediaAsset, OpenedProject, OverlayClip, OverlayTrack, SoundRole } from "./types";
 
 /** A row of the timeline a clip can be dropped on; "new" rows add a video or audio track. */
 export type TrackRow =
@@ -45,6 +45,33 @@ export function trackLabel(tracks: OverlayTrack[], trackId: string): string {
 /** How many audio streams the media has. */
 export function audioStreamCount(asset: MediaAsset | undefined): number {
   return asset?.audioPath ? 1 + (asset.extraAudioPaths?.length ?? 0) : 0;
+}
+
+/** What a stream is: as set, else a video's first stream is speech and the rest background. */
+export function soundRole(asset: MediaAsset | undefined, stream: number): SoundRole {
+  return asset?.soundRoles?.[stream] ?? (stream === 0 && asset?.kind === "video" ? "mic" : "background");
+}
+
+/** Sound that can be transcribed: the recording's mic and system tracks, then imported
+ *  streams (speech first). Ids match the backend: `msound-<stream>-<asset>` for imports. */
+export function transcribableSounds(project: OpenedProject | null): { id: string; label: string; speech: boolean }[] {
+  if (!project) return [];
+  const recorded = project.tracks
+    .filter((t) => t.descriptor.trackType === "mic_audio" || t.descriptor.trackType === "system_audio")
+    .map((t) => ({
+      id: t.descriptor.id,
+      label: `${t.descriptor.trackType === "mic_audio" ? "Microphone" : "System audio"} (${t.descriptor.id})`,
+      speech: t.descriptor.trackType === "mic_audio",
+    }));
+  const imported = (project.mediaAssets ?? []).flatMap((asset) =>
+    Array.from({ length: audioStreamCount(asset) }, (_, stream) => ({
+      id: `msound-${stream}-${asset.id}`,
+      label: `${asset.name} · ${audioStreamName(asset, stream)}`,
+      speech: soundRole(asset, stream) === "mic",
+    })),
+  );
+  // Speech first: that is what transcripts and captions are for.
+  return [...recorded, ...imported].sort((a, b) => Number(b.speech) - Number(a.speech));
 }
 
 /** "Mic", or "Audio 2" when the stream has no name. */

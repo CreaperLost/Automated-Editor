@@ -392,9 +392,14 @@ impl SceneEvaluator {
 
     pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
         let mut scene = self.main_scene_at(edited_us)?;
-        // A short's split frame shows the recording only.
+        // A short's split frame shows the recording only, and places its own captions.
         if self.document.short_layout.is_none() {
             self.push_overlays(&mut scene, edited_us)?;
+            // Captions go over everything, imported clips included.
+            let mapper = self.document.mapper()?;
+            if let Some((frame, x, y)) = self.caption_at(&mapper, edited_us) {
+                scene.push_caption(frame, x, y);
+            }
         }
         Ok(scene)
     }
@@ -496,9 +501,6 @@ impl SceneEvaluator {
             weight,
             crate::render::layout_px_unit(self.width, self.height),
         );
-        if let Some((frame, x, y)) = self.caption_at(&mapper, edited_us) {
-            scene.push_caption(frame, x, y);
-        }
         Ok(scene)
     }
 
@@ -583,16 +585,24 @@ impl SceneEvaluator {
     }
 
     /// An imported media clip, drawn where the screen recording would be, with the same
-    /// background, padding, corners and shadow. Crop, zoom, the webcam and captions belong to
-    /// the recording, so they are left out.
+    /// background, padding, corners and shadow. A file that stands for the screen is cropped
+    /// like the screen; a camera shown on V1 is not. The recording's own webcam is left out.
     fn media_scene(&self, asset_id: &str, local_us: u64) -> Result<Scene, String> {
         let frame = self.media_frame(asset_id, local_us)?;
         let mut layout = self.document.layout.clone();
         layout.webcam_enabled = false;
-        layout.screen_crop_left = 0.0;
-        layout.screen_crop_top = 0.0;
-        layout.screen_crop_right = 0.0;
-        layout.screen_crop_bottom = 0.0;
+        let screen = self
+            .document
+            .media_assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .is_none_or(|asset| asset.picture_role == crate::media_bin::PictureRole::Screen);
+        if !screen {
+            layout.screen_crop_left = 0.0;
+            layout.screen_crop_top = 0.0;
+            layout.screen_crop_right = 0.0;
+            layout.screen_crop_bottom = 0.0;
+        }
         Scene::from_layout_scaled(
             self.width,
             self.height,
@@ -653,8 +663,21 @@ impl SceneEvaluator {
                 continue;
             };
             let local_us = clip.local_us(edited_us).unwrap_or(clip.in_us);
+            let webcam = self.document.media_assets.iter().any(|asset| {
+                asset.id == clip.asset_id
+                    && asset.picture_role == crate::media_bin::PictureRole::Webcam
+            });
             if let Some(frame) = self.media_frame(&clip.asset_id, local_us)? {
-                scene.push_overlay(frame, clip.fit == crate::tracks::OverlayFit::Cover);
+                if webcam {
+                    // A camera file sits in the webcam bubble, shaped like the recording's.
+                    scene.push_webcam_bubble(
+                        frame,
+                        &self.document.layout,
+                        crate::render::layout_px_unit(self.width, self.height),
+                    )?;
+                } else {
+                    scene.push_overlay(frame, clip.fit == crate::tracks::OverlayFit::Cover);
+                }
             }
         }
         Ok(())
@@ -662,6 +685,8 @@ impl SceneEvaluator {
 
     /// The transcript captions read from: the chosen track, else the first transcribed
     /// microphone, else system audio.
+    /// The transcript captions read from: the chosen track, else the first transcribed
+    /// microphone, then system audio, then imported sound marked as speech.
     fn caption_transcript(&self) -> Option<crate::transcript::Transcript> {
         let settings = &self.document.captions;
         let load = |id: &str| {
@@ -672,14 +697,20 @@ impl SceneEvaluator {
         if let Some(id) = &settings.track_id {
             return load(id);
         }
-        [TrackType::MicAudio, TrackType::SystemAudio]
+        let recorded = [TrackType::MicAudio, TrackType::SystemAudio]
             .iter()
             .flat_map(|kind| {
                 self.tracks
                     .iter()
                     .filter(move |(t, _)| t.descriptor.track_type == *kind)
             })
-            .find_map(|(t, _)| load(&t.descriptor.id))
+            .map(|(t, _)| t.descriptor.id.clone());
+        let imported = self.document.media_assets.iter().flat_map(|asset| {
+            (0..asset.audio_paths().count())
+                .filter(|&stream| asset.sound_role(stream) == crate::media_bin::SoundRole::Mic)
+                .map(|stream| crate::project::revision::media_sound_id(stream, &asset.id))
+        });
+        recorded.chain(imported).find_map(|id| load(&id))
     }
 
     fn caption_at(
@@ -693,7 +724,10 @@ impl SceneEvaluator {
         }
         let cues = self.caption_cues.get_or_init(|| {
             self.caption_transcript()
-                .map(|t| crate::captions::build_cues(&t, mapper, settings))
+                .map(|t| match self.document.mapper_for_transcript(&t.track_id) {
+                    Ok(own) => crate::captions::build_cues(&t, &own, settings),
+                    Err(_) => crate::captions::build_cues(&t, mapper, settings),
+                })
                 .unwrap_or_default()
         });
         let index = crate::captions::cue_at(cues, edited_us)?;

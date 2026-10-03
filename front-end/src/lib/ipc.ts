@@ -36,6 +36,8 @@ import {
   TranscriptSettings,
   TranscriptSettingsView,
   TranscriptView,
+  PictureRole,
+  SoundRole,
 } from "./types";
 
 declare global {
@@ -351,6 +353,20 @@ export const api = {
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
   pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
   pickMediaFolder: () => invokeTauri<string | null>("pick_media_folder"),
+  projectMediaRoles: (
+    projectHandle: string,
+    expectedRevision: number,
+    assetId: string,
+    pictureRole: PictureRole,
+    soundRoles: SoundRole[],
+  ) =>
+    invokeTauri<OpenedProject>("project_media_roles", {
+      projectHandle,
+      expectedRevision,
+      assetId,
+      pictureRole,
+      soundRoles,
+    }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>

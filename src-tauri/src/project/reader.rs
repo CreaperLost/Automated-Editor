@@ -998,6 +998,24 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn set_media_roles(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        picture_role: crate::media_bin::PictureRole,
+        sound_roles: Vec<crate::media_bin::SoundRole>,
+    ) -> Result<OpenedProject, String> {
+        self.history.set_media_roles(
+            expected_revision,
+            asset_id,
+            picture_role,
+            sound_roles,
+            &self.root,
+        )?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn insert_media(
         &mut self,
         expected_revision: u64,

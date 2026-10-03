@@ -412,6 +412,28 @@ fn project_media_remove(
     commands::project_media_remove_impl(&state, project_handle, expected_revision, asset_id)
 }
 
+/// Sets what an imported file's picture and sound streams are (screen or webcam; mic or
+/// background).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_roles(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    picture_role: media_bin::PictureRole,
+    sound_roles: Vec<media_bin::SoundRole>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_media_roles_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        picture_role,
+        sound_roles,
+    )
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_media_insert(
@@ -1275,6 +1297,7 @@ pub fn run() {
             project_split,
             project_move_range,
             project_media_import,
+            project_media_roles,
             project_media_remove,
             project_media_insert,
             project_tracks_edit,

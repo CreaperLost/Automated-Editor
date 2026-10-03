@@ -489,6 +489,10 @@ export interface RetainedInterval {
 }
 
 export type MediaKind = "video" | "image" | "audio";
+/** What a file's picture stands for: drawn and edited like the screen, or in the webcam bubble. */
+export type PictureRole = "screen" | "webcam";
+/** What a sound stream is: speech (transcribed, captioned) or background (music, desktop). */
+export type SoundRole = "mic" | "background";
 
 /** A file imported into the project's media bin (src-tauri/src/media_bin.rs). */
 export interface MediaAsset {
@@ -501,6 +505,9 @@ export interface MediaAsset {
   sourcePath?: string;
   /** The file is no longer where it was imported from. */
   missing?: boolean;
+  pictureRole?: PictureRole;
+  /** A role per audio stream; missing entries take `soundRole`'s default. */
+  soundRoles?: SoundRole[];
   /** The first audio stream, extracted. */
   audioPath?: string;
   /** Further audio streams (e.g. mic and desktop recorded separately); they play together. */

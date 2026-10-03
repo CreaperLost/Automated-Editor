@@ -3,7 +3,8 @@ import { AlertTriangle, Film, FolderInput, Image as ImageIcon, Music, Plus, Tras
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import type { MediaAsset } from "../../lib/types";
-import { audioStreamCount } from "../../lib/trackUtils";
+import { audioStreamCount, audioStreamName, soundRole } from "../../lib/trackUtils";
+import type { PictureRole, SoundRole } from "../../lib/types";
 
 /** dataTransfer type for dragging a media bin item onto the timeline. */
 export const MEDIA_DRAG_TYPE = "application/x-aeroedits-media";
@@ -59,6 +60,25 @@ export const MediaPanel: React.FC = () => {
       return folder ? [folder] : [];
     });
   const missing = assets.filter((asset) => asset.missing);
+  /** Sets what a file's picture or one of its sound streams stands for (one undo step). */
+  const setRoles = (asset: MediaAsset, picture?: PictureRole, stream?: { index: number; role: SoundRole }) =>
+    run("Saving…", async () => {
+      const project = useProjectStore.getState().openedProject;
+      if (!project) return;
+      const sounds = Array.from({ length: audioStreamCount(asset) }, (_, i) => soundRole(asset, i));
+      if (stream) sounds[stream.index] = stream.role;
+      applyOpenedProject(
+        await api.projectMediaRoles(
+          project.projectHandle,
+          project.revision,
+          asset.id,
+          picture ?? asset.pictureRole ?? "screen",
+          sounds,
+        ),
+      );
+    });
+  const roleSelect =
+    "bg-studio-900 border border-studio-700 rounded px-1 py-0 text-[10px] text-studio-200 cursor-pointer disabled:opacity-40";
   /** Removes every file that is gone, and its clips, one undo step each. */
   const cleanUpMissing = () =>
     run("Cleaning up…", async () => {
@@ -174,6 +194,38 @@ export const MediaPanel: React.FC = () => {
                   {asset.width > 0 && ` · ${asset.width}×${asset.height}`}
                   {asset.kind === "video" && !asset.audioPath && " · no audio"}
                   {audioStreamCount(asset) > 1 && ` · ${audioStreamCount(asset)} audio tracks`}
+                </div>
+                {/* What the picture and each sound stream stand for: decides how they are edited. */}
+                <div className="mt-1 flex flex-wrap items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+                  {asset.kind !== "audio" && (
+                    <select
+                      aria-label={`${asset.name} picture role`}
+                      title="Screen: cropped, sized and zoomed like the screen. Webcam: shown in the webcam bubble when on a track above V1."
+                      value={asset.pictureRole ?? "screen"}
+                      disabled={busy !== null}
+                      draggable={false}
+                      onChange={(e) => void setRoles(asset, e.target.value as PictureRole)}
+                      className={roleSelect}
+                    >
+                      <option value="screen">Screen</option>
+                      <option value="webcam">Webcam</option>
+                    </select>
+                  )}
+                  {Array.from({ length: audioStreamCount(asset) }, (_, index) => (
+                    <select
+                      key={index}
+                      aria-label={`${asset.name} ${audioStreamName(asset, index)} role`}
+                      title={`${audioStreamName(asset, index)}: Mic is speech (transcribed and captioned); Background is music or desktop sound.`}
+                      value={soundRole(asset, index)}
+                      disabled={busy !== null}
+                      draggable={false}
+                      onChange={(e) => void setRoles(asset, undefined, { index, role: e.target.value as SoundRole })}
+                      className={roleSelect}
+                    >
+                      <option value="mic">{audioStreamName(asset, index)}: Mic</option>
+                      <option value="background">{audioStreamName(asset, index)}: Background</option>
+                    </select>
+                  ))}
                 </div>
               </div>
               <button

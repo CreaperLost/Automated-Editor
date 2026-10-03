@@ -967,6 +967,27 @@ pub fn project_media_remove_impl(
     Ok(summary)
 }
 
+pub fn project_media_roles_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    picture_role: crate::media_bin::PictureRole,
+    sound_roles: Vec<crate::media_bin::SoundRole>,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let summary =
+        reader.set_media_roles(expected_revision, &asset_id, picture_role, sound_roles)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok(summary)
+}
+
 pub fn project_media_insert_impl(
     state: &AppState,
     project_handle: String,

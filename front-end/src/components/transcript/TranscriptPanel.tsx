@@ -10,16 +10,11 @@ import {
   TranscriptView,
 } from "../../lib/types";
 import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
+import { transcribableSounds } from "../../lib/trackUtils";
 
+/** The recording's audio tracks and imported sound, speech first. */
 function audioTracks(project: OpenedProject | null) {
-  if (!project) return [];
-  const tracks = project.tracks.filter(
-    (t) => t.descriptor.trackType === "mic_audio" || t.descriptor.trackType === "system_audio",
-  );
-  // Microphone first: that is where the speech is.
-  return tracks.sort((a, b) =>
-    a.descriptor.trackType === b.descriptor.trackType ? 0 : a.descriptor.trackType === "mic_audio" ? -1 : 1,
-  );
+  return transcribableSounds(project);
 }
 
 function formatTime(us: number): string {
@@ -101,7 +96,7 @@ export const TranscriptPanel: React.FC = () => {
   const revision = openedProject?.revision;
 
   useEffect(() => {
-    setTrackId(audioTracks(openedProject)[0]?.descriptor.id ?? "");
+    setTrackId(audioTracks(openedProject)[0]?.id ?? "");
     setSelection(null);
   }, [handle]);
 
@@ -330,8 +325,8 @@ export const TranscriptPanel: React.FC = () => {
             className="bg-studio-800 text-studio-100 rounded px-1.5 py-0.5"
           >
             {tracks.map((t) => (
-              <option key={t.descriptor.id} value={t.descriptor.id}>
-                {t.descriptor.trackType === "mic_audio" ? "Microphone" : "System audio"} ({t.descriptor.id})
+              <option key={t.id} value={t.id}>
+                {t.label}
               </option>
             ))}
           </select>
@@ -448,7 +443,7 @@ export const TranscriptPanel: React.FC = () => {
       >
         {!view && !running && (
           <p className="text-studio-500">
-            Transcribe the {tracks[0]?.descriptor.trackType === "system_audio" ? "system audio" : "microphone"} track to edit
+            Transcribe {tracks.find((t) => t.id === trackId)?.label ?? "a sound track"} to edit
             the video by deleting words. Click a word to select it, shift-click to extend, then press Delete. Double-click a
             word to jump to it, or press Enter to fix a misheard word. Review lists every filler sound and restarted sentence so
             you can keep or cut each one.

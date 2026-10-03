@@ -118,6 +118,31 @@ impl EditDocument {
         self.zooms.iter().map(ZoomKeyframe::as_suggestion).collect()
     }
 
+    /// Maps the time of the file behind transcript `track_id` onto the edited timeline. A
+    /// recording track's transcript is in recording time: the usual mapper. Imported sound
+    /// (`msound-<stream>-<asset>`) is in that file's own time: its clips on V1 map it, and
+    /// everything else on V1 maps nothing.
+    pub fn mapper_for_transcript(
+        &self,
+        track_id: &str,
+    ) -> Result<crate::timeline::TimelineMapper, String> {
+        let Some(asset_id) = media_sound_asset(track_id) else {
+            return self.mapper();
+        };
+        Ok(crate::timeline::TimelineMapper::new(
+            self.retained_intervals
+                .iter()
+                .enumerate()
+                .map(|(i, interval)| {
+                    let own = interval.media.as_deref() == Some(asset_id);
+                    SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
+                        // The file's own clips read as "source"; the rest map nowhere.
+                        .with_media((!own).then(|| "other".to_string()))
+                })
+                .collect(),
+        ))
+    }
+
     pub fn attach_zoom_ranges(&mut self) -> Result<(), String> {
         let mapper = self.mapper()?;
         attach_zoom_edited_ranges(&mut self.zooms, &mapper);
@@ -316,6 +341,25 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
         }
     }
     out
+}
+
+/// The imported file behind a sound id `msound-<stream>-<asset>`.
+pub fn media_sound_asset(track_id: &str) -> Option<&str> {
+    track_id
+        .strip_prefix("msound-")?
+        .split_once('-')
+        .map(|(_, asset)| asset)
+}
+
+/// The stream and imported file behind a sound id `msound-<stream>-<asset>`.
+pub fn media_sound(track_id: &str) -> Option<(usize, &str)> {
+    let (stream, asset) = track_id.strip_prefix("msound-")?.split_once('-')?;
+    Some((stream.parse().ok()?, asset))
+}
+
+/// The sound id of stream `stream` of imported file `asset_id`.
+pub fn media_sound_id(stream: usize, asset_id: &str) -> String {
+    format!("msound-{stream}-{asset_id}")
 }
 
 /// Splits V1 at `edited_us`: imported media becomes two entries, the recording gets a split
@@ -1259,6 +1303,32 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
+    /// Sets what an imported file's picture and sound streams are.
+    pub fn set_media_roles(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        picture_role: crate::media_bin::PictureRole,
+        sound_roles: Vec<crate::media_bin::SoundRole>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let mut next = self.current.clone();
+        let asset = next
+            .media_assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("No such imported media")?;
+        if asset.picture_role == picture_role && asset.sound_roles == sound_roles {
+            return Err("Nothing changed".into());
+        }
+        asset.picture_role = picture_role;
+        asset.sound_roles = sound_roles;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
     /// Places a clip of imported media at edited position `target`, `source_start..end`
     /// within the file (the whole default length when `None`).
     pub fn insert_media(
@@ -1760,6 +1830,8 @@ mod tests {
             relative_path: "assets/media/m1.png".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -1852,6 +1924,8 @@ mod tests {
             relative_path: "assets/media/m1.mp4".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
@@ -1879,6 +1953,39 @@ mod tests {
     }
 
     #[test]
+    fn imported_sound_transcripts_map_through_their_own_clips() {
+        // Recording 0..4 s, then 2 s of m1 (from 1 s into the file), then 1 s of m2.
+        let media = |id: &str, start_us, end_us| RetainedInterval {
+            start_us,
+            end_us,
+            media: Some(id.into()),
+            audio_unlinked: false,
+        };
+        let document = EditDocument::from_retained(vec![
+            ri(0, 4_000_000),
+            media("m1", 1_000_000, 3_000_000),
+            media("m2", 0, 1_000_000),
+        ])
+        .unwrap();
+        let id = media_sound_id(0, "m1");
+        assert_eq!(media_sound(&id), Some((0, "m1")));
+        let mapper = document.mapper_for_transcript(&id).unwrap();
+        // A word 1.5 s into m1 plays 0.5 s into its clip, which starts at 4 s.
+        assert_eq!(
+            mapper.edited_span_of(1_500_000, 1_700_000),
+            Some((4_500_000, 4_700_000))
+        );
+        // Words outside the used part, and the recording's own time, map nowhere.
+        assert_eq!(mapper.edited_span_of(200_000, 300_000), None);
+        // A recording track keeps the usual mapping.
+        let usual = document.mapper_for_transcript("mic-1").unwrap();
+        assert_eq!(
+            usual.edited_span_of(1_000_000, 2_000_000),
+            Some((1_000_000, 2_000_000))
+        );
+    }
+
+    #[test]
     fn removing_the_only_clip_leaves_an_empty_timeline() {
         let dir = tempdir().unwrap();
         let mut history = EditHistory::new(EditDocument::from_retained(vec![]).unwrap());
@@ -1889,6 +1996,8 @@ mod tests {
             relative_path: "assets/media/m1.mp4".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Captions } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { transcribableSounds } from "../../lib/trackUtils";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { CaptionSettings, DEFAULT_CAPTION_SETTINGS } from "../../lib/types";
@@ -61,9 +62,7 @@ export const CaptionsSection: React.FC = () => {
 
   if (!openedProject) return null;
 
-  const audioTracks = openedProject.tracks.filter(
-    (t) => t.descriptor.trackType === "mic_audio" || t.descriptor.trackType === "system_audio",
-  );
+  const audioTracks = transcribableSounds(openedProject);
 
   const update = (patch: Partial<CaptionSettings>) => {
     const next = { ...draft, ...patch };
@@ -119,8 +118,8 @@ export const CaptionsSection: React.FC = () => {
             >
               <option value="">Automatic</option>
               {audioTracks.map((t) => (
-                <option key={t.descriptor.id} value={t.descriptor.id}>
-                  {t.descriptor.trackType === "mic_audio" ? "Microphone" : "System audio"} ({t.descriptor.id})
+                <option key={t.id} value={t.id}>
+                  {t.label}
                 </option>
               ))}
             </select>

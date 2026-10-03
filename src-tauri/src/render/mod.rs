@@ -151,6 +151,68 @@ pub struct Scene {
     pub layers: Vec<Layer>,
 }
 
+/// The webcam bubble for `layout`: its border ring (if any), then the camera picture.
+fn webcam_layers(
+    width: u32,
+    height: u32,
+    webcam: VideoFrame,
+    layout: &EditLayout,
+    unit: f32,
+) -> Result<Vec<Layer>, String> {
+    let px = |value: u32| (value as f32 * unit).round() as u32;
+    let mut layers = Vec::new();
+    let (bw, bh) = webcam_bubble_size(width, height, webcam.width, webcam.height, layout);
+    let (x, y) = webcam_origin(width, height, bw, bh, layout, unit);
+    let (cam_clip, cam_radius) = webcam_clip(layout, bw, bh);
+    let cam_shadow = if layout.webcam_shadow {
+        Some((WEBCAM_SHADOW_BLUR_PX * unit, WEBCAM_SHADOW_OPACITY))
+    } else {
+        None
+    };
+    let inset = if layout.webcam_border_width > 0 {
+        px(layout.webcam_border_width).max(1)
+    } else {
+        0
+    };
+    if inset > 0 {
+        let bx = x.saturating_sub(inset);
+        let by = y.saturating_sub(inset);
+        let bwidth = (bw + inset * 2).min(width.saturating_sub(bx)).max(1);
+        let bheight = (bh + inset * 2).min(height.saturating_sub(by)).max(1);
+        let [r, g, b] = crate::project::layout::parse_hex_rgb(&layout.webcam_border_color)?;
+        let border = VideoFrame::solid(8, 8, b, g, r, 0)?;
+        // The ring stays concentric with the rounded bubble inside it.
+        let border_radius = if cam_radius > 0.0 {
+            cam_radius + inset as f32
+        } else {
+            0.0
+        };
+        let mut border_layer = Layer::placed(border, bx, by, bwidth, bheight)
+            .with_role(LayerRole::WebcamBorder)
+            .with_clip(cam_clip, border_radius);
+        if let Some((blur, opacity)) = cam_shadow {
+            border_layer = border_layer.with_shadow(blur, opacity);
+        }
+        layers.push(border_layer);
+    }
+    let mut bubble = Layer::placed(webcam, x, y, bw, bh)
+        .with_role(LayerRole::Webcam)
+        .with_clip(cam_clip, cam_radius);
+    if matches!(layout.webcam_shape.as_str(), "circle" | "squircle") {
+        bubble = bubble.cover_uv(bw, bh);
+    }
+    if inset == 0 {
+        if let Some((blur, opacity)) = cam_shadow {
+            bubble = bubble.with_shadow(blur, opacity);
+        }
+    }
+    if layout.webcam_mirror {
+        bubble = bubble.mirrored();
+    }
+    layers.push(bubble);
+    Ok(layers)
+}
+
 impl Scene {
     pub fn styled_preview(screen: VideoFrame, webcam: Option<VideoFrame>) -> Result<Self, String> {
         validate_dim(64, 64)?;
@@ -269,57 +331,7 @@ impl Scene {
         }
         if layout.webcam_enabled {
             if let Some(webcam) = webcam {
-                let (bw, bh) =
-                    webcam_bubble_size(width, height, webcam.width, webcam.height, layout);
-                let (x, y) = webcam_origin(width, height, bw, bh, layout, unit);
-                let (cam_clip, cam_radius) = webcam_clip(layout, bw, bh);
-                let cam_shadow = if layout.webcam_shadow {
-                    Some((WEBCAM_SHADOW_BLUR_PX * unit, WEBCAM_SHADOW_OPACITY))
-                } else {
-                    None
-                };
-                let inset = if layout.webcam_border_width > 0 {
-                    px(layout.webcam_border_width).max(1)
-                } else {
-                    0
-                };
-                if inset > 0 {
-                    let bx = x.saturating_sub(inset);
-                    let by = y.saturating_sub(inset);
-                    let bwidth = (bw + inset * 2).min(width.saturating_sub(bx)).max(1);
-                    let bheight = (bh + inset * 2).min(height.saturating_sub(by)).max(1);
-                    let [r, g, b] =
-                        crate::project::layout::parse_hex_rgb(&layout.webcam_border_color)?;
-                    let border = VideoFrame::solid(8, 8, b, g, r, 0)?;
-                    // The ring stays concentric with the rounded bubble inside it.
-                    let border_radius = if cam_radius > 0.0 {
-                        cam_radius + inset as f32
-                    } else {
-                        0.0
-                    };
-                    let mut border_layer = Layer::placed(border, bx, by, bwidth, bheight)
-                        .with_role(LayerRole::WebcamBorder)
-                        .with_clip(cam_clip, border_radius);
-                    if let Some((blur, opacity)) = cam_shadow {
-                        border_layer = border_layer.with_shadow(blur, opacity);
-                    }
-                    layers.push(border_layer);
-                }
-                let mut bubble = Layer::placed(webcam, x, y, bw, bh)
-                    .with_role(LayerRole::Webcam)
-                    .with_clip(cam_clip, cam_radius);
-                if matches!(layout.webcam_shape.as_str(), "circle" | "squircle") {
-                    bubble = bubble.cover_uv(bw, bh);
-                }
-                if inset == 0 {
-                    if let Some((blur, opacity)) = cam_shadow {
-                        bubble = bubble.with_shadow(blur, opacity);
-                    }
-                }
-                if layout.webcam_mirror {
-                    bubble = bubble.mirrored();
-                }
-                layers.push(bubble);
+                layers.extend(webcam_layers(width, height, webcam, layout, unit)?);
             }
         }
         if layers.len() > MAX_LAYERS {
@@ -348,6 +360,30 @@ impl Scene {
 
     /// A track clip over the whole canvas, under the captions: fitted inside it (`cover` false)
     /// or filling it with the picture's edges cropped.
+    /// A camera clip from a track above V1, drawn in the webcam bubble of `layout`, under
+    /// the captions.
+    pub fn push_webcam_bubble(
+        &mut self,
+        frame: VideoFrame,
+        layout: &EditLayout,
+        unit: f32,
+    ) -> Result<(), String> {
+        if frame.width == 0 || frame.height == 0 {
+            return Ok(());
+        }
+        let layers = webcam_layers(self.width, self.height, frame, layout, unit)?;
+        if self.layers.len() + layers.len() > MAX_LAYERS {
+            return Ok(());
+        }
+        let at = self
+            .layers
+            .iter()
+            .position(|l| l.role == LayerRole::Caption)
+            .unwrap_or(self.layers.len());
+        self.layers.splice(at..at, layers);
+        Ok(())
+    }
+
     pub fn push_overlay(&mut self, frame: VideoFrame, cover: bool) {
         if self.layers.len() >= MAX_LAYERS || frame.width == 0 || frame.height == 0 {
             return;

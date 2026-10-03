@@ -34,6 +34,27 @@ pub enum MediaKind {
     Audio,
 }
 
+/// What a file's picture stands for, so it is edited and drawn like that part of a recording.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PictureRole {
+    /// The screen: the canvas layout's size, corners, shadow and crop apply, and zooms.
+    #[default]
+    Screen,
+    /// A camera: on a track above V1 it is drawn in the webcam bubble.
+    Webcam,
+}
+
+/// What a sound stream is, so it is treated like that part of a recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundRole {
+    /// Speech: it can be transcribed and captioned.
+    Mic,
+    /// Music, game or desktop sound.
+    Background,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaAsset {
@@ -51,6 +72,11 @@ pub struct MediaAsset {
     /// The file is no longer there. Worked out when the project is read, never saved.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub missing: bool,
+    #[serde(default)]
+    pub picture_role: PictureRole,
+    /// A role per audio stream; streams past the end take [`MediaAsset::sound_role`]'s default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sound_roles: Vec<SoundRole>,
     /// Extracted 48 kHz stereo WAV of the first audio stream, relative to the root, when
     /// the file has audio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +97,18 @@ pub struct MediaAsset {
 }
 
 impl MediaAsset {
+    /// What stream `stream` is: as set, else a video's first stream is speech and every
+    /// other stream (and an audio file, usually music) is background.
+    pub fn sound_role(&self, stream: usize) -> SoundRole {
+        self.sound_roles.get(stream).copied().unwrap_or(
+            if stream == 0 && self.kind == MediaKind::Video {
+                SoundRole::Mic
+            } else {
+                SoundRole::Background
+            },
+        )
+    }
+
     /// Where the media's own file is.
     pub fn file_path(&self, root: &Path) -> Result<std::path::PathBuf, String> {
         match &self.source_path {
@@ -150,6 +188,9 @@ pub fn validate_assets(assets: &[MediaAsset]) -> Result<(), String> {
         {
             return Err("Invalid imported media audio".into());
         }
+        if asset.sound_roles.len() > asset.audio_paths().count() {
+            return Err("More sound roles than audio streams".into());
+        }
         if asset.duration_us == 0 {
             return Err("Imported media has no duration".into());
         }
@@ -224,6 +265,8 @@ pub fn import(root: &Path, source: &Path) -> Result<MediaAsset, String> {
         relative_path: String::new(),
         source_path: Some(source_text),
         missing: false,
+        picture_role: Default::default(),
+        sound_roles: Vec::new(),
         audio_path: audio_paths.next(),
         extra_audio_paths: audio_paths.collect(),
         audio_names: audio.names,
@@ -347,6 +390,8 @@ mod tests {
             relative_path: "assets/media/m-1.png".into(),
             source_path: None,
             missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
             audio_path: None,
             extra_audio_paths: Vec::new(),
             audio_names: Vec::new(),
