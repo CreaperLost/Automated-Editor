@@ -1,5 +1,6 @@
+import { useShallow } from "zustand/react/shallow";
 import React, { useEffect, useState } from "react";
-import { listenForProjects } from "./lib/windowSync";
+import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
 import {
   Folder,
   FolderOpen,
@@ -52,7 +53,17 @@ export const App: React.FC = () => {
     clearProject,
     removeRecentProject,
     clearRecentProjects,
-  } = useProjectStore();
+  } = useProjectStore(
+    useShallow((s) => ({
+      openedProject: s.openedProject,
+      projectPath: s.projectPath,
+      recentProjects: s.recentProjects,
+      loadOpenedProject: s.loadOpenedProject,
+      clearProject: s.clearProject,
+      removeRecentProject: s.removeRecentProject,
+      clearRecentProjects: s.clearRecentProjects,
+    })),
+  );
   const { canvas } = useSettingsStore();
 
   const [error, setError] = useState<string>();
@@ -67,6 +78,7 @@ export const App: React.FC = () => {
     () => listenForProjects((next) => useProjectStore.getState().applyOpenedProject(next, { remote: true })),
     [],
   );
+  useEffect(() => listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true)), []);
 
   useEffect(() => {
     if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running")) {

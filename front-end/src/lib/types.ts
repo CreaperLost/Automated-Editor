@@ -949,6 +949,12 @@ export interface TranscriptViewWord {
   /** Null when the word has been cut. */
   editedStartUs: number | null;
   editedEndUs: number | null;
+  /** Heard but not shown in the captions. */
+  captionHidden?: boolean;
+  /** A caption starts at this word. */
+  captionBreak?: boolean;
+  /** Kept in the caption before it. */
+  captionJoin?: boolean;
 }
 
 export interface TranscriptView {

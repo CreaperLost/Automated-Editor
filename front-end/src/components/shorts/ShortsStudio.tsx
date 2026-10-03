@@ -14,7 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "../../lib/ipc";
-import { listenForProjects } from "../../lib/windowSync";
+import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
 import { transcribableSounds } from "../../lib/trackUtils";
@@ -96,11 +96,16 @@ export const ShortsStudio: React.FC = () => {
       })
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoaded(true));
-    return listenForProjects((next) => {
+    const stopCaptions = listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true));
+    const stopProjects = listenForProjects((next) => {
       const state = useProjectStore.getState();
       if (state.openedProject?.projectHandle !== next.projectHandle) state.loadOpenedProject(next);
       else state.applyOpenedProject(next, { remote: true });
     });
+    return () => {
+      stopCaptions();
+      stopProjects();
+    };
   }, [loadOpenedProject]);
 
   const shorts = project?.shorts ?? [];

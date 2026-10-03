@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { Track, ZoomKeyframe, SilenceBlock, ProjectManifest, OpenedProject, WaveformPage, PlaybackStatus, studioTrackType, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
-import { broadcastProject } from "../lib/windowSync";
+import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
 import { useSettingsStore } from "./settingsStore";
 
 const RECENT_PROJECTS_KEY = "aeroedits.recentProjects";
@@ -40,9 +40,8 @@ function trackMixFields(project: OpenedProject, trackId: string): Pick<Track, "m
 }
 
 function barsFromSuggestion(suggestion: ZoomSuggestion, pending: boolean, source?: ProjectZoom["source"]): ZoomKeyframe[] {
-  const ranges = suggestion.editedRanges.filter((range) => range.endUs > range.startUs);
-  const fallback = [{ startUs: suggestion.sourceStartUs, endUs: suggestion.sourceEndUs }];
-  const used = ranges.length > 0 ? ranges : fallback;
+  // The backend places every zoom; none left (its footage was cut) means no bar at all.
+  const used = (suggestion.editedRanges ?? []).filter((range) => range.endUs > range.startUs);
   return used.map((range, index) => ({
     id: used.length === 1 ? suggestion.id : `${suggestion.id}-${index}`,
     zoomId: suggestion.id,
@@ -107,7 +106,8 @@ interface ProjectStore {
   selectedOverlayClipId?: string;
   /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
   captionsVersion: number;
-  bumpCaptions: () => void;
+  /** Marks transcripts changed here (and tells the other windows) or in another window. */
+  bumpCaptions: (fromOtherWindow?: boolean) => void;
   /** The timeline's selection, shared so other panels can act on it. */
   timelineSelection: { startUs: number; endUs: number } | null;
   currentTimeUs: number;
@@ -231,7 +231,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   selectedZoomId: undefined,
   selectedOverlayClipId: undefined,
   captionsVersion: 0,
-  bumpCaptions: () => set((state) => ({ captionsVersion: state.captionsVersion + 1 })),
+  bumpCaptions: (fromOtherWindow?: boolean) => {
+    set((state) => ({ captionsVersion: state.captionsVersion + 1 }));
+    if (!fromOtherWindow) broadcastCaptionsChanged();
+  },
   timelineSelection: null,
   currentTimeUs: 0,
   durationUs: 0,

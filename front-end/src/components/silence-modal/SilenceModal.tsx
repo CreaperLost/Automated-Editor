@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import React, { useRef, useState } from "react";
 import { X, Scissors, Check, Sliders, AlertCircle } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
@@ -28,7 +29,19 @@ export const SilenceModal: React.FC = () => {
     openedProject,
     applyOpenedProject,
     silenceAnalysis,
-  } = useProjectStore();
+  } = useProjectStore(
+    useShallow((s) => ({
+      isSilenceModalOpen: s.isSilenceModalOpen,
+      setIsSilenceModalOpen: s.setIsSilenceModalOpen,
+      activeSilenceBlocks: s.activeSilenceBlocks,
+      setSilenceBlocks: s.setSilenceBlocks,
+      toggleSilenceBlock: s.toggleSilenceBlock,
+      applySilenceCuts: s.applySilenceCuts,
+      openedProject: s.openedProject,
+      applyOpenedProject: s.applyOpenedProject,
+      silenceAnalysis: s.silenceAnalysis,
+    })),
+  );
 
   const [config, setConfig] = useState<SilenceConfig>({
     thresholdDb: -38,

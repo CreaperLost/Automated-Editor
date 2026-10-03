@@ -628,8 +628,7 @@ impl ProjectReader {
         }
         let retained = history.current.retained_intervals.clone();
         let edited_duration_us = history.current.edited_duration_us()?;
-        let mut zooms = history.current.zooms.clone();
-        crate::zoom::attach_zoom_edited_ranges(&mut zooms, &history.current.mapper()?);
+        let zooms = history.current.zooms_with_ranges();
         let mut reader = Self {
             summary: OpenedProject {
                 project_handle: uuid::Uuid::new_v4().to_string(),
@@ -1109,11 +1108,7 @@ impl ProjectReader {
             .unwrap_or(self.summary.edited_duration_us);
         self.summary.undo_available = self.history.undo_available();
         self.summary.redo_available = self.history.redo_available();
-        let mut zooms = self.history.current.zooms.clone();
-        if let Ok(mapper) = self.history.current.mapper() {
-            crate::zoom::attach_zoom_edited_ranges(&mut zooms, &mapper);
-        }
-        self.summary.zooms = zooms;
+        self.summary.zooms = self.history.current.zooms_with_ranges();
         self.summary.dismissed_zoom_ids = self.history.current.dismissed_zoom_ids.clone();
         self.summary.layout = self.history.current.layout.clone();
         self.summary.split_points_us = self.history.current.split_points_us.clone();

@@ -216,6 +216,9 @@ mod tests {
                     },
                     edited_start_us: Some(start),
                     edited_end_us: Some(start + 400_000),
+                    caption_hidden: false,
+                    caption_break: false,
+                    caption_join: false,
                 }
             })
             .collect()

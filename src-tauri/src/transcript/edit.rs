@@ -31,6 +31,15 @@ pub struct TranscriptViewWord {
     /// Edited-time position, or `None` when the word has been cut.
     pub edited_start_us: Option<u64>,
     pub edited_end_us: Option<u64>,
+    /// Not shown in the captions (hidden on the caption track).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub caption_hidden: bool,
+    /// A caption starts at this word (split on the caption track).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub caption_break: bool,
+    /// Kept in the caption before it (merged on the caption track).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub caption_join: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -104,10 +113,14 @@ pub fn view(transcript: &Transcript, mapper: &TimelineMapper, revision: u64) -> 
         .iter()
         .map(|word| {
             let span = mapper.edited_span_of(word.source_start_us, word.source_end_us);
+            let mark = transcript.caption_mark(&word.id);
             TranscriptViewWord {
                 word: word.clone(),
                 edited_start_us: span.map(|s| s.0),
                 edited_end_us: span.map(|s| s.1),
+                caption_hidden: mark.hidden,
+                caption_break: mark.cue_break,
+                caption_join: mark.cue_join,
             }
         })
         .collect();

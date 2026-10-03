@@ -158,6 +158,17 @@ impl EditDocument {
         )
     }
 
+    /// The zooms with where each lands on the edited timeline, each on its own clock.
+    pub fn zooms_with_ranges(&self) -> Vec<ZoomKeyframe> {
+        let mut zooms = self.zooms.clone();
+        let main = self.mapper().ok();
+        crate::zoom::attach_zoom_edited_ranges_with(&mut zooms, &|media| match media {
+            None => main.clone(),
+            Some(asset) => Some(self.mapper_for_media(asset)),
+        });
+        zooms
+    }
+
     pub fn attach_zoom_ranges(&mut self) -> Result<(), String> {
         let mapper = self.mapper()?;
         let document = self.clone();
@@ -2014,6 +2025,28 @@ mod tests {
         assert_eq!(
             usual.edited_span_of(1_000_000, 2_000_000),
             Some((1_000_000, 2_000_000))
+        );
+    }
+
+    #[test]
+    fn a_zoom_whose_footage_is_all_cut_has_no_place_on_the_timeline() {
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 10_000_000)]).unwrap());
+        history
+            .add_manual_zoom(0, 2_000_000, 4_000_000, 0.5, 0.5, 2.0, dir.path())
+            .unwrap();
+        assert!(!history.current.zooms_with_ranges()[0]
+            .edited_ranges
+            .is_empty());
+        history
+            .ripple_cuts(1, &[(1_000_000, 5_000_000)], dir.path())
+            .unwrap();
+        assert!(
+            history.current.zooms_with_ranges()[0]
+                .edited_ranges
+                .is_empty(),
+            "nothing of it is left to show"
         );
     }
 

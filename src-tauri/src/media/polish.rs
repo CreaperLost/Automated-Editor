@@ -83,16 +83,25 @@ fn to_db(rms: f32) -> f32 {
 }
 
 /// Folds interleaved `frame` to the mixer's stereo output (mono plays on both sides).
+/// Called per sample frame, so it allocates nothing.
 fn fold_stereo(frame: &[f32]) -> [f32; 2] {
-    if frame.len() == 1 {
-        return [frame[0], frame[0]];
+    match frame {
+        [mono] => [*mono, *mono],
+        [left, right] => [*left, *right],
+        _ => {
+            // More channels: even ones average to the left, odd ones to the right.
+            let mut sums = [0.0f32; 2];
+            let mut counts = [0usize; 2];
+            for (i, value) in frame.iter().enumerate() {
+                sums[i % 2] += value;
+                counts[i % 2] += 1;
+            }
+            [
+                sums[0] / counts[0].max(1) as f32,
+                sums[1] / counts[1].max(1) as f32,
+            ]
+        }
     }
-    let mut out = [0.0; 2];
-    for (ch, value) in out.iter_mut().enumerate() {
-        let picked: Vec<f32> = frame.iter().skip(ch).step_by(2).copied().collect();
-        *value = picked.iter().sum::<f32>() / picked.len() as f32;
-    }
-    out
 }
 
 fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
@@ -401,6 +410,14 @@ fn duck_envelope<'a>(duck_db: f32, voices: impl Iterator<Item = (u64, &'a [bool]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folding_matches_the_channel_averages() {
+        assert_eq!(fold_stereo(&[0.5]), [0.5, 0.5]);
+        assert_eq!(fold_stereo(&[0.25, -0.5]), [0.25, -0.5]);
+        // Four channels: (0 + 2) / 2 left, (1 + 3) / 2 right.
+        assert_eq!(fold_stereo(&[0.0, 1.0, 2.0, 3.0]), [1.0, 2.0]);
+    }
     use crate::fixtures::generate_pcm16_wav;
 
     #[test]

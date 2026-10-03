@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles, X } from "lucide-react";
+import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles, X } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import {
@@ -102,7 +102,10 @@ export const TranscriptPanel: React.FC = () => {
     setSelection(null);
   }, [handle]);
 
+  // Only the latest refresh may apply: a slow older reply must not replace a newer one.
+  const refreshGeneration = useRef(0);
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     if (!handle || !trackId) {
       setView(null);
       setSuggestions([]);
@@ -110,12 +113,27 @@ export const TranscriptPanel: React.FC = () => {
     }
     try {
       const next = await api.transcriptGet(handle, trackId);
+      const nextSuggestions = next ? await api.transcriptSuggestions(handle, trackId) : [];
+      if (generation !== refreshGeneration.current) return;
       setView(next);
-      setSuggestions(next ? await api.transcriptSuggestions(handle, trackId) : []);
+      setSuggestions(nextSuggestions);
+    } catch (err) {
+      if (generation === refreshGeneration.current) setError(errorMessage(err));
+    }
+  }, [handle, trackId]);
+
+  /** A caption change from here: saved in the transcript, then the caption track reloads. */
+  const editCaptions = async (change: Parameters<typeof api.transcriptCaptionEdit>[2], label: string) => {
+    if (!handle || !trackId) return;
+    setError(null);
+    try {
+      await api.transcriptCaptionEdit(handle, trackId, change);
+      bumpCaptions();
+      setNotice(label);
     } catch (err) {
       setError(errorMessage(err));
     }
-  }, [handle, trackId]);
+  };
 
   // Edited positions change with every cut and undo, so reload on each revision.
   useEffect(() => {
@@ -366,6 +384,43 @@ export const TranscriptPanel: React.FC = () => {
               <Pencil className="w-3 h-3" /> Fix word
             </button>
           )}
+          {selectedIds.length > 0 && (() => {
+            const chosen = selectedIds.map((id) => words[wordIndex.get(id) ?? -1]).filter(Boolean);
+            const hidden = chosen.length > 0 && chosen.every((w) => w.captionHidden);
+            const first = chosen[0];
+            return (
+              <>
+                <button
+                  type="button"
+                  title={hidden ? "Show these words in the captions again" : "Keep the sound but leave these words out of the captions"}
+                  onClick={() =>
+                    void editCaptions(
+                      { kind: "hide", wordIds: selectedIds, hidden: !hidden },
+                      hidden ? "Shown in the captions again." : "Hidden from the captions; the sound stays.",
+                    )
+                  }
+                  className="flex items-center gap-1 px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
+                >
+                  <Captions className="w-3 h-3" /> {hidden ? "Show in captions" : "Hide in captions"}
+                </button>
+                {first && (
+                  <button
+                    type="button"
+                    title={first.captionBreak ? "Let this caption join the one before" : "Start a new caption at this word"}
+                    onClick={() =>
+                      void editCaptions(
+                        first.captionBreak ? { kind: "merge", wordId: first.id } : { kind: "split", wordId: first.id },
+                        first.captionBreak ? "Captions merged." : "A new caption starts here.",
+                      )
+                    }
+                    className="px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
+                  >
+                    {first.captionBreak ? "Merge caption" : "New caption here"}
+                  </button>
+                )}
+              </>
+            );
+          })()}
           {selectedIds.length > 0 && (
             <button
               type="button"
@@ -508,13 +563,30 @@ export const TranscriptPanel: React.FC = () => {
                     kind === "filler" && !cut ? "underline decoration-amber-400 decoration-2" : "",
                     kind === "retake" && !cut ? "underline decoration-violet-400 decoration-2" : "",
                     w.kind === "audioEvent" ? "italic text-studio-400" : "",
+                    // Heard but left out of the captions.
+                    w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
                   ].join(" ");
                   return (
                     <React.Fragment key={w.id}>
+                      {w.captionBreak && !cut && (
+                        <span
+                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-amber-400/80 rounded"
+                          title="A new caption starts here"
+                          aria-label="Caption break"
+                        />
+                      )}
                       <span
                         ref={i === activeIndex ? activeRef : undefined}
                         className={classes}
-                        title={kind === "filler" ? "Filler sound" : kind === "retake" ? "Abandoned take" : undefined}
+                        title={
+                          kind === "filler"
+                            ? "Filler sound"
+                            : kind === "retake"
+                              ? "Abandoned take"
+                              : w.captionHidden
+                                ? "Hidden from the captions"
+                                : undefined
+                        }
                         onClick={(e) => {
                           if (cut) return;
                           setSelection(e.shiftKey && selection ? { anchor: selection.anchor, focus: i } : { anchor: i, focus: i });

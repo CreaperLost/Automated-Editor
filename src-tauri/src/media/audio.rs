@@ -80,6 +80,40 @@ fn media_track(
         })
         .collect()
 }
+/// Sub-sample phases the resampling table holds; a 1/1024-sample step is far below hearing.
+const SINC_PHASES: usize = 1024;
+const SINC_TAPS: usize = (2 * RADIUS) as usize;
+
+/// Windowed-sinc weights for every phase, for low-pass `cutoff`: row `p` holds the taps
+/// `center - RADIUS + 1 ..= center + RADIUS` for a position `p / SINC_PHASES` past `center`.
+/// Built once per cutoff and kept, so the mixer does no trigonometry per sample.
+fn sinc_table(cutoff: f64) -> std::sync::Arc<Vec<f64>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static TABLES: OnceLock<Mutex<HashMap<u64, Arc<Vec<f64>>>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut tables = tables.lock().unwrap_or_else(|e| e.into_inner());
+    tables
+        .entry(cutoff.to_bits())
+        .or_insert_with(|| {
+            let mut table = Vec::with_capacity((SINC_PHASES + 1) * SINC_TAPS);
+            for phase in 0..=SINC_PHASES {
+                let frac = phase as f64 / SINC_PHASES as f64;
+                for j in 0..SINC_TAPS {
+                    let distance = (j as i64 - RADIUS + 1) as f64 - frac;
+                    let x = std::f64::consts::PI * distance * cutoff;
+                    let sinc = if x.abs() < 1e-12 { 1.0 } else { x.sin() / x };
+                    table.push(
+                        sinc * (0.5
+                            + 0.5 * (std::f64::consts::PI * distance / RADIUS as f64).cos()),
+                    );
+                }
+            }
+            Arc::new(table)
+        })
+        .clone()
+}
+
 fn ceil_frame(us: u64) -> u64 {
     ((us as u128 * SAMPLE_RATE as u128).div_ceil(1_000_000)) as u64
 }
@@ -309,47 +343,61 @@ impl AudioMixer {
                     let ducked = *track_type == TrackType::SystemAudio
                         && self.polish.is_some()
                         && span.media.is_none();
+                    // Fold a sample frame to stereo: stereo stays stereo; more channels
+                    // average even ones left and odd ones right.
+                    let fold = |values: &[f32]| -> [f64; 2] {
+                        match values {
+                            [mono] => [*mono as f64, *mono as f64],
+                            [left, right] => [*left as f64, *right as f64],
+                            _ => {
+                                let mut sums = [0.0f64; 2];
+                                let mut counts = [0usize; 2];
+                                for (c, v) in values.iter().enumerate() {
+                                    sums[c % 2] += *v as f64;
+                                    counts[c % 2] += 1;
+                                }
+                                [
+                                    sums[0] / counts[0].max(1) as f64,
+                                    sums[1] / counts[1].max(1) as f64,
+                                ]
+                            }
+                        }
+                    };
+                    let frame_at = |tap: i64| {
+                        let index = tap.clamp(read_start as i64, read_start as i64 + got as i64 - 1)
+                            as usize
+                            - read_start as usize;
+                        &samples[index * channels..(index + 1) * channels]
+                    };
+                    // Already at the output rate (imported sound, most recordings): take the
+                    // nearest sample, at most half a sample (10 us) off.
+                    let direct = info.sample_rate == SAMPLE_RATE;
+                    let table = (!direct).then(|| sinc_table((SAMPLE_RATE as f64 / rate).min(1.0)));
                     for frame in lo..hi {
                         let pos = local(frame);
                         if pos >= info.frame_count as f64 {
                             continue;
                         }
-                        let mut stereo = [0f64; 2];
-                        let mut weights = 0.0;
-                        // Windowed-sinc low-pass resampling prevents aliasing when downsampling.
-                        let cutoff = (SAMPLE_RATE as f64 / rate).min(1.0);
-                        let center = pos.floor() as i64;
-                        for tap in (center - RADIUS + 1)..=(center + RADIUS) {
-                            let distance = tap as f64 - pos;
-                            let x = std::f64::consts::PI * distance * cutoff;
-                            let sinc = if x.abs() < 1e-12 { 1.0 } else { x.sin() / x };
-                            let weight = sinc
-                                * (0.5
-                                    + 0.5
-                                        * (std::f64::consts::PI * distance / RADIUS as f64).cos());
-                            let sample_frame = tap
-                                .clamp(read_start as i64, read_start as i64 + got as i64 - 1)
-                                as usize
-                                - read_start as usize;
-                            let values =
-                                &samples[sample_frame * channels..(sample_frame + 1) * channels];
-                            for ch in 0..2 {
-                                let v = if channels == 1 {
-                                    values[0] as f64
-                                } else {
-                                    // Stereo stays stereo; multichannel uses an explicit even/odd fold-down.
-                                    let mut n = 0;
-                                    let mut sum = 0.0;
-                                    for c in (ch..channels).step_by(2) {
-                                        sum += values[c] as f64;
-                                        n += 1;
-                                    }
-                                    sum / n as f64
-                                };
-                                stereo[ch] += weight * v;
+                        let (stereo, weights) = match &table {
+                            None => (fold(frame_at(pos.round() as i64)), 1.0),
+                            Some(table) => {
+                                // Windowed-sinc low-pass resampling prevents aliasing when
+                                // downsampling; the weights come from a table by sub-sample phase.
+                                let center = pos.floor() as i64;
+                                let phase =
+                                    ((pos - center as f64) * SINC_PHASES as f64).round() as usize;
+                                let row = &table[phase * SINC_TAPS..(phase + 1) * SINC_TAPS];
+                                let mut stereo = [0f64; 2];
+                                let mut weights = 0.0;
+                                for (j, weight) in row.iter().enumerate() {
+                                    let v = fold(frame_at(center - RADIUS + 1 + j as i64));
+                                    stereo[0] += weight * v[0];
+                                    stereo[1] += weight * v[1];
+                                    weights += weight;
+                                }
+                                (stereo, weights)
                             }
-                            weights += weight;
-                        }
+                        };
                         if weights.abs() > 1e-12 {
                             let gain = track_gain
                                 * match &self.polish {

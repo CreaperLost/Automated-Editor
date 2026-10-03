@@ -347,11 +347,16 @@ fn take_clip(document: &mut EditDocument, clip_id: &str) -> Result<OverlayClip, 
 }
 
 fn new_id(document: &EditDocument, prefix: &str) -> String {
+    // Links count: a reused link would tie a new unlink to an older one, and relinking
+    // either would take the other's sound away.
     let taken = |id: &str| {
-        document
-            .overlay_tracks
-            .iter()
-            .any(|track| track.id == id || track.clips.iter().any(|clip| clip.id == id))
+        document.overlay_tracks.iter().any(|track| {
+            track.id == id
+                || track
+                    .clips
+                    .iter()
+                    .any(|clip| clip.id == id || clip.link.as_deref() == Some(id))
+        })
     };
     (1..)
         .map(|n| format!("{prefix}-{n}"))
@@ -448,6 +453,12 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
         } => {
             let (asset_id, in_us, audio_unlinked) =
                 media_under(&next.retained_intervals, *start_us, *end_us)?;
+            // A still shows the same picture throughout: a split part of it starts at 0.
+            let still = next
+                .media_assets
+                .iter()
+                .any(|m| m.id == asset_id && m.kind == MediaKind::Image);
+            let in_us = if still { 0 } else { in_us };
             let retained = &mut next.retained_intervals;
             let first = crate::project::revision::split_at_edited(retained, *start_us)?;
             let last = crate::project::revision::split_at_edited(retained, *end_us)?;
@@ -1477,5 +1488,87 @@ mod tests {
             // The recording pieces left behind touch again, so they are one clip.
             vec![(5 * S, 20 * S), (0, 5 * S), (S, 5 * S)]
         );
+    }
+
+    #[test]
+    fn independent_unlinks_get_their_own_links_and_relink_alone() {
+        // Two separate pictures of the video on V2, each unlinked.
+        let mut doc = apply(
+            &with_two_audio_streams(document()),
+            &TrackEdit::AddTrack { audio: false },
+        )
+        .unwrap();
+        doc = place(doc, "v", "track-1", 0);
+        doc = place(doc, "v", "track-1", 12 * S);
+        let pictures: Vec<String> = doc.overlay_tracks[0]
+            .clips
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        for id in &pictures {
+            doc = apply(
+                &doc,
+                &TrackEdit::UnlinkClip {
+                    clip_id: id.clone(),
+                },
+            )
+            .unwrap();
+        }
+        let sounds: Vec<OverlayClip> = doc
+            .overlay_tracks
+            .iter()
+            .filter(|t| t.is_audio())
+            .flat_map(|t| t.clips.clone())
+            .collect();
+        let links: std::collections::BTreeSet<_> = sounds.iter().map(|c| c.link.clone()).collect();
+        assert_eq!(links.len(), 2, "each unlink has its own link");
+        // Relinking the first leaves the second's sound in place.
+        let first_sound = sounds.iter().find(|c| c.start_us == 0).unwrap().id.clone();
+        let relinked = apply(
+            &doc,
+            &TrackEdit::RelinkClip {
+                clip_id: pictures[0].clone(),
+                audio_clip_ids: vec![first_sound],
+            },
+        )
+        .unwrap();
+        validate(&relinked).unwrap();
+        let left: Vec<_> = relinked
+            .overlay_tracks
+            .iter()
+            .filter(|t| t.is_audio())
+            .flat_map(|t| t.clips.iter().map(|c| c.start_us))
+            .collect();
+        assert_eq!(
+            left,
+            vec![12 * S, 12 * S],
+            "the other picture keeps both its streams"
+        );
+    }
+
+    #[test]
+    fn a_split_still_moves_from_v1_to_a_track() {
+        // A 5 s still on V1 at 24 s (after the 24 s of document()), split after 2 s.
+        let mut doc = document();
+        doc.retained_intervals.push(RetainedInterval {
+            start_us: 0,
+            end_us: 5 * S,
+            media: Some("img".into()),
+            audio_unlinked: false,
+        });
+        crate::project::revision::split_main(&mut doc, 26 * S).unwrap();
+        doc = apply(&doc, &TrackEdit::AddTrack { audio: false }).unwrap();
+        let lifted = apply(
+            &doc,
+            &TrackEdit::LiftFromMain {
+                start_us: 26 * S,
+                end_us: 29 * S,
+                track_id: "track-1".into(),
+                at_us: 0,
+            },
+        )
+        .unwrap();
+        validate(&lifted).unwrap();
+        assert_eq!(clips_of(&lifted, 0), vec![(0, 0, 3 * S)]);
     }
 }
