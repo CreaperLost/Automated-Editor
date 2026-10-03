@@ -6,6 +6,7 @@ import {
   EditCut,
   PreviewQuality,
   PreviewStatus,
+  TrackEdit,
   PreviewViewport,
   PreviewHitMode,
   MediaInteropStatus,
@@ -273,6 +274,8 @@ export const api = {
   previewQuality: () => invokeTauri<PreviewQuality>("preview_quality"),
   previewQualitySet: (quality: PreviewQuality) =>
     invokeTauri<PreviewQuality>("preview_quality_set", { quality }),
+  projectTracksEdit: (projectHandle: string, expectedRevision: number, edit: TrackEdit) =>
+    invokeTauri<OpenedProject>("project_tracks_edit", { projectHandle, expectedRevision, edit }),
   previewHitTest: (x: number, y: number) => invokeTauri<boolean>("preview_hit_test", { x, y }),
   previewDetach: (windowLabel: string, generation?: number) =>
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),

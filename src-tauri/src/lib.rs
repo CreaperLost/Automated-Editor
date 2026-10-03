@@ -14,6 +14,7 @@ pub mod secrets;
 pub mod shorts;
 pub mod telemetry;
 pub mod timeline;
+pub mod tracks;
 pub mod transcript;
 pub mod webcam_focus;
 pub mod zoom;
@@ -383,6 +384,18 @@ fn project_media_insert(
         asset_id,
         target_us,
     )
+}
+
+/// Adds, removes or changes a video track, or moves a clip onto, along or off one.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_tracks_edit(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    edit: tracks::TrackEdit,
+) -> Result<project::OpenedProject, String> {
+    commands::project_tracks_edit_impl(&state, project_handle, expected_revision, edit)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1198,6 +1211,7 @@ pub fn run() {
             project_media_import,
             project_media_remove,
             project_media_insert,
+            project_tracks_edit,
             pick_media_files,
             project_restore_cuts,
             project_undo,

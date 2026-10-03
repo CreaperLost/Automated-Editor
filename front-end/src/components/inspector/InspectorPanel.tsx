@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Palette, Sliders, Camera, Monitor, Frame } from "lucide-react";
 import { InspectorSection, RangeRow } from "./InspectorSection";
 import { WebcamFocusSection } from "./WebcamFocusSection";
+import { TrackClipSection } from "./TrackClipSection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
@@ -115,6 +116,8 @@ export const InspectorPanel: React.FC = () => {
           {persistError}
         </p>
       )}
+
+      <TrackClipSection />
 
       <InspectorSection id="background" title="Background" icon={Palette}>
 

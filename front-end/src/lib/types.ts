@@ -528,7 +528,42 @@ export interface OpenedProject {
   mediaAssets?: MediaAsset[];
   chapters?: Chapter[];
   shorts?: Short[];
+  /** Video tracks V2, V3, ... above the main sequence, bottom to top. */
+  overlayTracks?: OverlayTrack[];
 }
+
+// Video tracks above the main sequence (src-tauri/src/tracks.rs)
+/** "contain" fits the whole picture in the canvas; "cover" fills the canvas, cropping it. */
+export type OverlayFit = "contain" | "cover";
+
+export interface OverlayClip {
+  id: string;
+  assetId: string;
+  /** Where the clip starts on the timeline. */
+  startUs: number;
+  /** Where in the media the clip starts. */
+  inUs: number;
+  durationUs: number;
+  fit: OverlayFit;
+}
+
+export interface OverlayTrack {
+  id: string;
+  clips: OverlayClip[];
+  hidden: boolean;
+  muted: boolean;
+}
+
+/** One undoable change to the tracks above the main sequence. */
+export type TrackEdit =
+  | { kind: "addTrack" }
+  | { kind: "removeTrack"; trackId: string }
+  | { kind: "setTrack"; trackId: string; hidden: boolean; muted: boolean }
+  | { kind: "placeMedia"; assetId: string; trackId: string; startUs: number }
+  | { kind: "updateClip"; clip: OverlayClip; trackId: string }
+  | { kind: "removeClip"; clipId: string }
+  | { kind: "liftFromMain"; startUs: number; endUs: number; trackId: string; atUs: number }
+  | { kind: "dropToMain"; clipId: string; targetUs: number };
 
 // Auto webcam layout (src-tauri/src/webcam_focus.rs)
 export interface WebcamFocusSettings {
