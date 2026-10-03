@@ -299,6 +299,19 @@ export const TranscriptPanel: React.FC = () => {
     setEditing({ index, text: words[index].text });
   };
 
+  /** Takes the punctuation off every word; captions follow. */
+  const stripPunctuation = async () => {
+    if (!handle || !trackId) return;
+    setError(null);
+    try {
+      setView(await api.transcriptStripPunctuation(handle, trackId));
+      bumpCaptions();
+      setNotice("Removed the punctuation. Fix a word by hand (Enter) to put any back.");
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const commitEdit = async () => {
     if (!editing || !handle || !trackId) return;
     const word = words[editing.index];
@@ -439,6 +452,17 @@ export const TranscriptPanel: React.FC = () => {
               className="flex items-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
             >
               <Scissors className="w-3 h-3" /> Cut {selectedIds.length} selected
+            </button>
+          )}
+          {view && (
+            <button
+              type="button"
+              disabled={running}
+              title="Remove punctuation (. , ! ? : ; quotes, brackets) from every word, and so from the captions. Apostrophes, hyphens and numbers stay."
+              onClick={() => void stripPunctuation()}
+              className="px-1.5 py-0.5 rounded font-mono text-studio-400 hover:text-white hover:bg-studio-800 disabled:opacity-40"
+            >
+              .,?<span className="sr-only"> Remove punctuation</span>
             </button>
           )}
           {view && (

@@ -1078,6 +1078,16 @@ fn transcript_caption_edit(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn transcript_strip_punctuation(
+    state: State<'_, AppState>,
+    project_handle: String,
+    track_id: String,
+) -> Result<transcript::TranscriptView, String> {
+    commands::transcript::transcript_strip_punctuation_impl(&state, project_handle, track_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn transcript_set_word_text(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1444,6 +1454,7 @@ pub fn run() {
             transcript_suggestions,
             transcript_cut_words,
             transcript_set_word_text,
+            transcript_strip_punctuation,
             transcript_dismiss_suggestions,
             transcript_download_model,
             get_default_projects_dir,

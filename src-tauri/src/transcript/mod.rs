@@ -332,6 +332,24 @@ impl Transcript {
     }
 
     /// Replaces one word's text, e.g. to fix a misheard name before it shows in captions.
+    /// Takes sentence punctuation (. , ! ? ; : quotes, brackets, dashes) off every spoken
+    /// word, keeping apostrophes and hyphens inside words and separators inside numbers.
+    /// Returns how many words changed; a word that is only punctuation stays as it is.
+    pub fn strip_punctuation(&mut self) -> usize {
+        let mut changed = 0;
+        for word in &mut self.words {
+            if word.kind != WordKind::Word {
+                continue;
+            }
+            let stripped = strip_punctuation(&word.text);
+            if !stripped.is_empty() && stripped != word.text {
+                word.text = stripped;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     pub fn set_word_text(&mut self, word_id: &str, text: &str) -> Result<(), String> {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
@@ -464,5 +482,54 @@ mod tests {
         assert_eq!(seconds_to_us(1.25), 1_250_000);
         assert_eq!(seconds_to_us(-1.0), 0);
         assert_eq!(seconds_to_us(f64::NAN), 0);
+    }
+}
+
+/// `text` without sentence punctuation (see [`Transcript::strip_punctuation`]).
+pub fn strip_punctuation(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let kept: String = chars
+        .iter()
+        .enumerate()
+        .filter(|&(i, &c)| {
+            let before = i > 0 && chars[i - 1].is_alphanumeric();
+            let after = chars.get(i + 1).is_some_and(|n| n.is_alphanumeric());
+            match c {
+                // Inside a word: don't, well-known.
+                '\'' | '\u{2019}' | '-' => before && after,
+                // Inside a number: 3.5, 1,000.
+                '.' | ',' => {
+                    before
+                        && after
+                        && chars[i - 1].is_ascii_digit()
+                        && chars[i + 1].is_ascii_digit()
+                }
+                '!' | '?' | ';' | ':' | '\u{2026}' | '"' | '\u{201c}' | '\u{201d}' | '\u{2018}'
+                | '\u{00ab}' | '\u{00bb}' | '(' | ')' | '[' | ']' | '{' | '}' | '\u{2014}'
+                | '\u{2013}' | '\u{00a1}' | '\u{00bf}' => false,
+                _ => true,
+            }
+        })
+        .map(|(_, &c)| c)
+        .collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod punctuation_tests {
+    use super::strip_punctuation;
+
+    #[test]
+    fn sentence_marks_go_and_words_and_numbers_stay() {
+        assert_eq!(strip_punctuation("Hello,"), "Hello");
+        assert_eq!(strip_punctuation("world."), "world");
+        assert_eq!(strip_punctuation("\"Really?!\""), "Really");
+        assert_eq!(strip_punctuation("don't"), "don't");
+        assert_eq!(strip_punctuation("well-known"), "well-known");
+        assert_eq!(strip_punctuation("3.5,"), "3.5");
+        assert_eq!(strip_punctuation("1,000."), "1,000");
+        assert_eq!(strip_punctuation("(aside)"), "aside");
+        assert_eq!(strip_punctuation("$20%"), "$20%");
+        assert_eq!(strip_punctuation("\u{2014}"), "");
     }
 }

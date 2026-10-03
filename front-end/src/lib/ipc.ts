@@ -359,6 +359,9 @@ export const api = {
     invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit, shortId: editTarget }),
   transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
     invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text }),
+  /** Takes . , ! ? and the like off every word (apostrophes, hyphens and numbers stay). */
+  transcriptStripPunctuation: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptView>("transcript_strip_punctuation", { projectHandle, trackId }),
   transcriptDismissSuggestions: (projectHandle: string, trackId: string, ids: string[], dismissed: boolean) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_dismiss_suggestions", {
       projectHandle,

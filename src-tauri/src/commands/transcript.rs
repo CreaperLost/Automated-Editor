@@ -297,6 +297,22 @@ pub fn transcript_set_word_text_impl(
     current_view(state, &project_handle, &track_id)?.ok_or_else(|| "Transcript disappeared".into())
 }
 
+/// Takes the punctuation off every word of the transcript (captions follow).
+pub fn transcript_strip_punctuation_impl(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+) -> Result<TranscriptView, String> {
+    modify_transcript(state, &project_handle, &track_id, |t| {
+        if t.strip_punctuation() == 0 {
+            return Err("There is no punctuation to remove".into());
+        }
+        Ok(())
+    })?;
+    refresh_playback(state);
+    current_view(state, &project_handle, &track_id)?.ok_or_else(|| "Transcript disappeared".into())
+}
+
 pub fn transcript_dismiss_suggestions_impl(
     state: &AppState,
     project_handle: String,
