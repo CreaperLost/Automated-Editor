@@ -384,6 +384,32 @@ impl Scene {
         Ok(())
     }
 
+    /// Moves the layers added since `from` (a track below V1) to just above the background.
+    pub fn move_under_main(&mut self, from: usize) {
+        let added: Vec<Layer> = self.layers.drain(from..).collect();
+        let at = self
+            .layers
+            .iter()
+            .position(|l| l.role != LayerRole::Background)
+            .unwrap_or(self.layers.len());
+        // Captions stay on top: they were behind the added layers, so keep them at the end.
+        let captions: Vec<Layer> = {
+            let mut kept = Vec::new();
+            let mut i = 0;
+            while i < self.layers.len() {
+                if self.layers[i].role == LayerRole::Caption {
+                    kept.push(self.layers.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
+            kept
+        };
+        let at = at.min(self.layers.len());
+        self.layers.splice(at..at, added);
+        self.layers.extend(captions);
+    }
+
     pub fn push_overlay(&mut self, frame: VideoFrame, cover: bool) {
         if self.layers.len() >= MAX_LAYERS || frame.width == 0 || frame.height == 0 {
             return;

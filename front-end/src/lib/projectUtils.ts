@@ -21,6 +21,9 @@ export function editedToSourceUs(
 
 type Range = { startUs: number; endUs: number; media?: string };
 
+/** A V1 entry that is empty time (src-tauri GAP): black, silent, not a clip. */
+export const GAP = "@gap";
+
 /** A stretch of the edited timeline between two clip edges. */
 export interface TimelineClip {
   startUs: number;
@@ -31,6 +34,8 @@ export interface TimelineClip {
   media?: string;
   /** Imported media whose sound was unlinked onto audio tracks. */
   audioUnlinked?: boolean;
+  /** Empty time on V1 (not magnetic): nothing to draw or select. */
+  gap?: boolean;
 }
 
 /** A removed source range, drawn against the clip it would grow back onto. */
@@ -58,6 +63,7 @@ export function buildClips(retained: (Range & { audioUnlinked?: boolean })[], sp
         sourceStartUs: edges[i],
         media: interval.media,
         audioUnlinked: interval.audioUnlinked,
+        gap: interval.media === GAP || undefined,
       });
       edited += length;
     }

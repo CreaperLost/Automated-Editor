@@ -25,6 +25,9 @@ import {
   Music,
   Camera,
   Monitor,
+  Magnet,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -57,6 +60,8 @@ import {
   type ProjectZoom,
   type TrackEdit,
   type ZoomKeyframe,
+  type MainTrack,
+  DEFAULT_MAIN_TRACK,
 } from "../../lib/types";
 import {
   audioStreamCount,
@@ -338,6 +343,13 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   const overlayTracks = openedProject?.overlayTracks ?? [];
   const videoTracks = videoTracksOf(overlayTracks);
   const audioTracks = audioTracksOf(overlayTracks);
+  // V1 as a track: magnetic (cuts close up, moves insert) or not (gaps, overwrite), and where
+  // it sits among the video tracks: those above it list first, those below after its rows.
+  const mainTrack = openedProject?.mainTrack ?? DEFAULT_MAIN_TRACK;
+  const magnetic = mainTrack.magnetic;
+  const mainPosition = Math.min(mainTrack.position, videoTracks.length);
+  const videoAbove = videoTracks.slice(mainPosition).reverse();
+  const videoBelow = videoTracks.slice(0, mainPosition).reverse();
   const trackOfClip = (clipId: string) => overlayTracks.find((t) => t.clips.some((c) => c.id === clipId));
   const findTrackClip = (clipId: string) => trackOfClip(clipId)?.clips.find((c) => c.id === clipId);
 
@@ -523,6 +535,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   const [mediaGhost, setMediaGhost] = useState<{ row: TrackRow; startUs: number; durationUs: number; valid: boolean } | null>(null);
   const nearestEdge = (clientX: number) => {
     const pointerUs = clientXToUs(clientX);
+    if (!magnetic) {
+      const near = snapPoints().reduce((best, p) => (Math.abs(p - pointerUs) < Math.abs(best - pointerUs) ? p : best), Infinity);
+      return Math.max(0, Math.abs(near - pointerUs) <= snapUs() ? near : Math.round(pointerUs));
+    }
     return edges.reduce((best, edge) => (Math.abs(edge - pointerUs) < Math.abs(best - pointerUs) ? edge : best), edges[0] ?? 0);
   };
   const onMediaDragOver = (event: React.DragEvent<HTMLDivElement>) => {
@@ -869,12 +885,12 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     if (side === "start") {
       void (deltaUs > 0
         ? ripple(clip.startUs, clip.startUs + deltaUs)
-        : restoreCut(clip.sourceStartUs + deltaUs, clip.sourceStartUs, "start", allTracks ? clip.startUs : undefined));
+        : restoreCut(clip.sourceStartUs + deltaUs, clip.sourceStartUs, "start", allTracks || !magnetic ? clip.startUs : undefined));
       return;
     }
     void (deltaUs < 0
       ? ripple(clip.endUs + deltaUs, clip.endUs)
-      : restoreCut(sourceEndUs, sourceEndUs + deltaUs, "end", allTracks ? clip.endUs : undefined));
+      : restoreCut(sourceEndUs, sourceEndUs + deltaUs, "end", allTracks || !magnetic ? clip.endUs : undefined));
   };
 
   useEffect(() => {
@@ -1059,6 +1075,13 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       return;
     }
     move.lift = null;
+    if (!magnetic) {
+      const length = move.ranges.reduce((sum, r) => sum + r.endUs - r.startUs, 0);
+      const start = Math.max(0, snapStart(pointerUs - move.grabUs, length, snapPoints(), snapUs()));
+      move.targetUs = start === move.range.startUs && move.ranges.length === 1 ? null : start;
+      setClipMove({ ...move });
+      return;
+    }
     const candidates = edges.filter((edge) => move.ranges.every((r) => edge <= r.startUs || edge >= r.endUs));
     const nearest = candidates.reduce(
       (best, edge) => (Math.abs(edge - pointerUs) < Math.abs(best - pointerUs) ? edge : best),
@@ -1091,6 +1114,15 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     }
     const target = move.targetUs;
     if (target === null) return;
+    if (!magnetic) {
+      // Not magnetic: the clips land at the target over what is there, leaving gaps behind.
+      const length = move.ranges.reduce((sum, r) => sum + r.endUs - r.startUs, 0);
+      pendingSelect.current = { startUs: target, endUs: target + length };
+      void tracksEdit({ kind: "placeMain", ranges: move.ranges, startUs: target }).then((applied) => {
+        if (!applied) pendingSelect.current = null;
+      });
+      return;
+    }
     // The moved clips land together at the target, in timeline order, and stay selected.
     const length = move.ranges.reduce((sum, r) => sum + r.endUs - r.startUs, 0);
     const before = move.ranges.filter((r) => r.endUs <= target).reduce((sum, r) => sum + r.endUs - r.startUs, 0);
@@ -1354,7 +1386,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   // Sound of the imported clips on V1, one lane per audio stream (while linked).
   const linkedSoundLanes = Math.max(
     0,
-    ...clips.filter((clip) => clip.media && !clip.audioUnlinked).map((clip) => audioStreamCount(assetOf(clip.media!))),
+    ...clips.filter((clip) => clip.media && !clip.gap && !clip.audioUnlinked).map((clip) => audioStreamCount(assetOf(clip.media!))),
   );
 
   // The caption track: the captioned transcript's cues, editable in place.
@@ -1676,6 +1708,58 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     );
   };
 
+  /** Up/down in the stack: video tracks and V1 among themselves, audio tracks among theirs. */
+  const orderButtons = (trackId: string, label: string) => (
+    <div className="flex flex-col -my-1">
+      {([true, false] as const).map((up) => (
+        <button
+          key={up ? "up" : "down"}
+          disabled={editing}
+          aria-label={`Move ${label} ${up ? "up" : "down"}`}
+          title={`Move ${label} ${up ? "up" : "down"}${
+            trackId === "main" || videoTracks.some((t) => t.id === trackId) ? (up ? ": it draws over more" : ": it draws under more") : ""
+          }`}
+          onClick={() => void editTracks({ kind: "moveTrack", trackId, up })}
+          className="p-0 leading-none rounded text-studio-500 hover:text-white hover:bg-studio-700 disabled:opacity-40"
+        >
+          {up ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        </button>
+      ))}
+    </div>
+  );
+  const setMainTrack = (change: Partial<Pick<MainTrack, "magnetic" | "hidden" | "muted">>) => {
+    const next = { ...mainTrack, ...change };
+    void editTracks({ kind: "setMainTrack", magnetic: next.magnetic, hidden: next.hidden, muted: next.muted });
+  };
+  const mainHeader = (
+    <div className="h-8 px-3 flex items-end justify-between">
+      <span className="text-[10px] font-semibold tracking-wider uppercase text-studio-400 truncate">V1 · Main</span>
+      <div className="flex items-center gap-0.5">
+        {orderButtons("main", "V1")}
+        <button
+          disabled={editing || !openedProject}
+          aria-pressed={mainTrack.hidden}
+          aria-label={`${mainTrack.hidden ? "Show" : "Hide"} V1`}
+          title={mainTrack.hidden ? "Show V1" : "Hide V1: black where no other track draws"}
+          onClick={() => setMainTrack({ hidden: !mainTrack.hidden })}
+          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+        >
+          {mainTrack.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+        </button>
+        <button
+          disabled={editing || !openedProject}
+          aria-pressed={mainTrack.muted}
+          aria-label={`${mainTrack.muted ? "Unmute" : "Mute"} V1`}
+          title={mainTrack.muted ? "Unmute V1" : "Mute V1: the recording's and its clips' sound"}
+          onClick={() => setMainTrack({ muted: !mainTrack.muted })}
+          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+        >
+          {mainTrack.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+    </div>
+  );
+
   const renderTrackHeader = (track: (typeof overlayTracks)[number]) => {
     const audio = isAudioTrack(track);
     const label = trackLabel(overlayTracks, track.id);
@@ -1694,6 +1778,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           </div>
         </div>
         <div className="flex items-center gap-0.5">
+          {orderButtons(track.id, label)}
           {audio ? roleFlag(track.id) : pictureFlag(track)}
           {!audio && (
             <button
@@ -1908,6 +1993,22 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             Redo
           </button>
           <button
+            disabled={!openedProject || editing}
+            onClick={() => setMainTrack({ magnetic: !magnetic })}
+            aria-pressed={magnetic}
+            className={`flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs hover:bg-studio-700 disabled:opacity-40 ${
+              magnetic ? "text-teal-300" : "text-studio-400"
+            }`}
+            title={
+              magnetic
+                ? "Magnetic V1 (on): cuts close up and moved clips insert. Turn off to leave gaps and place clips anywhere."
+                : "Magnetic V1 (off): cuts leave gaps (black) and moved clips land where you drop them. Turn on to close up."
+            }
+          >
+            <Magnet className="w-3.5 h-3.5" />
+            <span>Magnetic</span>
+          </button>
+          <button
             disabled={!openedProject || editing || !linkState}
             onClick={toggleLink}
             aria-pressed={linkState === "unlinked"}
@@ -2071,10 +2172,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
           <div className="flex-1 space-y-2 py-2">
             {addTrackButton(false)}
-            {[...videoTracks].reverse().map(renderTrackHeader)}
-            <div className="h-8 px-3 flex items-end text-[10px] font-semibold tracking-wider uppercase text-studio-400">
-              V1 · Main
-            </div>
+            {videoAbove.map(renderTrackHeader)}
+            {mainHeader}
             {tracks.map((track) => (
               <div
                 key={track.id}
@@ -2095,6 +2194,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 </div>
               </div>
             ))}
+            {videoBelow.map(renderTrackHeader)}
             {Array.from({ length: linkedSoundLanes }, (_, stream) => (
               <div
                 key={`linked-${stream}`}
@@ -2308,7 +2408,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     style={{ left: `${(clipMove.targetUs / durationUs) * 100}%` }}
                   >
                     <span className="absolute -top-0.5 left-1.5 text-[9px] font-mono text-amber-100 bg-studio-950/90 rounded px-1 whitespace-nowrap">
-                      Move here
+                      {magnetic ? "Move here" : "Place here"}
                     </span>
                   </div>
                 )}
@@ -2341,7 +2441,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {renderNewTrackRow(false)}
 
             {/* Video tracks above the main sequence, top track first */}
-            {[...videoTracks].reverse().map(renderTrackLane)}
+            {videoAbove.map(renderTrackLane)}
 
             {/* Clip lane (V1): edges come from cuts and splits; markers restore cuts */}
             <div className="h-8 relative" data-track-row="main">
@@ -2404,6 +2504,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
 
               {durationUs > 0 && clips.map((clip, index) => {
+                if (clip.gap) return null;
                 const selected = clipSelected(clip);
                 return (
                   <button
@@ -2433,7 +2534,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               })}
               {/* Clip edge handles: the end handle sits left of the edge, the start handle right of it. */}
               {durationUs > 0 && !editing && clips.flatMap((clip, index) =>
-                (["start", "end"] as const).map((side) => {
+                (clip.gap ? [] : (["start", "end"] as const)).map((side) => {
                   const edgePct = ((side === "start" ? clip.startUs : clip.endUs) / durationUs) * 100;
                   return (
                     <div
@@ -2636,12 +2737,15 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               </div>
             ))}
 
+            {/* Video tracks below V1 */}
+            {videoBelow.map(renderTrackLane)}
+
             {/* V1's imported clips' sound, one lane per audio stream: part of the clip until unlinked */}
             {Array.from({ length: linkedSoundLanes }, (_, stream) => (
               <div key={`linked-${stream}`} data-track-row="main" className="relative" style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}>
                 {durationUs > 0 &&
                   clips.map((clip, index) => {
-                    if (!clip.media || clip.audioUnlinked) return null;
+                    if (!clip.media || clip.gap || clip.audioUnlinked) return null;
                     const asset = assetOf(clip.media);
                     if (stream >= audioStreamCount(asset)) return null;
                     const selected = clipSelected(clip);

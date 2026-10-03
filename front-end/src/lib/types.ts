@@ -566,9 +566,23 @@ export interface OpenedProject {
   shorts?: Short[];
   /** Video tracks V2, V3, ... above the main sequence, bottom to top. */
   overlayTracks?: OverlayTrack[];
+  /** V1 as a track; absent: magnetic, shown, unmuted, at the bottom. */
+  mainTrack?: MainTrack;
   /** Set when this is a short's own timeline: the timeline fields are the short's. */
   shortView?: string;
 }
+
+/** V1's settings as a track (src-tauri/src/project/revision.rs). */
+export interface MainTrack {
+  /** Cuts close up and moves insert; off, they leave gaps and overwrite. */
+  magnetic: boolean;
+  hidden: boolean;
+  muted: boolean;
+  /** How many video tracks are below V1. */
+  position: number;
+}
+
+export const DEFAULT_MAIN_TRACK: MainTrack = { magnetic: true, hidden: false, muted: false, position: 0 };
 
 // Video tracks above the main sequence (src-tauri/src/tracks.rs)
 /** "contain" fits the whole picture in the canvas; "cover" fills the canvas, cropping it. */
@@ -626,7 +640,11 @@ export type TrackEdit =
   | { kind: "moveClips"; clipIds: string[]; deltaUs: number }
   | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number }
   | { kind: "restore"; ranges: EditedSpan[]; grow: "end" | "start"; shiftTracksAt?: number | null }
-  | { kind: "insertMedia"; assetId: string; targetUs: number };
+  | { kind: "insertMedia"; assetId: string; targetUs: number }
+  | { kind: "placeMain"; ranges: EditedSpan[]; startUs: number }
+  | { kind: "setMainTrack"; magnetic: boolean; hidden: boolean; muted: boolean }
+  /** `trackId` "main" is V1. */
+  | { kind: "moveTrack"; trackId: string; up: boolean };
 
 /** One caption on the timeline's caption track (src-tauri/src/commands/transcript.rs). */
 export interface CaptionCueView {

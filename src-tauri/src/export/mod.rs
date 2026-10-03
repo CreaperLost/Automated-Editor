@@ -413,7 +413,20 @@ impl SceneEvaluator {
     /// The main sequence (V1): the recording, or media inserted into it.
     fn main_scene_at(&self, edited_us: u64) -> Result<Scene, String> {
         let mapper = self.document.mapper()?;
+        let black = || Scene {
+            width: self.width,
+            height: self.height,
+            background: [0.0, 0.0, 0.0, 1.0],
+            layers: Vec::new(),
+        };
+        // A hidden V1, a gap in it, or time past its end: black, with the tracks on top.
+        if self.document.main_track.hidden || edited_us >= mapper.total_edited_duration_us() {
+            return Ok(black());
+        }
         if let Some((asset_id, local_us)) = mapper.media_at(edited_us) {
+            if asset_id == crate::project::revision::GAP {
+                return Ok(black());
+            }
             return self.media_scene(asset_id, local_us);
         }
         let duration_us = mapper.total_edited_duration_us();
@@ -756,15 +769,22 @@ impl SceneEvaluator {
 
     /// Clips on the video tracks above the main sequence, bottom track first.
     fn push_overlays(&self, scene: &mut Scene, edited_us: u64) -> Result<(), String> {
-        for track in self
+        let below_main = self.document.main_track.position;
+        for (stack_index, track) in self
             .document
             .overlay_tracks
             .iter()
-            .filter(|t| !t.hidden && !t.is_audio())
+            .filter(|t| !t.is_audio())
+            .enumerate()
         {
+            if track.hidden {
+                continue;
+            }
             let Some(clip) = track.clip_at(edited_us) else {
                 continue;
             };
+            // Tracks below V1 are drawn over the background but under V1's picture.
+            let under = stack_index < below_main;
             let local_us = clip.local_us(edited_us).unwrap_or(clip.in_us);
             // The track's mark wins; unmarked, the file's own role.
             let webcam = track.role.unwrap_or_else(|| {
@@ -776,6 +796,7 @@ impl SceneEvaluator {
                     .unwrap_or_default()
             }) == crate::media_bin::PictureRole::Webcam;
             if let Some(frame) = self.media_frame(&clip.asset_id, local_us)? {
+                let before = scene.layers.len();
                 if webcam {
                     // A camera file sits in the webcam bubble, shaped like the recording's.
                     scene.push_webcam_bubble(
@@ -786,13 +807,14 @@ impl SceneEvaluator {
                 } else {
                     scene.push_overlay(frame, clip.fit == crate::tracks::OverlayFit::Cover);
                 }
+                if under {
+                    scene.move_under_main(before);
+                }
             }
         }
         Ok(())
     }
 
-    /// The transcript captions read from: the chosen track, else the first transcribed
-    /// microphone, else system audio.
     /// The transcript captions read from: the chosen track, else the first transcribed
     /// microphone, then system audio, then imported sound marked as speech.
     fn caption_transcript(&self) -> Option<crate::transcript::Transcript> {

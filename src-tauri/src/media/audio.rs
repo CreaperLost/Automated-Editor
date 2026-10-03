@@ -211,14 +211,19 @@ impl AudioMixer {
                     source_end: s.end_us,
                     fade_in: i > 0 && !joined(&intervals[i - 1], s),
                     fade_out: i + 1 < intervals.len() && !joined(s, &intervals[i + 1]),
-                    // An unlinked clip's sound plays from the audio tracks instead.
-                    media: s.media.as_ref().map(|id| {
-                        if s.audio_unlinked {
-                            Vec::new()
-                        } else {
-                            media_track(document, id, None, &main_sound_lane)
-                        }
-                    }),
+                    // An unlinked clip's sound plays from the audio tracks instead; a muted
+                    // V1 plays nothing at all (an empty list is silence).
+                    media: if document.main_track.muted {
+                        Some(Vec::new())
+                    } else {
+                        s.media.as_ref().map(|id| {
+                            if s.audio_unlinked {
+                                Vec::new()
+                            } else {
+                                media_track(document, id, None, &main_sound_lane)
+                            }
+                        })
+                    },
                 };
                 cursor = span.edited_end;
                 span

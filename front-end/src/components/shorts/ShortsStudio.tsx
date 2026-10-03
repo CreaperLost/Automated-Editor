@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
+import { GAP } from "../../lib/projectUtils";
 import { releaseShortPlayback, seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import {
   DockviewDefaultTab,
@@ -368,6 +369,10 @@ export const ShortsStudio: React.FC = () => {
     const start = clockAt(main, startEdited);
     const end = clockAt(main, endEdited - 1);
     if (!start || !end) return null;
+    if (start.media === GAP || end.media === GAP) {
+      setError("A short cannot start or end in a gap on V1.");
+      return null;
+    }
     if (start.media !== end.media) {
       setError("A short starts and ends on the same recording or file; trim it so both ends are on one.");
       return null;

@@ -63,6 +63,41 @@ pub struct EditDocument {
     /// Video tracks V2, V3, ... above the main sequence, bottom to top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
+    /// V1 as a track: magnetic or not, hidden, muted, and where it sits among the video tracks.
+    #[serde(default, skip_serializing_if = "MainTrack::is_default")]
+    pub main_track: MainTrack,
+}
+
+/// A V1 entry that is empty time: black where nothing else is drawn, silent.
+pub const GAP: &str = "@gap";
+
+/// V1's settings as a track.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MainTrack {
+    /// Cuts close up and moves insert (on by default); off, they leave gaps and overwrite.
+    pub magnetic: bool,
+    pub hidden: bool,
+    pub muted: bool,
+    /// How many video tracks are below V1 (0: V1 is at the bottom).
+    pub position: usize,
+}
+
+impl Default for MainTrack {
+    fn default() -> Self {
+        Self {
+            magnetic: true,
+            hidden: false,
+            muted: false,
+            position: 0,
+        }
+    }
+}
+
+impl MainTrack {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Default for EditDocument {
@@ -83,6 +118,7 @@ impl Default for EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             overlay_tracks: Vec::new(),
+            main_track: MainTrack::default(),
         }
     }
 }
@@ -106,6 +142,7 @@ impl EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             overlay_tracks: Vec::new(),
+            main_track: MainTrack::default(),
         })
     }
 
@@ -424,6 +461,10 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
             continue;
         }
         match out.last_mut() {
+            // Gaps side by side are one gap.
+            Some(last) if last.is_gap() && interval.is_gap() => {
+                last.end_us += interval.end_us - interval.start_us;
+            }
             // Media entries are never joined: their boundaries are the user's splits.
             Some(last)
                 if last.end_us == interval.start_us
@@ -435,7 +476,64 @@ pub fn canonical_retained(retained: Vec<RetainedInterval>) -> Vec<RetainedInterv
             _ => out.push(interval),
         }
     }
+    // Nothing after the last clip: the timeline ends there.
+    while out.last().is_some_and(RetainedInterval::is_gap) {
+        out.pop();
+    }
     out
+}
+
+/// Empty V1 time `len_us` long.
+pub fn gap(len_us: u64) -> RetainedInterval {
+    RetainedInterval {
+        start_us: 0,
+        end_us: len_us,
+        media: Some(GAP.into()),
+        audio_unlinked: false,
+    }
+}
+
+/// Without magnetism: the V1 ranges become gaps; nothing moves.
+pub(crate) fn lift_main(document: &mut EditDocument, cuts: &[(u64, u64)]) -> Result<(), String> {
+    let mut ordered = cuts.to_vec();
+    ordered.sort_unstable();
+    let retained = &mut document.retained_intervals;
+    let duration: u64 = retained.iter().map(|i| i.end_us - i.start_us).sum();
+    for &(start, end) in ordered.iter().rev() {
+        if start >= end || end > duration {
+            return Err("That range is not on the timeline".into());
+        }
+        let first = split_at_edited(retained, start)?;
+        let last = split_at_edited(retained, end)?;
+        retained.splice(first..last, [gap(end - start)]);
+    }
+    document.retained_intervals =
+        canonical_retained(std::mem::take(&mut document.retained_intervals));
+    Ok(())
+}
+
+/// Without magnetism: puts `entries` on V1 at `start_us`, over whatever was there (past the
+/// end, the time before it becomes a gap).
+pub(crate) fn place_main(
+    document: &mut EditDocument,
+    entries: Vec<RetainedInterval>,
+    start_us: u64,
+) -> Result<(), String> {
+    let length: u64 = entries.iter().map(|e| e.end_us - e.start_us).sum();
+    if length == 0 {
+        return Err("Nothing to place".into());
+    }
+    let retained = &mut document.retained_intervals;
+    let duration: u64 = retained.iter().map(|i| i.end_us - i.start_us).sum();
+    if start_us + length > duration {
+        retained.push(gap(start_us + length - duration));
+    }
+    let first = split_at_edited(retained, start_us)?;
+    let last = split_at_edited(retained, start_us + length)?;
+    retained.splice(first..last, entries);
+    document.retained_intervals =
+        canonical_retained(std::mem::take(&mut document.retained_intervals));
+    Ok(())
 }
 
 /// The imported file behind a sound id `msound-<stream>-<asset>`.
@@ -920,6 +1018,7 @@ impl EditHistory {
             entry
                 .media
                 .as_ref()
+                .filter(|id| *id != GAP)
                 .filter(|id| !next.media_assets.iter().any(|asset| &asset.id == *id))
         }) {
             return Err(format!(

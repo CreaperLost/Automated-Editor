@@ -418,6 +418,7 @@ pub fn validate_edits(base: &EditDocument) -> Result<(), String> {
             entry
                 .media
                 .as_ref()
+                .filter(|id| *id != crate::project::revision::GAP)
                 .filter(|id| !base.media_assets.iter().any(|asset| &asset.id == *id))
         }) {
             return Err(format!("A short uses media {missing} that is not imported"));

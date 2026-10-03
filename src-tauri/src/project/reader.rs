@@ -78,6 +78,11 @@ impl RetainedInterval {
     pub fn is_recording(&self) -> bool {
         self.media.is_none()
     }
+
+    /// Empty V1 time.
+    pub fn is_gap(&self) -> bool {
+        self.media.as_deref() == Some(crate::project::revision::GAP)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -125,6 +130,9 @@ pub struct OpenedProject {
     /// Video tracks V2, V3, ... above the main sequence, bottom to top.
     #[serde(default)]
     pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
+    /// V1 as a track: magnetic, hidden, muted, stack position.
+    #[serde(default)]
+    pub main_track: crate::project::revision::MainTrack,
     /// Set when this is short `id`'s own timeline (the timeline fields are the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
@@ -662,6 +670,7 @@ impl ProjectReader {
                 chapters: Vec::new(),
                 shorts: Vec::new(),
                 overlay_tracks: Vec::new(),
+                main_track: history.current.main_track.clone(),
                 short_view: None,
             },
             segments,
@@ -1213,6 +1222,7 @@ impl ProjectReader {
         crate::shorts::attach_edited(&mut shorts, &self.history.current);
         self.summary.shorts = shorts;
         self.summary.overlay_tracks = self.history.current.overlay_tracks.clone();
+        self.summary.main_track = self.history.current.main_track.clone();
         let pauses: Vec<RetainedInterval> = self
             .summary
             .manifest
