@@ -222,6 +222,14 @@ pub fn build_cues(
         } else {
             word.text.trim().to_string()
         };
+        // Punctuation given as a word of its own joins the word before ("video" "." → "video.").
+        if text.chars().all(|c| !c.is_alphanumeric()) {
+            if let Some((last, _, _)) = words.last_mut() {
+                let last: &mut CueWord = last;
+                last.text.push_str(&text);
+                continue;
+            }
+        }
         words.push((
             CueWord {
                 id: word.id.clone(),

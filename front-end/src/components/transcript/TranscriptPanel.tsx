@@ -601,7 +601,9 @@ export const TranscriptPanel: React.FC = () => {
                         }}
                       >
                         {w.text}
-                      </span>{" "}
+                      </span>
+                      {/* No space before punctuation that comes as a word of its own. */}
+                      {/^[^\p{L}\p{N}]+$/u.test(line.words[line.words.findIndex((x) => x.i === i) + 1]?.w.text ?? "") ? "" : " "}
                     </React.Fragment>
                   );
                         })}
