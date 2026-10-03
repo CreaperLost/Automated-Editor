@@ -13,7 +13,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { api } from "../../lib/ipc";
+import { api, setEditTarget } from "../../lib/ipc";
 import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
@@ -53,8 +53,6 @@ function clockAt(project: OpenedProject, editedUs: number): { media?: string; us
 const NEW_SHORT_US = 30_000_000;
 const MIN_SHORT_US = 3_000_000;
 const MAX_SHORT_US = 180_000_000;
-/** Preview playback asks for frames this often; there is no audio in the preview. */
-const PLAY_FRAME_MS = 100;
 
 function formatTime(us: number): string {
   const total = Math.max(0, us) / 1_000_000;
@@ -81,9 +79,13 @@ export const ShortsStudio: React.FC = () => {
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState<ShortLayout | null>(null);
-  const [offsetUs, setOffsetUs] = useState(0);
-  const [playing, setPlaying] = useState(false);
   const [frameUrl, setFrameUrl] = useState<string>();
+  // The whole video (new shorts and trims are placed on it); the store holds the short's view.
+  const [main, setMain] = useState<OpenedProject | null>(null);
+  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
+  const playing = useProjectStore((s) => s.isPlaying);
+  const applyPlaybackStatus = useProjectStore((s) => s.applyPlaybackStatus);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -97,7 +99,10 @@ export const ShortsStudio: React.FC = () => {
     void api
       .projectCurrent()
       .then((current) => {
-        if (current) loadOpenedProject(current);
+        if (current) {
+          loadOpenedProject(current);
+          setMain(current);
+        }
       })
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoaded(true));
@@ -119,14 +124,56 @@ export const ShortsStudio: React.FC = () => {
   // renders, since the preview reloads whenever the layout changes.
   const baseLayout = draft ?? selected?.layout;
   const layout = useMemo(() => ({ ...DEFAULT_LAYOUT, ...(baseLayout ?? {}) }), [baseLayout]);
-  const playable = selected?.editedStartUs !== undefined && selected?.editedEndUs !== undefined;
-  const lengthUs = playable ? selected!.editedEndUs! - selected!.editedStartUs! : 0;
+  // The store shows the selected short's own timeline once its view has arrived.
+  const viewing = !!selected && project?.shortView === selected.id;
+  const lengthUs = viewing ? project!.editedDurationUs : 0;
+  const playable = viewing && lengthUs > 0;
+  const ownEdit = !!selected?.edit;
+  const offsetUs = Math.min(currentTimeUs, Math.max(0, lengthUs - 1));
 
   useEffect(() => {
     setDraft(null);
-    setOffsetUs(0);
-    setPlaying(false);
   }, [selected?.id]);
+
+  // The selected short is what this window edits and what playback plays (with its sound).
+  const selectedId_ = selected?.id;
+  const handle_ = project?.projectHandle;
+  useEffect(() => {
+    if (!handle_) return;
+    const shortId = selectedId_ ?? null;
+    setEditTarget(shortId);
+    useProjectStore.getState().setViewShort(shortId ?? undefined);
+    if (shortId) {
+      void api
+        .projectShortView(handle_, shortId)
+        .then((view) => useProjectStore.getState().applyOpenedProject(view, { remote: true }))
+        .catch((err) => setError(errorMessage(err)));
+    }
+    void api
+      .playbackFocusShort(handle_, shortId)
+      .then(applyPlaybackStatus)
+      .catch((err) => setError(errorMessage(err)));
+  }, [selectedId_, handle_]);
+  // Closing the window hands playback back to the video.
+  useEffect(() => {
+    const release = () => {
+      const handle = useProjectStore.getState().openedProject?.projectHandle;
+      setEditTarget(null);
+      if (handle) void api.playbackFocusShort(handle, null).catch(() => undefined);
+    };
+    window.addEventListener("beforeunload", release);
+    return () => {
+      window.removeEventListener("beforeunload", release);
+      release();
+    };
+  }, []);
+  // The whole video, refreshed with each revision.
+  useEffect(() => {
+    void api
+      .projectCurrent()
+      .then((current) => setMain(current ?? null))
+      .catch(() => undefined);
+  }, [project?.revision, project?.projectHandle]);
 
   // Speech first, the recording's or an imported file's.
   const speechTrack = transcribableSounds(project)[0];
@@ -162,7 +209,7 @@ export const ShortsStudio: React.FC = () => {
     saveTimer.current = window.setTimeout(() => patchSelected({ layout: next }), 400);
   };
 
-  // Preview frames: the latest request wins.
+  // Paused: a still of the short at the playhead (the latest request wins).
   const showFrame = useCallback(
     async (at: number) => {
       const current = useProjectStore.getState().openedProject;
@@ -187,37 +234,61 @@ export const ShortsStudio: React.FC = () => {
     if (!playing) void showFrame(offsetUs);
   }, [showFrame, offsetUs, playing, project?.revision]);
 
+  // Playing: the playback engine plays the short with its sound; show the frames it renders.
   useEffect(() => {
     if (!playing) return;
-    let at = offsetUs;
-    let stopped = false;
-    const started = performance.now();
-    const tick = async () => {
-      while (!stopped) {
-        at = offsetUs + (performance.now() - started) * 1000;
-        if (at >= lengthUs) {
-          setPlaying(false);
-          setOffsetUs(0);
-          return;
+    let cancelled = false;
+    let lastSeq = 0;
+    const pull = async () => {
+      while (!cancelled) {
+        let buffer: ArrayBuffer;
+        try {
+          buffer = await api.previewFrame(lastSeq, 250);
+        } catch {
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+          continue;
         }
-        await showFrame(at);
-        await new Promise((resolve) => window.setTimeout(resolve, PLAY_FRAME_MS));
+        if (cancelled || buffer.byteLength <= 8) continue;
+        lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
+        const bitmap = await createImageBitmap(new Blob([buffer.slice(8)], { type: "image/jpeg" })).catch(() => null);
+        const canvas = canvasRef.current;
+        const context = canvas?.getContext("2d");
+        if (!bitmap || !canvas || !context || cancelled) {
+          bitmap?.close();
+          continue;
+        }
+        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+        }
+        context.drawImage(bitmap, 0, 0);
+        bitmap.close();
       }
     };
-    void tick();
+    void pull();
     return () => {
-      stopped = true;
-      setOffsetUs(Math.min(at, Math.max(0, lengthUs - 1)));
+      cancelled = true;
     };
-    // Playback restarts only when started or stopped.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
+
+  const togglePlay = () => {
+    const handle = useProjectStore.getState().openedProject?.projectHandle;
+    if (!handle) return;
+    void (playing ? api.playbackPause(handle) : api.playbackPlay(handle))
+      .then(applyPlaybackStatus)
+      .catch((err) => setError(errorMessage(err)));
+  };
+  const seek = (us: number) => {
+    const handle = useProjectStore.getState().openedProject?.projectHandle;
+    if (!handle) return;
+    void api.playbackSeek(handle, us).then(applyPlaybackStatus).catch(() => undefined);
+  };
 
   /** A short's ends on the clock they play on: the recording's or one imported file's. */
   const anchors = (startEdited: number, endEdited: number) => {
-    if (!project) return null;
-    const start = clockAt(project, startEdited);
-    const end = clockAt(project, endEdited - 1);
+    if (!main) return null;
+    const start = clockAt(main, startEdited);
+    const end = clockAt(main, endEdited - 1);
     if (!start || !end) return null;
     if (start.media !== end.media) {
       setError("A short starts and ends on the same recording or file; trim it so both ends are on one.");
@@ -227,11 +298,10 @@ export const ShortsStudio: React.FC = () => {
   };
 
   const newShort = () => {
-    if (!project) return;
-    // From the playhead, or the start.
-    const at = useProjectStore.getState().currentTimeUs;
-    const startEdited = at + MIN_SHORT_US <= project.editedDurationUs ? at : 0;
-    const ends = anchors(startEdited, Math.min(project.editedDurationUs, startEdited + NEW_SHORT_US));
+    if (!main) return;
+    // From the start of the video: the playhead here is in the selected short.
+    const startEdited = 0;
+    const ends = anchors(startEdited, Math.min(main.editedDurationUs, startEdited + NEW_SHORT_US));
     if (!ends) return;
     const id = `short-${Date.now().toString(36)}`;
     setSelectedId(id);
@@ -240,7 +310,7 @@ export const ShortsStudio: React.FC = () => {
 
   /** Moves the short's start or end on the edited timeline. */
   const trim = (edge: "start" | "end", editedUs: number) => {
-    if (!project || !selected || !playable) return;
+    if (!main || !selected || selected.editedStartUs === undefined || selected.editedEndUs === undefined) return;
     const start = edge === "start" ? editedUs : selected.editedStartUs!;
     const end = edge === "end" ? editedUs : selected.editedEndUs!;
     if (end - start < MIN_SHORT_US || end - start > MAX_SHORT_US) {
@@ -431,13 +501,17 @@ export const ShortsStudio: React.FC = () => {
           {selected && playable ? (
             <>
               <div className="relative h-[min(70vh,720px)] aspect-[9/16] rounded-xl overflow-hidden border border-studio-700 bg-black">
-                {frameUrl && <img src={frameUrl} alt="Short preview" className="w-full h-full object-contain" />}
+                {playing ? (
+                  <canvas ref={canvasRef} aria-label="Short playing" className="w-full h-full object-contain" />
+                ) : (
+                  frameUrl && <img src={frameUrl} alt="Short preview" className="w-full h-full object-contain" />
+                )}
               </div>
               <div className="w-[min(70vh*9/16,405px)] min-w-[280px] flex items-center gap-2">
                 <button
                   type="button"
                   aria-label={playing ? "Pause" : "Play"}
-                  onClick={() => setPlaying(!playing)}
+                  onClick={togglePlay}
                   className="p-1.5 rounded-md bg-studio-800 hover:bg-studio-700"
                 >
                   {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
@@ -449,17 +523,16 @@ export const ShortsStudio: React.FC = () => {
                   max={Math.max(0, lengthUs - 1)}
                   step={100_000}
                   value={Math.min(offsetUs, Math.max(0, lengthUs - 1))}
-                  onChange={(e) => {
-                    setPlaying(false);
-                    setOffsetUs(Number(e.target.value));
-                  }}
+                  onChange={(e) => seek(Number(e.target.value))}
                   className="flex-1 accent-teal-500"
                 />
                 <span className="font-mono text-studio-400 w-20 text-right">
                   {formatTime(offsetUs)} / {formatTime(lengthUs)}
                 </span>
               </div>
-              <p className="text-[11px] text-studio-500">Preview without sound. The export has the audio.</p>
+              <p className="text-[11px] text-studio-500 text-center max-w-xs">
+                Plays with sound through the editor's playback (its preview shows the short meanwhile).
+              </p>
             </>
           ) : (
             <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
@@ -485,7 +558,26 @@ export const ShortsStudio: React.FC = () => {
             </label>
             {selected.reason && <p className="text-[11px] text-studio-500 italic">AI: {selected.reason}</p>}
 
-            {playable && (
+            {ownEdit && (
+              <div className="space-y-1.5 rounded-lg border border-amber-700/50 bg-amber-950/30 p-2">
+                <p className="text-[11px] text-amber-100">
+                  Edited on its own: cuts and clips on its timeline below change only this short. Trim it by dragging
+                  its first or last clip's edge.
+                </p>
+                <button
+                  type="button"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void run("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
+                  }
+                  className="px-2 py-1 rounded border border-amber-600/60 text-amber-100 hover:bg-amber-900/40 disabled:opacity-40"
+                  title="Drop this short's own edits so it follows the video again"
+                >
+                  Follow the video again
+                </button>
+              </div>
+            )}
+            {!ownEdit && selected.editedStartUs !== undefined && (
               <div className="space-y-2">
                 <span className="font-semibold text-studio-300">Trim</span>
                 {(["start", "end"] as const).map((edge) => {
@@ -497,7 +589,7 @@ export const ShortsStudio: React.FC = () => {
                         −1s
                       </button>
                       <span className="flex-1 text-center font-mono">{formatTime(at)}</span>
-                      <button type="button" disabled={!!busy} onClick={() => trim(edge, Math.min(project.editedDurationUs, at + 1_000_000))} className="px-2 py-0.5 rounded bg-studio-800 hover:bg-studio-700 disabled:opacity-40">
+                      <button type="button" disabled={!!busy} onClick={() => trim(edge, Math.min(main?.editedDurationUs ?? at, at + 1_000_000))} className="px-2 py-0.5 rounded bg-studio-800 hover:bg-studio-700 disabled:opacity-40">
                         +1s
                       </button>
                     </div>
@@ -709,16 +801,16 @@ export const ShortsStudio: React.FC = () => {
         )}
       </div>
 
-      {/* The editor's timeline, opened on this short's stretch. Edits change the video itself,
-          and the short follows them. */}
+      {/* The short's own timeline: the editor's timeline, showing only the short. Its first
+          edit makes the short its own; the video is never changed from here. */}
       {selected && playable && (
         <section className="h-64 shrink-0 border-t border-studio-800 flex flex-col min-h-0" aria-label="Short timeline">
           <div className="px-4 py-1 text-[11px] text-studio-500 border-b border-studio-800 bg-studio-900">
-            Timeline of this short. Cuts, splits, captions and clips edited here change the main video too; the short
-            keeps its start and end.
+            This short's timeline. Cuts, splits, moves and clips here change only the short (the video stays as it
+            is); caption text is shared with the video's transcript.
           </div>
           <div className="flex-1 min-h-0">
-            <TimelineStudio scope={{ startUs: selected.editedStartUs!, endUs: selected.editedEndUs! }} />
+            <TimelineStudio />
           </div>
         </section>
       )}

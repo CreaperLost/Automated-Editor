@@ -587,8 +587,10 @@ pub enum CaptionEdit {
 
 fn caption_track(
     reader: &crate::project::reader::ProjectReader,
+    short: Option<&str>,
 ) -> Result<CaptionTrackView, String> {
-    let document = &reader.history().current;
+    let timeline = caption_timeline(reader, short)?;
+    let document = &timeline;
     let settings = &document.captions;
     let recorded: Vec<String> = [TrackType::MicAudio, TrackType::SystemAudio]
         .iter()
@@ -643,14 +645,34 @@ fn caption_track(
     })
 }
 
+/// The timeline captions are placed on: the project's, or short `short`'s own.
+fn caption_timeline(
+    reader: &crate::project::reader::ProjectReader,
+    short: Option<&str>,
+) -> Result<crate::project::revision::EditDocument, String> {
+    let base = &reader.history().current;
+    match short {
+        Some(id) => {
+            let short = base
+                .shorts
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("That short no longer exists")?;
+            crate::shorts::short_timeline(base, short)
+        }
+        None => Ok(base.clone()),
+    }
+}
+
 pub fn project_caption_cues_impl(
     state: &AppState,
     project_handle: String,
+    short_id: Option<String>,
 ) -> Result<CaptionTrackView, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, &project_handle)?;
-    caption_track(reader)
+    caption_track(reader, short_id.as_deref())
 }
 
 pub fn transcript_caption_edit_impl(
@@ -658,6 +680,7 @@ pub fn transcript_caption_edit_impl(
     project_handle: String,
     track_id: String,
     change: CaptionEdit,
+    short_id: Option<String>,
 ) -> Result<CaptionTrackView, String> {
     // Edited times become the file's own time through the transcript's mapper.
     let span = match &change {
@@ -667,7 +690,8 @@ pub fn transcript_caption_edit_impl(
             let opened = state.opened_project.lock();
             let reader = opened.as_ref().ok_or("No opened project")?;
             super::require_handle(reader, &project_handle)?;
-            let mapper = reader.history().current.mapper_for_transcript(&track_id)?;
+            let mapper =
+                caption_timeline(reader, short_id.as_deref())?.mapper_for_transcript(&track_id)?;
             let start = mapper
                 .edited_to_source_us(*start_us)
                 .ok_or("A caption has to start over its own sound")?;
@@ -705,5 +729,5 @@ pub fn transcript_caption_edit_impl(
     refresh_playback(state);
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    caption_track(reader)
+    caption_track(reader, short_id.as_deref())
 }

@@ -287,12 +287,143 @@ pub struct Short {
     /// project's recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
+    /// The short's own timeline, once it was edited on its own. Until then it is its stretch
+    /// of the video and follows the video's edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit: Option<ShortEdit>,
+    /// How long the short plays now. Filled in for the UI and cleared before storing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_us: Option<u64>,
     /// Where the short lies on the edited timeline; absent when an end was cut.
     /// Filled in for the UI and cleared before the document is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_start_us: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_end_us: Option<u64>,
+}
+
+/// A short's own timeline: V1, its split points and the tracks beside it, in the short's time.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortEdit {
+    pub retained_intervals: Vec<RetainedInterval>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub split_points_us: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
+}
+
+impl ShortEdit {
+    pub fn of(timeline: &EditDocument) -> Self {
+        Self {
+            retained_intervals: timeline.retained_intervals.clone(),
+            split_points_us: timeline.split_points_us.clone(),
+            overlay_tracks: timeline.overlay_tracks.clone(),
+        }
+    }
+}
+
+/// The tracks' clips within edited `[start, end)`, moved to start at 0 and cut to fit.
+fn slice_tracks(
+    tracks: &[crate::tracks::OverlayTrack],
+    start: u64,
+    end: u64,
+    stills: &dyn Fn(&str) -> bool,
+) -> Vec<crate::tracks::OverlayTrack> {
+    tracks
+        .iter()
+        .map(|track| {
+            let mut track = track.clone();
+            track.clips = track
+                .clips
+                .into_iter()
+                .filter_map(|clip| {
+                    let (a, b) = (clip.start_us.max(start), clip.end_us().min(end));
+                    if b <= a || b - a < crate::tracks::MIN_CLIP_US {
+                        return None;
+                    }
+                    let skip = a - clip.start_us;
+                    Some(crate::tracks::OverlayClip {
+                        start_us: a - start,
+                        in_us: if stills(&clip.asset_id) {
+                            0
+                        } else {
+                            clip.in_us + skip
+                        },
+                        duration_us: b - a,
+                        ..clip
+                    })
+                })
+                .collect();
+            track
+        })
+        .collect()
+}
+
+/// The short as a timeline of its own, in the short's time: its own edit when it has one,
+/// else its stretch of the video (V1 and the tracks beside it).
+pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument, String> {
+    let mut timeline = base.clone();
+    timeline.shorts.clear();
+    timeline.chapters.clear();
+    timeline.short_layout = None;
+    match &short.edit {
+        Some(own) => {
+            timeline.retained_intervals = own.retained_intervals.clone();
+            timeline.split_points_us = own.split_points_us.clone();
+            timeline.overlay_tracks = own.overlay_tracks.clone();
+        }
+        None => {
+            let (start, end) = edited_range_in(short, base)
+                .ok_or("Part of this short was cut from the video; adjust it first")?;
+            let stills = |asset: &str| {
+                base.media_assets
+                    .iter()
+                    .any(|m| m.id == asset && m.kind == crate::media_bin::MediaKind::Image)
+            };
+            timeline.retained_intervals = slice_retained(&base.retained_intervals, start, end);
+            timeline.overlay_tracks = slice_tracks(&base.overlay_tracks, start, end, &stills);
+        }
+    }
+    Ok(timeline)
+}
+
+/// `base` with short `short_id`'s own timeline set from `timeline`.
+pub fn with_short_timeline(
+    base: &EditDocument,
+    short_id: &str,
+    timeline: &EditDocument,
+) -> Result<EditDocument, String> {
+    let mut next = base.clone();
+    let short = next
+        .shorts
+        .iter_mut()
+        .find(|s| s.id == short_id)
+        .ok_or("That short no longer exists")?;
+    short.edit = Some(ShortEdit::of(timeline));
+    // Anything else the edit changed (imported media, tracks' new ids) is the project's.
+    next.media_assets = timeline.media_assets.clone();
+    Ok(next)
+}
+
+/// Checks each short's own timeline the way the project's is checked.
+pub fn validate_edits(base: &EditDocument) -> Result<(), String> {
+    for short in base.shorts.iter().filter(|s| s.edit.is_some()) {
+        let timeline = short_timeline(base, short)?;
+        crate::project::revision::validate_retained(&timeline.retained_intervals)?;
+        crate::project::revision::mapper_for(&timeline.retained_intervals)?;
+        crate::project::revision::validate_split_points(&timeline.split_points_us)?;
+        crate::tracks::validate(&timeline)?;
+        if let Some(missing) = timeline.retained_intervals.iter().find_map(|entry| {
+            entry
+                .media
+                .as_ref()
+                .filter(|id| !base.media_assets.iter().any(|asset| &asset.id == *id))
+        }) {
+            return Err(format!("A short uses media {missing} that is not imported"));
+        }
+    }
+    Ok(())
 }
 
 pub fn validate(shorts: &[Short]) -> Result<(), String> {
@@ -324,6 +455,7 @@ pub fn normalized(mut shorts: Vec<Short>) -> Vec<Short> {
         short.title = short.title.trim().to_string();
         short.edited_start_us = None;
         short.edited_end_us = None;
+        short.length_us = None;
     }
     shorts.sort_by(|a, b| {
         a.source_start_us
@@ -352,6 +484,15 @@ pub fn edited_range(short: &Short, mapper: &TimelineMapper) -> Option<(u64, u64)
 
 pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
     for short in shorts {
+        short.length_us = short_timeline(document, short)
+            .ok()
+            .and_then(|t| t.edited_duration_us().ok());
+        // A short with its own edit no longer sits on the video's timeline.
+        if short.edit.is_some() {
+            short.edited_start_us = None;
+            short.edited_end_us = None;
+            continue;
+        }
         let range = edited_range_in(short, document);
         short.edited_start_us = range.map(|r| r.0);
         short.edited_end_us = range.map(|r| r.1);
@@ -390,14 +531,11 @@ pub fn short_document(
     short: &Short,
     captions: bool,
 ) -> Result<EditDocument, String> {
-    let (start, end) = edited_range_in(short, base)
-        .ok_or("Part of this short was cut from the video; adjust it first")?;
-    let length = end - start;
+    let mut document = short_timeline(base, short)?;
+    let length = document.edited_duration_us()?;
     if !(MIN_SHORT_US..=MAX_SHORT_US).contains(&length) {
         return Err("A short must be between 3 seconds and 3 minutes long".into());
     }
-    let mut document = base.clone();
-    document.retained_intervals = slice_retained(&base.retained_intervals, start, end);
     document.layout.aspect_ratio = "9:16".into();
     document.captions.enabled = captions && short.layout.captions;
     // The short's own caption choices: fewer words and lines suit a narrow frame.
@@ -439,6 +577,8 @@ mod tests {
             reason: String::new(),
             layout: ShortLayout::default(),
             media: None,
+            edit: None,
+            length_us: None,
             edited_start_us: None,
             edited_end_us: None,
         }

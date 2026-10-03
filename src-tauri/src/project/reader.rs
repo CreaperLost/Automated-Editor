@@ -125,6 +125,9 @@ pub struct OpenedProject {
     /// Video tracks V2, V3, ... above the main sequence, bottom to top.
     #[serde(default)]
     pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
+    /// Set when this is short `id`'s own timeline (the timeline fields are the short's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_view: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -659,6 +662,7 @@ impl ProjectReader {
                 chapters: Vec::new(),
                 shorts: Vec::new(),
                 overlay_tracks: Vec::new(),
+                short_view: None,
             },
             segments,
             root,
@@ -1047,6 +1051,81 @@ impl ProjectReader {
             .insert_media(expected_revision, asset_id, target_us, range, &self.root)?;
         self.sync_summary();
         Ok(self.summary.clone())
+    }
+
+    /// The project as short `short_id` sees it: the timeline fields are the short's own (or
+    /// its stretch of the video), in the short's time; everything else is the project's.
+    pub fn short_view(&self, short_id: &str) -> Result<OpenedProject, String> {
+        let base = &self.history.current;
+        let short = base
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let timeline = crate::shorts::short_timeline(base, short)?;
+        let mut view = self.summary.clone();
+        view.short_view = Some(short_id.to_string());
+        view.retained_intervals = timeline.retained_intervals.clone();
+        view.split_points_us = timeline.split_points_us.clone();
+        view.overlay_tracks = timeline.overlay_tracks.clone();
+        view.edited_duration_us = timeline.edited_duration_us()?;
+        view.zooms = timeline.zooms_with_ranges();
+        let mut focus = base.webcam_focus.clone();
+        if let Ok(mapper) = timeline.mapper() {
+            focus.attach_edited_ranges(&mapper);
+        }
+        view.webcam_focus = focus;
+        view.chapters = Vec::new();
+        view.removed_intervals = revision::removed_intervals(
+            &timeline.retained_intervals,
+            &self.pauses(),
+            self.summary.source_duration_us,
+        );
+        Ok(view)
+    }
+
+    /// The short's view when `short` names one that still exists, else the project.
+    pub fn view_or_summary(&self, short: Option<&str>) -> OpenedProject {
+        short
+            .and_then(|id| self.short_view(id).ok())
+            .unwrap_or_else(|| self.summary.clone())
+    }
+
+    /// A timeline edit made in the project's timeline or (with `short`) in a short's own.
+    pub fn edit_tracks_in(
+        &mut self,
+        expected_revision: u64,
+        edit: &crate::tracks::TrackEdit,
+        short: Option<&str>,
+    ) -> Result<OpenedProject, String> {
+        let Some(short_id) = short else {
+            return self.edit_tracks(expected_revision, edit);
+        };
+        self.history
+            .edit_short_tracks(expected_revision, short_id, edit, &self.root)?;
+        self.sync_summary();
+        self.short_view(short_id)
+    }
+
+    /// Lets a short follow the video again.
+    pub fn resync_short(
+        &mut self,
+        expected_revision: u64,
+        short_id: &str,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .resync_short(expected_revision, short_id, &self.root)?;
+        self.sync_summary();
+        self.short_view(short_id)
+    }
+
+    fn pauses(&self) -> Vec<RetainedInterval> {
+        self.summary
+            .manifest
+            .pause_intervals
+            .iter()
+            .map(|p| RetainedInterval::recording(p.start_us, p.end_us))
+            .collect()
     }
 
     pub fn edit_tracks(

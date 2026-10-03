@@ -901,6 +901,7 @@ impl EditHistory {
         crate::media_bin::validate_assets(&next.media_assets)?;
         crate::chapters::validate(&next.chapters)?;
         crate::shorts::validate(&next.shorts)?;
+        crate::shorts::validate_edits(&next)?;
         crate::tracks::validate(&next)?;
         if next.short_layout.is_some() {
             return Err("A project's own edit cannot use a short's split layout".into());
@@ -1393,6 +1394,18 @@ impl EditHistory {
         next.retained_intervals
             .retain(|entry| entry.media.as_deref() != Some(asset_id));
         crate::tracks::remove_asset(&mut next, asset_id);
+        // Shorts edited on their own lose it too.
+        for short in &mut next.shorts {
+            if let Some(own) = &mut short.edit {
+                own.retained_intervals
+                    .retain(|entry| entry.media.as_deref() != Some(asset_id));
+                own.retained_intervals =
+                    canonical_retained(std::mem::take(&mut own.retained_intervals));
+                for track in &mut own.overlay_tracks {
+                    track.clips.retain(|clip| clip.asset_id != asset_id);
+                }
+            }
+        }
         // An empty timeline is valid: a project can be built from nothing but imports.
         next.retained_intervals = canonical_retained(next.retained_intervals);
         self.commit_next(expected_revision, persist_root, next)
@@ -1458,6 +1471,52 @@ impl EditHistory {
                 audio_unlinked: false,
             },
         );
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// One timeline change made in short `short_id`'s own timeline. The short's first edit
+    /// copies its stretch of the video into it; from then on it is edited on its own.
+    pub fn edit_short_tracks(
+        &mut self,
+        expected_revision: u64,
+        short_id: &str,
+        edit: &crate::tracks::TrackEdit,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let short = self
+            .current
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let timeline = crate::shorts::short_timeline(&self.current, short)?;
+        let changed = crate::tracks::apply(&timeline, edit)?;
+        let next = crate::shorts::with_short_timeline(&self.current, short_id, &changed)?;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Lets a short follow the video again: its own edit is dropped.
+    pub fn resync_short(
+        &mut self,
+        expected_revision: u64,
+        short_id: &str,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        if expected_revision != self.current.revision {
+            return Err("Stale edit revision".into());
+        }
+        let mut next = self.current.clone();
+        let short = next
+            .shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        if short.edit.take().is_none() {
+            return Err("This short already follows the video".into());
+        }
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -2194,6 +2253,84 @@ mod tests {
             Some((500_000, 700_000))
         );
         assert_eq!(talk.edited_span_of(3_500_000, 3_700_000), None);
+    }
+
+    #[test]
+    fn a_short_edited_on_its_own_leaves_the_video_alone() {
+        use crate::tracks::{EditedRange, TrackEdit};
+        let dir = tempdir().unwrap();
+        let mut history =
+            EditHistory::new(EditDocument::from_retained(vec![ri(0, 60_000_000)]).unwrap());
+        let short = crate::shorts::Short {
+            id: "s1".into(),
+            title: "Best bit".into(),
+            source_start_us: 10_000_000,
+            source_end_us: 30_000_000,
+            reason: String::new(),
+            layout: Default::default(),
+            media: None,
+            edit: None,
+            length_us: None,
+            edited_start_us: None,
+            edited_end_us: None,
+        };
+        history.set_shorts(0, vec![short], dir.path()).unwrap();
+
+        // Cutting 2 s out of the short's own timeline: the short is 18 s, the video still 60 s.
+        history
+            .edit_short_tracks(
+                1,
+                "s1",
+                &TrackEdit::RippleDelete {
+                    ranges: vec![EditedRange {
+                        start_us: 0,
+                        end_us: 2_000_000,
+                    }],
+                    all_tracks: true,
+                },
+                dir.path(),
+            )
+            .unwrap();
+        assert_eq!(history.current.edited_duration_us().unwrap(), 60_000_000);
+        let own = history.current.shorts[0].edit.clone().unwrap();
+        assert_eq!(own.retained_intervals, vec![ri(12_000_000, 30_000_000)]);
+        let exported =
+            crate::shorts::short_document(&history.current, &history.current.shorts[0], false)
+                .unwrap();
+        assert_eq!(exported.edited_duration_us().unwrap(), 18_000_000);
+
+        // A cut in the video no longer reaches it.
+        history
+            .ripple_cuts(2, &[(0, 20_000_000)], dir.path())
+            .unwrap();
+        let after =
+            crate::shorts::short_timeline(&history.current, &history.current.shorts[0]).unwrap();
+        assert_eq!(after.edited_duration_us().unwrap(), 18_000_000);
+
+        // The 2 s come back on the short's timeline; and a re-sync follows the video again.
+        history
+            .edit_short_tracks(
+                3,
+                "s1",
+                &TrackEdit::Restore {
+                    ranges: vec![EditedRange {
+                        start_us: 10_000_000,
+                        end_us: 12_000_000,
+                    }],
+                    grow: RestoreGrow::Start,
+                    shift_tracks_at: Some(0),
+                },
+                dir.path(),
+            )
+            .unwrap();
+        let own = history.current.shorts[0].edit.clone().unwrap();
+        assert_eq!(own.retained_intervals, vec![ri(10_000_000, 30_000_000)]);
+        history.resync_short(4, "s1", dir.path()).unwrap();
+        assert!(history.current.shorts[0].edit.is_none());
+        // Following the video now, whose first 20 s were cut: the short's start is gone.
+        assert!(
+            crate::shorts::short_timeline(&history.current, &history.current.shorts[0]).is_err()
+        );
     }
 
     #[test]

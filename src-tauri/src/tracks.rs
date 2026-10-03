@@ -211,6 +211,20 @@ pub enum TrackEdit {
         ranges: Vec<EditedRange>,
         target_us: u64,
     },
+    /// Puts cut recording time (`ranges`, in recording time) back on V1; `grow` picks the clip
+    /// that grows. With `shift_tracks_at`, the tracks' clips from there on move right with it.
+    Restore {
+        ranges: Vec<EditedRange>,
+        #[serde(default)]
+        grow: crate::project::revision::RestoreGrow,
+        #[serde(default)]
+        shift_tracks_at: Option<u64>,
+    },
+    /// Inserts imported media into V1 at edited position `target_us`, at its default length.
+    InsertMedia {
+        asset_id: String,
+        target_us: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -663,6 +677,76 @@ pub fn apply(document: &EditDocument, edit: &TrackEdit) -> Result<EditDocument, 
         }
         TrackEdit::MoveMain { ranges, target_us } => {
             crate::project::revision::move_main(&mut next, &pairs(ranges), *target_us)?;
+        }
+        TrackEdit::Restore {
+            ranges,
+            grow,
+            shift_tracks_at,
+        } => {
+            // Only time no V1 clip already shows can come back.
+            let shown: Vec<(u64, u64)> = next
+                .retained_intervals
+                .iter()
+                .filter(|i| i.is_recording())
+                .map(|i| (i.start_us, i.end_us))
+                .collect();
+            let mut wanted = Vec::new();
+            for (start, end) in pairs(ranges) {
+                let mut pieces = vec![(start, end)];
+                for &(a, b) in &shown {
+                    pieces = pieces
+                        .into_iter()
+                        .flat_map(|(s, e)| {
+                            if b <= s || a >= e {
+                                vec![(s, e)]
+                            } else {
+                                [(s, a.max(s)), (b.min(e), e)]
+                                    .into_iter()
+                                    .filter(|(x, y)| y > x)
+                                    .collect()
+                            }
+                        })
+                        .collect();
+                }
+                wanted.extend(pieces);
+            }
+            if wanted.is_empty() {
+                return Err("Nothing to restore there".into());
+            }
+            let before = next.edited_duration_us()?;
+            next.retained_intervals = crate::project::revision::restore_in_order(
+                &next.retained_intervals,
+                &wanted,
+                *grow,
+            );
+            if let Some(at_us) = shift_tracks_at {
+                let grown = next.edited_duration_us()?.saturating_sub(before);
+                shift_from(&mut next, *at_us, grown as i64);
+            }
+        }
+        TrackEdit::InsertMedia {
+            asset_id,
+            target_us,
+        } => {
+            let asset = next
+                .media_assets
+                .iter()
+                .find(|asset| &asset.id == asset_id)
+                .ok_or("No such imported media")?;
+            let length = asset.default_clip_us();
+            let at = crate::project::revision::split_at_edited(
+                &mut next.retained_intervals,
+                *target_us,
+            )?;
+            next.retained_intervals.insert(
+                at,
+                RetainedInterval {
+                    start_us: 0,
+                    end_us: length,
+                    media: Some(asset_id.clone()),
+                    audio_unlinked: false,
+                },
+            );
         }
         TrackEdit::RelinkClip {
             clip_id,

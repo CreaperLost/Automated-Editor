@@ -566,6 +566,8 @@ export interface OpenedProject {
   shorts?: Short[];
   /** Video tracks V2, V3, ... above the main sequence, bottom to top. */
   overlayTracks?: OverlayTrack[];
+  /** Set when this is a short's own timeline: the timeline fields are the short's. */
+  shortView?: string;
 }
 
 // Video tracks above the main sequence (src-tauri/src/tracks.rs)
@@ -622,7 +624,9 @@ export type TrackEdit =
   | { kind: "split"; atUs: number; main: boolean; clipIds: string[] }
   | { kind: "rippleTrimClip"; clipId: string; side: "start" | "end"; atUs: number }
   | { kind: "moveClips"; clipIds: string[]; deltaUs: number }
-  | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number };
+  | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number }
+  | { kind: "restore"; ranges: EditedSpan[]; grow: "end" | "start"; shiftTracksAt?: number | null }
+  | { kind: "insertMedia"; assetId: string; targetUs: number };
 
 /** One caption on the timeline's caption track (src-tauri/src/commands/transcript.rs). */
 export interface CaptionCueView {
@@ -745,6 +749,8 @@ export interface PlaybackStatus {
   positionUs: number;
   durationUs: number;
   clockKind: ClockKind;
+  /** The short playing instead of the video, while the Shorts Studio has one in focus. */
+  shortId?: string;
   previewAvailable: boolean;
   openFiles: number;
   plans: TrackDecodePlan[];
@@ -1051,6 +1057,10 @@ export interface Short {
   layout: ShortLayout;
   /** The imported file whose clock the start and end are on; absent: the recording. */
   media?: string;
+  /** Present once the short was edited on its own; it then no longer follows the video. */
+  edit?: unknown;
+  /** How long it plays now. */
+  lengthUs?: number;
   /** Absent when an end was cut from the video. Filled in by the backend. */
   editedStartUs?: number;
   editedEndUs?: number;

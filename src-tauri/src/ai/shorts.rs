@@ -67,6 +67,8 @@ pub fn parse_shorts(reply: &Value, lines: &[Line]) -> Vec<Short> {
             reason,
             layout: Default::default(),
             media: None,
+            edit: None,
+            length_us: None,
             edited_start_us: None,
             edited_end_us: None,
         });

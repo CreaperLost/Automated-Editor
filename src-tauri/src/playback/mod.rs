@@ -68,6 +68,9 @@ pub struct PlaybackStatus {
     pub position_us: u64,
     pub duration_us: u64,
     pub clock_kind: ClockKind,
+    /// The short playing instead of the video, when the Shorts Studio has one in focus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_id: Option<String>,
     pub preview_available: bool,
     pub open_files: usize,
     pub plans: Vec<TrackDecodePlan>,
@@ -100,9 +103,40 @@ pub struct PlaybackOwner {
     play_anchor: Option<(Instant, u64)>,
     error: Option<String>,
     diagnostics: Vec<String>,
+    /// The short that plays instead of the video.
+    short_focus: Option<String>,
 }
 
 impl PlaybackOwner {
+    /// What plays: the project's edit, or the short in focus as its own vertical video.
+    pub fn playable_document(&self, document: &EditDocument) -> Result<EditDocument, String> {
+        match &self.short_focus {
+            Some(id) => {
+                let short = document
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or("That short no longer exists")?;
+                crate::shorts::short_document(document, short, true)
+            }
+            None => Ok(document.clone()),
+        }
+    }
+
+    /// Plays short `short` instead of the video (or the video again with `None`), from its start.
+    pub fn focus_short(
+        &mut self,
+        short: Option<String>,
+        document: &EditDocument,
+    ) -> Result<(), String> {
+        if self.short_focus == short {
+            return Ok(());
+        }
+        self.short_focus = short;
+        self.position_us = 0;
+        self.apply_document(document)
+    }
+
     pub fn closed() -> Self {
         Self {
             native_enabled: false,
@@ -123,6 +157,7 @@ impl PlaybackOwner {
             play_anchor: None,
             error: None,
             diagnostics: Vec::new(),
+            short_focus: None,
         }
     }
 
@@ -157,6 +192,7 @@ impl PlaybackOwner {
             play_anchor: None,
             error: None,
             diagnostics: Vec::new(),
+            short_focus: None,
         };
         owner.touch_plans(0)?;
         Ok(owner)
@@ -165,6 +201,15 @@ impl PlaybackOwner {
     pub fn apply_document(&mut self, document: &EditDocument) -> Result<(), String> {
         self.advance();
         self.bump_generation();
+        // A short that is gone or no longer valid hands playback back to the video.
+        let playable = match self.playable_document(document) {
+            Ok(playable) => playable,
+            Err(_) => {
+                self.short_focus = None;
+                document.clone()
+            }
+        };
+        let document = &playable;
         self.retained = document.retained_intervals.clone();
         self.duration_us = document.edited_duration_us()?;
         if self.position_us > self.duration_us {
@@ -457,6 +502,7 @@ impl PlaybackOwner {
             position_us: self.position_us,
             duration_us: self.duration_us,
             clock_kind: self.clock_kind(source_us),
+            short_id: self.short_focus.clone(),
             preview_available: self.preview_available,
             open_files: self.open_files.len(),
             plans,

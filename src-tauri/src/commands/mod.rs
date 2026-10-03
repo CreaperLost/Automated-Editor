@@ -316,6 +316,7 @@ pub fn project_waveform_impl(
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
+    short_id: Option<String>,
 ) -> Result<WaveformPage, String> {
     let epoch = state.waveform_epoch.load(Ordering::SeqCst);
     let generation = {
@@ -387,6 +388,20 @@ pub fn project_waveform_impl(
                 edited_duration_us: reader.summary.edited_duration_us,
             }
         }
+    };
+    // In a short's timeline, the recording plays as the short's own V1.
+    let ctx = match short_id.as_deref() {
+        Some(short) => {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().ok_or("No opened project")?;
+            let view = reader.short_view(short)?;
+            WaveformTrackContext {
+                retained: view.retained_intervals,
+                edited_duration_us: view.edited_duration_us,
+                ..ctx
+            }
+        }
+        None => ctx,
     };
     crate::project::waveform::query_waveform(&ctx, start_us, end_us, bucket_count, &|| {
         if state.waveform_epoch.load(Ordering::SeqCst) != epoch {
@@ -1055,11 +1070,22 @@ pub fn project_tracks_edit_impl(
     expected_revision: u64,
     edit: crate::tracks::TrackEdit,
 ) -> Result<OpenedProject, String> {
+    project_tracks_edit_in(state, project_handle, expected_revision, edit, None)
+}
+
+/// A timeline edit in the project's timeline, or in short `short_id`'s own timeline.
+pub fn project_tracks_edit_in(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    edit: crate::tracks::TrackEdit,
+    short_id: Option<String>,
+) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let summary = reader.edit_tracks(expected_revision, &edit)?;
+    let summary = reader.edit_tracks_in(expected_revision, &edit, short_id.as_deref())?;
     state
         .playback
         .lock()
@@ -1131,12 +1157,14 @@ pub fn project_undo_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
+    short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let summary = reader.undo(expected_revision)?;
+    reader.undo(expected_revision)?;
+    let summary = reader.view_or_summary(short_id.as_deref());
     state
         .playback
         .lock()
@@ -1149,18 +1177,65 @@ pub fn project_redo_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
+    short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let summary = reader.redo(expected_revision)?;
+    reader.redo(expected_revision)?;
+    let summary = reader.view_or_summary(short_id.as_deref());
     state
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
+}
+
+pub fn project_short_view_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: String,
+) -> Result<OpenedProject, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    reader.short_view(&short_id)
+}
+
+pub fn project_short_resync_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let view = reader.resync_short(expected_revision, &short_id)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    Ok(view)
+}
+
+/// Plays short `short_id` (its own frame, timeline and sound) instead of the video, or the
+/// video again with `None`.
+pub fn playback_focus_short_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<crate::playback::PlaybackStatus, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let mut playback = state.playback.lock();
+    playback.focus_short(short_id, &reader.history().current)?;
+    playback.status()
 }
 
 pub fn project_rename_impl(

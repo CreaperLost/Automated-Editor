@@ -66,6 +66,13 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
   }
 }
 
+/** The short whose own timeline this window edits (the Shorts Studio), or none: the video. */
+let editTarget: string | null = null;
+export const setEditTarget = (shortId: string | null) => {
+  editTarget = shortId;
+};
+export const currentEditTarget = () => editTarget;
+
 // One wrapper per command registered in src-tauri/src/lib.rs.
 export const api = {
   openProject: (path: string) => invokeTauri<OpenedProject>("open_project", { path }),
@@ -85,6 +92,7 @@ export const api = {
       startUs,
       endUs,
       bucketCount,
+      shortId: editTarget,
     }),
   projectZoomSuggestions: (projectHandle: string, config?: ZoomConfig) =>
     invokeTauri<ZoomGeneration>(
@@ -250,9 +258,15 @@ export const api = {
       shiftTracksAt: shiftTracksAtUs === undefined ? null : Math.round(shiftTracksAtUs),
     }),
   projectUndo: (projectHandle: string, expectedRevision: number) =>
-    invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision }),
+    invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision, shortId: editTarget }),
   projectRedo: (projectHandle: string, expectedRevision: number) =>
-    invokeTauri<OpenedProject>("project_redo", { projectHandle, expectedRevision }),
+    invokeTauri<OpenedProject>("project_redo", { projectHandle, expectedRevision, shortId: editTarget }),
+  projectShortView: (projectHandle: string, shortId: string) =>
+    invokeTauri<OpenedProject>("project_short_view", { projectHandle, shortId }),
+  projectShortResync: (projectHandle: string, expectedRevision: number, shortId: string) =>
+    invokeTauri<OpenedProject>("project_short_resync", { projectHandle, expectedRevision, shortId }),
+  playbackFocusShort: (projectHandle: string, shortId: string | null) =>
+    invokeTauri<PlaybackStatus>("playback_focus_short", { projectHandle, shortId }),
   projectRename: (projectHandle: string, newName: string) =>
     invokeTauri<OpenedProject>("project_rename", { projectHandle, newName }),
   playbackStatus: (projectHandle: string) =>
@@ -282,7 +296,7 @@ export const api = {
   previewQualitySet: (quality: PreviewQuality) =>
     invokeTauri<PreviewQuality>("preview_quality_set", { quality }),
   projectTracksEdit: (projectHandle: string, expectedRevision: number, edit: TrackEdit) =>
-    invokeTauri<OpenedProject>("project_tracks_edit", { projectHandle, expectedRevision, edit }),
+    invokeTauri<OpenedProject>("project_tracks_edit", { projectHandle, expectedRevision, edit, shortId: editTarget }),
   previewHitTest: (x: number, y: number) => invokeTauri<boolean>("preview_hit_test", { x, y }),
   previewDetach: (windowLabel: string, generation?: number) =>
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),
@@ -329,9 +343,9 @@ export const api = {
       wordIds,
     }),
   projectCaptionCues: (projectHandle: string) =>
-    invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle }),
+    invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle, shortId: editTarget }),
   transcriptCaptionEdit: (projectHandle: string, trackId: string, edit: CaptionEdit) =>
-    invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit }),
+    invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit, shortId: editTarget }),
   transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
     invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text }),
   transcriptDismissSuggestions: (projectHandle: string, trackId: string, ids: string[], dismissed: boolean) =>

@@ -284,9 +284,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   };
   /** Puts cut media back; with `shiftAtUs`, the other tracks move right with it. */
   const restoreCut = (startUs: number, endUs: number, grow: "end" | "start" = "end", shiftAtUs?: number) =>
-    runEdit((project) =>
-      api.projectRestoreCuts(project.projectHandle, project.revision, [{ startUs, endUs }], grow, shiftAtUs),
-    );
+    tracksEdit({ kind: "restore", ranges: [{ startUs, endUs }], grow, shiftTracksAt: shiftAtUs ?? null });
   // Q and E: ripple-delete from the playhead to the previous or next edit point. A selected
   // clip is trimmed alone; with nothing selected, every track loses the same time.
   const rippleTrim = (side: "previous" | "next") => {
@@ -559,7 +557,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       return;
     }
     const target = nearestEdge(event.clientX);
-    void runEdit((project) => api.projectMediaInsert(project.projectHandle, project.revision, assetId, target));
+    void tracksEdit({ kind: "insertMedia", assetId, targetUs: target });
   };
   const jumpToEdit = (direction: -1 | 1) => {
     const target =
@@ -1098,12 +1096,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     const before = move.ranges.filter((r) => r.endUs <= target).reduce((sum, r) => sum + r.endUs - r.startUs, 0);
     const movedStart = target - before;
     pendingSelect.current = { startUs: movedStart, endUs: movedStart + length };
-    const work =
-      move.ranges.length === 1
-        ? runEdit((project) =>
-            api.projectMoveRange(project.projectHandle, project.revision, move.range.startUs, move.range.endUs, target),
-          )
-        : tracksEdit({ kind: "moveMain", ranges: move.ranges, targetUs: target });
+    const work = tracksEdit({ kind: "moveMain", ranges: move.ranges, targetUs: target });
     void work.then((applied) => {
       if (!applied) pendingSelect.current = null;
     });
@@ -1931,7 +1924,15 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           {cutMarkers.length > 0 && openedProject && (
             <button
               disabled={editing}
-              onClick={() => void restoreCut(0, openedProject.sourceDurationUs)}
+              onClick={() =>
+                void tracksEdit({
+                  kind: "restore",
+                  // Exactly what was cut: recorder pauses never come back.
+                  ranges: (openedProject.removedIntervals ?? []).map(({ startUs, endUs }) => ({ startUs, endUs })),
+                  grow: "end",
+                  shiftTracksAt: null,
+                })
+              }
               className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs text-amber-300 hover:bg-studio-700 disabled:opacity-40"
               title={`Put all ${cutMarkers.length} cut${cutMarkers.length === 1 ? "" : "s"} back on the timeline`}
             >
@@ -1942,7 +1943,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
 
           <button
-            disabled={!openedProject || editing || !selection}
+            disabled={!openedProject || editing || !selection || !!openedProject?.shortView}
             onClick={toggleCamFocus}
             aria-pressed={selectionFocused}
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-40 ${
@@ -1960,7 +1961,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             <span>Cam Focus</span>
           </button>
           <button
-            disabled={!openedProject || editing || !selection}
+            disabled={!openedProject || editing || !selection || !!openedProject?.shortView}
             onClick={toggleNormalView}
             aria-pressed={selectionInNormalView}
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-40 ${

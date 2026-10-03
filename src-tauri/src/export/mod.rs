@@ -2360,6 +2360,8 @@ mod tests {
             reason: String::new(),
             layout: ShortLayout::default(),
             media: None,
+            edit: None,
+            length_us: None,
             edited_start_us: None,
             edited_end_us: None,
         };

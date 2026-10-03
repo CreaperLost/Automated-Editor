@@ -75,7 +75,18 @@ export const App: React.FC = () => {
 
   // Edits made in the Shorts Studio window.
   useEffect(
-    () => listenForProjects((next) => useProjectStore.getState().applyOpenedProject(next, { remote: true })),
+    () =>
+      listenForProjects((next) => {
+        // The Shorts Studio may send a short's view: the editor shows the whole project.
+        if (next.shortView) {
+          void api
+            .projectCurrent()
+            .then((project) => project && useProjectStore.getState().applyOpenedProject(project, { remote: true }))
+            .catch(() => undefined);
+          return;
+        }
+        useProjectStore.getState().applyOpenedProject(next, { remote: true });
+      }),
     [],
   );
   useEffect(() => listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true)), []);

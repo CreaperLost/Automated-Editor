@@ -151,6 +151,7 @@ async fn project_waveform(
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
+    short_id: Option<String>,
 ) -> Result<project::WaveformPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::project_waveform_impl(
@@ -160,6 +161,7 @@ async fn project_waveform(
             start_us,
             end_us,
             bucket_count,
+            short_id,
         )
     })
     .await
@@ -460,8 +462,43 @@ fn project_tracks_edit(
     project_handle: String,
     expected_revision: u64,
     edit: tracks::TrackEdit,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_tracks_edit_impl(&state, project_handle, expected_revision, edit)
+    commands::project_tracks_edit_in(&state, project_handle, expected_revision, edit, short_id)
+}
+
+/// Short `short_id`'s own timeline, as a project the timeline can show.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_view(
+    state: State<'_, AppState>,
+    project_handle: String,
+    short_id: String,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_view_impl(&state, project_handle, short_id)
+}
+
+/// Drops a short's own edit, so it follows the video again.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_resync(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_resync_impl(&state, project_handle, expected_revision, short_id)
+}
+
+/// Plays a short instead of the video (or the video again).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn playback_focus_short(
+    state: State<'_, AppState>,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<playback::PlaybackStatus, String> {
+    commands::playback_focus_short_impl(&state, project_handle, short_id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -544,8 +581,9 @@ fn project_undo(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_undo_impl(&state, project_handle, expected_revision)
+    commands::project_undo_impl(&state, project_handle, expected_revision, short_id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -554,8 +592,9 @@ fn project_redo(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_redo_impl(&state, project_handle, expected_revision)
+    commands::project_redo_impl(&state, project_handle, expected_revision, short_id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -992,8 +1031,9 @@ fn transcript_suggestions(
 fn project_caption_cues(
     state: State<'_, AppState>,
     project_handle: String,
+    short_id: Option<String>,
 ) -> Result<commands::transcript::CaptionTrackView, String> {
-    commands::transcript::project_caption_cues_impl(&state, project_handle)
+    commands::transcript::project_caption_cues_impl(&state, project_handle, short_id)
 }
 
 /// Edits a caption from the timeline (text, timing, split, merge, hide), saved in the transcript.
@@ -1004,8 +1044,15 @@ fn transcript_caption_edit(
     project_handle: String,
     track_id: String,
     edit: commands::transcript::CaptionEdit,
+    short_id: Option<String>,
 ) -> Result<commands::transcript::CaptionTrackView, String> {
-    commands::transcript::transcript_caption_edit_impl(&state, project_handle, track_id, edit)
+    commands::transcript::transcript_caption_edit_impl(
+        &state,
+        project_handle,
+        track_id,
+        edit,
+        short_id,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1322,6 +1369,9 @@ pub fn run() {
             project_media_roles,
             project_caption_cues,
             transcript_caption_edit,
+            project_short_view,
+            project_short_resync,
+            playback_focus_short,
             project_media_remove,
             project_media_insert,
             project_tracks_edit,

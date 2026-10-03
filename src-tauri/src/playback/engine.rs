@@ -188,6 +188,12 @@ fn tick(
                 super::tracks_from_reader(reader),
             )
         };
+        // The short in focus plays as its own vertical video.
+        let document = state
+            .playback
+            .lock()
+            .playable_document(&document)
+            .map_err(error)?;
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
         let mixer = AudioMixer::new(&root, &document, &tracks).map_err(error)?;
         let (width, height) = document.layout.preview_dimensions().map_err(error)?;

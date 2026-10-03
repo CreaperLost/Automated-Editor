@@ -84,6 +84,7 @@ const PreviewQualityControls: React.FC = () => {
 /// The preview stage: project summary, the video preview, and track diagnostics.
 export const StagePanel: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
+  const playbackShortId = useProjectStore((s) => s.playbackShortId);
   const aspectRatio = useSettingsStore((s) => s.canvas.aspectRatio);
   const [trackId, setTrackId] = useState("");
   const [page, setPage] = useState<SegmentPage>();
@@ -113,9 +114,30 @@ export const StagePanel: React.FC = () => {
   }, [project?.projectHandle, trackId]);
 
   if (!project) return null;
+  const playingShort = project.shorts?.find((short) => short.id === playbackShortId);
 
   return (
     <div className="h-full flex flex-col min-w-0 min-h-0 overflow-hidden p-3 gap-2 bg-studio-950">
+      {playbackShortId && (
+        // The Shorts Studio is playing a short through this preview and its sound.
+        <div className="flex items-center gap-2 rounded-md border border-teal-700/60 bg-teal-950/40 px-2 py-1 text-[11px] text-teal-100">
+          <span className="flex-1 truncate">
+            Playing the short {playingShort ? `"${playingShort.title}"` : ""} from the Shorts Studio
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              void api
+                .playbackFocusShort(project.projectHandle, null)
+                .then(useProjectStore.getState().applyPlaybackStatus)
+                .catch(() => undefined)
+            }
+            className="px-2 py-0.5 rounded border border-teal-600/60 hover:bg-teal-900/50"
+          >
+            Back to the video
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between text-xs text-studio-400 px-1">
         <div className="truncate">
           {project.tracks.length} tracks · source {formatSeconds(project.sourceDurationUs)} · edited{" "}

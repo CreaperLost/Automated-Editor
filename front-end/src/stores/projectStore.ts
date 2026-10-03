@@ -1,3 +1,4 @@
+import { api } from "../lib/ipc";
 import { create } from "zustand";
 import { Track, ZoomKeyframe, SilenceBlock, ProjectManifest, OpenedProject, WaveformPage, PlaybackStatus, studioTrackType, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
@@ -104,6 +105,11 @@ interface ProjectStore {
   selectedZoomId?: string;
   /** The clip picked on a video track above the main sequence. */
   selectedOverlayClipId?: string;
+  /** The short this window shows as its timeline (the Shorts Studio), if any. */
+  viewShort?: string;
+  setViewShort: (shortId: string | undefined) => void;
+  /** The short playing instead of the video (set by the Shorts Studio). */
+  playbackShortId?: string;
   /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
   captionsVersion: number;
   /** Marks transcripts changed here (and tells the other windows) or in another window. */
@@ -170,7 +176,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
   applyPlaybackStatus: (status) => set((state) => {
     if (state.openedProject?.projectHandle !== status.projectHandle || status.generation < state.playbackGeneration) return state;
-    return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable };
+    return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable, playbackShortId: status.shortId };
   }),
   loadOpenedProject: (project, projectPath) => {
     const resolvedPath = projectPath ?? project.projectPath ?? get().projectPath ?? undefined;
@@ -231,6 +237,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   selectedZoomId: undefined,
   selectedOverlayClipId: undefined,
   captionsVersion: 0,
+  viewShort: undefined,
+  setViewShort: (viewShort) => set({ viewShort }),
+  playbackShortId: undefined,
   bumpCaptions: (fromOtherWindow?: boolean) => {
     set((state) => ({ captionsVersion: state.captionsVersion + 1 }));
     if (!fromOtherWindow) broadcastCaptionsChanged();
@@ -305,7 +314,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   applyOpenedProject: (project, options) => {
     const current = get().openedProject;
-    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle) {
+    // A window showing a short turns every project it is handed into that short's view.
+    const viewShort = get().viewShort;
+    if (viewShort && project.shortView !== viewShort) {
+      void api
+        .projectShortView(project.projectHandle, viewShort)
+        .then((view) => get().applyOpenedProject(view, options))
+        .catch(() => undefined);
+      if (!options?.remote) broadcastProject(project);
+      return;
+    }
+    // An older (or the same) revision is stale, unless it is a different view of it (a short's).
+    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle && project.shortView === current.shortView) {
       return;
     }
     if (!options?.remote && current?.projectHandle === project.projectHandle) broadcastProject(project);
