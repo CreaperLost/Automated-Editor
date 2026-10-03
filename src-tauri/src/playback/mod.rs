@@ -17,7 +17,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::Instant;
 
-pub use preview::{PreviewHitMode, PreviewOwner, PreviewStatus, PreviewViewport};
+pub use preview::{PreviewHitMode, PreviewOwner, PreviewQuality, PreviewStatus, PreviewViewport};
 pub const MAX_OPEN_FILES: usize = 8;
 pub const MAX_PLAN_TRACKS: usize = 16;
 

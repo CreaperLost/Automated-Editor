@@ -74,6 +74,9 @@ pub struct Layer {
     pub shadow_blur_px: f32,
     pub shadow_opacity: f32,
     pub shadow_offset: [f32; 2],
+    /// Set when the pixels are the same on every frame (the background); the compositor then
+    /// keeps the uploaded texture instead of uploading it again.
+    pub cache_key: Option<u64>,
 }
 
 impl Layer {
@@ -94,6 +97,7 @@ impl Layer {
             shadow_blur_px: 0.0,
             shadow_opacity: 0.0,
             shadow_offset: [0.0, 0.0],
+            cache_key: None,
         }
     }
 
@@ -467,12 +471,29 @@ impl Scene {
 }
 
 struct LayerDraw {
-    _texture: wgpu::Texture,
-    _view: wgpu::TextureView,
     _content_uniform: wgpu::Buffer,
     bind_content: wgpu::BindGroup,
     v_content: wgpu::Buffer,
     shadow: Option<(wgpu::BindGroup, wgpu::Buffer, wgpu::Buffer)>,
+}
+
+/// The render target and its readback buffer, kept while the canvas size stays the same.
+struct TargetCache {
+    width: u32,
+    height: u32,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    staging: wgpu::Buffer,
+}
+
+/// A layer texture kept for the layer in the same position on the next frame.
+struct LayerSlot {
+    width: u32,
+    height: u32,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// The `cache_key` of the pixels last uploaded, if they were static.
+    key: Option<u64>,
 }
 
 pub struct Compositor {
@@ -483,6 +504,9 @@ pub struct Compositor {
     bind_layout: wgpu::BindGroupLayout,
     adapter_name: String,
     copies: u32,
+    /// Creating textures and buffers for every frame cost more than drawing it.
+    target: std::sync::Mutex<Option<TargetCache>>,
+    slots: std::sync::Mutex<Vec<LayerSlot>>,
 }
 
 impl Compositor {
@@ -591,6 +615,8 @@ impl Compositor {
             bind_layout,
             adapter_name,
             copies: COPIES_COMPOSITE,
+            target: std::sync::Mutex::new(None),
+            slots: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -625,23 +651,47 @@ impl Compositor {
         if scene.layers.len() > MAX_LAYERS {
             return Err("Compositor layer count exceeds the F2 bound".into());
         }
-        let target = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("aeroedits-target"),
-            size: wgpu::Extent3d {
+        let padded = padded_bytes_per_row(scene.width);
+        let mut target_cache = self.target.lock().unwrap_or_else(|e| e.into_inner());
+        if !target_cache
+            .as_ref()
+            .is_some_and(|t| (t.width, t.height) == (scene.width, scene.height))
+        {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("aeroedits-target"),
+                size: wgpu::Extent3d {
+                    width: scene.width,
+                    height: scene.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("aeroedits-readback"),
+                size: u64::from(padded * scene.height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            *target_cache = Some(TargetCache {
                 width: scene.width,
                 height: scene.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+                texture,
+                view,
+                staging,
+            });
+        }
+        let cached = target_cache.as_ref().unwrap();
+        let (target, view, staging) = (&cached.texture, &cached.view, &cached.staging);
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        slots.truncate(scene.layers.len());
         let mut draws = Vec::new();
-        for layer in &scene.layers {
+        for (index, layer) in scene.layers.iter().enumerate() {
             validate_dim(layer.frame.width, layer.frame.height)?;
             if layer.frame.width > MAX_FRAME_DIM || layer.frame.height > MAX_FRAME_DIM {
                 return Err("Layer exceeds the compositor working-set limit".into());
@@ -654,40 +704,64 @@ impl Compositor {
             if (layer.frame.stride as usize) < row_bytes || layer.frame.data.len() < needed {
                 return Err("Layer frame buffer is truncated".into());
             }
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("aeroedits-layer"),
-                size: wgpu::Extent3d {
-                    width: layer.frame.width,
-                    height: layer.frame.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bgra8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &layer.frame.data[..needed],
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(layer.frame.stride),
-                    rows_per_image: Some(layer.frame.height),
-                },
-                wgpu::Extent3d {
-                    width: layer.frame.width,
-                    height: layer.frame.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            let layer_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let size = (layer.frame.width, layer.frame.height);
+            if slots
+                .get(index)
+                .is_none_or(|slot| (slot.width, slot.height) != size)
+            {
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("aeroedits-layer"),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let slot = LayerSlot {
+                    width: size.0,
+                    height: size.1,
+                    texture,
+                    view,
+                    key: None,
+                };
+                if index < slots.len() {
+                    slots[index] = slot;
+                } else {
+                    slots.push(slot);
+                }
+            }
+            let slot = &mut slots[index];
+            let unchanged = layer.cache_key.is_some() && slot.key == layer.cache_key;
+            slot.key = layer.cache_key;
+            if !unchanged {
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &slot.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &layer.frame.data[..needed],
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(layer.frame.stride),
+                        rows_per_image: Some(layer.frame.height),
+                    },
+                    wgpu::Extent3d {
+                        width: layer.frame.width,
+                        height: layer.frame.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            let layer_view = slot.view.clone();
             let content_params = layer_params(layer, 0);
             let content_uniform =
                 self.device
@@ -771,8 +845,6 @@ impl Compositor {
                 None
             };
             draws.push(LayerDraw {
-                _texture: texture,
-                _view: layer_view,
                 _content_uniform: content_uniform,
                 bind_content,
                 v_content,
@@ -789,7 +861,7 @@ impl Compositor {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("aeroedits-layers"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -819,22 +891,15 @@ impl Compositor {
             }
         }
 
-        let padded = padded_bytes_per_row(scene.width);
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("aeroedits-readback"),
-            size: u64::from(padded * scene.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &target,
+                texture: target,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
+                buffer: staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded),
@@ -2199,6 +2264,47 @@ mod tests {
         let report = run_parity(dir.path(), &crate::media::EncoderGate::new()).unwrap();
         assert!(report.matched, "parity failed: {:?}", report.diagnostics);
         crate::media::release_decoders();
+    }
+
+    /// Textures are kept between frames: a new screen picture, a new canvas size and a new
+    /// background key must all show up, and an unchanged key may skip the upload.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
+    )]
+    fn gpu_reused_textures_never_show_a_stale_frame() {
+        let compositor = Compositor::new().unwrap();
+        let scene = |size: u32, background: u8, key: u64, screen: u8| {
+            let paper =
+                VideoFrame::solid(size, size, background, background, background, 0).unwrap();
+            let mut paper = Layer::placed(paper, 0, 0, size, size).with_role(LayerRole::Background);
+            paper.cache_key = Some(key);
+            let shot = VideoFrame::solid(8, 8, screen, screen, screen, 0).unwrap();
+            Scene {
+                width: size,
+                height: size,
+                background: [0.0, 0.0, 0.0, 1.0],
+                layers: vec![paper, Layer::placed(shot, 0, 0, size / 2, size / 2)],
+            }
+        };
+        let level =
+            |frame: &VideoFrame, x: u32, y: u32| frame.data[(y * frame.stride + x * 4) as usize];
+        let first = compositor.composite(&scene(32, 40, 1, 200)).unwrap();
+        assert!(level(&first, 4, 4).abs_diff(200) <= 2);
+        assert!(level(&first, 28, 28).abs_diff(40) <= 2);
+        // Same key: the background is not uploaded again, the screen is.
+        let second = compositor.composite(&scene(32, 40, 1, 90)).unwrap();
+        assert!(level(&second, 4, 4).abs_diff(90) <= 2);
+        assert!(level(&second, 28, 28).abs_diff(40) <= 2);
+        // A new key uploads the new background.
+        let third = compositor.composite(&scene(32, 160, 2, 90)).unwrap();
+        assert!(level(&third, 28, 28).abs_diff(160) <= 2);
+        // A new canvas size gets a new target and readback buffer.
+        let fourth = compositor.composite(&scene(48, 160, 2, 10)).unwrap();
+        assert_eq!((fourth.width, fourth.height), (48, 48));
+        assert!(level(&fourth, 4, 4).abs_diff(10) <= 2);
+        assert!(level(&fourth, 44, 44).abs_diff(160) <= 2);
     }
 
     #[test]

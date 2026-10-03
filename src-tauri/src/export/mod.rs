@@ -289,10 +289,11 @@ fn background_key(
     h: u32,
 ) -> String {
     format!(
-        "{}|{}|{:?}|{}|{}|{w}x{h}",
+        "{}|{}|{:?}|{}|{}|{}|{w}x{h}",
         root.display(),
         layout.background_type,
         layout.wallpaper_asset,
+        layout.background_preset,
         layout.color_start,
         layout.color_end
     )
@@ -362,8 +363,22 @@ impl SceneEvaluator {
 
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
         let started = std::time::Instant::now();
-        let scene = self.scene_at(edited_us)?;
+        let mut scene = self.scene_at(edited_us)?;
         crate::media::profile("scene (decode)", started);
+        // The background is the same picture on every frame: let the GPU keep it.
+        if self.wallpaper.get().is_some_and(Option::is_some) {
+            if let Some(layer) = scene
+                .layers
+                .iter_mut()
+                .find(|layer| layer.role == crate::render::LayerRole::Background)
+            {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                background_key(&self.root, &self.document.layout, self.width, self.height)
+                    .hash(&mut hasher);
+                layer.cache_key = Some(hasher.finish());
+            }
+        }
         let started = std::time::Instant::now();
         let mut frame = match self.compositor.as_mut() {
             Some(compositor) => compositor.composite(&scene)?,
@@ -2056,14 +2071,14 @@ mod tests {
         ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
     )]
     fn gpu_webview_preview_frame_across_a_cut() {
-        use crate::playback::preview::{encode_webview_frame, webview_dimensions};
+        use crate::playback::preview::{encode_webview_frame, PreviewQuality};
         use crate::project::reader::ProjectReader;
 
         let dir = tempfile::tempdir().unwrap();
         let root = screen_and_mic_project(dir.path());
         let reader = ProjectReader::open(&root).unwrap();
         let document = cut_document();
-        let (width, height) = webview_dimensions(1920, 1080);
+        let (width, height) = PreviewQuality::default_for(true).canvas(1920, 1080);
         let mut evaluator = SceneEvaluator::new(
             root,
             document,

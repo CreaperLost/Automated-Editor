@@ -4,6 +4,7 @@ import {
   WaveformPage,
   PlaybackStatus,
   EditCut,
+  PreviewQuality,
   PreviewStatus,
   PreviewViewport,
   PreviewHitMode,
@@ -263,8 +264,15 @@ export const api = {
   previewPresentFixture: (path: string, generation = 0) =>
     invokeTauri<PreviewStatus>("preview_present_fixture", { path, generation }),
   previewStatus: () => invokeTauri<PreviewStatus>("preview_status"),
-  /** Latest webview preview frame after `after`: 8-byte LE sequence number + JPEG, or empty. */
-  previewFrame: (after: number) => invokeTauri<ArrayBuffer>("preview_frame", { after }),
+  /**
+   * Latest webview preview frame after `after`: 8-byte LE sequence number + JPEG. Waits up to
+   * `waitMs` for one to arrive; empty when none did.
+   */
+  previewFrame: (after: number, waitMs = 0) =>
+    invokeTauri<ArrayBuffer>("preview_frame", { after, waitMs }),
+  previewQuality: () => invokeTauri<PreviewQuality>("preview_quality"),
+  previewQualitySet: (quality: PreviewQuality) =>
+    invokeTauri<PreviewQuality>("preview_quality_set", { quality }),
   previewHitTest: (x: number, y: number) => invokeTauri<boolean>("preview_hit_test", { x, y }),
   previewDetach: (windowLabel: string, generation?: number) =>
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),

@@ -12,7 +12,7 @@ use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{mpsc, OnceLock};
 
 /// Overrides the ffmpeg binary location.
 pub const FFMPEG_ENV: &str = "AEROEDITS_FFMPEG";
@@ -27,6 +27,10 @@ const FALLBACK_RATE: (u32, u32) = (30, 1);
 const MAX_DECODE_RATE: u32 = 120;
 /// How far before the end to seek when a request lands past the last frame.
 const TAIL_SEEK_US: u64 = 1_000_000;
+/// Decoded frames a stream may hold ahead of the reader, so FFmpeg keeps decoding while the
+/// caller composites. Bounded in bytes: large frames get fewer slots.
+const READ_AHEAD_BYTES: usize = 32 << 20;
+const MAX_READ_AHEAD_FRAMES: usize = 3;
 const AUDIO_BITRATE: &str = "192k";
 
 fn exe_name(base: &str) -> String {
@@ -497,11 +501,67 @@ fn disable_hwaccel(api: &str, error: &str) {
 }
 
 /// One ffmpeg process emitting constant-rate BGRA frames from `start_us` onward.
+/// What the reader thread passes on from the decoder pipe.
+enum Piped {
+    Frame(Vec<u8>),
+    /// The pipe closed; `partial` when it closed in the middle of a frame.
+    End {
+        partial: bool,
+    },
+    Failed(String),
+}
+
+/// Reads whole frames from the decoder pipe on a thread of its own, up to a few ahead of the
+/// caller. A pipe holds far less than one frame, so without this FFmpeg could only decode
+/// while the caller was waiting on it. Spent buffers come back through the second channel.
+fn spawn_frame_reader(
+    mut stdout: ChildStdout,
+    frame_len: usize,
+) -> Result<(mpsc::Receiver<Piped>, mpsc::SyncSender<Vec<u8>>), String> {
+    let ahead = (READ_AHEAD_BYTES / frame_len.max(1)).clamp(1, MAX_READ_AHEAD_FRAMES);
+    let (frames, received) = mpsc::sync_channel(ahead);
+    let (recycle, recycled) = mpsc::sync_channel::<Vec<u8>>(ahead + 1);
+    std::thread::Builder::new()
+        .name("aeroedits-decode-pipe".into())
+        .spawn(move || loop {
+            let mut buffer = recycled.try_recv().unwrap_or_default();
+            buffer.resize(frame_len, 0);
+            let mut filled = 0;
+            while filled < frame_len {
+                match stdout.read(&mut buffer[filled..]) {
+                    Ok(0) => break,
+                    Ok(n) => filled += n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        let _ =
+                            frames.send(Piped::Failed(format!("FFmpeg decoder pipe failed: {e}")));
+                        return;
+                    }
+                }
+            }
+            let piped = if filled < frame_len {
+                Piped::End {
+                    partial: filled > 0,
+                }
+            } else {
+                Piped::Frame(buffer)
+            };
+            let end = !matches!(piped, Piped::Frame(_));
+            // The stream was dropped, or the pipe is done: either way this thread is finished.
+            if frames.send(piped).is_err() || end {
+                return;
+            }
+        })
+        .map_err(|e| format!("Could not start the decoder reader: {e}"))?;
+    Ok((received, recycle))
+}
+
 struct FrameStream {
     path: PathBuf,
     limit: DecodeLimit,
     child: Child,
-    stdout: ChildStdout,
+    frames: mpsc::Receiver<Piped>,
+    recycle: mpsc::SyncSender<Vec<u8>>,
     log: File,
     /// The GPU decode API this process was started with, if any.
     hwaccel: Option<&'static str>,
@@ -552,11 +612,13 @@ impl FrameStream {
             .stdout
             .take()
             .ok_or("FFmpeg decoder has no output pipe")?;
+        let (frames, recycle) = spawn_frame_reader(stdout, width as usize * height as usize * 4)?;
         Ok(Self {
             path: path.to_path_buf(),
             limit,
             child,
-            stdout,
+            frames,
+            recycle,
             log,
             hwaccel,
             failed: false,
@@ -604,46 +666,35 @@ impl FrameStream {
                 .saturating_add(MAX_FORWARD_READ_US)
     }
 
-    fn frame_len(&self) -> usize {
-        self.width as usize * self.height as usize * 4
-    }
-
     fn read_next(&mut self) -> Result<bool, String> {
         if self.eof {
             return Ok(false);
         }
-        let mut buffer = self.last.take().unwrap_or_default();
-        buffer.resize(self.frame_len(), 0);
-        let mut filled = 0;
-        while filled < buffer.len() {
-            match self.stdout.read(&mut buffer[filled..]) {
-                Ok(0) => break,
-                Ok(n) => filled += n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => {
-                    self.failed = true;
-                    return Err(format!("FFmpeg decoder pipe failed: {e}"));
+        // A reader that is gone without a word saw the pipe close.
+        let piped = self.frames.recv().unwrap_or(Piped::End { partial: false });
+        match piped {
+            Piped::Frame(buffer) => {
+                if let Some(spent) = self.last.replace(buffer) {
+                    let _ = self.recycle.try_send(spent);
                 }
+                self.next_index += 1;
+                Ok(true)
+            }
+            Piped::End { partial } => {
+                self.eof = true;
+                let status = self.child.wait().ok();
+                if !partial && status.is_some_and(|s| s.success()) {
+                    // A clean end of stream: keep showing the last frame.
+                    return Ok(false);
+                }
+                self.failed = true;
+                Err(failure("FFmpeg decoder stopped early", &mut self.log))
+            }
+            Piped::Failed(error) => {
+                self.failed = true;
+                Err(error)
             }
         }
-        if filled < buffer.len() {
-            self.eof = true;
-            let status = self.child.wait().ok();
-            if filled == 0 && status.is_some_and(|s| s.success()) {
-                // A clean end of stream: keep showing the last frame.
-                self.last = if self.next_index > 0 {
-                    Some(buffer)
-                } else {
-                    None
-                };
-                return Ok(false);
-            }
-            self.failed = true;
-            return Err(failure("FFmpeg decoder stopped early", &mut self.log));
-        }
-        self.last = Some(buffer);
-        self.next_index += 1;
-        Ok(true)
     }
 
     fn frame_at(&mut self, time_us: u64) -> Result<VideoFrame, String> {

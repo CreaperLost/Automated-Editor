@@ -1,14 +1,11 @@
 //! Preview surface session. Geometry and lifetime are owned here. On macOS pixels go to a
 //! native child view; elsewhere frames are JPEG-encoded and fetched by the webview.
+use crate::media::ffmpeg::DecodeLimit;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub const ARRANGEMENT: &str = "child_overlay";
 pub const WEBVIEW_ARRANGEMENT: &str = "webview";
-/// Long side of the composited frame sent to the webview.
-pub const WEBVIEW_MAX_DIM: u32 = 1280;
-/// Source frame-rate cap while decoding for the webview preview.
-pub const WEBVIEW_MAX_RATE: u32 = 30;
 const WEBVIEW_JPEG_QUALITY: u8 = 82;
 pub const MAX_VIEWPORT: f64 = 8_192.0;
 
@@ -72,18 +69,79 @@ pub struct PreviewStatus {
     pub diagnostics: Vec<String>,
 }
 
-/// Canvas size for webview preview: the layout's preview size scaled to fit
-/// [`WEBVIEW_MAX_DIM`], kept even.
-pub fn webview_dimensions(width: u32, height: u32) -> (u32, u32) {
-    let long = width.max(height).max(1);
-    if long <= WEBVIEW_MAX_DIM {
-        return (width, height);
+/// How the editor preview is drawn, chosen in the stage toolbar. Playback and scrubbing only;
+/// exports always use the export settings.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewQuality {
+    /// The canvas's shorter side in pixels (720 draws a 16:9 canvas at 1280x720); 0 draws
+    /// it at the project's full size.
+    pub resolution: u32,
+    /// Frames drawn per second while playing; 0 follows the source.
+    pub fps: u32,
+}
+
+impl PreviewQuality {
+    /// The webview preview copies every frame through a JPEG, so it starts at 720p and 30 fps;
+    /// the macOS native view draws at full size and the source rate.
+    pub fn default_for(webview: bool) -> Self {
+        if webview {
+            Self {
+                resolution: 720,
+                fps: 30,
+            }
+        } else {
+            Self {
+                resolution: 0,
+                fps: 0,
+            }
+        }
     }
-    let fit = |value: u32| {
-        let scaled = (value as u64 * WEBVIEW_MAX_DIM as u64 / long as u64) as u32;
-        (scaled & !1).max(16)
-    };
-    (fit(width), fit(height))
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.resolution != 0 && !(144..=4320).contains(&self.resolution) {
+            return Err("Preview resolution must be between 144p and 4320p".into());
+        }
+        if self.fps > 120 {
+            return Err("Preview frame rate must be at most 120 fps".into());
+        }
+        Ok(())
+    }
+
+    /// The preview canvas for a project canvas of `width` x `height`: scaled down so its
+    /// shorter side is at most `resolution`, kept even.
+    pub fn canvas(&self, width: u32, height: u32) -> (u32, u32) {
+        let short = width.min(height).max(1);
+        if self.resolution == 0 || short <= self.resolution {
+            return (width, height);
+        }
+        let fit = |value: u32| {
+            let scaled = (value as u64 * self.resolution as u64 / short as u64) as u32;
+            (scaled & !1).max(16)
+        };
+        (fit(width), fit(height))
+    }
+
+    /// Sources are decoded no larger than the canvas and no faster than the preview rate. At
+    /// full resolution the native view keeps source-size frames, so zooms stay sharp.
+    pub fn decode_limit(&self, canvas: (u32, u32), webview: bool) -> DecodeLimit {
+        let capped = webview || self.resolution != 0;
+        DecodeLimit {
+            max_width: if capped { canvas.0 } else { 0 },
+            max_height: if capped { canvas.1 } else { 0 },
+            max_rate: self.fps,
+        }
+    }
+
+    /// The time to draw while playing: the start of the frame the clock is in, so a frame is
+    /// drawn once rather than on every tick.
+    pub fn frame_time(&self, position_us: u64) -> u64 {
+        if self.fps == 0 {
+            position_us
+        } else {
+            frame_start_us(position_us, self.fps)
+        }
+    }
 }
 
 /// Start of the `rate`-per-second frame that contains `position_us`.
@@ -481,11 +539,44 @@ mod tests {
     }
 
     #[test]
-    fn webview_frames_fit_the_size_cap() {
-        assert_eq!(webview_dimensions(1920, 1080), (1280, 720));
-        assert_eq!(webview_dimensions(1080, 1920), (720, 1280));
-        assert_eq!(webview_dimensions(1440, 1080), (1280, 960));
-        assert_eq!(webview_dimensions(640, 360), (640, 360));
+    fn preview_quality_sizes_the_canvas_and_decode() {
+        let p720 = PreviewQuality::default_for(true);
+        assert_eq!(p720.canvas(1920, 1080), (1280, 720));
+        assert_eq!(p720.canvas(1080, 1920), (720, 1280));
+        assert_eq!(p720.canvas(1440, 1080), (960, 720));
+        assert_eq!(p720.canvas(640, 360), (640, 360));
+        let p360 = PreviewQuality {
+            resolution: 360,
+            fps: 60,
+        };
+        assert_eq!(p360.canvas(1920, 1080), (640, 360));
+        assert_eq!(
+            p360.decode_limit((640, 360), false),
+            DecodeLimit {
+                max_width: 640,
+                max_height: 360,
+                max_rate: 60
+            }
+        );
+        let full = PreviewQuality::default_for(false);
+        assert_eq!(full.canvas(1920, 1080), (1920, 1080));
+        assert_eq!(full.decode_limit((1920, 1080), false), DecodeLimit::NONE);
+        assert_eq!(full.decode_limit((1920, 1080), true).max_width, 1920);
+        assert_eq!(full.frame_time(1_234_567), 1_234_567);
+        assert_eq!(p360.frame_time(1_020_000), 1_016_666);
+        assert!(PreviewQuality {
+            resolution: 100,
+            fps: 30
+        }
+        .validate()
+        .is_err());
+        assert!(PreviewQuality {
+            resolution: 0,
+            fps: 240
+        }
+        .validate()
+        .is_err());
+        assert!(p360.validate().is_ok() && full.validate().is_ok());
     }
 
     #[test]

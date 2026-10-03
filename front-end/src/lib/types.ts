@@ -676,6 +676,14 @@ export interface PreviewStatus {
   diagnostics: string[];
 }
 
+/** How the editor preview is drawn. Export always uses the export settings. */
+export interface PreviewQuality {
+  /** Shorter side of the preview canvas in pixels (720 = 1280x720 for 16:9); 0 is full size. */
+  resolution: number;
+  /** Frames drawn per second while playing; 0 follows the source. */
+  fps: number;
+}
+
 export interface MediaInteropStatus {
   decoderBackend: string;
   compositorBackend: string;
