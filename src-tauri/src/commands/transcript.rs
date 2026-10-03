@@ -1,6 +1,6 @@
 //! Transcription commands. Transcripts are per audio track and stored in the project folder;
 //! word deletions and suggestions become ordinary ripple cuts on the edit document.
-use super::{project_ripple_cuts_impl, AppState, EditCut};
+use super::AppState;
 use crate::project::reader::SegmentSummary;
 use crate::project::{OpenedProject, TrackType};
 use crate::transcript::edit;
@@ -333,13 +333,20 @@ pub fn transcript_cut_words_impl(
             &document.mapper_for_transcript(&track_id)?,
         )?
     };
-    project_ripple_cuts_impl(
+    // Nothing is selected in the transcript sense: every track loses the same time, so
+    // pictures and sound elsewhere stay in step with the words.
+    let ranges = cuts
+        .into_iter()
+        .map(|(start_us, end_us)| crate::tracks::EditedRange { start_us, end_us })
+        .collect();
+    super::project_tracks_edit_impl(
         state,
         project_handle,
         expected_revision,
-        cuts.into_iter()
-            .map(|(start_us, end_us)| EditCut { start_us, end_us })
-            .collect(),
+        crate::tracks::TrackEdit::RippleDelete {
+            ranges,
+            all_tracks: true,
+        },
     )
 }
 

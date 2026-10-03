@@ -132,15 +132,15 @@ impl EditDocument {
 
     /// Maps the time of the file behind transcript `track_id` onto the edited timeline. A
     /// recording track's transcript is in recording time: the usual mapper. Imported sound
-    /// (`msound-<stream>-<asset>`) is in that file's own time: its clips on V1 map it, and
-    /// everything else on V1 maps nothing.
+    /// (`msound-<stream>-<asset>`) is in that file's own time: wherever its clips play it, on
+    /// any track.
     pub fn mapper_for_transcript(
         &self,
         track_id: &str,
     ) -> Result<crate::timeline::TimelineMapper, String> {
-        match media_sound_asset(track_id) {
+        match media_sound(track_id) {
             None => self.mapper(),
-            Some(asset_id) => Ok(self.mapper_for_media(asset_id)),
+            Some((stream, asset_id)) => Ok(self.mapper_for_sound(asset_id, stream)),
         }
     }
 
@@ -168,6 +168,49 @@ impl EditDocument {
                 })
                 .collect(),
         )
+    }
+
+    /// Maps one sound stream of imported file `asset_id` (its own time) onto the edited
+    /// timeline through every clip that plays it: on V1, on video tracks and on audio tracks.
+    /// Where clips of it overlap (in the timeline or in the file), the earlier one counts.
+    pub fn mapper_for_sound(
+        &self,
+        asset_id: &str,
+        stream: usize,
+    ) -> crate::timeline::TimelineMapper {
+        let mut placements: Vec<_> = crate::media::audio::media_placements(self)
+            .into_iter()
+            .filter(|p| p.asset_id == asset_id && p.stream == stream && p.len > 0)
+            .collect();
+        placements.sort_by_key(|p| (p.edited_start, p.in_us));
+        let mut intervals = Vec::new();
+        let mut used: Vec<(u64, u64)> = Vec::new();
+        let mut cursor = 0u64;
+        for placed in placements {
+            let file = (placed.in_us, placed.in_us + placed.len);
+            if placed.edited_start < cursor || used.iter().any(|&(a, b)| file.0 < b && a < file.1) {
+                continue;
+            }
+            if placed.edited_start > cursor {
+                // Time where this sound does not play: maps to nothing.
+                intervals.push(
+                    SourceInterval::new(
+                        format!("gap-{}", intervals.len()),
+                        0,
+                        placed.edited_start - cursor,
+                    )
+                    .with_media(Some("gap".into())),
+                );
+            }
+            intervals.push(SourceInterval::new(
+                format!("snd-{}", intervals.len()),
+                file.0,
+                file.1,
+            ));
+            used.push(file);
+            cursor = placed.edited_start + placed.len;
+        }
+        crate::timeline::TimelineMapper::new(intervals)
     }
 
     /// The zooms with where each lands on the edited timeline, each on its own clock.
@@ -2022,6 +2065,26 @@ mod tests {
             media("m2", 0, 1_000_000),
         ])
         .unwrap();
+        let mut document = document;
+        document.media_assets = ["m1", "m2"]
+            .map(|id| crate::media_bin::MediaAsset {
+                id: id.into(),
+                name: id.into(),
+                kind: crate::media_bin::MediaKind::Video,
+                relative_path: format!("assets/media/{id}.mp4"),
+                source_path: None,
+                missing: false,
+                picture_role: Default::default(),
+                sound_roles: Vec::new(),
+                recording_path: None,
+                audio_path: Some(format!("assets/media/{id}.audio.wav")),
+                extra_audio_paths: Vec::new(),
+                audio_names: Vec::new(),
+                duration_us: 10_000_000,
+                width: 0,
+                height: 0,
+            })
+            .to_vec();
         let id = media_sound_id(0, "m1");
         assert_eq!(media_sound(&id), Some((0, "m1")));
         let mapper = document.mapper_for_transcript(&id).unwrap();
@@ -2060,6 +2123,77 @@ mod tests {
                 .is_empty(),
             "nothing of it is left to show"
         );
+    }
+
+    #[test]
+    fn transcripts_follow_sound_on_any_track_and_files_used_twice() {
+        use crate::tracks::{OverlayClip, OverlayFit, OverlayTrack, TrackKind};
+        // A song only on an audio track at 5 s; a talk on V1 twice (overlapping in the file).
+        let talk = |start_us, end_us| RetainedInterval {
+            start_us,
+            end_us,
+            media: Some("talk".into()),
+            audio_unlinked: false,
+        };
+        let mut document =
+            EditDocument::from_retained(vec![talk(0, 3_000_000), talk(1_000_000, 4_000_000)])
+                .unwrap();
+        let asset = |id: &str, kind| crate::media_bin::MediaAsset {
+            id: id.into(),
+            name: id.into(),
+            kind,
+            relative_path: format!("assets/media/{id}.wav"),
+            source_path: None,
+            missing: false,
+            picture_role: Default::default(),
+            sound_roles: Vec::new(),
+            recording_path: None,
+            audio_path: Some(format!("assets/media/{id}.audio.wav")),
+            extra_audio_paths: Vec::new(),
+            audio_names: Vec::new(),
+            duration_us: 10_000_000,
+            width: 0,
+            height: 0,
+        };
+        document.media_assets = vec![
+            asset("talk", crate::media_bin::MediaKind::Video),
+            asset("song", crate::media_bin::MediaKind::Audio),
+        ];
+        document.overlay_tracks = vec![OverlayTrack {
+            id: "track-1".into(),
+            kind: TrackKind::Audio,
+            clips: vec![OverlayClip {
+                id: "clip-1".into(),
+                asset_id: "song".into(),
+                start_us: 5_000_000,
+                in_us: 2_000_000,
+                duration_us: 3_000_000,
+                fit: OverlayFit::default(),
+                audio_stream: Some(0),
+                audio_unlinked: false,
+                link: None,
+            }],
+            hidden: false,
+            muted: false,
+            role: None,
+        }];
+        // A word 3 s into the song plays 1 s into its clip: at 6 s.
+        let song = document
+            .mapper_for_transcript(&media_sound_id(0, "song"))
+            .unwrap();
+        assert_eq!(
+            song.edited_span_of(3_000_000, 3_200_000),
+            Some((6_000_000, 6_200_000))
+        );
+        // The talk's first use maps; the overlapping second use is skipped, not fatal.
+        let talk = document
+            .mapper_for_transcript(&media_sound_id(0, "talk"))
+            .unwrap();
+        assert_eq!(
+            talk.edited_span_of(500_000, 700_000),
+            Some((500_000, 700_000))
+        );
+        assert_eq!(talk.edited_span_of(3_500_000, 3_700_000), None);
     }
 
     #[test]

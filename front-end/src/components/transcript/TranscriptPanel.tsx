@@ -358,6 +358,11 @@ export const TranscriptPanel: React.FC = () => {
             {view.model} · {view.words.filter((w) => w.editedStartUs !== null).length}/{view.words.length} words kept
           </span>
         )}
+        {view && view.words.length > 0 && view.words.every((w) => w.editedStartUs === null) && trackId.startsWith("msound-") && (
+          <span className="text-amber-300 truncate" title="Its words show once a clip of it is on the timeline, on any track">
+            Not on the timeline yet: place it to edit and caption it
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           {view && (
             <button
