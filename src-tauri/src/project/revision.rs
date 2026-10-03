@@ -260,6 +260,27 @@ impl EditDocument {
         intervals
     }
 
+    /// Where `zoom` shows on the edited timeline (nothing if its time was all cut).
+    pub fn zoom_edited(&self, zoom: &ZoomKeyframe) -> Vec<(u64, u64)> {
+        let mapper = match zoom.media.as_deref() {
+            None => self.mapper().ok(),
+            Some(asset) => Some(self.mapper_for_media(asset)),
+        };
+        mapper
+            .map(|m| m.source_range_to_edited(zoom.source_start_us, zoom.source_end_us))
+            .unwrap_or_default()
+    }
+
+    /// Whether `zoom` shares edited time with any other zoom: zooms never overlap.
+    pub fn zoom_overlaps(&self, zoom: &ZoomKeyframe) -> bool {
+        let mine = self.zoom_edited(zoom);
+        self.zooms.iter().filter(|z| z.id != zoom.id).any(|other| {
+            let theirs = self.zoom_edited(other);
+            mine.iter()
+                .any(|&(a, b)| theirs.iter().any(|&(c, d)| a < d && c < b))
+        })
+    }
+
     /// The zooms with where each lands on the edited timeline, each on its own clock.
     pub fn zooms_with_ranges(&self) -> Vec<ZoomKeyframe> {
         let mut zooms = self.zooms.clone();
@@ -1213,17 +1234,25 @@ impl EditHistory {
             next.zooms.iter().map(|z| z.id.clone()).collect();
         let dismissed: std::collections::BTreeSet<_> =
             next.dismissed_zoom_ids.iter().cloned().collect();
+        let mut overlapping = 0;
         for suggestion in suggestions {
             if existing.contains(&suggestion.id) || dismissed.contains(&suggestion.id) {
                 continue;
             }
-            next.zooms.push(ZoomKeyframe::from_suggestion(
-                suggestion.clone(),
-                ZoomSource::Generated,
-            ));
+            let zoom = ZoomKeyframe::from_suggestion(suggestion.clone(), ZoomSource::Generated);
+            // Zooms never overlap: one landing on a zoom already there is left out.
+            if next.zoom_overlaps(&zoom) {
+                overlapping += 1;
+                continue;
+            }
+            next.zooms.push(zoom);
         }
         if next.zooms.len() == self.current.zooms.len() {
-            return Err("Those zoom suggestions are already applied or dismissed".into());
+            return Err(if overlapping > 0 {
+                "Those zooms would overlap zooms already on the timeline".into()
+            } else {
+                "Those zoom suggestions are already applied or dismissed".into()
+            });
         }
         if next.zooms.len() > MAX_ZOOMS {
             return Err("Too many zoom keyframes".into());
@@ -1281,6 +1310,44 @@ impl EditHistory {
         // Moving/resizing a generated zoom keeps its id so regeneration cannot
         // replace it, and marks it manual so a later accept cannot reset it.
         existing.source = ZoomSource::Manual;
+        let moved = existing.clone();
+        if next.zoom_overlaps(&moved) {
+            return Err("Zooms can't overlap: it stops where the next zoom starts".into());
+        }
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Takes the generated zooms off and puts the recording's zooms back on, found again with
+    /// the current auto-zoom settings (dismissed ones included); zooms you made or changed
+    /// stay, and new ones never overlap them.
+    pub fn reload_zooms(
+        &mut self,
+        expected_revision: u64,
+        suggestions: &[ZoomSuggestion],
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        let mut next = self.current.clone();
+        next.zooms.retain(|z| z.source == ZoomSource::Manual);
+        next.dismissed_zoom_ids.clear();
+        for suggestion in suggestions {
+            if next.zooms.iter().any(|z| z.id == suggestion.id) {
+                continue;
+            }
+            let zoom = ZoomKeyframe::from_suggestion(suggestion.clone(), ZoomSource::Generated);
+            if !next.zoom_overlaps(&zoom) && next.zooms.len() < MAX_ZOOMS {
+                next.zooms.push(zoom);
+            }
+        }
+        next.zooms.sort_by(|a, b| {
+            a.source_start_us
+                .cmp(&b.source_start_us)
+                .then(a.id.cmp(&b.id))
+        });
+        if next.zooms == self.current.zooms
+            && next.dismissed_zoom_ids == self.current.dismissed_zoom_ids
+        {
+            return Err("The recording's zooms are already on the timeline".into());
+        }
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1296,6 +1363,27 @@ impl EditHistory {
     ) -> Result<&EditDocument, String> {
         if edited_end_us <= edited_start_us {
             return Err("Zoom must be a half-open edited range".into());
+        }
+        // Zooms never overlap: the new one fits into the free time around its start.
+        let (mut edited_start_us, mut edited_end_us) = (edited_start_us, edited_end_us);
+        let mut taken: Vec<(u64, u64)> = self
+            .current
+            .zooms
+            .iter()
+            .flat_map(|z| self.current.zoom_edited(z))
+            .collect();
+        taken.sort_unstable();
+        for (a, b) in taken {
+            if a < edited_end_us && edited_start_us < b {
+                if a <= edited_start_us {
+                    edited_start_us = b;
+                } else {
+                    edited_end_us = edited_end_us.min(a);
+                }
+            }
+        }
+        if edited_end_us <= edited_start_us || edited_end_us - edited_start_us < 300_000 {
+            return Err("There's a zoom here already: zooms can't overlap".into());
         }
         let main = self.current.mapper()?;
         // Over an imported clip the zoom is on that file's clock.

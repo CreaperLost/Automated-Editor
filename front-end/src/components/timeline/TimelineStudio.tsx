@@ -26,6 +26,7 @@ import {
   Camera,
   Monitor,
   Magnet,
+  RefreshCw,
   ChevronUp,
   ChevronDown,
 } from "lucide-react";
@@ -124,6 +125,10 @@ const OVERLAY_ROW_PX = 40;
 /** Height of a lane showing the sound of the main sequence's imported clips. */
 const LINKED_SOUND_ROW_PX = 28;
 const NEW_TRACK_ROW_PX = 22;
+/** The zoom track's row. */
+const ZOOM_ROW_PX = 30;
+/** A zoom is never dragged shorter than this. */
+const MIN_ZOOM_US = 300_000;
 
 function loadTrackHeights(): Record<string, number> {
   try {
@@ -195,6 +200,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     originStart: number;
     originEnd: number;
   } | null>(null);
+  /** The zoom being dragged on the zoom track, and how far. */
+  const [zoomDrag, setZoomDrag] = useState<{ barId: string; mode: DragMode; deltaUs: number } | null>(null);
   const suppressSeek = useRef(false);
   const [trackHeights, setTrackHeights] = useState(loadTrackHeights);
   /** A lane's height: as resized (remembered per kind of lane), else `fallback`. */
@@ -369,6 +376,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     );
     if (ref.kind === "track") setSelectedOverlayClipId(ref.clipId);
     else if (!additive) setSelectedOverlayClipId(undefined);
+    setSelectedZoomId(undefined);
   };
   const clearSelection = () => {
     setRange(null);
@@ -587,6 +595,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   const deleteSelection = async () => {
     if (selectedClips.length === 0) {
       if (range) await editRange(false);
+      else if (selectedZoomId) deleteZoom(selectedZoomId);
       return;
     }
     const ranges = selectedMain.map(({ startUs, endUs }) => ({ startUs, endUs }));
@@ -974,7 +983,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       setEditError("Zoom range is too short.");
       return;
     }
-    const transitionUs = Math.min(Math.max(1, Math.floor(duration / 5)), 400_000, duration - 1);
+    // The auto-zoom transition, as long as in and out both fit.
+    const transitionUs = Math.max(1, Math.min(Math.round(autoZoomOptions.transitionMs * 1000), Math.floor((duration - 1) / 2)));
     void persistZoom(() =>
       api.projectZoomUpdate(openedProject.projectHandle, openedProject.revision, {
         ...zoom,
@@ -1852,11 +1862,37 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     seekToUs(progress * durationUs);
   };
 
+  /** Where a zoom may go: between the zooms either side of it (zooms never overlap). */
+  const zoomRoom = (bar: ZoomKeyframe) => {
+    const others = zoomKeyframes.filter((k) => !k.pending && k.zoomId !== bar.zoomId);
+    const before = others.filter((k) => k.endUs <= bar.tUs).map((k) => k.endUs);
+    const after = others.filter((k) => k.tUs >= bar.endUs).map((k) => k.tUs);
+    return { from: Math.max(0, ...before), to: Math.min(durationUs, ...after) };
+  };
+  /** A zoom's edited span while being dragged `deltaUs` by `mode`. */
+  const draggedZoomSpan = (bar: ZoomKeyframe, mode: DragMode, deltaUs: number): [number, number] => {
+    const { from, to } = zoomRoom(bar);
+    const length = bar.endUs - bar.tUs;
+    if (mode === "move") {
+      const snapped = snapStart(bar.tUs + deltaUs, length, snapPoints(), snapUs());
+      const start = Math.max(Math.min(from, bar.tUs), Math.min(Math.max(to, bar.endUs) - length, snapped));
+      return [start, start + length];
+    }
+    if (mode === "start") {
+      return [Math.max(Math.min(from, bar.tUs), Math.min(bar.endUs - MIN_ZOOM_US, bar.tUs + deltaUs)), bar.endUs];
+    }
+    return [bar.tUs, Math.min(Math.max(to, bar.endUs), Math.max(bar.tUs + MIN_ZOOM_US, bar.endUs + deltaUs))];
+  };
+
   const beginDrag = (event: React.PointerEvent, bar: ZoomKeyframe, mode: DragMode) => {
-    if (bar.pending || !openedProject || zoomBusy) return;
+    if (!openedProject || zoomBusy || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     setSelectedZoomId(bar.zoomId);
+    setSelectedClips([]);
+    setRange(null);
+    setSelectedCue(null);
+    if (bar.pending) return; // A suggestion is accepted (double-click) before it moves.
     dragging.current = {
       mode,
       zoomId: bar.zoomId,
@@ -1867,48 +1903,191 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   };
 
-  const onBarPointerMove = (event: React.PointerEvent) => {
+  const onBarPointerMove = (event: React.PointerEvent, bar: ZoomKeyframe) => {
     const drag = dragging.current;
-    if (!drag || !timelineTrackRef.current || durationUs <= 0) return;
+    if (!drag || drag.zoomId !== bar.zoomId || !timelineTrackRef.current || durationUs <= 0) return;
     event.stopPropagation();
+    const rect = timelineTrackRef.current.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const deltaUs = ((event.clientX - drag.startX) / rect.width) * durationUs;
+    if (Math.abs(event.clientX - drag.startX) < 2 && !zoomDrag) return;
     suppressSeek.current = true;
+    setZoomDrag({ barId: bar.id, mode: drag.mode, deltaUs });
   };
 
   const endDrag = (event: React.PointerEvent, bar: ZoomKeyframe) => {
     const drag = dragging.current;
     dragging.current = null;
-    if (!drag || drag.zoomId !== bar.zoomId || !openedProject || !timelineTrackRef.current) return;
+    const moved = zoomDrag;
+    setZoomDrag(null);
+    if (!drag || drag.zoomId !== bar.zoomId || !openedProject || !moved || Math.abs(moved.deltaUs) < 1_000) return;
     event.stopPropagation();
-    const rect = timelineTrackRef.current.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const deltaUs = ((event.clientX - drag.startX) / rect.width) * durationUs;
-    if (Math.abs(deltaUs) < 1_000) return;
-    const retained = openedProject.retainedIntervals;
     const zoom = openedProject.zooms?.find((item) => item.id === bar.zoomId);
     if (!zoom) return;
+    const [start, end] = draggedZoomSpan(bar, moved.mode, moved.deltaUs);
     // A zoom on an imported file's clock moves along that file's clips.
-    const toSource = (editedUs: number) => editedToSourceUs(retained, editedUs, zoom.media);
+    const toSource = (editedUs: number) => editedToSourceUs(openedProject.retainedIntervals, editedUs, zoom.media);
     let sourceStart = drag.originStart;
     let sourceEnd = drag.originEnd;
-    if (drag.mode === "move") {
-      const editedStart = bar.tUs + deltaUs;
-      const mapped = toSource(Math.max(0, Math.min(durationUs - 1, editedStart)));
-      if (mapped == null) return;
-      const duration = drag.originEnd - drag.originStart;
+    if (moved.mode === "move") {
+      const mapped = toSource(Math.min(durationUs - 1, start));
+      if (mapped == null) {
+        setEditError("A zoom moves along its own recording: drop it over that recording's clips.");
+        return;
+      }
       sourceStart = mapped;
-      sourceEnd = mapped + duration;
-    } else if (drag.mode === "start") {
-      const mapped = toSource(Math.max(0, Math.min(bar.endUs - 1, bar.tUs + deltaUs)));
+      sourceEnd = mapped + (drag.originEnd - drag.originStart);
+    } else if (moved.mode === "start") {
+      const mapped = toSource(start);
       if (mapped == null) return;
       sourceStart = mapped;
     } else {
-      const mapped = toSource(Math.max(bar.tUs + 1, Math.min(durationUs, bar.endUs + deltaUs)));
+      const mapped = toSource(Math.max(start + 1, end) - 1);
       if (mapped == null) return;
       sourceEnd = mapped + 1;
     }
     if (sourceEnd <= sourceStart + 2) return;
     patchPersisted(zoom, sourceStart, sourceEnd);
   };
+
+  const deleteZoom = (zoomId: string) => {
+    if (!openedProject) return;
+    const pending = zoomKeyframes.some((k) => k.zoomId === zoomId && k.pending);
+    setSelectedZoomId(undefined);
+    void persistZoom(() =>
+      pending
+        ? api.projectZoomDismiss(openedProject.projectHandle, openedProject.revision, [zoomId])
+        : api.projectZoomDelete(openedProject.projectHandle, openedProject.revision, zoomId),
+    );
+  };
+  const acceptZoom = (zoomId: string) => {
+    if (!openedProject) return;
+    void persistZoom(() =>
+      api.projectZoomAccept(openedProject.projectHandle, openedProject.revision, [zoomId], zoomConfigFor(autoZoomOptions)),
+    );
+  };
+  const addZoomHere = () => {
+    if (!openedProject) return;
+    const startUs = selection ? selection.startUs : Math.max(0, currentTimeUs - 600_000);
+    const endUs = selection ? selection.endUs : Math.min(durationUs, Math.max(startUs + 2_000_000, currentTimeUs + 1_400_000));
+    void persistZoom(() =>
+      api.projectZoomAdd(openedProject.projectHandle, openedProject.revision, {
+        editedStartUs: startUs,
+        editedEndUs: endUs,
+        centerX: 0.5,
+        centerY: 0.5,
+        scale: Math.max(1.25, autoZoomOptions.clickScale),
+      }),
+    );
+  };
+  const reloadZooms = () => {
+    if (!openedProject) return;
+    void persistZoom(() =>
+      api.projectZoomReload(openedProject.projectHandle, openedProject.revision, zoomConfigFor(autoZoomOptions)),
+    );
+  };
+
+  const zoomHeader = (
+    <div
+      className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
+      style={{ height: ZOOM_ROW_PX }}
+    >
+      <div className="truncate">
+        <span className="text-xs font-medium text-indigo-200">Zooms</span>
+        <span className="ml-1.5 text-[10px] font-mono text-studio-500">{openedProject?.zooms?.length ?? 0}</span>
+      </div>
+      <div className="flex items-center gap-0.5">
+        <button
+          disabled={!openedProject || zoomBusy || durationUs < 3}
+          aria-label="Add a zoom"
+          title={selection ? "Add a zoom over the selection" : "Add a zoom at the playhead (it fits between the zooms there)"}
+          onClick={addZoomHere}
+          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+        <button
+          disabled={!openedProject || zoomBusy}
+          aria-label="Reload zooms from the recording"
+          title="Reload zooms from the recording with your auto-zoom settings. Zooms you added or changed stay; Undo brings the old ones back."
+          onClick={reloadZooms}
+          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+
+  const zoomLane = (
+    <div className="relative border-b border-studio-800/40" style={{ height: ZOOM_ROW_PX }} data-track-row="zooms">
+      {durationUs > 0 &&
+        zoomKeyframes.map((k) => {
+          const selected = k.zoomId === selectedZoomId;
+          const [startUs, endUs] =
+            zoomDrag && zoomDrag.barId === k.id ? draggedZoomSpan(k, zoomDrag.mode, zoomDrag.deltaUs) : [k.tUs, k.endUs];
+          const seconds = ((endUs - startUs) / 1e6).toFixed(1);
+          const kind = k.source === "manual" ? "Manual zoom" : k.origin === "dwell" ? "Hover zoom" : "Click zoom";
+          return (
+            <div
+              key={k.id}
+              role="button"
+              aria-label={`${k.pending ? "Suggested" : kind} ${k.scale.toFixed(1)}×`}
+              aria-pressed={selected}
+              className={`group absolute top-1 bottom-1 rounded border text-[9px] font-mono px-1 flex items-center overflow-hidden ${
+                zoomDrag?.barId === k.id ? "cursor-grabbing z-30" : k.pending ? "cursor-pointer" : "cursor-grab"
+              } ${
+                k.pending
+                  ? `border-dashed ${selected ? "border-white bg-indigo-400/30 text-white" : "border-indigo-300/70 bg-indigo-400/10 text-indigo-200 hover:bg-indigo-400/25"}`
+                  : selected
+                    ? "border-white bg-indigo-500/60 text-white ring-1 ring-white/70"
+                    : "border-indigo-300/60 bg-indigo-500/35 text-indigo-50 hover:bg-indigo-500/50 hover:border-indigo-200"
+              }`}
+              style={{ left: `${(startUs / durationUs) * 100}%`, width: `${Math.max(((endUs - startUs) / durationUs) * 100, 0.4)}%` }}
+              title={
+                k.pending
+                  ? `Suggested ${kind.toLowerCase()} · ${k.scale.toFixed(1)}× · ${seconds}s. Double-click to add it; Delete dismisses it.`
+                  : `${kind} · ${k.scale.toFixed(1)}× · ${seconds}s. Drag to move, drag an edge to retime, Delete removes it. Zooms never overlap.`
+              }
+              onClick={(event) => {
+                event.stopPropagation();
+                if (suppressSeek.current) suppressSeek.current = false;
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                if (k.pending) acceptZoom(k.zoomId);
+                else seekToUs(k.tUs);
+              }}
+              onPointerDown={(event) => beginDrag(event, k, "move")}
+              onPointerMove={(event) => onBarPointerMove(event, k)}
+              onPointerUp={(event) => endDrag(event, k)}
+              onPointerCancel={() => {
+                dragging.current = null;
+                setZoomDrag(null);
+              }}
+            >
+              <span className="truncate pointer-events-none">
+                {k.scale.toFixed(1)}×{endUs - startUs > 1_500_000 ? ` · ${seconds}s` : ""}
+              </span>
+              {!k.pending && (
+                <>
+                  <span
+                    aria-label="Resize zoom start"
+                    className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40"
+                    onPointerDown={(event) => beginDrag(event, k, "start")}
+                  />
+                  <span
+                    aria-label="Resize zoom end"
+                    className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40"
+                    onPointerDown={(event) => beginDrag(event, k, "end")}
+                  />
+                </>
+              )}
+            </div>
+          );
+        })}
+    </div>
+  );
 
   const progress = durationUs > 0 ? currentTimeUs / durationUs : 0;
   const pendingCount = pendingZoomSuggestions.length;
@@ -2171,6 +2350,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           </div>
 
           <div className="flex-1 space-y-2 py-2">
+            {zoomHeader}
             {addTrackButton(false)}
             {videoAbove.map(renderTrackHeader)}
             {mainHeader}
@@ -2437,6 +2617,9 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               </div>
             )}
 
+            {/* Zoom track: zooms as clips of their own */}
+            {zoomLane}
+
             {/* New video track: a drop row that shows only while something can be dropped on it */}
             {renderNewTrackRow(false)}
 
@@ -2450,59 +2633,6 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                   Drag media from the Media panel here to start the main video (V1)
                 </div>
               )}
-              {/* Zoom Keyframe Track overlay */}
-              <div className="h-4 absolute top-0 left-0 right-0 z-20">
-                {zoomKeyframes.map((k) => {
-                  const startProg = durationUs > 0 ? k.tUs / durationUs : 0;
-                  const widthProg = durationUs > 0 ? Math.max(0, (k.endUs - k.tUs) / durationUs) : 0;
-                  const selected = k.zoomId === selectedZoomId;
-                  const label = k.pending
-                    ? `Pending auto-zoom ${k.scale}x (${k.origin ?? "click"})`
-                    : `${k.source === "manual" ? "Manual" : "Saved"} zoom ${k.scale}x`;
-                  return (
-                    <div
-                      key={k.id}
-                      className="absolute top-0.5 h-3 rounded-sm"
-                      style={{
-                        left: `${startProg * 100}%`,
-                        width: `${Math.max(widthProg * 100, 0.4)}%`,
-                      }}
-                      title={label}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedZoomId(k.zoomId);
-                      }}
-                      onPointerDown={(event) => beginDrag(event, k, "move")}
-                      onPointerMove={onBarPointerMove}
-                      onPointerUp={(event) => endDrag(event, k)}
-                    >
-                      <div
-                        className={`h-full rounded-sm border ${
-                          k.pending
-                            ? "bg-indigo-400/20 border-dashed border-indigo-300/80"
-                            : "bg-indigo-400/60 border-indigo-200/90"
-                        } ${selected ? "ring-1 ring-white/80" : ""}`}
-                      />
-                      {!k.pending && (
-                        <>
-                          <button
-                            aria-label="Resize zoom start"
-                            className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize"
-                            onPointerDown={(event) => beginDrag(event, k, "start")}
-                          />
-                          <button
-                            aria-label="Resize zoom end"
-                            className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize"
-                            onPointerDown={(event) => beginDrag(event, k, "end")}
-                          />
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-
               {durationUs > 0 && clips.map((clip, index) => {
                 if (clip.gap) return null;
                 const selected = clipSelected(clip);

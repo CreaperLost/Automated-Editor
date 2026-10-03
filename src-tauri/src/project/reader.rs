@@ -834,6 +834,17 @@ impl ProjectReader {
         Ok(self.summary.clone())
     }
 
+    pub fn reload_zooms(
+        &mut self,
+        expected_revision: u64,
+        suggestions: &[crate::zoom::ZoomSuggestion],
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .reload_zooms(expected_revision, suggestions, &self.root)?;
+        self.sync_summary();
+        Ok(self.summary.clone())
+    }
+
     pub fn dismiss_zooms(
         &mut self,
         expected_revision: u64,

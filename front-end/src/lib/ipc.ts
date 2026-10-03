@@ -99,12 +99,17 @@ export const api = {
       "project_zoom_suggestions",
       config ? { projectHandle, config } : { projectHandle },
     ),
-  projectZoomAccept: (projectHandle: string, expectedRevision: number, ids: string[]) =>
+  /** `config`: the auto-zoom settings the suggestions were found with. */
+  projectZoomAccept: (projectHandle: string, expectedRevision: number, ids: string[], config?: ZoomConfig) =>
     invokeTauri<OpenedProject>("project_zoom_accept", {
       projectHandle,
       expectedRevision,
       ids,
+      config: config ?? null,
     }),
+  /** Puts the recording's zooms back with these settings; yours stay, none overlap. */
+  projectZoomReload: (projectHandle: string, expectedRevision: number, config: ZoomConfig) =>
+    invokeTauri<OpenedProject>("project_zoom_reload", { projectHandle, expectedRevision, config }),
   projectZoomDismiss: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_zoom_dismiss", {
       projectHandle,

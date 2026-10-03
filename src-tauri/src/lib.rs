@@ -189,8 +189,20 @@ fn project_zoom_accept(
     project_handle: String,
     expected_revision: u64,
     ids: Vec<String>,
+    config: Option<zoom::ZoomConfig>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_zoom_accept_impl(&state, project_handle, expected_revision, ids)
+    commands::project_zoom_accept_impl(&state, project_handle, expected_revision, ids, config)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_zoom_reload(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    config: Option<zoom::ZoomConfig>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_zoom_reload_impl(&state, project_handle, expected_revision, config)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1358,6 +1370,7 @@ pub fn run() {
             project_waveform,
             project_zoom_suggestions,
             project_zoom_accept,
+            project_zoom_reload,
             project_zoom_dismiss,
             project_zoom_update,
             project_zoom_add,

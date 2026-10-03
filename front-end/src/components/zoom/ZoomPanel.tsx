@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Check, Crosshair, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
-import { DEFAULT_AUTO_ZOOM, useZoomSettingsStore } from "../../stores/zoomSettingsStore";
+import { DEFAULT_AUTO_ZOOM, useZoomSettingsStore, zoomConfigFor } from "../../stores/zoomSettingsStore";
 import { api } from "../../lib/ipc";
 import type { OpenedProject, ProjectZoom, ZoomSuggestion } from "../../lib/types";
 import { InspectorSection } from "../inspector/InspectorSection";
@@ -165,9 +165,20 @@ export const ZoomPanel: React.FC = () => {
         }
       >
         <p className="text-[11px] text-studio-500 leading-relaxed">
-          Suggested from the recorder's mouse tracking. Changing an option finds them again; zooms you already
-          accepted stay as they are.
+          Suggested from the recorder's mouse tracking. Click zooms come first; hover zooms only fill the time
+          between them, so zooms never overlap.
         </p>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            void run((project) => api.projectZoomReload(project.projectHandle, project.revision, zoomConfigFor(options)))
+          }
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-indigo-400/40 text-indigo-100 hover:bg-indigo-600/25 disabled:opacity-40"
+          title="Take the automatic zooms off and put the recording's zooms back with these settings (dismissed ones too). Zooms you added or changed stay. Undo brings the old ones back."
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Reload zooms from the recording
+        </button>
         <Slider
           label="Click zoom"
           value={options.clickScale}
@@ -225,7 +236,7 @@ export const ZoomPanel: React.FC = () => {
                 disabled={busy}
                 onClick={() =>
                   void run((project) =>
-                    api.projectZoomAccept(project.projectHandle, project.revision, suggestions.map((s) => s.id)),
+                    api.projectZoomAccept(project.projectHandle, project.revision, suggestions.map((s) => s.id), zoomConfigFor(options)),
                   )
                 }
                 className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-indigo-600/30 hover:bg-indigo-600/40 text-indigo-100 disabled:opacity-40"
@@ -262,7 +273,7 @@ export const ZoomPanel: React.FC = () => {
                       disabled={busy}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void run((project) => api.projectZoomAccept(project.projectHandle, project.revision, [s.id]));
+                        void run((project) => api.projectZoomAccept(project.projectHandle, project.revision, [s.id], zoomConfigFor(options)));
                       }}
                       className="p-1 rounded text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-40"
                     >

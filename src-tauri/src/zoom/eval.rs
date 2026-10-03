@@ -113,6 +113,10 @@ fn select_suggestion(suggestions: &[ZoomSuggestion], source_us: u64) -> Option<&
         })
 }
 
+/// The camera of one zoom at `source_us`. The zoom runs toward one fixed point of the
+/// frame (the one that maps the full frame onto the zoomed one), with the scale changing
+/// geometrically: equal times give equal *ratios* of zoom, so going in feels as even as
+/// coming out, and the frame never slides along an edge part-way.
 fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, f64) {
     let transition = suggestion.transition_us;
     let hold_start = suggestion.source_start_us.saturating_add(transition);
@@ -120,20 +124,33 @@ fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, 
         .source_end_us
         .saturating_sub(transition)
         .max(hold_start);
-    let scale = if source_us < hold_start {
+    let amount = if source_us < hold_start {
         let span = hold_start.saturating_sub(suggestion.source_start_us).max(1);
-        let t = (source_us.saturating_sub(suggestion.source_start_us) as f64) / span as f64;
-        lerp(1.0, suggestion.scale, cubic_bezier_unit(t))
+        ease_zoom(source_us.saturating_sub(suggestion.source_start_us) as f64 / span as f64)
     } else if source_us >= hold_end {
         let span = suggestion.source_end_us.saturating_sub(hold_end).max(1);
-        let t = (source_us.saturating_sub(hold_end) as f64) / span as f64;
-        lerp(suggestion.scale, 1.0, cubic_bezier_unit(t))
+        1.0 - ease_zoom(source_us.saturating_sub(hold_end) as f64 / span as f64)
     } else {
-        suggestion.scale
+        1.0
     };
-    (suggestion.center_x, suggestion.center_y, scale)
+    let target = suggestion.scale.max(1.0);
+    let scale = target.powf(amount);
+    let target_width = 1.0 / target;
+    let width = 1.0 / scale;
+    let axis = |center: f64| {
+        if target_width >= 1.0 {
+            return 0.5;
+        }
+        // Where the zoomed frame ends up (inside the picture), and the point that stays put.
+        let end = (center - target_width * 0.5).clamp(0.0, 1.0 - target_width);
+        let fixed = end / (1.0 - target_width);
+        fixed * (1.0 - width) + width * 0.5
+    };
+    (axis(suggestion.center_x), axis(suggestion.center_y), scale)
 }
 
-fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
+/// Quintic smootherstep: starts and ends with no speed and no jolt in acceleration.
+pub fn ease_zoom(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }

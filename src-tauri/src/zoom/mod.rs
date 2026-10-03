@@ -343,7 +343,7 @@ pub fn generate_zoom_suggestions(
         ignore_v1_clicks,
         &mut diagnostics,
     );
-    let mut suggestions = cluster_interest(&interest, config);
+    let mut suggestions = separate_zooms(cluster_interest(&interest, config), config);
     suggestions.truncate(MAX_SUGGESTIONS);
     if suggestions.is_empty()
         && !diagnostics
@@ -719,6 +719,86 @@ fn suggestion_from_cluster(
         edited_ranges: Vec::new(),
         media: None,
     })
+}
+
+/// Shortest zoom worth keeping once others have taken its time: in, a moment, out.
+fn shortest_zoom_us(config: &ZoomConfig) -> u64 {
+    config
+        .transition_us
+        .saturating_mul(2)
+        .saturating_add(200_000)
+}
+
+/// No two zooms share time. Zooms on clicks come first: when two overlap, the earlier one
+/// ends where the later one starts (or goes, if too little is left). Hover zooms only fill
+/// the time between them, each keeping its longest free stretch.
+pub fn separate_zooms(windows: Vec<ZoomSuggestion>, config: &ZoomConfig) -> Vec<ZoomSuggestion> {
+    let shortest = shortest_zoom_us(config);
+    let (mut firm, mut hover): (Vec<_>, Vec<_>) = windows
+        .into_iter()
+        .partition(|w| w.origin != ZoomOrigin::Dwell);
+    firm.sort_by_key(|w| w.source_start_us);
+    let mut placed: Vec<ZoomSuggestion> = Vec::new();
+    for window in firm {
+        if let Some(previous) = placed.last_mut() {
+            if window.source_start_us < previous.source_end_us {
+                previous.source_end_us = window.source_start_us;
+                if previous
+                    .source_end_us
+                    .saturating_sub(previous.source_start_us)
+                    < shortest
+                {
+                    placed.pop();
+                }
+            }
+        }
+        placed.push(window);
+    }
+    hover.sort_by_key(|w| w.source_start_us);
+    for mut window in hover {
+        let mut free = vec![(window.source_start_us, window.source_end_us)];
+        for taken in &placed {
+            free = free
+                .into_iter()
+                .flat_map(|(a, b)| {
+                    if taken.source_end_us <= a || taken.source_start_us >= b {
+                        vec![(a, b)]
+                    } else {
+                        [
+                            (a, taken.source_start_us.max(a)),
+                            (taken.source_end_us.min(b), b),
+                        ]
+                        .into_iter()
+                        .filter(|(x, y)| y > x)
+                        .collect()
+                    }
+                })
+                .collect();
+        }
+        let Some(&(a, b)) = free.iter().max_by_key(|(a, b)| b - a) else {
+            continue;
+        };
+        if b - a < shortest.max(config.min_hold_us) {
+            continue;
+        }
+        window.source_start_us = a;
+        window.source_end_us = b;
+        placed.push(window);
+    }
+    placed.sort_by(|a, b| {
+        a.source_start_us
+            .cmp(&b.source_start_us)
+            .then(a.id.cmp(&b.id))
+    });
+    for window in &mut placed {
+        // The way in and out both fit inside a shortened zoom.
+        let length = window.source_end_us - window.source_start_us;
+        window.transition_us = window
+            .transition_us
+            .min((length.saturating_sub(1)) / 2)
+            .max(1);
+    }
+    placed
 }
 
 fn merge_overlapping(windows: Vec<ZoomSuggestion>, config: &ZoomConfig) -> Vec<ZoomSuggestion> {
@@ -1176,5 +1256,86 @@ mod tests {
                 }
             ]
         );
+    }
+
+    fn window(id: &str, start: u64, end: u64, origin: ZoomOrigin) -> ZoomSuggestion {
+        ZoomSuggestion {
+            id: id.into(),
+            source_start_us: start,
+            source_end_us: end,
+            center_x: 0.5,
+            center_y: 0.5,
+            scale: 2.0,
+            transition_us: 400_000,
+            origin,
+            contributing_event_seqs: vec![1],
+            edited_ranges: Vec::new(),
+            media: None,
+        }
+    }
+
+    #[test]
+    fn zooms_never_overlap_and_hover_fills_the_gaps() {
+        let config = ZoomConfig::default();
+        let out = separate_zooms(
+            vec![
+                window("a", 0, 3_000_000, ZoomOrigin::Click),
+                window("b", 2_000_000, 5_000_000, ZoomOrigin::Click),
+                // Hover across b and the free time after it keeps the free part.
+                window("h", 4_000_000, 9_000_000, ZoomOrigin::Dwell),
+                // Hover inside a click zoom has no room.
+                window("x", 2_500_000, 4_500_000, ZoomOrigin::Dwell),
+            ],
+            &config,
+        );
+        let spans: Vec<_> = out
+            .iter()
+            .map(|w| (w.id.as_str(), w.source_start_us, w.source_end_us))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                ("a", 0, 2_000_000),
+                ("b", 2_000_000, 5_000_000),
+                ("h", 5_000_000, 9_000_000)
+            ]
+        );
+        for pair in out.windows(2) {
+            assert!(pair[0].source_end_us <= pair[1].source_start_us);
+        }
+        assert!(out
+            .iter()
+            .all(|w| w.transition_us * 2 < w.source_end_us - w.source_start_us));
+    }
+
+    #[test]
+    fn zoom_in_is_even_and_never_slides_along_an_edge() {
+        let config = ZoomConfig::default();
+        // A corner target: the old camera slid along the edge, then turned.
+        let mut zoom = window("z", 0, 4_000_000, ZoomOrigin::Click);
+        zoom.center_x = 0.95;
+        zoom.center_y = 0.1;
+        let zooms = [zoom];
+        let mut last = evaluate_at_source(&zooms, 0, &config);
+        let mut steps = Vec::new();
+        for t in (10_000..=400_000).step_by(10_000) {
+            let camera = evaluate_at_source(&zooms, t, &config);
+            // Equal ratios of zoom for equal ease: log-scale speed peaks mid-way, not at the start.
+            steps.push((camera.scale / last.scale).ln());
+            let (x0, y0, w0, _) = last.uv_rect();
+            let (x1, y1, w1, _) = camera.uv_rect();
+            // The frame closes toward one fixed point: each edge moves one way only.
+            assert!(x1 >= x0 - 1e-6 && x1 + w1 <= x0 + w0 + 1e-6);
+            assert!(y1 >= y0 - 1e-6 && w1 <= w0 + 1e-6);
+            last = camera;
+        }
+        let peak = steps
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        assert!((15..=25).contains(&peak), "fastest step at {peak}");
+        assert!((last.scale - 2.0).abs() < 1e-9);
     }
 }
