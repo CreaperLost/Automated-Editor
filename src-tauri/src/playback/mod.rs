@@ -105,6 +105,8 @@ pub struct PlaybackOwner {
     diagnostics: Vec<String>,
     /// The short that plays instead of the video.
     short_focus: Option<String>,
+    /// Where the video was when a short took over playback.
+    main_position_us: u64,
 }
 
 impl PlaybackOwner {
@@ -128,12 +130,26 @@ impl PlaybackOwner {
         &mut self,
         short: Option<String>,
         document: &EditDocument,
+        start_us: u64,
     ) -> Result<(), String> {
         if self.short_focus == short {
+            if short.is_some() {
+                self.seek(start_us)?;
+            }
             return Ok(());
         }
+        // The video's place is kept while a short plays, and comes back after.
+        let position = match (&self.short_focus, &short) {
+            (None, Some(_)) => {
+                self.advance();
+                self.main_position_us = self.position_us;
+                start_us
+            }
+            (Some(_), None) => self.main_position_us,
+            _ => start_us,
+        };
         self.short_focus = short;
-        self.position_us = 0;
+        self.position_us = position;
         self.apply_document(document)
     }
 
@@ -158,6 +174,7 @@ impl PlaybackOwner {
             error: None,
             diagnostics: Vec::new(),
             short_focus: None,
+            main_position_us: 0,
         }
     }
 
@@ -193,6 +210,7 @@ impl PlaybackOwner {
             error: None,
             diagnostics: Vec::new(),
             short_focus: None,
+            main_position_us: 0,
         };
         owner.touch_plans(0)?;
         Ok(owner)

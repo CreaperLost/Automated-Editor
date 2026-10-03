@@ -176,6 +176,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
   applyPlaybackStatus: (status) => set((state) => {
     if (state.openedProject?.projectHandle !== status.projectHandle || status.generation < state.playbackGeneration) return state;
+    // The engine plays something this window does not show (a short in the editor, or the
+    // video in the Shorts Studio): note it, but keep this window's own playhead.
+    if ((status.shortId ?? undefined) !== state.viewShort) {
+      return { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation };
+    }
     return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable, playbackShortId: status.shortId };
   }),
   loadOpenedProject: (project, projectPath) => {

@@ -265,8 +265,14 @@ export const api = {
     invokeTauri<OpenedProject>("project_short_view", { projectHandle, shortId }),
   projectShortResync: (projectHandle: string, expectedRevision: number, shortId: string) =>
     invokeTauri<OpenedProject>("project_short_resync", { projectHandle, expectedRevision, shortId }),
-  playbackFocusShort: (projectHandle: string, shortId: string | null) =>
-    invokeTauri<PlaybackStatus>("playback_focus_short", { projectHandle, shortId }),
+  /** Plays `shortId` instead of the video from `startUs` (or gives the video back with null). */
+  playbackFocusShort: (projectHandle: string, shortId: string | null, startUs = 0, play = false) =>
+    invokeTauri<PlaybackStatus>("playback_focus_short", {
+      projectHandle,
+      shortId,
+      startUs: Math.max(0, Math.round(startUs)),
+      play,
+    }),
   projectRename: (projectHandle: string, newName: string) =>
     invokeTauri<OpenedProject>("project_rename", { projectHandle, newName }),
   playbackStatus: (projectHandle: string) =>

@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
+import { releaseShortPlayback, seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import {
   DockviewDefaultTab,
   DockviewReact,
@@ -169,7 +170,6 @@ export const ShortsStudio: React.FC = () => {
   const [main, setMain] = useState<OpenedProject | null>(null);
   const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const playing = useProjectStore((s) => s.isPlaying);
-  const applyPlaybackStatus = useProjectStore((s) => s.applyPlaybackStatus);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
@@ -234,17 +234,15 @@ export const ShortsStudio: React.FC = () => {
         .then((view) => useProjectStore.getState().applyOpenedProject(view, { remote: true }))
         .catch((err) => setError(errorMessage(err)));
     }
-    void api
-      .playbackFocusShort(handle_, shortId)
-      .then(applyPlaybackStatus)
-      .catch((err) => setError(errorMessage(err)));
+    // Switching shorts: a short still playing hands playback back; this one starts at 0.
+    releaseShortPlayback();
+    useProjectStore.getState().setCurrentTimeUs(0);
   }, [selectedId_, handle_]);
   // Closing the window hands playback back to the video.
   useEffect(() => {
     const release = () => {
-      const handle = useProjectStore.getState().openedProject?.projectHandle;
       setEditTarget(null);
-      if (handle) void api.playbackFocusShort(handle, null).catch(() => undefined);
+      releaseShortPlayback();
     };
     window.addEventListener("beforeunload", release);
     return () => {
@@ -356,18 +354,13 @@ export const ShortsStudio: React.FC = () => {
     };
   }, [playing]);
 
-  const togglePlay = () => {
-    const handle = useProjectStore.getState().openedProject?.projectHandle;
-    if (!handle) return;
-    void (playing ? api.playbackPause(handle) : api.playbackPlay(handle))
-      .then(applyPlaybackStatus)
-      .catch((err) => setError(errorMessage(err)));
-  };
-  const seek = (us: number) => {
-    const handle = useProjectStore.getState().openedProject?.projectHandle;
-    if (!handle) return;
-    void api.playbackSeek(handle, us).then(applyPlaybackStatus).catch(() => undefined);
-  };
+  const togglePlay = () => togglePlayback();
+  const seek = (us: number) => seekPlayback(us);
+  // When the short stops (paused or at its end), the editor gets the video back.
+  const playbackShortId = useProjectStore((s) => s.playbackShortId);
+  useEffect(() => {
+    if (!playing && playbackShortId && playbackShortId === selected?.id) releaseShortPlayback();
+  }, [playing, playbackShortId, selected?.id]);
 
   /** A short's ends on the clock they play on: the recording's or one imported file's. */
   const anchors = (startEdited: number, endEdited: number) => {

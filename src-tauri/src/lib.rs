@@ -497,8 +497,16 @@ fn playback_focus_short(
     state: State<'_, AppState>,
     project_handle: String,
     short_id: Option<String>,
+    start_us: Option<u64>,
+    play: Option<bool>,
 ) -> Result<playback::PlaybackStatus, String> {
-    commands::playback_focus_short_impl(&state, project_handle, short_id)
+    commands::playback_focus_short_impl(
+        &state,
+        project_handle,
+        short_id,
+        start_us.unwrap_or(0),
+        play.unwrap_or(false),
+    )
 }
 
 #[cfg(feature = "tauri-app")]

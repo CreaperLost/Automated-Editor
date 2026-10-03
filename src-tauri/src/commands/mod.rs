@@ -1240,13 +1240,19 @@ pub fn playback_focus_short_impl(
     state: &AppState,
     project_handle: String,
     short_id: Option<String>,
+    start_us: u64,
+    play: bool,
 ) -> Result<crate::playback::PlaybackStatus, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
     let mut playback = state.playback.lock();
-    playback.focus_short(short_id, &reader.history().current)?;
-    playback.status()
+    playback.focus_short(short_id, &reader.history().current, start_us)?;
+    if play {
+        playback.play()
+    } else {
+        playback.pause()
+    }
 }
 
 pub fn project_rename_impl(
