@@ -6,6 +6,7 @@ import {
   MonitorPlay,
   Clock,
   X,
+  FilePlus2,
 } from "lucide-react";
 import { EditorTopBar } from "./components/navigation/EditorTopBar";
 import { SilenceModal } from "./components/silence-modal/SilenceModal";
@@ -16,6 +17,7 @@ import { DockWorkspace } from "./components/layout/DockWorkspace";
 import { api } from "./lib/ipc";
 import { ExportSettings, ExportStatus } from "./lib/types";
 import { ExportDialog } from "./components/export/ExportDialog";
+import { NewProjectDialog } from "./components/project/NewProjectDialog";
 
 function getProjectFolderName(fullPath: string): string {
   const parts = fullPath.split(/[/\\]/).filter(Boolean);
@@ -56,6 +58,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
 
@@ -182,6 +185,7 @@ export const App: React.FC = () => {
         exportJob={exportJob}
         busy={busy}
         onOpenFolder={handleOpenFolder}
+        onNewProject={() => setNewProjectOpen(true)}
         onCloseProject={handleCloseProject}
         onShowInFinder={handleShowInFinder}
       />
@@ -223,18 +227,30 @@ export const App: React.FC = () => {
               AeroEdits
             </h2>
             <p className="text-sm text-studio-400 max-w-md mb-6 leading-relaxed">
-              Open a recorded <strong>.aero</strong> project folder to edit video tracks, apply smart zoom from mouse telemetry, trim dead air, and export.
+              Start a project from a <strong>.aero</strong> recording (smart zoom from mouse telemetry, dead-air trimming) or from nothing, with imported video, images and audio. Projects live in their own folders; recordings are never changed.
             </p>
 
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleOpenFolder}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-semibold text-sm shadow-lg shadow-teal-900/40 transition-all hover:scale-102"
-            >
-              <FolderOpen className="w-4 h-4" />
-              <span>Open Recording Folder</span>
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setNewProjectOpen(true)}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-semibold text-sm shadow-lg shadow-teal-900/40 transition-all hover:scale-102"
+              >
+                <FilePlus2 className="w-4 h-4" />
+                <span>New Project</span>
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={handleOpenFolder}
+                title="Open a project folder, or a recording folder to edit it in place"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-studio-700 bg-studio-900 hover:bg-studio-850 text-studio-100 font-semibold text-sm transition-colors"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span>Open Project</span>
+              </button>
+            </div>
 
             {/* Recent Projects List */}
             {recentProjects.length > 0 && (
@@ -293,6 +309,17 @@ export const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {newProjectOpen && (
+        <NewProjectDialog
+          onClose={() => setNewProjectOpen(false)}
+          onCreated={(opened) => {
+            setNewProjectOpen(false);
+            loadOpenedProject(opened, opened.projectPath ?? "");
+            setExportDestination("");
+          }}
+        />
+      )}
 
       {/* 4. Global Silence Cuts Modal */}
       <SilenceModal />

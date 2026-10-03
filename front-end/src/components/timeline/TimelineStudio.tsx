@@ -1650,6 +1650,11 @@ export const TimelineStudio: React.FC = () => {
 
             {/* Clip lane (V1): edges come from cuts and splits; markers restore cuts */}
             <div className="h-8 relative" data-track-row="main">
+              {durationUs === 0 && (
+                <div className="absolute inset-0 flex items-center rounded border border-dashed border-studio-700 px-3 text-[11px] text-studio-500 pointer-events-none">
+                  Drag media from the Media panel here to start the main video (V1)
+                </div>
+              )}
               {/* Zoom Keyframe Track overlay */}
               <div className="h-4 absolute top-0 left-0 right-0 z-20">
                 {zoomKeyframes.map((k) => {

@@ -516,6 +516,11 @@ export interface OpenedProject {
   dismissedZoomIds?: string[];
   layout?: EditLayout;
   projectPath?: string;
+  /**
+   * The recording folder being edited; absent for a project that started empty. For an older
+   * recording folder that holds its own edits, the same as `projectPath`.
+   */
+  recordingPath?: string;
   /** Source ranges the edit cut out that can be restored. */
   removedIntervals?: RetainedInterval[];
   /** Source timestamps where the user split a clip. */

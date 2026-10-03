@@ -127,6 +127,14 @@ export const StagePanel: React.FC = () => {
         </div>
       </div>
 
+      {project.editedDurationUs === 0 && (
+        <p className="shrink-0 rounded-lg border border-teal-800/60 bg-teal-950/30 px-3 py-2 text-xs text-teal-200">
+          {project.recordingPath
+            ? "Everything was cut. Undo, or put clips back from the timeline."
+            : "This project starts empty. Import video, images or audio in the Media panel, then drag them onto the timeline."}
+        </p>
+      )}
+
       <div className="flex-1 min-h-0 overflow-hidden border border-studio-800 rounded-xl bg-studio-900/40 flex items-center justify-center p-2">
         <NativePreviewHost key={project.projectHandle} fitAspectRatio={aspectValue(aspectRatio)} />
       </div>
