@@ -67,19 +67,19 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
   };
 
   const option = (selected: boolean) =>
-    `flex-1 text-left rounded-lg border px-3 py-2.5 transition-colors ${
+    `flex-1 text-left rounded-control border px-3 py-2.5 transition-colors ${
       selected ? "border-accent-hover/70 bg-accent-hover/10 text-white" : "border-studio-700 hover:border-studio-500 text-studio-300"
     }`;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none">
       <div
         role="dialog"
         aria-label="New project"
-        className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-2xl shadow-2xl overflow-hidden text-xs"
+        className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-panel shadow-dialog overflow-hidden text-label"
       >
         <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+          <div className="flex items-center gap-2 text-heading text-studio-100">
             <FilePlus2 className="w-4 h-4 text-accent-hover" />
             New Project
           </div>
@@ -104,20 +104,20 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
               maxLength={80}
               placeholder="Untitled (today's date)"
               onChange={(event) => setName(event.target.value)}
-              className="w-full bg-studio-950 border border-studio-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-hover"
+              className="w-full bg-studio-950 border border-studio-700 rounded-control px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-hover"
             />
           </label>
 
           <div className="space-y-1.5">
             <span className="text-studio-300 font-medium">Saved in</span>
             <div className="flex items-center gap-2">
-              <span className="flex-1 truncate font-mono text-meta text-studio-400 bg-studio-950 border border-studio-800 rounded-lg px-3 py-2" title={location}>
+              <span className="flex-1 truncate font-mono text-meta text-studio-400 bg-studio-950 border border-studio-800 rounded-control px-3 py-2" title={location}>
                 {location || "Documents/AeroEdits"}
               </span>
               <button
                 type="button"
                 onClick={() => void pick("location")}
-                className="px-3 py-2 rounded-lg border border-studio-700 text-studio-200 hover:bg-studio-800"
+                className="px-3 py-2 rounded-control border border-studio-700 text-studio-200 hover:bg-studio-800"
               >
                 Change…
               </button>
@@ -151,7 +151,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
                 <button
                   type="button"
                   onClick={() => void pick("recording")}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-studio-700 text-studio-200 hover:bg-studio-800"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-control border border-studio-700 text-studio-200 hover:bg-studio-800"
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
                   Choose…
@@ -161,19 +161,19 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
           </div>
 
           {error && (
-            <p role="alert" className="text-danger-fg bg-danger/10 border border-danger/30 rounded-lg p-2">
+            <p role="alert" className="text-danger-fg bg-danger/10 border border-danger/30 rounded-control p-2">
               {error}
             </p>
           )}
 
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-studio-300 hover:bg-studio-800">
+            <button type="button" onClick={onClose} className="px-4 py-2 rounded-control text-studio-300 hover:bg-studio-800">
               Cancel
             </button>
             <button
               type="submit"
               disabled={busy}
-              className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold disabled:opacity-50"
+              className="px-4 py-2 rounded-control bg-accent hover:bg-accent-hover text-white text-body font-medium disabled:opacity-50"
             >
               {busy ? "Creating…" : "Create Project"}
             </button>

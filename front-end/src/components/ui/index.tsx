@@ -302,10 +302,13 @@ export const Menu: React.FC<{
     };
     window.addEventListener("pointerdown", onPointerDown);
     // Focus the first item, so the keyboard can drive the menu at once.
-    window.requestAnimationFrame(() =>
+    const focusFirst = window.setTimeout(() =>
       listRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus(),
     );
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.clearTimeout(focusFirst);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
   }, [open]);
 
   const close = (refocus = true) => {

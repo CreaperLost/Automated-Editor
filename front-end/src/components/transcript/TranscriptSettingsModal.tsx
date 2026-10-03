@@ -131,14 +131,14 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
 
   // Rendered into <body>: inside a dock panel the panel resize bars would sit on top of it.
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-xs">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none">
+      <div className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-panel shadow-dialog overflow-hidden flex flex-col max-h-[85vh] text-label">
         <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
           <div>
-            <h3 className="text-sm font-semibold text-white">Transcription and AI settings</h3>
+            <h3 className="text-heading text-studio-100">Transcription and AI settings</h3>
             <p className="text-studio-400">Used for every project on this computer.</p>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-studio-400 hover:text-white hover:bg-studio-700">
+          <button type="button" onClick={onClose} className="p-1.5 rounded-control text-studio-400 hover:text-white hover:bg-studio-700">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -153,7 +153,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   ["elevenlabs", "ElevenLabs Scribe (cloud)", "Uploads the audio to ElevenLabs. Needs an API key."],
                 ] as const
               ).map(([value, label, hint]) => (
-                <label key={value} className="flex items-start gap-2 p-2 rounded-lg border border-studio-800 bg-studio-850/60 cursor-pointer">
+                <label key={value} className="flex items-start gap-2 p-2 rounded-control border border-studio-800 bg-studio-850/60 cursor-pointer">
                   <input
                     type="radio"
                     name="provider"
@@ -175,7 +175,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
             </label>
 
             {draft.provider === "parakeet" ? (
-              <div className="space-y-2 p-3 rounded-lg border border-studio-800 bg-studio-850/60">
+              <div className="space-y-2 p-3 rounded-control border border-studio-800 bg-studio-850/60">
                 <div className="flex justify-between">
                   <span className="text-studio-400">Accelerator</span>
                   <span className={view.parakeetAvailable ? "text-accent-fg" : "text-suggest-fg"}>{view.parakeetAccelerator}</span>
@@ -208,7 +208,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                       type="button"
                       disabled={downloading}
                       onClick={() => void downloadModel()}
-                      className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent disabled:opacity-50 text-white"
+                      className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent-hover disabled:opacity-50 text-white"
                     >
                       <Download className="w-3 h-3" />
                       {downloading
@@ -226,7 +226,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                 </div>
               </div>
             ) : (
-              <div className="space-y-3 p-3 rounded-lg border border-studio-800 bg-studio-850/60">
+              <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">
                 <label className="block space-y-1">
                   <span className="flex items-center gap-1 text-studio-400">
                     <KeyRound className="w-3 h-3" /> API key
@@ -269,7 +269,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                     Sends the transcript text, never audio or video, to the provider when you press Find with AI.
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-lg p-1">
+                <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-control p-1">
                   {(
                     [
                       ["openAi", "OpenAI"],
@@ -294,7 +294,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   const source = openAi ? aiView.openaiKeySource : aiView.openrouterKeySource;
                   const envName = openAi ? "OPENAI_API_KEY" : "OPENROUTER_API_KEY";
                   return (
-                    <div className="space-y-3 p-3 rounded-lg border border-studio-800 bg-studio-850/60">
+                    <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">
                       <label className="block space-y-1">
                         <span className="flex items-center gap-1 text-studio-400">
                           <KeyRound className="w-3 h-3" /> {openAi ? "OpenAI" : "OpenRouter"} API key
@@ -348,7 +348,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
             )}
 
             {error && (
-              <div className="p-3 rounded-lg bg-danger/10 border border-danger/40 flex items-start gap-2 text-danger-fg">
+              <div className="p-3 rounded-control bg-danger/10 border border-danger/40 flex items-start gap-2 text-danger-fg">
                 <AlertCircle className="w-4 h-4 text-danger shrink-0" />
                 <span>{error}</span>
               </div>
@@ -358,14 +358,14 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
 
         <div className="px-6 py-4 border-t border-studio-800 bg-studio-850 flex items-center justify-end gap-3">
           {saved && <span className="text-accent-fg">Saved</span>}
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-studio-400 hover:text-white">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-control text-studio-400 hover:text-white">
             Close
           </button>
           <button
             type="button"
             disabled={!draft}
             onClick={() => void save()}
-            className="px-5 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-40 text-white font-semibold"
+            className="px-5 py-2 rounded-control bg-accent hover:bg-accent-hover disabled:opacity-40 text-white font-semibold"
           >
             Save
           </button>

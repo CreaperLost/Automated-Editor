@@ -63,7 +63,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   // box `fixed` positions against, and the dialog would be pinned to it and cut off.
   return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none"
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -72,10 +72,10 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
         role="dialog"
         aria-modal="true"
         aria-label="Keyboard shortcuts"
-        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-xl border border-studio-700 bg-studio-900 shadow-2xl"
+        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-panel border border-studio-700 bg-studio-900 shadow-dialog"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-studio-800">
-          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+          <div className="flex items-center gap-2 text-heading text-studio-100">
             <Keyboard className="w-4 h-4 text-studio-400" />
             Keyboard shortcuts
           </div>
@@ -112,7 +112,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
           {groups.map((group) => (
             <section key={group}>
-              <h3 className="mb-1.5 text-meta font-semibold uppercase tracking-wider text-studio-500">{group}</h3>
+              <h3 className="mb-1.5 text-label font-semibold text-studio-300">{group}</h3>
               <div className="divide-y divide-studio-800/60">
                 {HOTKEY_ACTIONS.filter((a) => a.group === group).map(({ action, label }) => {
                   const list = bindings[action];
