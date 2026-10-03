@@ -1136,9 +1136,7 @@ impl ProjectReader {
         }
         self.summary.chapters = chapters;
         let mut shorts = self.history.current.shorts.clone();
-        if let Ok(mapper) = self.history.current.mapper() {
-            crate::shorts::attach_edited(&mut shorts, &mapper);
-        }
+        crate::shorts::attach_edited(&mut shorts, &self.history.current);
         self.summary.shorts = shorts;
         self.summary.overlay_tracks = self.history.current.overlay_tracks.clone();
         let pauses: Vec<RetainedInterval> = self

@@ -168,6 +168,14 @@ export const CaptionsSection: React.FC = () => {
           unit=""
           onChange={(maxWords) => update({ maxWords })}
         />
+        <RangeRow
+          label="Lines at most"
+          value={draft.maxLines ?? 3}
+          min={1}
+          max={3}
+          unit=""
+          onChange={(maxLines) => update({ maxLines })}
+        />
         <ColorRow label="Text color" value={draft.textColor} onChange={(textColor) => update({ textColor })} />
         <Toggle
           label="Highlight the spoken word"

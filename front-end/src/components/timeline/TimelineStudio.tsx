@@ -138,7 +138,11 @@ interface EdgeDrag {
   pointerId: number;
 }
 
-export const TimelineStudio: React.FC = () => {
+/**
+ * The editor's timeline. With `scope` it opens on that stretch of the edit (a short's) and
+ * dims the rest; every edit still goes to the whole project.
+ */
+export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number } }> = ({ scope }) => {
   const {
     openedProject,
     tracks,
@@ -726,6 +730,21 @@ export const TimelineStudio: React.FC = () => {
       element.scrollLeft = Math.max(0, x - element.clientWidth * 0.1);
     }
   }, [isPlaying, currentTimeUs, pxPerUs, timelineZoom]);
+
+  // A scoped timeline frames its stretch, with a little room either side.
+  useEffect(() => {
+    if (!scope || viewportPx <= 0 || durationUs <= 0) return;
+    const length = Math.max(1, scope.endUs - scope.startUs);
+    const pad = length * 0.05;
+    const zoom = Math.min(MAX_TIMELINE_ZOOM, Math.max(MIN_TIMELINE_ZOOM, durationUs / (length * 1.1)));
+    const left = Math.max(0, scope.startUs - pad);
+    if (Math.abs(zoom - timelineZoom) > 1e-6) {
+      zoomAnchor.current = { timeUs: left, offsetPx: 0 };
+      setTimelineZoom(zoom);
+    } else if (scrollRef.current) {
+      scrollRef.current.scrollLeft = left * pxPerUs;
+    }
+  }, [scope?.startUs, scope?.endUs, viewportPx, durationUs]);
 
   const rulerStep = rulerStepUs(pxPerUs);
   const rulerTicks =
@@ -2182,6 +2201,20 @@ export const TimelineStudio: React.FC = () => {
               onPointerCancel={onRulerPointerUp}
               onClick={(event) => event.stopPropagation()}
             />
+
+            {/* Outside the scoped stretch (a short's), dimmed */}
+            {scope && durationUs > 0 && (
+              <>
+                <div
+                  className="absolute top-0 bottom-0 left-0 bg-black/55 z-20 pointer-events-none"
+                  style={{ width: `${(Math.max(0, scope.startUs) / durationUs) * 100}%` }}
+                />
+                <div
+                  className="absolute top-0 bottom-0 right-0 bg-black/55 z-20 pointer-events-none"
+                  style={{ width: `${(Math.max(0, durationUs - scope.endUs) / durationUs) * 100}%` }}
+                />
+              </>
+            )}
 
             {/* Range (Shift+drag on the ruler, or mark in/out) */}
             {range && durationUs > 0 && (

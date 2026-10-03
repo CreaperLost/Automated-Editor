@@ -269,7 +269,8 @@ pub struct SceneEvaluator {
     /// Decoded stills, most recently used last.
     image_cache: std::cell::RefCell<Vec<(String, VideoFrame)>>,
     /// Imported recordings' tracks, indexed once per evaluator, by asset id.
-    recordings: std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<RecordingTracks>>>,
+    recordings:
+        std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<RecordingTracks>>>,
 }
 
 type RecordingTracks = Vec<(TrackSummary, Vec<SegmentSummary>)>;
@@ -541,6 +542,11 @@ impl SceneEvaluator {
                     short.screen_zoom,
                 )
             };
+            // The short's pan moves the view by up to half the crop each way.
+            let center = (
+                center.0 + short.screen_pan_x * crop.2 / 2.0,
+                center.1 + short.screen_pan_y * crop.3 / 2.0,
+            );
             let (x, y, w, h) = rects.screen;
             let (uv_x, uv_y, uv_w, uv_h) =
                 crate::shorts::screen_window(screen.width, screen.height, crop, w, h, zoom, center);
@@ -2333,6 +2339,7 @@ mod tests {
             source_end_us: 1_200_000,
             reason: String::new(),
             layout: ShortLayout::default(),
+            media: None,
             edited_start_us: None,
             edited_end_us: None,
         };

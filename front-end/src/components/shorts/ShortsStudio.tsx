@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpToLine,
@@ -14,19 +14,37 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "../../lib/ipc";
-import { editedToSourceUs } from "../../lib/projectUtils";
 import { listenForProjects } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
+import { transcribableSounds } from "../../lib/trackUtils";
+import { TimelineStudio } from "../timeline/TimelineStudio";
 
 const DEFAULT_LAYOUT: ShortLayout = {
   cameraPosition: "top",
   cameraPct: 35,
   screenZoom: 1,
   followZooms: true,
+  screenPanX: 0,
+  screenPanY: 0,
   captions: true,
   captionSpot: "seam",
+  captionMaxWords: 0,
+  captionLines: 2,
+  captionSizePct: 0,
 };
+
+/** Which clock edited time `editedUs` plays on (the recording, or an imported file) and
+ *  where on it; `null` past the end. */
+function clockAt(project: OpenedProject, editedUs: number): { media?: string; us: number } | null {
+  let cursor = 0;
+  for (const interval of project.retainedIntervals) {
+    const length = interval.endUs - interval.startUs;
+    if (editedUs < cursor + length) return { media: interval.media, us: interval.startUs + (editedUs - cursor) };
+    cursor += length;
+  }
+  return null;
+}
 const NEW_SHORT_US = 30_000_000;
 const MIN_SHORT_US = 3_000_000;
 const MAX_SHORT_US = 180_000_000;
@@ -87,7 +105,10 @@ export const ShortsStudio: React.FC = () => {
 
   const shorts = project?.shorts ?? [];
   const selected = shorts.find((s) => s.id === selectedId) ?? shorts[0];
-  const layout = draft ?? selected?.layout ?? DEFAULT_LAYOUT;
+  // Older shorts lack the newer settings: fill them from the defaults. Kept stable between
+  // renders, since the preview reloads whenever the layout changes.
+  const baseLayout = draft ?? selected?.layout;
+  const layout = useMemo(() => ({ ...DEFAULT_LAYOUT, ...(baseLayout ?? {}) }), [baseLayout]);
   const playable = selected?.editedStartUs !== undefined && selected?.editedEndUs !== undefined;
   const lengthUs = playable ? selected!.editedEndUs! - selected!.editedStartUs! : 0;
 
@@ -97,9 +118,8 @@ export const ShortsStudio: React.FC = () => {
     setPlaying(false);
   }, [selected?.id]);
 
-  const speechTrack =
-    project?.tracks.find((t) => t.descriptor.trackType === "mic_audio") ??
-    project?.tracks.find((t) => t.descriptor.trackType === "system_audio");
+  // Speech first, the recording's or an imported file's.
+  const speechTrack = transcribableSounds(project)[0];
 
   const run = async (label: string, work: (p: OpenedProject) => Promise<OpenedProject>) => {
     const current = useProjectStore.getState().openedProject;
@@ -183,21 +203,29 @@ export const ShortsStudio: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing]);
 
+  /** A short's ends on the clock they play on: the recording's or one imported file's. */
+  const anchors = (startEdited: number, endEdited: number) => {
+    if (!project) return null;
+    const start = clockAt(project, startEdited);
+    const end = clockAt(project, endEdited - 1);
+    if (!start || !end) return null;
+    if (start.media !== end.media) {
+      setError("A short starts and ends on the same recording or file; trim it so both ends are on one.");
+      return null;
+    }
+    return { media: start.media, sourceStartUs: start.us, sourceEndUs: end.us + 1 };
+  };
+
   const newShort = () => {
     if (!project) return;
-    const start = editedToSourceUs(project.retainedIntervals, 0);
-    const endEdited = Math.min(project.editedDurationUs, NEW_SHORT_US);
-    const end = editedToSourceUs(project.retainedIntervals, endEdited - 1);
-    if (start === null || end === null) {
-      setError("The video starts or ends with imported media; trim a short over the recording instead.");
-      return;
-    }
+    // From the playhead, or the start.
+    const at = useProjectStore.getState().currentTimeUs;
+    const startEdited = at + MIN_SHORT_US <= project.editedDurationUs ? at : 0;
+    const ends = anchors(startEdited, Math.min(project.editedDurationUs, startEdited + NEW_SHORT_US));
+    if (!ends) return;
     const id = `short-${Date.now().toString(36)}`;
     setSelectedId(id);
-    void saveShorts([
-      ...shorts,
-      { id, title: `Short ${shorts.length + 1}`, sourceStartUs: start, sourceEndUs: end + 1, layout: DEFAULT_LAYOUT },
-    ]);
+    void saveShorts([...shorts, { id, title: `Short ${shorts.length + 1}`, layout: DEFAULT_LAYOUT, ...ends }]);
   };
 
   /** Moves the short's start or end on the edited timeline. */
@@ -209,14 +237,10 @@ export const ShortsStudio: React.FC = () => {
       setError("A short is between 3 seconds and 3 minutes long.");
       return;
     }
-    const sourceStart = editedToSourceUs(project.retainedIntervals, start);
-    const sourceEnd = editedToSourceUs(project.retainedIntervals, end - 1);
-    if (sourceStart === null || sourceEnd === null) {
-      setError("A short starts and ends on the recording, not on imported media.");
-      return;
-    }
+    const ends = anchors(start, end);
+    if (!ends) return;
     setError(undefined);
-    patchSelected({ sourceStartUs: sourceStart, sourceEndUs: sourceEnd + 1 });
+    patchSelected(ends);
   };
 
   const exportShorts = async (ids: string[]) => {
@@ -282,7 +306,7 @@ export const ShortsStudio: React.FC = () => {
             disabled={!!busy || !speechTrack}
             onClick={() =>
               speechTrack &&
-              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.descriptor.id))
+              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.id))
             }
             title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/50 border border-violet-600/50 text-violet-100 hover:bg-violet-800/60 disabled:opacity-40"
@@ -502,6 +526,37 @@ export const ShortsStudio: React.FC = () => {
                 </div>
                 <input type="range" aria-label="Screen zoom" min={1} max={3} step={0.1} value={layout.screenZoom} onChange={(e) => changeLayout({ screenZoom: Number(e.target.value) })} className="w-full accent-teal-500" />
               </label>
+              {(
+                [
+                  ["screenPanX", "Left / right"],
+                  ["screenPanY", "Up / down"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="block space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-studio-400">{label}</span>
+                    <button
+                      type="button"
+                      onClick={() => changeLayout({ [key]: 0 })}
+                      className="font-mono text-studio-300 hover:text-white"
+                      title="Back to the centre"
+                    >
+                      {layout[key] === 0 ? "centre" : `${layout[key] > 0 ? "+" : ""}${Math.round(layout[key] * 100)}%`}
+                    </button>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label={`Screen ${label}`}
+                    min={-1}
+                    max={1}
+                    step={0.02}
+                    value={layout[key]}
+                    onChange={(e) => changeLayout({ [key]: Number(e.target.value) })}
+                    onDoubleClick={() => changeLayout({ [key]: 0 })}
+                    className="w-full accent-teal-500"
+                  />
+                </label>
+              ))}
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={layout.followZooms} onChange={(e) => changeLayout({ followZooms: e.target.checked })} className="accent-teal-500" />
                 <span>Follow the video's zooms (clicks and manual zooms)</span>
@@ -528,7 +583,35 @@ export const ShortsStudio: React.FC = () => {
                   ))}
                 </div>
               )}
-              <p className="text-[11px] text-studio-500">Caption style comes from the editor's Captions settings.</p>
+              {layout.captions && (
+                <div className="space-y-2">
+                  <label className="block space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-studio-400">Words at once</span>
+                      <span className="font-mono">{layout.captionMaxWords || "editor's"}</span>
+                    </div>
+                    <input type="range" aria-label="Words per caption" min={0} max={12} step={1} value={layout.captionMaxWords} onChange={(e) => changeLayout({ captionMaxWords: Number(e.target.value) })} className="w-full accent-teal-500" />
+                  </label>
+                  <div className="space-y-1">
+                    <span className="text-studio-400">Lines</span>
+                    <div className="flex gap-1 bg-studio-900 border border-studio-800 rounded-lg p-1">
+                      {[1, 2, 3].map((lines) => (
+                        <button key={lines} type="button" aria-pressed={layout.captionLines === lines} onClick={() => changeLayout({ captionLines: lines })} className={segmented(layout.captionLines === lines)}>
+                          {lines}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <label className="block space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-studio-400">Text size</span>
+                      <span className="font-mono">{layout.captionSizePct ? `${layout.captionSizePct.toFixed(1)}%` : "editor's"}</span>
+                    </div>
+                    <input type="range" aria-label="Caption size" min={0} max={15} step={0.5} value={layout.captionSizePct} onChange={(e) => { const v = Number(e.target.value); changeLayout({ captionSizePct: v > 0 && v < 2 ? 2 : v }); }} className="w-full accent-teal-500" />
+                  </label>
+                </div>
+              )}
+              <p className="text-[11px] text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the timeline below.</p>
             </div>
 
             <div className="flex flex-col gap-2 pt-2 border-t border-studio-800">
@@ -555,6 +638,20 @@ export const ShortsStudio: React.FC = () => {
           </aside>
         )}
       </div>
+
+      {/* The editor's timeline, opened on this short's stretch. Edits change the video itself,
+          and the short follows them. */}
+      {selected && playable && (
+        <section className="h-64 shrink-0 border-t border-studio-800 flex flex-col min-h-0" aria-label="Short timeline">
+          <div className="px-4 py-1 text-[11px] text-studio-500 border-b border-studio-800 bg-studio-900">
+            Timeline of this short. Cuts, splits, captions and clips edited here change the main video too; the short
+            keeps its start and end.
+          </div>
+          <div className="flex-1 min-h-0">
+            <TimelineStudio scope={{ startUs: selected.editedStartUs!, endUs: selected.editedEndUs! }} />
+          </div>
+        </section>
+      )}
     </div>
   );
 };

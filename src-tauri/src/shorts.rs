@@ -46,8 +46,18 @@ pub struct ShortLayout {
     pub screen_zoom: f32,
     /// Move the screen view to where the project's zooms point.
     pub follow_zooms: bool,
+    /// Moves the screen view sideways and up or down: -1 to 1, as a share of how far it can
+    /// go inside the crop. Added to where the zooms point when following them.
+    pub screen_pan_x: f32,
+    pub screen_pan_y: f32,
     pub captions: bool,
     pub caption_spot: CaptionSpot,
+    /// Words per caption in this short; 0 uses the editor's setting.
+    pub caption_max_words: u32,
+    /// Lines a caption may take in this short (1 to 3).
+    pub caption_lines: u32,
+    /// Caption text size in this short, as a percentage of its height; 0 uses the editor's.
+    pub caption_size_pct: f32,
 }
 
 impl Default for ShortLayout {
@@ -57,8 +67,13 @@ impl Default for ShortLayout {
             camera_pct: 35.0,
             screen_zoom: 1.0,
             follow_zooms: true,
+            screen_pan_x: 0.0,
+            screen_pan_y: 0.0,
             captions: true,
             caption_spot: CaptionSpot::Seam,
+            caption_max_words: 0,
+            caption_lines: 2,
+            caption_size_pct: 0.0,
         }
     }
 }
@@ -72,6 +87,22 @@ impl ShortLayout {
         }
         if !(1.0..=MAX_SCREEN_ZOOM).contains(&self.screen_zoom) {
             return Err(format!("Screen zoom is 1x to {MAX_SCREEN_ZOOM}x"));
+        }
+        if !(-1.0..=1.0).contains(&self.screen_pan_x) || !(-1.0..=1.0).contains(&self.screen_pan_y)
+        {
+            return Err("The screen pans -1 to 1 each way".into());
+        }
+        if self.caption_max_words > crate::captions::MAX_WORDS_RANGE.1 {
+            return Err("Too many words per caption".into());
+        }
+        if !(1..=3).contains(&self.caption_lines) {
+            return Err("A short's captions take 1 to 3 lines".into());
+        }
+        if self.caption_size_pct != 0.0
+            && !(crate::captions::FONT_SIZE_PCT_RANGE.0..=crate::captions::FONT_SIZE_PCT_RANGE.1)
+                .contains(&self.caption_size_pct)
+        {
+            return Err("Caption size is out of range".into());
         }
         Ok(())
     }
@@ -168,6 +199,10 @@ pub struct Short {
     /// How the vertical frame is split between camera and screen.
     #[serde(default)]
     pub layout: ShortLayout,
+    /// The imported file (or recording) whose clock the start and end are on; `None` is the
+    /// project's recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
     /// Where the short lies on the edited timeline; absent when an end was cut.
     /// Filled in for the UI and cleared before the document is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -215,6 +250,14 @@ pub fn normalized(mut shorts: Vec<Short>) -> Vec<Short> {
 }
 
 /// The edited range a short covers now, if both ends are still on the timeline in order.
+pub fn edited_range_in(short: &Short, document: &EditDocument) -> Option<(u64, u64)> {
+    match &short.media {
+        Some(asset) => edited_range(short, &document.mapper_for_media(asset)),
+        None => edited_range(short, &document.mapper().ok()?),
+    }
+}
+
+/// The edited range of a short whose ends are on `mapper`'s clock.
 pub fn edited_range(short: &Short, mapper: &TimelineMapper) -> Option<(u64, u64)> {
     let start = mapper.source_to_edited_us(short.source_start_us)?;
     let end = mapper
@@ -223,9 +266,9 @@ pub fn edited_range(short: &Short, mapper: &TimelineMapper) -> Option<(u64, u64)
     (end > start).then_some((start, end))
 }
 
-pub fn attach_edited(shorts: &mut [Short], mapper: &TimelineMapper) {
+pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
     for short in shorts {
-        let range = edited_range(short, mapper);
+        let range = edited_range_in(short, document);
         short.edited_start_us = range.map(|r| r.0);
         short.edited_end_us = range.map(|r| r.1);
     }
@@ -263,8 +306,7 @@ pub fn short_document(
     short: &Short,
     captions: bool,
 ) -> Result<EditDocument, String> {
-    let mapper = base.mapper()?;
-    let (start, end) = edited_range(short, &mapper)
+    let (start, end) = edited_range_in(short, base)
         .ok_or("Part of this short was cut from the video; adjust it first")?;
     let length = end - start;
     if !(MIN_SHORT_US..=MAX_SHORT_US).contains(&length) {
@@ -274,6 +316,14 @@ pub fn short_document(
     document.retained_intervals = slice_retained(&base.retained_intervals, start, end);
     document.layout.aspect_ratio = "9:16".into();
     document.captions.enabled = captions && short.layout.captions;
+    // The short's own caption choices: fewer words and lines suit a narrow frame.
+    if short.layout.caption_max_words > 0 {
+        document.captions.max_words = short.layout.caption_max_words;
+    }
+    document.captions.max_lines = short.layout.caption_lines.clamp(1, 3);
+    if short.layout.caption_size_pct > 0.0 {
+        document.captions.font_size_pct = short.layout.caption_size_pct;
+    }
     document.short_layout = Some(short.layout.clone());
     document.chapters.clear();
     document.shorts.clear();
@@ -304,6 +354,7 @@ mod tests {
             source_end_us: end,
             reason: String::new(),
             layout: ShortLayout::default(),
+            media: None,
             edited_start_us: None,
             edited_end_us: None,
         }
@@ -359,11 +410,8 @@ mod tests {
     fn validation_and_ui_fields() {
         let mut shorts = vec![short(5 * S, 30 * S)];
         validate(&shorts).unwrap();
-        let mapper = EditDocument::from_retained(vec![ri(0, 60 * S)])
-            .unwrap()
-            .mapper()
-            .unwrap();
-        attach_edited(&mut shorts, &mapper);
+        let document = EditDocument::from_retained(vec![ri(0, 60 * S)]).unwrap();
+        attach_edited(&mut shorts, &document);
         let json = serde_json::to_value(&shorts).unwrap();
         assert_eq!(json[0]["editedStartUs"], 5 * S);
         let stored = serde_json::to_value(normalized(shorts)).unwrap();
@@ -457,5 +505,35 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn a_short_on_an_imported_file_follows_its_clip_and_takes_its_caption_choices() {
+        // Recording 0..10 s, then 20 s of the imported file from 5 s into it.
+        let base = EditDocument::from_retained(vec![
+            ri(0, 10 * S),
+            RetainedInterval {
+                start_us: 5 * S,
+                end_us: 25 * S,
+                media: Some("m1".into()),
+                audio_unlinked: false,
+            },
+        ])
+        .unwrap();
+        let mut on_file = short(10 * S, 20 * S);
+        on_file.media = Some("m1".into());
+        assert_eq!(edited_range_in(&on_file, &base), Some((15 * S, 25 * S)));
+        on_file.layout.caption_max_words = 3;
+        on_file.layout.caption_lines = 1;
+        on_file.layout.screen_pan_x = -0.5;
+        validate(std::slice::from_ref(&on_file)).unwrap();
+        let document = short_document(&base, &on_file, true).unwrap();
+        assert_eq!(document.edited_duration_us().unwrap(), 10 * S);
+        assert_eq!(
+            (document.captions.max_words, document.captions.max_lines),
+            (3, 1)
+        );
+        on_file.layout.screen_pan_x = 2.0;
+        assert!(validate(&[on_file]).is_err());
     }
 }

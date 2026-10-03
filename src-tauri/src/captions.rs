@@ -92,6 +92,13 @@ pub struct CaptionSettings {
     /// Most words shown at once.
     #[serde(default = "default_max_words")]
     pub max_words: u32,
+    /// Most lines a caption takes; a longer one is drawn smaller to fit.
+    #[serde(default = "default_max_lines")]
+    pub max_lines: u32,
+}
+
+fn default_max_lines() -> u32 {
+    MAX_LINES as u32
 }
 
 impl Default for CaptionSettings {
@@ -111,6 +118,7 @@ impl Default for CaptionSettings {
             background_opacity: default_background_opacity(),
             uppercase: false,
             max_words: default_max_words(),
+            max_lines: default_max_lines(),
         }
     }
 }
@@ -140,6 +148,9 @@ impl CaptionSettings {
                 "Words per caption must be between {} and {}",
                 MAX_WORDS_RANGE.0, MAX_WORDS_RANGE.1
             ));
+        }
+        if !(1..=MAX_LINES as u32).contains(&self.max_lines) {
+            return Err(format!("A caption takes 1 to {MAX_LINES} lines"));
         }
         if !matches!(self.position.as_str(), "bottom" | "middle" | "top") {
             return Err("Caption position must be bottom, middle or top".into());
@@ -350,12 +361,34 @@ pub fn rasterize_cue(
         return None;
     }
     let font = font();
-    let px = (settings.font_size_pct / 100.0 * canvas_h as f32).clamp(6.0, 400.0);
+    let max_line = canvas_w as f32 * MAX_LINE_WIDTH;
+    let max_lines = (settings.max_lines as usize).clamp(1, MAX_LINES);
+    // Lines the words need at `px`, wrapping greedily.
+    let lines_at = |px: f32| {
+        let space = font.metrics(' ', px).advance_width;
+        let mut lines = 1;
+        let mut current = 0.0f32;
+        for word in &cue.words {
+            let width = word_width(font, &word.text, px);
+            if current > 0.0 && current + space + width > max_line {
+                lines += 1;
+                current = width;
+            } else {
+                current += if current > 0.0 { space + width } else { width };
+            }
+        }
+        lines
+    };
+    let wanted = (settings.font_size_pct / 100.0 * canvas_h as f32).clamp(6.0, 400.0);
+    let mut px = wanted;
+    // Too many lines for the limit: smaller text, down to half size.
+    while lines_at(px) > max_lines && px > (wanted * 0.5).max(6.0) {
+        px *= 0.92;
+    }
     let space = font.metrics(' ', px).advance_width;
     let line_metrics = font.horizontal_line_metrics(px)?;
     let ascent = line_metrics.ascent;
     let line_height = (line_metrics.ascent - line_metrics.descent) * 1.12;
-    let max_line = canvas_w as f32 * MAX_LINE_WIDTH;
 
     // Greedy wrap; the widths of each line center it later.
     let mut placed = Vec::with_capacity(cue.words.len());
@@ -366,7 +399,7 @@ pub fn rasterize_cue(
         let current = line_widths[line];
         let x = if current == 0.0 {
             0.0
-        } else if current + space + width <= max_line || line_widths.len() >= MAX_LINES {
+        } else if current + space + width <= max_line || line_widths.len() >= max_lines {
             current + space
         } else {
             line_widths.push(0.0);
@@ -834,7 +867,16 @@ mod tests {
         )
         .unwrap();
         let wrapped = rasterize_cue(&cues[0], &settings, 1280, 720).unwrap();
-        assert!(wrapped.height > one_line.height * 2);
+        // Several lines, drawn smaller where three would not hold it, never past the edge.
+        assert!(wrapped.height > one_line.height * 3 / 2);
         assert!(wrapped.width <= 1280);
+
+        // One line allowed: the same words on one line, smaller.
+        let single = CaptionSettings {
+            max_lines: 1,
+            ..settings.clone()
+        };
+        let one = rasterize_cue(&cues[0], &single, 1280, 720).unwrap();
+        assert!(one.height < wrapped.height);
     }
 }

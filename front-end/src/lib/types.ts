@@ -226,6 +226,8 @@ export interface CaptionSettings {
   uppercase: boolean;
   /** Most words on screen at once, 1 to 12. */
   maxWords: number;
+  /** Most lines a caption takes (1 to 3). */
+  maxLines?: number;
 }
 
 export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
@@ -1006,8 +1008,17 @@ export interface ShortLayout {
   /** Extra zoom on the screen part, 1 to 3. */
   screenZoom: number;
   followZooms: boolean;
+  /** Moves the screen view, -1 to 1 each way, on top of where the zooms point. */
+  screenPanX: number;
+  screenPanY: number;
   captions: boolean;
   captionSpot: "seam" | "screen" | "camera";
+  /** Words per caption in this short; 0 uses the editor's setting. */
+  captionMaxWords: number;
+  /** Lines a caption may take, 1 to 3; longer ones are drawn smaller. */
+  captionLines: number;
+  /** Caption size as a percentage of the short's height; 0 uses the editor's. */
+  captionSizePct: number;
 }
 
 /** A vertical clip of the video, anchored in source time at its first and last word. */
@@ -1018,6 +1029,8 @@ export interface Short {
   sourceEndUs: number;
   reason?: string;
   layout: ShortLayout;
+  /** The imported file whose clock the start and end are on; absent: the recording. */
+  media?: string;
   /** Absent when an end was cut from the video. Filled in by the backend. */
   editedStartUs?: number;
   editedEndUs?: number;

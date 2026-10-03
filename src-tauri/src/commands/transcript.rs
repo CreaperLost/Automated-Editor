@@ -517,7 +517,13 @@ pub fn project_shorts_generate_impl(
         )
         .words
     };
-    let shorts = crate::ai::shorts::suggest(&mut client, &words)?;
+    let mut shorts = crate::ai::shorts::suggest(&mut client, &words)?;
+    // Picked from imported speech: the times are that file's own.
+    if let Some(asset) = crate::project::revision::media_sound_asset(&track_id) {
+        for short in &mut shorts {
+            short.media = Some(asset.to_string());
+        }
+    }
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
     }
