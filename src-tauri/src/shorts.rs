@@ -248,6 +248,7 @@ pub fn slice_retained(
                 start_us: entry.start_us + (a - cursor),
                 end_us: entry.start_us + (b - cursor),
                 media: entry.media.clone(),
+                audio_unlinked: entry.audio_unlinked,
             });
         }
         cursor += length;
@@ -291,6 +292,7 @@ mod tests {
             start_us,
             end_us,
             media: None,
+            audio_unlinked: false,
         }
     }
 
@@ -318,6 +320,7 @@ mod tests {
                 start_us: 0,
                 end_us: 4 * S,
                 media: Some("m1".into()),
+                audio_unlinked: false,
             },
         );
         // From 6 s into the recording to 25 s: crosses the media clip.
@@ -332,7 +335,8 @@ mod tests {
                 RetainedInterval {
                     start_us: 0,
                     end_us: 4 * S,
-                    media: Some("m1".into())
+                    media: Some("m1".into()),
+                    audio_unlinked: false,
                 },
                 ri(20 * S, 25 * S)
             ]

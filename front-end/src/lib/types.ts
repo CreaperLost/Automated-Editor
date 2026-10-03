@@ -484,6 +484,8 @@ export interface RetainedInterval {
   endUs: number;
   /** Imported media asset id; absent for the recording. */
   media?: string;
+  /** Imported media whose sound was unlinked onto audio tracks: it plays silent here. */
+  audioUnlinked?: boolean;
 }
 
 export type MediaKind = "video" | "image" | "audio";
@@ -493,8 +495,18 @@ export interface MediaAsset {
   id: string;
   name: string;
   kind: MediaKind;
+  /** A copy inside the project (older imports); empty when `sourcePath` is set. */
   relativePath: string;
+  /** The original file, used where it is. */
+  sourcePath?: string;
+  /** The file is no longer where it was imported from. */
+  missing?: boolean;
+  /** The first audio stream, extracted. */
   audioPath?: string;
+  /** Further audio streams (e.g. mic and desktop recorded separately); they play together. */
+  extraAudioPaths?: string[];
+  /** A display name per audio stream; absent for older imports. */
+  audioNames?: string[];
   durationUs: number;
   width: number;
   height: number;
@@ -550,25 +562,51 @@ export interface OverlayClip {
   inUs: number;
   durationUs: number;
   fit: OverlayFit;
+  /** On an audio track: which of the media's audio streams the clip plays. */
+  audioStream?: number;
+  /** On a video track: its sound was unlinked onto audio tracks. */
+  audioUnlinked?: boolean;
+  /** Audio clips unlinked from the same picture share this. */
+  link?: string;
 }
+
+export type TrackKind = "video" | "audio";
 
 export interface OverlayTrack {
   id: string;
+  /** Absent on tracks saved before audio tracks existed: video. */
+  kind?: TrackKind;
   clips: OverlayClip[];
   hidden: boolean;
   muted: boolean;
 }
 
-/** One undoable change to the tracks above the main sequence. */
+/** One undoable change to the tracks beside the main sequence. */
 export type TrackEdit =
-  | { kind: "addTrack" }
+  | { kind: "addTrack"; audio?: boolean }
   | { kind: "removeTrack"; trackId: string }
   | { kind: "setTrack"; trackId: string; hidden: boolean; muted: boolean }
   | { kind: "placeMedia"; assetId: string; trackId: string; startUs: number }
   | { kind: "updateClip"; clip: OverlayClip; trackId: string }
   | { kind: "removeClip"; clipId: string }
   | { kind: "liftFromMain"; startUs: number; endUs: number; trackId: string; atUs: number }
-  | { kind: "dropToMain"; clipId: string; targetUs: number };
+  | { kind: "dropToMain"; clipId: string; targetUs: number }
+  | { kind: "unlinkMain"; startUs: number; endUs: number }
+  | { kind: "unlinkClip"; clipId: string }
+  | { kind: "relinkMain"; startUs: number; endUs: number; audioClipIds: string[] }
+  | { kind: "relinkClip"; clipId: string; audioClipIds: string[] }
+  | { kind: "rippleDelete"; ranges: EditedSpan[]; allTracks: boolean }
+  | { kind: "deleteSelection"; ranges: EditedSpan[]; clipIds: string[] }
+  | { kind: "split"; atUs: number; main: boolean; clipIds: string[] }
+  | { kind: "rippleTrimClip"; clipId: string; side: "start" | "end"; atUs: number }
+  | { kind: "moveClips"; clipIds: string[]; deltaUs: number }
+  | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number };
+
+/** A span of the edited timeline. */
+export interface EditedSpan {
+  startUs: number;
+  endUs: number;
+}
 
 // Auto webcam layout (src-tauri/src/webcam_focus.rs)
 export interface WebcamFocusSettings {

@@ -7,11 +7,13 @@ import {
   Download,
   Smartphone,
   FilePlus2,
+  Keyboard,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { ExportStatus } from "../../lib/types";
 import { LayoutMenu } from "../layout/LayoutMenu";
+import { HotkeysDialog } from "../settings/HotkeysDialog";
 
 interface EditorTopBarProps {
   onOpenExport: () => void;
@@ -43,6 +45,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     project?.manifest.projectName ?? "",
   );
   const [isRenaming, setIsRenaming] = useState(false);
+  const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const projectNameInputRef = useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
@@ -167,6 +170,17 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             <span className="hidden xl:inline">Finder</span>
           </button>
         )}
+
+        <button
+          type="button"
+          onClick={() => setHotkeysOpen(true)}
+          aria-label="Keyboard shortcuts"
+          className="p-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-300 hover:text-white transition-colors"
+          title="Keyboard shortcuts: see and change them"
+        >
+          <Keyboard className="w-3.5 h-3.5" />
+        </button>
+        {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
 
         {project && (
           <>

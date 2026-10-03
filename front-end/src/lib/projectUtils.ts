@@ -24,6 +24,8 @@ export interface TimelineClip {
   sourceStartUs: number;
   /** Imported media asset id; absent for the recording. */
   media?: string;
+  /** Imported media whose sound was unlinked onto audio tracks. */
+  audioUnlinked?: boolean;
 }
 
 /** A removed source range, drawn against the clip it would grow back onto. */
@@ -36,7 +38,7 @@ export interface CutMarker {
 }
 
 /** Splits retained media into clips at cut edges and at the user's split points. */
-export function buildClips(retained: Range[], splitPointsUs: number[] = []): TimelineClip[] {
+export function buildClips(retained: (Range & { audioUnlinked?: boolean })[], splitPointsUs: number[] = []): TimelineClip[] {
   const clips: TimelineClip[] = [];
   let edited = 0;
   for (const interval of retained) {
@@ -45,7 +47,13 @@ export function buildClips(retained: Range[], splitPointsUs: number[] = []): Tim
     const edges = [interval.startUs, ...splits, interval.endUs];
     for (let i = 0; i + 1 < edges.length; i++) {
       const length = edges[i + 1] - edges[i];
-      clips.push({ startUs: edited, endUs: edited + length, sourceStartUs: edges[i], media: interval.media });
+      clips.push({
+        startUs: edited,
+        endUs: edited + length,
+        sourceStartUs: edges[i],
+        media: interval.media,
+        audioUnlinked: interval.audioUnlinked,
+      });
       edited += length;
     }
   }

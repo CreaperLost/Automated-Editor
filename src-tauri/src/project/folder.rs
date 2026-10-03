@@ -303,7 +303,7 @@ mod tests {
         image::RgbaImage::from_pixel(16, 9, image::Rgba([0, 0, 255, 255]))
             .save(&png)
             .unwrap();
-        let summary = reader.import_media(0, &[png]).unwrap();
+        let summary = reader.import_media(0, &[png.clone()]).unwrap();
         let id = summary.media_assets[0].id.clone();
         let summary = reader.insert_media(1, &id, 0, None).unwrap();
         assert_eq!(summary.edited_duration_us, crate::media_bin::IMAGE_CLIP_US);
@@ -313,8 +313,12 @@ mod tests {
             reopened.summary.edited_duration_us,
             crate::media_bin::IMAGE_CLIP_US
         );
-        assert!(folder
-            .join(&reopened.summary.media_assets[0].relative_path)
-            .is_file());
+        // The image is used where it is, and shows as missing once it is gone.
+        let asset = &reopened.summary.media_assets[0];
+        assert!(asset.file_path(&folder).unwrap().is_file() && !asset.missing);
+        drop(reopened);
+        std::fs::remove_file(&png).unwrap();
+        let reopened = ProjectReader::open(&folder).unwrap();
+        assert!(reopened.summary.media_assets[0].missing);
     }
 }

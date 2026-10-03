@@ -3,7 +3,7 @@ import { Layers, Trash2 } from "lucide-react";
 import { InspectorSection } from "./InspectorSection";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import { fitsOnTrack, trackLabel } from "../../lib/trackUtils";
+import { audioStreamName, fitsOnTrack, isAudioTrack, trackLabel } from "../../lib/trackUtils";
 import type { OverlayClip, OverlayFit, TrackEdit } from "../../lib/types";
 
 const FITS: { value: OverlayFit; label: string }[] = [
@@ -56,7 +56,16 @@ export const TrackClipSection: React.FC = () => {
         {asset?.name ?? "Missing media"}
         <span className="ml-1.5 text-studio-500 font-mono">{(clip.durationUs / 1e6).toFixed(2)}s</span>
       </div>
-      {asset?.kind !== "audio" && (
+      {clip.audioStream !== undefined && (
+        <div className="text-[11px] text-studio-400">
+          Sound: {audioStreamName(asset, clip.audioStream)}
+          {clip.link && " · unlinked from its picture (select both and press U to relink)"}
+        </div>
+      )}
+      {clip.audioUnlinked && (
+        <div className="text-[11px] text-studio-400">Sound unlinked onto audio tracks.</div>
+      )}
+      {asset?.kind !== "audio" && !isAudioTrack(track) && (
         <label className="block text-xs text-studio-300 space-y-1">
           <span>Picture</span>
           <select
@@ -92,7 +101,9 @@ export const TrackClipSection: React.FC = () => {
         />
       </label>
       <p className="text-[11px] text-studio-500">
-        Drag the clip on the timeline to move it, its edges to trim it, or down onto V1 to insert it into the main video.
+        {isAudioTrack(track)
+          ? "Drag the clip to move it along or between audio tracks, its edges to trim it."
+          : "Drag the clip on the timeline to move it, its edges to trim it, or down onto V1 to insert it into the main video."}
       </p>
       <button
         disabled={busy}

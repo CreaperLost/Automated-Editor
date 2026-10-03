@@ -20,8 +20,8 @@ struct Span {
     source_end: u64,
     fade_in: bool,
     fade_out: bool,
-    /// For an imported media clip, its extracted audio as a one-segment track (empty when
-    /// the media has no audio). `None` is the recording.
+    /// For an imported media clip, each extracted audio stream as a one-segment track
+    /// (empty when the media has no audio). `None` is the recording.
     media: Option<Vec<(TrackType, f64, Vec<SegmentSummary>)>>,
 }
 pub struct AudioMixer {
@@ -34,33 +34,51 @@ pub struct AudioMixer {
     polish: Option<PolishPlan>,
     pub total_frames: u64,
 }
-/// An imported clip's audio as a one-segment track spanning the whole file.
+/// The mix entry of the timeline lane that plays stream `stream` (0-based) of V1's imported
+/// clips: "main-sound-1" is the first.
+pub fn main_sound_lane(stream: usize) -> String {
+    format!("main-sound-{}", stream + 1)
+}
+
+/// The lane that plays stream `stream` of the clips on video track `track_id`.
+pub fn track_sound_lane(track_id: &str, stream: usize) -> String {
+    format!("{track_id}-sound-{}", stream + 1)
+}
+
+/// An imported clip's audio: one single-segment track per audio stream (or just `stream`),
+/// spanning the file, at the volume of the lane it plays on (`lane` names it by stream).
 fn media_track(
     document: &EditDocument,
     asset_id: &str,
+    stream: Option<usize>,
+    lane: &dyn Fn(usize) -> String,
 ) -> Vec<(TrackType, f64, Vec<SegmentSummary>)> {
     let Some(asset) = document.media_assets.iter().find(|a| a.id == asset_id) else {
         return Vec::new();
     };
-    let Some(audio_path) = &asset.audio_path else {
-        return Vec::new();
-    };
-    vec![(
-        TrackType::SystemAudio,
-        1.0,
-        vec![SegmentSummary {
-            track_id: asset_id.to_string(),
-            relative_path: audio_path.clone(),
-            start_us: 0,
-            end_us: asset.duration_us,
-            size_bytes: 0,
-            media_timescale: SAMPLE_RATE,
-            media_start_value: 0,
-            host_anchor_us: 0,
-            is_keyframe_start: None,
-            available: true,
-        }],
-    )]
+    asset
+        .audio_paths()
+        .enumerate()
+        .filter(|(index, _)| stream.is_none_or(|s| s == *index))
+        .map(|(index, audio_path)| {
+            (
+                TrackType::SystemAudio,
+                document.audio.track_gain(&lane(index)),
+                vec![SegmentSummary {
+                    track_id: asset_id.to_string(),
+                    relative_path: audio_path.clone(),
+                    start_us: 0,
+                    end_us: asset.duration_us,
+                    size_bytes: 0,
+                    media_timescale: SAMPLE_RATE,
+                    media_start_value: 0,
+                    host_anchor_us: 0,
+                    is_keyframe_start: None,
+                    available: true,
+                }],
+            )
+        })
+        .collect()
 }
 fn ceil_frame(us: u64) -> u64 {
     ((us as u128 * SAMPLE_RATE as u128).div_ceil(1_000_000)) as u64
@@ -81,7 +99,9 @@ impl AudioMixer {
                 let joined =
                     |a: &crate::project::reader::RetainedInterval,
                      b: &crate::project::reader::RetainedInterval| {
-                        a.end_us == b.start_us && a.media == b.media
+                        a.end_us == b.start_us
+                            && a.media == b.media
+                            && a.audio_unlinked == b.audio_unlinked
                     };
                 let span = Span {
                     edited_start: cursor,
@@ -90,7 +110,14 @@ impl AudioMixer {
                     source_end: s.end_us,
                     fade_in: i > 0 && !joined(&intervals[i - 1], s),
                     fade_out: i + 1 < intervals.len() && !joined(s, &intervals[i + 1]),
-                    media: s.media.as_ref().map(|id| media_track(document, id)),
+                    // An unlinked clip's sound plays from the audio tracks instead.
+                    media: s.media.as_ref().map(|id| {
+                        if s.audio_unlinked {
+                            Vec::new()
+                        } else {
+                            media_track(document, id, None, &main_sound_lane)
+                        }
+                    }),
                 };
                 cursor = span.edited_end;
                 span
@@ -121,16 +148,28 @@ impl AudioMixer {
             .overlay_tracks
             .iter()
             .filter(|track| !track.muted)
-            .flat_map(|track| &track.clips)
-            .filter(|clip| clip.start_us < duration)
-            .map(|clip| Span {
+            .flat_map(|track| track.clips.iter().map(move |clip| (track, clip)))
+            .filter(|(_, clip)| clip.start_us < duration && !clip.audio_unlinked)
+            .map(|(track, clip)| Span {
                 edited_start: clip.start_us,
                 edited_end: clip.end_us().min(duration),
                 source_start: clip.in_us,
                 source_end: clip.in_us + clip.end_us().min(duration) - clip.start_us,
                 fade_in: true,
                 fade_out: true,
-                media: Some(media_track(document, &clip.asset_id)),
+                // An audio track is one lane; a video track has a lane per stream.
+                media: Some(media_track(
+                    document,
+                    &clip.asset_id,
+                    clip.audio_stream,
+                    &|stream| {
+                        if track.is_audio() {
+                            track.id.clone()
+                        } else {
+                            track_sound_lane(&track.id, stream)
+                        }
+                    },
+                )),
             })
             .filter(|span| span.media.as_ref().is_some_and(|tracks| !tracks.is_empty()))
             .collect();
@@ -392,6 +431,7 @@ mod tests {
             start_us: 0,
             end_us: duration,
             media: None,
+            audio_unlinked: false,
         }])
         .unwrap();
         let track = TrackSummary {
@@ -608,11 +648,13 @@ mod tests {
                 start_us: 0,
                 end_us: 1_100_007,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 1_500_013,
                 end_us: 3_000_000,
                 media: None,
+                audio_unlinked: false,
             },
         ];
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
@@ -643,11 +685,13 @@ mod tests {
                 start_us: 0,
                 end_us: 100_013,
                 media: None,
+                audio_unlinked: false,
             },
             RetainedInterval {
                 start_us: 300_017,
                 end_us: 400_099,
                 media: None,
+                audio_unlinked: false,
             },
         ];
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
@@ -660,6 +704,7 @@ mod tests {
             start_us: 0,
             end_us: 3_600_000_000,
             media: None,
+            audio_unlinked: false,
         }];
         let mixer = AudioMixer::new(dir.path(), &doc, &tracks).unwrap();
         assert_eq!(

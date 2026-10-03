@@ -465,6 +465,26 @@ async fn pick_media_files(app: tauri::AppHandle) -> Result<Vec<String>, String> 
     .map_err(|error| error.to_string())?
 }
 
+/// A folder whose videos, images and audio are imported together.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn pick_media_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let picked = rfd::FileDialog::new()
+                .set_title("Import a folder of media")
+                .pick_folder()
+                .map(|path| path.to_string_lossy().into_owned());
+            let _ = tx.send(picked);
+        })
+        .map_err(|error| error.to_string())?;
+        rx.recv().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_split(
@@ -484,6 +504,7 @@ fn project_restore_cuts(
     expected_revision: u64,
     ranges: Vec<commands::EditCut>,
     grow: Option<project::revision::RestoreGrow>,
+    shift_tracks_at: Option<u64>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_restore_cuts_impl(
         &state,
@@ -491,6 +512,7 @@ fn project_restore_cuts(
         expected_revision,
         ranges,
         grow.unwrap_or_default(),
+        shift_tracks_at,
     )
 }
 
@@ -1257,6 +1279,7 @@ pub fn run() {
             project_media_insert,
             project_tracks_edit,
             pick_media_files,
+            pick_media_folder,
             project_restore_cuts,
             project_undo,
             project_redo,

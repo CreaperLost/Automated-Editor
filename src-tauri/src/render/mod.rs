@@ -234,28 +234,20 @@ impl Scene {
             let area_h = height - padding * 2;
             let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
             let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
-            // Crop in place: the uncropped screen keeps its size and position, and each
-            // crop only moves its own edge inward. Re-fitting the kept region would
-            // re-centre it, so cropping one side looked like cropping both.
-            let (full_x, full_y, full_w, full_h) = fit_inside(
-                screen.width,
-                screen.height,
-                padding + (area_w - box_w) / 2,
-                padding + (area_h - box_h) / 2,
-                box_w,
-                box_h,
-            );
-            let edge = |origin: u32, size: u32, fraction: f32| {
-                origin + (size as f32 * fraction).round() as u32
+            // The kept region keeps the scale of the uncropped screen (re-fitting it would
+            // enlarge it, so cropping one side looked like cropping both) and is centred
+            // in the content area at its new size.
+            let (_, _, full_w, full_h) =
+                fit_inside(screen.width, screen.height, 0, 0, box_w, box_h);
+            let span = |size: u32, start: f32, length: f32| {
+                let a = (size as f32 * start).round() as u32;
+                let b = (size as f32 * (start + length)).round() as u32;
+                b.saturating_sub(a).clamp(1, size.max(1))
             };
-            let x = edge(full_x, full_w, crop_x);
-            let y = edge(full_y, full_h, crop_y);
-            let w = edge(full_x, full_w, crop_x + crop_w)
-                .saturating_sub(x)
-                .max(1);
-            let h = edge(full_y, full_h, crop_y + crop_h)
-                .saturating_sub(y)
-                .max(1);
+            let w = span(full_w, crop_x, crop_w);
+            let h = span(full_h, crop_y, crop_h);
+            let x = padding + (area_w - w) / 2;
+            let y = padding + (area_h - h) / 2;
             let radius = layout.corner_radius_px as f32 * unit;
             let clip = if radius > 0.0 {
                 ClipMode::RoundedRect
@@ -1821,7 +1813,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_crop_moves_only_the_cropped_edge() {
+    fn screen_crop_keeps_scale_and_recentres() {
         // Left half red, right half blue; cropping 45% from the left leaves mostly blue.
         let screen = split_frame(32, 16, [0, 0, 255], [255, 0, 0]);
         let mut layout = solid_layout();
@@ -1842,23 +1834,23 @@ mod tests {
             .find(|l| l.role == LayerRole::Screen)
             .unwrap();
         assert!((layer.uv_x - 0.45).abs() < 1e-6 && (layer.uv_w - 0.55).abs() < 1e-6);
-        // Only the left edge moved: the right edge, top and height are where they were.
+        // Same scale as uncropped (18 of 32 px kept), centred horizontally.
         assert_eq!(
             (layer.x, layer.y, layer.width, layer.height),
-            (14, 8, 18, 16)
+            (7, 8, 18, 16)
         );
         let out = Compositor::composite_cpu(&scene).unwrap();
-        let [b, _, r, _] = pixel(&out, 30, 16);
-        assert!(b > 200 && r < 40, "right edge shows the blue half");
-        let [_, _, r, _] = pixel(&out, 14, 16);
+        let [b, _, r, _] = pixel(&out, 23, 16);
+        assert!(b > 200 && r < 40, "right side shows the blue half");
+        let [_, _, r, _] = pixel(&out, 7, 16);
         assert!(r > 200, "new left edge shows the red sliver the crop kept");
         assert_eq!(
-            pixel(&out, 4, 16)[1],
+            pixel(&out, 3, 16)[1],
             255,
-            "background shows where the crop removed"
+            "background shows either side of the centred crop"
         );
 
-        // Cropping the right side leaves the left edge in place.
+        // Cropping right and bottom shrinks the region and centres it both ways.
         layout.screen_crop_left = 0.0;
         layout.screen_crop_right = 25.0;
         layout.screen_crop_bottom = 25.0;
@@ -1870,7 +1862,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (layer.x, layer.y, layer.width, layer.height),
-            (0, 8, 24, 12)
+            (4, 10, 24, 12)
         );
     }
 

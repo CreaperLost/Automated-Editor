@@ -1,13 +1,17 @@
 import type { MediaAsset, OverlayClip, OverlayTrack } from "./types";
 
-/** A row of the timeline a clip can be dropped on. */
-export type TrackRow = { kind: "main" } | { kind: "new" } | { kind: "track"; trackId: string };
+/** A row of the timeline a clip can be dropped on; "new" rows add a video or audio track. */
+export type TrackRow =
+  | { kind: "main" }
+  | { kind: "new"; audio: boolean }
+  | { kind: "track"; trackId: string };
 
-/** Rows carry `data-track-row`: "main", "new", or "track:<id>". */
+/** Rows carry `data-track-row`: "main", "new", "new-audio", or "track:<id>". */
 export function rowFromElement(element: Element | null): TrackRow | null {
   const row = element?.closest("[data-track-row]")?.getAttribute("data-track-row");
   if (!row) return null;
-  if (row === "main" || row === "new") return { kind: row };
+  if (row === "main") return { kind: "main" };
+  if (row === "new" || row === "new-audio") return { kind: "new", audio: row === "new-audio" };
   return row.startsWith("track:") ? { kind: "track", trackId: row.slice(6) } : null;
 }
 
@@ -22,12 +26,30 @@ export function rowAtPoint(x: number, y: number): TrackRow | null {
 
 export function sameRow(a: TrackRow | null, b: TrackRow | null): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === "new") return a.audio === (b as { audio: boolean }).audio;
   return a.kind !== "track" || a.trackId === (b as { trackId: string }).trackId;
 }
 
-/** "V2" for the first track above the main sequence (V1). */
+export const isAudioTrack = (track: OverlayTrack | undefined) => track?.kind === "audio";
+export const videoTracks = (tracks: OverlayTrack[]) => tracks.filter((t) => !isAudioTrack(t));
+export const audioTracks = (tracks: OverlayTrack[]) => tracks.filter(isAudioTrack);
+
+/** "V2" for the first video track above the main sequence (V1); "A1" for the first audio track. */
 export function trackLabel(tracks: OverlayTrack[], trackId: string): string {
-  return `V${tracks.findIndex((track) => track.id === trackId) + 2}`;
+  const track = tracks.find((t) => t.id === trackId);
+  return isAudioTrack(track)
+    ? `A${audioTracks(tracks).indexOf(track!) + 1}`
+    : `V${videoTracks(tracks).findIndex((t) => t.id === trackId) + 2}`;
+}
+
+/** How many audio streams the media has. */
+export function audioStreamCount(asset: MediaAsset | undefined): number {
+  return asset?.audioPath ? 1 + (asset.extraAudioPaths?.length ?? 0) : 0;
+}
+
+/** "Mic", or "Audio 2" when the stream has no name. */
+export function audioStreamName(asset: MediaAsset | undefined, stream: number): string {
+  return asset?.audioNames?.[stream] ?? `Audio ${stream + 1}`;
 }
 
 export function clipEndUs(clip: Pick<OverlayClip, "startUs" | "durationUs">): number {
