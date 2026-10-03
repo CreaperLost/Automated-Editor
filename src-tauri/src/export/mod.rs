@@ -1829,6 +1829,71 @@ mod tests {
         crate::media::release_decoders();
     }
 
+    /// A project with no recording: made from imported media only, it previews and exports.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_project_without_a_recording_previews_and_exports() {
+        use crate::project::reader::ProjectReader;
+        let dir = tempfile::tempdir().unwrap();
+        let folder =
+            crate::project::folder::create_project_folder(dir.path(), "Slides", None).unwrap();
+        let png = dir.path().join("card.png");
+        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
+            .save(&png)
+            .unwrap();
+        let mut reader = ProjectReader::open(&folder).unwrap();
+        let id = reader.import_media(0, &[png]).unwrap().media_assets[0]
+            .id
+            .clone();
+        reader
+            .insert_media(1, &id, 0, Some((0, 1_000_000)))
+            .unwrap();
+        let document = reader.history().current.clone();
+        let tracks = crate::playback::tracks_from_reader(&reader);
+        assert!(tracks.is_empty());
+        let mut evaluator =
+            SceneEvaluator::new(folder.clone(), document.clone(), tracks.clone(), 320, 180)
+                .unwrap();
+        let frame = evaluator.preview_at(500_000).unwrap();
+        let i = ((90 * frame.stride) + 160 * 4) as usize;
+        assert!(
+            frame.data[i] > 180 && frame.data[i + 2] < 80,
+            "the card is blue"
+        );
+
+        let settings = ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
+        };
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(&folder, "slides", document, tracks, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        let output = run_export(
+            &captured,
+            &AtomicBool::new(false),
+            |_, _| {},
+            &EncoderGate::new(),
+        )
+        .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let duration = media_duration_us(&output).unwrap();
+        assert!(
+            duration.abs_diff(1_000_000) <= AUDIO_DURATION_SLACK_US + 40_000,
+            "duration {duration}"
+        );
+        let frame = decode_h264_frame(&output, 500_000).unwrap();
+        let i = ((90 * frame.stride) + 160 * 4) as usize;
+        assert!(
+            frame.data[i] > 180 && frame.data[i + 2] < 80,
+            "export shows the card"
+        );
+        crate::media::release_decoders();
+    }
+
     /// Imported media on the timeline: an image and a video with sound play between parts of
     /// the recording, in preview and export.
     #[test]

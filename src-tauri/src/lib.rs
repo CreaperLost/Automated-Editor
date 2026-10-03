@@ -72,6 +72,50 @@ async fn open_project(
     Ok(opened)
 }
 
+/// Makes a project folder (in `location`, or the default projects folder) and opens it. With
+/// `recording`, the project edits that recording folder without writing to it; without, it
+/// starts empty.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_create(
+    app: tauri::AppHandle,
+    name: String,
+    location: Option<String>,
+    recording: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    let folder = tauri::async_runtime::spawn_blocking(move || {
+        let parent = location
+            .filter(|path| !path.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(commands::default_projects_dir);
+        project::folder::create_project_folder(
+            &parent,
+            &name,
+            recording.as_deref().map(std::path::Path::new),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    open_project(app, folder.to_string_lossy().into_owned()).await
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn pick_recording_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    pick_directory_dialog(app, "Choose a Recording", commands::default_projects_dir()).await
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn pick_project_location(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    pick_directory_dialog(
+        app,
+        "Choose Where to Save the Project",
+        commands::default_projects_dir(),
+    )
+    .await
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn close_project(
@@ -1262,6 +1306,9 @@ pub fn run() {
             transcript_download_model,
             get_default_projects_dir,
             pick_project_folder,
+            pick_recording_folder,
+            pick_project_location,
+            project_create,
             pick_export_destination,
             pick_wallpaper_source,
             set_window_title,

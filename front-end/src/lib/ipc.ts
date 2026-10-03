@@ -334,6 +334,15 @@ export const api = {
     invokeTauri<TranscriptSettingsView>("transcript_download_model"),
   getDefaultProjectsDir: () => invokeTauri<string>("get_default_projects_dir"),
   pickProjectFolder: () => invokeTauri<string | null>("pick_project_folder"),
+  pickRecordingFolder: () => invokeTauri<string | null>("pick_recording_folder"),
+  pickProjectLocation: () => invokeTauri<string | null>("pick_project_location"),
+  /** Makes a project folder in `location` (default: the projects folder) and opens it. */
+  projectCreate: (name: string, location?: string, recording?: string) =>
+    invokeTauri<OpenedProject>("project_create", {
+      name,
+      location: location || null,
+      recording: recording || null,
+    }),
   pickExportDestination: (projectHandle?: string) =>
     invokeTauri<string | null>("pick_export_destination", { projectHandle: projectHandle ?? null }),
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),

@@ -331,7 +331,7 @@ pub fn project_zoom_suggestions_impl(
     if reader.summary.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
-    let stream = crate::telemetry::reader::read_telemetry(reader.root())?;
+    let stream = crate::telemetry::reader::read_telemetry(&reader.source_root())?;
     let mut generation = crate::zoom::generate_zoom_suggestions(&stream, &config)?;
     let mapper = reader.history().current.mapper()?;
     crate::zoom::attach_edited_ranges(&mut generation, &mapper);
@@ -383,7 +383,7 @@ pub fn project_zoom_accept_impl(
 ) -> Result<OpenedProject, String> {
     let config = crate::zoom::ZoomConfig::default();
     mutate_opened(state, project_handle, |reader| {
-        let stream = crate::telemetry::reader::read_telemetry(reader.root())?;
+        let stream = crate::telemetry::reader::read_telemetry(&reader.source_root())?;
         let generation = crate::zoom::generate_zoom_suggestions(&stream, &config)?;
         let selected: Vec<_> = if ids.is_empty() {
             generation.suggestions
@@ -539,11 +539,7 @@ pub fn project_webcam_focus_detect_impl(
                 })
             }
         };
-        (
-            ctx,
-            reader.root().to_path_buf(),
-            reader.summary.source_duration_us,
-        )
+        (ctx, reader.source_root(), reader.summary.source_duration_us)
     };
     // Without the speech requirement the whole recording is a candidate; only the mouse
     // decides.

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod folder;
 pub mod journal;
 pub mod layout;
 pub mod manifest;

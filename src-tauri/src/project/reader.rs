@@ -1,6 +1,10 @@
 //! Bounded, non-repairing project inspection. Source files are never modified.
 use super::{
     display_name_from_input,
+    folder::{
+        load_project_file, mount_recording, mounted_recording, save_project_file, under_mount,
+        ProjectFile, RECORDING_MOUNT,
+    },
     journal::JournalRecord,
     layout::EditLayout,
     manifest::{ProjectManifest, TrackDescriptor},
@@ -93,6 +97,10 @@ pub struct OpenedProject {
     pub layout: EditLayout,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
+    /// The recording folder being edited; `None` for a project without a recording. For an
+    /// older recording folder that holds its own edits, the same as `project_path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_path: Option<String>,
     /// Source ranges the edit cut out that can be put back.
     #[serde(default)]
     pub removed_intervals: Vec<RetainedInterval>,
@@ -126,9 +134,13 @@ pub struct ProjectReader {
     segments: HashMap<String, Vec<SegmentSummary>>,
     root: PathBuf,
     history: EditHistory,
+    /// Set for a project folder (not an older recording folder holding its own edits).
+    project_file: Option<ProjectFile>,
     // Directory advisory lease is shared with the recording writer. It creates
     // no lock file and holds the source snapshot against cooperating writers.
     _lease: File,
+    /// The same, on a project folder's recording.
+    _recording_lease: Option<File>,
 }
 
 pub(crate) fn is_safe_track_id(id: &str) -> bool {
@@ -161,7 +173,12 @@ pub(crate) fn safe_path(root: &Path, relative: &str) -> Result<PathBuf, String> 
     if relative.is_empty() || relative.contains('\\') || relative.contains(':') {
         return Err("Invalid project-relative path".into());
     }
-    let mut path = root.to_path_buf();
+    // A project folder sees its recording at `recording/`.
+    let (root, relative) = match under_mount(relative).zip(mounted_recording(root)) {
+        Some((inside, recording)) => (recording, inside),
+        None => (root.to_path_buf(), relative),
+    };
+    let mut path = root;
     for part in Path::new(relative).components() {
         let Component::Normal(part) = part else {
             return Err("Unsafe project-relative path".into());
@@ -245,6 +262,272 @@ pub(crate) fn acquire_read_lease(root: &Path) -> Result<File, String> {
     Ok(lease)
 }
 
+/// What a recording folder holds: its manifest, the committed segments of each track, and
+/// the recorded time without pauses.
+struct RecordingIndex {
+    manifest: ProjectManifest,
+    segments: HashMap<String, Vec<SegmentSummary>>,
+    summaries: Vec<TrackSummary>,
+    duration: u64,
+    retained: Vec<RetainedInterval>,
+    diagnostics: Vec<String>,
+}
+
+impl RecordingIndex {
+    /// A project without a recording: no tracks and nothing on the timeline yet.
+    fn empty() -> Self {
+        Self {
+            manifest: ProjectManifest {
+                version: ProjectManifest::CURRENT_VERSION,
+                session_id: "no-recording".into(),
+                project_name: "Untitled".into(),
+                created_at: String::new(),
+                duration_us: 0,
+                active_duration_us: 0,
+                pause_intervals: Vec::new(),
+                gaps_total: 0,
+                source_geometry: None,
+                cursor_mode: None,
+                tracks: Vec::new(),
+            },
+            segments: HashMap::new(),
+            summaries: Vec::new(),
+            duration: 0,
+            retained: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Prefixes every media path with `mount`, where the project sees its recording.
+    fn mount_at(&mut self, mount: &str) {
+        let prefix = |path: &mut String| *path = format!("{mount}/{path}");
+        for segment in self.segments.values_mut().flatten() {
+            prefix(&mut segment.relative_path);
+        }
+        for track in &mut self.manifest.tracks {
+            prefix(&mut track.relative_path);
+        }
+        for summary in &mut self.summaries {
+            prefix(&mut summary.descriptor.relative_path);
+        }
+    }
+}
+
+fn reject_writer_lock(root: &Path) -> Result<(), String> {
+    // Reject old writers/stale locks too. Recovery, not open, owns repairs.
+    if fs::symlink_metadata(root.join(".lock")).is_ok() {
+        return Err("Project has a writer lock; close recording or recover it first".into());
+    }
+    Ok(())
+}
+
+fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
+    let root = root.to_path_buf();
+    let bytes = bounded_read(&safe_path(&root, "manifest.json")?, MANIFEST_LIMIT)?;
+    let manifest: ProjectManifest = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    manifest.validate().map_err(|e| e.to_string())?;
+    if manifest.tracks.len() > 64
+        || manifest.pause_intervals.len() > 10_000
+        || manifest.duration_us > MAX_SAFE_TIME
+    {
+        return Err("Project exceeds metadata limits".into());
+    }
+    let mut tracks = HashMap::new();
+    let mut segments: HashMap<String, Vec<SegmentSummary>> = HashMap::new();
+    for track in &manifest.tracks {
+        if !is_safe_track_id(&track.id) {
+            return Err("Invalid track ID".into());
+        }
+        safe_path(&root, &track.relative_path)?;
+        if tracks.insert(track.id.clone(), track).is_some() {
+            return Err("Duplicate or empty track ID".into());
+        }
+        segments.insert(track.id.clone(), Vec::new());
+    }
+    let mut diagnostics = Vec::new();
+    let journal_path = safe_path(&root, "journal.jsonl")?;
+    let mut duration = manifest.duration_us;
+    let mut paths = HashSet::new();
+    if journal_path.exists() {
+        let file = open_regular(&journal_path)?;
+        let meta = file.metadata().map_err(|e| e.to_string())?;
+        if !meta.is_file() || meta.len() > JOURNAL_LIMIT {
+            return Err("Journal exceeds size limit or is not a file".into());
+        }
+        let mut reader = BufReader::new(file.take(JOURNAL_LIMIT + 1));
+        let mut total = 0u64;
+        let mut last_seq = None;
+        for line_number in 0..=RECORD_LIMIT {
+            let mut line = Vec::new();
+            let count = reader
+                .by_ref()
+                .take(LINE_LIMIT + 1)
+                .read_until(b'\n', &mut line)
+                .map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            total += count as u64;
+            if count as u64 > LINE_LIMIT || total > JOURNAL_LIMIT || line_number == RECORD_LIMIT {
+                return Err("Journal record limit exceeded".into());
+            }
+            if line.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let record: JournalRecord = match serde_json::from_slice(&line) {
+                Ok(record) => record,
+                Err(error) if error.is_eof() && !line.ends_with(b"\n") => {
+                    diagnostics.push(
+                        "Incomplete final journal line ignored; source was not repaired".into(),
+                    );
+                    break;
+                }
+                Err(error) => {
+                    return Err(format!("Corrupt journal line {}: {error}", line_number + 1))
+                }
+            };
+            if last_seq.is_some_and(|seq| record.seq() <= seq) {
+                return Err("Journal sequence is not increasing".into());
+            }
+            last_seq = Some(record.seq());
+            let segment = match record {
+                JournalRecord::SegmentCommitted {
+                    track_id,
+                    relative_path,
+                    start_us,
+                    end_us,
+                    size_bytes,
+                    media_timescale,
+                    media_start_value,
+                    host_anchor_us,
+                    is_keyframe_start,
+                    ..
+                } => Some(SegmentSummary {
+                    track_id,
+                    relative_path,
+                    start_us,
+                    end_us,
+                    size_bytes,
+                    media_timescale,
+                    media_start_value,
+                    host_anchor_us,
+                    is_keyframe_start: Some(is_keyframe_start),
+                    available: true,
+                }),
+                JournalRecord::UnindexedSegmentRecovered {
+                    track_id,
+                    relative_path,
+                    start_us,
+                    end_us,
+                    size_bytes,
+                    media_timescale,
+                    media_start_value,
+                    host_anchor_us,
+                    ..
+                } => Some(SegmentSummary {
+                    track_id,
+                    relative_path,
+                    start_us,
+                    end_us,
+                    size_bytes,
+                    media_timescale,
+                    media_start_value,
+                    host_anchor_us,
+                    is_keyframe_start: None,
+                    available: true,
+                }),
+                _ => None,
+            };
+            if let Some(mut segment) = segment {
+                let path = safe_path(&root, &segment.relative_path)?;
+                if !tracks.contains_key(&segment.track_id) {
+                    return Err("Segment references unknown track".into());
+                }
+                segment_belongs_to_track(&segment.track_id, &segment.relative_path)?;
+                if segment.start_us >= segment.end_us || segment.end_us > MAX_SAFE_TIME {
+                    return Err("Invalid segment time interval".into());
+                }
+                duration = duration.max(segment.end_us);
+                if !paths.insert(segment.relative_path.clone()) {
+                    return Err(format!(
+                        "Conflicting duplicate segment: {}",
+                        segment.relative_path
+                    ));
+                }
+                segment.available = fs::metadata(path)
+                    .map(|m| m.is_file() && m.len() == segment.size_bytes && m.len() > 0)
+                    .unwrap_or(false);
+                if !segment.available && diagnostics.len() < 256 {
+                    diagnostics.push(format!(
+                        "Missing or size-mismatched media: {}",
+                        segment.relative_path
+                    ));
+                }
+                segments.get_mut(&segment.track_id).unwrap().push(segment);
+            }
+        }
+    } else {
+        diagnostics.push("No journal found; no committed media indexed".into());
+    }
+    let mut summaries = Vec::new();
+    for track in &manifest.tracks {
+        let entries = segments.get_mut(&track.id).unwrap();
+        entries.sort_by_key(|s| (s.start_us, s.end_us));
+        let mut previous_end = 0;
+        let mut previous_index = 0;
+        for i in 0..entries.len() {
+            if entries[i].start_us < previous_end {
+                entries[i].available = false;
+                entries[previous_index].available = false;
+                if diagnostics.len() < 256 {
+                    diagnostics.push(format!("Overlapping segment: {}", entries[i].relative_path));
+                }
+            }
+            if entries[i].end_us > previous_end {
+                previous_end = entries[i].end_us;
+                previous_index = i;
+            }
+        }
+        summaries.push(TrackSummary {
+            descriptor: track.clone(),
+            segment_count: entries.len(),
+            available_segment_count: entries.iter().filter(|s| s.available).count(),
+        });
+    }
+    let mut pauses = manifest.pause_intervals.clone();
+    pauses.sort_by_key(|p| p.start_us);
+    let mut cursor = 0;
+    let mut retained = Vec::new();
+    for pause in pauses {
+        if pause.start_us < cursor || pause.start_us >= pause.end_us || pause.end_us > duration {
+            return Err("Invalid or overlapping pause intervals".into());
+        }
+        if cursor < pause.start_us {
+            retained.push(RetainedInterval {
+                start_us: cursor,
+                end_us: pause.start_us,
+                media: None,
+            });
+        }
+        cursor = pause.end_us;
+    }
+    if cursor < duration {
+        retained.push(RetainedInterval {
+            start_us: cursor,
+            end_us: duration,
+            media: None,
+        });
+    }
+    Ok(RecordingIndex {
+        manifest,
+        segments,
+        summaries,
+        duration,
+        retained,
+        diagnostics,
+    })
+}
+
 impl ProjectReader {
     pub fn open(path: &Path) -> Result<Self, String> {
         if !path.is_absolute() || path.components().any(|p| matches!(p, Component::ParentDir)) {
@@ -256,216 +539,53 @@ impl ProjectReader {
         }
         let root = dunce::canonicalize(path).map_err(|e| e.to_string())?;
         let lease = acquire_read_lease(&root)?;
-        // Reject old writers/stale locks too. Recovery, not open, owns repairs.
-        if fs::symlink_metadata(root.join(".lock")).is_ok() {
-            return Err("Project has a writer lock; close recording or recover it first".into());
-        }
-        let bytes = bounded_read(&safe_path(&root, "manifest.json")?, MANIFEST_LIMIT)?;
-        let manifest: ProjectManifest =
-            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        manifest.validate().map_err(|e| e.to_string())?;
-        if manifest.tracks.len() > 64
-            || manifest.pause_intervals.len() > 10_000
-            || manifest.duration_us > MAX_SAFE_TIME
-        {
-            return Err("Project exceeds metadata limits".into());
-        }
-        let mut tracks = HashMap::new();
-        let mut segments: HashMap<String, Vec<SegmentSummary>> = HashMap::new();
-        for track in &manifest.tracks {
-            if !is_safe_track_id(&track.id) {
-                return Err("Invalid track ID".into());
-            }
-            safe_path(&root, &track.relative_path)?;
-            if tracks.insert(track.id.clone(), track).is_some() {
-                return Err("Duplicate or empty track ID".into());
-            }
-            segments.insert(track.id.clone(), Vec::new());
-        }
-        let mut diagnostics = Vec::new();
-        let journal_path = safe_path(&root, "journal.jsonl")?;
-        let mut duration = manifest.duration_us;
-        let mut paths = HashSet::new();
-        if journal_path.exists() {
-            let file = open_regular(&journal_path)?;
-            let meta = file.metadata().map_err(|e| e.to_string())?;
-            if !meta.is_file() || meta.len() > JOURNAL_LIMIT {
-                return Err("Journal exceeds size limit or is not a file".into());
-            }
-            let mut reader = BufReader::new(file.take(JOURNAL_LIMIT + 1));
-            let mut total = 0u64;
-            let mut last_seq = None;
-            for line_number in 0..=RECORD_LIMIT {
-                let mut line = Vec::new();
-                let count = reader
-                    .by_ref()
-                    .take(LINE_LIMIT + 1)
-                    .read_until(b'\n', &mut line)
-                    .map_err(|e| e.to_string())?;
-                if count == 0 {
-                    break;
-                }
-                total += count as u64;
-                if count as u64 > LINE_LIMIT || total > JOURNAL_LIMIT || line_number == RECORD_LIMIT
-                {
-                    return Err("Journal record limit exceeded".into());
-                }
-                if line.iter().all(u8::is_ascii_whitespace) {
-                    continue;
-                }
-                let record: JournalRecord = match serde_json::from_slice(&line) {
-                    Ok(record) => record,
-                    Err(error) if error.is_eof() && !line.ends_with(b"\n") => {
-                        diagnostics.push(
-                            "Incomplete final journal line ignored; source was not repaired".into(),
-                        );
-                        break;
+        let project_file = load_project_file(&root)?;
+        let (index, recording_lease) = match &project_file {
+            // A project folder: its recording, if any, lives elsewhere and is only read.
+            Some(file) => match &file.recording {
+                Some(recording) => {
+                    let recording_root = dunce::canonicalize(recording).map_err(|_| {
+                        format!(
+                            "This project's recording is missing. It was at {recording}; move it back there to open the project."
+                        )
+                    })?;
+                    if recording_root.starts_with(&root) || root.starts_with(&recording_root) {
+                        return Err("A project and its recording must be separate folders".into());
                     }
-                    Err(error) => {
-                        return Err(format!("Corrupt journal line {}: {error}", line_number + 1))
-                    }
-                };
-                if last_seq.is_some_and(|seq| record.seq() <= seq) {
-                    return Err("Journal sequence is not increasing".into());
+                    let recording_lease = acquire_read_lease(&recording_root)?;
+                    reject_writer_lock(&recording_root)?;
+                    let mut index = index_recording(&recording_root)?;
+                    index.mount_at(RECORDING_MOUNT);
+                    mount_recording(&root, &recording_root);
+                    (index, Some(recording_lease))
                 }
-                last_seq = Some(record.seq());
-                let segment = match record {
-                    JournalRecord::SegmentCommitted {
-                        track_id,
-                        relative_path,
-                        start_us,
-                        end_us,
-                        size_bytes,
-                        media_timescale,
-                        media_start_value,
-                        host_anchor_us,
-                        is_keyframe_start,
-                        ..
-                    } => Some(SegmentSummary {
-                        track_id,
-                        relative_path,
-                        start_us,
-                        end_us,
-                        size_bytes,
-                        media_timescale,
-                        media_start_value,
-                        host_anchor_us,
-                        is_keyframe_start: Some(is_keyframe_start),
-                        available: true,
-                    }),
-                    JournalRecord::UnindexedSegmentRecovered {
-                        track_id,
-                        relative_path,
-                        start_us,
-                        end_us,
-                        size_bytes,
-                        media_timescale,
-                        media_start_value,
-                        host_anchor_us,
-                        ..
-                    } => Some(SegmentSummary {
-                        track_id,
-                        relative_path,
-                        start_us,
-                        end_us,
-                        size_bytes,
-                        media_timescale,
-                        media_start_value,
-                        host_anchor_us,
-                        is_keyframe_start: None,
-                        available: true,
-                    }),
-                    _ => None,
-                };
-                if let Some(mut segment) = segment {
-                    let path = safe_path(&root, &segment.relative_path)?;
-                    if !tracks.contains_key(&segment.track_id) {
-                        return Err("Segment references unknown track".into());
-                    }
-                    segment_belongs_to_track(&segment.track_id, &segment.relative_path)?;
-                    if segment.start_us >= segment.end_us || segment.end_us > MAX_SAFE_TIME {
-                        return Err("Invalid segment time interval".into());
-                    }
-                    duration = duration.max(segment.end_us);
-                    if !paths.insert(segment.relative_path.clone()) {
-                        return Err(format!(
-                            "Conflicting duplicate segment: {}",
-                            segment.relative_path
-                        ));
-                    }
-                    segment.available = fs::metadata(path)
-                        .map(|m| m.is_file() && m.len() == segment.size_bytes && m.len() > 0)
-                        .unwrap_or(false);
-                    if !segment.available && diagnostics.len() < 256 {
-                        diagnostics.push(format!(
-                            "Missing or size-mismatched media: {}",
-                            segment.relative_path
-                        ));
-                    }
-                    segments.get_mut(&segment.track_id).unwrap().push(segment);
-                }
+                None => (RecordingIndex::empty(), None),
+            },
+            // An older recording folder that holds its own edits.
+            None => {
+                reject_writer_lock(&root)?;
+                (index_recording(&root)?, None)
             }
-        } else {
-            diagnostics.push("No journal found; no committed media indexed".into());
-        }
-        let mut summaries = Vec::new();
-        for track in &manifest.tracks {
-            let entries = segments.get_mut(&track.id).unwrap();
-            entries.sort_by_key(|s| (s.start_us, s.end_us));
-            let mut previous_end = 0;
-            let mut previous_index = 0;
-            for i in 0..entries.len() {
-                if entries[i].start_us < previous_end {
-                    entries[i].available = false;
-                    entries[previous_index].available = false;
-                    if diagnostics.len() < 256 {
-                        diagnostics
-                            .push(format!("Overlapping segment: {}", entries[i].relative_path));
-                    }
-                }
-                if entries[i].end_us > previous_end {
-                    previous_end = entries[i].end_us;
-                    previous_index = i;
-                }
-            }
-            summaries.push(TrackSummary {
-                descriptor: track.clone(),
-                segment_count: entries.len(),
-                available_segment_count: entries.iter().filter(|s| s.available).count(),
-            });
-        }
-        let mut pauses = manifest.pause_intervals.clone();
-        pauses.sort_by_key(|p| p.start_us);
-        let mut cursor = 0;
-        let mut retained = Vec::new();
-        for pause in pauses {
-            if pause.start_us < cursor || pause.start_us >= pause.end_us || pause.end_us > duration
-            {
-                return Err("Invalid or overlapping pause intervals".into());
-            }
-            if cursor < pause.start_us {
-                retained.push(RetainedInterval {
-                    start_us: cursor,
-                    end_us: pause.start_us,
-                    media: None,
-                });
-            }
-            cursor = pause.end_us;
-        }
-        if cursor < duration {
-            retained.push(RetainedInterval {
-                start_us: cursor,
-                end_us: duration,
-                media: None,
-            });
+        };
+        let RecordingIndex {
+            mut manifest,
+            segments,
+            summaries,
+            duration,
+            retained,
+            mut diagnostics,
+        } = index;
+        if let Some(file) = &project_file {
+            manifest.project_name = file.name.clone();
         }
         let mut history = EditHistory::new(EditDocument::from_retained(retained.clone())?);
         match revision::load_edit_document(&root) {
             Ok(Some(document)) => {
+                // Imported media keeps times within its own file.
                 if document
                     .retained_intervals
                     .iter()
-                    .any(|s| s.end_us > duration)
+                    .any(|s| s.is_recording() && s.end_us > duration)
                 {
                     return Err("Edit interval exceeds source duration".into());
                 }
@@ -499,6 +619,10 @@ impl ProjectReader {
                 dismissed_zoom_ids: history.current.dismissed_zoom_ids.clone(),
                 layout: history.current.layout.clone(),
                 project_path: Some(root.to_string_lossy().into_owned()),
+                recording_path: match &project_file {
+                    Some(file) => file.recording.clone(),
+                    None => Some(root.to_string_lossy().into_owned()),
+                },
                 removed_intervals: Vec::new(),
                 split_points_us: Vec::new(),
                 webcam_focus: Default::default(),
@@ -512,7 +636,9 @@ impl ProjectReader {
             segments,
             root,
             history,
+            project_file,
             _lease: lease,
+            _recording_lease: recording_lease,
         };
         reader.sync_summary();
         Ok(reader)
@@ -520,6 +646,21 @@ impl ProjectReader {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Where the recording's own files (manifest, journal, telemetry) are: the linked
+    /// recording of a project folder, or the folder itself for an older recording folder.
+    pub fn source_root(&self) -> PathBuf {
+        mounted_recording(&self.root)
+            .filter(|_| self.project_file.is_some())
+            .unwrap_or_else(|| self.root.clone())
+    }
+
+    /// Whether this project has a recording (a project can start empty).
+    pub fn has_recording(&self) -> bool {
+        self.project_file
+            .as_ref()
+            .is_none_or(|file| file.recording.is_some())
     }
 
     pub fn segments_for(&self, track_id: &str) -> Option<&[SegmentSummary]> {
@@ -886,6 +1027,15 @@ impl ProjectReader {
         }
         let clean_name = display_name_from_input(trimmed);
         if clean_name == self.summary.manifest.project_name {
+            return Ok(self.summary.clone());
+        }
+        // A project folder keeps its own name; the recording is never written.
+        if let Some(file) = &mut self.project_file {
+            let mut next = file.clone();
+            next.name = clean_name.clone();
+            save_project_file(&self.root, &next)?;
+            *file = next;
+            self.summary.manifest.project_name = clean_name;
             return Ok(self.summary.clone());
         }
         let mut manifest = self.summary.manifest.clone();

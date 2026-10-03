@@ -6,6 +6,7 @@ import {
   Scissors,
   Download,
   Smartphone,
+  FilePlus2,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
@@ -17,6 +18,7 @@ interface EditorTopBarProps {
   exportJob?: ExportStatus;
   busy: boolean;
   onOpenFolder: () => void;
+  onNewProject: () => void;
   onCloseProject: () => void;
   onShowInFinder: () => void;
 }
@@ -26,6 +28,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   exportJob,
   busy,
   onOpenFolder,
+  onNewProject,
   onCloseProject,
   onShowInFinder,
 }) => {
@@ -124,7 +127,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
           </div>
         ) : (
           <span className="text-xs text-studio-500 font-mono">
-            No project open — pick a recording folder to start
+            No project open: start a new one or open an existing one
           </span>
         )}
       </div>
@@ -134,12 +137,22 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
         <button
           type="button"
           disabled={busy}
+          onClick={onNewProject}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-200 text-xs font-medium disabled:opacity-40 transition-colors"
+          title="Start a new project, empty or from a recording"
+        >
+          <FilePlus2 className="w-3.5 h-3.5" />
+          <span className="hidden xl:inline">New</span>
+        </button>
+        <button
+          type="button"
+          disabled={busy}
           onClick={onOpenFolder}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600/20 border border-teal-500/40 text-teal-300 text-xs font-medium hover:bg-teal-600/30 disabled:opacity-40 transition-colors"
-          title="Open a recorded project folder"
+          title="Open a project folder, or a recording folder to edit it in place"
         >
           <FolderOpen className="w-3.5 h-3.5" />
-          <span className="hidden xl:inline">Open Folder</span>
+          <span className="hidden xl:inline">Open</span>
         </button>
 
         {project && projectPath && (
