@@ -290,7 +290,11 @@ export const ShortsStudio: React.FC = () => {
     const next = { ...layout, ...patch };
     setDraft(next);
     window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => patchSelected({ layout: next }), 400);
+    // While it plays, the playing short picks the change up as soon as it is saved.
+    saveTimer.current = window.setTimeout(
+      () => patchSelected({ layout: next }),
+      useProjectStore.getState().isPlaying ? 120 : 400,
+    );
   };
 
   // Paused: a still of the short at the playhead (the latest request wins).
@@ -337,7 +341,8 @@ export const ShortsStudio: React.FC = () => {
         const bitmap = await createImageBitmap(new Blob([buffer.slice(8)], { type: "image/jpeg" })).catch(() => null);
         const canvas = canvasRef.current;
         const context = canvas?.getContext("2d");
-        if (!bitmap || !canvas || !context || cancelled) {
+        // A wide frame is the video's, left from before the short took over: skip it.
+        if (!bitmap || !canvas || !context || cancelled || bitmap.width > bitmap.height) {
           bitmap?.close();
           continue;
         }
