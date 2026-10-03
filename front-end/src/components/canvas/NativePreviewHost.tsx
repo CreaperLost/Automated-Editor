@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { PreviewHitMode, PreviewStatus } from "../../lib/types";
@@ -24,36 +24,23 @@ function closePicture(picture: Picture | null) {
   if (picture && "close" in picture) picture.close();
 }
 
-interface NativePreviewHostProps {
-  windowLabel?: string;
-  hitMode?: PreviewHitMode;
-  className?: string;
-  fitAspectRatio?: number;
-  showStatus?: boolean;
-}
-
-export function NativePreviewHost({
-  windowLabel = "main",
-  hitMode = "consume",
-  className = "w-full max-w-4xl aspect-video",
-  fitAspectRatio,
-  showStatus = true,
-}: NativePreviewHostProps) {
-  const previewAvailable = useProjectStore(s => s.previewAvailable);
-  const playbackError = useProjectStore(s => s.playbackError);
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+/**
+ * Pulls the playback engine's frames and draws them on `canvasRef`, measuring the rate drawn.
+ * Each request waits for the next frame, so it arrives as soon as it is stored; decoding runs
+ * off the main thread while the next frame is already being fetched. `accept` can turn away
+ * frames that are not for this view (a window showing a short skips the video's).
+ */
+export function useEngineFrames(
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  active: boolean,
+  restartKey?: unknown,
+  accept?: () => boolean,
+) {
   const setMeasuredFps = usePreviewQualityStore(s => s.setMeasuredFps);
-  const [status, setStatus] = useState<PreviewStatus | null>(null);
-  const [error, setError] = useState<string>();
-  const webview = status?.attached === true && status.surface === "webview";
-  const webviewGeneration = webview ? status.generation : undefined;
-
-  // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
   // Each request waits for the next frame, so it arrives as soon as it is stored; decoding
   // runs off the main thread while the next frame is already being fetched.
   useEffect(() => {
-    if (webviewGeneration === undefined) return;
+    if (!active) return;
     let cancelled = false;
     let lastSeq = 0;
     let latest: Blob | null = null;
@@ -109,6 +96,7 @@ export function NativePreviewHost({
         }
         if (cancelled || buffer.byteLength <= 8) continue;
         lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
+        if (accept && !accept()) continue;
         latest = new Blob([buffer.slice(8)], { type: "image/jpeg" });
         void draw();
       }
@@ -119,7 +107,36 @@ export function NativePreviewHost({
       window.clearInterval(measure);
       setMeasuredFps(null);
     };
-  }, [webviewGeneration, setMeasuredFps]);
+  }, [active, restartKey, setMeasuredFps]);
+
+}
+
+interface NativePreviewHostProps {
+  windowLabel?: string;
+  hitMode?: PreviewHitMode;
+  className?: string;
+  fitAspectRatio?: number;
+  showStatus?: boolean;
+}
+
+export function NativePreviewHost({
+  windowLabel = "main",
+  hitMode = "consume",
+  className = "w-full max-w-4xl aspect-video",
+  fitAspectRatio,
+  showStatus = true,
+}: NativePreviewHostProps) {
+  const previewAvailable = useProjectStore(s => s.previewAvailable);
+  const playbackError = useProjectStore(s => s.playbackError);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [status, setStatus] = useState<PreviewStatus | null>(null);
+  const [error, setError] = useState<string>();
+  const webview = status?.attached === true && status.surface === "webview";
+  const webviewGeneration = webview ? status.generation : undefined;
+
+  // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
+  useEngineFrames(canvasRef, webviewGeneration !== undefined, webviewGeneration);
 
   useEffect(() => {
     let cancelled = false;

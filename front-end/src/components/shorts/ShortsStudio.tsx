@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowUpToLine,
@@ -6,8 +6,6 @@ import {
   Download,
   FolderOpen,
   Loader2,
-  Pause,
-  Play,
   Plus,
   Smartphone,
   Sparkles,
@@ -15,7 +13,9 @@ import {
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
 import { GAP } from "../../lib/projectUtils";
-import { releaseShortPlayback, seekPlayback, togglePlayback } from "../../lib/playbackControl";
+import { releaseShortPlayback, takeShortPlayback } from "../../lib/playbackControl";
+import { useEngineFrames } from "../canvas/NativePreviewHost";
+import { PreviewQualityControls } from "../layout/StagePanel";
 import {
   DockviewDefaultTab,
   DockviewReact,
@@ -166,18 +166,14 @@ export const ShortsStudio: React.FC = () => {
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState<ShortLayout | null>(null);
-  const [frameUrl, setFrameUrl] = useState<string>();
   // The whole video (new shorts and trims are placed on it); the store holds the short's view.
   const [main, setMain] = useState<OpenedProject | null>(null);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
-  const playing = useProjectStore((s) => s.isPlaying);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [exports, setExports] = useState<Record<string, ExportRow>>({});
   const saveTimer = useRef<number>();
-  const frameRequest = useRef(0);
 
   // Load the project open in the editor, then follow its edits.
   useEffect(() => {
@@ -215,7 +211,6 @@ export const ShortsStudio: React.FC = () => {
   const lengthUs = viewing ? project!.editedDurationUs : 0;
   const playable = viewing && lengthUs > 0;
   const ownEdit = !!selected?.edit;
-  const offsetUs = Math.min(currentTimeUs, Math.max(0, lengthUs - 1));
 
   useEffect(() => {
     setDraft(null);
@@ -235,10 +230,26 @@ export const ShortsStudio: React.FC = () => {
         .then((view) => useProjectStore.getState().applyOpenedProject(view, { remote: true }))
         .catch((err) => setError(errorMessage(err)));
     }
-    // Switching shorts: a short still playing hands playback back; this one starts at 0.
-    releaseShortPlayback();
+    // Switching shorts: the new one starts at 0, live in the preview while this window is active.
     useProjectStore.getState().setCurrentTimeUs(0);
+    if (shortId && document.hasFocus()) {
+      void api
+        .playbackFocusShort(handle_, shortId, 0, false)
+        .then(useProjectStore.getState().applyPlaybackStatus)
+        .catch(() => undefined);
+    }
   }, [selectedId_, handle_]);
+  // Active, this window has the engine; the editor takes it back when it is clicked.
+  useEffect(() => {
+    const take = () => takeShortPlayback();
+    window.addEventListener("focus", take);
+    return () => window.removeEventListener("focus", take);
+  }, []);
+  // The short's own view arrives after selecting it: take the engine once it is there.
+  const viewReady = project?.shortView;
+  useEffect(() => {
+    if (viewReady && document.hasFocus()) takeShortPlayback();
+  }, [viewReady]);
   // Closing the window hands playback back to the video.
   useEffect(() => {
     const release = () => {
@@ -293,80 +304,18 @@ export const ShortsStudio: React.FC = () => {
     // While it plays, the playing short picks the change up as soon as it is saved.
     saveTimer.current = window.setTimeout(
       () => patchSelected({ layout: next }),
-      useProjectStore.getState().isPlaying ? 120 : 400,
+      useProjectStore.getState().isPlaying ? 120 : 200,
     );
   };
 
-  // Paused: a still of the short at the playhead (the latest request wins).
-  const showFrame = useCallback(
-    async (at: number) => {
-      const current = useProjectStore.getState().openedProject;
-      if (!current || !selected || !playable) return;
-      const request = ++frameRequest.current;
-      try {
-        const bytes = await api.shortPreviewFrame(current.projectHandle, selected.id, layout, at);
-        if (request !== frameRequest.current) return;
-        const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
-        setFrameUrl((old) => {
-          if (old) URL.revokeObjectURL(old);
-          return url;
-        });
-      } catch (err) {
-        if (request === frameRequest.current) setError(errorMessage(err));
-      }
-    },
-    [selected, playable, layout],
-  );
-
-  useEffect(() => {
-    if (!playing) void showFrame(offsetUs);
-  }, [showFrame, offsetUs, playing, project?.revision]);
-
-  // Playing: the playback engine plays the short with its sound; show the frames it renders.
-  useEffect(() => {
-    if (!playing) return;
-    let cancelled = false;
-    let lastSeq = 0;
-    const pull = async () => {
-      while (!cancelled) {
-        let buffer: ArrayBuffer;
-        try {
-          buffer = await api.previewFrame(lastSeq, 250);
-        } catch {
-          await new Promise((resolve) => window.setTimeout(resolve, 100));
-          continue;
-        }
-        if (cancelled || buffer.byteLength <= 8) continue;
-        lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
-        const bitmap = await createImageBitmap(new Blob([buffer.slice(8)], { type: "image/jpeg" })).catch(() => null);
-        const canvas = canvasRef.current;
-        const context = canvas?.getContext("2d");
-        // A wide frame is the video's, left from before the short took over: skip it.
-        if (!bitmap || !canvas || !context || cancelled || bitmap.width > bitmap.height) {
-          bitmap?.close();
-          continue;
-        }
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-        }
-        context.drawImage(bitmap, 0, 0);
-        bitmap.close();
-      }
-    };
-    void pull();
-    return () => {
-      cancelled = true;
-    };
-  }, [playing]);
-
-  const togglePlay = () => togglePlayback();
-  const seek = (us: number) => seekPlayback(us);
-  // When the short stops (paused or at its end), the editor gets the video back.
+  // The engine's frames while it has this short; the canvas keeps the last one otherwise.
   const playbackShortId = useProjectStore((s) => s.playbackShortId);
-  useEffect(() => {
-    if (!playing && playbackShortId && playbackShortId === selected?.id) releaseShortPlayback();
-  }, [playing, playbackShortId, selected?.id]);
+  const hasEngine = !!selected && playbackShortId === selected.id;
+  useEngineFrames(canvasRef, playable, selected?.id, () => {
+    const state = useProjectStore.getState();
+    return !!state.viewShort && state.playbackShortId === state.viewShort;
+  });
+
 
   /** A short's ends on the clock they play on: the recording's or one imported file's. */
   const anchors = (startEdited: number, endEdited: number) => {
@@ -540,46 +489,42 @@ export const ShortsStudio: React.FC = () => {
         </aside>
     ),
     preview: () => (
-        <main className="h-full min-w-0 flex flex-col items-center justify-center gap-3 p-4">
-          {selected && playable ? (
-            <>
-              <div className="relative h-[calc(100%-4.5rem)] max-h-[720px] aspect-[9/16] rounded-xl overflow-hidden border border-studio-700 bg-black">
-                {playing ? (
-                  <canvas ref={canvasRef} aria-label="Short playing" className="w-full h-full object-contain" />
-                ) : (
-                  frameUrl && <img src={frameUrl} alt="Short preview" className="w-full h-full object-contain" />
-                )}
-              </div>
-              <div className="w-[min(70vh*9/16,405px)] min-w-[280px] flex items-center gap-2">
-                <button
-                  type="button"
-                  aria-label={playing ? "Pause" : "Play"}
-                  onClick={togglePlay}
-                  className="p-1.5 rounded-md bg-studio-800 hover:bg-studio-700"
-                >
-                  {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                </button>
-                <input
-                  type="range"
-                  aria-label="Position in the short"
-                  min={0}
-                  max={Math.max(0, lengthUs - 1)}
-                  step={100_000}
-                  value={Math.min(offsetUs, Math.max(0, lengthUs - 1))}
-                  onChange={(e) => seek(Number(e.target.value))}
-                  className="flex-1 accent-teal-500"
+        <main className="h-full min-w-0 min-h-0 flex flex-col gap-2 p-3 bg-studio-950">
+          <div className="flex items-center justify-between gap-2 text-xs text-studio-400 px-1 shrink-0">
+            <span className="truncate">
+              {selected ? `${selected.title} · ${formatTime(lengthUs)}` : "No short selected"}
+            </span>
+            <div className="flex items-center gap-3 shrink-0">
+              <PreviewQualityControls />
+              <span className="font-mono text-[11px] text-studio-500">Canvas: 9:16</span>
+            </div>
+          </div>
+          <div
+            className="relative flex-1 min-h-0 overflow-hidden border border-studio-800 rounded-xl bg-studio-900/40 flex items-center justify-center p-2"
+            onPointerDown={() => takeShortPlayback()}
+          >
+            {selected && playable ? (
+              <>
+                <canvas
+                  ref={canvasRef}
+                  aria-label="Short preview"
+                  className="h-full max-w-full aspect-[9/16] object-contain rounded-lg bg-black"
                 />
-                <span className="font-mono text-studio-400 w-20 text-right">
-                  {formatTime(offsetUs)} / {formatTime(lengthUs)}
-                </span>
-              </div>
-              <p className="text-[11px] text-studio-500 text-center max-w-xs">
-                Plays with sound through the editor's playback (its preview shows the short meanwhile).
-              </p>
-            </>
-          ) : (
-            <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
-          )}
+                {!hasEngine && (
+                  <button
+                    type="button"
+                    onClick={() => takeShortPlayback()}
+                    className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-md bg-studio-900/90 border border-studio-700 text-[11px] text-studio-200 hover:bg-studio-800"
+                    title="The editor has the preview. Click to show this short here (the editor keeps its place)."
+                  >
+                    Show this short
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
+            )}
+          </div>
         </main>
     ),
     settings: () => (

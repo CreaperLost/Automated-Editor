@@ -16,8 +16,8 @@ export function togglePlayback() {
     void promise.then(applyPlaybackStatus).catch((err) => console.warn("[Playback] toggle failed:", err));
   if (viewShort) {
     if (isPlaying && playbackShortId === viewShort) {
-      useProjectStore.setState({ isPlaying: false });
-      done(api.playbackFocusShort(handle, null));
+      // Paused, the short stays in the engine: this window keeps its live preview.
+      done(api.playbackPause(handle));
     } else {
       done(api.playbackFocusShort(handle, viewShort, currentTimeUs, true));
     }
@@ -44,6 +44,21 @@ export function seekPlayback(timeUs: number) {
     .playbackSeek(openedProject.projectHandle, target)
     .then(applyPlaybackStatus)
     .catch((err) => console.warn("[Playback] seek failed:", err));
+}
+
+/**
+ * The Shorts Studio takes the engine while it is the active window, so its preview is live
+ * (paused frames, scrubbing, resolution and frame rate) like the editor's. The short keeps
+ * its own playhead; the video's place is kept for when the editor takes the engine back.
+ */
+export function takeShortPlayback() {
+  const { openedProject, viewShort, playbackShortId, currentTimeUs, applyPlaybackStatus } =
+    useProjectStore.getState();
+  if (!openedProject || !viewShort || playbackShortId === viewShort) return;
+  void api
+    .playbackFocusShort(openedProject.projectHandle, viewShort, currentTimeUs, false)
+    .then(applyPlaybackStatus)
+    .catch(() => undefined);
 }
 
 /** Hands playback back to the video if a short has it. */

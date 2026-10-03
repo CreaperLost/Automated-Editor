@@ -2350,6 +2350,49 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           </div>
 
           <div className="flex-1 space-y-2 py-2">
+            {captionTrack.trackId && (
+              <div
+                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
+                style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}
+              >
+                {resizeGrip("lane:captions", "the captions track", OVERLAY_ROW_PX)}
+                <div className="flex items-center gap-1.5 truncate">
+                  <Captions className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                  <div className="truncate">
+                    <div className="text-xs font-medium text-studio-200">Captions</div>
+                    <div className="text-[10px] font-mono text-studio-400">
+                      {openedProject?.captions?.enabled ? `${captionTrack.cues.length} shown` : "off in export"}
+                    </div>
+                  </div>
+                </div>
+                {cueAtSelection && (
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      onClick={splitCue}
+                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700"
+                      title={`Split the caption at the playhead${hint("split")}`}
+                    >
+                      Split
+                    </button>
+                    <button
+                      onClick={mergeCue}
+                      disabled={selectedCue === 0}
+                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700 disabled:opacity-40"
+                      title="Join this caption to the one before it"
+                    >
+                      Merge
+                    </button>
+                    <button
+                      onClick={hideCue}
+                      className="px-1 py-0.5 rounded text-[10px] text-rose-300 hover:bg-studio-700"
+                      title={`Hide this caption (the sound stays)${hint("deleteSelection")}`}
+                    >
+                      Hide
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             {zoomHeader}
             {addTrackButton(false)}
             {videoAbove.map(renderTrackHeader)}
@@ -2403,49 +2446,6 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             ))}
             {audioTracks.map(renderTrackHeader)}
             {addTrackButton(true)}
-            {captionTrack.trackId && (
-              <div
-                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
-                style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}
-              >
-                {resizeGrip("lane:captions", "the captions track", OVERLAY_ROW_PX)}
-                <div className="flex items-center gap-1.5 truncate">
-                  <Captions className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  <div className="truncate">
-                    <div className="text-xs font-medium text-studio-200">Captions</div>
-                    <div className="text-[10px] font-mono text-studio-400">
-                      {openedProject?.captions?.enabled ? `${captionTrack.cues.length} shown` : "off in export"}
-                    </div>
-                  </div>
-                </div>
-                {cueAtSelection && (
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      onClick={splitCue}
-                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700"
-                      title={`Split the caption at the playhead${hint("split")}`}
-                    >
-                      Split
-                    </button>
-                    <button
-                      onClick={mergeCue}
-                      disabled={selectedCue === 0}
-                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-                      title="Join this caption to the one before it"
-                    >
-                      Merge
-                    </button>
-                    <button
-                      onClick={hideCue}
-                      className="px-1 py-0.5 rounded text-[10px] text-rose-300 hover:bg-studio-700"
-                      title={`Hide this caption (the sound stays)${hint("deleteSelection")}`}
-                    >
-                      Hide
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
 
@@ -2616,6 +2616,9 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 </span>
               </div>
             )}
+
+            {/* Captions from the transcript, on top: edit, retime, split, merge or hide them here */}
+            {captionTrack.trackId && renderCaptionLane()}
 
             {/* Zoom track: zooms as clips of their own */}
             {zoomLane}
@@ -2945,8 +2948,6 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {audioTracks.map(renderTrackLane)}
             {renderNewTrackRow(true)}
 
-            {/* Captions from the transcript: edit, retime, split, merge or hide them here */}
-            {captionTrack.trackId && renderCaptionLane()}
           </div>
           </div>
         </div>

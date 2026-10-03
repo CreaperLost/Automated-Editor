@@ -9,6 +9,7 @@ import {
   usePreviewQualityStore,
 } from "../../stores/previewQualityStore";
 import { api } from "../../lib/ipc";
+import { releaseShortPlayback } from "../../lib/playbackControl";
 import type { SegmentPage } from "../../lib/types";
 
 function formatSeconds(us: number): string {
@@ -32,7 +33,7 @@ const selectClass =
   "min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 rounded px-1.5 py-0.5 text-[11px] border border-studio-700 focus:outline-none focus:border-teal-500";
 
 /// Preview resolution and frame rate, changed on the fly, with the rate actually drawn.
-const PreviewQualityControls: React.FC = () => {
+export const PreviewQualityControls: React.FC = () => {
   const quality = usePreviewQualityStore((s) => s.quality);
   const measuredFps = usePreviewQualityStore((s) => s.measuredFps);
   const error = usePreviewQualityStore((s) => s.error);
@@ -112,6 +113,13 @@ export const StagePanel: React.FC = () => {
       active = false;
     };
   }, [project?.projectHandle, trackId]);
+
+  // Clicking back into the editor gives it the video again, at its place.
+  useEffect(() => {
+    const takeBack = () => releaseShortPlayback();
+    window.addEventListener("focus", takeBack);
+    return () => window.removeEventListener("focus", takeBack);
+  }, []);
 
   if (!project) return null;
   const playingShort = project.shorts?.find((short) => short.id === playbackShortId);
