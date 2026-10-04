@@ -420,3 +420,109 @@ fn perf_pipe_throughput() {
         );
     }
 }
+
+/// The everyday operations on a long recording (`AERO_REC`, read only): opening, waveforms,
+/// pauses, zooms, edits, undo, and the preview after them.
+#[test]
+#[ignore]
+fn perf_long_recording() {
+    let Some(path) = std::env::var_os("AERO_REC") else {
+        return;
+    };
+    let work = tempfile::tempdir().unwrap();
+    let time = |label: &str, started: Instant| {
+        println!(
+            "PERF long {label}: {:.1}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        )
+    };
+    let t = Instant::now();
+    let folder =
+        crate::project::folder::create_project_folder(work.path(), "Long", Some(Path::new(&path)))
+            .unwrap();
+    time("make project", t);
+    let state = AppState::new();
+    let t = Instant::now();
+    let opened = commands::open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
+    time("open", t);
+    let handle = opened.project_handle.clone();
+    let asset = opened.assets[0].id.clone();
+    let doc = document(&state);
+    println!(
+        "PERF long duration {:.0}s, clips {}",
+        doc.duration_us() as f64 / 1e6,
+        doc.sequence.clips().count()
+    );
+    for key in ["mic", "system"] {
+        let key = format!("{asset}.{key}");
+        for pass in ["cold", "warm"] {
+            let t = Instant::now();
+            commands::project_waveform_impl(
+                &state,
+                handle.clone(),
+                key.clone(),
+                0,
+                doc.duration_us(),
+                512,
+            )
+            .unwrap();
+            time(&format!("waveform {key} {pass}"), t);
+        }
+    }
+    let t = Instant::now();
+    let pauses = commands::detect_silence_impl(
+        &state,
+        handle.clone(),
+        format!("{asset}.mic"),
+        crate::dsp::silence::SilenceConfig {
+            threshold_db: -38.0,
+            min_duration_ms: 400,
+            padding_ms: 50,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    time(
+        &format!("detect pauses ({} found)", pauses.suggestions.len()),
+        t,
+    );
+    let t = Instant::now();
+    let zooms = commands::project_zoom_suggestions_impl(&state, handle.clone(), None).unwrap();
+    time(
+        &format!("zoom suggestions ({} found)", zooms.suggestions.len()),
+        t,
+    );
+    let cuts: Vec<_> = pauses
+        .suggestions
+        .iter()
+        .map(|s| commands::EditCut {
+            start_us: s.start_us,
+            end_us: s.end_us,
+        })
+        .collect();
+    let t = Instant::now();
+    commands::project_ripple_cuts_impl(&state, handle.clone(), revision(&state), cuts).unwrap();
+    time("cut every pause", t);
+    let cut = document(&state);
+    println!(
+        "PERF long clips after cuts {}",
+        cut.sequence.clips().count()
+    );
+    edits(&state, &handle, "long");
+    let t = Instant::now();
+    commands::project_undo_impl(&state, handle.clone(), revision(&state), None).unwrap();
+    time("undo", t);
+    let cut = document(&state);
+    let t = Instant::now();
+    let (mut evaluator, mixer) = rebuild(&folder, &cut, None);
+    time("rebuild (scene + mixer)", t);
+    let t = Instant::now();
+    evaluator.preview_at(cut.duration_us() / 2).unwrap();
+    time("first frame mid-video", t);
+    let t = Instant::now();
+    mixer
+        .read_frames(cut.duration_us() / 2 * 48 / 1000, CHUNK_FRAMES)
+        .unwrap();
+    time("first audio chunk mid-video", t);
+    seeks(&folder, &cut, "long");
+}

@@ -531,6 +531,10 @@ export const TimelineStudio: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [viewportPx, setViewportPx] = useState(0);
+  // Only clips near the view are drawn: a long timeline cut at every pause has thousands, and
+  // drawing them all made every edit slow. The drawn window moves in steps of half a view, so
+  // scrolling does not redraw the timeline on every frame.
+  const [windowStep, setWindowStep] = useState(0);
   const zoomAnchor = useRef<{ timeUs: number; offsetPx: number } | null>(null);
   useEffect(() => {
     const element = scrollRef.current;
@@ -541,6 +545,33 @@ export const TimelineStudio: React.FC = () => {
     return () => observer.disconnect();
   }, [openedProject?.projectHandle]);
   useEffect(() => setTimelineZoom(1), [openedProject?.projectHandle]);
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    let frame = 0;
+    let timer = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      frame = 0;
+      timer = 0;
+      const step = Math.max(1, element.clientWidth / 2);
+      setWindowStep(Math.floor(element.scrollLeft / step));
+    };
+    // Once a frame; a timer too, for a window that is not drawing frames just now.
+    const onScroll = () => {
+      if (frame || timer) return;
+      frame = requestAnimationFrame(update);
+      timer = window.setTimeout(update, 100);
+    };
+    element.addEventListener("scroll", onScroll, { passive: true });
+    update();
+    return () => {
+      element.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [openedProject?.projectHandle]);
   // A little room after the last clip, so it can be dragged past the end.
   const spanUs = Math.max(durationUs * 1.05, 10_000_000);
   const contentPx = viewportPx * timelineZoom;
@@ -1395,6 +1426,39 @@ export const TimelineStudio: React.FC = () => {
     );
   };
 
+  // The time drawn: the visible stretch with half a view or more either side (all of it
+  // before the timeline has a size).
+  const drawnUs = (() => {
+    if (!(pxPerUs > 0) || viewportPx <= 0) return { from: 0, to: Number.MAX_SAFE_INTEGER };
+    const fromPx = (windowStep - 1) * (viewportPx / 2);
+    return { from: Math.max(0, fromPx / pxPerUs), to: (fromPx + viewportPx * 2.5) / pxPerUs };
+  })();
+  /** The clips of a track (in order) that overlap the drawn time, with their positions. */
+  const inView = (clips: Clip[]) => {
+    let lo = 0;
+    let hi = clips.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (clipEnd(clips[mid]) <= drawnUs.from) lo = mid + 1;
+      else hi = mid;
+    }
+    const out: { clip: Clip; index: number }[] = [];
+    for (let i = lo; i < clips.length && clips[i].startUs < drawnUs.to; i++) out.push({ clip: clips[i], index: i });
+    return out;
+  };
+  const joinsInView = useMemo(() => {
+    const cache = new Map<unknown, unknown>();
+    return <T extends { atUs: number }>(joins: T[]): T[] => {
+      const hit = cache.get(joins);
+      if (hit) return hit as T[];
+      const kept = joins.filter((j) => j.atUs >= drawnUs.from && j.atUs <= drawnUs.to);
+      // The same list while the window holds, so the marks' memo holds too.
+      const result = kept.length === joins.length ? joins : kept;
+      cache.set(joins, result);
+      return result;
+    };
+  }, [drawnUs.from, drawnUs.to]);
+
   const trackLane = (track: SeqTrack) => {
     const audio = track.kind === "audio";
     const trackNo = trackNumber(sequence, track.id);
@@ -1407,9 +1471,11 @@ export const TimelineStudio: React.FC = () => {
         className={cn("relative rounded-md bg-studio-850/30", (track.hidden || track.muted) && "opacity-50", track.locked && "bg-[repeating-linear-gradient(135deg,transparent_0_6px,rgb(255_255_255/0.025)_6px_12px)]")}
         style={{ height: lanes.height(audio ? "lane:audio" : "lane:video") }}
       >
-        {track.clips.map((clip, index) => clipBlock(track, trackNo, clip, index))}
+        {inView(track.clips).map(({ clip, index }) => clipBlock(track, trackNo, clip, index))}
         {/* Cut time between two pieces of one stretch: click to put it back */}
-        {trackJoins && trackJoins.length > 0 && <CutMarks joins={trackJoins} spanUs={spanUs} editing={editing} restore={restoreCut} />}
+        {trackJoins && trackJoins.length > 0 && (
+          <CutMarks joins={joinsInView(trackJoins)} spanUs={spanUs} editing={editing} restore={restoreCut} />
+        )}
         {/* Auto webcam layout: where the camera fills the frame, and where it keeps its bubble */}
         {hasCamera &&
           (focus.segments ?? []).flatMap((segment) =>

@@ -284,9 +284,17 @@ fn analyze_segment(
     let channels = info.channels as usize;
     let mut channel_peak = vec![0.0f32; bucket_count * channels];
     let mut channel_sum_sq = vec![0.0f32; bucket_count * channels];
+    // Frame `f` is at `floor(f * 1e6 / rate)` us into the segment, so bucket `i` starts at the
+    // first frame with `f * 1e6 / rate >= i * bucket_us`. Working out where each bucket (and
+    // the segment) ends once, rather than dividing for every sample, keeps this loop cheap.
+    let rate = info.sample_rate.max(1) as u128;
+    let first_frame_at = |us: u64| (us as u128 * rate).div_ceil(1_000_000) as u64;
+    let end_frame = first_frame_at(segment.end_us.saturating_sub(segment.start_us));
+    let mut idx = 0usize;
+    let mut next_bucket = first_frame_at(bucket_us);
     let mut frame_index = 0u64;
     let mut interleaved = vec![0.0f32; READ_FRAME_CHUNK * channels];
-    loop {
+    'read: loop {
         if cancelled() {
             return Err("Waveform query cancelled".into());
         }
@@ -294,27 +302,29 @@ fn analyze_segment(
         if frames == 0 {
             break;
         }
-        for frame in 0..frames {
-            let local_us = info.frame_us(frame_index);
-            let source_us = segment.start_us.saturating_add(local_us);
-            if source_us >= segment.end_us {
-                break;
+        let mut frame = 0usize;
+        while frame < frames {
+            if frame_index >= end_frame || idx >= bucket_count {
+                break 'read;
             }
-            let idx = ((source_us - segment.start_us) / bucket_us) as usize;
-            if idx < bucket_count {
-                let base = frame * channels;
-                let acc = idx * channels;
+            // The frames of this chunk that fall in bucket `idx`.
+            let run = ((next_bucket.min(end_frame) - frame_index) as usize).min(frames - frame);
+            let acc = idx * channels;
+            for f in frame..frame + run {
+                let base = f * channels;
                 for ch in 0..channels {
                     let x = interleaved[base + ch];
                     channel_peak[acc + ch] = channel_peak[acc + ch].max(x.abs());
                     channel_sum_sq[acc + ch] += x * x;
                 }
-                counts[idx] += 1;
             }
-            frame_index += 1;
-        }
-        if segment.start_us.saturating_add(info.frame_us(frame_index)) >= segment.end_us {
-            break;
+            counts[idx] += run as u32;
+            frame += run;
+            frame_index += run as u64;
+            if frame_index >= next_bucket {
+                idx += 1;
+                next_bucket = first_frame_at(bucket_us * (idx as u64 + 1));
+            }
         }
     }
     for i in 0..bucket_count {
@@ -434,10 +444,22 @@ fn hash_wav(
         let wanted = remaining.min(buf.len() as u64) as usize;
         file.read_exact(&mut buf[..wanted])
             .map_err(|e| e.to_string())?;
-        hash = fnv1a64_continue(hash, &buf[..wanted]);
+        hash = hash_words(hash, &buf[..wanted]);
         remaining -= wanted as u64;
     }
     Ok(hash)
+}
+
+/// Mixes `bytes` into `hash` eight at a time: a long recording is hundreds of MB, and a byte
+/// at a time took a quarter of a cold waveform load. Only tells content apart, nothing more.
+fn hash_words(mut hash: u64, bytes: &[u8]) -> u64 {
+    for chunk in bytes.chunks(8) {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash = (hash ^ u64::from_le_bytes(word)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        hash ^= hash >> 29;
+    }
+    hash
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -562,6 +584,67 @@ fn write_cache(
 
 #[cfg(test)]
 mod tests {
+
+    /// Buckets hold exactly the frames the per-sample formula puts in them, at rates that do
+    /// not divide a microsecond evenly and with an end that is not on a frame.
+    #[test]
+    fn buckets_match_the_per_sample_formula() {
+        for (rate, channels) in [(44_100u32, 2u16), (48_000, 1), (22_050, 2)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("a.wav");
+            let frames = rate as usize * 3 + 123;
+            let values: Vec<i16> = (0..frames * channels as usize)
+                .map(|i| ((i * 7919) % 20_000) as i16 - 10_000)
+                .collect();
+            std::fs::write(
+                &path,
+                crate::fixtures::generate_pcm16_wav(rate, channels, &values),
+            )
+            .unwrap();
+            let segment = SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: "a.wav".into(),
+                start_us: 1_000_000,
+                end_us: 3_712_345,
+                size_bytes: 0,
+                media_timescale: rate,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: Some(true),
+                available: true,
+            };
+            let built = analyze_segment(&segment, &path, &|| false).unwrap();
+            // The per-sample formula, as the loop used to work it out.
+            let info = super::super::pcm::parse_wav(&path).unwrap();
+            let mut peaks = vec![0.0f32; built.peaks.len()];
+            for f in 0..frames as u64 {
+                let local = info.frame_us(f);
+                if segment.start_us + local >= segment.end_us {
+                    break;
+                }
+                let idx = (local / built.bucket_us) as usize;
+                if idx < peaks.len() {
+                    for ch in 0..channels as usize {
+                        let x = values[f as usize * channels as usize + ch] as f32 / 32768.0;
+                        peaks[idx] = peaks[idx].max(x.abs());
+                    }
+                }
+            }
+            for (i, (a, b)) in built.peaks.iter().zip(&peaks).enumerate() {
+                // Multi-channel buckets report the loudest channel's peak: never above these.
+                assert!(*a <= *b + 1e-6, "rate {rate} bucket {i}: {a} > {b}");
+                if channels == 1 {
+                    assert_eq!(a, b, "rate {rate} bucket {i}");
+                }
+            }
+            assert_eq!(
+                built.peaks.iter().filter(|p| **p > 0.0).count(),
+                peaks.iter().filter(|p| **p > 0.0).count(),
+                "rate {rate}: the same buckets have sound"
+            );
+        }
+    }
+
     use super::*;
     use crate::fixtures::generate_pcm16_wav;
     use crate::fixtures::TestProject;
