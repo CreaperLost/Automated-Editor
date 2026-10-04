@@ -456,9 +456,25 @@ fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
     for track in &manifest.tracks {
         let entries = segments.get_mut(&track.id).unwrap();
         entries.sort_by_key(|s| (s.start_us, s.end_us));
-        let mut previous_end = 0;
+        let mut previous_end = 0u64;
         let mut previous_index = 0;
         for i in 0..entries.len() {
+            // A long recording is written in rolling segments, and each one starts a moment
+            // before the last ends (a frame of video, a few ms of sound). The earlier segment
+            // then ends where the next begins, so nothing plays twice. A longer overlap is a
+            // real conflict.
+            let overlap = previous_end.saturating_sub(entries[i].start_us);
+            if overlap > 0
+                && overlap <= MAX_SEGMENT_HANDOVER_US
+                && entries[i].end_us > previous_end
+                && entries[i].start_us > entries[previous_index].start_us
+                && entries[previous_index].available
+            {
+                entries[previous_index].end_us = entries[i].start_us;
+                previous_end = entries[i].end_us;
+                previous_index = i;
+                continue;
+            }
             if entries[i].start_us < previous_end {
                 entries[i].available = false;
                 entries[previous_index].available = false;
@@ -494,6 +510,10 @@ fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
         diagnostics,
     })
 }
+
+/// How far one segment of a track may start before the last one ends and still be taken
+/// as the next (see the rolling segments in `read_recording`).
+const MAX_SEGMENT_HANDOVER_US: u64 = 250_000;
 
 impl ProjectReader {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -1057,6 +1077,73 @@ mod tests {
     use super::*;
     use crate::fixtures::TestProject;
     use crate::project::manifest::PauseInterval;
+
+    /// Rolling segments that each start a moment before the last ends play one after another;
+    /// a real overlap still makes both unavailable.
+    #[test]
+    fn rolling_segments_hand_over_and_real_overlaps_are_flagged() {
+        use crate::fixtures::generate_pcm16_wav;
+        use crate::project::manifest::{TrackDescriptor, TrackType};
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "rolling");
+        let wav = generate_pcm16_wav(48_000, 1, &vec![1_000i16; 48_000]);
+        bundle.manifest_mut().tracks.push(TrackDescriptor {
+            id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            codec: "pcm".into(),
+            relative_path: "media/mic/000001.wav".into(),
+            width: None,
+            height: None,
+            fps: None,
+            sample_rate: Some(48_000),
+            channels: Some(1),
+            gaps_total: 0,
+            media_timescale: Some(48_000),
+        });
+        // 0-1 s, 0.998-2 s (2 ms early, as the recorder writes them), then 1.5-3 s (a
+        // half-second conflict).
+        let parts = [(0, 1_000_000), (998_000, 2_000_000), (1_500_000, 3_000_000)];
+        for (n, (start_us, end_us)) in parts.into_iter().enumerate() {
+            let relative = format!("media/mic/{:06}.wav", n + 1);
+            std::fs::write(bundle.root_path().join(&relative), &wav).unwrap();
+            bundle.append_journal(JournalRecord::SegmentCommitted {
+                seq: n as u64,
+                track_id: "mic".into(),
+                relative_path: relative,
+                start_us,
+                end_us,
+                size_bytes: wav.len() as u64,
+                is_keyframe_start: true,
+                media_timescale: 48_000,
+                media_start_value: 0,
+                host_anchor_us: start_us as i64,
+            });
+        }
+        bundle.manifest_mut().duration_us = 3_000_000;
+        bundle.manifest_mut().active_duration_us = 3_000_000;
+        bundle.save_manifest();
+        let (_, tracks, _, diagnostics) = read_recording(bundle.root_path()).unwrap();
+        let spans: Vec<_> = tracks[0]
+            .1
+            .iter()
+            .map(|s| (s.start_us, s.end_us, s.available))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                (0, 998_000, true),
+                (998_000, 2_000_000, false),
+                (1_500_000, 3_000_000, false)
+            ]
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.starts_with("Overlapping segment"))
+                .count(),
+            1
+        );
+    }
 
     /// A project folder made from a recording, as the app makes them.
     fn project_for(recording: &Path, parent: &Path) -> PathBuf {
