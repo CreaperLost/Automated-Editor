@@ -66,7 +66,7 @@ pub fn query_waveform(
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<WaveformPage, String> {
     if !matches!(ctx.track_type, TrackType::MicAudio | TrackType::SystemAudio) {
         return Err("Track is not audio".into());
@@ -119,18 +119,24 @@ pub fn query_waveform(
     let visible = edited_range_to_source(&mapper, query_start, query_end);
     let mut energies = vec![0.0f64; count];
     let mut weights = vec![0u64; count];
-    // Hold at most one segment cache. Output memory is bounded by viewport resolution.
-    for segment in &ctx.segments {
+    // The visible segments' summaries, read or built side by side: a long recording is many
+    // segment files, and building each reads the whole file. Summaries are small (a bucket per
+    // 10 ms or more), so holding them all is fine.
+    let wanted: Vec<&SegmentSummary> = ctx
+        .segments
+        .iter()
+        .filter(|segment| {
+            visible
+                .iter()
+                .any(|(a, b)| *a < segment.end_us && segment.start_us < *b)
+        })
+        .collect();
+    let built = build_segments(ctx, &wanted, cancelled);
+    for (segment, result) in wanted.iter().copied().zip(built) {
         if cancelled() {
             return Err("Waveform query cancelled".into());
         }
-        if !visible
-            .iter()
-            .any(|(a, b)| *a < segment.end_us && segment.start_us < *b)
-        {
-            continue;
-        }
-        match load_or_build_segment(ctx, segment, cancelled) {
+        match result {
             Ok(Some(cache)) => {
                 if sample_rate == 0 {
                     sample_rate = cache.sample_rate;
@@ -226,10 +232,53 @@ fn lookup_source_range(
     }
 }
 
+/// [`load_or_build_segment`] for each of `segments`, a few at a time, in order.
+fn build_segments(
+    ctx: &WaveformTrackContext,
+    segments: &[&SegmentSummary],
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Vec<Result<Option<CachedSegment>, String>> {
+    let workers = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(1, 8)
+        .min(segments.len().max(1));
+    if workers <= 1 {
+        return segments
+            .iter()
+            .map(|segment| load_or_build_segment(ctx, segment, cancelled))
+            .collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<Result<Option<CachedSegment>, String>>>> = segments
+        .iter()
+        .map(|_| std::sync::Mutex::new(None))
+        .collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(segment) = segments.get(i) else {
+                    break;
+                };
+                let result = load_or_build_segment(ctx, segment, cancelled);
+                *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+            });
+        }
+    });
+    results
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(|| Err("Waveform query cancelled".into()))
+        })
+        .collect()
+}
+
 fn load_or_build_segment(
     ctx: &WaveformTrackContext,
     segment: &SegmentSummary,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<CachedSegment>, String> {
     if !segment.available {
         return Ok(None);
@@ -269,7 +318,7 @@ fn load_or_build_segment(
 fn analyze_segment(
     segment: &SegmentSummary,
     path: &Path,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<CachedSegment, String> {
     let mut reader = PcmReader::open(path)?;
     let info = reader.info().clone();
@@ -401,7 +450,7 @@ fn wav_fingerprint(
     path: &Path,
     info: &WavInfo,
     file_len: u64,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<u64, String> {
     use std::sync::{Mutex, OnceLock};
     type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
@@ -431,7 +480,7 @@ fn hash_wav(
     path: &Path,
     _info: &WavInfo,
     file_len: u64,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<u64, String> {
     let mut file = super::reader::open_regular(path)?;
     let mut hash = fnv1a64(&file_len.to_le_bytes());

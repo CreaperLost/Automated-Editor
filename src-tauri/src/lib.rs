@@ -909,12 +909,21 @@ async fn transcript_ai_suggest(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn transcript_get(
-    state: State<'_, AppState>,
+async fn transcript_get(
+    app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
 ) -> Result<Option<transcript::TranscriptView>, String> {
-    commands::transcript::transcript_get_impl(&state, project_handle, track_id)
+    // A long transcript takes a while to read and place: not on the window's thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::transcript::transcript_get_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            track_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -959,23 +968,39 @@ fn transcript_delete(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn transcript_suggestions(
-    state: State<'_, AppState>,
+async fn transcript_suggestions(
+    app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
-    commands::transcript::transcript_suggestions_impl(&state, project_handle, track_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::transcript::transcript_suggestions_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            track_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The caption track: the captioned transcript's cues in edited time.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_caption_cues(
-    state: State<'_, AppState>,
+async fn project_caption_cues(
+    app: tauri::AppHandle,
     project_handle: String,
     short_id: Option<String>,
 ) -> Result<commands::transcript::CaptionTrackView, String> {
-    commands::transcript::project_caption_cues_impl(&state, project_handle, short_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::transcript::project_caption_cues_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            short_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Edits a caption from the timeline (text, timing, split, merge, hide), saved in the transcript.
