@@ -287,3 +287,136 @@ fn perf_audio_device() {
     }
     println!("PERF {}", Stats(times).line("audio device open"));
 }
+
+fn export_timed(root: &Path, document: &crate::project::revision::EditDocument, label: &str) {
+    crate::media::ffmpeg::release_decoders();
+    let mut owner = crate::export::ExportOwner::new();
+    let settings = crate::export::ExportSettings::default();
+    let captured = crate::export::prepare_job(root, label, document.clone(), settings, &mut owner)
+        .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+    let started = Instant::now();
+    let frames = std::cell::Cell::new(0);
+    crate::export::run_export(
+        &captured,
+        &std::sync::atomic::AtomicBool::new(false),
+        |done, _| frames.set(done),
+        &crate::media::EncoderGate::new(),
+    )
+    .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+    let seconds = started.elapsed().as_secs_f64();
+    println!(
+        "PERF export {label}: {} frames of 1080p30 in {seconds:.2}s ({:.1} fps, {:.2}x real time)",
+        frames.get(),
+        frames.get() as f64 / seconds,
+        document.duration_us() as f64 / 1e6 / seconds
+    );
+}
+
+#[test]
+#[ignore]
+fn perf_export() {
+    let Some(dir) = probe_dir() else { return };
+    let work = tempfile::tempdir().unwrap();
+    let (state, handle, root) = opened(work.path(), &dir);
+    if let Some(settle) = std::env::var_os("AERO_PERF_SETTLE") {
+        let seconds: u64 = settle.to_string_lossy().parse().unwrap_or(15);
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+    }
+    export_timed(&root, &document(&state), "straight");
+    jump_cut(&state, &handle, 1_200_000, 250_000);
+    export_timed(&root, &document(&state), "jump cuts");
+}
+
+/// How fast frames come through the decoder pipe, unpaced, at preview and export sizes.
+#[test]
+#[ignore]
+fn perf_decode_throughput() {
+    let Some(dir) = probe_dir() else { return };
+    let path = dir.join("aero/media/screen/000001.mp4");
+    for (label, limit) in [
+        (
+            "720p preview",
+            crate::media::ffmpeg::DecodeLimit {
+                max_width: 1280,
+                max_height: 720,
+                max_rate: 30,
+                interactive: true,
+                yuv: false,
+            },
+        ),
+        (
+            "1080p export, every source frame",
+            crate::media::ffmpeg::DecodeLimit {
+                max_width: 3840,
+                max_height: 2160,
+                max_rate: 0,
+                interactive: false,
+                yuv: false,
+            },
+        ),
+        (
+            "1080p export at 30 fps",
+            crate::media::ffmpeg::DecodeLimit {
+                max_width: 3840,
+                max_height: 2160,
+                max_rate: 30,
+                interactive: false,
+                yuv: false,
+            },
+        ),
+    ] {
+        crate::media::ffmpeg::release_decoders();
+        crate::media::ffmpeg::decode_bgra_limited(&path, 0, limit).unwrap();
+        let started = Instant::now();
+        let n = 300u64;
+        for i in 1..=n {
+            crate::media::ffmpeg::decode_bgra_limited(&path, i * 1_000_000 / 30, limit).unwrap();
+        }
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "PERF decode {label}: {:.2}ms/frame ({:.0} fps)",
+            ms / n as f64,
+            n as f64 * 1000.0 / ms
+        );
+    }
+}
+
+/// Raw FFmpeg output through a pipe: how fast frames can come at all.
+#[test]
+#[ignore]
+fn perf_pipe_throughput() {
+    use std::io::Read;
+    let Some(dir) = probe_dir() else { return };
+    let path = dir.join("aero/media/screen/000001.mp4");
+    let ffmpeg = crate::media::ffmpeg::ffmpeg_path().unwrap();
+    for fmt in ["bgra", "nv12"] {
+        let started = Instant::now();
+        let mut child = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-nostdin", "-i"])
+            .arg(&path)
+            .args(["-t", "20", "-map", "0:v:0", "-an", "-vf"])
+            .arg(format!("fps=30/1,format={fmt}"))
+            .args(["-f", "rawvideo", "pipe:1"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut out = child.stdout.take().unwrap();
+        let mut buf = vec![0u8; 8 << 20];
+        let mut total = 0usize;
+        loop {
+            let n = out.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            total += n;
+        }
+        child.wait().unwrap();
+        let s = started.elapsed().as_secs_f64();
+        println!(
+            "PERF pipe {fmt}: {:.0} MB in {s:.2}s = {:.0} MB/s, {:.2}ms per 600 frames-equivalent frame",
+            total as f64 / 1e6,
+            total as f64 / 1e6 / s,
+            s * 1000.0 / 600.0
+        );
+    }
+}

@@ -397,6 +397,9 @@ pub struct DecodeLimit {
     pub max_rate: u32,
     /// For the preview, where seeks and cuts wait on a new decoder: see [`hwaccel_for_stream`].
     pub interactive: bool,
+    /// Frames come as NV12 (a third of BGRA's bytes through the pipe, which is the slowest
+    /// part of decoding) for a GPU compositor to convert; otherwise BGRA.
+    pub yuv: bool,
 }
 
 impl DecodeLimit {
@@ -405,9 +408,10 @@ impl DecodeLimit {
         max_height: 0,
         max_rate: 0,
         interactive: false,
+        yuv: false,
     };
 
-    /// Output size and rate for a source, keeping its aspect ratio.
+    /// Output size and rate for a source, keeping its aspect ratio. NV12 needs even sizes.
     fn apply(&self, info: &VideoInfo) -> VideoInfo {
         let mut scale = 1.0f64;
         if self.max_width > 0 && info.width > self.max_width {
@@ -416,7 +420,15 @@ impl DecodeLimit {
         if self.max_height > 0 && info.height > self.max_height {
             scale = scale.min(self.max_height as f64 / info.height as f64);
         }
-        let fit = |value: u32| ((value as f64 * scale).round() as u32).max(2);
+        let even = self.yuv;
+        let fit = |value: u32| {
+            let v = ((value as f64 * scale).round() as u32).max(2);
+            if even {
+                v & !1
+            } else {
+                v
+            }
+        };
         let (num, den) = info.rate;
         let rate = if self.max_rate > 0 && num > self.max_rate.saturating_mul(den) {
             (self.max_rate, 1)
@@ -710,9 +722,16 @@ impl FrameStream {
             .arg(file_arg(path))
             .args(["-map", "0:v:0", "-an", "-sn"])
             .arg("-vf")
-            .arg(format!(
-                "fps={num}/{den},scale={width}:{height}:flags=bilinear:in_color_matrix=auto:in_range=auto:out_range=full,format=bgra"
-            ))
+            .arg(if limit.yuv {
+                // Limited range keeps the recording's own values (no range conversion).
+                format!(
+                    "fps={num}/{den},scale={width}:{height}:flags=bilinear:in_color_matrix=auto:in_range=auto:out_color_matrix=bt709:out_range=tv,format=nv12"
+                )
+            } else {
+                format!(
+                    "fps={num}/{den},scale={width}:{height}:flags=bilinear:in_color_matrix=auto:in_range=auto:out_range=full,format=bgra"
+                )
+            })
             .args(["-f", "rawvideo", "pipe:1"])
             .stdout(Stdio::piped());
         let mut child = cmd
@@ -722,7 +741,12 @@ impl FrameStream {
             .stdout
             .take()
             .ok_or("FFmpeg decoder has no output pipe")?;
-        let (frames, recycle) = spawn_frame_reader(stdout, width as usize * height as usize * 4)?;
+        let frame_len = if limit.yuv {
+            width as usize * height as usize * 3 / 2
+        } else {
+            width as usize * height as usize * 4
+        };
+        let (frames, recycle) = spawn_frame_reader(stdout, frame_len)?;
         Ok(Self {
             path: path.to_path_buf(),
             limit,
@@ -826,12 +850,17 @@ impl FrameStream {
             .last
             .clone()
             .ok_or_else(|| format!("No video frame at {}us", time_us))?;
+        let (stride, format) = if self.limit.yuv {
+            (self.width, PixelFormat::Nv12)
+        } else {
+            (self.width * 4, PixelFormat::Bgra8888)
+        };
         Ok(VideoFrame {
             pts_us: self.time_of(self.next_index.saturating_sub(1)),
             width: self.width,
             height: self.height,
-            stride: self.width * 4,
-            format: PixelFormat::Bgra8888,
+            stride,
+            format,
             color: ColorInfo::rec709_full(),
             data,
         })
@@ -1700,6 +1729,7 @@ mod tests {
             max_height: 1280,
             max_rate: 30,
             interactive: false,
+            yuv: false,
         };
         assert_eq!(
             limit.apply(&source),
@@ -1731,6 +1761,7 @@ mod tests {
             max_height: 32,
             max_rate: 10,
             interactive: true,
+            yuv: false,
         };
         let frame = decode_bgra_limited(&path, 250_000, limit).unwrap();
         assert_eq!((frame.width, frame.height), (32, 16));

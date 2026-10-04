@@ -12,7 +12,8 @@ struct LayerParams {
     shadow_opacity: f32,
     shadow_offset: vec2<f32>,
     pass_kind: u32,
-    _pad0: u32,
+    // 0: BGRA; 1: NV12, limited-range BT.709 (luma in layer_tex, chroma in layer_chroma).
+    format: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -20,6 +21,19 @@ struct LayerParams {
 @group(0) @binding(0) var layer_tex: texture_2d<f32>;
 @group(0) @binding(1) var layer_samp: sampler;
 @group(0) @binding(2) var<uniform> params: LayerParams;
+@group(0) @binding(3) var layer_chroma: texture_2d<f32>;
+
+// The layer's colour at `uv`. NV12 is converted from limited-range BT.709 YCbCr; it has no
+// alpha. (Sampled at level 0, which needs no derivatives, so it may run per pixel.)
+fn layer_color(uv: vec2<f32>) -> vec4<f32> {
+    if params.format == 1u {
+        let y = (textureSampleLevel(layer_tex, layer_samp, uv, 0.0).r - 16.0 / 255.0) * (255.0 / 219.0);
+        let c = (textureSampleLevel(layer_chroma, layer_samp, uv, 0.0).rg - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
+        let rgb = vec3<f32>(y + 1.5748 * c.y, y - 0.1873 * c.x - 0.4681 * c.y, y + 1.8556 * c.x);
+        return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
+    return textureSample(layer_tex, layer_samp, uv);
+}
 
 @vertex
 fn vs_main(
@@ -87,5 +101,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if sdf > 0.0 {
         return vec4<f32>(0.0);
     }
-    return textureSample(layer_tex, layer_samp, in.uv);
+    return layer_color(in.uv);
 }

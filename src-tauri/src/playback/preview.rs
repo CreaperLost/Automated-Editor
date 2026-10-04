@@ -131,6 +131,7 @@ impl PreviewQuality {
             max_height: if capped { canvas.1 } else { 0 },
             max_rate: self.fps,
             interactive: true,
+            yuv: false,
         }
     }
 
@@ -558,6 +559,7 @@ mod tests {
                 max_height: 360,
                 max_rate: 60,
                 interactive: true,
+                yuv: false,
             }
         );
         let full = PreviewQuality::default_for(false);
@@ -566,6 +568,7 @@ mod tests {
             full.decode_limit((1920, 1080), false),
             DecodeLimit {
                 interactive: true,
+                yuv: false,
                 ..DecodeLimit::NONE
             }
         );

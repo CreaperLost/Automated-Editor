@@ -36,7 +36,9 @@ struct LayerParams {
     shadow_opacity: f32,
     shadow_offset: [f32; 2],
     pass_kind: u32,
-    _pad: [u32; 3],
+    /// 0: BGRA; 1: NV12 (limited-range BT.709), converted to RGB in the shader.
+    format: u32,
+    _pad: [u32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -645,8 +647,12 @@ struct TargetCache {
 struct LayerSlot {
     width: u32,
     height: u32,
+    format: PixelFormat,
+    /// BGRA pixels, or NV12's luma plane.
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    /// NV12's half-size chroma plane.
+    chroma: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// The `cache_key` of the pixels last uploaded, if they were static.
     key: Option<u64>,
 }
@@ -662,6 +668,8 @@ pub struct Compositor {
     /// Creating textures and buffers for every frame cost more than drawing it.
     target: std::sync::Mutex<Option<TargetCache>>,
     slots: std::sync::Mutex<Vec<LayerSlot>>,
+    /// Bound as the chroma plane of layers that have none (BGRA).
+    no_chroma: wgpu::TextureView,
 }
 
 impl Compositor {
@@ -708,6 +716,16 @@ impl Compositor {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -762,6 +780,22 @@ impl Compositor {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
+        let no_chroma = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("aeroedits-no-chroma"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rg8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         Ok(Self {
             device,
             queue,
@@ -772,6 +806,7 @@ impl Compositor {
             copies: COPIES_COMPOSITE,
             target: std::sync::Mutex::new(None),
             slots: std::sync::Mutex::new(Vec::new()),
+            no_chroma,
         })
     }
 
@@ -793,7 +828,15 @@ impl Compositor {
             if layer.has_shadow() {
                 blit_shadow(&mut frame, layer)?;
             }
-            blit_bilinear(&mut frame, layer)?;
+            if layer.frame.format == PixelFormat::Bgra8888 {
+                blit_bilinear(&mut frame, layer)?;
+            } else {
+                let bgra = Layer {
+                    frame: layer.frame.to_bgra(),
+                    ..layer.clone()
+                };
+                blit_bilinear(&mut frame, &bgra)?;
+            }
         }
         if let Some(first) = scene.layers.first() {
             frame.pts_us = first.frame.pts_us;
@@ -851,39 +894,71 @@ impl Compositor {
             if layer.frame.width > MAX_FRAME_DIM || layer.frame.height > MAX_FRAME_DIM {
                 return Err("Layer exceeds the compositor working-set limit".into());
             }
-            // Layers and the target are BGRA like the frames themselves, so pixels upload and
-            // read back without a per-pixel channel swap.
-            let row_bytes = layer.frame.width as usize * 4;
-            let needed =
-                layer.frame.stride as usize * (layer.frame.height as usize - 1) + row_bytes;
-            if (layer.frame.stride as usize) < row_bytes || layer.frame.data.len() < needed {
+            // BGRA layers upload as they are (the target is BGRA too, so nothing is swapped);
+            // NV12 uploads its two planes, and the shader converts them.
+            let format = layer.frame.format;
+            let nv12 = format == PixelFormat::Nv12;
+            let row_bytes = layer.frame.width as usize * if nv12 { 1 } else { 4 };
+            let needed = layer.frame.byte_len();
+            if (layer.frame.stride as usize) < row_bytes
+                || layer.frame.data.len() < needed
+                || (nv12 && (layer.frame.width % 2 != 0 || layer.frame.height % 2 != 0))
+            {
                 return Err("Layer frame buffer is truncated".into());
             }
             let size = (layer.frame.width, layer.frame.height);
-            if slots
-                .get(index)
-                .is_none_or(|slot| (slot.width, slot.height) != size)
-            {
-                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("aeroedits-layer"),
-                    size: wgpu::Extent3d {
-                        width: size.0,
-                        height: size.1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
+            let new_texture =
+                |label: &str, width: u32, height: u32, format: wgpu::TextureFormat| {
+                    let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    (texture, view)
+                };
+            if slots.get(index).is_none_or(|slot| {
+                (slot.width, slot.height, slot.format) != (size.0, size.1, format)
+            }) {
+                let (texture, view) = if nv12 {
+                    new_texture(
+                        "aeroedits-layer-luma",
+                        size.0,
+                        size.1,
+                        wgpu::TextureFormat::R8Unorm,
+                    )
+                } else {
+                    new_texture(
+                        "aeroedits-layer",
+                        size.0,
+                        size.1,
+                        wgpu::TextureFormat::Bgra8Unorm,
+                    )
+                };
+                let chroma = nv12.then(|| {
+                    new_texture(
+                        "aeroedits-layer-chroma",
+                        size.0 / 2,
+                        size.1 / 2,
+                        wgpu::TextureFormat::Rg8Unorm,
+                    )
                 });
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 let slot = LayerSlot {
                     width: size.0,
                     height: size.1,
+                    format,
                     texture,
                     view,
+                    chroma,
                     key: None,
                 };
                 if index < slots.len() {
@@ -896,27 +971,42 @@ impl Compositor {
             let unchanged = layer.cache_key.is_some() && slot.key == layer.cache_key;
             slot.key = layer.cache_key;
             if !unchanged {
-                self.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &slot.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &layer.frame.data[..needed],
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(layer.frame.stride),
-                        rows_per_image: Some(layer.frame.height),
-                    },
-                    wgpu::Extent3d {
-                        width: layer.frame.width,
-                        height: layer.frame.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                let stride = layer.frame.stride;
+                let plane = |texture: &wgpu::Texture, bytes: &[u8], width: u32, height: u32| {
+                    self.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        bytes,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(stride),
+                            rows_per_image: Some(height),
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                };
+                let (w, h) = size;
+                if let Some((chroma, _)) = &slot.chroma {
+                    let luma_len = stride as usize * h as usize;
+                    plane(&slot.texture, &layer.frame.data[..luma_len], w, h);
+                    plane(chroma, &layer.frame.data[luma_len..needed], w / 2, h / 2);
+                } else {
+                    plane(&slot.texture, &layer.frame.data[..needed], w, h);
+                }
             }
             let layer_view = slot.view.clone();
+            let chroma_view = slot
+                .chroma
+                .as_ref()
+                .map_or_else(|| self.no_chroma.clone(), |(_, view)| view.clone());
             let content_params = layer_params(layer, 0);
             let content_uniform =
                 self.device
@@ -940,6 +1030,10 @@ impl Compositor {
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: content_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&chroma_view),
                     },
                 ],
             });
@@ -980,6 +1074,10 @@ impl Compositor {
                         wgpu::BindGroupEntry {
                             binding: 2,
                             resource: shadow_uniform.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(&chroma_view),
                         },
                     ],
                 });
@@ -1427,7 +1525,11 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
         shadow_opacity: layer.shadow_opacity,
         shadow_offset: layer.shadow_offset,
         pass_kind,
-        _pad: [0, 0, 0],
+        format: match layer.frame.format {
+            PixelFormat::Bgra8888 => 0,
+            PixelFormat::Nv12 => 1,
+        },
+        _pad: [0, 0],
     }
 }
 

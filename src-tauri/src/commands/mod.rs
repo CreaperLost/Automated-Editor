@@ -713,6 +713,7 @@ pub fn short_preview_frame_impl(
                     max_height: height * 2,
                     max_rate: 0,
                     interactive: true,
+                    yuv: false,
                 });
         *cache = Some(ShortPreviewCache { key, evaluator });
     }

@@ -2,6 +2,7 @@ import { api } from "../lib/ipc";
 import { create } from "zustand";
 import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformBucket, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
+import { shareSequence } from "../lib/sequence";
 import { useSettingsStore } from "./settingsStore";
 
 const RECENT_PROJECTS_KEY = "aeroedits.recentProjects";
@@ -338,8 +339,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         state.silenceAnalysis.revision !== project.revision;
       const clipIds = new Set(project.sequence.tracks.flatMap((t) => t.clips.map((c) => c.id)));
       const kept = state.selectedClipIds.filter((id) => clipIds.has(id));
+      // Clips the edit left alone keep their objects, so only the changed ones re-render.
+      const sequence = state.openedProject?.shortView === project.shortView ? shareSequence(state.openedProject?.sequence, project.sequence) : project.sequence;
       return {
-        openedProject: project,
+        openedProject: sequence === project.sequence ? project : { ...project, sequence },
         durationUs: project.durationUs,
         currentTimeUs: Math.min(state.currentTimeUs, project.durationUs),
         selectedClipIds: kept.length === state.selectedClipIds.length ? state.selectedClipIds : kept,

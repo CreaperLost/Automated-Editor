@@ -194,6 +194,193 @@ interface ClipDrag {
   row: Row | null;
 }
 
+/** What the timeline does for a clip's clicks and drags; read through a ref, so a clip
+ * does not re-render because the timeline made new handlers. */
+interface ClipActions {
+  pick: (clip: Clip, event: React.MouseEvent) => void;
+  begin: (event: React.PointerEvent<HTMLElement>, trackId: string, clip: Clip, mode: ClipDrag["mode"]) => void;
+  move: (event: React.PointerEvent<HTMLElement>) => void;
+  end: (event: React.PointerEvent<HTMLElement>) => void;
+  cancel: () => void;
+  suppressClick: React.MutableRefObject<boolean>;
+}
+
+/** What a clip shows, worked out once per revision rather than on every render. */
+interface ClipInfo {
+  name: string;
+  role?: Role;
+  /** "Screen", "Speech"…: what it plays as. */
+  roleLabel?: string;
+  image: boolean;
+  missing: boolean;
+  /** An unlinked clip of media with several streams (it shows the unlink mark). */
+  unlinked: boolean;
+}
+
+interface ClipBlockProps {
+  clip: Clip;
+  trackId: string;
+  trackNo: string;
+  audio: boolean;
+  locked: boolean;
+  showName: boolean;
+  spanUs: number;
+  info: ClipInfo;
+  selected: boolean;
+  moving: boolean;
+  shade: { from: number; to: number; shrinking: boolean } | null;
+  buckets?: React.ComponentProps<typeof WaveformRenderer>["buckets"];
+  audioHeight: number;
+  actions: React.MutableRefObject<ClipActions>;
+}
+
+/**
+ * One clip on its lane. Memoized: selecting, dragging or trimming re-renders only the clips
+ * it changes, not every clip on the timeline.
+ */
+const ClipBlock = React.memo(function ClipBlock({
+  clip,
+  trackId,
+  trackNo,
+  audio,
+  locked,
+  showName,
+  spanUs,
+  info,
+  selected,
+  moving,
+  shade,
+  buckets,
+  audioHeight,
+  actions,
+}: ClipBlockProps) {
+  const pct = (us: number) => `${(us / spanUs) * 100}%`;
+  const { name, role, missing } = info;
+  const Icon = audio ? (role === "mic" ? Mic : AudioLines) : info.image ? ImageIcon : role === "webcam" ? Camera : Film;
+  const tint = missing
+    ? "bg-danger/15 border-danger/50"
+    : audio
+      ? selected
+        ? "bg-audio/35 border-accent-fg ring-2 ring-accent-hover/70"
+        : "bg-audio/20 border-audio/50 hover:border-audio-fg"
+      : selected
+        ? "bg-video/45 border-accent-fg ring-2 ring-accent-hover/70"
+        : "bg-video/30 border-video/60 hover:border-video-fg";
+  const drag = (mode: ClipDrag["mode"]) => ({
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => actions.current.begin(event, trackId, clip, mode),
+    onPointerMove: (event: React.PointerEvent<HTMLElement>) => actions.current.move(event),
+    onPointerUp: (event: React.PointerEvent<HTMLElement>) => actions.current.end(event),
+    onPointerCancel: () => actions.current.cancel(),
+  });
+  return (
+    <>
+      <div
+        role="button"
+        aria-label={`${name} on ${trackNo}`}
+        aria-pressed={selected}
+        className={cn(
+          "absolute top-1 bottom-1 rounded-control border overflow-hidden flex items-center gap-1.5 px-2",
+          locked ? "cursor-not-allowed" : "cursor-grab",
+          tint,
+          moving && "opacity-40",
+        )}
+        style={{ left: pct(clip.startUs), width: `max(2px, ${pct(clip.durationUs)})` }}
+        title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${
+          info.roleLabel ? ` · ${info.roleLabel}` : ""
+        }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click for more), drag to move, drag an edge to trim.`}
+        onClick={(event) => {
+          event.stopPropagation();
+          const suppress = actions.current.suppressClick;
+          if (suppress.current) {
+            suppress.current = false;
+            return;
+          }
+          actions.current.pick(clip, event);
+        }}
+        {...drag("move")}
+      >
+        {buckets && buckets.length > 0 && (
+          <div className="absolute inset-0 px-0.5 py-0.5 pointer-events-none opacity-80">
+            <ClipWaveform clip={clip} buckets={buckets} speech={role === "mic"} heightPx={audioHeight} />
+          </div>
+        )}
+        <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
+        {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
+        <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
+        {!locked &&
+          (["start", "end"] as const).map((side) => (
+            <div
+              key={side}
+              role="separator"
+              aria-label={`Trim ${name} ${side}`}
+              className={cn(
+                "absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100",
+                audio ? "hover:bg-audio-fg/80" : "hover:bg-video-fg/80",
+                side === "start" ? "left-0" : "right-0",
+              )}
+              onClick={(event) => event.stopPropagation()}
+              {...drag(side)}
+            />
+          ))}
+      </div>
+      {shade && (
+        <div
+          className={cn(
+            "absolute top-1 bottom-1 z-20 pointer-events-none rounded-control border flex items-center justify-center text-meta font-mono tabular-nums",
+            shade.shrinking ? "bg-danger/40 border-danger text-white" : "bg-accent/30 border-dashed border-accent-fg text-white",
+          )}
+          style={{ left: pct(shade.from), width: `max(2px, ${pct(shade.to - shade.from)})` }}
+        >
+          <span className="px-1 bg-studio-950/80 rounded whitespace-nowrap">
+            {shade.shrinking ? "−" : "+"}
+            {((shade.to - shade.from) / 1e6).toFixed(2)}s
+          </span>
+        </div>
+      )}
+    </>
+  );
+});
+
+/** The cuts on one track, each a mark whose cap puts the cut time back. Memoized: the marks
+ * redraw only when the cuts, the scale or the busy state change. */
+const CutMarks = React.memo(function CutMarks({
+  joins,
+  spanUs,
+  editing,
+  restore,
+}: {
+  joins: { clipId: string; atUs: number; gapUs: number }[];
+  spanUs: number;
+  editing: boolean;
+  restore: React.MutableRefObject<(clipId: string) => void>;
+}) {
+  return (
+    <>
+      {joins.map((join) => {
+        const left = `${(join.atUs / spanUs) * 100}%`;
+        return (
+          <React.Fragment key={`join-${join.clipId}`}>
+            {/* The line marks the cut; only its cap restores, so the clip edges stay draggable. */}
+            <span className="absolute top-0 bottom-0 w-px -translate-x-1/2 bg-danger/70 z-10 pointer-events-none" style={{ left }} />
+            <button
+              disabled={editing}
+              aria-label="Restore cut"
+              className="absolute top-0 h-2.5 w-3.5 -translate-x-1/2 z-30 rounded-b-sm bg-danger hover:bg-danger-fg disabled:opacity-40"
+              style={{ left }}
+              title={`Restore the ${(join.gapUs / 1e6).toFixed(2)}s cut here (everything after moves along)`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                restore.current(join.clipId);
+              }}
+            />
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+});
+
 const ROLE_LABEL: Record<Role, string> = {
   screen: "Screen",
   webcam: "Camera",
@@ -226,6 +413,40 @@ export const TimelineStudio: React.FC = () => {
   const audioTracks = sequence.tracks.filter((t) => t.kind === "audio");
   const frameUs = Math.round(1e6 / (openedProject?.fps || 30));
   const edges = useMemo(() => sequenceEdges(sequence), [openedProject?.revision, openedProject?.shortView]);
+  const previousInfo = useRef(new Map<string, ClipInfo>());
+  const clipInfo = useMemo(() => {
+    const info = new Map<string, ClipInfo>();
+    // Unchanged info keeps its object, so the clip's memo holds across edits.
+    const keep = (id: string, next: ClipInfo) => {
+      const was = previousInfo.current.get(id);
+      const same =
+        was &&
+        was.name === next.name &&
+        was.role === next.role &&
+        was.roleLabel === next.roleLabel &&
+        was.image === next.image &&
+        was.missing === next.missing &&
+        was.unlinked === next.unlinked;
+      info.set(id, same ? was : next);
+    };
+    for (const track of sequence.tracks) {
+      for (const clip of track.clips) {
+        const asset = assetById(openedProject, clip.asset);
+        const stream = streamOf(openedProject, clip);
+        const role = clipRole(openedProject, track, clip);
+        keep(clip.id, {
+          name: clipName(openedProject, clip),
+          role,
+          roleLabel: stream ? ROLE_LABEL[role ?? stream.role] : undefined,
+          image: asset?.kind === "image",
+          missing: !asset || !!asset.missing,
+          unlinked: !clip.link && !!asset && asset.streams.length > 1,
+        });
+      }
+    }
+    previousInfo.current = info;
+    return info;
+  }, [openedProject]);
 
   // Range selection (Shift+drag on the ruler, or mark in/out).
   const [range, setRange] = useState<EditedSpan | null>(null);
@@ -487,14 +708,28 @@ export const TimelineStudio: React.FC = () => {
   };
 
   // Restoring cut time: every join between two pieces of one stretch of a source.
-  const joins = sequence.tracks.flatMap((track) => (track.locked ? [] : cutJoins(openedProject!, track).map((j) => ({ ...j, track }))));
-  const cutCount = new Set(joins.map((j) => j.atUs)).size;
+  // Worked out once per revision: they only change with the sequence.
+  const joinsByTrack = useMemo(() => {
+    const byTrack = new Map<string, { clipId: string; atUs: number; gapUs: number }[]>();
+    if (!openedProject) return byTrack;
+    for (const track of openedProject.sequence.tracks) if (!track.locked) byTrack.set(track.id, cutJoins(openedProject, track));
+    return byTrack;
+  }, [openedProject]);
+  const cutCount = useMemo(() => new Set([...joinsByTrack.values()].flat().map((j) => j.atUs)).size, [joinsByTrack]);
+  const restoreCut = useRef((_clipId: string) => {});
+  restoreCut.current = (clipId) => void edit({ kind: "restoreCuts", clipIds: [clipId] });
 
   // ---- Webcam focus and normal view ---------------------------------------------------------
   const focus = openedProject?.webcamFocus ?? DEFAULT_WEBCAM_FOCUS;
   const focusAsset = focus.media ?? openedProject?.assets.find((a) => a.kind === "recording")?.id;
-  const cameraClips = videoTracks.flatMap((track) =>
-    track.clips.filter((c) => c.asset === focusAsset && clipRole(openedProject, track, c) === "webcam").map((clip) => ({ track, clip })),
+  const cameraClips = useMemo(
+    () =>
+      (openedProject?.sequence.tracks ?? [])
+        .filter((t) => t.kind === "video")
+        .flatMap((track) =>
+          track.clips.filter((c) => c.asset === focusAsset && clipRole(openedProject, track, c) === "webcam").map((clip) => ({ track, clip })),
+        ),
+    [openedProject, focusAsset],
   );
   const normalView: SourceRange[] = (focus.normalView ?? []).map((r) => [r.sourceStartUs, r.sourceEndUs]);
   const selectionSource: SourceRange[] = selection
@@ -776,15 +1011,6 @@ export const TimelineStudio: React.FC = () => {
     if (current.deltaUs === 0 && !trackId) return;
     void edit({ kind: "moveClips", clipIds: current.ids, deltaUs: current.deltaUs, trackId, anchorId: current.anchor.id });
   };
-  const clipDragHandlers = (track: SeqTrack, clip: Clip, mode: ClipDrag["mode"]) => ({
-    onPointerDown: (event: React.PointerEvent<HTMLElement>) => beginClipDrag(event, track, clip, mode),
-    onPointerMove: moveClipDrag,
-    onPointerUp: endClipDrag,
-    onPointerCancel: () => {
-      dragRef.current = null;
-      setDrag(null);
-    },
-  });
 
   /** Where each moving clip lands while dragging: its track (shifted with the anchor's) and start. */
   const dragGhosts = (() => {
@@ -1088,102 +1314,50 @@ export const TimelineStudio: React.FC = () => {
     );
   };
 
-  const clipBlock = (track: SeqTrack, clip: Clip, index: number) => {
+  // Clips call back through this ref, so their handlers never change between renders.
+  const clipActions = useRef<ClipActions>(null as unknown as ClipActions);
+  clipActions.current = {
+    pick: pickClip,
+    begin: (event, trackId, clip, mode) => {
+      const track = sequence.tracks.find((t) => t.id === trackId);
+      if (track) beginClipDrag(event, track, clip, mode);
+    },
+    move: moveClipDrag,
+    end: endClipDrag,
+    cancel: () => {
+      dragRef.current = null;
+      setDrag(null);
+    },
+    suppressClick,
+  };
+  const audioHeight = lanes.height("lane:audio");
+  const clipBlock = (track: SeqTrack, trackNo: string, clip: Clip, index: number) => {
     const audio = track.kind === "audio";
-    const isSelected = selected.has(clip.id);
-    const asset = assetById(openedProject, clip.asset);
-    const stream = streamOf(openedProject, clip);
-    const name = clipName(openedProject, clip);
-    const role = clipRole(openedProject, track, clip);
-    const moving = drag?.active && drag.mode === "move" && drag.ids.includes(clip.id);
-    const missing = !asset || asset.missing;
-    const buckets = audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined;
-    const shade = trimShade(clip);
-    const Icon = audio ? (role === "mic" ? Mic : AudioLines) : asset?.kind === "image" ? ImageIcon : role === "webcam" ? Camera : Film;
-    const tint = missing
-      ? "bg-danger/15 border-danger/50"
-      : audio
-        ? isSelected
-          ? "bg-audio/35 border-accent-fg ring-2 ring-accent-hover/70"
-          : "bg-audio/20 border-audio/50 hover:border-audio-fg"
-        : isSelected
-          ? "bg-video/45 border-accent-fg ring-2 ring-accent-hover/70"
-          : "bg-video/30 border-video/60 hover:border-video-fg";
     return (
-      <React.Fragment key={clip.id}>
-        <div
-          role="button"
-          aria-label={`${name} on ${trackNumber(sequence, track.id)}`}
-          aria-pressed={isSelected}
-          className={cn(
-            "absolute top-1 bottom-1 rounded-control border overflow-hidden flex items-center gap-1.5 px-2",
-            track.locked ? "cursor-not-allowed" : "cursor-grab",
-            tint,
-            moving && "opacity-40",
-          )}
-          style={{ left: pct(clip.startUs), width: `max(2px, ${pct(clip.durationUs)})` }}
-          title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${
-            stream ? ` · ${ROLE_LABEL[role ?? stream.role]}` : ""
-          }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click for more), drag to move, drag an edge to trim.`}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (suppressClick.current) {
-              suppressClick.current = false;
-              return;
-            }
-            pickClip(clip, event);
-          }}
-          {...clipDragHandlers(track, clip, "move")}
-        >
-          {buckets && buckets.length > 0 && (
-            <div className="absolute inset-0 px-0.5 py-0.5 pointer-events-none opacity-80">
-              <ClipWaveform clip={clip} buckets={buckets} speech={role === "mic"} heightPx={lanes.height("lane:audio")} />
-            </div>
-          )}
-          <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
-          {!clip.link && asset && asset.streams.length > 1 && (
-            <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />
-          )}
-          <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">
-            {index === 0 || clip.durationUs * pxPerUs > 60 ? name : ""}
-          </span>
-          {!track.locked &&
-            (["start", "end"] as const).map((side) => (
-              <div
-                key={side}
-                role="separator"
-                aria-label={`Trim ${name} ${side}`}
-                className={cn(
-                  "absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100",
-                  audio ? "hover:bg-audio-fg/80" : "hover:bg-video-fg/80",
-                  side === "start" ? "left-0" : "right-0",
-                )}
-                onClick={(event) => event.stopPropagation()}
-                {...clipDragHandlers(track, clip, side)}
-              />
-            ))}
-        </div>
-        {shade && (
-          <div
-            className={cn(
-              "absolute top-1 bottom-1 z-20 pointer-events-none rounded-control border flex items-center justify-center text-meta font-mono tabular-nums",
-              shade.shrinking ? "bg-danger/40 border-danger text-white" : "bg-accent/30 border-dashed border-accent-fg text-white",
-            )}
-            style={{ left: pct(shade.from), width: `max(2px, ${pct(shade.to - shade.from)})` }}
-          >
-            <span className="px-1 bg-studio-950/80 rounded whitespace-nowrap">
-              {shade.shrinking ? "−" : "+"}
-              {((shade.to - shade.from) / 1e6).toFixed(2)}s
-            </span>
-          </div>
-        )}
-      </React.Fragment>
+      <ClipBlock
+        key={clip.id}
+        clip={clip}
+        trackId={track.id}
+        trackNo={trackNo}
+        audio={audio}
+        locked={!!track.locked}
+        showName={index === 0 || clip.durationUs * pxPerUs > 60}
+        spanUs={spanUs}
+        info={clipInfo.get(clip.id) ?? { name: clipName(openedProject, clip), image: false, missing: true, unlinked: false }}
+        selected={selected.has(clip.id)}
+        moving={!!(drag?.active && drag.mode === "move" && drag.ids.includes(clip.id))}
+        shade={trimShade(clip)}
+        buckets={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
+        audioHeight={audioHeight}
+        actions={clipActions}
+      />
     );
   };
 
   const trackLane = (track: SeqTrack) => {
     const audio = track.kind === "audio";
-    const trackJoins = joins.filter((j) => j.track.id === track.id);
+    const trackNo = trackNumber(sequence, track.id);
+    const trackJoins = joinsByTrack.get(track.id);
     const hasCamera = cameraClips.some((c) => c.track.id === track.id);
     return (
       <div
@@ -1192,26 +1366,9 @@ export const TimelineStudio: React.FC = () => {
         className={cn("relative rounded-md bg-studio-850/30", (track.hidden || track.muted) && "opacity-50", track.locked && "bg-[repeating-linear-gradient(135deg,transparent_0_6px,rgb(255_255_255/0.025)_6px_12px)]")}
         style={{ height: lanes.height(audio ? "lane:audio" : "lane:video") }}
       >
-        {track.clips.map((clip, index) => clipBlock(track, clip, index))}
+        {track.clips.map((clip, index) => clipBlock(track, trackNo, clip, index))}
         {/* Cut time between two pieces of one stretch: click to put it back */}
-        {trackJoins.map((join) => (
-          <React.Fragment key={`join-${join.clipId}`}>
-            {/* The line marks the cut; only its cap restores, so the clip edges stay draggable. */}
-            <span className="absolute top-0 bottom-0 w-px -translate-x-1/2 bg-danger/70 z-10 pointer-events-none" style={{ left: pct(join.atUs) }} />
-            <button
-              disabled={editing}
-              aria-label="Restore cut"
-              className="absolute top-0 h-2.5 w-3.5 -translate-x-1/2 z-30 rounded-b-sm bg-danger hover:bg-danger-fg disabled:opacity-40"
-              style={{ left: pct(join.atUs) }}
-              title={`Restore the ${(join.gapUs / 1e6).toFixed(2)}s cut here (everything after moves along)`}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                void edit({ kind: "restoreCuts", clipIds: [join.clipId] });
-              }}
-            />
-          </React.Fragment>
-        ))}
+        {trackJoins && trackJoins.length > 0 && <CutMarks joins={trackJoins} spanUs={spanUs} editing={editing} restore={restoreCut} />}
         {/* Auto webcam layout: where the camera fills the frame, and where it keeps its bubble */}
         {hasCamera &&
           (focus.segments ?? []).flatMap((segment) =>

@@ -78,6 +78,10 @@ impl RateControl {
 #[serde(rename_all = "snake_case")]
 pub enum PixelFormat {
     Bgra8888,
+    /// 4:2:0 video as decoded: a full-size luma plane, then a half-size plane of interleaved
+    /// chroma pairs, each `stride` bytes a row. Limited-range BT.709, as FFmpeg is asked for.
+    /// A third of BGRA's bytes; the GPU compositor converts it to RGB.
+    Nv12,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -115,6 +119,56 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
+    /// Bytes the pixels take: BGRA rows, or NV12's luma rows then half as many chroma rows.
+    pub fn byte_len(&self) -> usize {
+        let rows = match self.format {
+            PixelFormat::Bgra8888 => self.height as usize,
+            PixelFormat::Nv12 => self.height as usize + (self.height as usize).div_ceil(2),
+        };
+        self.stride as usize * rows
+    }
+
+    /// The picture as BGRA, for code that works on RGB pixels (the CPU compositor). NV12 is
+    /// converted the way the GPU compositor's shader does it.
+    pub fn to_bgra(&self) -> VideoFrame {
+        if self.format == PixelFormat::Bgra8888 {
+            return self.clone();
+        }
+        let (w, h, stride) = (
+            self.width as usize,
+            self.height as usize,
+            self.stride as usize,
+        );
+        let mut data = vec![0u8; w * h * 4];
+        let chroma = &self.data[stride * h..];
+        let clamp = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+        for y in 0..h {
+            for x in 0..w {
+                let luma = self.data.get(y * stride + x).copied().unwrap_or(16);
+                let i = (y / 2) * stride + (x / 2) * 2;
+                let cb = chroma.get(i).copied().unwrap_or(128);
+                let cr = chroma.get(i + 1).copied().unwrap_or(128);
+                let l = (luma as f32 - 16.0) / 219.0;
+                let u = (cb as f32 - 128.0) / 224.0;
+                let v = (cr as f32 - 128.0) / 224.0;
+                let o = (y * w + x) * 4;
+                data[o] = clamp(l + 1.8556 * u);
+                data[o + 1] = clamp(l - 0.1873 * u - 0.4681 * v);
+                data[o + 2] = clamp(l + 1.5748 * v);
+                data[o + 3] = 255;
+            }
+        }
+        VideoFrame {
+            pts_us: self.pts_us,
+            width: self.width,
+            height: self.height,
+            stride: self.width * 4,
+            format: PixelFormat::Bgra8888,
+            color: ColorInfo::rec709_full(),
+            data,
+        }
+    }
+
     pub fn solid(
         width: u32,
         height: u32,

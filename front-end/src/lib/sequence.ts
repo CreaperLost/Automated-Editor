@@ -196,3 +196,42 @@ export function formatRulerLabel(timeUs: number, stepUs: number): string {
   const seconds = String(Math.floor((tenths % 600) / 10)).padStart(2, "0");
   return stepUs < 1_000_000 ? `${minutes}:${seconds}.${tenths % 10}` : `${minutes}:${seconds}`;
 }
+
+const sameFields = <T extends object>(a: T, b: T) => {
+  const keys = Object.keys(a) as (keyof T)[];
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.is(a[key], b[key]));
+};
+
+/**
+ * `next` with every clip and track that did not change taken from `previous`, so components
+ * that compare by identity (each clip on the timeline) re-render only for what an edit changed.
+ */
+export function shareSequence(previous: Sequence | undefined, next: Sequence): Sequence {
+  if (!previous) return next;
+  const oldTracks = new Map(previous.tracks.map((t) => [t.id, t]));
+  let allSame = previous.tracks.length === next.tracks.length && previous.magnetic === next.magnetic;
+  const tracks = next.tracks.map((track, index) => {
+    const old = oldTracks.get(track.id);
+    if (!old) {
+      allSame = false;
+      return track;
+    }
+    const oldClips = new Map(old.clips.map((c) => [c.id, c]));
+    let clipsSame = old.clips.length === track.clips.length;
+    const clips = track.clips.map((clip, i) => {
+      const was = oldClips.get(clip.id);
+      if (was && sameFields(was, clip)) {
+        if (old.clips[i] !== was) clipsSame = false;
+        return was;
+      }
+      clipsSame = false;
+      return clip;
+    });
+    const { clips: _a, ...fields } = track;
+    const { clips: _b, ...oldFields } = old;
+    const shared = clipsSame && sameFields(fields, oldFields) ? old : { ...track, clips: clipsSame ? old.clips : clips };
+    if (shared !== old || previous.tracks[index] !== old) allSame = false;
+    return shared;
+  });
+  return allSame ? previous : { ...next, tracks };
+}
