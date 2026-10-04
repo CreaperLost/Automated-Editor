@@ -61,7 +61,14 @@ export function useZoomLane({
     return () => {
       active = false;
     };
-  }, [openedProject?.projectHandle, openedProject?.revision, applyZoomGeneration]);
+    // They depend on where the recordings play, the zoom settings and which zooms were taken
+    // or dismissed: not on every edit (a layout slider makes many).
+  }, [
+    openedProject?.projectHandle,
+    openedProject?.sequence,
+    JSON.stringify([openedProject?.zoomSettings ?? null, openedProject?.zooms?.map((z) => z.id), openedProject?.dismissedZoomIds]),
+    applyZoomGeneration,
+  ]);
 
   useEffect(() => {
     if (selectedZoomId && !zoomKeyframes.some((bar) => bar.zoomId === selectedZoomId)) setSelectedZoomId(undefined);

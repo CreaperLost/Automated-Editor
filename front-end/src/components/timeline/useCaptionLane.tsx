@@ -47,7 +47,9 @@ export function useCaptionLane({
     return () => {
       active = false;
     };
-  }, [openedProject?.projectHandle, openedProject?.revision, captionsVersion, openedProject?.captions?.trackId]);
+    // Cues change with the sequence, the transcript and the caption settings, not with every
+    // edit (a layout slider makes many).
+  }, [openedProject?.projectHandle, openedProject?.sequence, captionsVersion, JSON.stringify(openedProject?.captions ?? null)]);
   useEffect(() => setSelected(null), [openedProject?.projectHandle]);
 
   const edit = async (change: CaptionEdit) => {

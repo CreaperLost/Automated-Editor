@@ -226,7 +226,6 @@ export const TranscriptPanel: React.FC = () => {
   const activeRef = useRef<HTMLSpanElement | null>(null);
 
   const handle = openedProject?.projectHandle;
-  const revision = openedProject?.revision;
   const captionsVersion = useProjectStore((s) => s.captionsVersion);
   const bumpCaptions = useProjectStore((s) => s.bumpCaptions);
 
@@ -274,10 +273,13 @@ export const TranscriptPanel: React.FC = () => {
     }
   };
 
-  // Edited positions change with every cut and undo, so reload on each revision.
+  // Where words land changes with the sequence (cuts, moves, undo), and their text and caption
+  // marks with the transcript. Other edits (layout, captions' look, zooms) keep the same
+  // sequence object, so they do not reload and redraw a long transcript.
+  const sequence = openedProject?.sequence;
   useEffect(() => {
     void refresh();
-  }, [refresh, revision, captionsVersion]);
+  }, [refresh, sequence, captionsVersion]);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
