@@ -348,7 +348,6 @@ mod tests {
                 start_us: 0,
                 end_us: 5_000_000,
                 media: None,
-                audio_unlinked: false,
             }],
             edited_duration_us: 5_000_000,
         };

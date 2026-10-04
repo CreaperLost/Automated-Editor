@@ -1,16 +1,16 @@
-//! Audio polish for the shared mixer: loudness normalization, microphone noise reduction
-//! and ducking of system audio under speech.
+//! Audio polish for the shared mixer: loudness normalization, noise reduction on speech and
+//! ducking of background sound under speech.
 //!
 //! Each audio file is analyzed once (speech activity, loudness, a noise profile) and kept
 //! in a process-wide cache, because the playback mixer is rebuilt on every seek. Everything
 //! derived from the analysis is a pure function of source time, so playback and export
 //! produce the same samples however they chunk their reads.
+use super::audio::Lane;
 use crate::dsp::denoise::{fft_size_for, Denoiser, NoiseProfile, ProfileBuilder};
 use crate::dsp::loudness::{integrated_lufs, KWeighting};
 use crate::project::{
     pcm::{PcmReader, READ_FRAME_CHUNK},
-    reader::{safe_path, RetainedInterval, SegmentSummary},
-    TrackType,
+    reader::{safe_path, SegmentSummary},
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -221,20 +221,14 @@ fn noise_profile(
     Ok(builder.finish())
 }
 
-/// An analyzed audio file with its track type and mix gain.
-type Analyzed<'a> = (TrackType, f64, &'a SegmentSummary, Arc<SegmentAnalysis>);
-
 /// Polish derived for one edit: everything the mixer needs per sample.
 pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
     gain: f64,
     limit: bool,
-    /// System-audio gain per 10 ms of source time, for measuring the edit's loudness; empty
-    /// when the project-wide ducking switch is off.
-    duck: Vec<f32>,
     /// Noise reduction for speech files, by relative path.
     denoisers: HashMap<String, Arc<Denoiser>>,
-    /// Gain per 10 ms of edited time for each ducked lane, under speech on any speech lane.
+    /// Gain per 10 ms of timeline time for each ducked lane, under speech on any speech lane.
     lane_ducks: HashMap<String, Arc<Vec<f32>>>,
 }
 
@@ -242,104 +236,50 @@ impl PolishPlan {
     /// `None` when every effect is off. Files that cannot be analyzed are left unpolished.
     pub fn build(
         root: &Path,
-        document: &crate::project::revision::EditDocument,
-        retained: &[RetainedInterval],
-        tracks: &[(TrackType, f64, Vec<SegmentSummary>)],
+        settings: &crate::project::AudioSettings,
+        lanes: &[Lane],
+        duration_us: u64,
     ) -> Option<Self> {
-        let settings = &document.audio;
         if !settings.any_enabled() {
             return None;
         }
-        let has_system = tracks
-            .iter()
-            .any(|(t, _, s)| *t == TrackType::SystemAudio && s.iter().any(|s| s.available));
-        let duck_on = settings.duck_system_audio && has_system;
-        let mut analyses: Vec<Analyzed> = Vec::new();
-        for (track_type, gain, segments) in tracks {
-            let needed = settings.normalize
-                || (*track_type == TrackType::MicAudio && (settings.noise_reduction || duck_on));
-            if !needed {
-                continue;
-            }
-            for segment in segments.iter().filter(|s| s.available) {
-                let Ok(path) = safe_path(root, &segment.relative_path) else {
-                    continue;
-                };
-                if let Ok(analysis) = analyze_cached(&path) {
-                    analyses.push((*track_type, *gain, segment, analysis));
-                }
-            }
-        }
-        let duck = if duck_on {
-            duck_envelope(
-                settings.duck_db,
-                analyses
-                    .iter()
-                    .filter(|(t, _, _, _)| *t == TrackType::MicAudio)
-                    .map(|(_, _, s, a)| (s.start_us, a.voice.as_slice())),
-            )
-        } else {
-            Vec::new()
+        let analyze = |segment: &SegmentSummary| {
+            safe_path(root, &segment.relative_path)
+                .and_then(|path| analyze_cached(&path))
+                .ok()
         };
+        // Noise reduction where a lane has it on (speech by default when switched on).
         let mut denoisers = HashMap::new();
-        // A recording's lanes: noise reduction where on (the mic by default).
-        for (track_type, _, segments) in tracks {
-            for segment in segments.iter().filter(|s| s.available) {
-                let mic = *track_type == TrackType::MicAudio;
-                let Some(db) = settings.lane_denoise_db(&segment.track_id, mic) else {
-                    continue;
-                };
-                let Ok(path) = safe_path(root, &segment.relative_path) else {
-                    continue;
-                };
-                if let Ok(analysis) = analyze_cached(&path) {
-                    if let Some(profile) = &analysis.noise {
-                        denoisers.insert(
-                            segment.relative_path.clone(),
-                            Arc::new(Denoiser::new(profile, db)),
-                        );
-                    }
-                }
-            }
-        }
-        // Imported sound: noise reduction where its lane has it on.
-        let placements = crate::media::audio::media_placements(document);
-        let wav = |asset_id: &str, stream: usize| {
-            document
-                .media_assets
+        for lane in lanes {
+            let Some(db) = settings.lane_denoise_db(&lane.id, lane.speech) else {
+                continue;
+            };
+            for segment in lane
+                .clips
                 .iter()
-                .find(|a| a.id == asset_id)
-                .and_then(|a| a.audio_paths().nth(stream).cloned())
-        };
-        for placed in &placements {
-            let (Some(db), Some(relative)) = (
-                settings.lane_denoise_db(&placed.lane, false),
-                wav(&placed.asset_id, placed.stream),
-            ) else {
-                continue;
-            };
-            if denoisers.contains_key(&relative) {
-                continue;
-            }
-            let Ok(path) = safe_path(root, &relative) else {
-                continue;
-            };
-            if let Ok(analysis) = analyze_cached(&path) {
-                if let Some(profile) = &analysis.noise {
-                    denoisers.insert(relative, Arc::new(Denoiser::new(profile, db)));
+                .flat_map(|c| c.segments.iter())
+                .filter(|s| s.available)
+            {
+                if denoisers.contains_key(&segment.relative_path) {
+                    continue;
+                }
+                if let Some(profile) = analyze(segment).and_then(|a| a.noise.clone()) {
+                    denoisers.insert(
+                        segment.relative_path.clone(),
+                        Arc::new(Denoiser::new(&profile, db)),
+                    );
                 }
             }
         }
-        let lane_ducks = lane_ducks(root, document, tracks, &placements, &wav);
+        let lane_ducks = lane_ducks(settings, lanes, duration_us, &analyze);
         let mut plan = Self {
             gain: 1.0,
             limit: settings.normalize,
-            duck,
             denoisers,
             lane_ducks,
         };
         if settings.normalize {
-            if let Some(lufs) = plan.edit_loudness(&analyses, retained) {
+            if let Some(lufs) = plan.edit_loudness(lanes, duration_us, &analyze) {
                 let db =
                     (settings.target_lufs as f64 - lufs).clamp(-MAX_NORMALIZE_DB, MAX_NORMALIZE_DB);
                 plan.gain = 10f64.powf(db / 20.0);
@@ -348,55 +288,53 @@ impl PolishPlan {
         Some(plan)
     }
 
-    /// Integrated loudness of the edit before normalization: retained 100 ms blocks of
-    /// every track, with ducking applied, in playback order.
-    fn edit_loudness(&self, analyses: &[Analyzed], retained: &[RetainedInterval]) -> Option<f64> {
-        let end = analyses
-            .iter()
-            .map(|(_, _, s, a)| s.start_us + a.loudness.len() as u64 * LOUDNESS_BLOCK_US)
-            .max()?;
-        let mut energy = vec![0f64; end.div_ceil(LOUDNESS_BLOCK_US) as usize];
-        for (track_type, track_gain, segment, analysis) in analyses {
-            for (i, &e) in analysis.loudness.iter().enumerate() {
-                let start = segment.start_us + i as u64 * LOUDNESS_BLOCK_US;
-                let gain = track_gain
-                    * if *track_type == TrackType::SystemAudio {
-                        self.duck_gain(start as f64 + LOUDNESS_BLOCK_US as f64 / 2.0)
-                    } else {
-                        1.0
+    /// Integrated loudness of the edit before normalization: every lane's clips, 100 ms
+    /// blocks on the timeline, with ducking applied.
+    fn edit_loudness(
+        &self,
+        lanes: &[Lane],
+        duration_us: u64,
+        analyze: &dyn Fn(&SegmentSummary) -> Option<Arc<SegmentAnalysis>>,
+    ) -> Option<f64> {
+        let mut energy = vec![0f64; duration_us.div_ceil(LOUDNESS_BLOCK_US) as usize];
+        for lane in lanes {
+            for clip in &lane.clips {
+                for segment in clip.segments.iter().filter(|s| s.available) {
+                    let (a, b) = (
+                        clip.in_us.max(segment.start_us),
+                        (clip.in_us + clip.len).min(segment.end_us),
+                    );
+                    if b <= a {
+                        continue;
+                    }
+                    let Some(analysis) = analyze(segment) else {
+                        continue;
                     };
-                if let Some(slot) = energy.get_mut((start / LOUDNESS_BLOCK_US) as usize) {
-                    *slot += e * gain * gain;
+                    // Each timeline block takes the file's block under its middle.
+                    let first = (clip.edited_start + (a - clip.in_us)) / LOUDNESS_BLOCK_US;
+                    let last = (clip.edited_start + (b - clip.in_us)).div_ceil(LOUDNESS_BLOCK_US);
+                    for block in first..last {
+                        let center = block * LOUDNESS_BLOCK_US + LOUDNESS_BLOCK_US / 2;
+                        let Some(source) = (center + clip.in_us).checked_sub(clip.edited_start)
+                        else {
+                            continue;
+                        };
+                        if source < a || source >= b {
+                            continue;
+                        }
+                        let index = ((source - segment.start_us) / LOUDNESS_BLOCK_US) as usize;
+                        let Some(&e) = analysis.loudness.get(index) else {
+                            continue;
+                        };
+                        let gain = lane.gain * self.lane_duck_gain(&lane.id, center as f64);
+                        if let Some(slot) = energy.get_mut(block as usize) {
+                            *slot += e * gain * gain;
+                        }
+                    }
                 }
             }
         }
-        let kept: Vec<f64> = retained
-            .iter()
-            .flat_map(|r| {
-                let first = r.start_us / LOUDNESS_BLOCK_US;
-                let last = r.end_us.div_ceil(LOUDNESS_BLOCK_US);
-                (first..last).filter(move |b| {
-                    let center = b * LOUDNESS_BLOCK_US + LOUDNESS_BLOCK_US / 2;
-                    center >= r.start_us && center < r.end_us
-                })
-            })
-            .filter_map(|b| energy.get(b as usize).copied())
-            .collect();
-        integrated_lufs(&kept)
-    }
-
-    /// Linear gain for system audio at `source_us`.
-    pub fn duck_gain(&self, source_us: f64) -> f64 {
-        if self.duck.is_empty() {
-            return 1.0;
-        }
-        // Block values sit at block centers; interpolate between them.
-        let pos = (source_us / VOICE_BLOCK_US as f64 - 0.5).max(0.0);
-        let i = pos.floor() as usize;
-        let t = pos - i as f64;
-        let a = self.duck.get(i).copied().unwrap_or(1.0) as f64;
-        let b = self.duck.get(i + 1).copied().unwrap_or(1.0) as f64;
-        a + (b - a) * t
+        integrated_lufs(&energy)
     }
 
     /// Whether lane `lane` is lowered under speech.
@@ -404,7 +342,7 @@ impl PolishPlan {
         self.lane_ducks.contains_key(lane)
     }
 
-    /// The ducking gain of lane `lane` at edited time `edited_us` (1 when it is not ducked).
+    /// The ducking gain of lane `lane` at timeline time `edited_us` (1 when it is not ducked).
     pub fn lane_duck_gain(&self, lane: &str, edited_us: f64) -> f64 {
         let Some(envelope) = self.lane_ducks.get(lane) else {
             return 1.0;
@@ -432,133 +370,50 @@ impl PolishPlan {
     }
 }
 
-/// Speech on the edited timeline, per 10 ms, from every speech lane (a recording's mic, or
-/// any lane marked as speech), and from it the gain of every ducked lane.
+/// Speech on the timeline, per 10 ms, from every speech lane, and from it the gain of every
+/// ducked (background) lane.
 fn lane_ducks(
-    root: &Path,
-    document: &crate::project::revision::EditDocument,
-    tracks: &[(TrackType, f64, Vec<SegmentSummary>)],
-    placements: &[crate::media::audio::MediaPlacement],
-    wav: &dyn Fn(&str, usize) -> Option<String>,
+    settings: &crate::project::AudioSettings,
+    lanes: &[Lane],
+    duration_us: u64,
+    analyze: &dyn Fn(&SegmentSummary) -> Option<Arc<SegmentAnalysis>>,
 ) -> HashMap<String, Arc<Vec<f32>>> {
-    use crate::media_bin::SoundRole;
-    let settings = &document.audio;
-    // Which lanes duck, and by how much.
-    let mut ducked: Vec<(String, f32)> = Vec::new();
-    for (track_type, _, segments) in tracks {
-        let system = *track_type == TrackType::SystemAudio;
-        if let Some(lane) = segments.first().map(|s| s.track_id.clone()) {
-            let role = settings.lane_role(&lane).unwrap_or(if system {
-                SoundRole::Background
-            } else {
-                SoundRole::Mic
-            });
-            if role == SoundRole::Background {
-                if let Some(db) = settings.lane_duck_db(&lane, system) {
-                    ducked.push((lane, db));
-                }
-            }
-        }
-    }
-    for placed in placements {
-        if ducked.iter().any(|(lane, _)| lane == &placed.lane) {
-            continue;
-        }
-        if let Some(db) = settings.lane_duck_db(&placed.lane, false) {
-            ducked.push((placed.lane.clone(), db));
-        }
-    }
+    let ducked: Vec<(String, f32)> = lanes
+        .iter()
+        .filter(|lane| !lane.speech)
+        .filter_map(|lane| Some((lane.id.clone(), settings.lane_duck_db(&lane.id, true)?)))
+        .collect();
     if ducked.is_empty() {
         return HashMap::new();
     }
-    let mut speech: Vec<bool> = Vec::new();
-    let mut mark =
-        |edited_start: u64, file_start: u64, len: u64, voice_start: u64, voice: &[bool]| {
-            let first = edited_start / VOICE_BLOCK_US;
-            let last = (edited_start + len).div_ceil(VOICE_BLOCK_US);
-            for block in first..last {
-                let edited = (block * VOICE_BLOCK_US).max(edited_start);
-                let Some(file) = (file_start + (edited - edited_start)).checked_sub(voice_start)
-                else {
+    // Cover the whole timeline, so the hold and release after the last words still apply.
+    let mut speech = vec![false; duration_us.div_ceil(VOICE_BLOCK_US) as usize + 1];
+    for lane in lanes.iter().filter(|lane| lane.speech) {
+        for clip in &lane.clips {
+            for segment in clip.segments.iter().filter(|s| s.available) {
+                let (a, b) = (
+                    clip.in_us.max(segment.start_us),
+                    (clip.in_us + clip.len).min(segment.end_us),
+                );
+                if b <= a {
+                    continue;
+                }
+                let Some(analysis) = analyze(segment) else {
                     continue;
                 };
-                if voice.get((file / VOICE_BLOCK_US) as usize) == Some(&true) {
-                    if speech.len() <= block as usize {
-                        speech.resize(block as usize + 1, false);
+                let edited_a = clip.edited_start + (a - clip.in_us);
+                let edited_b = clip.edited_start + (b - clip.in_us);
+                for block in edited_a / VOICE_BLOCK_US..edited_b.div_ceil(VOICE_BLOCK_US) {
+                    let edited = (block * VOICE_BLOCK_US).max(edited_a);
+                    let file = clip.in_us + (edited - clip.edited_start) - segment.start_us;
+                    if analysis.voice.get((file / VOICE_BLOCK_US) as usize) == Some(&true) {
+                        if let Some(slot) = speech.get_mut(block as usize) {
+                            *slot = true;
+                        }
                     }
-                    speech[block as usize] = true;
                 }
             }
-        };
-    // The recording's speech lanes, through its clips on V1.
-    for (track_type, _, segments) in tracks {
-        let Some(lane) = segments.first().map(|s| s.track_id.as_str()) else {
-            continue;
-        };
-        let default = if *track_type == TrackType::MicAudio {
-            SoundRole::Mic
-        } else {
-            SoundRole::Background
-        };
-        if settings.lane_role(lane).unwrap_or(default) != SoundRole::Mic {
-            continue;
         }
-        for segment in segments.iter().filter(|s| s.available) {
-            let Ok(analysis) =
-                safe_path(root, &segment.relative_path).and_then(|p| analyze_cached(&p))
-            else {
-                continue;
-            };
-            let mut cursor = 0u64;
-            for entry in &document.retained_intervals {
-                let len = entry.end_us - entry.start_us;
-                if entry.is_recording() {
-                    mark(
-                        cursor,
-                        entry.start_us,
-                        len,
-                        segment.start_us,
-                        &analysis.voice,
-                    );
-                }
-                cursor += len;
-            }
-        }
-    }
-    // Imported speech, where its clips play.
-    for placed in placements {
-        let asset = document
-            .media_assets
-            .iter()
-            .find(|a| a.id == placed.asset_id);
-        let role = settings
-            .lane_role(&placed.lane)
-            .or_else(|| asset.map(|a| a.sound_role(placed.stream)));
-        if role != Some(SoundRole::Mic) {
-            continue;
-        }
-        let Some(relative) = wav(&placed.asset_id, placed.stream) else {
-            continue;
-        };
-        let Ok(analysis) = safe_path(root, &relative).and_then(|p| analyze_cached(&p)) else {
-            continue;
-        };
-        mark(
-            placed.edited_start,
-            placed.in_us,
-            placed.len,
-            0,
-            &analysis.voice,
-        );
-    }
-    // Cover the whole timeline, so the hold and release after the last words still apply.
-    let blocks = document
-        .edited_duration_us()
-        .unwrap_or(0)
-        .div_ceil(VOICE_BLOCK_US) as usize
-        + 1;
-    if speech.len() < blocks {
-        speech.resize(blocks, false);
     }
     // One envelope per depth, shared by the lanes that duck by it.
     let mut by_depth: HashMap<u32, Arc<Vec<f32>>> = HashMap::new();
@@ -676,7 +531,6 @@ mod tests {
             lane_ducks: HashMap::new(),
             gain: 2.0,
             limit: true,
-            duck: Vec::new(),
             denoisers: HashMap::new(),
         };
         assert!((plan.finish(0.2) - 0.4).abs() < 1e-12);

@@ -180,7 +180,7 @@ fn tick(
         != Some((generation, webview, quality))
     {
         let rebuild_started = std::time::Instant::now();
-        let (root, document, tracks) = {
+        let (root, document) = {
             let opened = state.opened_project.lock();
             let Some(reader) = opened.as_ref() else {
                 return Ok(false);
@@ -191,7 +191,6 @@ fn tick(
             (
                 reader.root().to_path_buf(),
                 reader.history().current.clone(),
-                super::tracks_from_reader(reader),
             )
         };
         // The short in focus plays as its own vertical video.
@@ -201,12 +200,12 @@ fn tick(
             .playable_document(&document)
             .map_err(error)?;
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
-        let mixer = AudioMixer::new(&root, &document, &tracks).map_err(error)?;
+        let mixer = AudioMixer::new(&root, &document).map_err(error)?;
         let (width, height) = document.layout.preview_dimensions().map_err(error)?;
         let (width, height) = quality.canvas(width, height);
         // Keep the GPU device and background across seeks; recreating them dominated seek time.
         let reuse = runtime.take().and_then(|old| old.evaluator.into_reuse());
-        let evaluator = SceneEvaluator::new_reusing(root, document, tracks, width, height, reuse)
+        let evaluator = SceneEvaluator::new_reusing(root, document, width, height, reuse)
             .map_err(error)?
             .with_decode_limit(quality.decode_limit((width, height), webview));
         *runtime = Some(Runtime {

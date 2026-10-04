@@ -162,6 +162,9 @@ pub struct WebcamFocus {
     /// Master switch. Off keeps the segments so turning it back on restores them.
     #[serde(default)]
     pub enabled: bool,
+    /// The recording whose camera the segments are in (its own time); `None` is the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
     #[serde(default)]
     pub settings: WebcamFocusSettings,
     #[serde(default)]

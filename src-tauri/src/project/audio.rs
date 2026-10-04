@@ -49,34 +49,26 @@ pub struct AudioSettings {
     pub tracks: BTreeMap<String, TrackMix>,
 }
 
-/// One audio track's level in the mix.
+/// One audio track's mix, kept under the track's id. Muting is the track's own switch.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackMix {
-    #[serde(default)]
-    pub muted: bool,
     /// Gain applied to the track, in dB. 0 leaves it as recorded.
     #[serde(default)]
     pub volume_db: f32,
-    /// What the lane carries, when set on the timeline: speech or background sound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<crate::media_bin::SoundRole>,
-    /// Noise reduction on this lane, in dB; `None` is off.
+    /// Noise reduction on this track, in dB; `None` follows the project's switch for speech.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denoise_db: Option<f32>,
-    /// Lowered by this many dB while speech plays on a speech lane; `None` is off.
+    /// Lowered by this many dB while speech plays on a speech track; `None` follows the
+    /// project's switch for background sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duck_db: Option<f32>,
 }
 
 impl TrackMix {
-    /// Linear gain, 0 when muted.
+    /// Linear gain.
     pub fn gain(&self) -> f64 {
-        if self.muted {
-            0.0
-        } else {
-            10f64.powf(self.volume_db as f64 / 20.0)
-        }
+        10f64.powf(self.volume_db as f64 / 20.0)
     }
 }
 
@@ -109,30 +101,23 @@ impl AudioSettings {
                 .any(|mix| mix.denoise_db.is_some() || mix.duck_db.is_some())
     }
 
-    /// The role set on lane `lane`, if any.
-    pub fn lane_role(&self, lane: &str) -> Option<crate::media_bin::SoundRole> {
-        self.tracks.get(lane).and_then(|mix| mix.role)
-    }
-
-    /// Noise reduction on a lane: its own setting, else (for a recording's microphone) the
-    /// older project-wide switch.
-    pub fn lane_denoise_db(&self, lane: &str, recorded_mic: bool) -> Option<f32> {
+    /// Noise reduction on an audio track: its own setting, else (for speech) the project's.
+    pub fn lane_denoise_db(&self, lane: &str, speech: bool) -> Option<f32> {
         self.tracks
             .get(lane)
             .and_then(|mix| mix.denoise_db)
-            .or((recorded_mic && self.noise_reduction).then_some(self.noise_reduction_db))
+            .or((speech && self.noise_reduction).then_some(self.noise_reduction_db))
     }
 
-    /// Ducking on a lane: its own setting, else (for a recording's system audio) the older
-    /// project-wide switch.
-    pub fn lane_duck_db(&self, lane: &str, recorded_system: bool) -> Option<f32> {
+    /// Ducking on an audio track: its own setting, else (for background sound) the project's.
+    pub fn lane_duck_db(&self, lane: &str, background: bool) -> Option<f32> {
         self.tracks
             .get(lane)
             .and_then(|mix| mix.duck_db)
-            .or((recorded_system && self.duck_system_audio).then_some(self.duck_db))
+            .or((background && self.duck_system_audio).then_some(self.duck_db))
     }
 
-    /// Linear gain for the audio track `track_id`, 0 when muted.
+    /// Linear gain for the audio track `track_id`.
     pub fn track_gain(&self, track_id: &str) -> f64 {
         self.tracks.get(track_id).map_or(1.0, TrackMix::gain)
     }
@@ -193,7 +178,6 @@ mod tests {
                 tracks: BTreeMap::from([(
                     "mic".into(),
                     TrackMix {
-                        muted: false,
                         volume_db: 40.0,
                         ..Default::default()
                     },
@@ -208,9 +192,7 @@ mod tests {
     #[test]
     fn track_mix_round_trips_and_defaults_to_full_volume() {
         let settings: AudioSettings =
-            serde_json::from_str(r#"{"tracks":{"system":{"muted":true},"mic":{"volumeDb":-6}}}"#)
-                .unwrap();
-        assert_eq!(settings.track_gain("system"), 0.0);
+            serde_json::from_str(r#"{"tracks":{"mic":{"volumeDb":-6}}}"#).unwrap();
         assert!((settings.track_gain("mic") - 0.501).abs() < 1e-3);
         assert_eq!(settings.track_gain("other"), 1.0);
         let json = serde_json::to_string(&AudioSettings::default()).unwrap();

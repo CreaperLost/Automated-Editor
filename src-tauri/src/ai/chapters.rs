@@ -159,6 +159,8 @@ pub fn parse_chapters(reply: &Value, lines: &[Line]) -> Vec<Chapter> {
             id: format!("ch-{}", lines[line].source_us),
             source_us: lines[line].source_us,
             title,
+            // The caller knows whose words these are.
+            media: None,
             edited_us: None,
         });
         if chapters.len() == MAX_AI_CHAPTERS {

@@ -1,7 +1,7 @@
 //! Chapter markers. Each chapter is anchored at a source time, like zooms and words, so it
 //! stays on the same moment through cuts, undo and reordering. Export writes them into the
 //! MP4 as chapter metadata; the UI also offers them as a YouTube description list.
-use crate::timeline::TimelineMapper;
+use crate::project::revision::EditDocument;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_CHAPTERS: usize = 200;
@@ -13,6 +13,9 @@ pub struct Chapter {
     pub id: String,
     pub source_us: u64,
     pub title: String,
+    /// The asset whose time `source_us` is in; `None` is the first recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
     /// Where the chapter starts on the edited timeline; absent when that moment was cut.
     /// Filled in for the UI and cleared before the document is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,18 +54,26 @@ pub fn normalized(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
     chapters
 }
 
-pub fn attach_edited(chapters: &mut [Chapter], mapper: &TimelineMapper) {
+/// Where a chapter's moment plays now, through the clips of its asset.
+pub fn edited_at(chapter: &Chapter, document: &EditDocument) -> Option<u64> {
+    let asset = document.clock_asset(chapter.media.as_deref())?;
+    document
+        .asset_clock(asset)
+        .source_to_edited_us(chapter.source_us)
+}
+
+pub fn attach_edited(chapters: &mut [Chapter], document: &EditDocument) {
     for chapter in chapters {
-        chapter.edited_us = mapper.source_to_edited_us(chapter.source_us);
+        chapter.edited_us = edited_at(chapter, document);
     }
 }
 
 /// The chapters that survive the edit, in playback order, as (edited start, title). The first
 /// starts at 0 so the whole video is covered; chapters at the same moment keep the first one.
-pub fn timeline(chapters: &[Chapter], mapper: &TimelineMapper) -> Vec<(u64, String)> {
+pub fn timeline(chapters: &[Chapter], document: &EditDocument) -> Vec<(u64, String)> {
     let mut placed: Vec<(u64, String)> = chapters
         .iter()
-        .filter_map(|c| Some((mapper.source_to_edited_us(c.source_us)?, c.title.clone())))
+        .filter_map(|c| Some((edited_at(c, document)?, c.title.clone())))
         .collect();
     placed.sort_by_key(|(at, _)| *at);
     placed.dedup_by_key(|(at, _)| *at);
@@ -104,7 +115,7 @@ pub fn ffmetadata(timeline: &[(u64, String)], duration_us: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timeline::SourceInterval;
+    use crate::sequence::edit::SequenceEdit;
 
     const S: u64 = 1_000_000;
 
@@ -113,6 +124,7 @@ mod tests {
             id: id.into(),
             source_us,
             title: title.into(),
+            media: None,
             edited_us: None,
         }
     }
@@ -120,24 +132,47 @@ mod tests {
     #[test]
     fn chapters_follow_cuts_and_reordering() {
         // Source 0-10 s and 20-40 s kept, with the second part played first.
-        let mapper = TimelineMapper::try_new(vec![
-            SourceInterval::new("b".into(), 20 * S, 40 * S),
-            SourceInterval::new("a".into(), 0, 10 * S),
-        ])
-        .unwrap();
+        let mut document =
+            EditDocument::from_recording(crate::sequence::tests::recording("rec", 40 * S, &[]))
+                .unwrap();
+        let cut = |document: &EditDocument, edit: SequenceEdit| {
+            crate::sequence::edit::apply(&document.sequence, &document.assets, &edit)
+                .unwrap()
+                .0
+        };
+        document.sequence = cut(
+            &document,
+            SequenceEdit::DeleteRange {
+                ranges: vec![crate::zoom::EditedRange {
+                    start_us: 10 * S,
+                    end_us: 20 * S,
+                }],
+                ripple: Some(true),
+            },
+        );
+        let second = document.sequence.tracks[0].clips[1].id.clone();
+        document.sequence = cut(
+            &document,
+            SequenceEdit::MoveClips {
+                clip_ids: vec![second],
+                delta_us: -(10 * S as i64),
+                track_id: None,
+                anchor_id: None,
+            },
+        );
         let chapters = vec![
             chapter("c1", 2 * S, "Intro"),
             chapter("c2", 15 * S, "Cut away"),
             chapter("c3", 25 * S, "Main part"),
         ];
-        let placed = timeline(&chapters, &mapper);
+        let placed = timeline(&chapters, &document);
         // "Main part" plays first and becomes the 0:00 chapter; "Cut away" is gone.
         assert_eq!(
             placed,
             vec![(0, "Main part".to_string()), (22 * S, "Intro".to_string())]
         );
         let mut shown = chapters.clone();
-        attach_edited(&mut shown, &mapper);
+        attach_edited(&mut shown, &document);
         assert_eq!(shown[1].edited_us, None);
         assert_eq!(shown[2].edited_us, Some(5 * S));
         // The UI gets the edited start; a cut chapter has none; storing drops it.

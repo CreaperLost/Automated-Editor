@@ -10,11 +10,14 @@ pub const TRANSCRIPTS_DIR: &str = "transcripts";
 pub const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
 
 fn transcript_path(root: &Path, track_id: &str) -> Result<PathBuf, String> {
+    // A sound's key, `<asset>.<stream>`.
     if track_id.is_empty()
-        || track_id.len() > 64
+        || track_id.len() > 160
+        || track_id.starts_with('.')
+        || track_id.contains("..")
         || !track_id
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         return Err("Invalid track id for a transcript".into());
     }

@@ -2,7 +2,7 @@
 //! word deletions and suggestions become ordinary ripple cuts on the edit document.
 use super::AppState;
 use crate::project::reader::SegmentSummary;
-use crate::project::{OpenedProject, TrackType};
+use crate::project::OpenedProject;
 use crate::transcript::edit;
 use crate::transcript::elevenlabs::ScribeTranscriber;
 use crate::transcript::parakeet::{self, ParakeetTranscriber};
@@ -64,6 +64,7 @@ struct TrackContext {
     segments: Vec<SegmentSummary>,
 }
 
+/// The sound stream (`<asset>.<stream>`) to transcribe, over its own time.
 fn audio_track(
     state: &AppState,
     project_handle: &str,
@@ -72,53 +73,10 @@ fn audio_track(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, project_handle)?;
-    // Imported sound: one stream of a file, over the file's own time.
-    if let Some((stream, asset_id)) = crate::project::revision::media_sound(track_id) {
-        let asset = reader
-            .history()
-            .current
-            .media_assets
-            .iter()
-            .find(|asset| asset.id == asset_id)
-            .ok_or("Unknown imported media")?;
-        let path = asset
-            .audio_paths()
-            .nth(stream)
-            .ok_or("That media has no such audio stream")?;
-        return Ok(TrackContext {
-            root: reader.root().to_path_buf(),
-            segments: vec![SegmentSummary {
-                track_id: track_id.to_string(),
-                relative_path: path.clone(),
-                start_us: 0,
-                end_us: asset.duration_us,
-                size_bytes: crate::project::file_len(reader.root(), path),
-                media_timescale: crate::media::audio::SAMPLE_RATE,
-                media_start_value: 0,
-                host_anchor_us: 0,
-                is_keyframe_start: None,
-                available: true,
-            }],
-        });
-    }
-    let track = reader
-        .summary
-        .tracks
-        .iter()
-        .find(|t| t.descriptor.id == track_id)
-        .ok_or("Unknown track")?;
-    if !matches!(
-        track.descriptor.track_type,
-        TrackType::MicAudio | TrackType::SystemAudio
-    ) {
-        return Err("Only audio tracks can be transcribed".into());
-    }
+    let ctx = super::sound_context(reader, track_id, false)?;
     Ok(TrackContext {
-        root: reader.root().to_path_buf(),
-        segments: reader
-            .segments_for(track_id)
-            .ok_or("Unknown track")?
-            .to_vec(),
+        root: ctx.root,
+        segments: ctx.segments,
     })
 }
 
@@ -136,7 +94,7 @@ fn current_view(
     let document = &reader.history().current;
     Ok(Some(edit::view(
         &transcript,
-        &document.mapper_for_transcript(track_id)?,
+        &document.transcript_clock(track_id)?,
         document.revision,
     )))
 }
@@ -279,7 +237,7 @@ pub fn transcript_suggestions_impl(
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
     Ok(edit::suggestions(
         &transcript,
-        &reader.history().current.mapper_for_transcript(&track_id)?,
+        &reader.history().current.transcript_clock(&track_id)?,
     ))
 }
 
@@ -346,23 +304,24 @@ pub fn transcript_cut_words_impl(
         edit::word_cuts(
             &transcript,
             &word_ids,
-            &document.mapper_for_transcript(&track_id)?,
+            &document.transcript_clock(&track_id)?,
         )?
     };
     // Nothing is selected in the transcript sense: every track loses the same time, so
     // pictures and sound elsewhere stay in step with the words.
     let ranges = cuts
         .into_iter()
-        .map(|(start_us, end_us)| crate::tracks::EditedRange { start_us, end_us })
+        .map(|(start_us, end_us)| crate::zoom::EditedRange { start_us, end_us })
         .collect();
-    super::project_tracks_edit_impl(
+    super::project_sequence_edit_impl(
         state,
         project_handle,
         expected_revision,
-        crate::tracks::TrackEdit::RippleDelete {
+        crate::sequence::edit::SequenceEdit::DeleteRange {
             ranges,
-            all_tracks: true,
+            ripple: Some(true),
         },
+        None,
     )
 }
 
@@ -440,7 +399,7 @@ pub fn transcript_ai_suggest_impl(
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        let mapper = reader.history().current.mapper_for_transcript(&track_id)?;
+        let mapper = reader.history().current.transcript_clock(&track_id)?;
         let words: Vec<crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
@@ -498,12 +457,17 @@ pub fn project_chapters_generate_impl(
         let document = &reader.history().current;
         edit::view(
             &transcript,
-            &document.mapper_for_transcript(&track_id)?,
+            &document.transcript_clock(&track_id)?,
             document.revision,
         )
         .words
     };
-    let chapters = crate::ai::chapters::suggest(&mut client, &words)?;
+    let mut chapters = crate::ai::chapters::suggest(&mut client, &words)?;
+    // The words' times are their recording's or file's own.
+    let asset = crate::sequence::StreamRef::parse(&track_id).map(|r| r.asset);
+    for chapter in &mut chapters {
+        chapter.media = asset.clone();
+    }
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
     }
@@ -535,17 +499,16 @@ pub fn project_shorts_generate_impl(
         let document = &reader.history().current;
         edit::view(
             &transcript,
-            &document.mapper_for_transcript(&track_id)?,
+            &document.transcript_clock(&track_id)?,
             document.revision,
         )
         .words
     };
     let mut shorts = crate::ai::shorts::suggest(&mut client, &words)?;
-    // Picked from imported speech: the times are that file's own.
-    if let Some(asset) = crate::project::revision::media_sound_asset(&track_id) {
-        for short in &mut shorts {
-            short.media = Some(asset.to_string());
-        }
+    // The words' times are their recording's or file's own.
+    let asset = crate::sequence::StreamRef::parse(&track_id).map(|r| r.asset);
+    for short in &mut shorts {
+        short.media = asset.clone();
     }
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
@@ -608,38 +571,16 @@ fn caption_track(
     let timeline = caption_timeline(reader, short)?;
     let document = &timeline;
     let settings = &document.captions;
-    let recorded: Vec<String> = [TrackType::MicAudio, TrackType::SystemAudio]
-        .iter()
-        .flat_map(|kind| {
-            reader
-                .summary
-                .tracks
-                .iter()
-                .filter(move |t| t.descriptor.track_type == *kind)
-                .map(|t| t.descriptor.id.clone())
-        })
-        .collect();
-    let document_for_roles = document;
-    let imported: Vec<String> = document
-        .media_assets
-        .iter()
-        .flat_map(|asset| {
-            (0..asset.audio_paths().count())
-                .filter(|&stream| {
-                    document_for_roles.main_stream_role(asset, stream)
-                        == crate::media_bin::SoundRole::Mic
-                })
-                .map(|stream| crate::project::revision::media_sound_id(stream, &asset.id))
-                .collect::<Vec<_>>()
-        })
-        .collect();
     let root = reader.root();
-    let Some(transcript) = crate::captions::caption_source(settings, recorded, imported, |id| {
-        store::load_transcript(root, id).ok().flatten()
-    }) else {
+    let candidates = crate::export::caption_candidates(document);
+    let Some(transcript) =
+        crate::captions::caption_source(settings, candidates, Vec::new(), |id| {
+            store::load_transcript(root, id).ok().flatten()
+        })
+    else {
         return Ok(CaptionTrackView::default());
     };
-    let mapper = document.mapper_for_transcript(&transcript.track_id)?;
+    let mapper = document.transcript_clock(&transcript.track_id)?;
     let cues = crate::captions::build_cues(&transcript, &mapper, settings)
         .into_iter()
         .map(|cue| CaptionCueView {
@@ -707,7 +648,7 @@ pub fn transcript_caption_edit_impl(
             let reader = opened.as_ref().ok_or("No opened project")?;
             super::require_handle(reader, &project_handle)?;
             let mapper =
-                caption_timeline(reader, short_id.as_deref())?.mapper_for_transcript(&track_id)?;
+                caption_timeline(reader, short_id.as_deref())?.transcript_clock(&track_id)?;
             let start = mapper
                 .edited_to_source_us(*start_us)
                 .ok_or("A caption has to start over its own sound")?;
