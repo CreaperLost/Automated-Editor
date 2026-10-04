@@ -10,12 +10,17 @@ import {
   Sparkles,
   Trash2,
   RotateCcw,
+  Camera,
+  Monitor,
+  Palette,
+  Captions,
+  Pencil,
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
 import { GAP } from "../../lib/projectUtils";
 import { releaseShortPlayback, takeShortPlayback } from "../../lib/playbackControl";
 import { useEngineFrames } from "../canvas/NativePreviewHost";
-import { PreviewQualityControls } from "../layout/StagePanel";
+import { PreviewBar } from "../layout/PreviewBar";
 import {
   DockviewDefaultTab,
   DockviewReact,
@@ -33,7 +38,8 @@ import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/
 import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
 import { transcribableSounds } from "../../lib/trackUtils";
 import { TimelineStudio } from "../timeline/TimelineStudio";
-import { Badge, Button, Notice, Switch } from "../ui";
+import { Button, Notice, Switch } from "../ui";
+import { InspectorSection } from "../inspector/InspectorSection";
 
 const DEFAULT_LAYOUT: ShortLayout = {
   cameraPosition: "top",
@@ -65,8 +71,6 @@ function clockAt(project: OpenedProject, editedUs: number): { media?: string; us
   return null;
 }
 const NEW_SHORT_US = 30_000_000;
-const MIN_SHORT_US = 3_000_000;
-const MAX_SHORT_US = 180_000_000;
 
 function formatTime(us: number): string {
   const total = Math.max(0, us) / 1_000_000;
@@ -291,6 +295,11 @@ export const ShortsStudio: React.FC = () => {
   const saveShorts = (next: Short[]) =>
     run("Saving", (p) => api.projectShortsSet(p.projectHandle, p.revision, next));
 
+  /** Renames a short (the title is also its file name). */
+  const renameShort = (id: string, title: string) =>
+    void saveShorts(shorts.map((s) => (s.id === id ? { ...s, title } : s)));
+  const [renaming, setRenaming] = useState<string | null>(null);
+
   const patchSelected = (patch: Partial<Short>) => {
     if (!selected) return;
     void saveShorts(shorts.map((s) => (s.id === selected.id ? { ...s, ...patch } : s)));
@@ -344,21 +353,6 @@ export const ShortsStudio: React.FC = () => {
     const id = `short-${Date.now().toString(36)}`;
     setSelectedId(id);
     void saveShorts([...shorts, { id, title: `Short ${shorts.length + 1}`, layout: DEFAULT_LAYOUT, ...ends }]);
-  };
-
-  /** Moves the short's start or end on the edited timeline. */
-  const trim = (edge: "start" | "end", editedUs: number) => {
-    if (!main || !selected || selected.editedStartUs === undefined || selected.editedEndUs === undefined) return;
-    const start = edge === "start" ? editedUs : selected.editedStartUs!;
-    const end = edge === "end" ? editedUs : selected.editedEndUs!;
-    if (end - start < MIN_SHORT_US || end - start > MAX_SHORT_US) {
-      setError("A short is between 3 seconds and 3 minutes long.");
-      return;
-    }
-    const ends = anchors(start, end);
-    if (!ends) return;
-    setError(undefined);
-    patchSelected(ends);
   };
 
   const exportShorts = async (ids: string[]) => {
@@ -422,8 +416,8 @@ export const ShortsStudio: React.FC = () => {
         <aside className="h-full overflow-y-auto p-2 space-y-1.5 text-label" aria-label="Shorts">
           {shorts.length === 0 && (
             <p className="p-2 text-studio-500 leading-relaxed">
-              No shorts yet. Transcribe the video in the editor, then press Find shorts with AI, or start one with New
-              short and trim it.
+              No shorts yet. Transcribe the video in the editor, then press Find with AI, or start one with New short
+              and shape it on its timeline.
             </p>
           )}
           {shorts.map((s) => {
@@ -433,13 +427,13 @@ export const ShortsStudio: React.FC = () => {
               <div
                 key={s.id}
                 onClick={() => setSelectedId(s.id)}
-                className={`rounded-control border px-3 py-2.5 cursor-pointer transition-colors ${
+                className={`group rounded-control border px-3 py-2.5 cursor-pointer transition-colors ${
                   s.id === selected?.id
                     ? "border-accent-hover/70 bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent-hover))]"
                     : "border-studio-800 bg-studio-850 hover:border-studio-600"
                 }`}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-h-7">
                   <input
                     type="checkbox"
                     aria-label={`Select ${s.title} for export`}
@@ -453,12 +447,55 @@ export const ShortsStudio: React.FC = () => {
                     }}
                     className="w-4 h-4"
                   />
-                  <span className="flex-1 truncate font-medium text-studio-100">{s.title}</span>
+                  {renaming === s.id ? (
+                    <input
+                      autoFocus
+                      aria-label="Short title (also the file name)"
+                      defaultValue={s.title}
+                      maxLength={100}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        setRenaming(null);
+                        const title = e.target.value.trim();
+                        if (title && title !== s.title) renameShort(s.id, title);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                      className="ui-field !h-7 flex-1 min-w-0"
+                    />
+                  ) : (
+                    <>
+                      <span
+                        className="flex-1 truncate font-medium text-studio-100"
+                        title={s.reason ? `${s.title}\nAI: ${s.reason}` : s.title}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          setRenaming(s.id);
+                        }}
+                      >
+                        {s.title}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Rename ${s.title}`}
+                        title="Rename (the title is also the file name)"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenaming(s.id);
+                        }}
+                        className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-control text-studio-500 hover:text-studio-100 hover:bg-studio-700 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div className="mt-1 pl-6 text-meta tabular-nums text-studio-500">
                   {ok
                     ? `${formatTime(s.editedStartUs!)} · ${((s.editedEndUs! - s.editedStartUs!) / 1e6).toFixed(1)}s`
-                    : "Part of it was cut; trim it again"}
+                    : "Part of it was cut; adjust it on its timeline"}
                 </div>
                 {row && (
                   <div className="mt-1 pl-6 flex items-center gap-1 text-meta">
@@ -496,16 +533,9 @@ export const ShortsStudio: React.FC = () => {
         </aside>
     ),
     preview: () => (
-        <main className="h-full min-w-0 min-h-0 flex flex-col gap-2 p-2 bg-studio-900">
-          <div className="flex items-center justify-between gap-3 px-1 shrink-0">
-            <PreviewQualityControls />
-            <span className="truncate text-label text-studio-400">
-              {selected ? `${selected.title} · ${formatTime(lengthUs)}` : "No short selected"}
-            </span>
-            <Badge title="Shorts are vertical: 1080 × 1920">9:16</Badge>
-          </div>
+        <main className="h-full min-w-0 min-h-0 flex flex-col bg-studio-900">
           <div
-            className="relative flex-1 min-h-0 overflow-hidden rounded-control bg-studio-950 flex items-center justify-center p-2"
+            className="relative flex-1 min-h-0 overflow-hidden m-2 rounded-control bg-studio-950 flex items-center justify-center p-2"
             onPointerDown={() => takeShortPlayback()}
           >
             {selected && playable ? (
@@ -527,73 +557,38 @@ export const ShortsStudio: React.FC = () => {
                 )}
               </>
             ) : (
-              <p className="text-studio-500">{selected ? "Part of this short was cut from the video; trim it again." : "Pick or create a short."}</p>
+              <p className="text-studio-500">{selected ? "Part of this short was cut from the video; adjust it on its timeline." : "Pick or create a short."}</p>
             )}
           </div>
+          <PreviewBar aspect="9:16" aspectTitle="Shorts are vertical: 1080 × 1920" />
         </main>
     ),
     settings: () => (
       <>
         {selected && (
-          <aside className="h-full overflow-y-auto p-4 space-y-6 text-label" aria-label="Short settings">
-            <label className="block space-y-1.5">
-              <span className="text-label text-studio-400">Title (also the file name)</span>
-              <input
-                key={selected.id + selected.title}
-                defaultValue={selected.title}
-                maxLength={100}
-                onBlur={(e) => {
-                  const title = e.target.value.trim();
-                  if (title && title !== selected.title) patchSelected({ title });
-                }}
-                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                className="ui-field w-full"
-              />
-            </label>
-            {selected.reason && <p className="text-meta text-studio-500 italic">AI: {selected.reason}</p>}
-
+          <aside className="h-full overflow-y-auto text-label" aria-label="Short settings">
             {ownEdit && (
-              <div className="space-y-2 rounded-control border border-suggest/40 bg-suggest/10 p-3">
-                <p className="text-meta text-suggest-fg">
-                  Edited on its own: cuts and clips on its timeline below change only this short. Trim it by dragging
-                  its first or last clip's edge.
-                </p>
-                <button
-                  type="button"
-                  disabled={!!busy}
-                  onClick={() =>
-                    void run("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
-                  }
-                  className="h-7 px-2.5 rounded-control border border-suggest/50 text-suggest-fg hover:bg-suggest/15 disabled:opacity-40"
-                  title="Drop this short's own edits so it follows the video again"
-                >
-                  Follow the video again
-                </button>
-              </div>
-            )}
-            {!ownEdit && selected.editedStartUs !== undefined && (
-              <div className="space-y-2">
-                <span className="text-label font-semibold text-studio-100">Trim</span>
-                {(["start", "end"] as const).map((edge) => {
-                  const at = edge === "start" ? selected.editedStartUs! : selected.editedEndUs!;
-                  return (
-                    <div key={edge} className="flex items-center gap-2">
-                      <span className="w-10 text-studio-400 capitalize">{edge}</span>
-                      <button type="button" disabled={!!busy} onClick={() => trim(edge, Math.max(0, at - 1_000_000))} className="h-7 px-2.5 rounded-control border border-studio-700 bg-studio-800 hover:bg-studio-700 disabled:opacity-40">
-                        −1s
-                      </button>
-                      <span className="flex-1 text-center font-mono tabular-nums text-studio-100">{formatTime(at)}</span>
-                      <button type="button" disabled={!!busy} onClick={() => trim(edge, Math.min(main?.editedDurationUs ?? at, at + 1_000_000))} className="h-7 px-2.5 rounded-control border border-studio-700 bg-studio-800 hover:bg-studio-700 disabled:opacity-40">
-                        +1s
-                      </button>
-                    </div>
-                  );
-                })}
+              <div className="p-4 border-b border-studio-800">
+                <div className="space-y-2 rounded-control border border-suggest/40 bg-suggest/10 p-3">
+                  <p className="text-meta text-suggest-fg">
+                    Edited on its own: cuts and clips on its timeline below change only this short.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={!!busy}
+                    onClick={() =>
+                      void run("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
+                    }
+                    className="h-7 px-2.5 rounded-control border border-suggest/50 text-suggest-fg hover:bg-suggest/15 disabled:opacity-40"
+                    title="Drop this short's own edits so it follows the video again"
+                  >
+                    Follow the video again
+                  </button>
+                </div>
               </div>
             )}
 
-            <div className="space-y-2">
-              <span className="text-label font-semibold text-studio-100">Camera</span>
+            <InspectorSection id="short-camera" title="Camera" icon={Camera}>
               <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
                 <button type="button" aria-pressed={layout.cameraPosition === "top"} onClick={() => changeLayout({ cameraPosition: "top" })} className={segmented(layout.cameraPosition === "top")}>
                   <ArrowUpToLine className="inline w-3 h-3 mr-1" />
@@ -606,18 +601,17 @@ export const ShortsStudio: React.FC = () => {
               </div>
               <label className="block space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-studio-400">Camera height</span>
+                  <span className="text-label text-studio-400">Camera height</span>
                   <span className="font-mono text-meta tabular-nums text-studio-200">{Math.round(layout.cameraPct)}%</span>
                 </div>
                 <input type="range" aria-label="Camera height" min={20} max={70} step={1} value={layout.cameraPct} onChange={(e) => changeLayout({ cameraPct: Number(e.target.value) })} className="w-full" />
               </label>
-            </div>
+            </InspectorSection>
 
-            <div className="space-y-2">
-              <span className="text-label font-semibold text-studio-100">Screen</span>
+            <InspectorSection id="short-screen" title="Screen" icon={Monitor}>
               <label className="block space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-studio-400">Zoom</span>
+                  <span className="text-label text-studio-400">Zoom</span>
                   <button
                     type="button"
                     onClick={() => changeLayout({ screenZoom: 1 })}
@@ -637,7 +631,7 @@ export const ShortsStudio: React.FC = () => {
               ).map(([key, label]) => (
                 <label key={key} className="block space-y-1">
                   <div className="flex justify-between">
-                    <span className="text-studio-400">{label}</span>
+                    <span className="text-label text-studio-400">{label}</span>
                     <button
                       type="button"
                       onClick={() => changeLayout({ [key]: 0 })}
@@ -666,10 +660,9 @@ export const ShortsStudio: React.FC = () => {
                 label="Follow the video's zooms"
                 title="The screen part follows the zooms of the video (clicks and manual zooms)"
               />
-            </div>
+            </InspectorSection>
 
-            <div className="space-y-2">
-              <span className="text-label font-semibold text-studio-100">Background</span>
+            <InspectorSection id="short-background" title="Background" icon={Palette}>
               <div className="grid grid-cols-5 gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
                 {(
                   [
@@ -719,13 +712,14 @@ export const ShortsStudio: React.FC = () => {
                   ))}
                 </div>
               )}
-            </div>
+            </InspectorSection>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-label font-semibold text-studio-100">Captions</span>
-                <Switch checked={layout.captions} onChange={(captions) => changeLayout({ captions })} title="Show captions in this short" />
-              </div>
+            <InspectorSection
+              id="short-captions"
+              title="Captions"
+              icon={Captions}
+              extra={<Switch checked={layout.captions} onChange={(captions) => changeLayout({ captions })} title="Show captions in this short" />}
+            >
               {layout.captions && (
                 <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
                   {(
@@ -745,13 +739,13 @@ export const ShortsStudio: React.FC = () => {
                 <div className="space-y-2">
                   <label className="block space-y-1">
                     <div className="flex justify-between">
-                      <span className="text-studio-400">Words at once</span>
+                      <span className="text-label text-studio-400">Words at once</span>
                       <span className="font-mono text-meta tabular-nums text-studio-200">{layout.captionMaxWords || "editor's"}</span>
                     </div>
                     <input type="range" aria-label="Words per caption" min={0} max={12} step={1} value={layout.captionMaxWords} onChange={(e) => changeLayout({ captionMaxWords: Number(e.target.value) })} className="w-full" />
                   </label>
                   <div className="space-y-1">
-                    <span className="text-studio-400">Lines</span>
+                    <span className="text-label text-studio-400">Lines</span>
                     <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
                       {[1, 2, 3].map((lines) => (
                         <button key={lines} type="button" aria-pressed={layout.captionLines === lines} onClick={() => changeLayout({ captionLines: lines })} className={segmented(layout.captionLines === lines)}>
@@ -762,7 +756,7 @@ export const ShortsStudio: React.FC = () => {
                   </div>
                   <label className="block space-y-1">
                     <div className="flex justify-between">
-                      <span className="text-studio-400">Text size</span>
+                      <span className="text-label text-studio-400">Text size</span>
                       <span className="font-mono text-meta tabular-nums text-studio-200">{layout.captionSizePct ? `${layout.captionSizePct.toFixed(1)}%` : "editor's"}</span>
                     </div>
                     <input type="range" aria-label="Caption size" min={0} max={15} step={0.5} value={layout.captionSizePct} onChange={(e) => { const v = Number(e.target.value); changeLayout({ captionSizePct: v > 0 && v < 2 ? 2 : v }); }} className="w-full" />
@@ -770,9 +764,9 @@ export const ShortsStudio: React.FC = () => {
                 </div>
               )}
               <p className="text-meta text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the timeline below.</p>
-            </div>
+            </InspectorSection>
 
-            <div className="flex flex-col gap-2 pt-2 border-t border-studio-800">
+            <div className="flex flex-col gap-2 p-4">
               <button
                 type="button"
                 disabled={!!busy || shorts.length < 2}

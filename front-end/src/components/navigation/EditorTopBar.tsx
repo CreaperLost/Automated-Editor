@@ -170,7 +170,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
       )}
 
       {/* Workspaces, centred in the window */}
-      <div className="flex-1 flex justify-center self-stretch min-w-0">
+      <div className="flex-1 flex justify-center self-stretch">
         {project && (
           <Tabs
             label="Workspace"
@@ -202,7 +202,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
               onClick={() => setIsSilenceModalOpen(true)}
               title="Find the silent pauses and cut them out (jump cuts)"
             >
-              <span className="hidden md:inline">Jump Cuts</span>
+              <span className="hidden xl:inline">Jump Cuts</span>
             </Button>
             <Button
               variant="primary"
@@ -294,7 +294,7 @@ const SaveIndicator: React.FC = () => {
   if (pending > 0) {
     return (
       <span className="inline-flex items-center gap-1.5 text-label text-studio-400 shrink-0" role="status">
-        <Loader2 className="w-4 h-4 animate-spin" /> Saving…
+        <Loader2 className="w-4 h-4 animate-spin" /> <span className="hidden lg:inline">Saving…</span>
       </span>
     );
   }
@@ -316,7 +316,7 @@ const SaveIndicator: React.FC = () => {
       title={`Every change is saved as you make it (revision ${revision ?? 0}).`}
       role="status"
     >
-      <Check className="w-4 h-4 text-success" /> Saved
+      <Check className="w-4 h-4 text-success" /> <span className="hidden lg:inline">Saved</span>
     </span>
   );
 };

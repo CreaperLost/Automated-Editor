@@ -1,8 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  Play,
-  Pause,
-  SkipBack,
   ZoomIn,
   ZoomOut,
   Scissors,
@@ -131,6 +128,8 @@ const LINKED_SOUND_ROW_PX = 32;
 const NEW_TRACK_ROW_PX = 28;
 /** The zoom track's row. */
 const ZOOM_ROW_PX = 36;
+/** The main track's (V1's) clip row. */
+const MAIN_ROW_PX = 40;
 /** A zoom is never dragged shorter than this. */
 const MIN_ZOOM_US = 300_000;
 
@@ -211,7 +210,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     applyZoomGeneration,
   } = useProjectStore();
 
-  const { isPlaying, togglePlayPause, seekToUs, formattedTime, formattedDuration } = useTimeline();
+  const { isPlaying, togglePlayPause, seekToUs } = useTimeline();
   const frameUs = Math.round(
     1e6 / (openedProject?.manifest.tracks.find((track) => track.trackType === "screen")?.fps || 30),
   );
@@ -1818,7 +1817,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
   const mainHeader = trackHeaderRow({
     key: "main",
-    height: 40,
+    height: trackHeight("lane:main", MAIN_ROW_PX),
+    grip: resizeGrip("lane:main", "the main track (V1)", MAIN_ROW_PX),
     tone: "video",
     icon: Film,
     name: "V1 · Main",
@@ -2073,7 +2073,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
   const zoomHeader = trackHeaderRow({
     key: "zooms",
-    height: ZOOM_ROW_PX,
+    height: trackHeight("lane:zooms", ZOOM_ROW_PX),
+    grip: resizeGrip("lane:zooms", "the zoom track", ZOOM_ROW_PX),
     tone: "zoom",
     icon: ScanSearch,
     name: "Zooms",
@@ -2105,7 +2106,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   });
 
   const zoomLane = (
-    <div className="relative rounded-md bg-studio-850/30" style={{ height: ZOOM_ROW_PX }} data-track-row="zooms">
+    <div className="relative rounded-md bg-studio-850/30" style={{ height: trackHeight("lane:zooms", ZOOM_ROW_PX) }} data-track-row="zooms">
       {durationUs > 0 &&
         zoomKeyframes.map((k) => {
           const selected = k.zoomId === selectedZoomId;
@@ -2182,24 +2183,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     <div className="relative flex flex-col h-full bg-studio-900 select-none">
       {/* Toolbar: transport, editing tools, modes, camera, and the timeline's zoom */}
       <div className="h-11 shrink-0 flex items-center gap-1 px-2 border-b border-studio-800 bg-studio-900 overflow-x-auto overflow-y-hidden">
-        <IconButton icon={SkipBack} label="Go to start" disabled={!openedProject} onClick={() => seekToUs(0)} />
-        <button
-          type="button"
-          disabled={!openedProject}
-          onClick={togglePlayPause}
-          aria-label={isPlaying ? "Pause" : "Play"}
-          title={`${isPlaying ? "Pause" : "Play"}${hint("playPause")}`}
-          className="h-8 w-8 shrink-0 inline-flex items-center justify-center rounded-full bg-accent hover:bg-accent-hover text-white disabled:opacity-40 transition-colors"
-        >
-          {isPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-white ml-0.5" />}
-        </button>
-        <div className="px-2 font-mono text-label tabular-nums whitespace-nowrap" aria-label="Playhead time">
-          <span className="font-semibold text-studio-100">{formattedTime}</span>
-          <span className="mx-1 text-studio-600">/</span>
-          <span className="text-studio-400">{formattedDuration}</span>
-        </div>
-
-        <ToolbarDivider />
+        {/* Play, the time and quality sit on the preview's bar. */}
         <Button
           variant="ghost"
           icon={Scissors}
@@ -2668,7 +2652,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {videoAbove.map(renderTrackLane)}
 
             {/* Clip lane (V1): edges come from cuts and splits; markers restore cuts */}
-            <div className="h-10 relative rounded-md bg-studio-850/30" data-track-row="main">
+            <div className="relative rounded-md bg-studio-850/30" style={{ height: trackHeight("lane:main", MAIN_ROW_PX) }} data-track-row="main">
               {durationUs === 0 && (
                 <div className="absolute inset-0 flex items-center rounded-md border border-dashed border-studio-600 px-3 text-label text-studio-400 pointer-events-none">
                   Drag media from the Media panel here to start the main video (V1)
