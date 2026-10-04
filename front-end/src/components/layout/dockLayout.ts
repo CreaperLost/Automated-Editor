@@ -21,7 +21,21 @@ export const LAYOUT_PRESETS = {
 
 export type LayoutPreset = keyof typeof LAYOUT_PRESETS;
 
-const STORAGE_KEY = "aeroedits.dockLayout.v1";
+/**
+ * Workspaces in the editor window. Each keeps its own panel arrangement; switching swaps
+ * them. (Shorts is its own window.)
+ */
+export const WORKSPACES = {
+  edit: { label: "Edit", preset: "editing" as LayoutPreset },
+  cleanup: { label: "Cleanup", preset: "transcript" as LayoutPreset },
+} as const;
+
+export type Workspace = keyof typeof WORKSPACES;
+
+/** Edit keeps the key layouts were always saved under. */
+function storageKey(workspace: Workspace) {
+  return workspace === "edit" ? "aeroedits.dockLayout.v1" : `aeroedits.dockLayout.${workspace}.v1`;
+}
 
 function panel(id: DockPanelId) {
   const { title, minimumWidth, minimumHeight } = DOCK_PANELS[id];
@@ -77,11 +91,11 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
   api.getPanel("preview")?.api.setActive();
 }
 
-/// Restores the saved layout. Falls back to the default preset when nothing usable is stored,
-/// including a stored layout that lost one of the panels.
-export function restoreLayout(api: DockviewApi) {
+/// Restores the workspace's saved layout. Falls back to its preset when nothing usable is
+/// stored, including a stored layout that lost one of the panels.
+export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const stored = window.localStorage.getItem(storageKey(workspace));
     if (stored) {
       api.fromJSON(JSON.parse(stored));
       const ids = new Set(api.panels.map((p) => p.id));
@@ -104,12 +118,12 @@ export function restoreLayout(api: DockviewApi) {
   } catch {
     // Unreadable storage or an old layout format: start from the default.
   }
-  applyPreset(api, "editing");
+  applyPreset(api, WORKSPACES[workspace].preset);
 }
 
-export function saveLayout(api: DockviewApi) {
+export function saveLayout(api: DockviewApi, workspace: Workspace = activeWorkspace) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(api.toJSON()));
+    window.localStorage.setItem(storageKey(workspace), JSON.stringify(api.toJSON()));
   } catch {
     // Not remembering the layout is harmless.
   }
@@ -117,13 +131,26 @@ export function saveLayout(api: DockviewApi) {
 
 /// The mounted workspace, so the layout menu can apply presets.
 let activeApi: DockviewApi | null = null;
+let activeWorkspace: Workspace = "edit";
+
+/// Which workspace's layout is showing (saves go under its name).
+export function setActiveWorkspace(workspace: Workspace) {
+  activeWorkspace = workspace;
+}
 
 export function setActiveDockApi(api: DockviewApi | null) {
   activeApi = api;
+  // Development only: lets the browser preview arrange panels from the console.
+  if (import.meta.env.DEV) (window as unknown as { __aeroDock?: DockviewApi | null }).__aeroDock = api;
 }
 
 export function applyPresetToWorkspace(preset: LayoutPreset) {
   if (!activeApi) return;
   applyPreset(activeApi, preset);
   saveLayout(activeApi);
+}
+
+/// Puts the current workspace back to its own default arrangement.
+export function resetWorkspaceLayout() {
+  applyPresetToWorkspace(WORKSPACES[activeWorkspace].preset);
 }

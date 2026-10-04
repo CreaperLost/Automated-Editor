@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { AlertTriangle, Film, FolderInput, Image as ImageIcon, Music, Plus, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Film, FolderInput, Image as ImageIcon, Music, Plus, Search, Trash2, Upload } from "lucide-react";
+import { Badge, Button, IconButton, Notice, Segmented } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import type { MediaAsset } from "../../lib/types";
@@ -29,6 +30,8 @@ export const MediaPanel: React.FC = () => {
   const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
+  const [search, setSearch] = useState("");
+  const [kind, setKind] = useState<"all" | MediaAsset["kind"]>("all");
   const assets = openedProject?.mediaAssets ?? [];
 
   const run = async (label: string, work: () => Promise<void>) => {
@@ -83,68 +86,102 @@ export const MediaPanel: React.FC = () => {
       applyOpenedProject(await api.projectMediaRemove(project.projectHandle, project.revision, asset.id));
     });
 
+  const query = search.trim().toLowerCase();
+  const shown = assets.filter(
+    (asset) => (kind === "all" || asset.kind === kind) && (!query || asset.name.toLowerCase().includes(query)),
+  );
+
   return (
-    <div className="h-full flex flex-col min-h-0 bg-studio-900/95 text-xs select-none">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-studio-800">
-        <span className="text-studio-400">
-          {assets.length === 0 ? "No media yet" : `${assets.length} file${assets.length === 1 ? "" : "s"}`}
-        </span>
-        <div className="flex items-center gap-1">
-        <button
-          type="button"
-          disabled={!openedProject || busy !== null}
-          onClick={() => void importFolder()}
-          aria-label="Import a folder"
-          className="p-1.5 rounded-md border border-studio-700 text-studio-300 hover:text-white hover:bg-studio-800 disabled:opacity-40"
-          title="Import every video, image and audio file in a folder"
-        >
-          <FolderInput className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          disabled={!openedProject || busy !== null}
-          onClick={() => void importFiles()}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-fuchsia-600/25 hover:bg-fuchsia-600/35 border border-fuchsia-400/40 text-fuchsia-100 font-medium disabled:opacity-40"
-          title="Add videos, images or audio. Files stay where they are; the project refers to them."
-        >
-          <Upload className="w-3.5 h-3.5" />
-          {busy ?? "Import…"}
-        </button>
+    <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label select-none">
+      <div className="shrink-0 space-y-2 p-3 border-b border-studio-800">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            icon={Upload}
+            className="flex-1"
+            disabled={!openedProject || busy !== null}
+            onClick={() => void importFiles()}
+            title="Add videos, images or audio. Files stay where they are; the project refers to them."
+          >
+            {busy ?? "Import media"}
+          </Button>
+          <IconButton
+            icon={FolderInput}
+            variant="secondary"
+            label="Import every video, image and audio file in a folder"
+            disabled={!openedProject || busy !== null}
+            onClick={() => void importFolder()}
+          />
         </div>
+        {assets.length > 0 && (
+          <>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-studio-500 pointer-events-none" />
+              <input
+                type="search"
+                aria-label="Search media"
+                placeholder="Search media…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="ui-field w-full pl-8"
+              />
+            </div>
+            <Segmented<"all" | MediaAsset["kind"]>
+              label="Show"
+              size="sm"
+              className="w-full"
+              value={kind}
+              onChange={setKind}
+              options={[
+                { value: "all", label: `All ${assets.length}` },
+                { value: "video", label: "Video" },
+                { value: "image", label: "Images" },
+                { value: "audio", label: "Audio" },
+              ]}
+            />
+          </>
+        )}
       </div>
       {missing.length > 0 && (
-        <div className="mx-3 mt-2 flex items-center gap-2 rounded border border-amber-800/50 bg-amber-950/30 p-2 text-[11px] text-amber-200">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+        <div className="mx-3 mt-3 flex items-center gap-2 rounded-control border border-suggest/40 bg-suggest/10 px-3 py-2 text-label text-suggest-fg">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
           <span className="flex-1">
             {missing.length} file{missing.length === 1 ? " was" : "s were"} moved or deleted. Their clips show nothing.
           </span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             disabled={busy !== null}
             onClick={() => void cleanUpMissing()}
-            className="px-2 py-0.5 rounded border border-amber-700/60 hover:bg-amber-900/40 disabled:opacity-40"
+            className="text-suggest-fg border-suggest/50"
             title="Remove the missing files and their clips from the project (undoable)"
           >
             Clean up
-          </button>
+          </Button>
         </div>
       )}
       {error && (
-        <p role="alert" className="mx-3 mt-2 text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
+        <Notice tone="danger" className="mx-3 mt-3 rounded-control border" onDismiss={() => setError(undefined)}>
           {error}
-        </p>
+        </Notice>
       )}
       <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
         {assets.length === 0 && (
-          <p className="px-1 py-2 text-[11px] text-studio-500 leading-relaxed">
-            Import intros, B-roll, images or music, one by one or a whole folder. A recorder
-            folder comes in as one recording, with its camera, sound and mouse data. Drag an item onto
-            the timeline to insert it at a clip edge, or use + to insert it at the playhead. Files
-            stay where they are: moving or deleting one later shows it as missing here.
-          </p>
+          <div className="m-1 rounded-panel border border-dashed border-studio-700 p-4 text-center">
+            <Upload className="mx-auto w-6 h-6 text-studio-500" />
+            <p className="mt-2 text-label text-studio-300">Import intros, B-roll, images or music.</p>
+            <p className="mt-1 text-meta text-studio-500 leading-relaxed">
+              One by one or a whole folder; a recorder folder comes in as one recording with its camera, sound and mouse
+              data. Drag an item onto the timeline, or use + to insert it at the playhead. Files stay where they are.
+            </p>
+          </div>
         )}
-        {assets.map((asset) => {
+        {assets.length > 0 && shown.length === 0 && (
+          <p className="px-2 py-3 text-label text-studio-500">Nothing matches.</p>
+        )}
+        {shown.map((asset) => {
           const Icon = KIND_ICON[asset.kind];
+          const sound = asset.kind === "audio";
           return (
             <div
               key={asset.id}
@@ -157,54 +194,56 @@ export const MediaPanel: React.FC = () => {
               onDragEnd={() => {
                 draggedMediaId = null;
               }}
-              className={`group flex items-center gap-2 rounded-md border bg-studio-850 px-2 py-1.5 cursor-grab ${
-                asset.missing ? "border-amber-700/60 opacity-70" : "border-studio-800 hover:border-fuchsia-400/50"
+              className={`group flex items-center gap-2.5 rounded-control border px-2 py-2 cursor-grab transition-colors ${
+                asset.missing
+                  ? "border-suggest/50 bg-suggest/5 opacity-75"
+                  : "border-transparent hover:border-studio-700 hover:bg-studio-850"
               }`}
               title={`${asset.missing ? `MISSING: ${asset.sourcePath ?? asset.name} is no longer there. ` : ""}${asset.name}${
                 audioStreamCount(asset) > 1 ? ` (audio: ${(asset.audioNames ?? []).join(", ")})` : ""
               }. Drag onto the main track to insert it, or onto a track above to lay it over the video.`}
             >
-              <Icon className="w-3.5 h-3.5 shrink-0 text-fuchsia-300" />
+              <span
+                className={`h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-control ${
+                  sound ? "bg-audio/15 text-audio-fg" : "bg-video/20 text-video-fg"
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+              </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-studio-100">
-                  {asset.missing && <span className="mr-1 text-amber-300">Missing ·</span>}
+                <div className="flex items-center gap-1.5 min-w-0">
                   {asset.recordingPath && (
-                    <span
-                      className="mr-1 px-1 rounded bg-teal-500/20 text-teal-200 text-[9px] font-semibold uppercase"
-                      title="A recording: its screen, camera, sound and mouse data (for its own auto-zoom)"
-                    >
+                    <Badge tone="video" title="A recording: its screen, camera, sound and mouse data (for its own auto-zoom)">
                       Rec
-                    </span>
+                    </Badge>
                   )}
-                  {asset.name}
+                  {asset.missing && <Badge tone="suggest">Missing</Badge>}
+                  <span className="truncate text-label font-medium text-studio-100">{asset.name}</span>
                 </div>
-                <div className="text-[10px] text-studio-500 font-mono">
+                <div className="text-meta text-studio-500 truncate">
                   {formatLength(asset)}
                   {asset.width > 0 && ` · ${asset.width}×${asset.height}`}
-                  {asset.kind === "video" && !asset.audioPath && " · no audio"}
-                  {audioStreamCount(asset) > 1 && ` · ${audioStreamCount(asset)} audio tracks`}
+                  {asset.kind === "video" && !asset.audioPath && " · no sound"}
+                  {audioStreamCount(asset) > 1 && ` · ${audioStreamCount(asset)} sound tracks`}
                 </div>
               </div>
-              <button
-                type="button"
-                aria-label={`Insert ${asset.name} at the playhead`}
-                title="Insert at the playhead"
-                disabled={busy !== null}
-                onClick={() => void insertAtPlayhead(asset)}
-                className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-700 disabled:opacity-40"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                aria-label={`Remove ${asset.name}`}
-                title="Remove from the project and the timeline (undoable)"
-                disabled={busy !== null}
-                onClick={() => void remove(asset)}
-                className="p-1 rounded text-studio-500 hover:text-rose-300 hover:bg-studio-700 disabled:opacity-40"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                <IconButton
+                  icon={Plus}
+                  size="sm"
+                  label={`Insert ${asset.name} at the playhead`}
+                  disabled={busy !== null}
+                  onClick={() => void insertAtPlayhead(asset)}
+                />
+                <IconButton
+                  icon={Trash2}
+                  size="sm"
+                  label={`Remove ${asset.name} from the project and the timeline (undoable)`}
+                  disabled={busy !== null}
+                  onClick={() => void remove(asset)}
+                  className="hover:!text-danger-fg hover:!bg-danger/15"
+                />
+              </div>
             </div>
           );
         })}

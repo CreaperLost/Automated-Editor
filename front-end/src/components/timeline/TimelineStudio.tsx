@@ -1,8 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  Play,
-  Pause,
-  SkipBack,
   ZoomIn,
   ZoomOut,
   Scissors,
@@ -29,7 +26,11 @@ import {
   RefreshCw,
   ChevronUp,
   ChevronDown,
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  ScanSearch,
 } from "lucide-react";
+import { Badge, Button, IconButton, cn } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { WaveformRenderer } from "../waveform/WaveformRenderer";
@@ -121,14 +122,50 @@ const DEFAULT_TRACK_HEIGHT = 56;
 const MIN_TRACK_HEIGHT = 28;
 const MAX_TRACK_HEIGHT = 240;
 /** Height of a video or audio track, and of the "new track" drop row. */
-const OVERLAY_ROW_PX = 40;
+const OVERLAY_ROW_PX = 48;
 /** Height of a lane showing the sound of the main sequence's imported clips. */
-const LINKED_SOUND_ROW_PX = 28;
-const NEW_TRACK_ROW_PX = 22;
+const LINKED_SOUND_ROW_PX = 32;
+const NEW_TRACK_ROW_PX = 28;
 /** The zoom track's row. */
-const ZOOM_ROW_PX = 30;
+const ZOOM_ROW_PX = 36;
+/** The main track's (V1's) clip row. */
+const MAIN_ROW_PX = 40;
 /** A zoom is never dragged shorter than this. */
 const MIN_ZOOM_US = 300_000;
+
+/** A button on a track header. */
+const HDR_BUTTON =
+  "h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-800 disabled:opacity-40 transition-colors";
+
+/** The colour strip on a track header: what kind of track it is. */
+const TRACK_TONE = {
+  video: "bg-video",
+  audio: "bg-audio",
+  caption: "bg-caption",
+  zoom: "bg-zoom",
+} as const;
+
+const RECORDING_TRACK = {
+  screen: { label: "Screen recording", icon: Monitor, tone: "video" },
+  webcam: { label: "Camera", icon: Camera, tone: "video" },
+  mic: { label: "Microphone", icon: Mic, tone: "audio" },
+  system: { label: "System audio", icon: Volume2, tone: "audio" },
+} as const;
+
+/** A divider between groups of toolbar controls. */
+const ToolbarDivider: React.FC = () => <span className="mx-1 h-5 w-px shrink-0 bg-studio-800" aria-hidden />;
+
+/** A toolbar button that stays lit while its mode is on. */
+const ToolbarToggle: React.FC<
+  React.ComponentProps<typeof Button> & { on: boolean }
+> = ({ on, className, ...rest }) => (
+  <Button
+    variant="ghost"
+    aria-pressed={on}
+    className={cn(on && "!bg-accent/15 !text-accent-fg !border-accent/40", className)}
+    {...rest}
+  />
+);
 
 function loadTrackHeights(): Record<string, number> {
   try {
@@ -173,7 +210,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     applyZoomGeneration,
   } = useProjectStore();
 
-  const { isPlaying, togglePlayPause, seekToUs, formattedTime, formattedDuration } = useTimeline();
+  const { isPlaying, togglePlayPause, seekToUs } = useTimeline();
   const frameUs = Math.round(
     1e6 / (openedProject?.manifest.tracks.find((track) => track.trackType === "screen")?.fps || 30),
   );
@@ -247,7 +284,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       }}
       onDoubleClick={() => setTrackHeight(key, null)}
     >
-      <span className="h-1 w-10 rounded-full bg-studio-700 group-hover:bg-teal-400 transition-colors" />
+      <span className="h-1 w-10 rounded-full bg-studio-700 group-hover:bg-accent-hover transition-colors" />
     </div>
   );
   useEffect(() => {
@@ -1319,7 +1356,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     return (
       <div
         className={`absolute top-1 bottom-1 rounded-md border-2 border-dashed z-30 pointer-events-none ${
-          ghost.valid ? "border-amber-200 bg-amber-300/20" : "border-rose-300 bg-rose-500/25"
+          ghost.valid ? "border-accent-fg bg-accent/20" : "border-danger bg-danger/25"
         }`}
         style={{
           left: `${(ghost.startUs / durationUs) * 100}%`,
@@ -1496,7 +1533,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   });
 
   const renderCaptionLane = () => (
-    <div data-track-row="captions" className="relative rounded-md bg-studio-850/40" style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}>
+    <div data-track-row="captions" className="relative rounded-md bg-studio-850/30" style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}>
       {durationUs > 0 &&
         captionTrack.cues.map((cue, index) => {
           const selected = index === selectedCue;
@@ -1510,10 +1547,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               role="button"
               aria-label={`Caption: ${cue.text}`}
               aria-pressed={selected}
-              className={`absolute top-1 bottom-1 rounded-md border overflow-hidden flex items-center px-1.5 cursor-grab ${
+              className={`absolute top-1 bottom-1 rounded-control border overflow-hidden flex items-center px-2 cursor-grab ${
                 selected
-                  ? "bg-amber-400/35 border-white ring-1 ring-white/70 z-10"
-                  : "bg-amber-400/15 border-amber-300/50 hover:border-amber-200/80"
+                  ? "bg-caption-fill border-accent-fg ring-2 ring-accent-hover/70 z-10"
+                  : "bg-caption-fill/90 border-caption/60 hover:border-caption"
               }`}
               style={{
                 left: `${(Math.max(0, startUs) / durationUs) * 100}%`,
@@ -1551,10 +1588,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     }
                   }}
                   onBlur={() => setCueText(null)}
-                  className="w-full bg-studio-950/90 text-[10px] text-white px-1 rounded outline-none border border-amber-300"
+                  className="w-full bg-studio-950 text-meta text-white px-1.5 h-6 rounded outline-none border border-caption"
                 />
               ) : (
-                <span className="text-[9px] text-amber-50/90 truncate pointer-events-none">{cue.text}</span>
+                <span className="text-meta text-studio-100 truncate pointer-events-none">{cue.text}</span>
               )}
               {!typing &&
                 (["start", "end"] as const).map((side) => (
@@ -1562,7 +1599,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     key={side}
                     role="separator"
                     aria-label={`Retime the caption ${side}`}
-                    className={`absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100 hover:bg-amber-100/70 ${
+                    className={`absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100 hover:bg-caption/80 ${
                       side === "start" ? "left-0" : "right-0"
                     }`}
                     onClick={(event) => event.stopPropagation()}
@@ -1582,8 +1619,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
         data-track-row={audio ? "new-audio" : "new"}
         // The top row: the playhead and overlays before it are absolute, so drop the gap
         // space-y would put above it and keep the lanes level with their headers.
-        className={`relative rounded-md flex items-center px-2 text-[10px] transition-colors ${audio ? "" : "!mt-0"} ${
-          shown ? "border border-dashed border-studio-600 text-studio-400" : "border border-transparent text-transparent"
+        className={`relative rounded-md flex items-center px-2 text-meta transition-colors ${audio ? "" : "!mt-0"} ${
+          shown ? "border border-dashed border-accent/60 bg-accent/5 text-studio-300" : "border border-transparent text-transparent"
         }`}
         style={{ height: NEW_TRACK_ROW_PX }}
       >
@@ -1602,7 +1639,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
       <div
         key={track.id}
         data-track-row={`track:${track.id}`}
-        className={`relative rounded-md bg-studio-850/40 ${track.hidden || (audio && track.muted) ? "opacity-50" : ""}`}
+        className={`relative rounded-md bg-studio-850/30 ${track.hidden || (audio && track.muted) ? "opacity-50" : ""}`}
         style={{ height: trackHeight(audio ? "lane:audio" : "lane:video", OVERLAY_ROW_PX) }}
       >
         {durationUs > 0 &&
@@ -1616,18 +1653,18 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 : (asset?.name ?? "Missing media");
             const tint = audio
               ? selected
-                ? "bg-emerald-500/35 border-white ring-1 ring-white/70"
-                : "bg-emerald-500/20 border-emerald-300/50 hover:border-emerald-200/80"
+                ? "bg-audio/35 border-accent-fg ring-2 ring-accent-hover/70"
+                : "bg-audio/20 border-audio/50 hover:border-audio-fg"
               : selected
-                ? "bg-violet-500/45 border-white ring-1 ring-white/70"
-                : "bg-violet-500/25 border-violet-300/50 hover:border-violet-200/80";
+                ? "bg-video/45 border-accent-fg ring-2 ring-accent-hover/70"
+                : "bg-video/30 border-video/60 hover:border-video-fg";
             return (
               <div
                 key={clip.id}
                 role="button"
                 aria-label={`${name} on ${label}`}
                 aria-pressed={selected}
-                className={`absolute top-1 bottom-1 rounded-md border overflow-hidden flex items-center gap-1 px-1.5 cursor-grab ${tint} ${
+                className={`absolute top-1 bottom-1 rounded-control border overflow-hidden flex items-center gap-1.5 px-2 cursor-grab ${tint} ${
                   dragging && overlayDrag?.mode === "move" ? "opacity-40" : ""
                 }`}
                 style={{
@@ -1643,14 +1680,14 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 {audio && clip.audioStream !== undefined &&
                   renderSoundWave(clip.assetId, clip.audioStream, clip.inUs, clip.durationUs, clip.startUs)}
                 {audio ? (
-                  <AudioLines className="relative w-2.5 h-2.5 shrink-0 text-white/70 pointer-events-none" aria-label="Audio" />
+                  <AudioLines className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-label="Audio" />
                 ) : (
-                  <Film className="relative w-2.5 h-2.5 shrink-0 text-white/70 pointer-events-none" aria-label="Video" />
+                  <Film className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-label="Video" />
                 )}
                 {(clip.link || clip.audioUnlinked) && (
-                  <Unlink className="relative w-2.5 h-2.5 shrink-0 text-white/70 pointer-events-none" aria-label="Sound unlinked" />
+                  <Unlink className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-label="Sound unlinked" />
                 )}
-                <span className={`relative text-[9px] font-mono truncate pointer-events-none ${audio ? "text-emerald-50/90" : "text-violet-50/90"}`}>
+                <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">
                   {name}
                 </span>
                 {(["start", "end"] as const).map((side) => (
@@ -1659,7 +1696,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     role="separator"
                     aria-label={`Trim ${name} ${side}`}
                     className={`absolute inset-y-0 w-1.5 cursor-ew-resize opacity-0 hover:opacity-100 ${
-                      audio ? "hover:bg-emerald-100/70" : "hover:bg-violet-100/70"
+                      audio ? "hover:bg-audio-fg/80" : "hover:bg-video-fg/80"
                     } ${side === "start" ? "left-0" : "right-0"}`}
                     onClick={(event) => event.stopPropagation()}
                     {...overlayDragHandlers(clip, track.id, side)}
@@ -1689,9 +1726,9 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             : "Background sound (music, game, desktop). Click to mark as speech."
         }
         onClick={() => void saveTrackMix({ [lane.id]: { role: role === "mic" ? "background" : "mic" } }).catch((err) => setEditError(String(err)))}
-        className={`p-1 rounded hover:bg-studio-700 ${role === "mic" ? "text-emerald-300" : "text-sky-300"}`}
+        className={cn(HDR_BUTTON, role === "mic" ? "!text-audio-fg" : "!text-studio-300")}
       >
-        {role === "mic" ? <Mic className="w-3.5 h-3.5" /> : <Music className="w-3.5 h-3.5" />}
+        {role === "mic" ? <Mic className="w-4 h-4" /> : <Music className="w-4 h-4" />}
       </button>
     );
   };
@@ -1712,16 +1749,16 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               : "Unmarked: each file's own role. Click to mark this track as the screen."
         }
         onClick={() => void editTracks({ kind: "setTrackRole", trackId: track.id, role: next })}
-        className={`p-1 rounded hover:bg-studio-700 disabled:opacity-40 ${track.role ? "text-violet-200" : "text-studio-500"}`}
+        className={cn(HDR_BUTTON, track.role ? "!text-video-fg" : "!text-studio-500")}
       >
-        {track.role === "webcam" ? <Camera className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+        {track.role === "webcam" ? <Camera className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
       </button>
     );
   };
 
   /** Up/down in the stack: video tracks and V1 among themselves, audio tracks among theirs. */
   const orderButtons = (trackId: string, label: string) => (
-    <div className="flex flex-col -my-1">
+    <div className="flex flex-col">
       {([true, false] as const).map((up) => (
         <button
           key={up ? "up" : "down"}
@@ -1731,9 +1768,9 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             trackId === "main" || videoTracks.some((t) => t.id === trackId) ? (up ? ": it draws over more" : ": it draws under more") : ""
           }`}
           onClick={() => void editTracks({ kind: "moveTrack", trackId, up })}
-          className="p-0 leading-none rounded text-studio-500 hover:text-white hover:bg-studio-700 disabled:opacity-40"
+          className="h-3.5 w-5 inline-flex items-center justify-center rounded text-studio-500 hover:text-studio-100 hover:bg-studio-800 disabled:opacity-40"
         >
-          {up ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          {up ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
         </button>
       ))}
     </div>
@@ -1742,106 +1779,152 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     const next = { ...mainTrack, ...change };
     void editTracks({ kind: "setMainTrack", magnetic: next.magnetic, hidden: next.hidden, muted: next.muted });
   };
-  const mainHeader = (
-    <div className="h-8 px-3 flex items-end justify-between">
-      <span className="text-[10px] font-semibold tracking-wider uppercase text-studio-400 truncate">V1 · Main</span>
-      <div className="flex items-center gap-0.5">
+  /**
+   * One track header: a colour strip for the kind of track, an icon, the name (and a detail
+   * line when the row is tall enough), and its buttons. It is exactly as tall as its lane.
+   */
+  const trackHeaderRow = (row: {
+    key: string;
+    height: number;
+    tone: keyof typeof TRACK_TONE;
+    icon: React.ComponentType<{ className?: string }>;
+    name: React.ReactNode;
+    meta?: React.ReactNode;
+    title?: string;
+    grip?: React.ReactNode;
+    actions?: React.ReactNode;
+    dim?: boolean;
+  }) => {
+    const Icon = row.icon;
+    return (
+      <div
+        key={row.key}
+        className="group/header relative flex items-center gap-2 pl-3 pr-1.5 border-b border-studio-800/60 hover:bg-studio-850/60"
+        style={{ height: row.height }}
+        title={row.title}
+      >
+        <span className={cn("absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r", TRACK_TONE[row.tone])} aria-hidden />
+        {row.grip}
+        <Icon className={cn("w-4 h-4 shrink-0", row.dim ? "text-studio-600" : "text-studio-400")} aria-hidden />
+        <div className={cn("min-w-0 flex-1", row.height >= 40 ? "leading-tight" : "flex items-baseline gap-2")}>
+          <div className={cn("text-label font-medium truncate", row.dim ? "text-studio-500" : "text-studio-100")}>{row.name}</div>
+          {row.meta && <div className="text-meta text-studio-500 truncate">{row.meta}</div>}
+        </div>
+        {row.actions && <div className="flex items-center gap-0.5 shrink-0">{row.actions}</div>}
+      </div>
+    );
+  };
+
+  const mainHeader = trackHeaderRow({
+    key: "main",
+    height: trackHeight("lane:main", MAIN_ROW_PX),
+    grip: resizeGrip("lane:main", "the main track (V1)", MAIN_ROW_PX),
+    tone: "video",
+    icon: Film,
+    name: "V1 · Main",
+    meta: magnetic ? "Magnetic" : "Free placement",
+    dim: mainTrack.hidden,
+    actions: (
+      <>
         {orderButtons("main", "V1")}
         <button
+          type="button"
           disabled={editing || !openedProject}
           aria-pressed={mainTrack.hidden}
           aria-label={`${mainTrack.hidden ? "Show" : "Hide"} V1`}
           title={mainTrack.hidden ? "Show V1" : "Hide V1: black where no other track draws"}
           onClick={() => setMainTrack({ hidden: !mainTrack.hidden })}
-          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+          className={cn(HDR_BUTTON, mainTrack.hidden && "text-danger-fg")}
         >
-          {mainTrack.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          {mainTrack.hidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
         <button
+          type="button"
           disabled={editing || !openedProject}
           aria-pressed={mainTrack.muted}
           aria-label={`${mainTrack.muted ? "Unmute" : "Mute"} V1`}
           title={mainTrack.muted ? "Unmute V1" : "Mute V1: the recording's and its clips' sound"}
           onClick={() => setMainTrack({ muted: !mainTrack.muted })}
-          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+          className={cn(HDR_BUTTON, mainTrack.muted && "text-danger-fg")}
         >
-          {mainTrack.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+          {mainTrack.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
-      </div>
-    </div>
-  );
+      </>
+    ),
+  });
 
   const renderTrackHeader = (track: (typeof overlayTracks)[number]) => {
     const audio = isAudioTrack(track);
     const label = trackLabel(overlayTracks, track.id);
-    return (
-      <div
-        key={track.id}
-        className="relative px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
-        style={{ height: trackHeight(audio ? "lane:audio" : "lane:video", OVERLAY_ROW_PX) }}
-      >
-        {resizeGrip(audio ? "lane:audio" : "lane:video", audio ? "audio tracks" : "video tracks", OVERLAY_ROW_PX)}
-        <div className="truncate">
-          <div className="text-xs font-medium text-studio-200">{label}</div>
-          <div className="text-[10px] font-mono text-studio-400">
-            {audio ? "audio · " : ""}
-            {track.clips.length} clip{track.clips.length === 1 ? "" : "s"}
-          </div>
-        </div>
-        <div className="flex items-center gap-0.5">
+    return trackHeaderRow({
+      key: track.id,
+      height: trackHeight(audio ? "lane:audio" : "lane:video", OVERLAY_ROW_PX),
+      tone: audio ? "audio" : "video",
+      icon: audio ? AudioLines : Film,
+      name: label,
+      meta: `${track.clips.length} clip${track.clips.length === 1 ? "" : "s"}`,
+      dim: track.hidden || (audio && track.muted),
+      grip: resizeGrip(audio ? "lane:audio" : "lane:video", audio ? "audio tracks" : "video tracks", OVERLAY_ROW_PX),
+      actions: (
+        <>
           {orderButtons(track.id, label)}
           {audio ? roleFlag(track.id) : pictureFlag(track)}
           {!audio && (
             <button
+              type="button"
               disabled={editing}
               aria-pressed={track.hidden}
               aria-label={`${track.hidden ? "Show" : "Hide"} ${label}`}
               title={track.hidden ? "Show this track" : "Hide this track"}
               onClick={() => void editTracks({ kind: "setTrack", trackId: track.id, hidden: !track.hidden, muted: track.muted })}
-              className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+              className={cn(HDR_BUTTON, track.hidden && "text-danger-fg")}
             >
-              {track.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              {track.hidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
           )}
           <button
+            type="button"
             disabled={editing}
             aria-pressed={track.muted}
             aria-label={`${track.muted ? "Unmute" : "Mute"} ${label}`}
             title={track.muted ? "Unmute this track" : "Mute this track"}
             onClick={() => void editTracks({ kind: "setTrack", trackId: track.id, hidden: track.hidden, muted: !track.muted })}
-            className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+            className={cn(HDR_BUTTON, track.muted && "text-danger-fg")}
           >
-            {track.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            {track.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
           <button
+            type="button"
             disabled={editing}
             aria-label={`Remove ${label}`}
             title="Remove this track and its clips (Undo brings it back)"
             onClick={() => void editTracks({ kind: "removeTrack", trackId: track.id })}
-            className="p-1 rounded hover:bg-rose-900/40 text-studio-400 hover:text-rose-300 disabled:opacity-40"
+            className={cn(HDR_BUTTON, "hover:!text-danger-fg hover:!bg-danger/15")}
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="w-4 h-4" />
           </button>
-        </div>
-      </div>
-    );
+        </>
+      ),
+    });
   };
 
   const addTrackButton = (audio: boolean) => (
     <div className="px-2 flex items-center" style={{ height: NEW_TRACK_ROW_PX }}>
-      <button
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={Plus}
         disabled={!openedProject || editing || (audio ? audioTracks : videoTracks).length >= 8}
         onClick={() => void editTracks({ kind: "addTrack", audio })}
-        className="flex items-center gap-1 px-2 py-0.5 rounded border border-studio-700 text-[11px] text-studio-200 hover:bg-studio-800 hover:border-teal-500/60 disabled:opacity-40"
+        className="text-studio-400"
         title={
           audio
             ? "Add an audio track below the others"
             : "Add a video track above the others. Clips on higher tracks draw over the ones below."
         }
       >
-        <Plus className="w-3 h-3" />
         {audio ? "Add audio track" : "Add video track"}
-      </button>
+      </Button>
     </div>
   );
 
@@ -1988,40 +2071,42 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
     );
   };
 
-  const zoomHeader = (
-    <div
-      className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
-      style={{ height: ZOOM_ROW_PX }}
-    >
-      <div className="truncate">
-        <span className="text-xs font-medium text-indigo-200">Zooms</span>
-        <span className="ml-1.5 text-[10px] font-mono text-studio-500">{openedProject?.zooms?.length ?? 0}</span>
-      </div>
-      <div className="flex items-center gap-0.5">
+  const zoomHeader = trackHeaderRow({
+    key: "zooms",
+    height: trackHeight("lane:zooms", ZOOM_ROW_PX),
+    grip: resizeGrip("lane:zooms", "the zoom track", ZOOM_ROW_PX),
+    tone: "zoom",
+    icon: ScanSearch,
+    name: "Zooms",
+    meta: `${openedProject?.zooms?.length ?? 0}`,
+    actions: (
+      <>
         <button
+          type="button"
           disabled={!openedProject || zoomBusy || durationUs < 3}
           aria-label="Add a zoom"
           title={selection ? "Add a zoom over the selection" : "Add a zoom at the playhead (it fits between the zooms there)"}
           onClick={addZoomHere}
-          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+          className={HDR_BUTTON}
         >
-          <Plus className="w-3.5 h-3.5" />
+          <Plus className="w-4 h-4" />
         </button>
         <button
+          type="button"
           disabled={!openedProject || zoomBusy}
           aria-label="Reload zooms from the recording"
           title="Reload zooms from the recording with your auto-zoom settings. Zooms you added or changed stay; Undo brings the old ones back."
           onClick={reloadZooms}
-          className="p-1 rounded hover:bg-studio-700 text-studio-300 disabled:opacity-40"
+          className={HDR_BUTTON}
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className="w-4 h-4" />
         </button>
-      </div>
-    </div>
-  );
+      </>
+    ),
+  });
 
   const zoomLane = (
-    <div className="relative border-b border-studio-800/40" style={{ height: ZOOM_ROW_PX }} data-track-row="zooms">
+    <div className="relative rounded-md bg-studio-850/30" style={{ height: trackHeight("lane:zooms", ZOOM_ROW_PX) }} data-track-row="zooms">
       {durationUs > 0 &&
         zoomKeyframes.map((k) => {
           const selected = k.zoomId === selectedZoomId;
@@ -2035,14 +2120,14 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               role="button"
               aria-label={`${k.pending ? "Suggested" : kind} ${k.scale.toFixed(1)}×`}
               aria-pressed={selected}
-              className={`group absolute top-1 bottom-1 rounded border text-[9px] font-mono px-1 flex items-center overflow-hidden ${
+              className={`group absolute top-1 bottom-1 rounded-control border text-meta font-medium px-1.5 flex items-center overflow-hidden ${
                 zoomDrag?.barId === k.id ? "cursor-grabbing z-30" : k.pending ? "cursor-pointer" : "cursor-grab"
               } ${
                 k.pending
-                  ? `border-dashed ${selected ? "border-white bg-indigo-400/30 text-white" : "border-indigo-300/70 bg-indigo-400/10 text-indigo-200 hover:bg-indigo-400/25"}`
+                  ? `border-dashed ${selected ? "border-accent-fg bg-zoom/25 text-zoom-fg ring-2 ring-accent-hover/70" : "border-zoom/70 bg-zoom/10 text-zoom-fg hover:bg-zoom/20"}`
                   : selected
-                    ? "border-white bg-indigo-500/60 text-white ring-1 ring-white/70"
-                    : "border-indigo-300/60 bg-indigo-500/35 text-indigo-50 hover:bg-indigo-500/50 hover:border-indigo-200"
+                    ? "border-accent-fg bg-zoom/40 text-white ring-2 ring-accent-hover/70"
+                    : "border-zoom/60 bg-zoom/25 text-zoom-fg hover:bg-zoom/35 hover:border-zoom-fg"
               }`}
               style={{ left: `${(startUs / durationUs) * 100}%`, width: `${Math.max(((endUs - startUs) / durationUs) * 100, 0.4)}%` }}
               title={
@@ -2095,199 +2180,140 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
   const persistedCount = openedProject?.zooms?.length ?? 0;
 
   return (
-    <div className="relative flex flex-col h-full bg-studio-900 border-t border-studio-800 select-none">
-      {/* Timeline Toolbar */}
-      <div className="h-12 px-6 flex items-center justify-between border-b border-studio-800 bg-studio-850">
-        {/* Playback Controls & Timecode */}
-        <div className="flex items-center space-x-4">
-          <button
-            disabled={!openedProject}
-            onClick={() => seekToUs(0)}
-            className="p-1.5 rounded-md hover:bg-studio-700 text-studio-300 transition-colors"
-            title="Jump to Start"
-          >
-            <SkipBack className="w-4 h-4" />
-          </button>
+    <div className="relative flex flex-col h-full bg-studio-900 select-none">
+      {/* Toolbar: transport, editing tools, modes, camera, and the timeline's zoom */}
+      <div className="h-11 shrink-0 flex items-center gap-1 px-2 border-b border-studio-800 bg-studio-900 overflow-x-auto overflow-y-hidden">
+        {/* Play, the time and quality sit on the preview's bar. */}
+        <Button
+          variant="ghost"
+          icon={Scissors}
+          disabled={!openedProject || editing || durationUs === 0}
+          onClick={() => void splitAtPlayhead()}
+          title={`Split at the playhead${hint("split")}`}
+        >
+          Split
+        </Button>
+        <IconButton
+          icon={ArrowLeftToLine}
+          label={`Ripple delete from the playhead back to the previous edit${hint("rippleTrimPrevious")}`}
+          disabled={!openedProject || editing || durationUs === 0}
+          onClick={() => void rippleTrim("previous")}
+        />
+        <IconButton
+          icon={ArrowRightToLine}
+          label={`Ripple delete from the playhead to the next edit${hint("rippleTrimNext")}`}
+          disabled={!openedProject || editing || durationUs === 0}
+          onClick={() => void rippleTrim("next")}
+        />
+        <Button
+          variant="ghost"
+          icon={linkState === "unlinked" ? Link2 : Unlink}
+          disabled={!openedProject || editing || !linkState}
+          onClick={toggleLink}
+          aria-pressed={linkState === "unlinked"}
+          title={
+            linkState === "unlinked"
+              ? `Relink: select this clip and its sound, then press this${hint("toggleLink")}`
+              : `Unlink the selected clip's sound onto audio tracks, to move or trim it on its own${hint("toggleLink")}`
+          }
+        >
+          {linkState === "unlinked" ? "Relink" : "Unlink"}
+        </Button>
 
-          <button
-            disabled={!openedProject}
-            onClick={togglePlayPause}
-            className="p-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
-            title={`${isPlaying ? "Pause" : "Play"}${hint("playPause")}`}
-          >
-            {isPlaying ? (
-              <Pause className="w-4 h-4 fill-white" />
-            ) : (
-              <Play className="w-4 h-4 fill-white ml-0.5" />
-            )}
-          </button>
-
-          <div className="font-mono text-sm tracking-wider text-studio-200">
-            <span className="text-white font-semibold">{formattedTime}</span>
-            <span className="text-studio-500 mx-1.5">/</span>
-            <span className="text-studio-400">{formattedDuration}</span>
-          </div>
-        </div>
-
-        {/* Action Tools: Silence Detection & Zoom Keyframe */}
-        <div className="flex items-center space-x-3">
-          <button
-            disabled={!openedProject || editing || durationUs === 0}
-            onClick={() => void splitAtPlayhead()}
-            className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title={`Split the clip at the playhead${hint("split")}`}
-          >
-            <Scissors className="w-3.5 h-3.5" />
-            <span>Split</span>
-          </button>
-          <button
-            disabled={!openedProject || editing || durationUs === 0}
-            onClick={() => void rippleTrim("previous")}
-            className="px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title={`Ripple delete from the playhead back to the previous edit${hint("rippleTrimPrevious")}`}
-          >
-            ← Trim
-          </button>
-          <button
-            disabled={!openedProject || editing || durationUs === 0}
-            onClick={() => void rippleTrim("next")}
-            className="px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title={`Ripple delete from the playhead to the next edit${hint("rippleTrimNext")}`}
-          >
-            Trim →
-          </button>
-          <button
-            disabled={!openedProject?.undoAvailable || editing}
-            onClick={undo}
-            className="px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-            title={`Undo edit${hint("undo")}`}
-          >
-            Undo
-          </button>
-          <button
-            disabled={!openedProject?.redoAvailable || editing}
-            onClick={redo}
-            className="px-2 py-1.5 rounded-md text-xs text-studio-300 hover:bg-studio-700 disabled:opacity-40"
-            title={`Redo edit${hint("redo")}`}
-          >
-            Redo
-          </button>
-          <button
-            disabled={!openedProject || editing}
-            onClick={() => setMainTrack({ magnetic: !magnetic })}
-            aria-pressed={magnetic}
-            className={`flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs hover:bg-studio-700 disabled:opacity-40 ${
-              magnetic ? "text-teal-300" : "text-studio-400"
-            }`}
-            title={
-              magnetic
-                ? "Magnetic V1 (on): cuts close up and moved clips insert. Turn off to leave gaps and place clips anywhere."
-                : "Magnetic V1 (off): cuts leave gaps (black) and moved clips land where you drop them. Turn on to close up."
+        <ToolbarDivider />
+        <ToolbarToggle
+          on={magnetic}
+          icon={Magnet}
+          disabled={!openedProject || editing}
+          onClick={() => setMainTrack({ magnetic: !magnetic })}
+          title={
+            magnetic
+              ? "Magnetic V1 (on): cuts close up and moved clips insert. Turn off to leave gaps and place clips anywhere."
+              : "Magnetic V1 (off): cuts leave gaps (black) and moved clips land where you drop them. Turn on to close up."
+          }
+        >
+          Magnetic
+        </ToolbarToggle>
+        {cutMarkers.length > 0 && openedProject && (
+          <Button
+            variant="ghost"
+            icon={RotateCcw}
+            disabled={editing}
+            onClick={() =>
+              void tracksEdit({
+                kind: "restore",
+                // Exactly what was cut: recorder pauses never come back.
+                ranges: (openedProject.removedIntervals ?? []).map(({ startUs, endUs }) => ({ startUs, endUs })),
+                grow: "end",
+                shiftTracksAt: null,
+              })
             }
+            title={`Put all ${cutMarkers.length} cut${cutMarkers.length === 1 ? "" : "s"} back on the timeline`}
           >
-            <Magnet className="w-3.5 h-3.5" />
-            <span>Magnetic</span>
-          </button>
-          <button
-            disabled={!openedProject || editing || !linkState}
-            onClick={toggleLink}
-            aria-pressed={linkState === "unlinked"}
-            className="flex items-center space-x-1 px-2 py-1.5 rounded-md text-xs text-studio-200 hover:bg-studio-700 disabled:opacity-40"
-            title={
-              linkState === "unlinked"
-                ? `Relink: select this clip and its sound, then press this${hint("toggleLink")}`
-                : `Unlink the selected clip's sound onto audio tracks, to move or trim it on its own${hint("toggleLink")}`
-            }
-          >
-            {linkState === "unlinked" ? <Link2 className="w-3.5 h-3.5" /> : <Unlink className="w-3.5 h-3.5" />}
-            <span>{linkState === "unlinked" ? "Relink" : "Unlink"}</span>
-          </button>
-          {cutMarkers.length > 0 && openedProject && (
-            <button
-              disabled={editing}
-              onClick={() =>
-                void tracksEdit({
-                  kind: "restore",
-                  // Exactly what was cut: recorder pauses never come back.
-                  ranges: (openedProject.removedIntervals ?? []).map(({ startUs, endUs }) => ({ startUs, endUs })),
-                  grow: "end",
-                  shiftTracksAt: null,
-                })
-              }
-              className="flex items-center gap-1 px-2 py-1.5 rounded-md text-xs text-amber-300 hover:bg-studio-700 disabled:opacity-40"
-              title={`Put all ${cutMarkers.length} cut${cutMarkers.length === 1 ? "" : "s"} back on the timeline`}
-            >
-              <RotateCcw className="w-3 h-3" />
-              Restore cuts
-            </button>
-          )}
+            Restore {cutMarkers.length} cut{cutMarkers.length === 1 ? "" : "s"}
+          </Button>
+        )}
 
+        <ToolbarDivider />
+        <ToolbarToggle
+          on={selectionFocused}
+          icon={Video}
+          disabled={!openedProject || editing || !selection || !!openedProject?.shortView}
+          onClick={toggleCamFocus}
+          title={
+            selectionFocused
+              ? "Remove Cam Focus from the selection"
+              : "Make the webcam fill the frame over the selection (turns Auto Webcam on). Click a focus block on the webcam lane to select it."
+          }
+        >
+          Cam Focus
+        </ToolbarToggle>
+        <ToolbarToggle
+          on={selectionInNormalView}
+          icon={MonitorPlay}
+          disabled={!openedProject || editing || !selection || !!openedProject?.shortView}
+          onClick={toggleNormalView}
+          title={
+            selectionInNormalView
+              ? "These clips use normal view. Click to let Auto Webcam go full frame here again."
+              : "Keep the normal view (webcam bubble) over the selected clips, even when Auto Webcam would go full frame"
+          }
+        >
+          Normal view
+        </ToolbarToggle>
 
-          <button
-            disabled={!openedProject || editing || !selection || !!openedProject?.shortView}
-            onClick={toggleCamFocus}
-            aria-pressed={selectionFocused}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-40 ${
-              selectionFocused
-                ? "bg-amber-500/35 border-amber-300/70 text-amber-50"
-                : "bg-amber-500/15 hover:bg-amber-500/25 border-amber-400/30 text-amber-200"
-            }`}
-            title={
-              selectionFocused
-                ? "Remove Cam Focus from the selection"
-                : "Make the webcam fill the frame over the selection (turns Auto Webcam on). Click a focus block on the webcam lane to select it."
-            }
-          >
-            <Video className="w-3.5 h-3.5" />
-            <span>Cam Focus</span>
-          </button>
-          <button
-            disabled={!openedProject || editing || !selection || !!openedProject?.shortView}
-            onClick={toggleNormalView}
-            aria-pressed={selectionInNormalView}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-40 ${
-              selectionInNormalView
-                ? "bg-sky-500/30 border-sky-300/60 text-sky-100"
-                : "bg-sky-500/10 hover:bg-sky-500/20 border-sky-400/30 text-sky-200"
-            }`}
-            title={
-              selectionInNormalView
-                ? "These clips use normal view. Click to let Auto Webcam go full frame here again."
-                : "Keep the normal view (webcam bubble) over the selected clips, even when Auto Webcam would go full frame"
-            }
-          >
-            <MonitorPlay className="w-3.5 h-3.5" />
-            <span>Normal view</span>
-          </button>
-          {(pendingCount > 0 || zoomDiagnostics.length > 0 || persistedCount > 0) && (
-            <span className="text-[11px] text-indigo-300/80" title="Review and change zooms in the Zoom panel">
-              {pendingCount > 0
-                ? `${pendingCount} zoom suggestion${pendingCount === 1 ? "" : "s"} in the Zoom panel`
-                : persistedCount > 0
-                  ? `${persistedCount} zoom${persistedCount === 1 ? "" : "s"}`
-                  : "No auto-zoom (see the Zoom panel)"}
-            </span>
-          )}
-
-          <div className="h-4 w-px bg-studio-700 mx-1" />
-
-          <button
-            disabled={!openedProject || timelineZoom <= MIN_TIMELINE_ZOOM}
-            onClick={() => zoomTimeline(0.5)}
-            className="p-1.5 rounded hover:bg-studio-700 text-studio-400 disabled:opacity-40"
-            title={`Zoom the timeline out${hint("zoomOut")}`}
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <button
-            disabled={!openedProject || timelineZoom >= MAX_TIMELINE_ZOOM}
-            onClick={() => zoomTimeline(2)}
-            className="p-1.5 rounded hover:bg-studio-700 text-studio-400 disabled:opacity-40"
-            title={`Zoom the timeline in${hint("zoomIn")}`}
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-        </div>
+        <span className="flex-1 min-w-2" />
+        {(pendingCount > 0 || zoomDiagnostics.length > 0 || persistedCount > 0) && (
+          <Badge tone="zoom" className="hidden xl:inline-flex" title="Review and change zooms on the Zooms track or in the Zoom panel">
+            {pendingCount > 0
+              ? `${pendingCount} zoom suggestion${pendingCount === 1 ? "" : "s"}`
+              : persistedCount > 0
+                ? `${persistedCount} zoom${persistedCount === 1 ? "" : "s"}`
+                : "No auto-zoom"}
+          </Badge>
+        )}
+        <ToolbarDivider />
+        <IconButton
+          icon={ZoomOut}
+          label={`Zoom the timeline out${hint("zoomOut")}`}
+          disabled={!openedProject || timelineZoom <= MIN_TIMELINE_ZOOM}
+          onClick={() => zoomTimeline(0.5)}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!openedProject || timelineZoom <= MIN_TIMELINE_ZOOM}
+          onClick={() => setTimelineZoom(MIN_TIMELINE_ZOOM)}
+          title="Fit the whole video in view"
+        >
+          Fit
+        </Button>
+        <IconButton
+          icon={ZoomIn}
+          label={`Zoom the timeline in${hint("zoomIn")}`}
+          disabled={!openedProject || timelineZoom >= MAX_TIMELINE_ZOOM}
+          onClick={() => zoomTimeline(2)}
+        />
       </div>
 
       {openedProject && (range || editError) && (
@@ -2295,27 +2321,27 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           {editError && (
             <div
               role="alert"
-              className="pointer-events-auto flex items-start gap-2 max-w-md rounded-lg border border-rose-900/60 bg-studio-950/95 px-3 py-2 text-xs text-rose-200 shadow-lg"
+              className="pointer-events-auto flex items-start gap-2 max-w-md rounded-panel border border-danger/40 bg-studio-850 px-3 py-2 text-label text-danger-fg shadow-popover"
             >
               <span>{editError}</span>
               <button
                 aria-label="Dismiss"
                 onClick={() => setEditError(undefined)}
-                className="text-rose-300/70 hover:text-white"
+                className="text-danger-fg/70 hover:text-studio-100"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
           {range && (
-            <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-studio-700 bg-studio-950/95 pl-3 pr-1 py-1 text-xs text-studio-200 shadow-lg">
-              <span className="font-mono text-studio-300 mr-1">
+            <div className="pointer-events-auto flex items-center gap-1 rounded-panel border border-studio-700 bg-studio-850 pl-3 pr-1 py-1 text-label text-studio-200 shadow-popover">
+              <span className="font-mono tabular-nums text-studio-300 mr-1">
                 {((range.endUs - range.startUs) / 1e6).toFixed(2)}s range
               </span>
               <button
                 disabled={editing}
                 onClick={() => void editRange(false)}
-                className="px-2 py-0.5 rounded text-rose-300 hover:bg-studio-800 disabled:opacity-40"
+                className="h-7 px-2 rounded-control text-danger-fg hover:bg-danger/15 disabled:opacity-40"
                 title={`Cut the range and close the gap${hint("deleteSelection")}`}
               >
                 Delete
@@ -2323,7 +2349,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               <button
                 disabled={editing}
                 onClick={() => void editRange(true)}
-                className="px-2 py-0.5 rounded text-teal-300 hover:bg-studio-800 disabled:opacity-40"
+                className="h-7 px-2 rounded-control text-accent-fg hover:bg-accent/15 disabled:opacity-40"
                 title="Cut everything outside the range"
               >
                 Keep only
@@ -2331,7 +2357,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
               <button
                 aria-label="Clear range"
                 onClick={() => setRange(null)}
-                className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
+                className="h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-800"
                 title={`Clear the range${hint("deselect")}`}
               >
                 <X className="w-3 h-3" />
@@ -2341,110 +2367,106 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
         </div>
       )}
 
-      {/* Multi-Track Workspace */}      {/* Multi-Track Workspace */}
-      <div className="flex-1 flex min-h-0 overflow-x-hidden overflow-y-auto">
-        {/* Left Track Headers */}
-        <div className="w-56 border-r border-studio-800 bg-studio-900 shrink-0 flex flex-col">
-          {/* Header spacer aligned with time ruler */}
-          <div className="h-7 border-b border-studio-800 px-3 flex items-center text-[10px] font-semibold tracking-wider uppercase text-studio-400">
+      {/* Tracks: headers on the left, lanes on the right */}
+      {/* Scrolls up and down; both columns grow to the full height of the tracks, so a short
+          timeline panel scrolls the lanes with their headers instead of cutting them off. */}
+      <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
+      <div className="flex min-h-full">
+        {/* Track headers, pinned beside their lanes (each as tall as its lane) */}
+        <div className="w-64 shrink-0 flex flex-col border-r border-studio-800 bg-studio-900">
+          <div className="h-8 shrink-0 border-b border-studio-800 px-3 flex items-center text-meta font-semibold uppercase tracking-wide text-studio-500">
             Tracks
           </div>
 
           <div className="flex-1 space-y-2 py-2">
-            {captionTrack.trackId && (
-              <div
-                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
-                style={{ height: trackHeight("lane:captions", OVERLAY_ROW_PX) }}
-              >
-                {resizeGrip("lane:captions", "the captions track", OVERLAY_ROW_PX)}
-                <div className="flex items-center gap-1.5 truncate">
-                  <Captions className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  <div className="truncate">
-                    <div className="text-xs font-medium text-studio-200">Captions</div>
-                    <div className="text-[10px] font-mono text-studio-400">
-                      {openedProject?.captions?.enabled ? `${captionTrack.cues.length} shown` : "off in export"}
-                    </div>
-                  </div>
-                </div>
-                {cueAtSelection && (
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      onClick={splitCue}
-                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700"
-                      title={`Split the caption at the playhead${hint("split")}`}
-                    >
+            {captionTrack.trackId &&
+              trackHeaderRow({
+                key: "captions",
+                height: trackHeight("lane:captions", OVERLAY_ROW_PX),
+                tone: "caption",
+                icon: Captions,
+                name: "Captions",
+                meta: openedProject?.captions?.enabled ? `${captionTrack.cues.length} shown` : "Off in export",
+                grip: resizeGrip("lane:captions", "the captions track", OVERLAY_ROW_PX),
+                actions: cueAtSelection && (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={splitCue} title={`Split the caption at the playhead${hint("split")}`}>
                       Split
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={mergeCue}
                       disabled={selectedCue === 0}
-                      className="px-1 py-0.5 rounded text-[10px] text-studio-300 hover:bg-studio-700 disabled:opacity-40"
                       title="Join this caption to the one before it"
                     >
                       Merge
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={hideCue}
-                      className="px-1 py-0.5 rounded text-[10px] text-rose-300 hover:bg-studio-700"
+                      className="text-danger-fg hover:!bg-danger/15"
                       title={`Hide this caption (the sound stays)${hint("deleteSelection")}`}
                     >
                       Hide
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
+                    </Button>
+                  </>
+                ),
+              })}
             {zoomHeader}
             {addTrackButton(false)}
             {videoAbove.map(renderTrackHeader)}
             {mainHeader}
-            {tracks.map((track) => (
-              <div
-                key={track.id}
-                className="relative px-3 flex items-center justify-between border-b border-studio-800/40 hover:bg-studio-850/50"
-                style={{ height: trackHeight(track.trackType) }}
-              >
-                {resizeGrip(track.trackType, `the ${track.name} track`)}
-                <div className="truncate">
-                  <div className="text-xs font-medium text-studio-200 truncate">{track.name}</div>
-                  <div className="text-[10px] uppercase font-mono text-studio-400">
-                    {track.trackType}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-0.5">
-                  {roleFlag(track.id)}
-                  <TrackHeaderButtons track={track} />
-                </div>
-              </div>
-            ))}
+            {tracks.map((track) => {
+              const kind = RECORDING_TRACK[track.trackType];
+              // "3/4 segments available": only worth showing when some are missing.
+              const segments = /(\d+)\/(\d+) segments/.exec(track.name);
+              const missing = segments && Number(segments[1]) < Number(segments[2]);
+              return trackHeaderRow({
+                key: track.id,
+                height: trackHeight(track.trackType),
+                tone: kind.tone,
+                icon: kind.icon,
+                name: kind.label,
+                meta: missing ? (
+                  <span className="text-suggest-fg">{`${segments![1]} of ${segments![2]} segments available`}</span>
+                ) : undefined,
+                title: track.name,
+                grip: resizeGrip(track.trackType, `the ${track.name} track`),
+                actions: (
+                  <>
+                    {roleFlag(track.id)}
+                    <TrackHeaderButtons track={track} />
+                  </>
+                ),
+              });
+            })}
             {videoBelow.map(renderTrackHeader)}
-            {Array.from({ length: linkedSoundLanes }, (_, stream) => (
-              <div
-                key={`linked-${stream}`}
-                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
-                style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}
-                title="The sound of the imported clips on V1. Select a clip and press U to unlink it onto an audio track."
-              >
-                {resizeGrip("lane:sound", "sound lanes", LINKED_SOUND_ROW_PX)}
-                <span className="text-[10px] font-mono uppercase text-studio-400 truncate">V1 sound {stream + 1}</span>
-                {roleFlag(`main-sound-${stream + 1}`)}
-              </div>
-            ))}
-            {trackSoundLanes.map(({ track, stream }) => (
-              <div
-                key={`tsound-${track.id}-${stream}`}
-                className="relative px-3 flex items-center justify-between border-b border-studio-800/40"
-                style={{ height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX) }}
-                title={`The sound of the clips on ${trackLabel(overlayTracks, track.id)}. Select a clip and press U to unlink it.`}
-              >
-                {resizeGrip("lane:sound", "sound lanes", LINKED_SOUND_ROW_PX)}
-                <span className="text-[10px] font-mono uppercase text-studio-400 truncate">
-                  {trackLabel(overlayTracks, track.id)} sound {stream + 1}
-                </span>
-                {roleFlag(`${track.id}-sound-${stream + 1}`)}
-              </div>
-            ))}
+            {Array.from({ length: linkedSoundLanes }, (_, stream) =>
+              trackHeaderRow({
+                key: `linked-${stream}`,
+                height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX),
+                tone: "audio",
+                icon: AudioLines,
+                name: `V1 sound ${stream + 1}`,
+                title: "The sound of the imported clips on V1. Select a clip and press U to unlink it onto an audio track.",
+                grip: resizeGrip("lane:sound", "sound lanes", LINKED_SOUND_ROW_PX),
+                actions: roleFlag(`main-sound-${stream + 1}`),
+              }),
+            )}
+            {trackSoundLanes.map(({ track, stream }) =>
+              trackHeaderRow({
+                key: `tsound-${track.id}-${stream}`,
+                height: trackHeight("lane:sound", LINKED_SOUND_ROW_PX),
+                tone: "audio",
+                icon: AudioLines,
+                name: `${trackLabel(overlayTracks, track.id)} sound ${stream + 1}`,
+                title: `The sound of the clips on ${trackLabel(overlayTracks, track.id)}. Select a clip and press U to unlink it.`,
+                grip: resizeGrip("lane:sound", "sound lanes", LINKED_SOUND_ROW_PX),
+                actions: roleFlag(`${track.id}-sound-${stream + 1}`),
+              }),
+            )}
             {audioTracks.map(renderTrackHeader)}
             {addTrackButton(true)}
           </div>
@@ -2455,7 +2477,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           <div className="flex flex-col h-full min-w-full" style={{ width: `${timelineZoom * 100}%` }}>
           {/* Time Ruler: drag to scrub */}
           <div
-            className="h-7 shrink-0 border-b border-studio-800 bg-studio-850/70 relative cursor-ew-resize overflow-hidden"
+            className="h-8 shrink-0 border-b border-studio-800 bg-studio-900 relative cursor-ew-resize overflow-hidden"
             onPointerDown={onRulerPointerDown}
             onPointerMove={onRulerPointerMove}
             onPointerUp={onRulerPointerUp}
@@ -2464,7 +2486,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           >
             {range && durationUs > 0 && (
               <div
-                className="absolute top-0 bottom-0 bg-sky-400/25 border-x border-sky-300 pointer-events-none"
+                className="absolute top-0 bottom-0 bg-accent/25 border-x border-accent-hover pointer-events-none"
                 style={{
                   left: `${(range.startUs / durationUs) * 100}%`,
                   width: `${((range.endUs - range.startUs) / durationUs) * 100}%`,
@@ -2474,7 +2496,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {rulerTicks.map((tickUs) => (
               <div
                 key={tickUs}
-                className="absolute top-0 bottom-0 border-l border-studio-700 pl-1 text-[10px] font-mono text-studio-500 pointer-events-none"
+                className="absolute top-3 bottom-0 border-l border-studio-700 pl-1.5 -mt-3 pt-2 text-meta font-mono tabular-nums text-studio-400 pointer-events-none"
                 style={{ left: `${(tickUs / durationUs) * 100}%` }}
               >
                 {formatRulerLabel(tickUs, rulerStep)}
@@ -2489,16 +2511,18 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                   style={{ left: `${(atUs / durationUs) * 100}%` }}
                   title={chapter.title}
                 >
-                  <div className="h-full border-l border-violet-400/80" />
-                  <span className="absolute top-0 left-0.5 max-w-[160px] truncate rounded-sm bg-violet-900/80 px-1 text-[9px] leading-[14px] text-violet-100">
+                  <div className="h-full border-l border-studio-300/70" />
+                  <span className="absolute top-0.5 left-1 max-w-[180px] truncate rounded bg-studio-700 px-1.5 text-meta text-studio-100">
                     {chapter.title}
                   </span>
                 </div>
               ))}
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-indigo-500 pointer-events-none"
+              className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-accent-hover pointer-events-none"
               style={{ left: `${progress * 100}%` }}
-            />
+            >
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 h-2.5 w-3 rounded-b-sm bg-accent-hover" />
+            </div>
           </div>
 
           {/* Interactive Track Area */}
@@ -2512,16 +2536,13 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             onDrop={onMediaDrop}
             onClick={handleTimelineClick}
             onPointerDown={onTrackPointerDown}
-            className="flex-1 relative cursor-pointer py-2 space-y-2"
+            className="flex-1 relative cursor-pointer py-2 space-y-2 bg-studio-950/40"
           >
             {/* Playhead Vertical Line */}
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-indigo-500 z-30 pointer-events-none"
+              className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-accent-hover z-30 pointer-events-none shadow-[0_0_6px_rgb(var(--accent-hover)/0.5)]"
               style={{ left: `${progress * 100}%` }}
-            >
-              {/* Playhead Top Scrubber Cap */}
-              <div className="w-3 h-3 bg-indigo-500 rounded-sm transform -translate-x-1/2 -top-1 absolute rotate-45 shadow-md shadow-indigo-500/50" />
-            </div>
+            />
             {/* Playhead grab strip: drag the playhead itself without touching the selection. */}
             <div
               role="slider"
@@ -2565,7 +2586,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {/* Range (Shift+drag on the ruler, or mark in/out) */}
             {range && durationUs > 0 && (
               <div
-                className="absolute top-0 bottom-0 bg-sky-300/[0.07] border-x border-sky-300/60 z-10 pointer-events-none"
+                className="absolute top-0 bottom-0 bg-accent/[0.08] border-x border-accent-hover/60 z-10 pointer-events-none"
                 style={{
                   left: `${(range.startUs / durationUs) * 100}%`,
                   width: `${((range.endUs - range.startUs) / durationUs) * 100}%`,
@@ -2577,7 +2598,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {clipMove?.active && durationUs > 0 && (
               <>
                 <div
-                  className="absolute top-0 bottom-0 bg-teal-300/10 border-x border-dashed border-teal-200/70 z-30 pointer-events-none"
+                  className="absolute top-0 bottom-0 bg-accent/10 border-x border-dashed border-accent-fg/70 z-30 pointer-events-none"
                   style={{
                     left: `${(clipMove.range.startUs / durationUs) * 100}%`,
                     width: `${((clipMove.range.endUs - clipMove.range.startUs) / durationUs) * 100}%`,
@@ -2585,10 +2606,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 />
                 {clipMove.targetUs !== null && (
                   <div
-                    className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.8)] z-40 pointer-events-none"
+                    className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-accent-fg shadow-[0_0_8px_rgb(var(--accent-fg)/0.8)] z-40 pointer-events-none"
                     style={{ left: `${(clipMove.targetUs / durationUs) * 100}%` }}
                   >
-                    <span className="absolute -top-0.5 left-1.5 text-[9px] font-mono text-amber-100 bg-studio-950/90 rounded px-1 whitespace-nowrap">
+                    <span className="absolute -top-0.5 left-1.5 text-meta font-medium text-accent-fg bg-studio-950 border border-accent/50 rounded px-1.5 whitespace-nowrap">
                       {magnetic ? "Move here" : "Place here"}
                     </span>
                   </div>
@@ -2598,10 +2619,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
             {overlayDrag?.active && overlayDrag.mainUs !== null && durationUs > 0 && (
               <div
-                className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-fuchsia-300 shadow-[0_0_8px_rgba(240,171,252,0.8)] z-40 pointer-events-none"
+                className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-accent-fg shadow-[0_0_8px_rgb(var(--accent-fg)/0.8)] z-40 pointer-events-none"
                 style={{ left: `${(overlayDrag.mainUs / durationUs) * 100}%` }}
               >
-                <span className="absolute -top-0.5 left-1.5 text-[9px] font-mono text-fuchsia-50 bg-studio-950/90 rounded px-1 whitespace-nowrap">
+                <span className="absolute -top-0.5 left-1.5 text-meta font-medium text-accent-fg bg-studio-950 border border-accent/50 rounded px-1.5 whitespace-nowrap">
                   Insert into V1
                 </span>
               </div>
@@ -2609,10 +2630,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
 
             {mediaDropUs !== null && durationUs > 0 && (
               <div
-                className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-fuchsia-300 shadow-[0_0_8px_rgba(240,171,252,0.8)] z-40 pointer-events-none"
+                className="absolute top-0 bottom-0 w-1 -translate-x-1/2 bg-accent-fg shadow-[0_0_8px_rgb(var(--accent-fg)/0.8)] z-40 pointer-events-none"
                 style={{ left: `${(mediaDropUs / durationUs) * 100}%` }}
               >
-                <span className="absolute -top-0.5 left-1.5 text-[9px] font-mono text-fuchsia-50 bg-studio-950/90 rounded px-1 whitespace-nowrap">
+                <span className="absolute -top-0.5 left-1.5 text-meta font-medium text-accent-fg bg-studio-950 border border-accent/50 rounded px-1.5 whitespace-nowrap">
                   Insert here
                 </span>
               </div>
@@ -2631,9 +2652,9 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
             {videoAbove.map(renderTrackLane)}
 
             {/* Clip lane (V1): edges come from cuts and splits; markers restore cuts */}
-            <div className="h-8 relative" data-track-row="main">
+            <div className="relative rounded-md bg-studio-850/30" style={{ height: trackHeight("lane:main", MAIN_ROW_PX) }} data-track-row="main">
               {durationUs === 0 && (
-                <div className="absolute inset-0 flex items-center rounded border border-dashed border-studio-700 px-3 text-[11px] text-studio-500 pointer-events-none">
+                <div className="absolute inset-0 flex items-center rounded-md border border-dashed border-studio-600 px-3 text-label text-studio-400 pointer-events-none">
                   Drag media from the Media panel here to start the main video (V1)
                 </div>
               )}
@@ -2643,14 +2664,14 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 return (
                   <button
                     key={`${clip.sourceStartUs}-${index}`}
-                    className={`absolute top-2.5 bottom-0 rounded border text-[9px] font-mono text-left px-1 truncate ${
+                    className={`absolute top-2.5 bottom-0.5 rounded-control border text-meta font-medium text-left px-1.5 truncate ${
                       clip.media
                         ? selected
-                          ? "bg-fuchsia-500/45 border-white text-white ring-1 ring-white/70"
-                          : "bg-fuchsia-500/20 border-fuchsia-300/50 text-fuchsia-100 hover:bg-fuchsia-500/30"
+                          ? "bg-video/55 border-accent-fg text-white ring-2 ring-accent-hover/70"
+                          : "bg-video/40 border-video-fg/50 text-white hover:bg-video/50"
                         : selected
-                          ? "bg-teal-500/45 border-white text-white ring-1 ring-white/70"
-                          : "bg-teal-500/15 border-teal-400/40 text-teal-200 hover:bg-teal-500/25"
+                          ? "bg-video/45 border-accent-fg text-white ring-2 ring-accent-hover/70"
+                          : "bg-video/25 border-video/60 text-video-fg hover:bg-video/35"
                     }`}
                     style={{
                       left: `${(clip.startUs / durationUs) * 100}%`,
@@ -2660,8 +2681,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     onClick={(event) => onClipClick(event, clip)}
                     {...clipMoveHandlers(clip)}
                   >
-                    <Film className="inline w-2.5 h-2.5 mr-0.5 -mt-px opacity-70" aria-label="Video" />
-                    {clip.audioUnlinked && <Unlink className="inline w-2.5 h-2.5 mr-0.5 -mt-px" aria-label="Sound unlinked" />}
+                    <Film className="inline w-3.5 h-3.5 mr-1 -mt-0.5 opacity-75" aria-label="Video" />
+                    {clip.audioUnlinked && <Unlink className="inline w-3.5 h-3.5 mr-1 -mt-0.5" aria-label="Sound unlinked" />}
                     {clip.media ? `${index + 1} · ${mediaName(clip)}` : index + 1}
                   </button>
                 );
@@ -2675,7 +2696,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                       key={`${side}-${clip.sourceStartUs}-${index}`}
                       role="separator"
                       aria-label={`Trim clip ${index + 1} ${side}`}
-                      className={`absolute top-2.5 bottom-0 w-1.5 z-30 cursor-ew-resize hover:bg-teal-200/70 ${
+                      className={`absolute top-2.5 bottom-0.5 w-2 z-30 cursor-ew-resize hover:bg-accent-fg/70 ${
                         side === "start" ? "rounded-l" : "-translate-x-full rounded-r"
                       }`}
                       style={{ left: `${edgePct}%` }}
@@ -2697,10 +2718,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 const toUs = Math.max(edgeUs, edgeUs + deltaUs);
                 return (
                   <div
-                    className={`absolute top-2.5 bottom-0 z-20 pointer-events-none rounded border flex items-center justify-center text-[9px] font-mono ${
+                    className={`absolute top-2.5 bottom-0.5 z-20 pointer-events-none rounded-control border flex items-center justify-center text-meta font-mono tabular-nums ${
                       trimming
-                        ? "bg-rose-500/40 border-rose-300 text-rose-50"
-                        : "bg-teal-300/30 border-dashed border-teal-100 text-teal-50"
+                        ? "bg-danger/40 border-danger text-white"
+                        : "bg-accent/30 border-dashed border-accent-fg text-white"
                     }`}
                     style={{
                       left: `${(Math.max(0, fromUs) / durationUs) * 100}%`,
@@ -2730,8 +2751,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     void restoreCut(marker.sourceStartUs, marker.sourceEndUs, marker.grow, marker.editedUs);
                   }}
                 >
-                  <span className="w-2.5 h-2 shrink-0 rounded-sm bg-rose-400 group-hover:bg-rose-200" />
-                  <span className="w-0.5 flex-1 bg-rose-400 group-hover:bg-rose-200" />
+                  <span className="w-3 h-2 shrink-0 rounded-sm bg-danger group-hover:bg-danger-fg" />
+                  <span className="w-0.5 flex-1 bg-danger group-hover:bg-danger-fg" />
                 </button>
               ))}
             </div>
@@ -2750,13 +2771,13 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                   return (
                     <div
                       key={`${clip.sourceStartUs}-${index}`}
-                      className={`absolute top-0 bottom-0 rounded-md border overflow-hidden flex items-center ${
+                      className={`absolute top-0 bottom-0 rounded-control border overflow-hidden flex items-center ${
                         clip.media
-                          ? "bg-fuchsia-500/15 border-fuchsia-300/40 hover:border-fuchsia-200/70"
+                          ? "bg-video/20 border-video-fg/40 hover:border-video-fg/70"
                           : audio
-                            ? "bg-studio-800/70 border-studio-700 hover:border-studio-500"
-                            : "bg-indigo-500/15 border-indigo-400/30 hover:border-indigo-300/60"
-                      } ${selected ? "!border-white ring-1 ring-white/70" : ""}`}
+                            ? "bg-audio/10 border-audio/35 hover:border-audio/70"
+                            : "bg-video/20 border-video/45 hover:border-video-fg/70"
+                      } ${selected ? "!border-accent-fg ring-2 ring-accent-hover/70" : ""}`}
                       style={{
                         left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
                         width: `max(1px, calc(${((clip.endUs - clip.startUs) / durationUs) * 100}% - 2px))`,
@@ -2768,7 +2789,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                       {clip.media ? (
                         // Imported media replaces the recording here: name it on the screen lane.
                         track.trackType === "screen" && (
-                          <span className="px-1.5 text-[9px] font-mono text-fuchsia-100/80 truncate pointer-events-none">
+                          <span className="px-2 text-meta font-medium text-video-fg truncate pointer-events-none">
                             {mediaName(clip)}
                           </span>
                         )
@@ -2779,14 +2800,15 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                             startUs={clip.startUs}
                             endUs={clip.endUs}
                             currentTimeUs={currentTimeUs}
-                            activeBarColor={track.trackType === "mic" ? "#10b981" : "#6366f1"}
+                            activeBarColor={track.trackType === "mic" ? "#10b981" : "#0d9e74"}
+                            barColor={track.trackType === "mic" ? "#17634d" : "#134d40"}
                             className="w-full h-full"
                             heightPx={trackHeight(track.trackType)}
                           />
                         </div>
                       ) : (
                         !audio && (
-                          <span className="px-1.5 text-[9px] font-mono text-indigo-200/70 truncate pointer-events-none">
+                          <span className="px-2 text-meta text-video-fg/80 truncate pointer-events-none">
                             {index + 1}
                           </span>
                         )
@@ -2796,11 +2818,11 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                 })}
 
                 {track.waveform && track.waveform.buckets.length === 0 && (
-                  <span className="absolute inset-0 flex items-center px-4 text-xs text-studio-400 pointer-events-none">Waveform unavailable</span>
+                  <span className="absolute inset-0 flex items-center px-4 text-meta text-studio-400 pointer-events-none">Waveform unavailable</span>
                 )}
 
                 {!track.waveform && (track.trackType === "mic" || track.trackType === "system") && (
-                  <span className="absolute inset-0 flex items-center px-4 text-xs text-studio-400 pointer-events-none">Loading waveform…</span>
+                  <span className="absolute inset-0 flex items-center px-4 text-meta text-studio-400 pointer-events-none">Loading waveform…</span>
                 )}
 
                 {/* Auto webcam layout: where the webcam fills the frame */}
@@ -2815,9 +2837,9 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                           event.stopPropagation();
                           selectRange(range.startUs, range.endUs);
                         }}
-                        className={`absolute top-1 bottom-1 rounded-sm border z-10 cursor-pointer hover:ring-1 hover:ring-amber-200 ${
+                        className={`absolute top-1 bottom-1 rounded-control border z-10 cursor-pointer hover:ring-2 hover:ring-zoom-fg/70 ${
                           segment.enabled && openedProject?.webcamFocus?.enabled
-                            ? "bg-amber-400/30 border-amber-300/70"
+                            ? "bg-zoom/30 border-zoom/80"
                             : "border-dashed border-studio-500/60"
                         }`}
                         style={{
@@ -2835,14 +2857,14 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     (range.editedRanges ?? []).map((edited, index) => (
                       <div
                         key={`normal-${range.sourceStartUs}-${index}`}
-                        className="absolute top-1 bottom-1 rounded-sm border border-sky-300/70 bg-sky-500/20 z-10 pointer-events-none flex items-center justify-center"
+                        className="absolute top-1 bottom-1 rounded-control border border-studio-300/60 bg-studio-600/40 z-10 pointer-events-none flex items-center justify-center"
                         style={{
                           left: `${(edited.startUs / durationUs) * 100}%`,
                           width: `${((edited.endUs - edited.startUs) / durationUs) * 100}%`,
                         }}
                         title="Normal view: the webcam stays in its bubble here"
                       >
-                        <span className="text-[9px] font-mono text-sky-100 truncate px-1">Normal</span>
+                        <span className="text-meta text-studio-100 truncate px-1">Normal view</span>
                       </div>
                     )),
                   )}
@@ -2856,13 +2878,13 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     return (
                       <div
                         key={cut.id}
-                        className="absolute top-0 bottom-0 bg-rose-950/70 border-x border-rose-500/50 backdrop-blur-[1px] flex items-center justify-center z-10 pointer-events-none"
+                        className="absolute top-0 bottom-0 bg-danger/20 border-x border-danger/60 flex items-center justify-center z-10 pointer-events-none"
                         style={{
                           left: `${cutStartProg * 100}%`,
                           width: `${cutWidthProg * 100}%`,
                         }}
                       >
-                        <span className="text-[9px] font-mono text-rose-300 font-semibold uppercase tracking-wider">
+                        <span className="text-meta text-danger-fg font-semibold uppercase tracking-wide">
                           CUT
                         </span>
                       </div>
@@ -2886,10 +2908,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     return (
                       <div
                         key={`${clip.sourceStartUs}-${index}`}
-                        className={`absolute top-0.5 bottom-0.5 rounded border overflow-hidden flex items-center ${
+                        className={`absolute top-0.5 bottom-0.5 rounded-control border overflow-hidden flex items-center ${
                           selected
-                            ? "bg-emerald-500/30 border-white ring-1 ring-white/70"
-                            : "bg-emerald-500/15 border-emerald-300/40 hover:border-emerald-200/70"
+                            ? "bg-audio/30 border-accent-fg ring-2 ring-accent-hover/70"
+                            : "bg-audio/15 border-audio/40 hover:border-audio-fg/70"
                         }`}
                         style={{
                           left: `calc(${(clip.startUs / durationUs) * 100}% + 1px)`,
@@ -2900,8 +2922,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                         {...clipMoveHandlers(clip)}
                       >
                         {renderSoundWave(clip.media, stream, clip.sourceStartUs, clip.endUs - clip.startUs, clip.startUs)}
-                        <span className="relative flex items-center gap-1 px-1.5 text-[9px] font-mono text-emerald-50/80 truncate pointer-events-none">
-                          <AudioLines className="w-2.5 h-2.5 shrink-0" aria-label="Audio" />
+                        <span className="relative flex items-center gap-1.5 px-2 text-meta text-white/85 truncate pointer-events-none">
+                          <AudioLines className="w-3.5 h-3.5 shrink-0" aria-label="Audio" />
                           {audioStreamName(asset, stream)}
                         </span>
                       </div>
@@ -2921,10 +2943,10 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                     return (
                       <div
                         key={clip.id}
-                        className={`absolute top-0.5 bottom-0.5 rounded border overflow-hidden flex items-center cursor-pointer ${
+                        className={`absolute top-0.5 bottom-0.5 rounded-control border overflow-hidden flex items-center cursor-pointer ${
                           selected
-                            ? "bg-emerald-500/30 border-white ring-1 ring-white/70"
-                            : "bg-emerald-500/15 border-emerald-300/40 hover:border-emerald-200/70"
+                            ? "bg-audio/30 border-accent-fg ring-2 ring-accent-hover/70"
+                            : "bg-audio/15 border-audio/40 hover:border-audio-fg/70"
                         }`}
                         style={{
                           left: `${(clip.startUs / durationUs) * 100}%`,
@@ -2935,8 +2957,8 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
                         onClick={(event) => onOverlayClipClick(event, clip)}
                       >
                         {renderSoundWave(clip.assetId, stream, clip.inUs, clip.durationUs, clip.startUs)}
-                        <span className="relative flex items-center gap-1 px-1.5 text-[9px] font-mono text-emerald-50/80 truncate pointer-events-none">
-                          <AudioLines className="w-2.5 h-2.5 shrink-0" aria-label="Audio" />
+                        <span className="relative flex items-center gap-1.5 px-2 text-meta text-white/85 truncate pointer-events-none">
+                          <AudioLines className="w-3.5 h-3.5 shrink-0" aria-label="Audio" />
                           {audioStreamName(asset, stream)}
                         </span>
                       </div>
@@ -2952,6 +2974,7 @@ export const TimelineStudio: React.FC<{ scope?: { startUs: number; endUs: number
           </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

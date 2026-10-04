@@ -45,9 +45,10 @@ export const TrackHeaderButtons: React.FC<{ track: Track }> = ({ track }) => {
       }
     });
 
-  const button = "p-1 rounded text-studio-400 hover:text-white disabled:opacity-40";
+  const button =
+    "h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-800 disabled:opacity-40 transition-colors";
   return (
-    <div className="flex items-center space-x-1" title={error}>
+    <div className="flex items-center gap-0.5" title={error}>
       {isAudioTrack(track.trackType) && (
         <button
           type="button"
@@ -56,9 +57,9 @@ export const TrackHeaderButtons: React.FC<{ track: Track }> = ({ track }) => {
           aria-label={track.muted ? `Unmute ${track.id}` : `Mute ${track.id}`}
           title={error ?? (track.muted ? "Unmute this track" : "Mute this track in preview and export")}
           onClick={() => void run(() => saveTrackMix({ [track.id]: { muted: !track.muted } }))}
-          className={`${button} ${track.muted ? "text-rose-300" : ""}`}
+          className={`${button} ${track.muted ? "!text-danger-fg" : ""}`}
         >
-          {track.muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+          {track.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
       )}
       {track.trackType === "webcam" && (
@@ -69,9 +70,9 @@ export const TrackHeaderButtons: React.FC<{ track: Track }> = ({ track }) => {
           aria-label={webcamVisible ? "Hide webcam" : "Show webcam"}
           title={error ?? (webcamVisible ? "Hide the webcam in preview and export" : "Show the webcam")}
           onClick={() => void setWebcamVisible(!webcamVisible)}
-          className={`${button} ${webcamVisible ? "" : "text-rose-300"}`}
+          className={`${button} ${webcamVisible ? "" : "!text-danger-fg"}`}
         >
-          {webcamVisible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+          {webcamVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
         </button>
       )}
       {error && <span role="alert" className="sr-only">{error}</span>}

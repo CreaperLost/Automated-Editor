@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   DockviewDefaultTab,
   DockviewReact,
@@ -16,7 +16,15 @@ import { ChaptersPanel } from "../chapters/ChaptersPanel";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { TranscriptPanel } from "../transcript/TranscriptPanel";
 import { StagePanel } from "./StagePanel";
-import { restoreLayout, saveLayout, setActiveDockApi, type DockPanelId } from "./dockLayout";
+import {
+  restoreLayout,
+  saveLayout,
+  setActiveDockApi,
+  setActiveWorkspace,
+  type DockPanelId,
+} from "./dockLayout";
+import { useWorkspaceStore } from "../../stores/workspaceStore";
+import type { DockviewApi } from "dockview-react";
 
 const THEME: DockviewTheme = {
   name: "aeroedits",
@@ -43,15 +51,34 @@ const Tab: React.FC<IDockviewPanelHeaderProps> = (props) => <DockviewDefaultTab 
 /// The editor workspace. Drag a panel's tab onto another panel's edge to dock it there, or
 /// onto its middle to share a tab group; drag the gaps between panels to resize them.
 export const DockWorkspace: React.FC = () => {
+  const workspace = useWorkspaceStore((s) => s.workspace);
+  const apiRef = useRef<DockviewApi | null>(null);
+  // The workspace whose layout is showing, and a pending save of it.
+  const shown = useRef(workspace);
+  const saveTimer = useRef(0);
+
   useEffect(() => () => setActiveDockApi(null), []);
 
+  // Switching workspace: keep this one's arrangement, then show the other's.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api || shown.current === workspace) return;
+    window.clearTimeout(saveTimer.current);
+    saveLayout(api, shown.current);
+    shown.current = workspace;
+    setActiveWorkspace(workspace);
+    restoreLayout(api, workspace);
+  }, [workspace]);
+
   const onReady = (event: DockviewReadyEvent) => {
-    restoreLayout(event.api);
+    apiRef.current = event.api;
+    setActiveWorkspace(shown.current);
+    restoreLayout(event.api, shown.current);
     setActiveDockApi(event.api);
-    let timer = 0;
     event.api.onDidLayoutChange(() => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => saveLayout(event.api), 250);
+      window.clearTimeout(saveTimer.current);
+      const target = shown.current;
+      saveTimer.current = window.setTimeout(() => saveLayout(event.api, target), 250);
     });
   };
 

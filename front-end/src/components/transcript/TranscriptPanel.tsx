@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles, X } from "lucide-react";
+import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import {
@@ -11,6 +11,7 @@ import {
 } from "../../lib/types";
 import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
 import { transcribableSounds } from "../../lib/trackUtils";
+import { Badge, Button, IconButton, Notice, Segmented, cn } from "../ui";
 
 /** The recording's audio tracks and imported sound, speech first. */
 function audioTracks(project: OpenedProject | null) {
@@ -350,11 +351,15 @@ export const TranscriptPanel: React.FC = () => {
 
   if (!openedProject) return null;
 
+  const chosen = selectedIds.map((id) => words[wordIndex.get(id) ?? -1]).filter(Boolean);
+  const chosenHidden = chosen.length > 0 && chosen.every((w) => w.captionHidden);
+  const firstChosen = chosen[0];
+
   return (
-    <div className="h-full flex flex-col min-h-0 bg-studio-900/40 border border-studio-800 rounded-xl text-xs">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-studio-800">
-        <AudioLines className="w-3.5 h-3.5 text-teal-400" />
-        <span className="font-semibold text-studio-200">Transcript</span>
+    <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label">
+      <div className="shrink-0 flex items-center gap-2 h-11 px-3 border-b border-studio-800">
+        <AudioLines className="w-4 h-4 text-studio-400 shrink-0" aria-hidden />
+        <span className="font-semibold text-studio-100">Transcript</span>
         {tracks.length > 1 && (
           <select
             aria-label="Transcript track"
@@ -363,7 +368,7 @@ export const TranscriptPanel: React.FC = () => {
               setTrackId(e.target.value);
               setSelection(null);
             }}
-            className="min-w-0 max-w-[15rem] truncate bg-studio-800 text-studio-100 text-xs rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-teal-500"
+            className="ui-field !h-control-sm !text-meta !px-2 min-w-0 max-w-[14rem] truncate"
           >
             {tracks.map((t) => (
               <option key={t.id} value={t.id}>
@@ -373,170 +378,142 @@ export const TranscriptPanel: React.FC = () => {
           </select>
         )}
         {view && (
-          <span className="text-studio-500 truncate">
-            {view.model} · {view.words.filter((w) => w.editedStartUs !== null).length}/{view.words.length} words kept
+          <span className="hidden lg:inline text-meta text-studio-500 truncate" title={view.model}>
+            {view.words.filter((w) => w.editedStartUs !== null).length} of {view.words.length} words kept
           </span>
         )}
         {view && view.words.length > 0 && view.words.every((w) => w.editedStartUs === null) && trackId.startsWith("msound-") && (
-          <span className="text-amber-300 truncate" title="Its words show once a clip of it is on the timeline, on any track">
-            Not on the timeline yet: place it to edit and caption it
-          </span>
+          <Badge tone="suggest" title="Its words show once a clip of it is on the timeline, on any track">
+            Not on the timeline yet
+          </Badge>
         )}
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1 shrink-0">
           {view && (
-            <button
-              type="button"
-              title="Review filler sounds and restarted sentences one by one, or find more with AI"
-              onClick={() => setReviewOpen(!reviewOpen)}
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Sparkles}
               aria-pressed={reviewOpen}
-              className={`flex items-center gap-1 px-2 py-1 rounded border ${
-                reviewOpen
-                  ? "bg-amber-800/60 border-amber-600 text-amber-100"
-                  : "bg-amber-900/40 border-amber-700/50 text-amber-200 hover:bg-amber-800/50"
-              }`}
+              onClick={() => setReviewOpen(!reviewOpen)}
+              title="Review filler sounds and restarted sentences one by one, or find more with AI"
+              className={cn("text-suggest-fg", reviewOpen && "!bg-suggest/15 !border-suggest/50")}
             >
-              <Sparkles className="w-3 h-3" /> Review {pending.length}
-            </button>
-          )}
-          {selectedIds.length === 1 && !editing && (
-            <button
-              type="button"
-              title="Fix this word's text (Enter). Captions show the corrected word."
-              onClick={startEditing}
-              className="flex items-center gap-1 px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
-            >
-              <Pencil className="w-3 h-3" /> Fix word
-            </button>
-          )}
-          {selectedIds.length > 0 && (() => {
-            const chosen = selectedIds.map((id) => words[wordIndex.get(id) ?? -1]).filter(Boolean);
-            const hidden = chosen.length > 0 && chosen.every((w) => w.captionHidden);
-            const first = chosen[0];
-            return (
-              <>
-                <button
-                  type="button"
-                  title={hidden ? "Show these words in the captions again" : "Keep the sound but leave these words out of the captions"}
-                  onClick={() =>
-                    void editCaptions(
-                      { kind: "hide", wordIds: selectedIds, hidden: !hidden },
-                      hidden ? "Shown in the captions again." : "Hidden from the captions; the sound stays.",
-                    )
-                  }
-                  className="flex items-center gap-1 px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
-                >
-                  <Captions className="w-3 h-3" /> {hidden ? "Show in captions" : "Hide in captions"}
-                </button>
-                {first && (
-                  <button
-                    type="button"
-                    title={first.captionBreak ? "Let this caption join the one before" : "Start a new caption at this word"}
-                    onClick={() =>
-                      void editCaptions(
-                        first.captionBreak ? { kind: "merge", wordId: first.id } : { kind: "split", wordId: first.id },
-                        first.captionBreak ? "Captions merged." : "A new caption starts here.",
-                      )
-                    }
-                    className="px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
-                  >
-                    {first.captionBreak ? "Merge caption" : "New caption here"}
-                  </button>
-                )}
-              </>
-            );
-          })()}
-          {selectedIds.length > 0 && (
-            <button
-              type="button"
-              onClick={() => void cutWords(selectedIds, `Cut ${selectedIds.length} words`)}
-              className="flex items-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
-            >
-              <Scissors className="w-3 h-3" /> Cut {selectedIds.length} selected
-            </button>
+              Review {pending.length}
+            </Button>
           )}
           {view && (
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant="ghost"
               disabled={running}
-              title="Remove punctuation (. , ! ? : ; quotes, brackets) from every word, and so from the captions. Apostrophes, hyphens and numbers stay."
               onClick={() => void stripPunctuation()}
-              className="px-1.5 py-0.5 rounded font-mono text-studio-400 hover:text-white hover:bg-studio-800 disabled:opacity-40"
+              title="Remove punctuation (. , ! ? : ; quotes, brackets) from every word, and so from the captions. Apostrophes, hyphens and numbers stay."
+              className="font-mono"
             >
               .,?<span className="sr-only"> Remove punctuation</span>
-            </button>
+            </Button>
           )}
           {view && (
-            <button
-              type="button"
-              title={showCut ? "Hide cut words" : "Show cut words"}
+            <IconButton
+              size="sm"
+              icon={showCut ? EyeOff : Eye}
+              label={showCut ? "Hide cut words" : "Show cut words"}
+              active={showCut}
               onClick={() => setShowCut(!showCut)}
-              className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
-            >
-              {showCut ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-            </button>
+            />
           )}
           {running ? (
-            <button
-              type="button"
-              onClick={() => void api.transcriptCancel()}
-              className="flex items-center gap-1 px-2 py-1 rounded bg-studio-800 text-studio-200 hover:bg-studio-700"
-            >
-              <Loader2 className="w-3 h-3 animate-spin" /> Cancel
-            </button>
+            <Button size="sm" variant="secondary" icon={Loader2} className="[&>svg]:animate-spin" onClick={() => void api.transcriptCancel()}>
+              Cancel
+            </Button>
           ) : (
-            <button
-              type="button"
-              disabled={!trackId}
-              onClick={() => void runTranscription()}
-              className="px-2 py-1 rounded bg-teal-700 hover:bg-teal-600 disabled:opacity-40 text-white font-semibold"
-            >
+            <Button size="sm" variant={view ? "secondary" : "primary"} disabled={!trackId} onClick={() => void runTranscription()}>
               {view ? "Re-transcribe" : "Transcribe"}
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
-            title="Transcription settings"
-            onClick={() => setSettingsOpen(true)}
-            className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
-          >
-            <Settings2 className="w-3.5 h-3.5" />
-          </button>
+          <IconButton size="sm" icon={Settings2} label="Transcription settings" onClick={() => setSettingsOpen(true)} />
         </div>
       </div>
 
+      {selectedIds.length > 0 && (
+        <div className="shrink-0 flex items-center gap-1.5 h-10 px-3 border-b border-studio-800 bg-accent/5" role="toolbar" aria-label="Selected words">
+          <span className="text-meta text-accent-fg mr-1">
+            {selectedIds.length} word{selectedIds.length === 1 ? "" : "s"} selected
+          </span>
+          {selectedIds.length === 1 && !editing && (
+            <Button size="sm" variant="ghost" icon={Pencil} onClick={startEditing} title="Fix this word's text (Enter). Captions show the corrected word.">
+              Fix word
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={Captions}
+            title={chosenHidden ? "Show these words in the captions again" : "Keep the sound but leave these words out of the captions"}
+            onClick={() =>
+              void editCaptions(
+                { kind: "hide", wordIds: selectedIds, hidden: !chosenHidden },
+                chosenHidden ? "Shown in the captions again." : "Hidden from the captions; the sound stays.",
+              )
+            }
+          >
+            {chosenHidden ? "Show in captions" : "Hide in captions"}
+          </Button>
+          {firstChosen && (
+            <Button
+              size="sm"
+              variant="ghost"
+              title={firstChosen.captionBreak ? "Let this caption join the one before" : "Start a new caption at this word"}
+              onClick={() =>
+                void editCaptions(
+                  firstChosen.captionBreak ? { kind: "merge", wordId: firstChosen.id } : { kind: "split", wordId: firstChosen.id },
+                  firstChosen.captionBreak ? "Captions merged." : "A new caption starts here.",
+                )
+              }
+            >
+              {firstChosen.captionBreak ? "Merge caption" : "New caption here"}
+            </Button>
+          )}
+          <span className="flex-1" />
+          <Button
+            size="sm"
+            variant="danger"
+            icon={Scissors}
+            onClick={() => void cutWords(selectedIds, `Cut ${selectedIds.length} words`)}
+            title="Cut these words from the video (Delete)"
+          >
+            Cut {selectedIds.length}
+          </Button>
+        </div>
+      )}
+
       {running && (
-        <div className="px-3 py-1.5 border-b border-studio-800 flex items-center gap-2 text-teal-300">
-          <div className="flex-1 h-1 bg-studio-800 rounded overflow-hidden">
-            <div className="h-full bg-teal-500 transition-all" style={{ width: `${Math.round((progress?.fraction ?? 0) * 100)}%` }} />
+        <div className="shrink-0 px-3 py-2 border-b border-studio-800 flex items-center gap-3 text-meta text-accent-fg">
+          <div className="flex-1 h-1.5 bg-studio-800 rounded-full overflow-hidden">
+            <div className="h-full bg-accent-hover transition-all" style={{ width: `${Math.round((progress?.fraction ?? 0) * 100)}%` }} />
           </div>
-          <span>{progress?.message ?? "Starting"}</span>
+          <span className="shrink-0">{progress?.message ?? "Starting"}</span>
         </div>
       )}
       {error && (
-        <div role="alert" className="px-3 py-1.5 border-b border-rose-900/60 bg-rose-950/40 text-rose-200 flex items-center gap-2">
-          <span className="flex-1">{error}</span>
-          <button type="button" onClick={() => setError(null)} className="text-rose-400 hover:text-rose-100">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
+        <Notice tone="danger" onDismiss={() => setError(null)}>
+          {error}
+        </Notice>
       )}
       {notice && !error && (
-        <div className="px-3 py-1 border-b border-studio-800 text-studio-400 flex items-center gap-2">
-          <span className="flex-1 truncate">{notice}</span>
-          <button type="button" onClick={() => setNotice(null)} className="text-studio-500 hover:text-studio-200">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
+        <Notice tone="neutral" onDismiss={() => setNotice(null)}>
+          {notice}
+        </Notice>
       )}
 
       <div className="flex-1 min-h-0 flex">
       <div
         tabIndex={0}
         onKeyDown={onKeyDown}
-        className="flex-1 min-w-0 overflow-y-auto px-2 py-2 space-y-0.5 leading-6 text-[13px] text-studio-200 outline-none select-none"
+        className="flex-1 min-w-0 overflow-y-auto px-3 py-3 space-y-1 text-reading text-studio-200 outline-none select-none"
       >
         {!view && !running && (
-          <p className="text-studio-500">
+          <p className="text-body text-studio-500 max-w-prose">
             Transcribe {tracks.find((t) => t.id === trackId)?.label ?? "a sound track"} to edit
             the video by deleting words. Click a word to select it, shift-click to extend, then press Delete. Double-click a
             word to jump to it, or press Enter to fix a misheard word. Review lists every filler sound and restarted sentence so
@@ -549,14 +526,14 @@ export const TranscriptPanel: React.FC = () => {
           return (
             <div
               key={line.words[0].w.id}
-              className={`flex gap-3 rounded-md px-1.5 py-1 ${playing ? "bg-teal-950/40" : lineIndex % 2 ? "bg-studio-900/30" : ""}`}
+              className={`flex gap-4 rounded-control px-2 py-1.5 ${playing ? "bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent-hover))]" : lineIndex % 2 ? "bg-studio-850/40" : ""}`}
             >
               <button
                 type="button"
                 disabled={line.startUs === null}
                 onClick={() => line.startUs !== null && seekTo(line.startUs)}
-                className={`shrink-0 w-14 text-left font-mono text-[11px] leading-6 tabular-nums disabled:cursor-default ${
-                  playing ? "text-teal-300" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-teal-300"
+                className={`shrink-0 w-14 pt-1 text-left font-mono text-meta tabular-nums disabled:cursor-default ${
+                  playing ? "text-accent-fg" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-accent-fg"
                 }`}
                 title={line.startUs === null ? "This line is cut" : "Jump here"}
               >
@@ -585,18 +562,18 @@ export const TranscriptPanel: React.FC = () => {
                             else if (e.key === "Escape") setEditing(null);
                           }}
                           onBlur={() => void commitEdit()}
-                          className="bg-studio-800 text-white rounded px-1 outline outline-1 outline-teal-500"
+                          className="bg-studio-950 text-white rounded px-1 border border-accent-hover"
                         />{" "}
                       </React.Fragment>
                     );
                   }
                   const classes = [
                     "rounded px-0.5 cursor-pointer",
-                    cut ? "line-through text-studio-600" : "hover:bg-studio-800",
-                    selected && !cut ? "bg-rose-800/60 text-white" : "",
-                    i === activeIndex ? "bg-teal-800/70 text-white" : "",
-                    kind === "filler" && !cut ? "underline decoration-amber-400 decoration-2" : "",
-                    kind === "retake" && !cut ? "underline decoration-violet-400 decoration-2" : "",
+                    cut ? "line-through decoration-danger/70 text-studio-500" : "hover:bg-studio-800",
+                    selected && !cut ? "bg-accent/30 text-white shadow-[0_0_0_1px_rgb(var(--accent-hover)/0.6)]" : "",
+                    i === activeIndex && !selected ? "bg-studio-700 text-white" : "",
+                    kind === "filler" && !cut ? "underline decoration-suggest decoration-2" : "",
+                    kind === "retake" && !cut ? "underline decoration-studio-400 decoration-2" : "",
                     w.kind === "audioEvent" ? "italic text-studio-400" : "",
                     // Heard but left out of the captions.
                     w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
@@ -605,7 +582,7 @@ export const TranscriptPanel: React.FC = () => {
                     <React.Fragment key={w.id}>
                       {w.captionBreak && !cut && (
                         <span
-                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-amber-400/80 rounded"
+                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-suggest/80 rounded"
                           title="A new caption starts here"
                           aria-label="Caption break"
                         />
@@ -643,55 +620,43 @@ export const TranscriptPanel: React.FC = () => {
         })}
       </div>
       {reviewOpen && view && (
-        <aside className="w-72 shrink-0 border-l border-studio-800 flex flex-col min-h-0" aria-label="Suggestion review">
-          <div className="px-2 py-1.5 border-b border-studio-800 flex items-center gap-1">
-            {(["all", "filler", "retake"] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setReviewFilter(f)}
-                className={`px-1.5 py-0.5 rounded ${
-                  reviewFilter === f ? "bg-studio-700 text-white" : "text-studio-400 hover:text-white"
-                }`}
+        <aside className="w-80 shrink-0 border-l border-studio-800 flex flex-col min-h-0 bg-studio-900" aria-label="Suggestion review">
+          <div className="shrink-0 p-3 space-y-2 border-b border-studio-800">
+            <div className="flex items-center gap-2">
+              <Segmented<"all" | "filler" | "retake">
+                label="Show"
+                size="sm"
+                className="flex-1"
+                value={reviewFilter}
+                onChange={setReviewFilter}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "filler", label: "Fillers" },
+                  { value: "retake", label: "Retakes" },
+                ]}
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowRejected(!showRejected)}
+                disabled={rejectedCount === 0 && !showRejected}
+                title="Rejected suggestions stay out of Cut all"
               >
-                {f === "all" ? "All" : f === "filler" ? "Fillers" : "Retakes"}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setShowRejected(!showRejected)}
-              disabled={rejectedCount === 0 && !showRejected}
-              className="ml-auto text-studio-400 hover:text-white disabled:opacity-40"
-              title="Rejected suggestions stay out of Accept all"
-            >
-              {showRejected ? "Back" : `Rejected ${rejectedCount}`}
-            </button>
-          </div>
-          <div className="px-2 pt-2">
-            <button
-              type="button"
+                {showRejected ? "Back" : `Rejected ${rejectedCount}`}
+              </Button>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={Sparkles}
+              className="w-full"
               disabled={running}
               onClick={() => void runAiReview()}
-              className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded bg-violet-900/40 border border-violet-600/40 text-violet-100 hover:bg-violet-800/50 disabled:opacity-40"
               title="Ask the AI provider from Transcription and AI settings to find filler words and retakes in context. Sends the transcript text."
             >
-              <Sparkles className="w-3 h-3" /> Find with AI
-            </button>
+              Find with AI
+            </Button>
           </div>
-          {!showRejected && reviewed.length > 1 && (
-            <button
-              type="button"
-              onClick={() =>
-                void cutWords(
-                  reviewed.flatMap((s) => s.wordIds),
-                  `Removed ${reviewed.length} suggestion${reviewed.length === 1 ? "" : "s"}`,
-                )
-              }
-              className="mx-2 mt-2 flex items-center justify-center gap-1 px-2 py-1 rounded bg-rose-900/50 border border-rose-700/50 text-rose-200 hover:bg-rose-800/60"
-            >
-              <Scissors className="w-3 h-3" /> Accept all {reviewed.length}
-            </button>
-          )}
           <ul className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
             {reviewed.length === 0 && (
               <li className="text-studio-500 px-1">{showRejected ? "Nothing rejected." : "Nothing left to review."}</li>
@@ -699,70 +664,78 @@ export const TranscriptPanel: React.FC = () => {
             {reviewed.map((s) => (
               <li
                 key={s.id}
-                className="rounded border border-studio-800 bg-studio-900/60 hover:border-studio-600 p-1.5 cursor-pointer"
+                className="rounded-control border border-studio-800 bg-studio-850 hover:border-studio-600 px-2.5 py-2 cursor-pointer"
                 onClick={() => focusSuggestion(s)}
               >
                 <div className="flex items-center gap-1.5">
-                  <span
-                    className={`px-1 rounded text-[10px] uppercase font-semibold ${
-                      s.kind === "filler" ? "bg-amber-900/60 text-amber-200" : "bg-violet-900/60 text-violet-200"
-                    }`}
-                  >
-                    {s.kind === "filler" ? "Filler" : "Retake"}
-                  </span>
-                  {s.source === "ai" && (
-                    <span className="px-1 rounded text-[10px] font-semibold bg-sky-900/60 text-sky-200" title="Found by the AI review">
-                      AI
-                    </span>
-                  )}
-                  <span className="font-mono text-studio-500">{formatTime(s.editedStartUs)}</span>
+                  <Badge tone={s.kind === "filler" ? "suggest" : "neutral"}>{s.kind === "filler" ? "Filler" : "Retake"}</Badge>
+                  {s.source === "ai" && <Badge title="Found by the AI review">AI</Badge>}
+                  <span className="font-mono text-meta tabular-nums text-studio-500">{formatTime(s.editedStartUs)}</span>
                   <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                     <button
                       type="button"
                       title="Play from just before it"
                       onClick={() => focusSuggestion(s)}
-                      className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
+                      className="h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-700"
                     >
-                      <Play className="w-3 h-3" />
+                      <Play className="w-3.5 h-3.5" />
                     </button>
                     {s.dismissed ? (
                       <button
                         type="button"
                         title="Put it back in the review list"
                         onClick={() => void dismiss([s.id], false)}
-                        className="p-1 rounded text-studio-400 hover:text-white hover:bg-studio-800"
+                        className="h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-700"
                       >
-                        <RotateCcw className="w-3 h-3" />
+                        <RotateCcw className="w-3.5 h-3.5" />
                       </button>
                     ) : (
                       <>
                         <button
                           type="button"
-                          title="Accept: cut these words"
+                          title="Cut these words"
                           onClick={() =>
                             void cutWords(s.wordIds, `Cut ${s.kind === "filler" ? "filler" : "retake"} "${s.text}"`)
                           }
-                          className="p-1 rounded text-emerald-400 hover:text-white hover:bg-emerald-800/60"
+                          className="h-7 w-7 inline-flex items-center justify-center rounded-control text-danger-fg hover:bg-danger/15"
                         >
-                          <Check className="w-3 h-3" />
+                          <Scissors className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
-                          title="Reject: keep these words"
+                          title="Keep these words"
                           onClick={() => void dismiss([s.id], true)}
-                          className="p-1 rounded text-rose-400 hover:text-white hover:bg-rose-900/60"
+                          className="h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-700"
                         >
-                          <X className="w-3 h-3" />
+                          <Check className="w-3.5 h-3.5" />
                         </button>
                       </>
                     )}
                   </div>
                 </div>
-                <p className={`mt-1 text-studio-200 ${s.dismissed ? "text-studio-500" : ""}`}>&ldquo;{s.text}&rdquo;</p>
-                {s.reason && <p className="mt-0.5 text-[11px] text-studio-500 italic">{s.reason}</p>}
+                <p className={`mt-1.5 text-body ${s.dismissed ? "text-studio-500" : "text-studio-100"}`}>&ldquo;{s.text}&rdquo;</p>
+                {s.reason && <p className="mt-0.5 text-meta text-studio-500 italic">{s.reason}</p>}
               </li>
             ))}
           </ul>
+          {!showRejected && reviewed.length > 1 && (
+            <div className="shrink-0 p-3 border-t border-studio-800 space-y-1.5">
+              <Button
+                variant="danger"
+                icon={Scissors}
+                className="w-full"
+                onClick={() =>
+                  void cutWords(
+                    reviewed.flatMap((s) => s.wordIds),
+                    `Removed ${reviewed.length} suggestion${reviewed.length === 1 ? "" : "s"}`,
+                  )
+                }
+              >
+                Cut all {reviewed.length}
+              </Button>
+              <p className="text-meta text-studio-500 text-center">Every track loses the same time. Undo brings it back.</p>
+            </div>
+          )}
         </aside>
       )}
       </div>

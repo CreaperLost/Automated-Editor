@@ -2,8 +2,8 @@
 .dockview-theme-aero {
   color-scheme: dark;
   --dv-paneview-active-outline-color: #14b8a6;
-  --dv-tabs-and-actions-container-font-size: 12px;
-  --dv-tabs-and-actions-container-height: 28px;
+  --dv-tabs-and-actions-container-font-size: 13px;
+  --dv-tabs-and-actions-container-height: 36px;
   --dv-drag-over-background-color: rgba(20, 184, 166, 0.18);
   --dv-drag-over-border-color: #14b8a6;
   --dv-edge-dock-indicator-color: rgba(20, 184, 166, 0.9);
@@ -62,9 +62,32 @@
   isolation: isolate;
 }
 
-/* Tabs are drag handles: show it. */
+/* Tabs are drag handles: show it. The open tab of the focused group is underlined in the
+   accent; other groups' open tabs in grey. */
 .dockview-theme-aero .dv-tab {
   cursor: grab;
+  padding: 0 14px;
+  font-weight: 500;
+  transition: color 0.12s, background-color 0.12s;
+}
+.dockview-theme-aero .dv-tab:hover {
+  color: rgb(var(--studio-100));
+}
+.dockview-theme-aero .dv-tab.dv-active-tab {
+  box-shadow: inset 0 -2px 0 rgb(var(--studio-600));
+}
+.dockview-theme-aero .dv-groupview.dv-active-group .dv-tab.dv-active-tab {
+  box-shadow: inset 0 -2px 0 rgb(var(--accent-hover));
+}
+.dockview-theme-aero .dv-tabs-and-actions-container {
+  border-bottom: 1px solid rgb(var(--studio-800));
+}
+/* Each group reads as one panel with rounded corners. */
+.dockview-theme-aero .dv-groupview {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgb(var(--studio-800));
+  background: rgb(var(--studio-900));
 }
 
 /* Resize bars: a wider grab area than the visible bar, with a grip in the middle. */

@@ -4,6 +4,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { Notice, Switch } from "../ui";
 
 function formatTime(us: number): string {
   const total = us / 1_000_000;
@@ -33,10 +34,10 @@ function Slider(props: {
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block space-y-1">
-      <div className="flex justify-between text-xs">
+    <label className="block space-y-1.5">
+      <div className="flex justify-between text-label">
         <span className="text-studio-400">{props.label}</span>
-        <span className="font-mono text-studio-300">{props.format(props.value)}</span>
+        <span className="font-mono tabular-nums text-meta text-studio-200">{props.format(props.value)}</span>
       </div>
       <input
         type="range"
@@ -45,7 +46,7 @@ function Slider(props: {
         step={props.step}
         value={props.value}
         onChange={(event) => props.onChange(Number(event.target.value))}
-        className="w-full accent-indigo-500 h-1.5 bg-studio-800 rounded-lg cursor-pointer"
+        className="w-full h-1.5 cursor-pointer"
       />
     </label>
   );
@@ -146,29 +147,31 @@ export const ZoomPanel: React.FC = () => {
   const optionsChanged = JSON.stringify(settings) !== JSON.stringify(DEFAULT_ZOOM_SETTINGS);
   const rowClass = (selected: boolean) =>
     `group flex items-center gap-2 rounded-md border px-2 py-1.5 cursor-pointer ${
-      selected ? "border-indigo-300/70 bg-indigo-500/15" : "border-studio-800 bg-studio-850 hover:border-indigo-400/40"
+      selected ? "border-accent-fg/70 bg-accent-hover/15" : "border-studio-800 bg-studio-850 hover:border-accent-hover/40"
     }`;
 
   if (!openedProject) return null;
 
   return (
-    <div className="h-full overflow-y-auto p-3 space-y-3 bg-studio-900/95 text-xs select-none">
+    <div className="h-full overflow-y-auto bg-studio-900 text-label select-none">
       {error && (
-        <p role="alert" className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900/40 rounded p-2">
+        <Notice tone="danger" onDismiss={() => setError(undefined)}>
           {error}
-        </p>
+        </Notice>
       )}
 
+      <div className="p-3 border-b border-studio-800">
       <button
         type="button"
         disabled={busy || durationUs < 3}
         onClick={addZoom}
-        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600/25 hover:bg-indigo-600/35 border border-indigo-400/40 text-indigo-100 font-medium disabled:opacity-40"
+        className="w-full h-control-lg flex items-center justify-center gap-2 rounded-control bg-accent hover:bg-accent-hover border border-accent-hover/40 text-white text-body font-medium disabled:opacity-40 transition-colors"
         title="Zoom into the timeline selection, or around the playhead when nothing is selected"
       >
-        <Plus className="w-3.5 h-3.5" />
+        <Plus className="w-4 h-4" />
         {selection ? "Add zoom on the selection" : "Add zoom at the playhead"}
       </button>
+      </div>
 
       <InspectorSection
         id="zoom-auto"
@@ -179,14 +182,14 @@ export const ZoomPanel: React.FC = () => {
             <button
               type="button"
               onClick={() => setSettings(DEFAULT_ZOOM_SETTINGS)}
-              className="text-[11px] text-studio-400 hover:text-studio-200"
+              className="text-meta text-studio-400 hover:text-studio-200"
             >
               Reset
             </button>
           ) : undefined
         }
       >
-        <p className="text-[11px] text-studio-500 leading-relaxed">
+        <p className="text-meta text-studio-500 leading-relaxed">
           A few strong zooms, not many: activity close together is one zoom, the camera follows the mouse through
           it, and only the strongest moments are kept. These settings belong to the project; changing an amount
           changes every automatic zoom.
@@ -195,7 +198,7 @@ export const ZoomPanel: React.FC = () => {
           type="button"
           disabled={busy}
           onClick={() => void run((project) => api.projectZoomReload(project.projectHandle, project.revision))}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-indigo-400/40 text-indigo-100 hover:bg-indigo-600/25 disabled:opacity-40"
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-accent-hover/40 text-accent-fg hover:bg-accent/25 disabled:opacity-40"
           title="Take the automatic zooms off and find the recording's zooms again with these settings (dismissed ones too). Zooms you added or changed stay. Undo brings the old ones back."
         >
           <RefreshCw className="w-3.5 h-3.5" /> Reload zooms from the recording
@@ -254,15 +257,11 @@ export const ZoomPanel: React.FC = () => {
           format={(v) => `${(v / 1000).toFixed(1)} s`}
           onChange={(minHoldMs) => setSettings({ minHoldMs })}
         />
-        <label className="flex items-center gap-2 text-xs text-studio-300">
-          <input
-            type="checkbox"
-            checked={settings.follow}
-            onChange={(e) => setSettings({ follow: e.target.checked })}
-            className="accent-indigo-500"
-          />
-          Follow the mouse while zoomed
-        </label>
+        <Switch
+          checked={settings.follow}
+          onChange={(follow) => setSettings({ follow })}
+          label="Follow the mouse while zoomed"
+        />
         {settings.follow && (
           <Slider
             label="Camera"
@@ -282,7 +281,7 @@ export const ZoomPanel: React.FC = () => {
         icon={Crosshair}
       >
         {suggestions.length === 0 ? (
-          <p className="text-[11px] text-studio-500">
+          <p className="text-meta text-studio-500">
             {diagnostics.length > 0 && zooms.length === 0
               ? `No auto-zoom: ${diagnostics[diagnostics.length - 1]}`
               : "Nothing new to review."}
@@ -298,7 +297,7 @@ export const ZoomPanel: React.FC = () => {
                     api.projectZoomAccept(project.projectHandle, project.revision, suggestions.map((s) => s.id)),
                   )
                 }
-                className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-indigo-600/30 hover:bg-indigo-600/40 text-indigo-100 disabled:opacity-40"
+                className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md bg-accent/30 hover:bg-accent/40 text-accent-fg disabled:opacity-40"
               >
                 <Check className="w-3.5 h-3.5" /> Accept all
               </button>
@@ -334,7 +333,7 @@ export const ZoomPanel: React.FC = () => {
                         event.stopPropagation();
                         void run((project) => api.projectZoomAccept(project.projectHandle, project.revision, [s.id]));
                       }}
-                      className="p-1 rounded text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-40"
+                      className="p-1 rounded text-accent-fg hover:bg-accent/30 disabled:opacity-40"
                     >
                       <Check className="w-3.5 h-3.5" />
                     </button>
@@ -361,7 +360,7 @@ export const ZoomPanel: React.FC = () => {
 
       <InspectorSection id="zoom-list" title={`Zooms${zooms.length ? ` (${zooms.length})` : ""}`} icon={Plus}>
         {zooms.length === 0 ? (
-          <p className="text-[11px] text-studio-500">
+          <p className="text-meta text-studio-500">
             No zooms yet. Accept a suggestion or add one; drag a zoom on the timeline's zoom lane to retime it.
           </p>
         ) : (
@@ -386,13 +385,13 @@ export const ZoomPanel: React.FC = () => {
                         event.stopPropagation();
                         void run((project) => api.projectZoomDelete(project.projectHandle, project.revision, zoom.id));
                       }}
-                      className="p-1 rounded text-studio-500 hover:text-rose-300 hover:bg-studio-700 disabled:opacity-40"
+                      className="p-1 rounded text-studio-500 hover:text-danger-fg hover:bg-studio-700 disabled:opacity-40"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                   {selected && settings.follow && (
-                    <label className="pl-2 flex items-center gap-2 text-[11px] text-studio-300">
+                    <label className="pl-2 flex items-center gap-2 text-meta text-studio-300">
                       <input
                         type="checkbox"
                         checked={!zoom.fixed}
@@ -402,7 +401,7 @@ export const ZoomPanel: React.FC = () => {
                             api.projectZoomUpdate(project.projectHandle, project.revision, { ...zoom, fixed: !e.target.checked }),
                           )
                         }
-                        className="accent-indigo-500"
+                        className=""
                       />
                       Follow the mouse (off: stays on its center)
                     </label>
@@ -421,9 +420,9 @@ export const ZoomPanel: React.FC = () => {
                               api.projectZoomUpdate(project.projectHandle, project.revision, { ...zoom, scale }),
                             )
                           }
-                          className={`flex-1 py-0.5 rounded font-mono text-[11px] disabled:opacity-40 ${
+                          className={`flex-1 py-0.5 rounded font-mono text-meta disabled:opacity-40 ${
                             Math.abs(zoom.scale - scale) < 0.01
-                              ? "bg-indigo-600 text-white"
+                              ? "bg-accent text-white"
                               : "bg-studio-850 text-studio-300 hover:bg-studio-800"
                           }`}
                         >
@@ -440,7 +439,7 @@ export const ZoomPanel: React.FC = () => {
       </InspectorSection>
 
       {diagnostics.length > 1 && (
-        <details className="text-[11px] text-studio-500">
+        <details className="text-meta text-studio-500">
           <summary className="cursor-pointer">
             <RotateCcw className="inline w-3 h-3 mr-1" />
             Auto-zoom notes

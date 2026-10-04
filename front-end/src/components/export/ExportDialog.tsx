@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Download, FolderOpen, X, XCircle } from "lucide-react";
+import { CheckCircle2, Download, Film, FolderOpen, X, XCircle } from "lucide-react";
 import { api } from "../../lib/ipc";
+import { FILE_MANAGER } from "../../lib/projectActions";
+import { Button, IconButton, Segmented, cn } from "../ui";
 import type { ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
@@ -127,15 +129,39 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     });
   };
 
-  const option = (active: boolean) =>
-    `py-1.5 rounded-md text-xs transition-colors disabled:opacity-40 ${
-      active ? "bg-teal-600 text-white font-semibold" : "text-studio-300 hover:text-white hover:bg-studio-800"
-    }`;
   const seconds = editedDurationUs / 1e6;
+  const [outWidth, outHeight] = fittedSize(resolution.width, resolution.height, aspectRatio);
+  const quality = QUALITIES.find((q) => q.key === preferences.quality);
+  const length = `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+
+  // The frame at the playhead, from the playback engine, as a picture of what is exported.
+  const [thumbnail, setThumbnail] = useState<string>();
+  useEffect(() => {
+    let url: string | undefined;
+    void api
+      .previewFrame(0, 0)
+      .then((buffer) => {
+        if (buffer.byteLength <= 8) return;
+        url = URL.createObjectURL(new Blob([buffer.slice(8)], { type: "image/jpeg" }));
+        setThumbnail(url);
+      })
+      .catch(() => undefined);
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, []);
+
+  const field = (label: string, control: React.ReactNode, hint?: React.ReactNode) => (
+    <div className="space-y-1.5">
+      <div className="text-label font-medium text-studio-200">{label}</div>
+      {control}
+      {hint && <div className="text-meta text-studio-500">{hint}</div>}
+    </div>
+  );
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none"
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -144,77 +170,74 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-dialog-title"
-        className="w-full max-w-lg bg-studio-900 border border-studio-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-xs"
+        className="w-full max-w-3xl bg-studio-900 border border-studio-700 rounded-panel shadow-dialog overflow-hidden flex flex-col max-h-[90vh]"
       >
-        <div className="px-6 py-4 border-b border-studio-800 flex items-center justify-between bg-studio-850">
+        <div className="px-6 py-4 border-b border-studio-800 flex items-start justify-between gap-4">
           <div>
-            <h3 id="export-dialog-title" className="text-sm font-semibold text-white">Export video</h3>
-            <p className="text-studio-400">MP4, H.264 video and AAC audio · {seconds.toFixed(1)}s</p>
+            <h2 id="export-dialog-title" className="text-heading text-studio-100">
+              Export video
+            </h2>
+            <p className="text-label text-studio-400">An MP4 file of the whole edit</p>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-studio-400 hover:text-white hover:bg-studio-700"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <IconButton icon={X} label="Close (Esc)" onClick={onClose} />
         </div>
 
-        <div className="p-6 space-y-5 overflow-y-auto">
-          <fieldset disabled={exporting} className="space-y-5">
-            <div className="space-y-2">
-              <div className="flex items-baseline justify-between">
-                <span className="font-semibold text-studio-300">Resolution</span>
-                <span className="font-mono text-studio-500">
-                  {fittedSize(resolution.width, resolution.height, aspectRatio).join(" × ")} · {aspectRatio}
-                </span>
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="grid gap-6 p-6 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+            {/* What comes out */}
+            <div className="space-y-3">
+              <div
+                className="w-full rounded-control overflow-hidden border border-studio-700 bg-studio-950 flex items-center justify-center"
+                style={{ aspectRatio: `${outWidth} / ${outHeight}`, maxHeight: 320 }}
+              >
+                {thumbnail ? (
+                  <img src={thumbnail} alt="The video at the playhead" className="w-full h-full object-contain" />
+                ) : (
+                  <Film className="w-8 h-8 text-studio-600" aria-hidden />
+                )}
               </div>
-              <div className="grid grid-cols-4 gap-1 bg-studio-950/60 border border-studio-800 rounded-lg p-1">
-                {RESOLUTIONS.map((r) => (
-                  <button
-                    key={r.label}
-                    type="button"
-                    className={option(r.label === resolution.label)}
-                    onClick={() => update({ resolution: r.label })}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <span className="font-semibold text-studio-300">Frame rate</span>
-              <div className="grid grid-cols-4 gap-1 bg-studio-950/60 border border-studio-800 rounded-lg p-1">
-                {FRAME_RATES.map((fps) => (
-                  <button
-                    key={fps}
-                    type="button"
-                    className={option(fps === preferences.fps)}
-                    onClick={() => update({ fps })}
-                  >
-                    {fps} fps
-                  </button>
-                ))}
+              <div className="space-y-0.5">
+                <p className="text-body font-medium text-studio-100 tabular-nums">
+                  {length} · {outWidth} × {outHeight} · {preferences.fps} fps
+                </p>
+                <p className="text-label text-studio-400">MP4 · H.264 video · AAC audio · {aspectRatio} canvas</p>
               </div>
             </div>
 
-            <div className="space-y-2">
-              <span className="font-semibold text-studio-300">Quality</span>
-              <div className="grid grid-cols-4 gap-1 bg-studio-950/60 border border-studio-800 rounded-lg p-1">
-                {QUALITIES.map((q) => (
-                  <button
-                    key={q.key}
-                    type="button"
-                    className={option(q.key === preferences.quality)}
-                    onClick={() => update({ quality: q.key })}
-                  >
-                    {q.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-studio-500">{QUALITIES.find((q) => q.key === preferences.quality)?.hint}</p>
+            {/* The choices */}
+            <fieldset disabled={exporting} className="space-y-5 min-w-0 disabled:opacity-60">
+              {field(
+                "Resolution",
+                <Segmented
+                  label="Resolution"
+                  className="w-full"
+                  value={resolution.label}
+                  onChange={(label) => update({ resolution: label })}
+                  options={RESOLUTIONS.map((r) => ({ value: r.label, label: r.label }))}
+                />,
+                <>Output size {outWidth} × {outHeight} (the canvas shape, {aspectRatio}). Preview quality does not change this.</>,
+              )}
+              {field(
+                "Frame rate",
+                <Segmented
+                  label="Frame rate"
+                  className="w-full"
+                  value={preferences.fps}
+                  onChange={(fps) => update({ fps })}
+                  options={FRAME_RATES.map((fps) => ({ value: fps, label: `${fps} fps` }))}
+                />,
+              )}
+              {field(
+                "Quality",
+                <Segmented
+                  label="Quality"
+                  className="w-full"
+                  value={preferences.quality}
+                  onChange={(q) => update({ quality: q })}
+                  options={QUALITIES.map((q) => ({ value: q.key, label: q.label }))}
+                />,
+                quality?.hint,
+              )}
               {custom && (
                 <label className="flex items-center gap-2">
                   <input
@@ -225,108 +248,84 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                     value={Number.isFinite(preferences.mbps) ? preferences.mbps : ""}
                     onChange={(event) => update({ mbps: event.target.valueAsNumber })}
                     aria-label="Video bitrate in megabits per second"
-                    className={`w-24 bg-studio-800 border rounded px-2 py-1 text-studio-100 font-mono ${
-                      mbpsValid ? "border-studio-700" : "border-rose-500"
-                    }`}
+                    className={cn("ui-field w-24 font-mono", !mbpsValid && "!border-danger")}
                   />
-                  <span className="text-studio-400">Mbps</span>
+                  <span className="text-label text-studio-400">Mbps</span>
                   {mbpsValid ? (
-                    <span className="text-studio-500 ml-auto">
-                      ≈ {formatBytes(((preferences.mbps * 1e6 + 192_000) * seconds) / 8)}
+                    <span className="ml-auto text-label text-studio-400">
+                      About {formatBytes(((preferences.mbps * 1e6 + 192_000) * seconds) / 8)}
                     </span>
                   ) : (
-                    <span className="text-rose-300 ml-auto">
+                    <span className="ml-auto text-label text-danger-fg">
                       {MIN_MBPS} to {MAX_MBPS} Mbps
                     </span>
                   )}
                 </label>
               )}
-            </div>
-
-            <div className="space-y-2">
-              <span className="font-semibold text-studio-300">Save to</span>
-              <div className="flex items-center gap-2">
-                <span
-                  className="flex-1 min-w-0 truncate font-mono text-studio-300 bg-studio-950/60 border border-studio-800 rounded px-2 py-1.5 select-text"
-                  title={destination}
-                >
-                  {destination || "Next to the project folder"}
-                </span>
-                <button
-                  type="button"
-                  onClick={onChooseDestination}
-                  className="px-2.5 py-1.5 rounded-lg bg-studio-850 hover:bg-studio-800 border border-studio-700 text-studio-200"
-                >
-                  Change…
-                </button>
-              </div>
-            </div>
-          </fieldset>
+              {field(
+                "Save to",
+                <div className="flex items-center gap-2">
+                  <span
+                    className="ui-field flex-1 min-w-0 flex items-center truncate font-mono !text-meta select-text"
+                    title={destination}
+                  >
+                    {destination || "Next to the project folder"}
+                  </span>
+                  <Button variant="secondary" icon={FolderOpen} onClick={onChooseDestination}>
+                    Change…
+                  </Button>
+                </div>,
+              )}
+            </fieldset>
+          </div>
 
           {exportJob && exportJob.state !== "idle" && (
-            <div className="space-y-2 rounded-lg border border-studio-800 bg-studio-950/60 p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold capitalize text-studio-200">{exportJob.state}</span>
-                <span className="font-mono text-studio-400">{Math.round(progress * 100)}%</span>
+            <div className="mx-6 mb-6 space-y-2 rounded-control border border-studio-800 bg-studio-850 p-4">
+              <div className="flex items-center justify-between text-label">
+                <span className="flex items-center gap-2 font-medium capitalize text-studio-100">
+                  {exportJob.state === "completed" && <CheckCircle2 className="w-4 h-4 text-success" />}
+                  {exportJob.state === "completed" ? "Exported" : exportJob.state}
+                </span>
+                <span className="font-mono tabular-nums text-studio-400">{Math.round(progress * 100)}%</span>
               </div>
               <div className="h-1.5 rounded-full bg-studio-800 overflow-hidden">
                 <div
-                  className={`h-full transition-[width] ${exportJob.state === "failed" ? "bg-rose-500" : "bg-teal-500"}`}
+                  className={`h-full transition-[width] ${exportJob.state === "failed" ? "bg-danger" : exportJob.state === "completed" ? "bg-success" : "bg-accent-hover"}`}
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
               {exportJob.failure && (
-                <p role="alert" className="text-rose-300">
+                <p role="alert" className="text-label text-danger-fg">
                   {exportJob.failure.message}
                 </p>
               )}
               {exportJob.state === "completed" && exportJob.outputPath && (
                 <div className="flex items-center gap-2">
-                  <span className="flex-1 min-w-0 truncate font-mono text-emerald-300" title={exportJob.outputPath}>
+                  <span className="flex-1 min-w-0 truncate font-mono text-meta text-studio-300 select-text" title={exportJob.outputPath}>
                     {exportJob.outputPath}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => void api.showInFinder(exportJob.outputPath!)}
-                    className="flex items-center gap-1 px-2 py-1 rounded border border-studio-700 text-studio-200 hover:bg-studio-800"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5" />
-                    Show
-                  </button>
+                  <Button size="sm" variant="secondary" icon={FolderOpen} onClick={() => void api.showInFinder(exportJob.outputPath!)}>
+                    Show in {FILE_MANAGER}
+                  </Button>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-studio-800 bg-studio-850 flex items-center justify-end gap-2">
+        <div className="px-6 py-4 border-t border-studio-800 flex items-center justify-end gap-2">
           {exporting ? (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-800 text-rose-200 font-medium"
-            >
-              <XCircle className="w-3.5 h-3.5" />
+            <Button variant="danger" icon={XCircle} onClick={onCancel}>
               Cancel export
-            </button>
+            </Button>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3 py-1.5 rounded-lg text-studio-300 hover:text-white hover:bg-studio-800"
-              >
+              <Button variant="ghost" onClick={onClose}>
                 Close
-              </button>
-              <button
-                type="button"
-                disabled={custom && !mbpsValid}
-                onClick={start}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-semibold shadow-md shadow-teal-900/40 disabled:opacity-40"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Export
-              </button>
+              </Button>
+              <Button variant="primary" size="lg" icon={Download} disabled={custom && !mbpsValid} onClick={start}>
+                Export video
+              </Button>
             </>
           )}
         </div>
