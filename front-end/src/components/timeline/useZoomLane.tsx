@@ -178,7 +178,7 @@ export function useZoomLane({
   const acceptZoom = (zoomId: string) =>
     void persist((project) => api.projectZoomAccept(project.projectHandle, project.revision, [zoomId]));
   const addZoomHere = () => {
-    const { currentTimeUs } = view;
+    const currentTimeUs = view.nowUs();
     const startUs = selection ? selection.startUs : Math.max(0, currentTimeUs - 600_000);
     const endUs = selection ? selection.endUs : Math.min(durationUs, Math.max(startUs + 2_000_000, currentTimeUs + 1_400_000));
     void persist((project) =>

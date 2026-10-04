@@ -85,6 +85,61 @@ import { useCaptionLane } from "./useCaptionLane";
 
 type SourceRange = [start: number, end: number];
 
+/** The playhead now, read when needed: the timeline itself does not re-render as it moves. */
+const nowUs = () => useProjectStore.getState().currentTimeUs;
+
+/**
+ * Something drawn at the playhead. Only this re-renders as the playhead moves, not the
+ * timeline with all its clips.
+ */
+const AtPlayhead: React.FC<{ spanUs: number; children: (left: string, timeUs: number) => React.ReactNode }> = ({
+  spanUs,
+  children,
+}) => {
+  const timeUs = useProjectStore((s) => s.currentTimeUs);
+  return <>{children(`${(Math.min(timeUs, spanUs) / spanUs) * 100}%`, timeUs)}</>;
+};
+
+/** While playing, pages the timeline so the playhead stays in view. */
+const FollowPlayhead: React.FC<{ scrollRef: React.RefObject<HTMLDivElement | null>; pxPerUs: number; zoom: number }> = ({
+  scrollRef,
+  pxPerUs,
+  zoom,
+}) => {
+  const timeUs = useProjectStore((s) => (s.isPlaying ? s.currentTimeUs : -1));
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (timeUs < 0 || !element || pxPerUs <= 0 || zoom <= 1) return;
+    const x = timeUs * pxPerUs;
+    if (x < element.scrollLeft || x > element.scrollLeft + element.clientWidth - 24) {
+      element.scrollLeft = Math.max(0, x - element.clientWidth * 0.1);
+    }
+  }, [timeUs, pxPerUs, zoom, scrollRef]);
+  return null;
+};
+
+/** A sound clip's waveform. Only the clip under the playhead redraws as it moves. */
+const ClipWaveform: React.FC<{
+  clip: Clip;
+  buckets: React.ComponentProps<typeof WaveformRenderer>["buckets"];
+  speech: boolean;
+  heightPx: number;
+}> = ({ clip, buckets, speech, heightPx }) => {
+  const played = useProjectStore((s) => Math.max(0, Math.min(1, (s.currentTimeUs - clip.startUs) / Math.max(1, clip.durationUs))));
+  return (
+    <WaveformRenderer
+      buckets={buckets}
+      startUs={clip.inUs}
+      endUs={clip.inUs + clip.durationUs}
+      currentTimeUs={clip.inUs + played * clip.durationUs}
+      activeBarColor={speech ? "#34d399" : "#2bb38a"}
+      barColor={speech ? "#065f46" : "#134d40"}
+      className="w-full h-full"
+      heightPx={heightPx}
+    />
+  );
+};
+
 /** `ranges` minus `cut`, both as [start, end) ranges. */
 function subtractRanges(ranges: SourceRange[], cut: SourceRange[]): SourceRange[] {
   return ranges.flatMap(([start, end]) => {
@@ -152,7 +207,6 @@ export const TimelineStudio: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const pendingZoomSuggestions = useProjectStore((s) => s.pendingZoomSuggestions);
   const zoomDiagnostics = useProjectStore((s) => s.zoomDiagnostics);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const durationUs = useProjectStore((s) => s.durationUs);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const selectedClipIds = useProjectStore((s) => s.selectedClipIds);
@@ -161,7 +215,7 @@ export const TimelineStudio: React.FC = () => {
   const setSelectedZoomId = useProjectStore((s) => s.setSelectedZoomId);
   const waveforms = useProjectStore((s) => s.waveforms);
   const setWaveform = useProjectStore((s) => s.setWaveform);
-  const { isPlaying, togglePlayPause, seekToUs } = useTimeline();
+  const { togglePlayPause, seekToUs } = useTimeline();
   const bindings = useHotkeyStore((s) => s.bindings);
   const hint = (action: HotkeyAction) => hotkeyHint(bindings, action);
   const lanes = useLaneHeights();
@@ -248,14 +302,14 @@ export const TimelineStudio: React.FC = () => {
     return Math.round(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * spanUs);
   };
   const snapUs = () => (pxPerUs > 0 ? SNAP_PX / pxPerUs : 0);
-  const view: TimelineView = { durationUs: spanUs, pxPerUs, currentTimeUs, pct, clientXToUs, snapUs, seekToUs };
+  const view: TimelineView = { durationUs: spanUs, pxPerUs, nowUs, pct, clientXToUs, snapUs, seekToUs };
 
   const zoomTimeline = (factor: number, anchor?: { timeUs: number; offsetPx: number }) => {
     const next = Math.min(MAX_TIMELINE_ZOOM, Math.max(MIN_TIMELINE_ZOOM, timelineZoom * factor));
     if (next === timelineZoom) return;
     const element = scrollRef.current;
     zoomAnchor.current =
-      anchor ?? (element && pxPerUs > 0 ? { timeUs: currentTimeUs, offsetPx: currentTimeUs * pxPerUs - element.scrollLeft } : null);
+      anchor ?? (element && pxPerUs > 0 ? { timeUs: nowUs(), offsetPx: nowUs() * pxPerUs - element.scrollLeft } : null);
     setTimelineZoom(next);
   };
   useLayoutEffect(() => {
@@ -283,15 +337,6 @@ export const TimelineStudio: React.FC = () => {
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
   }, [openedProject?.projectHandle, spanUs]);
-  // While playing, page the view so the playhead stays visible.
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!isPlaying || !element || pxPerUs <= 0 || timelineZoom <= 1) return;
-    const x = currentTimeUs * pxPerUs;
-    if (x < element.scrollLeft || x > element.scrollLeft + element.clientWidth - 24) {
-      element.scrollLeft = Math.max(0, x - element.clientWidth * 0.1);
-    }
-  }, [isPlaying, currentTimeUs, pxPerUs, timelineZoom]);
 
   const rulerStep = rulerStepUs(pxPerUs);
   const rulerTicks = pxPerUs > 0 ? Array.from({ length: Math.floor(spanUs / rulerStep) + 1 }, (_, i) => i * rulerStep) : [];
@@ -340,7 +385,7 @@ export const TimelineStudio: React.FC = () => {
 
   // ---- Snapping -----------------------------------------------------------------------------
   const snapPoints = (ignore: string[] = []) => [
-    currentTimeUs,
+    nowUs(),
     0,
     ...sequence.tracks.flatMap((t) => t.clips.filter((c) => !ignore.includes(c.id)).flatMap((c) => [c.startUs, clipEnd(c)])),
   ];
@@ -348,7 +393,7 @@ export const TimelineStudio: React.FC = () => {
   // ---- Edits --------------------------------------------------------------------------------
   /** S: the selected clips split at the playhead; with none selected, every track. */
   const splitAtPlayhead = () => {
-    const at = currentTimeUs;
+    const at = nowUs();
     if (selectedClipIds.length > 0 && !selectedClips.some((c) => c.startUs < at && at < clipEnd(c))) {
       setEditError("Put the playhead over a selected clip to split it, or deselect (Ctrl+D) to split every track.");
       return;
@@ -360,7 +405,7 @@ export const TimelineStudio: React.FC = () => {
    * with one clip (and its partners) selected, that clip alone is trimmed to the playhead.
    */
   const rippleTrim = (side: "previous" | "next") => {
-    const at = currentTimeUs;
+    const at = nowUs();
     const groups = new Set(selectedClips.map((c) => c.link ?? c.id));
     if (groups.size > 1) {
       setEditError("Select one clip to trim, or deselect (Ctrl+D) to trim every track.");
@@ -427,12 +472,19 @@ export const TimelineStudio: React.FC = () => {
     if (openedProject?.redoAvailable) void runEdit((p) => api.projectRedo(p.projectHandle, p.revision));
   };
   const jumpToEdit = (direction: -1 | 1) => {
+    const currentTimeUs = nowUs();
     const target =
       direction < 0 ? [...edges].reverse().find((e) => e < currentTimeUs) : edges.find((e) => e > currentTimeUs && e <= durationUs);
     if (target !== undefined) seekToUs(target);
   };
-  const markIn = () => selectRange(currentTimeUs, range && range.endUs > currentTimeUs ? range.endUs : durationUs);
-  const markOut = () => selectRange(range && range.startUs < currentTimeUs ? range.startUs : 0, currentTimeUs);
+  const markIn = () => {
+    const at = nowUs();
+    selectRange(at, range && range.endUs > at ? range.endUs : durationUs);
+  };
+  const markOut = () => {
+    const at = nowUs();
+    selectRange(range && range.startUs < at ? range.startUs : 0, at);
+  };
 
   // Restoring cut time: every join between two pieces of one stretch of a source.
   const joins = sequence.tracks.flatMap((track) => (track.locked ? [] : cutJoins(openedProject!, track).map((j) => ({ ...j, track }))));
@@ -532,10 +584,10 @@ export const TimelineStudio: React.FC = () => {
     markOut,
     undo,
     redo,
-    stepBack: () => seekToUs(currentTimeUs - frameUs),
-    stepForward: () => seekToUs(currentTimeUs + frameUs),
-    stepBackLong: () => seekToUs(currentTimeUs - 1_000_000),
-    stepForwardLong: () => seekToUs(currentTimeUs + 1_000_000),
+    stepBack: () => seekToUs(nowUs() - frameUs),
+    stepForward: () => seekToUs(nowUs() + frameUs),
+    stepBackLong: () => seekToUs(nowUs() - 1_000_000),
+    stepForwardLong: () => seekToUs(nowUs() + 1_000_000),
     previousEdit: () => jumpToEdit(-1),
     nextEdit: () => jumpToEdit(1),
     zoomIn: () => zoomRef.current(2),
@@ -988,9 +1040,9 @@ export const TimelineStudio: React.FC = () => {
             )}
             <button
               type="button"
-              disabled={editing}
+              disabled={editing || !!track.locked}
               aria-label={`Remove ${number}`}
-              title="Remove this track and its clips (Undo brings it back)"
+              title={track.locked ? "Unlock this track to remove it" : "Remove this track and its clips (Undo brings it back)"}
               onClick={() => void edit({ kind: "removeTrack", trackId: track.id })}
               className={cn(HDR_BUTTON, "hidden group-hover/header:inline-flex focus-visible:inline-flex hover:!text-danger-fg hover:!bg-danger/15")}
             >
@@ -1085,16 +1137,7 @@ export const TimelineStudio: React.FC = () => {
         >
           {buckets && buckets.length > 0 && (
             <div className="absolute inset-0 px-0.5 py-0.5 pointer-events-none opacity-80">
-              <WaveformRenderer
-                buckets={buckets}
-                startUs={clip.inUs}
-                endUs={clip.inUs + clip.durationUs}
-                currentTimeUs={currentTimeUs - clip.startUs + clip.inUs}
-                activeBarColor={role === "mic" ? "#34d399" : "#2bb38a"}
-                barColor={role === "mic" ? "#065f46" : "#134d40"}
-                className="w-full h-full"
-                heightPx={lanes.height("lane:audio")}
-              />
+              <ClipWaveform clip={clip} buckets={buckets} speech={role === "mic"} heightPx={lanes.height("lane:audio")} />
             </div>
           )}
           <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
@@ -1221,7 +1264,6 @@ export const TimelineStudio: React.FC = () => {
     })
       ? Math.min(...dragGhosts.map((g) => g.startUs))
       : null;
-  const progressPct = pct(Math.min(currentTimeUs, spanUs));
   const empty = sequence.tracks.length === 0;
 
   return (
@@ -1428,9 +1470,13 @@ export const TimelineStudio: React.FC = () => {
                     <span className="absolute top-0.5 left-1 max-w-[180px] truncate rounded bg-studio-700 px-1.5 text-meta text-studio-100">{chapter.title}</span>
                   </div>
                 ))}
-                <div className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-accent-hover pointer-events-none" style={{ left: progressPct }}>
-                  <div className="absolute top-0 left-1/2 -translate-x-1/2 h-2.5 w-3 rounded-b-sm bg-accent-hover" />
-                </div>
+                <AtPlayhead spanUs={spanUs}>
+                  {(left) => (
+                    <div className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-accent-hover pointer-events-none" style={{ left }}>
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 h-2.5 w-3 rounded-b-sm bg-accent-hover" />
+                    </div>
+                  )}
+                </AtPlayhead>
               </div>
 
               <div
@@ -1448,16 +1494,22 @@ export const TimelineStudio: React.FC = () => {
                 }}
                 className="flex-1 relative cursor-pointer py-2 bg-studio-950/40"
               >
-                <div className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-accent-hover z-30 pointer-events-none shadow-[0_0_6px_rgb(var(--accent-hover)/0.5)]" style={{ left: progressPct }} />
-                {/* Playhead grab strip: drag the playhead itself without touching the selection. */}
-                <div
+                <AtPlayhead spanUs={spanUs}>
+                  {(left, timeUs) => (
+                    <>
+                      <div
+                        className="absolute top-0 bottom-0 w-0.5 -translate-x-1/2 bg-accent-hover z-30 pointer-events-none shadow-[0_0_6px_rgb(var(--accent-hover)/0.5)]"
+                        style={{ left }}
+                      />
+                      {/* Playhead grab strip: drag the playhead itself without touching the selection. */}
+                      <div
                   role="slider"
                   aria-label="Playhead"
                   aria-valuemin={0}
                   aria-valuemax={durationUs}
-                  aria-valuenow={currentTimeUs}
+                  aria-valuenow={timeUs}
                   className="absolute top-0 bottom-0 w-3 -translate-x-1/2 z-40 cursor-ew-resize"
-                  style={{ left: progressPct }}
+                  style={{ left }}
                   title="Drag to move the playhead"
                   onPointerDown={(event) => {
                     event.stopPropagation();
@@ -1474,6 +1526,10 @@ export const TimelineStudio: React.FC = () => {
                   onPointerCancel={onRulerPointerUp}
                   onClick={(event) => event.stopPropagation()}
                 />
+                    </>
+                  )}
+                </AtPlayhead>
+                <FollowPlayhead scrollRef={scrollRef} pxPerUs={pxPerUs} zoom={timelineZoom} />
                 {range && <div className="absolute top-0 bottom-0 bg-accent/[0.08] border-x border-accent-hover/60 z-10 pointer-events-none" style={{ left: pct(range.startUs), width: pct(range.endUs - range.startUs) }} />}
                 {durationUs > 0 && <div className="absolute top-0 bottom-0 bg-studio-950/40 pointer-events-none" style={{ left: pct(durationUs), right: 0 }} />}
                 {dragInsertAt !== null && marker(dragInsertAt, "Insert here")}

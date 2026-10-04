@@ -28,7 +28,6 @@ const KIND_ICON = { recording: Clapperboard, video: Film, image: ImageIcon, audi
 export const MediaPanel: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [search, setSearch] = useState("");
@@ -83,7 +82,7 @@ export const MediaPanel: React.FC = () => {
         await api.projectSequenceEdit(project.projectHandle, project.revision, {
           kind: "placeAsset",
           assetId: asset.id,
-          atUs: Math.round(currentTimeUs),
+          atUs: Math.round(useProjectStore.getState().currentTimeUs),
           trackId: null,
         }),
       );

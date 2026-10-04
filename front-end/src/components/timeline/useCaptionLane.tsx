@@ -66,7 +66,7 @@ export function useCaptionLane({
   /** A new caption starts at the first word at or after the playhead. */
   const splitCue = () => {
     if (!cue) return;
-    const index = cue.wordStartsUs.findIndex((start, i) => i > 0 && start >= view.currentTimeUs);
+    const index = cue.wordStartsUs.findIndex((start, i) => i > 0 && start >= view.nowUs());
     if (index <= 0) {
       onError("Put the playhead between two words of the caption to split it.");
       return;

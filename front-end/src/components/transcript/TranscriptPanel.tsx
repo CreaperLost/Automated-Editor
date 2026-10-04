@@ -75,7 +75,9 @@ function errorMessage(err: unknown): string {
 }
 
 export const TranscriptPanel: React.FC = () => {
-  const { openedProject, applyOpenedProject, applyPlaybackStatus, currentTimeUs } = useProjectStore();
+  const openedProject = useProjectStore((s) => s.openedProject);
+  const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
+  const applyPlaybackStatus = useProjectStore((s) => s.applyPlaybackStatus);
   const tracks = audioTracks(openedProject);
   const [trackId, setTrackId] = useState<string>("");
   const [view, setView] = useState<TranscriptView | null>(null);
@@ -181,12 +183,15 @@ export const TranscriptPanel: React.FC = () => {
   );
   const rejectedCount = suggestions.length - pending.length;
 
-  const activeIndex = useMemo(
-    () =>
-      words.findIndex(
-        (w) => w.editedStartUs !== null && w.editedEndUs !== null && currentTimeUs >= w.editedStartUs && currentTimeUs < w.editedEndUs,
-      ),
-    [words, currentTimeUs],
+  // The word and line under the playhead: the panel re-renders when they change, not on
+  // every tick of the playhead.
+  const activeIndex = useProjectStore((s) =>
+    words.findIndex(
+      (w) => w.editedStartUs !== null && w.editedEndUs !== null && s.currentTimeUs >= w.editedStartUs && s.currentTimeUs < w.editedEndUs,
+    ),
+  );
+  const playingLine = useProjectStore((s) =>
+    lines.findIndex((line) => line.startUs !== null && line.endUs !== null && s.currentTimeUs >= line.startUs && s.currentTimeUs < line.endUs),
   );
 
   useEffect(() => {
@@ -521,8 +526,7 @@ export const TranscriptPanel: React.FC = () => {
           </p>
         )}
         {lines.map((line, lineIndex) => {
-          const playing =
-            line.startUs !== null && line.endUs !== null && currentTimeUs >= line.startUs && currentTimeUs < line.endUs;
+          const playing = lineIndex === playingLine;
           return (
             <div
               key={line.words[0].w.id}

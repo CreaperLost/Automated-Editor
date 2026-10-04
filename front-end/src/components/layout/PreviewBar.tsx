@@ -59,6 +59,12 @@ export const PreviewQualityControls: React.FC = () => {
   );
 };
 
+/** The playhead's time; only this re-renders as it moves. */
+const PlayheadTime: React.FC = () => {
+  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
+  return <span className="font-semibold text-studio-100">{formatTimeUs(currentTimeUs)}</span>;
+};
+
 /// The bar under a preview: go to start, play, where the playhead is, then the preview's
 /// quality and the canvas shape. Used by the editor and the Shorts Studio alike.
 export const PreviewBar: React.FC<{
@@ -68,7 +74,6 @@ export const PreviewBar: React.FC<{
   notes?: string[];
 }> = ({ aspect, aspectTitle, notes = [] }) => {
   const project = useProjectStore((s) => s.openedProject);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const durationUs = useProjectStore((s) => s.durationUs);
   const isPlaying = useProjectStore((s) => s.isPlaying);
   const bindings = useHotkeyStore((s) => s.bindings);
@@ -89,7 +94,7 @@ export const PreviewBar: React.FC<{
         {isPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-white ml-0.5" />}
       </button>
       <div className="px-2 font-mono text-label tabular-nums whitespace-nowrap" aria-label="Playhead time">
-        <span className="font-semibold text-studio-100">{formatTimeUs(currentTimeUs)}</span>
+        <PlayheadTime />
         <span className="mx-1 text-studio-600">/</span>
         <span className="text-studio-400">{formatTimeUs(durationUs)}</span>
       </div>

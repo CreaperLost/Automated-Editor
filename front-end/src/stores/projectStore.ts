@@ -168,10 +168,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     if (state.openedProject?.projectHandle !== status.projectHandle || status.generation < state.playbackGeneration) return state;
     // The engine plays something this window does not show (a short in the editor, or the
     // video in the Shorts Studio): note it, but keep this window's own playhead.
-    if ((status.shortId ?? undefined) !== state.viewShort) {
-      return { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation };
-    }
-    return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable, playbackShortId: status.shortId };
+    const next: Partial<ProjectStore> =
+      (status.shortId ?? undefined) !== state.viewShort
+        ? { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation }
+        : {
+            currentTimeUs: Math.min(status.positionUs, state.durationUs),
+            isPlaying: status.state === "playing",
+            playbackGeneration: status.generation,
+            playbackError: status.error,
+            previewAvailable: status.previewAvailable,
+            playbackShortId: status.shortId,
+          };
+    // Polled many times a second: nothing changed means nothing to tell the components.
+    const changed = (Object.keys(next) as (keyof ProjectStore)[]).some((key) => !Object.is(next[key], state[key]));
+    return changed ? next : state;
   }),
   loadOpenedProject: (project, projectPath) => {
     const resolvedPath = projectPath ?? project.projectPath ?? get().projectPath ?? undefined;
@@ -300,8 +310,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (!options?.remote) broadcastProject(project);
       return;
     }
-    // An older (or the same) revision is stale, unless it is a different view of it (a short's).
-    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle && project.shortView === current.shortView) {
+    // An older revision is stale, whether it came from another window or is this window's own
+    // late reply; from another window the same revision is too. A different view of it (a
+    // short's) is not.
+    if (
+      current &&
+      project.projectHandle === current.projectHandle &&
+      project.shortView === current.shortView &&
+      (project.revision < current.revision || (options?.remote && project.revision === current.revision))
+    ) {
       return;
     }
     if (!options?.remote && current?.projectHandle === project.projectHandle) broadcastProject(project);
