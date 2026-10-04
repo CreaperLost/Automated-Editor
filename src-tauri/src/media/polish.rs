@@ -259,6 +259,53 @@ fn noise_profile(
     Ok(builder.finish())
 }
 
+/// Analyzes, side by side, the files the enabled effects will read: loudness reads every
+/// lane, noise reduction the lanes that have it, ducking the speech lanes. One after another,
+/// switching an effect on for a long recording held playback up for over a second; the plan
+/// is then built from the cache.
+fn prepare_analyses(root: &Path, settings: &crate::project::AudioSettings, lanes: &[Lane]) {
+    let ducking = lanes
+        .iter()
+        .any(|lane| !lane.speech && settings.lane_duck_db(&lane.id, true).is_some());
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for lane in lanes {
+        let wanted = settings.normalize
+            || settings.lane_denoise_db(&lane.id, lane.speech).is_some()
+            || (ducking && lane.speech);
+        if !wanted {
+            continue;
+        }
+        for clip in &lane.clips {
+            for segment in clip.segments.iter().filter(|s| {
+                s.available && s.start_us < clip.in_us + clip.len && clip.in_us < s.end_us
+            }) {
+                if let Ok(path) = safe_path(root, &segment.relative_path) {
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+    if paths.len() < 2 {
+        return;
+    }
+    let workers = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .min(paths.len())
+        .min(8);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(path) = paths.get(i) else { break };
+                let _ = analyze_cached(path);
+            });
+        }
+    });
+}
+
 /// Polish derived for one edit: everything the mixer needs per sample.
 pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
@@ -287,6 +334,7 @@ impl PolishPlan {
                 .and_then(|path| analyze_cached(&path))
                 .ok()
         };
+        prepare_analyses(root, settings, lanes);
         // Noise reduction where a lane has it on (speech by default when switched on).
         let mut denoisers = HashMap::new();
         for lane in lanes {

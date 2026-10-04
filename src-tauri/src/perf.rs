@@ -526,3 +526,37 @@ fn perf_long_recording() {
     time("first audio chunk mid-video", t);
     seeks(&folder, &cut, "long");
 }
+
+/// Building the audio mixer of the long recording (`AERO_REC`) with every effect on: the
+/// playback worker builds one after each edit.
+#[test]
+#[ignore]
+fn perf_long_mixer_with_polish() {
+    let Some(path) = std::env::var_os("AERO_REC") else {
+        return;
+    };
+    let work = tempfile::tempdir().unwrap();
+    let folder =
+        crate::project::folder::create_project_folder(work.path(), "Long", Some(Path::new(&path)))
+            .unwrap();
+    let state = AppState::new();
+    commands::open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
+    let mut doc = document(&state);
+    doc.audio.normalize = true;
+    doc.audio.noise_reduction = true;
+    doc.audio.duck_system_audio = true;
+    for pass in ["cold", "warm", "warm"] {
+        let t = Instant::now();
+        let mixer = AudioMixer::new(&folder, &doc).unwrap();
+        println!(
+            "PERF long mixer with polish {pass}: {:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+        let t = Instant::now();
+        mixer.read_frames(48_000 * 300, CHUNK_FRAMES).unwrap();
+        println!(
+            "PERF long first denoised chunk: {:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
