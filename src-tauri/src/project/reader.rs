@@ -1,15 +1,14 @@
 //! Bounded, non-repairing project inspection. Source files are never modified.
 use super::{
     display_name_from_input,
-    folder::{
-        load_project_file, mount_recording, mounted_recording, save_project_file, under_mount,
-        ProjectFile, RECORDING_MOUNT,
-    },
+    folder::{load_project_file, resolve_mount, save_project_file, ProjectFile},
     journal::JournalRecord,
     layout::EditLayout,
     manifest::{ProjectManifest, TrackDescriptor},
-    revision::{self, EditDocument, EditHistory, TrimSide},
+    revision::{self, EditDocument, EditHistory},
 };
+use crate::sequence::edit::{EditOutcome, SequenceEdit};
+use crate::sequence::{Asset, Role, Sequence};
 use crate::zoom::ZoomKeyframe;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -48,53 +47,49 @@ pub struct TrackSummary {
     pub available_segment_count: usize,
 }
 
-/// One entry of the edited timeline, in playback order. Without `media` it is a range of the
-/// recording; with it, a range of an imported media asset (times within that file).
+/// One entry of a clock: a range of an asset's time playing on the timeline, or (with
+/// `media` set) time where it does not play. See [`crate::sequence::clock`].
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RetainedInterval {
     pub start_us: u64,
     pub end_us: u64,
-    /// Imported media asset id; `None` is the recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
-    /// For imported media: its sound was split off onto audio tracks, so this clip plays
-    /// silent here.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub audio_unlinked: bool,
 }
 
 impl RetainedInterval {
-    /// A range of the recording.
+    /// A range of the asset's time.
     pub fn recording(start_us: u64, end_us: u64) -> Self {
         Self {
             start_us,
             end_us,
             media: None,
-            audio_unlinked: false,
         }
     }
 
     pub fn is_recording(&self) -> bool {
         self.media.is_none()
     }
-
-    /// Empty V1 time.
-    pub fn is_gap(&self) -> bool {
-        self.media.as_deref() == Some(crate::project::revision::GAP)
-    }
 }
 
+/// The project as the UI sees it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedProject {
     pub project_handle: String,
     pub revision: u64,
-    pub manifest: ProjectManifest,
-    pub source_duration_us: u64,
-    pub edited_duration_us: u64,
-    pub retained_intervals: Vec<RetainedInterval>,
-    pub tracks: Vec<TrackSummary>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    /// Where the timeline ends.
+    pub duration_us: u64,
+    /// Everything that can be played, with `missing` worked out.
+    pub assets: Vec<Asset>,
+    /// The timeline: video tracks bottom to top, then audio tracks top to bottom.
+    pub sequence: Sequence,
+    /// Frames per second the timeline steps by: the first recording's screen, else 30.
+    pub fps: u32,
     pub diagnostics: Vec<String>,
     pub preview_available: bool,
     pub undo_available: bool,
@@ -104,39 +99,19 @@ pub struct OpenedProject {
     #[serde(default)]
     pub dismissed_zoom_ids: Vec<String>,
     #[serde(default)]
+    pub zoom_settings: crate::zoom::ZoomSettings,
+    #[serde(default)]
     pub layout: EditLayout,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_path: Option<String>,
-    /// The recording folder being edited; `None` for a project without a recording. For an
-    /// older recording folder that holds its own edits, the same as `project_path`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recording_path: Option<String>,
-    /// Source ranges the edit cut out that can be put back.
-    #[serde(default)]
-    pub removed_intervals: Vec<RetainedInterval>,
-    #[serde(default)]
-    pub split_points_us: Vec<u64>,
     #[serde(default)]
     pub webcam_focus: crate::webcam_focus::WebcamFocus,
     pub audio: crate::project::AudioSettings,
     #[serde(default)]
     pub captions: crate::captions::CaptionSettings,
     #[serde(default)]
-    pub media_assets: Vec<crate::media_bin::MediaAsset>,
-    #[serde(default)]
     pub chapters: Vec<crate::chapters::Chapter>,
     #[serde(default)]
     pub shorts: Vec<crate::shorts::Short>,
-    /// Video tracks V2, V3, ... above the main sequence, bottom to top.
-    #[serde(default)]
-    pub overlay_tracks: Vec<crate::tracks::OverlayTrack>,
-    /// V1 as a track: magnetic, hidden, muted, stack position.
-    #[serde(default)]
-    pub main_track: crate::project::revision::MainTrack,
-    /// Auto-zoom settings.
-    #[serde(default)]
-    pub zoom_settings: crate::zoom::ZoomSettings,
-    /// Set when this is short `id`'s own timeline (the timeline fields are the short's).
+    /// Set when this is short `id`'s own timeline (the sequence is the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
 }
@@ -150,16 +125,12 @@ pub struct SegmentPage {
 
 pub struct ProjectReader {
     pub summary: OpenedProject,
-    segments: HashMap<String, Vec<SegmentSummary>>,
     root: PathBuf,
     history: EditHistory,
-    /// Set for a project folder (not an older recording folder holding its own edits).
-    project_file: Option<ProjectFile>,
-    // Directory advisory lease is shared with the recording writer. It creates
-    // no lock file and holds the source snapshot against cooperating writers.
+    project_file: ProjectFile,
+    // Directory advisory lease. It creates no lock file and holds the project against
+    // cooperating writers.
     _lease: File,
-    /// The same, on a project folder's recording.
-    _recording_lease: Option<File>,
 }
 
 pub(crate) fn is_safe_track_id(id: &str) -> bool {
@@ -192,9 +163,9 @@ pub(crate) fn safe_path(root: &Path, relative: &str) -> Result<PathBuf, String> 
     if relative.is_empty() || relative.contains('\\') || relative.contains(':') {
         return Err("Invalid project-relative path".into());
     }
-    // A project folder sees its recording at `recording/`.
-    let (root, relative) = match under_mount(relative).zip(mounted_recording(root)) {
-        Some((inside, recording)) => (recording, inside),
+    // A project sees its recordings at `recordings/<asset id>/`.
+    let (root, relative) = match resolve_mount(root, relative) {
+        Some((folder, inside)) => (folder, inside),
         None => (root.to_path_buf(), relative),
     };
     let mut path = root;
@@ -282,54 +253,13 @@ pub(crate) fn acquire_read_lease(root: &Path) -> Result<File, String> {
 }
 
 /// What a recording folder holds: its manifest, the committed segments of each track, and
-/// the recorded time without pauses.
+/// how long it is.
 struct RecordingIndex {
     manifest: ProjectManifest,
     segments: HashMap<String, Vec<SegmentSummary>>,
     summaries: Vec<TrackSummary>,
     duration: u64,
-    retained: Vec<RetainedInterval>,
     diagnostics: Vec<String>,
-}
-
-impl RecordingIndex {
-    /// A project without a recording: no tracks and nothing on the timeline yet.
-    fn empty() -> Self {
-        Self {
-            manifest: ProjectManifest {
-                version: ProjectManifest::CURRENT_VERSION,
-                session_id: "no-recording".into(),
-                project_name: "Untitled".into(),
-                created_at: String::new(),
-                duration_us: 0,
-                active_duration_us: 0,
-                pause_intervals: Vec::new(),
-                gaps_total: 0,
-                source_geometry: None,
-                cursor_mode: None,
-                tracks: Vec::new(),
-            },
-            segments: HashMap::new(),
-            summaries: Vec::new(),
-            duration: 0,
-            retained: Vec::new(),
-            diagnostics: Vec::new(),
-        }
-    }
-
-    /// Prefixes every media path with `mount`, where the project sees its recording.
-    fn mount_at(&mut self, mount: &str) {
-        let prefix = |path: &mut String| *path = format!("{mount}/{path}");
-        for segment in self.segments.values_mut().flatten() {
-            prefix(&mut segment.relative_path);
-        }
-        for track in &mut self.manifest.tracks {
-            prefix(&mut track.relative_path);
-        }
-        for summary in &mut self.summaries {
-            prefix(&mut summary.descriptor.relative_path);
-        }
-    }
 }
 
 fn reject_writer_lock(root: &Path) -> Result<(), String> {
@@ -340,11 +270,24 @@ fn reject_writer_lock(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The tracks, with their segments, and the length of the recording in `folder`: what an
-/// imported recording plays from.
+/// The tracks, with their segments, and the length of the recording in `folder`.
 pub fn recording_tracks(
     folder: &Path,
 ) -> Result<(Vec<(TrackSummary, Vec<SegmentSummary>)>, u64), String> {
+    let (_, tracks, duration, _) = read_recording(folder)?;
+    Ok((tracks, duration))
+}
+
+/// Everything about the recording in `folder`: its manifest, its tracks with their segments
+/// (paths relative to the folder), its length, and what was wrong with it.
+pub(crate) type RecordingRead = (
+    ProjectManifest,
+    Vec<(TrackSummary, Vec<SegmentSummary>)>,
+    u64,
+    Vec<String>,
+);
+
+pub(crate) fn read_recording(folder: &Path) -> Result<RecordingRead, String> {
     let index = index_recording(folder)?;
     let tracks = index
         .summaries
@@ -358,7 +301,7 @@ pub fn recording_tracks(
             (track.clone(), segments)
         })
         .collect();
-    Ok((tracks, index.duration))
+    Ok((index.manifest, tracks, index.duration, index.diagnostics))
 }
 
 fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
@@ -537,35 +480,17 @@ fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
     let mut pauses = manifest.pause_intervals.clone();
     pauses.sort_by_key(|p| p.start_us);
     let mut cursor = 0;
-    let mut retained = Vec::new();
     for pause in pauses {
         if pause.start_us < cursor || pause.start_us >= pause.end_us || pause.end_us > duration {
             return Err("Invalid or overlapping pause intervals".into());
         }
-        if cursor < pause.start_us {
-            retained.push(RetainedInterval {
-                start_us: cursor,
-                end_us: pause.start_us,
-                media: None,
-                audio_unlinked: false,
-            });
-        }
         cursor = pause.end_us;
-    }
-    if cursor < duration {
-        retained.push(RetainedInterval {
-            start_us: cursor,
-            end_us: duration,
-            media: None,
-            audio_unlinked: false,
-        });
     }
     Ok(RecordingIndex {
         manifest,
         segments,
         summaries,
         duration,
-        retained,
         diagnostics,
     })
 }
@@ -581,141 +506,142 @@ impl ProjectReader {
         }
         let root = dunce::canonicalize(path).map_err(|e| e.to_string())?;
         let lease = acquire_read_lease(&root)?;
-        let project_file = load_project_file(&root)?;
-        let (index, recording_lease) = match &project_file {
-            // A project folder: its recording, if any, lives elsewhere and is only read.
-            Some(file) => match &file.recording {
-                Some(recording) => {
-                    let recording_root = dunce::canonicalize(recording).map_err(|_| {
-                        format!(
-                            "This project's recording is missing. It was at {recording}; move it back there to open the project."
-                        )
-                    })?;
-                    if recording_root.starts_with(&root) || root.starts_with(&recording_root) {
-                        return Err("A project and its recording must be separate folders".into());
-                    }
-                    let recording_lease = acquire_read_lease(&recording_root)?;
-                    reject_writer_lock(&recording_root)?;
-                    let mut index = index_recording(&recording_root)?;
-                    index.mount_at(RECORDING_MOUNT);
-                    mount_recording(&root, &recording_root);
-                    (index, Some(recording_lease))
-                }
-                None => (RecordingIndex::empty(), None),
-            },
-            // An older recording folder that holds its own edits.
-            None => {
-                reject_writer_lock(&root)?;
-                (index_recording(&root)?, None)
+        let Some(project_file) = load_project_file(&root)? else {
+            return Err(if root.join("manifest.json").is_file() {
+                "That folder is a recording. Make a new project from it to edit it.".into()
+            } else {
+                "That folder is not an AeroEdits project".into()
+            });
+        };
+        let mut diagnostics = Vec::new();
+        let document = match revision::load_edit_document(&root) {
+            Ok(Some(document)) => document,
+            Ok(None) => Self::starting_document(&root, &project_file)?,
+            Err(error) => {
+                diagnostics.push(format!("Edit document ignored: {error}"));
+                Self::starting_document(&root, &project_file)?
             }
         };
-        let RecordingIndex {
-            mut manifest,
-            segments,
-            summaries,
-            duration,
-            retained,
-            mut diagnostics,
-        } = index;
-        if let Some(file) = &project_file {
-            manifest.project_name = file.name.clone();
-        }
-        let mut history = EditHistory::new(EditDocument::from_retained(retained.clone())?);
-        match revision::load_edit_document(&root) {
-            Ok(Some(document)) => {
-                // Imported media keeps times within its own file.
-                if document
-                    .retained_intervals
-                    .iter()
-                    .any(|s| s.is_recording() && s.end_us > duration)
-                {
-                    return Err("Edit interval exceeds source duration".into());
-                }
-                history = EditHistory::new(document);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                if diagnostics.len() < 256 {
-                    diagnostics.push(format!("Edit document ignored: {error}"));
-                }
-            }
-        }
-        let retained = history.current.retained_intervals.clone();
-        let edited_duration_us = history.current.edited_duration_us()?;
-        let zooms = history.current.zooms_with_ranges();
+        let history = EditHistory::new(document);
         let mut reader = Self {
             summary: OpenedProject {
                 project_handle: uuid::Uuid::new_v4().to_string(),
-                revision: history.current.revision,
-                manifest,
-                source_duration_us: duration,
-                edited_duration_us,
-                retained_intervals: retained,
-                tracks: summaries,
+                revision: 0,
+                name: project_file.name.clone(),
+                project_path: Some(root.to_string_lossy().into_owned()),
+                duration_us: 0,
+                assets: Vec::new(),
+                sequence: Sequence::default(),
+                fps: 30,
                 diagnostics,
                 preview_available: false,
-                undo_available: history.undo_available(),
-                redo_available: history.redo_available(),
-                zooms,
-                dismissed_zoom_ids: history.current.dismissed_zoom_ids.clone(),
-                layout: history.current.layout.clone(),
-                project_path: Some(root.to_string_lossy().into_owned()),
-                recording_path: match &project_file {
-                    Some(file) => file.recording.clone(),
-                    None => Some(root.to_string_lossy().into_owned()),
-                },
-                removed_intervals: Vec::new(),
-                split_points_us: Vec::new(),
+                undo_available: false,
+                redo_available: false,
+                zooms: Vec::new(),
+                dismissed_zoom_ids: Vec::new(),
+                zoom_settings: Default::default(),
+                layout: EditLayout::default(),
                 webcam_focus: Default::default(),
-                audio: history.current.audio.clone(),
-                captions: history.current.captions.clone(),
-                media_assets: history.current.media_assets.clone(),
+                audio: Default::default(),
+                captions: Default::default(),
                 chapters: Vec::new(),
                 shorts: Vec::new(),
-                overlay_tracks: Vec::new(),
-                main_track: history.current.main_track.clone(),
-                zoom_settings: history.current.zoom_settings.clone(),
                 short_view: None,
             },
-            segments,
             root,
             history,
             project_file,
             _lease: lease,
-            _recording_lease: recording_lease,
         };
+        reader.index_recordings();
         reader.sync_summary();
         Ok(reader)
+    }
+
+    /// A new project's document: its recording on the timeline, saved at once so the
+    /// recording keeps its id (transcripts are kept under it).
+    fn starting_document(root: &Path, file: &ProjectFile) -> Result<EditDocument, String> {
+        let Some(recording) = &file.recording else {
+            return Ok(EditDocument::default());
+        };
+        let folder = dunce::canonicalize(recording).map_err(|_| {
+            format!(
+                "This project's recording is missing. It was at {recording}; move it back there to open the project."
+            )
+        })?;
+        if folder.starts_with(root) || root.starts_with(&folder) {
+            return Err("A project and its recording must be separate folders".into());
+        }
+        reject_writer_lock(&folder)?;
+        let asset = crate::sequence::sources::recording_asset(
+            &folder,
+            crate::sequence::sources::new_asset_id(true),
+        )?;
+        let document = EditDocument::from_recording(asset)?;
+        revision::save_edit_document(root, &document)?;
+        Ok(document)
+    }
+
+    /// Mounts every recording in the project and notes what is wrong with any of them.
+    fn index_recordings(&mut self) {
+        for asset in self
+            .history
+            .current
+            .assets
+            .iter()
+            .filter(|a| a.is_recording())
+        {
+            match crate::sequence::sources::recording(&self.root, asset) {
+                Ok(files) => {
+                    for line in files.diagnostics.iter().take(32) {
+                        self.summary
+                            .diagnostics
+                            .push(format!("{}: {line}", asset.name));
+                    }
+                }
+                Err(error) => self.summary.diagnostics.push(error),
+            }
+        }
+        self.summary.diagnostics.truncate(256);
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Where the recording's own files (manifest, journal, telemetry) are: the linked
-    /// recording of a project folder, or the folder itself for an older recording folder.
-    pub fn source_root(&self) -> PathBuf {
-        mounted_recording(&self.root)
-            .filter(|_| self.project_file.is_some())
-            .unwrap_or_else(|| self.root.clone())
+    pub fn history(&self) -> &EditHistory {
+        &self.history
     }
 
-    /// Whether this project has a recording (a project can start empty).
-    pub fn has_recording(&self) -> bool {
-        self.project_file
-            .as_ref()
-            .is_none_or(|file| file.recording.is_some())
+    pub fn document(&self) -> &EditDocument {
+        &self.history.current
     }
 
-    pub fn segments_for(&self, track_id: &str) -> Option<&[SegmentSummary]> {
-        self.segments.get(track_id).map(Vec::as_slice)
+    /// The recordings in the project, first the one it was made from.
+    pub fn recordings(&self) -> impl Iterator<Item = &Asset> {
+        self.history
+            .current
+            .assets
+            .iter()
+            .filter(|a| a.is_recording())
     }
 
-    pub fn page(&self, track_id: &str, offset: usize, limit: usize) -> Result<SegmentPage, String> {
+    /// A segment page of one stream of a recording (`<asset>.<stream>`).
+    pub fn page(&self, key: &str, offset: usize, limit: usize) -> Result<SegmentPage, String> {
         if limit == 0 || limit > 256 {
             return Err("Page limit must be 1–256".into());
         }
-        let segments = self.segments.get(track_id).ok_or("Unknown track")?;
+        let source = crate::sequence::StreamRef::parse(key).ok_or("Unknown stream")?;
+        let asset = self
+            .history
+            .current
+            .asset(&source.asset)
+            .ok_or("Unknown stream")?;
+        let segments =
+            match crate::sequence::sources::stream_source(&self.root, asset, &source.stream)? {
+                crate::sequence::sources::StreamSource::Segments(segments) => segments,
+                _ => Vec::new(),
+            };
         if offset > segments.len() {
             return Err("Invalid page offset".into());
         }
@@ -726,8 +652,36 @@ impl ProjectReader {
         })
     }
 
-    pub fn history(&self) -> &EditHistory {
-        &self.history
+    fn done(&mut self) -> OpenedProject {
+        self.sync_summary();
+        self.summary.clone()
+    }
+
+    /// One timeline edit in the project's timeline or (with `short`) in a short's own.
+    pub fn edit_sequence(
+        &mut self,
+        expected_revision: u64,
+        edit: &SequenceEdit,
+        short: Option<&str>,
+    ) -> Result<(OpenedProject, EditOutcome), String> {
+        match short {
+            None => {
+                let outcome = self
+                    .history
+                    .edit_sequence(expected_revision, edit, &self.root)?;
+                Ok((self.done(), outcome))
+            }
+            Some(short_id) => {
+                let outcome = self.history.edit_short_sequence(
+                    expected_revision,
+                    short_id,
+                    edit,
+                    &self.root,
+                )?;
+                self.sync_summary();
+                Ok((self.short_view(short_id)?, outcome))
+            }
+        }
     }
 
     pub fn ripple_cuts(
@@ -737,94 +691,26 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .ripple_cuts(expected_revision, cuts, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
-    pub fn ripple_trim(
-        &mut self,
-        expected_revision: u64,
-        playhead_us: u64,
-        side: TrimSide,
-    ) -> Result<OpenedProject, String> {
-        self.history
-            .ripple_trim(expected_revision, playhead_us, side, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
-    pub fn split(
-        &mut self,
-        expected_revision: u64,
-        edited_us: u64,
-    ) -> Result<OpenedProject, String> {
-        self.history
-            .split(expected_revision, edited_us, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
-    /// Moves the edited range `[start, end)` (usually one clip) to edited position `target`.
-    pub fn move_range(
-        &mut self,
-        expected_revision: u64,
-        start_us: u64,
-        end_us: u64,
-        target_us: u64,
-    ) -> Result<OpenedProject, String> {
-        self.history
-            .move_range(expected_revision, start_us, end_us, target_us, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
-    /// Restores removed media inside the requested source ranges. Parts of a
-    /// range that were never removed, or that fall in a recorder pause, are
-    /// ignored.
-    pub fn restore_cuts(
-        &mut self,
-        expected_revision: u64,
-        ranges: &[(u64, u64)],
-        grow: crate::project::revision::RestoreGrow,
-        shift_tracks_at: Option<u64>,
-    ) -> Result<OpenedProject, String> {
-        let mut restorable = Vec::new();
-        for &(start, end) in ranges {
-            if end <= start {
-                return Err("Restore range must be a half-open interval".into());
-            }
-            for removed in &self.summary.removed_intervals {
-                let a = start.max(removed.start_us);
-                let b = end.min(removed.end_us);
-                if a < b {
-                    restorable.push((a, b));
-                }
-            }
-        }
-        if restorable.is_empty() {
-            return Err("Nothing to restore in that range".into());
-        }
-        self.history.restore(
-            expected_revision,
-            &restorable,
-            grow,
-            shift_tracks_at,
-            &self.root,
-        )?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn undo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
         self.history.undo(expected_revision, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        self.index_recordings_quietly();
+        Ok(self.done())
     }
 
     pub fn redo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
         self.history.redo(expected_revision, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        self.index_recordings_quietly();
+        Ok(self.done())
+    }
+
+    /// Undo or redo can bring back a recording: mount it again.
+    fn index_recordings_quietly(&self) {
+        for asset in self.recordings() {
+            let _ = crate::sequence::sources::recording(&self.root, asset);
+        }
     }
 
     pub fn accept_zooms(
@@ -834,8 +720,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .accept_zooms(expected_revision, suggestions, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn set_zoom_settings(
@@ -845,8 +730,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .set_zoom_settings(expected_revision, settings, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn reload_zooms(
@@ -856,8 +740,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .reload_zooms(expected_revision, suggestions, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn dismiss_zooms(
@@ -867,8 +750,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .dismiss_zooms(expected_revision, ids, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn update_zoom(
@@ -878,8 +760,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .update_zoom(expected_revision, patch, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn add_manual_zoom(
@@ -900,8 +781,7 @@ impl ProjectReader {
             scale,
             &self.root,
         )?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn delete_zoom(
@@ -911,8 +791,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .delete_zoom(expected_revision, id, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn update_layout(
@@ -922,8 +801,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .update_layout(expected_revision, layout, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn update_webcam_focus(
@@ -933,8 +811,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .update_webcam_focus(expected_revision, focus, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn add_webcam_focus(
@@ -949,8 +826,7 @@ impl ProjectReader {
             edited_end_us,
             &self.root,
         )?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn remove_webcam_focus(
@@ -965,8 +841,7 @@ impl ProjectReader {
             edited_end_us,
             &self.root,
         )?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn set_chapters(
@@ -976,8 +851,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .set_chapters(expected_revision, chapters, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn set_shorts(
@@ -987,8 +861,7 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .set_shorts(expected_revision, shorts, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
     pub fn update_audio(
@@ -998,12 +871,21 @@ impl ProjectReader {
     ) -> Result<OpenedProject, String> {
         self.history
             .update_audio(expected_revision, audio, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+        Ok(self.done())
     }
 
-    /// Copies files into the project and adds them to the media bin. All or nothing: a file
-    /// that cannot be imported fails the whole call.
+    pub fn update_captions(
+        &mut self,
+        expected_revision: u64,
+        captions: crate::captions::CaptionSettings,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .update_captions(expected_revision, captions, &self.root)?;
+        Ok(self.done())
+    }
+
+    /// Adds files (or recording folders) to the project, referenced where they are; their
+    /// sound is extracted once. All or nothing: a file that cannot be imported fails the call.
     pub fn import_media(
         &mut self,
         expected_revision: u64,
@@ -1024,72 +906,51 @@ impl ProjectReader {
                 }
             }
         }
-        self.add_media(expected_revision, assets)
+        self.add_assets(expected_revision, assets)
     }
 
-    /// Records media already copied into the project. On failure the copies are deleted.
-    pub fn add_media(
+    /// Records media already described for the project. On failure its extracted files go.
+    pub fn add_assets(
         &mut self,
         expected_revision: u64,
-        assets: Vec<crate::media_bin::MediaAsset>,
+        assets: Vec<Asset>,
     ) -> Result<OpenedProject, String> {
         if let Err(error) = self
             .history
-            .add_media(expected_revision, assets.clone(), &self.root)
+            .add_assets(expected_revision, assets.clone(), &self.root)
         {
             for asset in &assets {
                 crate::media_bin::remove_files(&self.root, asset);
             }
             return Err(error);
         }
-        self.sync_summary();
-        Ok(self.summary.clone())
+        self.index_recordings();
+        Ok(self.done())
     }
 
-    pub fn remove_media(
+    pub fn remove_asset(
         &mut self,
         expected_revision: u64,
         asset_id: &str,
     ) -> Result<OpenedProject, String> {
         self.history
-            .remove_media(expected_revision, asset_id, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+            .remove_asset(expected_revision, asset_id, &self.root)?;
+        Ok(self.done())
     }
 
-    pub fn set_media_roles(
+    pub fn set_stream_roles(
         &mut self,
         expected_revision: u64,
         asset_id: &str,
-        picture_role: crate::media_bin::PictureRole,
-        sound_roles: Vec<crate::media_bin::SoundRole>,
-    ) -> Result<OpenedProject, String> {
-        self.history.set_media_roles(
-            expected_revision,
-            asset_id,
-            picture_role,
-            sound_roles,
-            &self.root,
-        )?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
-    pub fn insert_media(
-        &mut self,
-        expected_revision: u64,
-        asset_id: &str,
-        target_us: u64,
-        range: Option<(u64, u64)>,
+        roles: &[(String, Role)],
     ) -> Result<OpenedProject, String> {
         self.history
-            .insert_media(expected_revision, asset_id, target_us, range, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
+            .set_stream_roles(expected_revision, asset_id, roles, &self.root)?;
+        Ok(self.done())
     }
 
-    /// The project as short `short_id` sees it: the timeline fields are the short's own (or
-    /// its stretch of the video), in the short's time; everything else is the project's.
+    /// The project as short `short_id` sees it: the sequence is the short's own (or its
+    /// stretch of the video), in the short's time; everything else is the project's.
     pub fn short_view(&self, short_id: &str) -> Result<OpenedProject, String> {
         let base = &self.history.current;
         let short = base
@@ -1100,22 +961,13 @@ impl ProjectReader {
         let timeline = crate::shorts::short_timeline(base, short)?;
         let mut view = self.summary.clone();
         view.short_view = Some(short_id.to_string());
-        view.retained_intervals = timeline.retained_intervals.clone();
-        view.split_points_us = timeline.split_points_us.clone();
-        view.overlay_tracks = timeline.overlay_tracks.clone();
-        view.edited_duration_us = timeline.edited_duration_us()?;
+        view.sequence = timeline.sequence.clone();
+        view.duration_us = timeline.duration_us();
         view.zooms = timeline.zooms_with_ranges();
-        let mut focus = base.webcam_focus.clone();
-        if let Ok(mapper) = timeline.mapper() {
-            focus.attach_edited_ranges(&mapper);
-        }
+        let mut focus = timeline.webcam_focus.clone();
+        focus.attach_edited_ranges(&timeline.focus_clock());
         view.webcam_focus = focus;
         view.chapters = Vec::new();
-        view.removed_intervals = revision::removed_intervals(
-            &timeline.retained_intervals,
-            &self.pauses(),
-            self.summary.source_duration_us,
-        );
         Ok(view)
     }
 
@@ -1124,22 +976,6 @@ impl ProjectReader {
         short
             .and_then(|id| self.short_view(id).ok())
             .unwrap_or_else(|| self.summary.clone())
-    }
-
-    /// A timeline edit made in the project's timeline or (with `short`) in a short's own.
-    pub fn edit_tracks_in(
-        &mut self,
-        expected_revision: u64,
-        edit: &crate::tracks::TrackEdit,
-        short: Option<&str>,
-    ) -> Result<OpenedProject, String> {
-        let Some(short_id) = short else {
-            return self.edit_tracks(expected_revision, edit);
-        };
-        self.history
-            .edit_short_tracks(expected_revision, short_id, edit, &self.root)?;
-        self.sync_summary();
-        self.short_view(short_id)
     }
 
     /// Lets a short follow the video again.
@@ -1154,119 +990,59 @@ impl ProjectReader {
         self.short_view(short_id)
     }
 
-    fn pauses(&self) -> Vec<RetainedInterval> {
-        self.summary
-            .manifest
-            .pause_intervals
-            .iter()
-            .map(|p| RetainedInterval::recording(p.start_us, p.end_us))
-            .collect()
-    }
-
-    pub fn edit_tracks(
-        &mut self,
-        expected_revision: u64,
-        edit: &crate::tracks::TrackEdit,
-    ) -> Result<OpenedProject, String> {
-        self.history
-            .edit_tracks(expected_revision, edit, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
-    pub fn update_captions(
-        &mut self,
-        expected_revision: u64,
-        captions: crate::captions::CaptionSettings,
-    ) -> Result<OpenedProject, String> {
-        self.history
-            .update_captions(expected_revision, captions, &self.root)?;
-        self.sync_summary();
-        Ok(self.summary.clone())
-    }
-
     pub fn rename_project(&mut self, new_name: &str) -> Result<OpenedProject, String> {
         let trimmed = new_name.trim();
         if trimmed.is_empty() {
             return Err("Project name cannot be empty".into());
         }
         let clean_name = display_name_from_input(trimmed);
-        if clean_name == self.summary.manifest.project_name {
+        if clean_name == self.summary.name {
             return Ok(self.summary.clone());
         }
-        // A project folder keeps its own name; the recording is never written.
-        if let Some(file) = &mut self.project_file {
-            let mut next = file.clone();
-            next.name = clean_name.clone();
-            save_project_file(&self.root, &next)?;
-            *file = next;
-            self.summary.manifest.project_name = clean_name;
-            return Ok(self.summary.clone());
-        }
-        let mut manifest = self.summary.manifest.clone();
-        manifest.project_name = clean_name;
-        manifest
-            .save_with_backup(&self.root.join("manifest.json"))
-            .map_err(|e| e.to_string())?;
-        self.summary.manifest = manifest;
+        // A project folder keeps its own name; recordings are never written.
+        let mut next = self.project_file.clone();
+        next.name = clean_name.clone();
+        save_project_file(&self.root, &next)?;
+        self.project_file = next;
+        self.summary.name = clean_name;
         Ok(self.summary.clone())
     }
 
     fn sync_summary(&mut self) {
-        self.summary.revision = self.history.current.revision;
-        self.summary.retained_intervals = self.history.current.retained_intervals.clone();
-        self.summary.edited_duration_us = self
-            .history
-            .current
-            .edited_duration_us()
-            .unwrap_or(self.summary.edited_duration_us);
+        let document = &self.history.current;
+        self.summary.revision = document.revision;
+        self.summary.duration_us = document.duration_us();
+        self.summary.sequence = document.sequence.clone();
+        self.summary.assets = document.assets.clone();
+        for asset in &mut self.summary.assets {
+            asset.missing = !Path::new(&asset.path).exists();
+        }
+        self.summary.fps = document
+            .assets
+            .iter()
+            .filter(|a| a.is_recording())
+            .flat_map(|a| a.streams.iter())
+            .find(|s| s.role == Role::Screen)
+            .and_then(|s| s.fps)
+            .filter(|&fps| fps > 0)
+            .unwrap_or(30);
         self.summary.undo_available = self.history.undo_available();
         self.summary.redo_available = self.history.redo_available();
-        self.summary.zooms = self.history.current.zooms_with_ranges();
-        self.summary.dismissed_zoom_ids = self.history.current.dismissed_zoom_ids.clone();
-        self.summary.layout = self.history.current.layout.clone();
-        self.summary.split_points_us = self.history.current.split_points_us.clone();
-        let mut focus = self.history.current.webcam_focus.clone();
-        if let Ok(mapper) = self.history.current.mapper() {
-            focus.attach_edited_ranges(&mapper);
-        }
+        self.summary.zooms = document.zooms_with_ranges();
+        self.summary.dismissed_zoom_ids = document.dismissed_zoom_ids.clone();
+        self.summary.zoom_settings = document.zoom_settings.clone();
+        self.summary.layout = document.layout.clone();
+        let mut focus = document.webcam_focus.clone();
+        focus.attach_edited_ranges(&document.focus_clock());
         self.summary.webcam_focus = focus;
-        self.summary.audio = self.history.current.audio.clone();
-        self.summary.captions = self.history.current.captions.clone();
-        self.summary.media_assets = self.history.current.media_assets.clone();
-        for asset in &mut self.summary.media_assets {
-            asset.missing = asset
-                .file_path(&self.root)
-                .map_or(true, |path| !path.exists());
-        }
-        let mut chapters = self.history.current.chapters.clone();
-        if let Ok(mapper) = self.history.current.mapper() {
-            crate::chapters::attach_edited(&mut chapters, &mapper);
-        }
+        self.summary.audio = document.audio.clone();
+        self.summary.captions = document.captions.clone();
+        let mut chapters = document.chapters.clone();
+        crate::chapters::attach_edited(&mut chapters, document);
         self.summary.chapters = chapters;
-        let mut shorts = self.history.current.shorts.clone();
-        crate::shorts::attach_edited(&mut shorts, &self.history.current);
+        let mut shorts = document.shorts.clone();
+        crate::shorts::attach_edited(&mut shorts, document);
         self.summary.shorts = shorts;
-        self.summary.overlay_tracks = self.history.current.overlay_tracks.clone();
-        self.summary.main_track = self.history.current.main_track.clone();
-        self.summary.zoom_settings = self.history.current.zoom_settings.clone();
-        let pauses: Vec<RetainedInterval> = self
-            .summary
-            .manifest
-            .pause_intervals
-            .iter()
-            .map(|p| RetainedInterval {
-                start_us: p.start_us,
-                end_us: p.end_us,
-                media: None,
-                audio_unlinked: false,
-            })
-            .collect();
-        self.summary.removed_intervals = revision::removed_intervals(
-            &self.history.current.retained_intervals,
-            &pauses,
-            self.summary.source_duration_us,
-        );
     }
 }
 
@@ -1276,18 +1052,22 @@ mod tests {
     use crate::fixtures::TestProject;
     use crate::project::manifest::PauseInterval;
 
-    /// `fs::canonicalize` returns verbatim `\\?\C:\...` paths on Windows, which leak into
+    /// A project folder made from a recording, as the app makes them.
+    fn project_for(recording: &Path, parent: &Path) -> PathBuf {
+        crate::project::folder::create_project_folder(parent, "Edit", Some(recording)).unwrap()
+    }
+
+    /// `fs::canonicalize` returns verbatim `\?\C:\...` paths on Windows, which leak into
     /// FFmpeg arguments, the UI and comparisons with user-chosen paths.
     #[cfg(windows)]
     #[test]
     fn open_root_has_no_verbatim_prefix_on_windows() {
         let dir = tempfile::tempdir().unwrap();
-        let bundle = TestProject::create(dir.path(), "verbatim");
-        let root = bundle.root_path().to_path_buf();
-        drop(bundle);
+        let root =
+            crate::project::folder::create_project_folder(dir.path(), "verbatim", None).unwrap();
         let reader = ProjectReader::open(&root).unwrap();
         let shown = reader.root().to_string_lossy().into_owned();
-        assert!(!shown.starts_with(r"\\?\"), "verbatim root {shown}");
+        assert!(!shown.starts_with(r"\?\"), "verbatim root {shown}");
         assert!(reader.root().is_absolute());
 
         let parent = dir.path().join("exports");
@@ -1302,10 +1082,9 @@ mod tests {
         )
         .unwrap();
         let shown = resolved.to_string_lossy().into_owned();
-        assert!(!shown.starts_with(r"\\?\"), "verbatim destination {shown}");
+        assert!(!shown.starts_with(r"\?\"), "verbatim destination {shown}");
         assert_eq!(resolved.file_name().unwrap(), "out.mp4");
-        // Traversal and the inside-bundle check still apply.
-        assert!(ProjectReader::open(&root.join("..").join("verbatim.aero")).is_err());
+        assert!(ProjectReader::open(&root.join("..").join("verbatim")).is_err());
         let inside = reader.root().join("out.mp4");
         assert!(crate::export::resolve_destination(
             reader.root(),
@@ -1317,10 +1096,28 @@ mod tests {
         .is_err());
     }
 
+    /// A recording with pauses opens as one linked clip set per recorded stretch, keeps its
+    /// asset id across opens, and a recording folder itself is not a project.
     #[test]
-    fn restore_cuts_never_restores_pauses_or_uncut_media() {
+    fn a_new_project_lays_out_its_recording_between_pauses() {
         let dir = tempfile::tempdir().unwrap();
-        let mut bundle = TestProject::create(dir.path(), "restore");
+        let mut bundle = TestProject::create(dir.path(), "take");
+        bundle
+            .manifest_mut()
+            .tracks
+            .push(crate::project::TrackDescriptor {
+                id: "mic".into(),
+                track_type: crate::project::TrackType::MicAudio,
+                codec: "pcm".into(),
+                relative_path: "media/mic/000001.wav".into(),
+                width: None,
+                height: None,
+                fps: None,
+                sample_rate: Some(48_000),
+                channels: Some(1),
+                gaps_total: 0,
+                media_timescale: Some(48_000),
+            });
         bundle.manifest_mut().duration_us = 10_000_000;
         bundle.manifest_mut().active_duration_us = 9_000_000;
         bundle.manifest_mut().pause_intervals = vec![PauseInterval {
@@ -1328,48 +1125,34 @@ mod tests {
             end_us: 7_000_000,
         }];
         bundle.save_manifest();
-        let root = bundle.root_path().to_path_buf();
+        let recording = bundle.root_path().to_path_buf();
         drop(bundle);
-        let mut reader = ProjectReader::open(&root).unwrap();
-        assert!(reader.summary.removed_intervals.is_empty());
-        assert!(reader
-            .restore_cuts(0, &[(0, 10_000_000)], Default::default(), None)
-            .is_err());
-
+        assert!(ProjectReader::open(&recording)
+            .err()
+            .unwrap()
+            .contains("recording"));
+        let folder = project_for(&recording, &dir.path().join("Projects"));
+        let mut reader = ProjectReader::open(&folder).unwrap();
+        assert_eq!(reader.summary.name, "Edit");
+        assert_eq!(reader.summary.duration_us, 9_000_000);
+        let asset = reader.summary.assets[0].clone();
+        assert!(asset.is_recording() && !asset.missing);
+        assert_eq!(asset.pauses.len(), 1);
+        let v1 = &reader.summary.sequence.tracks[0];
+        let spans: Vec<_> = v1
+            .clips
+            .iter()
+            .map(|c| (c.start_us, c.in_us, c.duration_us))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![(0, 0, 6_000_000), (6_000_000, 7_000_000, 3_000_000)]
+        );
         let summary = reader.ripple_cuts(0, &[(1_000_000, 2_000_000)]).unwrap();
-        assert_eq!(
-            summary.removed_intervals,
-            vec![RetainedInterval {
-                start_us: 1_000_000,
-                end_us: 2_000_000,
-                media: None,
-                audio_unlinked: false,
-            }]
-        );
-        let summary = reader
-            .restore_cuts(1, &[(0, 10_000_000)], Default::default(), None)
-            .unwrap();
-        assert!(summary.removed_intervals.is_empty());
-        assert_eq!(
-            summary.retained_intervals,
-            vec![
-                RetainedInterval {
-                    start_us: 0,
-                    end_us: 6_000_000,
-                    media: None,
-                    audio_unlinked: false,
-                },
-                RetainedInterval {
-                    start_us: 7_000_000,
-                    end_us: 10_000_000,
-                    media: None,
-                    audio_unlinked: false,
-                },
-            ]
-        );
-
-        let summary = reader.split(2, 3_000_000).unwrap();
-        assert_eq!(summary.split_points_us, vec![3_000_000]);
-        assert_eq!(summary.revision, 3);
+        assert_eq!(summary.duration_us, 8_000_000);
+        drop(reader);
+        let reopened = ProjectReader::open(&folder).unwrap();
+        assert_eq!(reopened.summary.assets[0].id, asset.id);
+        assert_eq!(reopened.summary.duration_us, 8_000_000);
     }
 }

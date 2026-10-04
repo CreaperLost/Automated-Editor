@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Captions } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
-import { transcribableSounds } from "../../lib/trackUtils";
+import { soundSources } from "../../lib/sequence";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { CaptionSettings, DEFAULT_CAPTION_SETTINGS } from "../../lib/types";
@@ -62,7 +62,7 @@ export const CaptionsSection: React.FC = () => {
 
   if (!openedProject) return null;
 
-  const audioTracks = transcribableSounds(openedProject);
+  const audioTracks = soundSources(openedProject);
 
   const update = (patch: Partial<CaptionSettings>) => {
     const next = { ...draft, ...patch };
@@ -110,7 +110,7 @@ export const CaptionsSection: React.FC = () => {
       <fieldset disabled={!draft.enabled} className="space-y-4 disabled:opacity-50">
         {audioTracks.length > 1 && (
           <label className="flex items-center justify-between text-label text-studio-400">
-            <span>Track</span>
+            <span>Sound</span>
             <select
               value={draft.trackId ?? ""}
               onChange={(e) => update({ trackId: e.target.value || undefined })}
@@ -118,7 +118,7 @@ export const CaptionsSection: React.FC = () => {
             >
               <option value="">Automatic</option>
               {audioTracks.map((t) => (
-                <option key={t.id} value={t.id}>
+                <option key={t.key} value={t.key}>
                   {t.label}
                 </option>
               ))}

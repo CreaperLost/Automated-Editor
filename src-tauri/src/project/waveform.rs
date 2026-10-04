@@ -624,7 +624,6 @@ mod tests {
                 start_us: 0,
                 end_us,
                 media: None,
-                audio_unlinked: false,
             }],
             edited_duration_us: end_us,
         }
@@ -709,7 +708,6 @@ mod tests {
             start_us: 0,
             end_us: 2_100_000,
             media: None,
-            audio_unlinked: false,
         }];
         ctx.edited_duration_us = 2_100_000;
         let page = query_waveform(&ctx, 0, 2_100_000, 21, &|| false).unwrap();

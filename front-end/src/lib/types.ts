@@ -1,12 +1,3 @@
-export type TrackType = "screen" | "webcam" | "mic" | "system";
-
-export interface TimelineInterval {
-  id: string;
-  startUs: number;
-  endUs: number;
-  excluded: boolean;
-}
-
 export interface WaveformBucket {
   startUs: number;
   endUs: number;
@@ -25,16 +16,6 @@ export interface WaveformPage {
   buckets: WaveformBucket[];
   diagnostics: string[];
   cancelled: boolean;
-}
-
-export interface Track {
-  id: string;
-  trackType: TrackType;
-  name: string;
-  muted: boolean;
-  volume: number; // linear gain, 1.0 plays as recorded
-  intervals: TimelineInterval[];
-  waveform?: WaveformPage;
 }
 
 export type ZoomOrigin = "click" | "dwell" | "cluster";
@@ -95,7 +76,7 @@ export interface ProjectZoom {
   contributingEventSeqs: number[];
   source: ZoomSource;
   editedRanges: EditedRange[];
-  /** The imported recording (or file) whose clock the times are on; absent: the recording. */
+  /** The recording whose clock the times are on. */
   media?: string;
   /** Stays on its center instead of following the mouse. */
   fixed?: boolean;
@@ -214,29 +195,22 @@ export interface AudioSettings {
   duckSystemAudio: boolean;
   /** How far system audio is lowered under speech, 3 to 30 dB. */
   duckDb: number;
-  /** Mute and volume per audio track id; tracks without an entry play as recorded. */
+  /** Volume, noise reduction and ducking per audio track id; absent plays as recorded. */
   tracks?: Record<string, TrackMix>;
 }
 
+/** One audio track's mix, kept under the track's id. Muting is the track's own switch. */
 export interface TrackMix {
-  muted: boolean;
   /** Gain in dB, -30 to +12. */
   volumeDb: number;
-  /** What the lane carries, when marked on the timeline. */
-  role?: SoundRole;
-  /** Noise reduction in dB (3 to 30); absent is off. */
+  /** Noise reduction in dB (3 to 30); absent follows the project's switch for speech. */
   denoiseDb?: number;
-  /** Lowered this many dB under speech (3 to 30); absent is off. */
+  /** Lowered this many dB under speech (3 to 30); absent follows the project's switch for background sound. */
   duckDb?: number;
 }
 
-export const DEFAULT_TRACK_MIX: TrackMix = { muted: false, volumeDb: 0 };
+export const DEFAULT_TRACK_MIX: TrackMix = { volumeDb: 0 };
 export const TRACK_VOLUME_DB_RANGE = { min: -30, max: 12 } as const;
-
-/** Audio track kinds the mixer plays. */
-export function isAudioTrack(trackType: TrackType): boolean {
-  return trackType === "mic" || trackType === "system";
-}
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   normalize: false,
@@ -250,7 +224,7 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
 /** Captions burned into playback and export from a track's transcript. */
 export interface CaptionSettings {
   enabled: boolean;
-  /** Transcript to caption; unset picks the microphone, then system audio. */
+  /** The sound to caption (`<asset>.<stream>`); unset picks the first speech on the timeline. */
   trackId?: string;
   position: "bottom" | "middle" | "top";
   /** Distance from the top or bottom edge, 0 to 45 % of the canvas height. */
@@ -494,93 +468,123 @@ export interface SilenceDetectionResult {
   diagnostics: string[];
 }
 
-export type NativeTrackType = "screen" | "webcam" | "mic_audio" | "system_audio";
+// The timeline as tracks of clips (src-tauri/src/sequence)
+export type AssetKind = "recording" | "video" | "image" | "audio";
+export type StreamKind = "picture" | "sound";
+/**
+ * What a stream stands for. Pictures: "screen" (the canvas layout, zooms and cursor), "webcam"
+ * (the camera bubble) or "overlay" (over the whole canvas). Sound: "mic" (speech: transcribed,
+ * captioned, ducks background sound) or "background" (music, game, desktop).
+ */
+export type Role = "screen" | "webcam" | "overlay" | "mic" | "background";
 
-export interface NativeTrackDescriptor {
+export interface Stream {
+  /** A recording's own track id ("screen", "webcam", "mic", "system"); a file's "picture" or "sound0"... */
   id: string;
-  trackType: NativeTrackType;
-  codec: string;
-  relativePath: string;
-  width?: number;
-  height?: number;
+  kind: StreamKind;
+  role: Role;
+  name: string;
+  audioPath?: string;
   fps?: number;
-  sampleRate?: number;
-  channels?: number;
-  gapsTotal: number;
-  mediaTimescale?: number;
 }
 
-export interface ProjectManifest {
-  version: number;
-  sessionId: string;
-  projectName: string;
-  createdAt: string;
-  durationUs: number;
-  activeDurationUs: number;
-  gapsTotal: number;
-  pauseIntervals: { startUs: number; endUs: number }[];
-  cursorMode?: string;
-  sourceGeometry?: unknown;
-  tracks: NativeTrackDescriptor[];
-}
-
-export interface TrackSummary {
-  descriptor: NativeTrackDescriptor;
-  segmentCount: number;
-  availableSegmentCount: number;
-}
-
-/** One timeline entry in playback order: a range of the recording, or of imported media. */
-export interface RetainedInterval {
-  startUs: number;
-  endUs: number;
-  /** Imported media asset id; absent for the recording. */
-  media?: string;
-  /** Imported media whose sound was unlinked onto audio tracks: it plays silent here. */
-  audioUnlinked?: boolean;
-}
-
-export type MediaKind = "video" | "image" | "audio";
-/** What a file's picture stands for: drawn and edited like the screen, or in the webcam bubble. */
-export type PictureRole = "screen" | "webcam";
-/** What a sound stream is: speech (transcribed, captioned) or background (music, desktop). */
-export type SoundRole = "mic" | "background";
-
-/** A file imported into the project's media bin (src-tauri/src/media_bin.rs). */
-export interface MediaAsset {
+/** Something that can be played: a recording, a video, an image or audio. */
+export interface Asset {
   id: string;
   name: string;
-  kind: MediaKind;
-  /** A copy inside the project (older imports); empty when `sourcePath` is set. */
-  relativePath: string;
-  /** The original file, used where it is. */
-  sourcePath?: string;
-  /** The file is no longer where it was imported from. */
-  missing?: boolean;
-  pictureRole?: PictureRole;
-  /** An imported recording: its folder (screen, camera, sound and mouse data). */
-  recordingPath?: string;
-  /** A role per audio stream; missing entries take `soundRole`'s default. */
-  soundRoles?: SoundRole[];
-  /** The first audio stream, extracted. */
-  audioPath?: string;
-  /** Further audio streams (e.g. mic and desktop recorded separately); they play together. */
-  extraAudioPaths?: string[];
-  /** A display name per audio stream; absent for older imports. */
-  audioNames?: string[];
+  kind: AssetKind;
+  /** Where it is: a recording's folder or the file, used in place. */
+  path: string;
+  streams: Stream[];
+  /** Its length; for an image, how far a clip can be stretched. */
   durationUs: number;
   width: number;
   height: number;
+  /** A recording's pauses on its own clock: no media there. */
+  pauses?: { startUs: number; endUs: number }[];
+  /** The file or folder is no longer there. */
+  missing?: boolean;
 }
 
+export type TrackKind = "video" | "audio";
+/** "contain" fits the whole picture in the canvas; "cover" fills the canvas, cropping it. */
+export type Fit = "contain" | "cover";
+
+/** One clip: stream `stream` of asset `asset` from `inUs`, `durationUs` long, at `startUs`. */
+export interface Clip {
+  id: string;
+  asset: string;
+  stream: string;
+  startUs: number;
+  inUs: number;
+  durationUs: number;
+  /** Clips cut from one moment of an asset share this: they move and trim together. */
+  link?: string;
+  fit?: Fit;
+}
+
+export interface SeqTrack {
+  id: string;
+  kind: TrackKind;
+  /** The user's name; absent shows its number (V1, A2...). */
+  name?: string;
+  hidden?: boolean;
+  muted?: boolean;
+  /** Never changed by edits. */
+  locked?: boolean;
+  /** What its clips stand for; absent: each stream's own role. */
+  role?: Role;
+  clips: Clip[];
+}
+
+export interface Sequence {
+  /** Video tracks bottom to top (V1 first), then audio tracks top to bottom (A1 first). */
+  tracks: SeqTrack[];
+  /** Ripple editing: cuts close up on every track, moves and longer clips make room. */
+  magnetic: boolean;
+}
+
+export type TrimSide = "previous" | "next";
+
+/** One undoable timeline edit (src-tauri/src/sequence/edit.rs). */
+export type SequenceEdit =
+  | { kind: "addTrack"; trackKind: TrackKind }
+  | { kind: "removeTrack"; trackId: string }
+  | { kind: "setTrack"; trackId: string; name: string; hidden: boolean; muted: boolean; locked: boolean; role: Role | null }
+  | { kind: "moveTrack"; trackId: string; up: boolean }
+  | {
+      kind: "placeAsset";
+      assetId: string;
+      atUs: number;
+      trackId?: string | null;
+      streams?: string[];
+      range?: { startUs: number; endUs: number } | null;
+    }
+  | { kind: "moveClips"; clipIds: string[]; deltaUs: number; trackId?: string | null; anchorId?: string | null }
+  | { kind: "trimClip"; clipId: string; edge: "start" | "end"; toUs: number; ripple?: boolean | null }
+  | { kind: "split"; atUs: number; clipIds: string[] }
+  | { kind: "delete"; clipIds: string[]; ripple?: boolean | null }
+  | { kind: "deleteRange"; ranges: EditedSpan[]; ripple?: boolean | null }
+  | { kind: "rippleTrim"; atUs: number; side: TrimSide }
+  | { kind: "link"; clipIds: string[] }
+  | { kind: "unlink"; clipIds: string[] }
+  | { kind: "setMagnetic"; magnetic: boolean }
+  | { kind: "setClip"; clipId: string; fit: Fit }
+  /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
+  | { kind: "restoreCuts"; clipIds: string[] };
+
+/** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
 export interface OpenedProject {
   projectHandle: string;
   revision: number;
-  manifest: ProjectManifest;
-  sourceDurationUs: number;
-  editedDurationUs: number;
-  retainedIntervals: RetainedInterval[];
-  tracks: TrackSummary[];
+  name: string;
+  projectPath?: string;
+  /** Where the timeline ends. */
+  durationUs: number;
+  assets: Asset[];
+  sequence: Sequence;
+  /** Frames per second the timeline steps by. */
+  fps: number;
   diagnostics: string[];
   previewAvailable: boolean;
   undoAvailable: boolean;
@@ -588,107 +592,17 @@ export interface OpenedProject {
   zooms?: ProjectZoom[];
   dismissedZoomIds?: string[];
   layout?: EditLayout;
-  projectPath?: string;
-  /**
-   * The recording folder being edited; absent for a project that started empty. For an older
-   * recording folder that holds its own edits, the same as `projectPath`.
-   */
-  recordingPath?: string;
-  /** Source ranges the edit cut out that can be restored. */
-  removedIntervals?: RetainedInterval[];
-  /** Source timestamps where the user split a clip. */
-  splitPointsUs?: number[];
   /** Auto webcam layout settings and segments. */
   webcamFocus?: WebcamFocus;
   audio?: AudioSettings;
   captions?: CaptionSettings;
-  /** Videos, images and audio imported into the project. */
-  mediaAssets?: MediaAsset[];
   chapters?: Chapter[];
   shorts?: Short[];
-  /** Video tracks V2, V3, ... above the main sequence, bottom to top. */
-  overlayTracks?: OverlayTrack[];
-  /** V1 as a track; absent: magnetic, shown, unmuted, at the bottom. */
-  mainTrack?: MainTrack;
   /** Auto-zoom settings; absent: the defaults. */
   zoomSettings?: ZoomSettings;
-  /** Set when this is a short's own timeline: the timeline fields are the short's. */
+  /** Set when this is a short's own timeline: the sequence is the short's. */
   shortView?: string;
 }
-
-/** V1's settings as a track (src-tauri/src/project/revision.rs). */
-export interface MainTrack {
-  /** Cuts close up and moves insert; off, they leave gaps and overwrite. */
-  magnetic: boolean;
-  hidden: boolean;
-  muted: boolean;
-  /** How many video tracks are below V1. */
-  position: number;
-}
-
-export const DEFAULT_MAIN_TRACK: MainTrack = { magnetic: true, hidden: false, muted: false, position: 0 };
-
-// Video tracks above the main sequence (src-tauri/src/tracks.rs)
-/** "contain" fits the whole picture in the canvas; "cover" fills the canvas, cropping it. */
-export type OverlayFit = "contain" | "cover";
-
-export interface OverlayClip {
-  id: string;
-  assetId: string;
-  /** Where the clip starts on the timeline. */
-  startUs: number;
-  /** Where in the media the clip starts. */
-  inUs: number;
-  durationUs: number;
-  fit: OverlayFit;
-  /** On an audio track: which of the media's audio streams the clip plays. */
-  audioStream?: number;
-  /** On a video track: its sound was unlinked onto audio tracks. */
-  audioUnlinked?: boolean;
-  /** Audio clips unlinked from the same picture share this. */
-  link?: string;
-}
-
-export type TrackKind = "video" | "audio";
-
-export interface OverlayTrack {
-  id: string;
-  /** Absent on tracks saved before audio tracks existed: video. */
-  kind?: TrackKind;
-  clips: OverlayClip[];
-  hidden: boolean;
-  muted: boolean;
-  /** A video track's clips as the screen or a webcam; absent: each file's own. */
-  role?: PictureRole;
-}
-
-/** One undoable change to the tracks beside the main sequence. */
-export type TrackEdit =
-  | { kind: "addTrack"; audio?: boolean }
-  | { kind: "setTrackRole"; trackId: string; role: PictureRole | null }
-  | { kind: "removeTrack"; trackId: string }
-  | { kind: "setTrack"; trackId: string; hidden: boolean; muted: boolean }
-  | { kind: "placeMedia"; assetId: string; trackId: string; startUs: number }
-  | { kind: "updateClip"; clip: OverlayClip; trackId: string }
-  | { kind: "removeClip"; clipId: string }
-  | { kind: "liftFromMain"; startUs: number; endUs: number; trackId: string; atUs: number }
-  | { kind: "dropToMain"; clipId: string; targetUs: number }
-  | { kind: "unlinkMain"; startUs: number; endUs: number }
-  | { kind: "unlinkClip"; clipId: string }
-  | { kind: "relinkMain"; startUs: number; endUs: number; audioClipIds: string[] }
-  | { kind: "relinkClip"; clipId: string; audioClipIds: string[] }
-  | { kind: "rippleDelete"; ranges: EditedSpan[]; allTracks: boolean }
-  | { kind: "deleteSelection"; ranges: EditedSpan[]; clipIds: string[] }
-  | { kind: "split"; atUs: number; main: boolean; clipIds: string[] }
-  | { kind: "rippleTrimClip"; clipId: string; side: "start" | "end"; atUs: number }
-  | { kind: "moveClips"; clipIds: string[]; deltaUs: number }
-  | { kind: "moveMain"; ranges: EditedSpan[]; targetUs: number }
-  | { kind: "restore"; ranges: EditedSpan[]; grow: "end" | "start"; shiftTracksAt?: number | null }
-  | { kind: "insertMedia"; assetId: string; targetUs: number }
-  | { kind: "placeMain"; ranges: EditedSpan[]; startUs: number }
-  | { kind: "setMainTrack"; magnetic: boolean; hidden: boolean; muted: boolean }
-  /** `trackId` "main" is V1. */
-  | { kind: "moveTrack"; trackId: string; up: boolean };
 
 /** One caption on the timeline's caption track (src-tauri/src/commands/transcript.rs). */
 export interface CaptionCueView {
@@ -753,6 +667,8 @@ export interface NormalViewRange {
 
 export interface WebcamFocus {
   enabled: boolean;
+  /** The recording whose camera the segments are in; absent: the first one. */
+  media?: string;
   settings: WebcamFocusSettings;
   segments: WebcamFocusSegment[];
   normalView?: NormalViewRange[];
@@ -792,18 +708,6 @@ export type PlaybackState =
 
 export type ClockKind = "audio" | "monotonic";
 
-export interface TrackDecodePlan {
-  trackId: string;
-  generation: number;
-  editedUs: number;
-  sourceUs: number | null;
-  gap: boolean;
-  ended: boolean;
-  relativePath: string | null;
-  keyframeSourceUs: number | null;
-  decodeToSourceUs: number | null;
-}
-
 export interface PlaybackStatus {
   projectHandle: string;
   state: PlaybackState;
@@ -814,8 +718,6 @@ export interface PlaybackStatus {
   /** The short playing instead of the video, while the Shorts Studio has one in focus. */
   shortId?: string;
   previewAvailable: boolean;
-  openFiles: number;
-  plans: TrackDecodePlan[];
   error: string | null;
   diagnostics: string[];
 }
@@ -989,12 +891,6 @@ export interface SegmentPage {
   nextOffset: number | null;
 }
 
-export function studioTrackType(trackType: NativeTrackType): TrackType {
-  if (trackType === "mic_audio") return "mic";
-  if (trackType === "system_audio") return "system";
-  return trackType;
-}
-
 // Transcription (src-tauri/src/transcript)
 export type TranscriptProvider = "parakeet" | "elevenlabs";
 
@@ -1080,6 +976,8 @@ export interface Chapter {
   id: string;
   sourceUs: number;
   title: string;
+  /** The asset whose time `sourceUs` is in; absent: the first recording. */
+  media?: string;
   /** Edited-timeline start, or null when that moment was cut. Filled in by the backend. */
   editedUs?: number | null;
 }
@@ -1117,7 +1015,7 @@ export interface Short {
   sourceEndUs: number;
   reason?: string;
   layout: ShortLayout;
-  /** The imported file whose clock the start and end are on; absent: the recording. */
+  /** The asset whose clock the start and end are on; absent: the first recording. */
   media?: string;
   /** Present once the short was edited on its own; it then no longer follows the video. */
   edit?: unknown;

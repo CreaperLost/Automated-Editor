@@ -8,7 +8,7 @@ export function formatWindowTitle(openedProjectName?: string | null): string {
 }
 
 export function useWindowTitle(): void {
-  const openedProjectName = useProjectStore((s) => s.openedProject?.manifest.projectName);
+  const openedProjectName = useProjectStore((s) => s.openedProject?.name);
 
   useEffect(() => {
     const title = formatWindowTitle(openedProjectName);

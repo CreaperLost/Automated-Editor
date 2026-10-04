@@ -45,7 +45,7 @@ export const StatusBar: React.FC<{
   return (
     <footer className="h-statusbar shrink-0 flex items-center gap-4 border-t border-studio-800 bg-studio-900 px-3 text-meta text-studio-400 select-none">
       <span className="truncate">
-        {formatDuration(project.editedDurationUs)} edited · Canvas {aspect}
+        {formatDuration(project.durationUs)} edited · Canvas {aspect}
         {project.shorts && project.shorts.length > 0 ? ` · ${project.shorts.length} shorts` : ""}
       </span>
 

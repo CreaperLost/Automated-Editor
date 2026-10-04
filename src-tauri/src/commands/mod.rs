@@ -4,10 +4,11 @@ use crate::playback::{
     self, PlaybackOwner, PlaybackStatus, PreviewHitMode, PreviewOwner, PreviewStatus,
     PreviewViewport,
 };
-use crate::project::revision::TrimSide;
 use crate::project::{
-    OpenedProject, ProjectReader, SegmentPage, TrackType, WaveformPage, WaveformTrackContext,
+    OpenedProject, ProjectReader, SegmentPage, WaveformPage, WaveformTrackContext,
 };
+use crate::sequence::edit::SequenceEdit;
+use crate::sequence::{Role, StreamKind};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -151,6 +152,47 @@ pub fn show_in_finder_impl(path: String) -> Result<(), String> {
     }
 }
 
+/// What a sound stream's waveform, pauses and speech are read from: `key` is
+/// `<asset>.<stream>`. On the timeline, its time maps through the clips that play it;
+/// otherwise the asset's own time is the timeline (a waveform drawn per clip).
+pub(crate) fn sound_context(
+    reader: &ProjectReader,
+    key: &str,
+    on_timeline: bool,
+) -> Result<WaveformTrackContext, String> {
+    let document = reader.document();
+    let source = document.stream_ref(key)?;
+    let asset = document.asset(&source.asset).ok_or("Unknown sound")?;
+    let stream = asset.stream(&source.stream).ok_or("Unknown sound")?;
+    if stream.kind != StreamKind::Sound {
+        return Err("That stream has no sound".into());
+    }
+    let segments = crate::sequence::sources::sound_segments(reader.root(), asset, &source.stream)?;
+    let (retained, edited_duration_us) = if on_timeline {
+        (
+            crate::sequence::clock::stream_entries(&document.sequence, &asset.id, &stream.id),
+            document.duration_us(),
+        )
+    } else {
+        (
+            vec![crate::project::RetainedInterval::recording(
+                0,
+                asset.duration_us,
+            )],
+            asset.duration_us,
+        )
+    };
+    Ok(WaveformTrackContext {
+        root: reader.root().to_path_buf(),
+        track_id: key.to_string(),
+        track_type: crate::sequence::sources::track_type(stream.role),
+        segments,
+        retained,
+        edited_duration_us,
+    })
+}
+
+/// Finds pauses in a sound stream (`<asset>.<stream>`), in timeline time through its clips.
 pub fn detect_silence_impl(
     state: &AppState,
     project_handle: String,
@@ -161,68 +203,8 @@ pub fn detect_silence_impl(
     let ctx = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
-        if reader.summary.project_handle != project_handle {
-            return Err("Stale project handle".into());
-        }
-        // "msound-<stream>-<asset id>": one audio stream of imported media, over the file's
-        // own time, so a clip draws the part it plays wherever it sits on the timeline.
-        if let Some((stream, asset_id)) = track_id
-            .strip_prefix(MEDIA_SOUND_PREFIX)
-            .and_then(|rest| rest.split_once('-'))
-        {
-            let stream: usize = stream.parse().map_err(|_| "Unknown track")?;
-            let asset = reader
-                .history()
-                .current
-                .media_assets
-                .iter()
-                .find(|asset| asset.id == asset_id)
-                .ok_or("Unknown imported media")?;
-            let path = asset
-                .audio_paths()
-                .nth(stream)
-                .ok_or("That media has no such audio stream")?;
-            let duration = asset.duration_us;
-            WaveformTrackContext {
-                root: reader.root().to_path_buf(),
-                track_id: track_id.clone(),
-                track_type: crate::project::TrackType::SystemAudio,
-                segments: vec![crate::project::reader::SegmentSummary {
-                    track_id: track_id.clone(),
-                    relative_path: path.clone(),
-                    start_us: 0,
-                    end_us: duration,
-                    // Its real size: readers check it to catch a file being rewritten.
-                    size_bytes: crate::project::file_len(reader.root(), path),
-                    media_timescale: crate::media::audio::SAMPLE_RATE,
-                    media_start_value: 0,
-                    host_anchor_us: 0,
-                    is_keyframe_start: None,
-                    available: true,
-                }],
-                // Silence is found where its clips play, on any track, in edited time.
-                retained: reader.history().current.sound_retained(asset_id, stream),
-                edited_duration_us: reader.summary.edited_duration_us.max(duration),
-            }
-        } else {
-            let track = reader
-                .summary
-                .tracks
-                .iter()
-                .find(|track| track.descriptor.id == track_id)
-                .ok_or("Unknown track")?;
-            WaveformTrackContext {
-                root: reader.root().to_path_buf(),
-                track_id: track_id.clone(),
-                track_type: track.descriptor.track_type,
-                segments: reader
-                    .segments_for(&track_id)
-                    .ok_or("Unknown track")?
-                    .to_vec(),
-                retained: reader.summary.retained_intervals.clone(),
-                edited_duration_us: reader.summary.edited_duration_us,
-            }
-        }
+        require_handle(reader, &project_handle)?;
+        sound_context(reader, &track_id, true)?
     };
     crate::project::silence::detect_track_silence(&ctx, &config)
 }
@@ -272,14 +254,8 @@ pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject
     let _guard = state.command_lock.lock();
     let reader = ProjectReader::open(std::path::Path::new(&path))?;
     let summary = reader.summary.clone();
-    let tracks = playback::tracks_from_reader(&reader);
     let document = reader.history().current.clone();
-    let mut owner = PlaybackOwner::open(
-        summary.project_handle.clone(),
-        reader.root().to_path_buf(),
-        &document,
-        tracks,
-    )?;
+    let mut owner = PlaybackOwner::open(summary.project_handle.clone(), &document)?;
     *state.opened_project.lock() = Some(reader);
     owner.native_enabled = state.native_capture_enabled;
     *state.playback.lock() = owner;
@@ -318,9 +294,8 @@ pub fn project_segments_impl(
     reader.page(&track_id, offset, limit)
 }
 
-/// Waveform ids for imported sound: `msound-<stream>-<asset id>`.
-pub const MEDIA_SOUND_PREFIX: &str = "msound-";
-
+/// A sound stream's waveform (`<asset>.<stream>`) over `[start_us, end_us)` of its own time;
+/// the timeline draws each clip's part of it.
 pub fn project_waveform_impl(
     state: &AppState,
     project_handle: String,
@@ -328,7 +303,6 @@ pub fn project_waveform_impl(
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
-    short_id: Option<String>,
 ) -> Result<WaveformPage, String> {
     let epoch = state.waveform_epoch.load(Ordering::SeqCst);
     let generation = {
@@ -340,81 +314,8 @@ pub fn project_waveform_impl(
     let ctx = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
-        if reader.summary.project_handle != project_handle {
-            return Err("Stale project handle".into());
-        }
-        // "msound-<stream>-<asset id>": one audio stream of imported media, over the file's
-        // own time, so a clip draws the part it plays wherever it sits on the timeline.
-        if let Some((stream, asset_id)) = track_id
-            .strip_prefix(MEDIA_SOUND_PREFIX)
-            .and_then(|rest| rest.split_once('-'))
-        {
-            let stream: usize = stream.parse().map_err(|_| "Unknown track")?;
-            let asset = reader
-                .history()
-                .current
-                .media_assets
-                .iter()
-                .find(|asset| asset.id == asset_id)
-                .ok_or("Unknown imported media")?;
-            let path = asset
-                .audio_paths()
-                .nth(stream)
-                .ok_or("That media has no such audio stream")?;
-            let duration = asset.duration_us;
-            WaveformTrackContext {
-                root: reader.root().to_path_buf(),
-                track_id: track_id.clone(),
-                track_type: crate::project::TrackType::SystemAudio,
-                segments: vec![crate::project::reader::SegmentSummary {
-                    track_id: track_id.clone(),
-                    relative_path: path.clone(),
-                    start_us: 0,
-                    end_us: duration,
-                    // Its real size: readers check it to catch a file being rewritten.
-                    size_bytes: crate::project::file_len(reader.root(), path),
-                    media_timescale: crate::media::audio::SAMPLE_RATE,
-                    media_start_value: 0,
-                    host_anchor_us: 0,
-                    is_keyframe_start: None,
-                    available: true,
-                }],
-                retained: vec![crate::project::RetainedInterval::recording(0, duration)],
-                edited_duration_us: duration,
-            }
-        } else {
-            let track = reader
-                .summary
-                .tracks
-                .iter()
-                .find(|track| track.descriptor.id == track_id)
-                .ok_or("Unknown track")?;
-            WaveformTrackContext {
-                root: reader.root().to_path_buf(),
-                track_id: track_id.clone(),
-                track_type: track.descriptor.track_type,
-                segments: reader
-                    .segments_for(&track_id)
-                    .ok_or("Unknown track")?
-                    .to_vec(),
-                retained: reader.summary.retained_intervals.clone(),
-                edited_duration_us: reader.summary.edited_duration_us,
-            }
-        }
-    };
-    // In a short's timeline, the recording plays as the short's own V1.
-    let ctx = match short_id.as_deref() {
-        Some(short) => {
-            let opened = state.opened_project.lock();
-            let reader = opened.as_ref().ok_or("No opened project")?;
-            let view = reader.short_view(short)?;
-            WaveformTrackContext {
-                retained: view.retained_intervals,
-                edited_duration_us: view.edited_duration_us,
-                ..ctx
-            }
-        }
-        None => ctx,
+        require_handle(reader, &project_handle)?;
+        sound_context(reader, &track_id, false)?
     };
     crate::project::waveform::query_waveform(&ctx, start_us, end_us, bucket_count, &|| {
         if state.waveform_epoch.load(Ordering::SeqCst) != epoch {
@@ -430,42 +331,34 @@ pub fn project_waveform_impl(
     })
 }
 
-/// Zoom suggestions from the mouse data of the project's recording (if it has one) and of
-/// each imported recording, each on its own clock and placed where its clips play.
+/// Zoom suggestions from the mouse data of each recording, each on its own clock and placed
+/// where its screen plays.
 fn all_zoom_suggestions(
     reader: &crate::project::reader::ProjectReader,
     config: &crate::zoom::ZoomConfig,
 ) -> Result<crate::zoom::ZoomGeneration, String> {
-    let document = &reader.history().current;
-    let mut generation = if reader.has_recording() {
-        let stream = crate::telemetry::reader::read_telemetry(&reader.source_root())?;
-        let mut own = crate::zoom::generate_zoom_suggestions(&stream, config)?;
-        crate::zoom::attach_edited_ranges(&mut own, &document.mapper()?);
-        own
-    } else {
-        crate::zoom::ZoomGeneration {
-            version: config.generation_version,
-            config: config.clone(),
-            suggestions: Vec::new(),
-            diagnostics: Vec::new(),
-        }
+    let document = reader.document();
+    let mut generation = crate::zoom::ZoomGeneration {
+        version: config.generation_version,
+        config: config.clone(),
+        suggestions: Vec::new(),
+        diagnostics: Vec::new(),
     };
-    for asset in &document.media_assets {
-        let Some(folder) = &asset.recording_path else {
-            continue;
-        };
-        let stream = match crate::telemetry::reader::read_telemetry(std::path::Path::new(folder)) {
-            Ok(stream) => stream,
-            Err(error) => {
-                generation
-                    .diagnostics
-                    .push(format!("{}: {error}", asset.name));
-                continue;
-            }
-        };
-        let mut theirs = crate::zoom::generate_zoom_suggestions(&stream, config)?;
-        crate::zoom::attach_edited_ranges(&mut theirs, &document.mapper_for_media(&asset.id));
-        for mut suggestion in theirs.suggestions {
+    for asset in reader.recordings() {
+        let stream =
+            match crate::telemetry::reader::read_telemetry(std::path::Path::new(&asset.path)) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    generation
+                        .diagnostics
+                        .push(format!("{}: {error}", asset.name));
+                    continue;
+                }
+            };
+        let mut found = crate::zoom::generate_zoom_suggestions(&stream, config)?;
+        crate::zoom::attach_edited_ranges(&mut found, &document.picture_clock(&asset.id));
+        generation.diagnostics.extend(found.diagnostics);
+        for mut suggestion in found.suggestions {
             // Ids stay unique across recordings.
             suggestion.id = format!("{}:{}", asset.id, suggestion.id);
             suggestion.media = Some(asset.id.clone());
@@ -697,36 +590,35 @@ pub fn project_webcam_focus_detect_impl(
     settings: crate::webcam_focus::WebcamFocusSettings,
 ) -> Result<WebcamFocusDetection, String> {
     settings.validate()?;
-    let (ctx, root, source_duration_us) = {
+    let (ctx, root, source_duration_us, media) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
-        let mic = reader
-            .summary
-            .tracks
-            .iter()
-            .find(|track| track.descriptor.track_type == TrackType::MicAudio);
+        let document = reader.document();
+        // The recording focus is on, else the first one.
+        let asset = document
+            .clock_asset(document.webcam_focus.media.as_deref())
+            .and_then(|id| document.asset(id))
+            .filter(|a| a.is_recording())
+            .ok_or("Webcam focus needs a recording with a camera")?;
+        let mic = asset.streams.iter().find(|s| s.role == Role::Mic);
         let ctx = match (settings.require_speech, mic) {
             (false, _) => None,
             (true, None) => {
                 return Err("This recording has no microphone track to detect speech on".into())
             }
-            (true, Some(track)) => {
-                let track_id = track.descriptor.id.clone();
-                Some(WaveformTrackContext {
-                    root: reader.root().to_path_buf(),
-                    track_type: track.descriptor.track_type,
-                    segments: reader
-                        .segments_for(&track_id)
-                        .ok_or("Unknown track")?
-                        .to_vec(),
-                    track_id,
-                    retained: reader.summary.retained_intervals.clone(),
-                    edited_duration_us: reader.summary.edited_duration_us,
-                })
-            }
+            (true, Some(stream)) => Some(sound_context(
+                reader,
+                &crate::sequence::StreamRef::new(&asset.id, &stream.id).key(),
+                false,
+            )?),
         };
-        (ctx, reader.source_root(), reader.summary.source_duration_us)
+        (
+            ctx,
+            std::path::PathBuf::from(&asset.path),
+            asset.duration_us,
+            asset.id.clone(),
+        )
     };
     // Without the speech requirement the whole recording is a candidate; only the mouse
     // decides.
@@ -758,6 +650,7 @@ pub fn project_webcam_focus_detect_impl(
     let project = mutate_opened(state, project_handle, |reader| {
         let mut focus = reader.history().current.webcam_focus.clone();
         focus.enabled = true;
+        focus.media = Some(media);
         focus.settings = settings;
         focus.replace_auto_segments(&detected);
         reader.update_webcam_focus(expected_revision, focus)
@@ -780,7 +673,7 @@ pub fn project_chapters_set_impl(
     })
 }
 
-/// Whether a microphone or system audio track has a transcript to caption from.
+/// Whether some speech has a transcript to caption from.
 fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
     let has = |id: &str| {
         crate::transcript::store::load_transcript(reader.root(), id)
@@ -788,19 +681,11 @@ fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
             .flatten()
             .is_some()
     };
-    let document = &reader.history().current;
-    // The chosen caption track, the recording's tracks, or any imported sound.
+    let document = reader.document();
     document.captions.track_id.as_deref().is_some_and(has)
-        || reader.summary.tracks.iter().any(|track| {
-            matches!(
-                track.descriptor.track_type,
-                TrackType::MicAudio | TrackType::SystemAudio
-            ) && has(&track.descriptor.id)
-        })
-        || document.media_assets.iter().any(|asset| {
-            (0..asset.audio_paths().count())
-                .any(|stream| has(&crate::project::revision::media_sound_id(stream, &asset.id)))
-        })
+        || crate::export::caption_candidates(document)
+            .iter()
+            .any(|key| has(key))
 }
 
 /// One preview frame of a short, `offset_us` into it, drawn with `layout` (which may not be
@@ -813,7 +698,7 @@ pub fn short_preview_frame_impl(
     offset_us: u64,
 ) -> Result<Vec<u8>, String> {
     layout.validate()?;
-    let (document, tracks, root, key) = {
+    let (document, root, key) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
@@ -831,26 +716,20 @@ pub fn short_preview_frame_impl(
             base.revision,
             serde_json::to_string(&short.layout).map_err(|e| e.to_string())?
         );
-        (
-            document,
-            playback::tracks_from_reader(reader),
-            reader.root().to_path_buf(),
-            key,
-        )
+        (document, reader.root().to_path_buf(), key)
     };
-    let at = offset_us.min(document.edited_duration_us()?.saturating_sub(1));
+    let at = offset_us.min(document.duration_us().saturating_sub(1));
     let mut cache = state.short_preview.lock();
     if cache.as_ref().map(|c| c.key.as_str()) != Some(key.as_str()) {
         let reuse = cache.take().and_then(|c| c.evaluator.into_reuse());
         let (width, height) = SHORT_PREVIEW_SIZE;
-        let evaluator = crate::export::SceneEvaluator::new_reusing(
-            root, document, tracks, width, height, reuse,
-        )?
-        .with_decode_limit(crate::media::ffmpeg::DecodeLimit {
-            max_width: width * 2,
-            max_height: height * 2,
-            max_rate: 0,
-        });
+        let evaluator =
+            crate::export::SceneEvaluator::new_reusing(root, document, width, height, reuse)?
+                .with_decode_limit(crate::media::ffmpeg::DecodeLimit {
+                    max_width: width * 2,
+                    max_height: height * 2,
+                    max_rate: 0,
+                });
         *cache = Some(ShortPreviewCache { key, evaluator });
     }
     let frame = cache
@@ -892,9 +771,8 @@ pub fn project_short_export_impl(
         .find(|s| s.id == short_id)
         .ok_or("That short no longer exists")?;
     let document = crate::shorts::short_document(base, short, has_speech_transcript(reader))?;
-    let tracks = playback::tracks_from_reader(reader);
     let root = reader.root().to_path_buf();
-    let stem = format!("{} - {}", reader.summary.manifest.project_name, short.title);
+    let stem = format!("{} - {}", reader.summary.name, short.title);
     drop(opened);
     // The first free "<project> - <short>.mp4", then " (2)", " (3)" and so on.
     let name = (1..1000)
@@ -912,7 +790,7 @@ pub fn project_short_export_impl(
         .ok_or("Too many exports of this short already exist")?;
     let gate = Arc::clone(&state.encoder_gate);
     let mut owner = state.export.lock();
-    match crate::export::prepare_job(&root, &name, document, tracks, settings, &mut owner) {
+    match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
         Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
         Err(status) => {
             owner.install_failed(status.clone());
@@ -993,27 +871,6 @@ pub fn project_ripple_cuts_impl(
     Ok(summary)
 }
 
-pub fn project_move_range_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    start_us: u64,
-    end_us: u64,
-    target_us: u64,
-) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    let summary = reader.move_range(expected_revision, start_us, end_us, target_us)?;
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    Ok(summary)
-}
-
 /// Imports files into the project's media bin. Copying and probing run without holding
 /// the project, so playback keeps going during a long import.
 pub fn project_media_import_impl(
@@ -1059,7 +916,7 @@ pub fn project_media_import_impl(
         }
         return Err("The project was closed during the import".into());
     };
-    reader.add_media(expected_revision, assets)
+    reader.add_assets(expected_revision, assets)
 }
 
 pub fn project_media_remove_impl(
@@ -1072,13 +929,21 @@ pub fn project_media_remove_impl(
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let summary = reader.remove_media(expected_revision, &asset_id)?;
+    let summary = reader.remove_asset(expected_revision, &asset_id)?;
     state
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
+}
+
+/// What one of an asset's streams stands for.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamRoleInput {
+    pub stream: String,
+    pub role: Role,
 }
 
 pub fn project_media_roles_impl(
@@ -1086,15 +951,14 @@ pub fn project_media_roles_impl(
     project_handle: String,
     expected_revision: u64,
     asset_id: String,
-    picture_role: crate::media_bin::PictureRole,
-    sound_roles: Vec<crate::media_bin::SoundRole>,
+    roles: Vec<StreamRoleInput>,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let summary =
-        reader.set_media_roles(expected_revision, &asset_id, picture_role, sound_roles)?;
+    let roles: Vec<(String, Role)> = roles.into_iter().map(|r| (r.stream, r.role)).collect();
+    let summary = reader.set_stream_roles(expected_revision, &asset_id, &roles)?;
     state
         .playback
         .lock()
@@ -1102,107 +966,19 @@ pub fn project_media_roles_impl(
     Ok(summary)
 }
 
-pub fn project_media_insert_impl(
+/// One timeline edit in the project's timeline, or in short `short_id`'s own timeline.
+pub fn project_sequence_edit_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
-    asset_id: String,
-    target_us: u64,
-) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    let summary = reader.insert_media(expected_revision, &asset_id, target_us, None)?;
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    Ok(summary)
-}
-
-pub fn project_tracks_edit_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    edit: crate::tracks::TrackEdit,
-) -> Result<OpenedProject, String> {
-    project_tracks_edit_in(state, project_handle, expected_revision, edit, None)
-}
-
-/// A timeline edit in the project's timeline, or in short `short_id`'s own timeline.
-pub fn project_tracks_edit_in(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    edit: crate::tracks::TrackEdit,
+    edit: SequenceEdit,
     short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let summary = reader.edit_tracks_in(expected_revision, &edit, short_id.as_deref())?;
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    Ok(summary)
-}
-
-pub fn project_ripple_trim_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    playhead_us: u64,
-    side: TrimSide,
-) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    let summary = reader.ripple_trim(expected_revision, playhead_us, side)?;
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    Ok(summary)
-}
-
-pub fn project_split_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    edited_us: u64,
-) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    // A split keeps every retained interval, so playback and waveforms stay as they are.
-    reader.split(expected_revision, edited_us)
-}
-
-pub fn project_restore_cuts_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    ranges: Vec<EditCut>,
-    grow: crate::project::revision::RestoreGrow,
-    shift_tracks_at: Option<u64>,
-) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    let ranges: Vec<(u64, u64)> = ranges
-        .into_iter()
-        .map(|range| (range.start_us, range.end_us))
-        .collect();
-    let summary = reader.restore_cuts(expected_revision, &ranges, grow, shift_tracks_at)?;
+    let (summary, _) = reader.edit_sequence(expected_revision, &edit, short_id.as_deref())?;
     state
         .playback
         .lock()
@@ -1479,13 +1255,12 @@ pub fn export_start_impl(
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
     let document = reader.history().current.clone();
-    let tracks = playback::tracks_from_reader(reader);
     let root = reader.root().to_path_buf();
-    let name = reader.summary.manifest.project_name.clone();
+    let name = reader.summary.name.clone();
     drop(opened);
     let gate = Arc::clone(&state.encoder_gate);
     let mut owner = state.export.lock();
-    match crate::export::prepare_job(&root, &name, document, tracks, settings, &mut owner) {
+    match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
         Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
         Err(status) => {
             owner.install_failed(status.clone());

@@ -8,14 +8,15 @@ pub mod export;
 pub mod fixtures;
 pub mod media;
 pub mod media_bin;
+mod parity;
 pub mod playback;
 pub mod project;
 pub mod render;
 pub mod secrets;
+pub mod sequence;
 pub mod shorts;
 pub mod telemetry;
 pub mod timeline;
-pub mod tracks;
 pub mod transcript;
 pub mod webcam_focus;
 pub mod zoom;
@@ -66,7 +67,7 @@ async fn open_project(
     .map_err(|e| e.to_string())??;
 
     if let Some(window) = app.get_webview_window("main") {
-        let title = commands::window_title_for_project(Some(&opened.manifest.project_name));
+        let title = commands::window_title_for_project(Some(&opened.name));
         let _ = window.set_title(&title);
     }
 
@@ -152,7 +153,6 @@ async fn project_waveform(
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
-    short_id: Option<String>,
 ) -> Result<project::WaveformPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::project_waveform_impl(
@@ -162,7 +162,6 @@ async fn project_waveform(
             start_us,
             end_us,
             bucket_count,
-            short_id,
         )
     })
     .await
@@ -381,38 +380,6 @@ fn project_ripple_cuts(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_ripple_trim(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    playhead_us: u64,
-    side: project::revision::TrimSide,
-) -> Result<project::OpenedProject, String> {
-    commands::project_ripple_trim_impl(&state, project_handle, expected_revision, playhead_us, side)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_move_range(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    start_us: u64,
-    end_us: u64,
-    target_us: u64,
-) -> Result<project::OpenedProject, String> {
-    commands::project_move_range_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        start_us,
-        end_us,
-        target_us,
-    )
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
 async fn project_media_import(
     app: tauri::AppHandle,
     project_handle: String,
@@ -438,8 +405,7 @@ fn project_media_remove(
     commands::project_media_remove_impl(&state, project_handle, expected_revision, asset_id)
 }
 
-/// Sets what an imported file's picture and sound streams are (screen or webcam; mic or
-/// background).
+/// Sets what an asset's streams stand for (screen or camera; speech or background).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_media_roles(
@@ -447,48 +413,22 @@ fn project_media_roles(
     project_handle: String,
     expected_revision: u64,
     asset_id: String,
-    picture_role: media_bin::PictureRole,
-    sound_roles: Vec<media_bin::SoundRole>,
+    roles: Vec<commands::StreamRoleInput>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_media_roles_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        asset_id,
-        picture_role,
-        sound_roles,
-    )
+    commands::project_media_roles_impl(&state, project_handle, expected_revision, asset_id, roles)
 }
 
+/// One timeline edit: tracks, clips, cuts, links. In a short's own timeline with `short_id`.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_media_insert(
+fn project_sequence_edit(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
-    asset_id: String,
-    target_us: u64,
-) -> Result<project::OpenedProject, String> {
-    commands::project_media_insert_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        asset_id,
-        target_us,
-    )
-}
-
-/// Adds, removes or changes a video track, or moves a clip onto, along or off one.
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_tracks_edit(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    edit: tracks::TrackEdit,
+    edit: sequence::edit::SequenceEdit,
     short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_tracks_edit_in(&state, project_handle, expected_revision, edit, short_id)
+    commands::project_sequence_edit_impl(&state, project_handle, expected_revision, edit, short_id)
 }
 
 /// Short `short_id`'s own timeline, as a project the timeline can show.
@@ -574,37 +514,6 @@ async fn pick_media_folder(app: tauri::AppHandle) -> Result<Option<String>, Stri
     })
     .await
     .map_err(|error| error.to_string())?
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_split(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    edited_us: u64,
-) -> Result<project::OpenedProject, String> {
-    commands::project_split_impl(&state, project_handle, expected_revision, edited_us)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_restore_cuts(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    ranges: Vec<commands::EditCut>,
-    grow: Option<project::revision::RestoreGrow>,
-    shift_tracks_at: Option<u64>,
-) -> Result<project::OpenedProject, String> {
-    commands::project_restore_cuts_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        ranges,
-        grow.unwrap_or_default(),
-        shift_tracks_at,
-    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1289,7 +1198,7 @@ async fn pick_export_destination(
             }
             let root = reader.root().to_path_buf();
             let parent = root.parent().unwrap_or(&root).to_path_buf();
-            let project_name = reader.summary.manifest.project_name.clone();
+            let project_name = reader.summary.name.clone();
             let filename = crate::export::default_export_filename(&project_name);
             (parent, filename, Some(root))
         } else {
@@ -1406,9 +1315,7 @@ pub fn run() {
             project_audio_update,
             project_captions_update,
             project_ripple_cuts,
-            project_ripple_trim,
-            project_split,
-            project_move_range,
+            project_sequence_edit,
             project_media_import,
             project_media_roles,
             project_caption_cues,
@@ -1417,11 +1324,8 @@ pub fn run() {
             project_short_resync,
             playback_focus_short,
             project_media_remove,
-            project_media_insert,
-            project_tracks_edit,
             pick_media_files,
             pick_media_folder,
-            project_restore_cuts,
             project_undo,
             project_redo,
             playback_status,

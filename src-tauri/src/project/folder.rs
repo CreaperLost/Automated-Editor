@@ -1,15 +1,15 @@
 //! Project folders, separate from recordings. A project folder holds `aeroedits.json` (its
-//! name and the recording it edits, if any), the edit (`project.json`), imported media and
-//! transcripts. The recording folder is only read; inside the project it is seen at
-//! [`RECORDING_MOUNT`], so `recording/media/screen/000001.mp4` names a file of the recording.
-//!
-//! Older recording folders that hold their own `project.json` still open as projects.
+//! name and the recording it was made from, if any), the edit (`project.json`), extracted
+//! sound and transcripts. Recording folders are only read; inside the project a recording
+//! asset is seen at `recordings/<asset id>/`, so `recordings/rec-1/media/screen/000001.mp4`
+//! names a file of that recording.
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const PROJECT_FILE: &str = "aeroedits.json";
-pub const RECORDING_MOUNT: &str = "recording";
+/// Recordings are seen inside a project at `recordings/<asset id>/`.
+pub const RECORDINGS_MOUNT: &str = "recordings";
 const PROJECT_FILE_VERSION: u32 = 1;
 const PROJECT_FILE_LIMIT: u64 = 65_536;
 
@@ -20,36 +20,46 @@ pub struct ProjectFile {
     pub name: String,
     #[serde(default)]
     pub created_at: String,
-    /// The recording folder this project edits; `None` for a project that starts empty.
+    /// The recording this project was made from; it becomes the project's first asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording: Option<String>,
 }
 
-/// Project roots and the recording folders seen inside them at [`RECORDING_MOUNT`].
-static MOUNTS: parking_lot::RwLock<Vec<(PathBuf, PathBuf)>> = parking_lot::RwLock::new(Vec::new());
+/// Project roots and the recording folders seen inside them, by asset id.
+static MOUNTS: parking_lot::RwLock<Vec<(PathBuf, String, PathBuf)>> =
+    parking_lot::RwLock::new(Vec::new());
 
-/// From now on, `recording/...` inside `project_root` resolves into `recording_root`. Kept
-/// for the life of the app, so an export that outlives the open project still finds its files.
-pub(crate) fn mount_recording(project_root: &Path, recording_root: &Path) {
-    let mut mounts = MOUNTS.write();
-    mounts.retain(|(root, _)| root != project_root);
-    mounts.push((project_root.to_path_buf(), recording_root.to_path_buf()));
+/// Where recording asset `asset_id`'s files are seen inside a project.
+pub fn mount_path(asset_id: &str) -> String {
+    format!("{RECORDINGS_MOUNT}/{asset_id}")
 }
 
-/// The recording mounted in `project_root`, if any.
-pub(crate) fn mounted_recording(project_root: &Path) -> Option<PathBuf> {
+/// From now on, `recordings/<asset_id>/...` inside `project_root` resolves into `folder`. Kept
+/// for the life of the app, so an export that outlives the open project still finds its files.
+pub(crate) fn mount_recording(project_root: &Path, asset_id: &str, folder: &Path) {
+    let mut mounts = MOUNTS.write();
+    mounts.retain(|(root, id, _)| !(root == project_root && id == asset_id));
+    mounts.push((
+        project_root.to_path_buf(),
+        asset_id.to_string(),
+        folder.to_path_buf(),
+    ));
+}
+
+/// The folder and the rest of the path, when `relative` names a file of a mounted recording.
+pub(crate) fn resolve_mount<'a>(
+    project_root: &Path,
+    relative: &'a str,
+) -> Option<(PathBuf, &'a str)> {
+    let rest = relative
+        .strip_prefix(RECORDINGS_MOUNT)
+        .and_then(|rest| rest.strip_prefix('/'))?;
+    let (id, inside) = rest.split_once('/')?;
     MOUNTS
         .read()
         .iter()
-        .find(|(root, _)| root == project_root)
-        .map(|(_, recording)| recording.clone())
-}
-
-/// `relative` split at the mount: the rest of the path inside the recording, if it is one.
-pub(crate) fn under_mount(relative: &str) -> Option<&str> {
-    relative
-        .strip_prefix(RECORDING_MOUNT)
-        .and_then(|rest| rest.strip_prefix('/'))
+        .find(|(root, mounted, _)| root == project_root && mounted == id)
+        .map(|(_, _, folder)| (folder.clone(), inside))
 }
 
 pub(crate) fn load_project_file(root: &Path) -> Result<Option<ProjectFile>, String> {
@@ -182,8 +192,16 @@ mod tests {
         // A recording must look like one.
         assert!(create_project_folder(dir.path(), "x", Some(&first)).is_err());
         assert!(create_project_folder(dir.path(), "x", Some(&dir.path().join("nope"))).is_err());
-        assert_eq!(under_mount("recording/media/a.mp4"), Some("media/a.mp4"));
-        assert_eq!(under_mount("recordings/a"), None);
+        mount_recording(dir.path(), "rec-1", &first);
+        assert_eq!(
+            resolve_mount(dir.path(), "recordings/rec-1/media/a.mp4"),
+            Some((first.clone(), "media/a.mp4"))
+        );
+        assert_eq!(
+            resolve_mount(dir.path(), "recordings/rec-2/media/a.mp4"),
+            None
+        );
+        assert_eq!(resolve_mount(dir.path(), "recording/a"), None);
     }
 
     /// A recording with one second of a loud microphone, as the recorder writes it.
@@ -230,6 +248,7 @@ mod tests {
     #[test]
     fn a_project_reads_its_recording_and_writes_only_to_itself() {
         use crate::project::ProjectReader;
+        use crate::sequence::edit::SequenceEdit;
         let dir = tempfile::tempdir().unwrap();
         let recording = mic_recording(dir.path());
         let recording = dunce::canonicalize(recording).unwrap();
@@ -238,29 +257,37 @@ mod tests {
             create_project_folder(&dir.path().join("Projects"), "Edit", Some(&recording)).unwrap();
 
         let mut reader = ProjectReader::open(&folder).unwrap();
-        assert_eq!(reader.summary.manifest.project_name, "Edit");
-        assert_eq!(reader.summary.edited_duration_us, 1_000_000);
-        assert_eq!(
-            reader.summary.recording_path.as_deref(),
-            Some(recording.to_string_lossy().as_ref())
-        );
-        assert_eq!(reader.source_root(), recording);
-        let segment = reader.segments_for("mic").unwrap()[0].clone();
+        assert_eq!(reader.summary.name, "Edit");
+        assert_eq!(reader.summary.duration_us, 1_000_000);
+        let asset = reader.summary.assets[0].clone();
+        assert_eq!(asset.path, recording.to_string_lossy());
+        let key = format!("{}.mic", asset.id);
+        let segment = reader.page(&key, 0, 10).unwrap().segments[0].clone();
         assert!(segment.available, "the recording's media is found");
-        assert_eq!(segment.relative_path, "recording/media/mic/000001.wav");
+        assert_eq!(
+            segment.relative_path,
+            format!("recordings/{}/media/mic/000001.wav", asset.id)
+        );
         assert_eq!(
             crate::project::reader::safe_path(reader.root(), &segment.relative_path).unwrap(),
             recording.join("media/mic/000001.wav")
         );
         // Playback and export read the microphone through the mount.
-        let tracks = crate::playback::tracks_from_reader(&reader);
         let mixer =
-            crate::media::audio::AudioMixer::new(reader.root(), &reader.history().current, &tracks)
-                .unwrap();
+            crate::media::audio::AudioMixer::new(reader.root(), &reader.history().current).unwrap();
         let pcm = mixer.read_frames(24_000, 480).unwrap();
         assert!(pcm.iter().any(|&s| s.unsigned_abs() > 5_000));
 
-        reader.split(0, 500_000).unwrap();
+        reader
+            .edit_sequence(
+                0,
+                &SequenceEdit::Split {
+                    at_us: 500_000,
+                    clip_ids: vec![],
+                },
+                None,
+            )
+            .unwrap();
         reader.rename_project("Launch edit").unwrap();
         drop(reader);
         assert!(folder.join("project.json").is_file());
@@ -270,11 +297,30 @@ mod tests {
             manifest_before
         );
         let reopened = ProjectReader::open(&folder).unwrap();
-        assert_eq!(reopened.summary.manifest.project_name, "Launch edit");
-        assert_eq!(reopened.summary.split_points_us, vec![500_000]);
+        assert_eq!(reopened.summary.name, "Launch edit");
+        assert_eq!(reopened.summary.sequence.tracks[0].clips.len(), 2);
+        assert!(!reopened.summary.assets[0].missing);
         drop(reopened);
 
-        // A recording that moved away is reported, not silently replaced.
+        // A recording that moved away shows as missing; the project still opens.
+        fs::rename(&recording, dir.path().join("moved.aero")).unwrap();
+        let reopened = ProjectReader::open(&folder).unwrap();
+        assert!(reopened.summary.assets[0].missing);
+        assert!(reopened
+            .summary
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("missing")));
+    }
+
+    /// A project made from a recording that is gone says where it was.
+    #[test]
+    fn a_new_project_whose_recording_is_gone_says_so() {
+        use crate::project::ProjectReader;
+        let dir = tempfile::tempdir().unwrap();
+        let recording = mic_recording(dir.path());
+        let folder =
+            create_project_folder(&dir.path().join("Projects"), "Edit", Some(&recording)).unwrap();
         fs::rename(&recording, dir.path().join("moved.aero")).unwrap();
         let error = ProjectReader::open(&folder).err().unwrap();
         assert!(error.contains("recording is missing"), "{error}");
@@ -284,18 +330,16 @@ mod tests {
     #[test]
     fn an_empty_project_opens_and_takes_imported_media() {
         use crate::project::ProjectReader;
+        use crate::sequence::edit::SequenceEdit;
         let dir = tempfile::tempdir().unwrap();
         let folder = create_project_folder(dir.path(), "From scratch", None).unwrap();
         let mut reader = ProjectReader::open(&folder).unwrap();
-        assert_eq!(reader.summary.edited_duration_us, 0);
-        assert!(reader.summary.tracks.is_empty());
-        assert_eq!(reader.summary.recording_path, None);
-        assert!(!reader.has_recording());
+        assert_eq!(reader.summary.duration_us, 0);
+        assert!(reader.summary.assets.is_empty());
+        assert!(reader.summary.sequence.tracks.is_empty());
         let owner = crate::playback::PlaybackOwner::open(
             reader.summary.project_handle.clone(),
-            folder.clone(),
             &reader.history().current,
-            Vec::new(),
         );
         assert!(owner.is_ok(), "playback opens on an empty timeline");
 
@@ -304,21 +348,30 @@ mod tests {
             .save(&png)
             .unwrap();
         let summary = reader.import_media(0, &[png.clone()]).unwrap();
-        let id = summary.media_assets[0].id.clone();
-        let summary = reader.insert_media(1, &id, 0, None).unwrap();
-        assert_eq!(summary.edited_duration_us, crate::media_bin::IMAGE_CLIP_US);
+        let id = summary.assets[0].id.clone();
+        let (summary, _) = reader
+            .edit_sequence(
+                1,
+                &SequenceEdit::PlaceAsset {
+                    asset_id: id,
+                    at_us: 0,
+                    track_id: None,
+                    streams: vec![],
+                    range: None,
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(summary.duration_us, crate::sequence::IMAGE_CLIP_US);
         drop(reader);
         let reopened = ProjectReader::open(&folder).unwrap();
-        assert_eq!(
-            reopened.summary.edited_duration_us,
-            crate::media_bin::IMAGE_CLIP_US
-        );
+        assert_eq!(reopened.summary.duration_us, crate::sequence::IMAGE_CLIP_US);
         // The image is used where it is, and shows as missing once it is gone.
-        let asset = &reopened.summary.media_assets[0];
-        assert!(asset.file_path(&folder).unwrap().is_file() && !asset.missing);
+        let asset = &reopened.summary.assets[0];
+        assert!(Path::new(&asset.path).is_file() && !asset.missing);
         drop(reopened);
         std::fs::remove_file(&png).unwrap();
         let reopened = ProjectReader::open(&folder).unwrap();
-        assert!(reopened.summary.media_assets[0].missing);
+        assert!(reopened.summary.assets[0].missing);
     }
 }

@@ -1,10 +1,9 @@
 import React, { useState } from "react";
-import { AlertTriangle, Film, FolderInput, Image as ImageIcon, Music, Plus, Search, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Clapperboard, Film, FolderInput, Image as ImageIcon, Music, Plus, Search, Trash2, Upload } from "lucide-react";
 import { Badge, Button, IconButton, Notice, Segmented } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import type { MediaAsset } from "../../lib/types";
-import { audioStreamCount } from "../../lib/trackUtils";
+import type { Asset } from "../../lib/types";
 
 /** dataTransfer type for dragging a media bin item onto the timeline. */
 export const MEDIA_DRAG_TYPE = "application/x-aeroedits-media";
@@ -13,17 +12,19 @@ let draggedMediaId: string | null = null;
 /** The media being dragged from the bin; drag-over events cannot read the drag's data. */
 export const currentMediaDrag = () => draggedMediaId;
 
-function formatLength(asset: MediaAsset): string {
+const soundCount = (asset: Asset) => asset.streams.filter((s) => s.kind === "sound").length;
+
+function formatLength(asset: Asset): string {
   if (asset.kind === "image") return "still image";
   const seconds = asset.durationUs / 1e6;
   const minutes = Math.floor(seconds / 60);
   return minutes > 0 ? `${minutes}:${String(Math.floor(seconds % 60)).padStart(2, "0")}` : `${seconds.toFixed(1)}s`;
 }
 
-const KIND_ICON = { video: Film, image: ImageIcon, audio: Music } as const;
+const KIND_ICON = { recording: Clapperboard, video: Film, image: ImageIcon, audio: Music } as const;
 
-/// The project's media bin: import videos, images and audio, then drag them onto the
-/// timeline (or insert at the playhead) to play between parts of the recording.
+/// The project's media: recordings, videos, images and audio. Drag one onto a track (or add it
+/// at the playhead) to put its picture and sound on the timeline as linked clips.
 export const MediaPanel: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
@@ -31,8 +32,9 @@ export const MediaPanel: React.FC = () => {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [search, setSearch] = useState("");
-  const [kind, setKind] = useState<"all" | MediaAsset["kind"]>("all");
-  const assets = openedProject?.mediaAssets ?? [];
+  const [kind, setKind] = useState<"all" | Asset["kind"]>("all");
+  const assets = openedProject?.assets ?? [];
+  const placed = new Set(openedProject?.sequence.tracks.flatMap((t) => t.clips.map((c) => c.asset)) ?? []);
 
   const run = async (label: string, work: () => Promise<void>) => {
     if (busy) return;
@@ -72,14 +74,22 @@ export const MediaPanel: React.FC = () => {
       }
     });
 
-  const insertAtPlayhead = (asset: MediaAsset) =>
-    run("Inserting…", async () => {
+  /** At the playhead, on the first track with room (or a new one). */
+  const addAtPlayhead = (asset: Asset) =>
+    run("Adding…", async () => {
       const project = useProjectStore.getState().openedProject;
       if (!project) return;
-      applyOpenedProject(await api.projectMediaInsert(project.projectHandle, project.revision, asset.id, currentTimeUs));
+      applyOpenedProject(
+        await api.projectSequenceEdit(project.projectHandle, project.revision, {
+          kind: "placeAsset",
+          assetId: asset.id,
+          atUs: Math.round(currentTimeUs),
+          trackId: null,
+        }),
+      );
     });
 
-  const remove = (asset: MediaAsset) =>
+  const remove = (asset: Asset) =>
     run("Removing…", async () => {
       const project = useProjectStore.getState().openedProject;
       if (!project) return;
@@ -126,7 +136,7 @@ export const MediaPanel: React.FC = () => {
                 className="ui-field w-full pl-8"
               />
             </div>
-            <Segmented<"all" | MediaAsset["kind"]>
+            <Segmented<"all" | Asset["kind"]>
               label="Show"
               size="sm"
               className="w-full"
@@ -134,6 +144,7 @@ export const MediaPanel: React.FC = () => {
               onChange={setKind}
               options={[
                 { value: "all", label: `All ${assets.length}` },
+                ...(assets.some((a) => a.kind === "recording") ? [{ value: "recording" as const, label: "Recordings" }] : []),
                 { value: "video", label: "Video" },
                 { value: "image", label: "Images" },
                 { value: "audio", label: "Audio" },
@@ -172,7 +183,7 @@ export const MediaPanel: React.FC = () => {
             <p className="mt-2 text-label text-studio-300">Import intros, B-roll, images or music.</p>
             <p className="mt-1 text-meta text-studio-500 leading-relaxed">
               One by one or a whole folder; a recorder folder comes in as one recording with its camera, sound and mouse
-              data. Drag an item onto the timeline, or use + to insert it at the playhead. Files stay where they are.
+              data. Drag an item onto a track, or use + to add it at the playhead. Files stay where they are.
             </p>
           </div>
         )}
@@ -199,9 +210,9 @@ export const MediaPanel: React.FC = () => {
                   ? "border-suggest/50 bg-suggest/5 opacity-75"
                   : "border-transparent hover:border-studio-700 hover:bg-studio-850"
               }`}
-              title={`${asset.missing ? `MISSING: ${asset.sourcePath ?? asset.name} is no longer there. ` : ""}${asset.name}${
-                audioStreamCount(asset) > 1 ? ` (audio: ${(asset.audioNames ?? []).join(", ")})` : ""
-              }. Drag onto the main track to insert it, or onto a track above to lay it over the video.`}
+              title={`${asset.missing ? `MISSING: ${asset.path} is no longer there. ` : ""}${asset.name}${
+                soundCount(asset) > 1 ? ` (sound: ${asset.streams.filter((s) => s.kind === "sound").map((s) => s.name).join(", ")})` : ""
+              }. Drag onto a track: its picture and sound go on as linked clips.`}
             >
               <span
                 className={`h-9 w-9 shrink-0 inline-flex items-center justify-center rounded-control ${
@@ -212,7 +223,7 @@ export const MediaPanel: React.FC = () => {
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 min-w-0">
-                  {asset.recordingPath && (
+                  {asset.kind === "recording" && (
                     <Badge tone="video" title="A recording: its screen, camera, sound and mouse data (for its own auto-zoom)">
                       Rec
                     </Badge>
@@ -223,17 +234,18 @@ export const MediaPanel: React.FC = () => {
                 <div className="text-meta text-studio-500 truncate">
                   {formatLength(asset)}
                   {asset.width > 0 && ` · ${asset.width}×${asset.height}`}
-                  {asset.kind === "video" && !asset.audioPath && " · no sound"}
-                  {audioStreamCount(asset) > 1 && ` · ${audioStreamCount(asset)} sound tracks`}
+                  {asset.kind === "video" && soundCount(asset) === 0 && " · no sound"}
+                  {soundCount(asset) > 1 && ` · ${soundCount(asset)} sounds`}
+                  {!placed.has(asset.id) && " · not on the timeline"}
                 </div>
               </div>
               <div className="flex items-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                 <IconButton
                   icon={Plus}
                   size="sm"
-                  label={`Insert ${asset.name} at the playhead`}
+                  label={`Add ${asset.name} at the playhead`}
                   disabled={busy !== null}
-                  onClick={() => void insertAtPlayhead(asset)}
+                  onClick={() => void addAtPlayhead(asset)}
                 />
                 <IconButton
                   icon={Trash2}

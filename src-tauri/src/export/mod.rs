@@ -7,10 +7,10 @@ use crate::media::{
     decode_h264_frame, decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate,
     MediaBackend, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
 };
-use crate::project::manifest::TrackType;
-use crate::project::reader::{safe_path, SegmentSummary, TrackSummary};
+use crate::project::reader::{safe_path, SegmentSummary};
 use crate::project::revision::EditDocument;
 use crate::render::{Compositor, Scene};
+use crate::sequence::{Asset, Clip, Role};
 use native::NativeExport;
 
 pub(crate) use native::media_duration_us as native_media_duration_us;
@@ -242,52 +242,40 @@ pub struct CapturedExport {
     pub job_id: String,
     pub root: PathBuf,
     pub document: EditDocument,
-    pub tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
     pub dest: PathBuf,
     pub temp: PathBuf,
     pub settings: ExportSettings,
     pub lease: Arc<File>,
 }
 
+type Zooms = std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>;
+
 pub struct SceneEvaluator {
     root: PathBuf,
     document: EditDocument,
-    tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
     compositor: Option<Compositor>,
     width: u32,
     height: u32,
     decode_limit: DecodeLimit,
     /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
-    /// Enabled webcam focus segments on the edited timeline, merged.
+    /// Enabled webcam focus segments on the timeline, merged.
     webcam_focus: std::cell::OnceCell<Vec<(u64, u64)>>,
-    /// Caption cues from the captioned track's transcript; empty when captions are off.
+    /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The last cue drawn and its colored frame for the active word.
     caption_cache: std::cell::RefCell<CaptionCache>,
-    /// The last imported image drawn, decoded once rather than per frame.
     /// Decoded stills, most recently used last.
     image_cache: std::cell::RefCell<Vec<(String, VideoFrame)>>,
-    /// Recorded pointers, read once per evaluator: by imported recording, `None` the project's.
+    /// Recorded pointers by recording, read once per evaluator.
     cursors: std::cell::RefCell<
-        std::collections::HashMap<
-            Option<String>,
-            Option<std::sync::Arc<crate::cursor::CursorTrack>>,
-        >,
+        std::collections::HashMap<String, Option<std::sync::Arc<crate::cursor::CursorTrack>>>,
     >,
-    /// Zooms by clock (`None` the project's recording), with the camera paths that follow
-    /// the mouse, worked out once.
-    zooms: std::cell::RefCell<
-        std::collections::HashMap<Option<String>, std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>>,
-    >,
+    /// Zooms by recording, with the camera paths that follow the mouse, worked out once.
+    zooms: std::cell::RefCell<std::collections::HashMap<String, Zooms>>,
     /// Pointer pictures by file, decoded once.
     cursor_images: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<VideoFrame>>>,
-    /// Imported recordings' tracks, indexed once per evaluator, by asset id.
-    recordings:
-        std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<RecordingTracks>>>,
 }
-
-type RecordingTracks = Vec<(TrackSummary, Vec<SegmentSummary>)>;
 
 #[derive(Default)]
 struct CaptionCache {
@@ -319,21 +307,49 @@ fn background_key(
     )
 }
 
+/// A picture to decode, with nothing borrowed, so screen and camera decode side by side.
+enum PictureJob {
+    Segment(SegmentSummary, u64),
+    Video(PathBuf, u64),
+    Ready(VideoFrame),
+}
+
+impl PictureJob {
+    fn run(self, root: &Path, limit: DecodeLimit) -> Result<VideoFrame, String> {
+        match self {
+            PictureJob::Segment(segment, time) => decode_layer(root, &segment, time, limit),
+            PictureJob::Video(path, time) => {
+                crate::media::ffmpeg::decode_bgra_limited(&path, time, limit)
+            }
+            PictureJob::Ready(frame) => Ok(frame),
+        }
+    }
+}
+
+/// The video clips showing at one moment: the screen, the camera and the overlays.
+#[derive(Default)]
+struct Shown<'a> {
+    /// The topmost screen clip, with the index of its video track.
+    screen: Option<(usize, &'a Clip)>,
+    /// The topmost camera clip.
+    webcam: Option<&'a Clip>,
+    /// Overlay clips, bottom track first, with their track index and fit.
+    overlays: Vec<(usize, &'a Clip)>,
+}
+
 impl SceneEvaluator {
     pub fn new(
         root: PathBuf,
         document: EditDocument,
-        tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        Self::new_reusing(root, document, tracks, width, height, None)
+        Self::new_reusing(root, document, width, height, None)
     }
 
     pub fn new_reusing(
         root: PathBuf,
         document: EditDocument,
-        tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
         width: u32,
         height: u32,
         reuse: Option<EvaluatorReuse>,
@@ -352,7 +368,6 @@ impl SceneEvaluator {
         Ok(Self {
             root,
             document,
-            tracks,
             compositor: Some(compositor),
             width,
             height,
@@ -362,7 +377,6 @@ impl SceneEvaluator {
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             image_cache: std::cell::RefCell::new(Vec::new()),
-            recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
             cursors: Default::default(),
             zooms: Default::default(),
             cursor_images: Default::default(),
@@ -413,143 +427,142 @@ impl SceneEvaluator {
         Ok(frame)
     }
 
-    pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
-        let mut scene = self.main_scene_at(edited_us)?;
-        // A short's split frame shows the recording only, and places its own captions.
-        if self.document.short_layout.is_none() {
-            self.push_overlays(&mut scene, edited_us)?;
-            // Captions go over everything, imported clips included.
-            let mapper = self.document.mapper()?;
-            if let Some((frame, x, y)) = self.caption_at(&mapper, edited_us) {
-                scene.push_caption(frame, x, y);
+    /// What the video tracks show at `edited_us`, by role.
+    fn shown(&self, edited_us: u64) -> Shown<'_> {
+        let document = &self.document;
+        let mut shown = Shown::default();
+        for (index, track) in document.sequence.video_tracks().enumerate() {
+            if track.hidden {
+                continue;
+            }
+            let Some(clip) = track.clip_at(edited_us) else {
+                continue;
+            };
+            match crate::sequence::clip_role(&document.assets, track, clip) {
+                // A higher track's screen or camera takes over from a lower one's.
+                Some(Role::Screen) => shown.screen = Some((index, clip)),
+                Some(Role::Webcam) => shown.webcam = Some(clip),
+                Some(_) => shown.overlays.push((index, clip)),
+                None => {}
             }
         }
-        Ok(scene)
+        shown
     }
 
-    /// The main sequence (V1): the recording, or media inserted into it.
-    fn main_scene_at(&self, edited_us: u64) -> Result<Scene, String> {
-        let mapper = self.document.mapper()?;
-        let black = || Scene {
-            width: self.width,
-            height: self.height,
-            background: [0.0, 0.0, 0.0, 1.0],
-            layers: Vec::new(),
-        };
-        // A hidden V1, a gap in it, or time past its end: black, with the tracks on top.
-        if self.document.main_track.hidden || edited_us >= mapper.total_edited_duration_us() {
-            return Ok(black());
-        }
-        if let Some((asset_id, local_us)) = mapper.media_at(edited_us) {
-            if asset_id == crate::project::revision::GAP {
-                return Ok(black());
-            }
-            return self.media_scene(asset_id, local_us);
-        }
-        let duration_us = mapper.total_edited_duration_us();
-        let ended = edited_us >= duration_us;
-        let source_us = mapper.edited_to_source_us(edited_us);
-        let mut screen_job = None;
-        let mut webcam_job = None;
-        for (track, segments) in &self.tracks {
-            if ended {
-                return Err("The exclusive edited end is not a video sample".into());
-            }
-            let source = source_us.ok_or("No source sample at edited position")?;
-            let containing = segments
-                .iter()
-                .find(|s| s.start_us <= source && source < s.end_us && s.available);
-            match track.descriptor.track_type {
-                TrackType::Screen => {
-                    let candidate = containing.map(|s| (s, source)).or_else(|| {
-                        // A gap holds the last retained source picture, independent of seek history.
-                        self.document
-                            .retained_intervals
-                            .iter()
-                            .filter(|interval| interval.is_recording())
-                            .rev()
-                            .find_map(|interval| {
-                                segments.iter().rev().find_map(|s| {
-                                    let end = source.min(interval.end_us).min(s.end_us);
-                                    (s.available && end > interval.start_us.max(s.start_us))
-                                        .then_some((s, end.saturating_sub(1)))
-                                })
-                            })
-                    });
-                    screen_job = candidate;
-                }
-                TrackType::Webcam => {
-                    webcam_job = containing.map(|segment| (segment, source));
-                }
-                TrackType::MicAudio | TrackType::SystemAudio => {}
-            }
-        }
-        // Screen and webcam decode in parallel; each waits on its own FFmpeg process.
+    pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
+        let shown = self.shown(edited_us);
+        let at = |clip: &Clip| clip.local_us(edited_us).unwrap_or(clip.in_us);
+        // Screen and camera decode in parallel; each waits on its own FFmpeg process.
+        let screen_job = shown
+            .screen
+            .map(|(_, clip)| self.picture_job(clip, at(clip)))
+            .transpose()?
+            .flatten();
+        let webcam_job = shown
+            .webcam
+            .filter(|_| self.document.layout.webcam_enabled)
+            .map(|clip| self.picture_job(clip, at(clip)))
+            .transpose()?
+            .flatten();
         let (root, limit) = (&self.root, self.decode_limit);
-        let decode = move |job: Option<(&SegmentSummary, u64)>| {
-            job.map(|(segment, time)| decode_layer(root, segment, time, limit))
-                .transpose()
-        };
         let (screen, webcam) = std::thread::scope(|scope| {
-            let webcam = webcam_job.map(|job| scope.spawn(move || decode(Some(job))));
-            let screen = decode(screen_job);
+            let webcam = webcam_job.map(|job| scope.spawn(move || job.run(root, limit)));
+            let screen = screen_job.map(|job| job.run(root, limit)).transpose()?;
             let webcam = match webcam {
-                Some(handle) => handle
-                    .join()
-                    .map_err(|_| "Webcam decode panicked".to_string())?,
-                None => Ok(None),
+                Some(handle) => Some(
+                    handle
+                        .join()
+                        .map_err(|_| "Webcam decode panicked".to_string())??,
+                ),
+                None => None,
             };
-            Ok::<_, String>((screen?, webcam?))
+            Ok::<_, String>((screen, webcam))
         })?;
-
         if let Some(short) = self.document.short_layout.clone() {
-            return self.split_scene(&short, &mapper, edited_us, screen, webcam);
+            return self.split_scene(&short, edited_us, &shown, screen, webcam);
         }
+        let unit = crate::render::layout_px_unit(self.width, self.height);
         let has_screen = screen.is_some();
-        let wallpaper = self.background()?;
-        let mut scene = Scene::from_layout_scaled(
-            self.width,
-            self.height,
-            &self.document.layout,
-            screen,
-            webcam,
-            wallpaper,
-            crate::render::layout_px_unit(self.width, self.height),
-        )?;
-        let zooms = self.zooms_for(None);
-        let config = crate::zoom::eval_config_for(&self.document.zooms);
-        let camera = crate::zoom::evaluate_at_edited(&zooms, &mapper, edited_us, &config)
-            .unwrap_or_else(crate::zoom::CameraTransform::identity);
-        if has_screen {
-            let crop = self.document.layout.screen_crop_uv();
-            let (uv_x, uv_y, uv_w, uv_h) = crate::render::zoom_within_crop(crop, camera.uv_rect());
-            scene.apply_screen_uv(uv_x, uv_y, uv_w, uv_h);
-            if let Some(source) = source_us {
-                self.push_cursor(&mut scene, None, source)?;
+        let has_webcam = webcam.is_some();
+        // Nothing to frame: the canvas is black, with any overlays on it.
+        let mut scene = if has_screen || has_webcam {
+            let mut layout = self.document.layout.clone();
+            layout.webcam_enabled = has_webcam;
+            Scene::from_layout_scaled(
+                self.width,
+                self.height,
+                &layout,
+                screen,
+                webcam,
+                self.background()?,
+                unit,
+            )?
+        } else {
+            Scene {
+                width: self.width,
+                height: self.height,
+                background: [0.0, 0.0, 0.0, 1.0],
+                layers: Vec::new(),
+            }
+        };
+        if let (Some((_, clip)), true) = (shown.screen, has_screen) {
+            let local = at(clip);
+            let zooms = self.zooms_for(&clip.asset);
+            if !zooms.is_empty() {
+                let config = crate::zoom::eval_config_for(&self.document.zooms);
+                let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
+                let crop = self.document.layout.screen_crop_uv();
+                let (x, y, w, h) = crate::render::zoom_within_crop(crop, camera.uv_rect());
+                scene.apply_screen_uv(x, y, w, h);
+            }
+            self.push_cursor(&mut scene, &clip.asset, local)?;
+        }
+        if has_webcam {
+            let focus = &self.document.webcam_focus;
+            let ranges = self
+                .webcam_focus
+                .get_or_init(|| focus.edited_ranges(&self.document.focus_clock()));
+            let weight = crate::webcam_focus::focus_weight(
+                ranges,
+                edited_us,
+                focus.settings.transition_us(),
+            );
+            scene.apply_webcam_focus(
+                &self.document.layout,
+                focus.settings.focus_size_pct,
+                weight,
+                unit,
+            );
+        }
+        // Overlays draw in track order; one below the screen's track goes under it.
+        let screen_track = shown.screen.map(|(index, _)| index);
+        for (index, clip) in &shown.overlays {
+            let job = self.picture_job(clip, at(clip))?;
+            if let Some(frame) = job
+                .map(|job| job.run(&self.root, self.decode_limit))
+                .transpose()?
+            {
+                let before = scene.layers.len();
+                scene.push_overlay(frame, clip.fit == crate::sequence::Fit::Cover);
+                if screen_track.is_some_and(|screen| *index < screen) {
+                    scene.move_under_main(before);
+                }
             }
         }
-        let focus = &self.document.webcam_focus;
-        let ranges = self
-            .webcam_focus
-            .get_or_init(|| focus.edited_ranges(&mapper));
-        let weight =
-            crate::webcam_focus::focus_weight(ranges, edited_us, focus.settings.transition_us());
-        scene.apply_webcam_focus(
-            &self.document.layout,
-            focus.settings.focus_size_pct,
-            weight,
-            crate::render::layout_px_unit(self.width, self.height),
-        );
+        // Captions go over everything.
+        if let Some((frame, x, y)) = self.caption_at(edited_us) {
+            scene.push_caption(frame, x, y);
+        }
         Ok(scene)
     }
 
     /// A short's vertical frame: the camera across the top or bottom and the screen in the
-    /// rest, cut to that shape and following the project's zooms, with captions placed to suit.
+    /// rest, cut to that shape and following the screen's zooms, with captions placed to suit.
     fn split_scene(
         &self,
         short: &crate::shorts::ShortLayout,
-        mapper: &crate::timeline::TimelineMapper,
         edited_us: u64,
+        shown: &Shown<'_>,
         screen: Option<VideoFrame>,
         webcam: Option<VideoFrame>,
     ) -> Result<Scene, String> {
@@ -558,13 +571,14 @@ impl SceneEvaluator {
         let webcam = webcam.filter(|_| layout.webcam_enabled);
         let rects = crate::shorts::split_rects(self.width, self.height, short, webcam.is_some());
         let mut layers = Vec::new();
-        if let Some(screen) = screen {
+        let screen_clip = shown.screen.map(|(_, clip)| clip);
+        let local = screen_clip.map(|clip| clip.local_us(edited_us).unwrap_or(clip.in_us));
+        if let (Some(screen), Some(clip), Some(local)) = (screen, screen_clip, local) {
             let crop = layout.screen_crop_uv();
             let (center, zoom) = if short.follow_zooms {
-                let zooms = self.zooms_for(None);
+                let zooms = self.zooms_for(&clip.asset);
                 let config = crate::zoom::eval_config_for(&self.document.zooms);
-                let camera = crate::zoom::evaluate_at_edited(&zooms, mapper, edited_us, &config)
-                    .unwrap_or_else(crate::zoom::CameraTransform::identity);
+                let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
                 (
                     (camera.center_x as f32, camera.center_y as f32),
                     short.screen_zoom * camera.scale.max(1.0) as f32,
@@ -616,10 +630,10 @@ impl SceneEvaluator {
             background: background_layout.background_rgba()?.0,
             layers,
         };
-        if let Some(source) = mapper.edited_to_source_us(edited_us) {
-            self.push_cursor(&mut scene, None, source)?;
+        if let (Some(clip), Some(local)) = (screen_clip, local) {
+            self.push_cursor(&mut scene, &clip.asset, local)?;
         }
-        if let Some((frame, x, _)) = self.caption_at(mapper, edited_us) {
+        if let Some((frame, x, _)) = self.caption_at(edited_us) {
             let y = crate::shorts::caption_y(short.caption_spot, &rects, frame.height, self.height);
             scene.push_caption(frame, x, y);
         }
@@ -642,83 +656,23 @@ impl SceneEvaluator {
         })
     }
 
-    /// An imported media clip, drawn where the screen recording would be, with the same
-    /// background, padding, corners and shadow. A file that stands for the screen is cropped
-    /// like the screen; a camera shown on V1 is not. The recording's own webcam is left out.
-    fn media_scene(&self, asset_id: &str, local_us: u64) -> Result<Scene, String> {
-        let frame = self.media_frame(asset_id, local_us)?;
-        let mut layout = self.document.layout.clone();
-        let asset = self
-            .document
-            .media_assets
-            .iter()
-            .find(|asset| asset.id == asset_id);
-        // An imported recording brings its own camera into the bubble.
-        let webcam = match asset {
-            Some(asset) if layout.webcam_enabled && asset.recording_path.is_some() => {
-                self.recording_frame(asset, TrackType::Webcam, local_us)?
-            }
-            _ => None,
-        };
-        layout.webcam_enabled = webcam.is_some();
-        let screen =
-            asset.is_none_or(|asset| asset.picture_role == crate::media_bin::PictureRole::Screen);
-        if !screen {
-            layout.screen_crop_left = 0.0;
-            layout.screen_crop_top = 0.0;
-            layout.screen_crop_right = 0.0;
-            layout.screen_crop_bottom = 0.0;
-        }
-        let has_picture = frame.is_some();
-        let mut scene = Scene::from_layout_scaled(
-            self.width,
-            self.height,
-            &layout,
-            frame,
-            webcam,
-            self.background()?,
-            crate::render::layout_px_unit(self.width, self.height),
-        )?;
-        // Zooms on this file's own clock (an imported recording's, or drawn over the clip).
-        let zooms = self.zooms_for(Some(asset_id));
-        if screen && has_picture && !zooms.is_empty() {
-            let config = crate::zoom::eval_config_for(&self.document.zooms);
-            let camera = crate::zoom::evaluate_at_source(&zooms, local_us, &config);
-            let (x, y, w, h) =
-                crate::render::zoom_within_crop(layout.screen_crop_uv(), camera.uv_rect());
-            scene.apply_screen_uv(x, y, w, h);
-        }
-        if screen && has_picture {
-            self.push_cursor(&mut scene, Some(asset_id), local_us)?;
-        }
-        Ok(scene)
-    }
-
-    /// The zooms on one clock, each following the mouse along its recording (unless fixed or
+    /// The zooms on a recording's clock, each following the mouse along it (unless fixed or
     /// following is off).
-    fn zooms_for(&self, media: Option<&str>) -> std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>> {
-        let key = media.map(str::to_string);
-        if let Some(zooms) = self.zooms.borrow().get(&key) {
+    fn zooms_for(&self, asset: &str) -> Zooms {
+        if let Some(zooms) = self.zooms.borrow().get(asset) {
             return zooms.clone();
         }
         let settings = &self.document.zoom_settings;
-        let folder = match media {
-            None => Some(self.root.clone()),
-            Some(id) => self
-                .document
-                .media_assets
-                .iter()
-                .find(|asset| asset.id == id)
-                .and_then(|asset| asset.recording_path.as_ref().map(PathBuf::from)),
-        };
-        let samples = folder
-            .filter(|_| settings.follow)
-            .map(|folder| crate::zoom::recording_cursor_samples(&folder));
+        let samples = self
+            .document
+            .asset(asset)
+            .filter(|a| a.is_recording() && settings.follow)
+            .map(|a| crate::zoom::recording_cursor_samples(Path::new(&a.path)));
         let zooms: Vec<crate::zoom::ZoomSuggestion> = self
             .document
             .zooms
             .iter()
-            .filter(|zoom| zoom.media.as_deref() == media)
+            .filter(|zoom| self.document.clock_asset(zoom.media.as_deref()) == Some(asset))
             .map(|zoom| {
                 let mut suggestion = zoom.as_suggestion();
                 if let Some(samples) = samples.as_ref().filter(|_| !zoom.fixed) {
@@ -732,49 +686,41 @@ impl SceneEvaluator {
             })
             .collect();
         let zooms = std::sync::Arc::new(zooms);
-        self.zooms.borrow_mut().insert(key, zooms.clone());
+        self.zooms
+            .borrow_mut()
+            .insert(asset.to_string(), zooms.clone());
         zooms
     }
 
-    /// The recorded pointer of the project's recording (`media` `None`) or of an imported
-    /// one, read once.
-    fn cursor_track(
-        &self,
-        media: Option<&str>,
-    ) -> Option<std::sync::Arc<crate::cursor::CursorTrack>> {
-        let key = media.map(str::to_string);
-        if let Some(track) = self.cursors.borrow().get(&key) {
+    /// A recording's recorded pointer, read once.
+    fn cursor_track(&self, asset: &str) -> Option<std::sync::Arc<crate::cursor::CursorTrack>> {
+        if let Some(track) = self.cursors.borrow().get(asset) {
             return track.clone();
         }
-        let folder = match media {
-            None => Some(self.root.clone()),
-            Some(id) => self
-                .document
-                .media_assets
-                .iter()
-                .find(|asset| asset.id == id)
-                .and_then(|asset| asset.recording_path.as_ref().map(PathBuf::from)),
-        };
         // A pointer that cannot be read is simply not drawn.
-        let track = folder
-            .and_then(|folder| crate::cursor::CursorTrack::load(&folder).ok().flatten())
+        let track = self
+            .document
+            .asset(asset)
+            .filter(|a| a.is_recording())
+            .and_then(|a| {
+                crate::cursor::CursorTrack::load(Path::new(&a.path))
+                    .ok()
+                    .flatten()
+            })
             .map(std::sync::Arc::new);
-        self.cursors.borrow_mut().insert(key, track.clone());
+        self.cursors
+            .borrow_mut()
+            .insert(asset.to_string(), track.clone());
         track
     }
 
-    /// Draws the recorded pointer at `source_us` on its recording's clock over the screen.
-    fn push_cursor(
-        &self,
-        scene: &mut Scene,
-        media: Option<&str>,
-        source_us: u64,
-    ) -> Result<(), String> {
+    /// Draws a recording's pointer at `source_us` on its clock over the screen.
+    fn push_cursor(&self, scene: &mut Scene, asset: &str, source_us: u64) -> Result<(), String> {
         let layout = &self.document.layout;
         if !layout.cursor_visible {
             return Ok(());
         }
-        let Some(track) = self.cursor_track(media) else {
+        let Some(track) = self.cursor_track(asset) else {
             return Ok(());
         };
         let Some(pose) = track.at(source_us) else {
@@ -805,196 +751,86 @@ impl SceneEvaluator {
         Ok(())
     }
 
-    /// The tracks of an imported recording, read from its folder once.
-    fn recording_tracks(
-        &self,
-        asset: &crate::media_bin::MediaAsset,
-    ) -> Result<Option<std::sync::Arc<RecordingTracks>>, String> {
-        let Some(folder) = &asset.recording_path else {
-            return Ok(None);
-        };
-        if let Some(tracks) = self.recordings.borrow().get(&asset.id) {
-            return Ok(Some(tracks.clone()));
-        }
-        if !Path::new(folder).is_dir() {
-            return Ok(None);
-        }
-        let (tracks, _) = crate::project::reader::recording_tracks(Path::new(folder))?;
-        let tracks = std::sync::Arc::new(tracks);
-        self.recordings
-            .borrow_mut()
-            .insert(asset.id.clone(), tracks.clone());
-        Ok(Some(tracks))
-    }
-
-    /// An imported recording's screen or camera picture at `local_us` on its clock. In a gap
-    /// between segments the screen holds its last picture; the camera shows nothing.
-    fn recording_frame(
-        &self,
-        asset: &crate::media_bin::MediaAsset,
-        kind: TrackType,
-        local_us: u64,
-    ) -> Result<Option<VideoFrame>, String> {
-        let Some(tracks) = self.recording_tracks(asset)? else {
-            return Ok(None);
-        };
-        let Some((_, segments)) = tracks.iter().find(|(t, _)| t.descriptor.track_type == kind)
-        else {
-            return Ok(None);
-        };
-        let containing = segments
-            .iter()
-            .find(|s| s.available && s.start_us <= local_us && local_us < s.end_us)
-            .map(|s| (s, local_us));
-        let job = containing.or_else(|| {
-            (kind == TrackType::Screen)
-                .then(|| {
-                    segments
-                        .iter()
-                        .rev()
-                        .find(|s| s.available && s.end_us <= local_us)
-                        .map(|s| (s, s.end_us.saturating_sub(1)))
-                })
-                .flatten()
-        });
-        let Some((segment, time)) = job else {
-            return Ok(None);
-        };
-        let folder = Path::new(asset.recording_path.as_deref().unwrap_or_default());
-        decode_layer(folder, segment, time, self.decode_limit).map(Some)
-    }
-
-    /// The picture of imported media at `local_us` into the file; `None` for audio.
-    fn media_frame(&self, asset_id: &str, local_us: u64) -> Result<Option<VideoFrame>, String> {
-        use crate::media_bin::MediaKind;
+    /// What to decode for a clip's picture at `local_us` on its asset's clock. In a
+    /// recording's gap between segments the screen holds its last picture and the camera
+    /// shows nothing; a missing file shows nothing.
+    fn picture_job(&self, clip: &Clip, local_us: u64) -> Result<Option<PictureJob>, String> {
+        use crate::sequence::sources::{stream_source, StreamSource};
         const MAX_CACHED_IMAGES: usize = 4;
-        let asset = self
-            .document
-            .media_assets
-            .iter()
-            .find(|asset| asset.id == asset_id)
-            .ok_or("Imported media is missing from the project")?;
-        if asset.recording_path.is_some() {
-            return self.recording_frame(asset, TrackType::Screen, local_us);
-        }
-        let path = asset.file_path(&self.root)?;
-        // A file moved or deleted since import shows nothing; its extracted sound still plays.
-        if !path.is_file() {
+        let Some(asset) = self.document.asset(&clip.asset) else {
             return Ok(None);
-        }
-        Ok(match asset.kind {
-            MediaKind::Video => Some(crate::media::ffmpeg::decode_bgra_limited(
-                &path,
-                local_us,
-                self.decode_limit,
-            )?),
-            MediaKind::Image => {
+        };
+        let source = match stream_source(&self.root, asset, &clip.stream) {
+            Ok(source) => source,
+            // A recording that is gone shows nothing rather than stopping playback.
+            Err(_) => return Ok(None),
+        };
+        Ok(match source {
+            StreamSource::Segments(segments) => {
+                let containing = segments
+                    .iter()
+                    .find(|s| s.available && s.start_us <= local_us && local_us < s.end_us)
+                    .map(|s| (s, local_us));
+                let screen = asset
+                    .stream(&clip.stream)
+                    .is_some_and(|s| s.role == Role::Screen);
+                let job = containing.or_else(|| {
+                    screen
+                        .then(|| {
+                            segments
+                                .iter()
+                                .rev()
+                                .find(|s| s.available && s.end_us <= local_us)
+                                .map(|s| (s, s.end_us.saturating_sub(1)))
+                        })
+                        .flatten()
+                });
+                job.map(|(segment, time)| PictureJob::Segment(segment.clone(), time))
+            }
+            // A file moved or deleted since import shows nothing.
+            StreamSource::Video(path) => {
+                path.is_file().then_some(PictureJob::Video(path, local_us))
+            }
+            StreamSource::Image(path) => {
+                if !path.is_file() {
+                    return Ok(None);
+                }
                 let mut cache = self.image_cache.borrow_mut();
-                let frame = match cache.iter().position(|(id, _)| id == asset_id) {
+                let frame = match cache.iter().position(|(id, _)| *id == clip.asset) {
                     Some(index) => cache.remove(index).1,
                     None => crate::media_bin::decode_image(&path)?,
                 };
-                cache.push((asset_id.to_string(), frame.clone()));
+                cache.push((clip.asset.clone(), frame.clone()));
                 if cache.len() > MAX_CACHED_IMAGES {
                     cache.remove(0);
                 }
-                Some(frame)
+                Some(PictureJob::Ready(frame))
             }
-            MediaKind::Audio => None,
         })
     }
 
-    /// Clips on the video tracks above the main sequence, bottom track first.
-    fn push_overlays(&self, scene: &mut Scene, edited_us: u64) -> Result<(), String> {
-        let below_main = self.document.main_track.position;
-        for (stack_index, track) in self
-            .document
-            .overlay_tracks
-            .iter()
-            .filter(|t| !t.is_audio())
-            .enumerate()
-        {
-            if track.hidden {
-                continue;
-            }
-            let Some(clip) = track.clip_at(edited_us) else {
-                continue;
-            };
-            // Tracks below V1 are drawn over the background but under V1's picture.
-            let under = stack_index < below_main;
-            let local_us = clip.local_us(edited_us).unwrap_or(clip.in_us);
-            // The track's mark wins; unmarked, the file's own role.
-            let webcam = track.role.unwrap_or_else(|| {
-                self.document
-                    .media_assets
-                    .iter()
-                    .find(|asset| asset.id == clip.asset_id)
-                    .map(|asset| asset.picture_role)
-                    .unwrap_or_default()
-            }) == crate::media_bin::PictureRole::Webcam;
-            if let Some(frame) = self.media_frame(&clip.asset_id, local_us)? {
-                let before = scene.layers.len();
-                if webcam {
-                    // A camera file sits in the webcam bubble, shaped like the recording's.
-                    scene.push_webcam_bubble(
-                        frame,
-                        &self.document.layout,
-                        crate::render::layout_px_unit(self.width, self.height),
-                    )?;
-                } else {
-                    scene.push_overlay(frame, clip.fit == crate::tracks::OverlayFit::Cover);
-                }
-                if under {
-                    scene.move_under_main(before);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// The transcript captions read from: the chosen track, else the first transcribed
-    /// microphone, then system audio, then imported sound marked as speech.
+    /// The transcript captions read from: the chosen sound, else the first speech on the
+    /// timeline, else any speech in the project.
     fn caption_transcript(&self) -> Option<crate::transcript::Transcript> {
-        let settings = &self.document.captions;
-        let load = |id: &str| {
-            crate::transcript::store::load_transcript(&self.root, id)
+        let load = |key: &str| {
+            crate::transcript::store::load_transcript(&self.root, key)
                 .ok()
                 .flatten()
         };
-        let recorded = [TrackType::MicAudio, TrackType::SystemAudio]
-            .iter()
-            .flat_map(|kind| {
-                self.tracks
-                    .iter()
-                    .filter(move |(t, _)| t.descriptor.track_type == *kind)
-            })
-            .map(|(t, _)| t.descriptor.id.clone());
-        let document_for_roles = &self.document;
-        let imported = self.document.media_assets.iter().flat_map(|asset| {
-            (0..asset.audio_paths().count())
-                .filter(|&stream| {
-                    document_for_roles.main_stream_role(asset, stream)
-                        == crate::media_bin::SoundRole::Mic
-                })
-                .map(|stream| crate::project::revision::media_sound_id(stream, &asset.id))
-        });
-        crate::captions::caption_source(settings, recorded, imported, load)
+        let candidates = caption_candidates(&self.document);
+        crate::captions::caption_source(&self.document.captions, candidates, Vec::new(), load)
     }
 
-    fn caption_at(
-        &self,
-        mapper: &crate::timeline::TimelineMapper,
-        edited_us: u64,
-    ) -> Option<(VideoFrame, u32, u32)> {
+    fn caption_at(&self, edited_us: u64) -> Option<(VideoFrame, u32, u32)> {
         let settings = &self.document.captions;
         if !settings.enabled {
             return None;
         }
         let cues = self.caption_cues.get_or_init(|| {
             self.caption_transcript()
-                .map(|t| match self.document.mapper_for_transcript(&t.track_id) {
-                    Ok(own) => crate::captions::build_cues(&t, &own, settings),
-                    Err(_) => crate::captions::build_cues(&t, mapper, settings),
+                .and_then(|t| {
+                    let clock = self.document.transcript_clock(&t.track_id).ok()?;
+                    Some(crate::captions::build_cues(&t, &clock, settings))
                 })
                 .unwrap_or_default()
         });
@@ -1025,6 +861,30 @@ impl SceneEvaluator {
         );
         Some((frame, x, y))
     }
+}
+
+/// The sounds captions may read, best first: speech on the timeline (top audio track first,
+/// earliest clip first), then the rest of the project's speech.
+pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |key: String| {
+        if !out.contains(&key) {
+            out.push(key);
+        }
+    };
+    for track in document.sequence.audio_tracks() {
+        for clip in &track.clips {
+            if crate::sequence::clip_role(&document.assets, track, clip) == Some(Role::Mic) {
+                push(clip.source().key());
+            }
+        }
+    }
+    for asset in &document.assets {
+        for stream in asset.streams.iter().filter(|s| s.role == Role::Mic) {
+            push(crate::sequence::StreamRef::new(&asset.id, &stream.id).key());
+        }
+    }
+    out
 }
 
 /// Sources larger than twice the output are shrunk by FFmpeg's filtered scaler before
@@ -1248,7 +1108,7 @@ pub fn resolve_destination(
     project_name: &str,
     revision: u64,
     requested: Option<&str>,
-    tracks: &[(TrackSummary, Vec<SegmentSummary>)],
+    sources: &[Asset],
 ) -> Result<PathBuf, ExportFailure> {
     let dest = match requested {
         Some(path) if !path.trim().is_empty() => PathBuf::from(path),
@@ -1287,24 +1147,19 @@ pub fn resolve_destination(
             message: "Export destination cannot be inside the project bundle".into(),
         });
     }
-    for (_track, segments) in tracks {
-        for segment in segments {
-            if let Ok(path) = safe_path(&project_root, &segment.relative_path) {
-                if let (Ok(src), Ok(out)) =
-                    (dunce::canonicalize(&path), dunce::canonicalize(&resolved))
-                {
-                    if src == out {
-                        return Err(ExportFailure::SourcePath {
-                            message: "Export destination cannot overwrite a source track".into(),
-                        });
-                    }
-                }
-                if path == resolved {
-                    return Err(ExportFailure::SourcePath {
-                        message: "Export destination cannot overwrite a source track".into(),
-                    });
-                }
-            }
+    // Never over the media it is made from, nor inside a recording.
+    for asset in sources {
+        let source = PathBuf::from(&asset.path);
+        let canonical = dunce::canonicalize(&source).unwrap_or(source);
+        let clash = if asset.is_recording() {
+            resolved.starts_with(&canonical)
+        } else {
+            resolved == canonical
+        };
+        if clash {
+            return Err(ExportFailure::SourcePath {
+                message: "Export destination cannot overwrite the media it is made from".into(),
+            });
         }
     }
     Ok(resolved)
@@ -1362,7 +1217,6 @@ pub fn prepare_job(
     root: &Path,
     project_name: &str,
     document: EditDocument,
-    tracks: Vec<(TrackSummary, Vec<SegmentSummary>)>,
     settings: ExportSettings,
     owner: &mut ExportOwner,
 ) -> Result<CapturedExport, ExportStatus> {
@@ -1411,7 +1265,7 @@ pub fn prepare_job(
         project_name,
         document.revision,
         settings.destination.as_deref(),
-        &tracks,
+        &document.assets,
     ) {
         Ok(path) => path,
         Err(failure) => {
@@ -1435,18 +1289,7 @@ pub fn prepare_job(
             }),
         ));
     }
-    let duration = match document.edited_duration_us() {
-        Ok(value) => value,
-        Err(message) => {
-            return Err(status_from(
-                &job_id,
-                &document,
-                &settings,
-                ExportState::Failed,
-                Some(ExportFailure::InvalidSettings { message }),
-            ));
-        }
-    };
+    let duration = document.duration_us();
     if let Err(failure) = frame_count(duration, settings.fps) {
         return Err(status_from(
             &job_id,
@@ -1477,7 +1320,6 @@ pub fn prepare_job(
         job_id,
         root: root.to_path_buf(),
         document,
-        tracks,
         dest,
         temp,
         settings,
@@ -1608,12 +1450,9 @@ fn export_to_temp(
         path: captured.temp.clone(),
         keep: false,
     };
-    let duration_us = captured
-        .document
-        .edited_duration_us()
-        .map_err(|message| ExportFailure::InvalidSettings { message })?;
+    let duration_us = captured.document.duration_us();
     let frames = frame_count(duration_us, captured.settings.fps)?;
-    let mixer = AudioMixer::new(&captured.root, &captured.document, &captured.tracks)
+    let mixer = AudioMixer::new(&captured.root, &captured.document)
         .map_err(|message| ExportFailure::Io { message })?;
     let (sample_rate, channels) = if mixer.has_audio() {
         (SAMPLE_RATE, CHANNELS)
@@ -1633,7 +1472,6 @@ fn export_to_temp(
     let mut evaluator = SceneEvaluator::new(
         captured.root.clone(),
         captured.document.clone(),
-        captured.tracks.clone(),
         captured.settings.width,
         captured.settings.height,
     )
@@ -1737,7 +1575,7 @@ fn export_to_temp(
 
 /// Adds the document's chapters to the finished file, in place. Nothing to do without any.
 fn write_chapters(temp: &Path, document: &EditDocument, duration_us: u64) -> Result<(), String> {
-    let timeline = crate::chapters::timeline(&document.chapters, &document.mapper()?);
+    let timeline = crate::chapters::timeline(&document.chapters, document);
     if timeline.is_empty() {
         return Ok(());
     }
@@ -1900,18 +1738,17 @@ mod tests {
         assert!(frame_time_us(2, 10) >= 200_000);
     }
 
-    /// A `.aero` bundle with two seconds of 64x64 screen video, whose grey level steps up
-    /// every 100ms, and a mic track. Returns the project root.
+    /// A `.aero` recording with two seconds of 64x64 screen video, whose grey level steps up
+    /// every 100ms, and a mic track. Returns the recording folder.
     fn screen_and_mic_project(dir: &Path) -> PathBuf {
         project_with_tracks(dir, false)
     }
 
-    /// The screen (grey ramp) and mic project, plus a solid red webcam when `webcam` is set.
+    /// The screen (grey ramp) and mic recording, plus a solid red webcam when `webcam` is set.
     fn project_with_tracks(dir: &Path, webcam: bool) -> PathBuf {
         use crate::fixtures::{generate_pcm16_wav, TestProject};
         use crate::project::manifest::{TrackDescriptor, TrackType};
         use crate::project::JournalRecord;
-
         let mut bundle = TestProject::create(dir, "export");
         let root = bundle.root_path().to_path_buf();
         let frames: Vec<VideoFrame> = (0..20u8)
@@ -1986,49 +1823,65 @@ mod tests {
         root
     }
 
-    fn cut_document() -> EditDocument {
-        use crate::project::reader::RetainedInterval;
-        EditDocument::from_retained(vec![
-            RetainedInterval {
-                start_us: 0,
-                end_us: 500_000,
-                media: None,
-                audio_unlinked: false,
-            },
-            RetainedInterval {
-                start_us: 1_200_000,
-                end_us: 2_000_000,
-                media: None,
-                audio_unlinked: false,
-            },
-        ])
-        .unwrap()
+    /// A recording opened as a new project, the way the app makes one.
+    fn opened(recording: &Path) -> (PathBuf, crate::project::ProjectReader) {
+        let parent = recording.parent().unwrap().join("projects");
+        let folder =
+            crate::project::folder::create_project_folder(&parent, "Edit", Some(recording))
+                .unwrap();
+        let reader = crate::project::ProjectReader::open(&folder).unwrap();
+        (folder, reader)
     }
 
-    /// Video tracks above the main sequence: a higher track draws over a lower one, a hidden
-    /// track draws nothing, and a clip's sound plays unless its track is muted.
-    #[test]
-    #[cfg_attr(
-        not(target_os = "macos"),
-        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
-    )]
-    fn gpu_overlay_tracks_draw_in_order_and_play_their_sound() {
-        use crate::project::reader::ProjectReader;
-        use crate::tracks::TrackEdit;
-        use std::process::Command;
+    fn edit(reader: &mut crate::project::ProjectReader, edit: crate::sequence::edit::SequenceEdit) {
+        let revision = reader.summary.revision;
+        reader
+            .edit_sequence(revision, &edit, None)
+            .unwrap_or_else(|e| panic!("{edit:?}: {e}"));
+    }
 
-        let dir = tempfile::tempdir().unwrap();
-        let root = screen_and_mic_project(dir.path());
-        let png = dir.path().join("blue.png");
-        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
-            .save(&png)
-            .unwrap();
-        let clip = dir.path().join("red.mp4");
-        let status = Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+    /// Source 0.5 s to 1.2 s cut out of every track.
+    fn cut_project(dir: &Path) -> (PathBuf, crate::project::ProjectReader) {
+        let (folder, mut reader) = opened(&screen_and_mic_project(dir));
+        reader.ripple_cuts(0, &[(500_000, 1_200_000)]).unwrap();
+        (folder, reader)
+    }
+
+    /// The source 1.2 s to 2.0 s set first, then 0 to 0.5 s.
+    fn reordered_project(dir: &Path) -> (PathBuf, crate::project::ProjectReader) {
+        let (folder, mut reader) = cut_project(dir);
+        let second = reader.summary.sequence.tracks[0].clips[1].id.clone();
+        edit(
+            &mut reader,
+            crate::sequence::edit::SequenceEdit::MoveClips {
+                clip_ids: vec![second],
+                delta_us: -500_000,
+                track_id: None,
+                anchor_id: None,
+            },
+        );
+        (folder, reader)
+    }
+
+    fn track_id(reader: &crate::project::ProjectReader, number: &str) -> String {
+        let sequence = &reader.summary.sequence;
+        sequence
+            .tracks
+            .iter()
+            .find(|t| sequence.number(&t.id).as_deref() == Some(number))
+            .unwrap()
+            .id
+            .clone()
+    }
+
+    fn red_video_with_tone(path: &Path, seconds: f64) {
+        let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
             .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
-            .arg("color=c=red:s=64x36:r=30:d=1")
+            .arg(format!("color=c=red:s=64x36:r=30:d={seconds}"))
             .args(["-f", "lavfi", "-i"])
-            .arg("sine=frequency=440:sample_rate=48000:duration=1")
+            .arg(format!(
+                "sine=frequency=440:sample_rate=48000:duration={seconds}"
+            ))
             .args([
                 "-c:v",
                 "libx264",
@@ -2038,46 +1891,104 @@ mod tests {
                 "aac",
                 "-shortest",
             ])
-            .arg(&clip)
+            .arg(path)
             .status()
             .unwrap();
         assert!(status.success());
+    }
 
-        let mut reader = ProjectReader::open(&root).unwrap();
-        let summary = reader.import_media(0, &[png, clip]).unwrap();
-        let (image_id, video_id) = (
-            summary.media_assets[0].id.clone(),
-            summary.media_assets[1].id.clone(),
-        );
-        let edits = [
-            TrackEdit::AddTrack { audio: false },
-            TrackEdit::AddTrack { audio: false },
-            // The red video on V2 from 0.2 s, the blue image on V3 from 0.6 s.
-            TrackEdit::PlaceMedia {
-                asset_id: video_id,
-                track_id: "track-1".into(),
-                start_us: 200_000,
-            },
-            TrackEdit::PlaceMedia {
-                asset_id: image_id,
-                track_id: "track-2".into(),
-                start_us: 600_000,
-            },
-        ];
-        for (revision, edit) in edits.iter().enumerate() {
-            reader.edit_tracks(revision as u64 + 1, edit).unwrap();
+    fn blue_png(path: &Path) {
+        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
+            .save(path)
+            .unwrap();
+    }
+
+    fn small() -> ExportSettings {
+        ExportSettings {
+            width: 320,
+            height: 180,
+            fps: 30,
+            ..ExportSettings::default()
         }
-        // The main sequence is unchanged: 2 s of recording.
-        assert_eq!(reader.summary.edited_duration_us, 2_000_000);
+    }
+
+    fn export(root: &Path, document: EditDocument, settings: ExportSettings) -> PathBuf {
+        let mut owner = ExportOwner::new();
+        let captured = prepare_job(root, "export", document, settings, &mut owner)
+            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
+        run_export(
+            &captured,
+            &AtomicBool::new(false),
+            |_, _| {},
+            &EncoderGate::new(),
+        )
+        .unwrap_or_else(|failure| panic!("export failed: {failure:?}"))
+    }
+
+    /// Video tracks over the recording: a higher track draws over a lower one, a hidden track
+    /// draws nothing, and a clip's sound plays unless its track is muted.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_overlay_tracks_draw_in_order_and_play_their_sound() {
+        use crate::sequence::edit::SequenceEdit;
+        use crate::sequence::{SourceRange, TrackKind};
+        let dir = tempfile::tempdir().unwrap();
+        let (root, mut reader) = opened(&screen_and_mic_project(dir.path()));
+        let png = dir.path().join("blue.png");
+        blue_png(&png);
+        let clip = dir.path().join("red.mp4");
+        red_video_with_tone(&clip, 1.0);
+        let summary = reader.import_media(0, &[png, clip]).unwrap();
+        let (image_id, video_id) = (summary.assets[1].id.clone(), summary.assets[2].id.clone());
+        edit(
+            &mut reader,
+            SequenceEdit::AddTrack {
+                track_kind: TrackKind::Video,
+            },
+        );
+        edit(
+            &mut reader,
+            SequenceEdit::AddTrack {
+                track_kind: TrackKind::Video,
+            },
+        );
+        // The red video on V2 from 0.2 s, the blue image on V3 from 0.6 s to 1.4 s.
+        let (v2, v3) = (track_id(&reader, "V2"), track_id(&reader, "V3"));
+        edit(
+            &mut reader,
+            SequenceEdit::PlaceAsset {
+                asset_id: video_id.clone(),
+                at_us: 200_000,
+                track_id: Some(v2),
+                streams: vec![],
+                range: None,
+            },
+        );
+        edit(
+            &mut reader,
+            SequenceEdit::PlaceAsset {
+                asset_id: image_id,
+                at_us: 600_000,
+                track_id: Some(v3.clone()),
+                streams: vec![],
+                range: Some(SourceRange {
+                    start_us: 0,
+                    end_us: 800_000,
+                }),
+            },
+        );
+        // Nothing was pushed along: 2 s of recording.
+        assert_eq!(reader.summary.duration_us, 2_000_000);
         let mut document = reader.history().current.clone();
         if std::env::var("NOCURSOR").is_ok() {
             document.layout.cursor_visible = false;
         }
-        let tracks = crate::playback::tracks_from_reader(&reader);
         let colour = |document: &EditDocument, t: u64| {
             let mut evaluator =
-                SceneEvaluator::new(root.clone(), document.clone(), tracks.clone(), 320, 180)
-                    .unwrap();
+                SceneEvaluator::new(root.clone(), document.clone(), 320, 180).unwrap();
             let frame = evaluator.preview_at(t).unwrap();
             let i = ((90 * frame.stride) + 160 * 4) as usize;
             (frame.data[i], frame.data[i + 2])
@@ -2089,7 +2000,13 @@ mod tests {
         let (b, r) = colour(&document, 700_000);
         assert!(b > 180 && r < 80, "the V3 image is on top, got b{b} r{r}");
         let mut hidden = document.clone();
-        hidden.overlay_tracks[1].hidden = true;
+        let index = hidden
+            .sequence
+            .tracks
+            .iter()
+            .position(|t| t.id == v3)
+            .unwrap();
+        hidden.sequence.tracks[index].hidden = true;
         let (b, r) = colour(&hidden, 700_000);
         assert!(
             r > 180 && b < 80,
@@ -2097,13 +2014,23 @@ mod tests {
         );
 
         let frame = 400_000 * SAMPLE_RATE as u64 / 1_000_000;
-        let with_sound = AudioMixer::new(&root, &document, &tracks)
+        let with_sound = AudioMixer::new(&root, &document)
             .unwrap()
             .read_frames(frame, 480)
             .unwrap();
         let mut muted = document.clone();
-        muted.overlay_tracks[0].muted = true;
-        let without = AudioMixer::new(&root, &muted, &tracks)
+        let (sound_track, _) = muted
+            .sequence
+            .clips()
+            .find(|(_, c)| c.asset == video_id && c.stream == "sound0")
+            .unwrap();
+        let sound_track = sound_track.id.clone();
+        for track in &mut muted.sequence.tracks {
+            if track.id == sound_track {
+                track.muted = true;
+            }
+        }
+        let without = AudioMixer::new(&root, &muted)
             .unwrap()
             .read_frames(frame, 480)
             .unwrap();
@@ -2119,28 +2046,13 @@ mod tests {
         );
         assert!(spread(&without) < 200, "a muted track is silent");
 
-        // Exported too: the frame at 0.4 s is the overlay's red.
-        let settings = ExportSettings {
-            width: 320,
-            height: 180,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let output = run_export(
-            &captured,
-            &AtomicBool::new(false),
-            |_, _| {},
-            &EncoderGate::new(),
-        )
-        .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        // Exported too: the frame at 0.4 s is the video's red.
+        let output = export(&root, document, small());
         let frame = decode_h264_frame(&output, 450_000).unwrap();
         let i = ((90 * frame.stride) + 160 * 4) as usize;
         assert!(
             frame.data[i + 2] > 180 && frame.data[i] < 80,
-            "export shows the overlay"
+            "export shows the video over the recording"
         );
         crate::media::release_decoders();
     }
@@ -2153,49 +2065,37 @@ mod tests {
     )]
     fn gpu_project_without_a_recording_previews_and_exports() {
         use crate::project::reader::ProjectReader;
+        use crate::sequence::edit::SequenceEdit;
         let dir = tempfile::tempdir().unwrap();
         let folder =
             crate::project::folder::create_project_folder(dir.path(), "Slides", None).unwrap();
         let png = dir.path().join("card.png");
-        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
-            .save(&png)
-            .unwrap();
+        blue_png(&png);
         let mut reader = ProjectReader::open(&folder).unwrap();
-        let id = reader.import_media(0, &[png]).unwrap().media_assets[0]
-            .id
-            .clone();
-        reader
-            .insert_media(1, &id, 0, Some((0, 1_000_000)))
-            .unwrap();
+        let id = reader.import_media(0, &[png]).unwrap().assets[0].id.clone();
+        edit(
+            &mut reader,
+            SequenceEdit::PlaceAsset {
+                asset_id: id,
+                at_us: 0,
+                track_id: None,
+                streams: vec![],
+                range: Some(crate::sequence::SourceRange {
+                    start_us: 0,
+                    end_us: 1_000_000,
+                }),
+            },
+        );
         let document = reader.history().current.clone();
-        let tracks = crate::playback::tracks_from_reader(&reader);
-        assert!(tracks.is_empty());
         let mut evaluator =
-            SceneEvaluator::new(folder.clone(), document.clone(), tracks.clone(), 320, 180)
-                .unwrap();
+            SceneEvaluator::new(folder.clone(), document.clone(), 320, 180).unwrap();
         let frame = evaluator.preview_at(500_000).unwrap();
         let i = ((90 * frame.stride) + 160 * 4) as usize;
         assert!(
             frame.data[i] > 180 && frame.data[i + 2] < 80,
             "the card is blue"
         );
-
-        let settings = ExportSettings {
-            width: 320,
-            height: 180,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&folder, "slides", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let output = run_export(
-            &captured,
-            &AtomicBool::new(false),
-            |_, _| {},
-            &EncoderGate::new(),
-        )
-        .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let output = export(&folder, document, small());
         let duration = media_duration_us(&output).unwrap();
         assert!(
             duration.abs_diff(1_000_000) <= AUDIO_DURATION_SLACK_US + 40_000,
@@ -2210,8 +2110,8 @@ mod tests {
         crate::media::release_decoders();
     }
 
-    /// A recording imported into an empty project plays as one source: its screen on V1,
-    /// its camera in the bubble, its microphone as sound, with a zoom on its own clock.
+    /// A recording imported into an empty project is an asset like the project's own: its
+    /// screen on V1, its camera in the bubble, its microphone as sound, its zoom on its clock.
     #[test]
     #[cfg_attr(
         not(target_os = "macos"),
@@ -2219,36 +2119,59 @@ mod tests {
     )]
     fn gpu_imported_recording_plays_with_its_camera_sound_and_zoom() {
         use crate::project::reader::ProjectReader;
+        use crate::sequence::edit::SequenceEdit;
+        use crate::sequence::{AssetKind, Role};
         let dir = tempfile::tempdir().unwrap();
         let recording = project_with_tracks(&dir.path().join("rec"), true);
         let folder =
             crate::project::folder::create_project_folder(dir.path(), "Joined", None).unwrap();
         let mut reader = ProjectReader::open(&folder).unwrap();
         let summary = reader.import_media(0, &[recording.clone()]).unwrap();
-        let asset = summary.media_assets[0].clone();
-        assert!(asset.recording_path.is_some());
-        assert_eq!(asset.audio_names, vec!["Microphone".to_string()]);
+        let asset = summary.assets[0].clone();
+        assert_eq!(asset.kind, AssetKind::Recording);
+        let roles: Vec<_> = asset
+            .streams
+            .iter()
+            .map(|s| (s.id.as_str(), s.role))
+            .collect();
         assert_eq!(
-            asset.sound_role(0),
-            crate::media_bin::SoundRole::Mic,
-            "the recording's microphone is speech"
+            roles,
+            vec![
+                ("screen", Role::Screen),
+                ("webcam", Role::Webcam),
+                ("mic", Role::Mic)
+            ]
         );
-        assert!(folder.join(asset.audio_path.as_ref().unwrap()).is_file());
-        reader
-            .insert_media(1, &asset.id, 0, Some((0, 1_000_000)))
-            .unwrap();
+        edit(
+            &mut reader,
+            SequenceEdit::PlaceAsset {
+                asset_id: asset.id.clone(),
+                at_us: 0,
+                track_id: None,
+                streams: vec![],
+                range: Some(crate::sequence::SourceRange {
+                    start_us: 0,
+                    end_us: 1_000_000,
+                }),
+            },
+        );
         // A zoom drawn over the clip is on the recording's clock.
+        let revision = reader.summary.revision;
         reader
-            .add_manual_zoom(2, 100_000, 900_000, 0.25, 0.25, 2.0)
+            .add_manual_zoom(revision, 100_000, 900_000, 0.25, 0.25, 2.0)
             .unwrap();
         let document = reader.history().current.clone();
         assert_eq!(document.zooms[0].media.as_deref(), Some(asset.id.as_str()));
-        assert!(!document.zooms[0].edited_ranges.is_empty());
+        assert!(!reader.summary.zooms[0].edited_ranges.is_empty());
+        let mixer = AudioMixer::new(&folder, &document).unwrap();
+        assert!(
+            mixer.has_audio(),
+            "its microphone plays from its own folder"
+        );
 
         let mut layout_only = document.clone();
         layout_only.zooms.clear();
-        let evaluator =
-            SceneEvaluator::new(folder.clone(), layout_only, Vec::new(), 320, 180).unwrap();
+        let evaluator = SceneEvaluator::new(folder.clone(), layout_only, 320, 180).unwrap();
         let scene = evaluator.scene_at(500_000).unwrap();
         assert!(
             scene
@@ -2264,7 +2187,7 @@ mod tests {
                 .any(|l| l.role == crate::render::LayerRole::Webcam),
             "its camera is in the bubble"
         );
-        let zoomed = SceneEvaluator::new(folder.clone(), document, Vec::new(), 320, 180)
+        let zoomed = SceneEvaluator::new(folder.clone(), document, 320, 180)
             .unwrap()
             .scene_at(500_000)
             .unwrap();
@@ -2281,82 +2204,58 @@ mod tests {
         crate::media::release_decoders();
     }
 
-    /// Imported media on the timeline: an image and a video with sound play between parts of
-    /// the recording, in preview and export.
+    /// Imported media on V1: an image and a video with sound inserted between parts of the
+    /// recording (magnetic pushes the rest along), in preview and export.
     #[test]
     #[cfg_attr(
         not(target_os = "macos"),
         ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
     )]
     fn gpu_export_plays_imported_media_between_recording_clips() {
-        use crate::project::reader::ProjectReader;
-        use std::process::Command;
-
+        use crate::sequence::edit::SequenceEdit;
         let dir = tempfile::tempdir().unwrap();
-        let root = screen_and_mic_project(dir.path());
-        // A pure-blue 1.0 s image clip and a 0.6 s red video with a tone.
+        let (root, mut reader) = opened(&screen_and_mic_project(dir.path()));
         let png = dir.path().join("blue.png");
-        image::RgbaImage::from_pixel(32, 18, image::Rgba([0, 0, 255, 255]))
-            .save(&png)
-            .unwrap();
+        blue_png(&png);
         let clip = dir.path().join("red.mp4");
-        let ffmpeg = crate::media::ffmpeg::ffmpeg_path().unwrap();
-        let status = Command::new(ffmpeg)
-            .args([
-                "-v",
-                "error",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=red:s=64x36:r=30:d=0.6",
-            ])
-            .args([
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:sample_rate=48000:duration=0.6",
-            ])
-            .args([
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-shortest",
-            ])
-            .arg(&clip)
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let mut reader = ProjectReader::open(&root).unwrap();
+        red_video_with_tone(&clip, 0.6);
         let summary = reader.import_media(0, &[png, clip]).unwrap();
-        assert_eq!(summary.media_assets.len(), 2);
-        let image_id = summary.media_assets[0].id.clone();
-        let video = summary.media_assets[1].clone();
+        assert_eq!(summary.assets.len(), 3);
+        let image_id = summary.assets[1].id.clone();
+        let video = summary.assets[2].clone();
         assert!(
-            video.audio_path.is_some(),
-            "the video's audio was extracted"
+            video.streams.iter().any(|s| s.audio_path.is_some()),
+            "the video's sound was extracted"
         );
-        // Recording 0-2s; insert the video at 0.5s, then a 1s image after it.
-        reader.insert_media(1, &video.id, 500_000, None).unwrap();
-        let summary = reader
-            .insert_media(
-                2,
-                &image_id,
-                500_000 + video.duration_us,
-                Some((0, 1_000_000)),
-            )
-            .unwrap();
+        let v1 = track_id(&reader, "V1");
+        edit(
+            &mut reader,
+            SequenceEdit::PlaceAsset {
+                asset_id: video.id.clone(),
+                at_us: 500_000,
+                track_id: Some(v1.clone()),
+                streams: vec![],
+                range: None,
+            },
+        );
+        edit(
+            &mut reader,
+            SequenceEdit::PlaceAsset {
+                asset_id: image_id,
+                at_us: 500_000 + video.duration_us,
+                track_id: Some(v1),
+                streams: vec![],
+                range: Some(crate::sequence::SourceRange {
+                    start_us: 0,
+                    end_us: 1_000_000,
+                }),
+            },
+        );
         let total = 2_000_000 + video.duration_us + 1_000_000;
-        assert_eq!(summary.edited_duration_us, total);
+        assert_eq!(reader.summary.duration_us, total);
 
         let document = reader.history().current.clone();
-        let tracks = crate::playback::tracks_from_reader(&reader);
-        let mut evaluator =
-            SceneEvaluator::new(root.clone(), document.clone(), tracks.clone(), 320, 180).unwrap();
+        let mut evaluator = SceneEvaluator::new(root.clone(), document.clone(), 320, 180).unwrap();
         let preview = evaluator
             .preview_at(500_000 + video.duration_us + 200_000)
             .unwrap();
@@ -2365,28 +2264,16 @@ mod tests {
             preview.data[centre] > 200 && preview.data[centre + 2] < 60,
             "image clip is blue"
         );
-
-        let mixer = AudioMixer::new(&root, &document, &tracks).unwrap();
+        let mixer = AudioMixer::new(&root, &document).unwrap();
         assert!(mixer.has_audio());
-        let frame = ((500_000 + 300_000) as u64 * SAMPLE_RATE as u64 / 1_000_000) as u64;
+        let frame = (500_000 + 300_000) as u64 * SAMPLE_RATE as u64 / 1_000_000;
         let tone = mixer.read_frames(frame, 480).unwrap();
         assert!(
             tone.iter().any(|&s| s.unsigned_abs() > 1_000),
             "the imported clip's tone plays"
         );
 
-        let settings = ExportSettings {
-            width: 320,
-            height: 180,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let gate = EncoderGate::new();
-        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
-            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let output = export(&root, document, small());
         let duration = media_duration_us(&output).unwrap();
         assert!(
             duration.abs_diff(total) <= AUDIO_DURATION_SLACK_US + 40_000,
@@ -2412,31 +2299,28 @@ mod tests {
     )]
     fn gpu_export_writes_chapters_in_playback_order() {
         use crate::chapters::Chapter;
-        use crate::project::reader::{ProjectReader, RetainedInterval};
         use std::process::Command;
 
         let dir = tempfile::tempdir().unwrap();
-        let root = screen_and_mic_project(dir.path());
-        let reader = ProjectReader::open(&root).unwrap();
-        let mut document = EditDocument::from_retained(vec![
-            RetainedInterval {
-                start_us: 1_000_000,
-                end_us: 2_000_000,
-                media: None,
-                audio_unlinked: false,
+        // Source 1.0 s to 2.0 s first, then 0 to 0.6 s.
+        let (root, mut reader) = opened(&screen_and_mic_project(dir.path()));
+        reader.ripple_cuts(0, &[(600_000, 1_000_000)]).unwrap();
+        let second = reader.summary.sequence.tracks[0].clips[1].id.clone();
+        edit(
+            &mut reader,
+            crate::sequence::edit::SequenceEdit::MoveClips {
+                clip_ids: vec![second],
+                delta_us: -600_000,
+                track_id: None,
+                anchor_id: None,
             },
-            RetainedInterval {
-                start_us: 0,
-                end_us: 600_000,
-                media: None,
-                audio_unlinked: false,
-            },
-        ])
-        .unwrap();
+        );
+        let mut document = reader.history().current.clone();
         let chapter = |id: &str, source_us: u64, title: &str| Chapter {
             id: id.into(),
             source_us,
             title: title.into(),
+            media: None,
             edited_us: None,
         };
         document.chapters = vec![
@@ -2444,19 +2328,7 @@ mod tests {
             chapter("b", 800_000, "Cut away"),
             chapter("c", 1_200_000, "Main"),
         ];
-        let tracks = crate::playback::tracks_from_reader(&reader);
-        let settings = ExportSettings {
-            width: 320,
-            height: 180,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let gate = EncoderGate::new();
-        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
-            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let output = export(&root, document, small());
         let read = Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
             .args(["-v", "error", "-i"])
             .arg(&output)
@@ -2501,19 +2373,11 @@ mod tests {
         ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
     )]
     fn gpu_export_renders_a_short_as_a_split_vertical_clip() {
-        use crate::project::reader::{ProjectReader, RetainedInterval};
         use crate::shorts::{short_document, Short, ShortLayout};
 
         let dir = tempfile::tempdir().unwrap();
-        let root = project_with_tracks(dir.path(), true);
-        let reader = ProjectReader::open(&root).unwrap();
-        let base = EditDocument::from_retained(vec![RetainedInterval {
-            start_us: 0,
-            end_us: 2_000_000,
-            media: None,
-            audio_unlinked: false,
-        }])
-        .unwrap();
+        let (root, reader) = opened(&project_with_tracks(dir.path(), true));
+        let base = reader.history().current.clone();
         let short = Short {
             id: "s".into(),
             title: "Short".into(),
@@ -2530,25 +2394,22 @@ mod tests {
         // Real shorts are at least 3 s; this fixture is 2 s, so build the document by hand.
         assert!(short_document(&base, &short, false).is_err());
         let mut document = base.clone();
-        document.retained_intervals =
-            crate::shorts::slice_retained(&base.retained_intervals, 300_000, 1_200_000);
+        document.sequence =
+            crate::shorts::slice_sequence(&base.sequence, &base.assets, 300_000, 1_200_000);
         document.layout.aspect_ratio = "9:16".into();
         document.short_layout = Some(short.layout.clone());
-        let tracks = crate::playback::tracks_from_reader(&reader);
 
         // Standard sizes are reshaped to the canvas: 720p becomes 720x1280.
-        let settings = ExportSettings {
-            width: 1280,
-            height: 720,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&root, "short", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let gate = EncoderGate::new();
-        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
-            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let output = export(
+            &root,
+            document,
+            ExportSettings {
+                width: 1280,
+                height: 720,
+                fps: 30,
+                ..ExportSettings::default()
+            },
+        );
         let frame = decode_h264_frame(&output, 100_000).unwrap();
         assert_eq!((frame.width, frame.height), (720, 1280));
         let pixel = |y: u32| {
@@ -2582,39 +2443,9 @@ mod tests {
         ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
     )]
     fn gpu_export_plays_reordered_clips_in_timeline_order() {
-        use crate::project::reader::{ProjectReader, RetainedInterval};
-
         let dir = tempfile::tempdir().unwrap();
-        let root = screen_and_mic_project(dir.path());
-        let reader = ProjectReader::open(&root).unwrap();
-        let document = EditDocument::from_retained(vec![
-            RetainedInterval {
-                start_us: 1_200_000,
-                end_us: 2_000_000,
-                media: None,
-                audio_unlinked: false,
-            },
-            RetainedInterval {
-                start_us: 0,
-                end_us: 500_000,
-                media: None,
-                audio_unlinked: false,
-            },
-        ])
-        .unwrap();
-        let tracks = crate::playback::tracks_from_reader(&reader);
-        let settings = ExportSettings {
-            width: 320,
-            height: 180,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let gate = EncoderGate::new();
-        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
-            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+        let (root, reader) = reordered_project(dir.path());
+        let output = export(&root, reader.history().current.clone(), small());
         let duration = media_duration_us(&output).unwrap();
         assert!(
             duration.abs_diff(1_300_000) <= AUDIO_DURATION_SLACK_US,
@@ -2638,33 +2469,16 @@ mod tests {
         crate::media::release_decoders();
     }
 
-    /// Full export of a real project bundle with a cut: decode, composite, encode, mux.
+    /// Full export of a recording project with a cut: decode, composite, encode, mux.
     #[test]
     #[cfg_attr(
         not(target_os = "macos"),
         ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
     )]
     fn gpu_export_writes_a_playable_mp4_across_a_cut() {
-        use crate::project::reader::ProjectReader;
-
         let dir = tempfile::tempdir().unwrap();
-        let root = screen_and_mic_project(dir.path());
-        let reader = ProjectReader::open(&root).unwrap();
-        let document = cut_document();
-        let tracks = crate::playback::tracks_from_reader(&reader);
-        let settings = ExportSettings {
-            width: 320,
-            height: 180,
-            fps: 30,
-            ..ExportSettings::default()
-        };
-        let mut owner = ExportOwner::new();
-        let captured = prepare_job(&root, "export", document, tracks, settings, &mut owner)
-            .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-        let gate = EncoderGate::new();
-        let output = run_export(&captured, &AtomicBool::new(false), |_, _| {}, &gate)
-            .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
-
+        let (root, reader) = cut_project(dir.path());
+        let output = export(&root, reader.history().current.clone(), small());
         assert!(output.is_file());
         let duration = media_duration_us(&output).unwrap();
         assert!(
@@ -2701,26 +2515,17 @@ mod tests {
     )]
     fn gpu_webview_preview_frame_across_a_cut() {
         use crate::playback::preview::{encode_webview_frame, PreviewQuality};
-        use crate::project::reader::ProjectReader;
-
         let dir = tempfile::tempdir().unwrap();
-        let root = screen_and_mic_project(dir.path());
-        let reader = ProjectReader::open(&root).unwrap();
-        let document = cut_document();
+        let (root, reader) = cut_project(dir.path());
         let (width, height) = PreviewQuality::default_for(true).canvas(1920, 1080);
-        let mut evaluator = SceneEvaluator::new(
-            root,
-            document,
-            crate::playback::tracks_from_reader(&reader),
-            width,
-            height,
-        )
-        .unwrap()
-        .with_decode_limit(DecodeLimit {
-            max_width: 32,
-            max_height: 32,
-            max_rate: 30,
-        });
+        let mut evaluator =
+            SceneEvaluator::new(root, reader.history().current.clone(), width, height)
+                .unwrap()
+                .with_decode_limit(DecodeLimit {
+                    max_width: 32,
+                    max_height: 32,
+                    max_rate: 30,
+                });
         // Play forward across the cut the way the playback worker does.
         let mut last = None;
         for edited_us in (0..1_300_000).step_by(33_333) {
@@ -2746,16 +2551,15 @@ mod tests {
     fn captions_render_from_the_transcript_in_edited_time() {
         use crate::fixtures::{generate_pcm16_wav, TestProject};
         use crate::project::manifest::{TrackDescriptor, TrackType};
-        use crate::project::reader::{ProjectReader, RetainedInterval};
         use crate::project::JournalRecord;
         use crate::transcript::{store, test_word, ProviderKind, Transcript};
 
         let dir = tempfile::tempdir().unwrap();
         let mut bundle = TestProject::create(dir.path(), "captions");
-        let root = bundle.root_path().to_path_buf();
+        let recording = bundle.root_path().to_path_buf();
         let path = "media/mic/000001.wav";
         fs::write(
-            root.join(path),
+            recording.join(path),
             generate_pcm16_wav(48_000, 1, &vec![0i16; 96_000]),
         )
         .unwrap();
@@ -2778,7 +2582,7 @@ mod tests {
             relative_path: path.into(),
             start_us: 0,
             end_us: 2_000_000,
-            size_bytes: fs::metadata(root.join(path)).unwrap().len(),
+            size_bytes: fs::metadata(recording.join(path)).unwrap().len(),
             is_keyframe_start: true,
             media_timescale: 48_000,
             media_start_value: 0,
@@ -2788,10 +2592,12 @@ mod tests {
         bundle.manifest_mut().active_duration_us = 2_000_000;
         bundle.save_manifest();
         drop(bundle);
+        let (root, mut reader) = opened(&recording);
+        let key = format!("{}.mic", reader.summary.assets[0].id);
         store::save_transcript(
             &root,
             &Transcript::new(
-                "mic".into(),
+                key.clone(),
                 ProviderKind::ElevenLabs,
                 "scribe_v2".into(),
                 None,
@@ -2803,24 +2609,9 @@ mod tests {
             ),
         )
         .unwrap();
-
-        let reader = ProjectReader::open(&root).unwrap();
         // "um" is cut out: source 500-1200 removed.
-        let mut document = EditDocument::from_retained(vec![
-            RetainedInterval {
-                start_us: 0,
-                end_us: 500_000,
-                media: None,
-                audio_unlinked: false,
-            },
-            RetainedInterval {
-                start_us: 1_200_000,
-                end_us: 2_000_000,
-                media: None,
-                audio_unlinked: false,
-            },
-        ])
-        .unwrap();
+        reader.ripple_cuts(0, &[(500_000, 1_200_000)]).unwrap();
+        let mut document = reader.history().current.clone();
         document.layout.background_type = "solid".into();
         document.layout.color_start = "#000000".into();
         document.layout.color_end = "#000000".into();
@@ -2830,7 +2621,6 @@ mod tests {
         let evaluator = SceneEvaluator {
             root: root.clone(),
             document,
-            tracks: crate::playback::tracks_from_reader(&reader),
             compositor: None,
             width: 320,
             height: 180,
@@ -2840,13 +2630,11 @@ mod tests {
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             image_cache: std::cell::RefCell::new(Vec::new()),
-            recordings: std::cell::RefCell::new(std::collections::HashMap::new()),
             cursors: Default::default(),
             zooms: Default::default(),
             cursor_images: Default::default(),
         };
-        let mapper = evaluator.document.mapper().unwrap();
-        let (_, _, y) = evaluator.caption_at(&mapper, 100_000).unwrap();
+        let (_, _, y) = evaluator.caption_at(100_000).unwrap();
         assert!(y > 90, "caption sits in the lower half, y {y}");
         let cues = evaluator.caption_cues.get().unwrap();
         let words: Vec<_> = cues
