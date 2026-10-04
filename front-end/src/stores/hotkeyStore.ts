@@ -11,6 +11,7 @@ export type HotkeyAction =
   | "rippleTrimPrevious"
   | "rippleTrimNext"
   | "deleteSelection"
+  | "rippleDelete"
   | "deselect"
   | "toggleLink"
   | "markIn"
@@ -43,8 +44,9 @@ export const HOTKEY_ACTIONS: { action: HotkeyAction; label: string; group: strin
   { action: "split", label: "Split at playhead", group: "Editing", defaults: ["KeyS"] },
   { action: "rippleTrimPrevious", label: "Ripple trim to previous edit", group: "Editing", defaults: ["KeyQ"] },
   { action: "rippleTrimNext", label: "Ripple trim to next edit", group: "Editing", defaults: ["KeyE"] },
-  { action: "deleteSelection", label: "Delete selection", group: "Editing", defaults: ["Delete", "Backspace"] },
-  { action: "toggleLink", label: "Unlink / relink sound", group: "Editing", defaults: ["KeyU"] },
+  { action: "deleteSelection", label: "Delete selection (closes up when Magnetic)", group: "Editing", defaults: ["Delete", "Backspace"] },
+  { action: "rippleDelete", label: "Ripple delete selection", group: "Editing", defaults: ["Shift+Delete", "Shift+Backspace"] },
+  { action: "toggleLink", label: "Link / unlink clips", group: "Editing", defaults: ["KeyU"] },
   { action: "undo", label: "Undo", group: "Editing", defaults: ["Mod+KeyZ"] },
   { action: "redo", label: "Redo", group: "Editing", defaults: ["Mod+Shift+KeyZ", "Mod+KeyY"] },
   { action: "markIn", label: "Mark in (range start)", group: "Selection", defaults: ["KeyI"] },

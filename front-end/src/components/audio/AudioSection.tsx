@@ -1,19 +1,49 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Mic, Music, Volume2, VolumeX, Wand2 } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
-import { Button, Notice, Switch } from "../ui";
+import { Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
-import { laneRole, soundLanes, type SoundLane } from "../../lib/trackUtils";
+import { clipName, clipRole, trackLabel } from "../../lib/sequence";
 import {
   AudioSettings,
   DEFAULT_AUDIO_SETTINGS,
   TRACK_VOLUME_DB_RANGE,
   TrackMix,
-  SoundRole,
-  isAudioTrack,
+  type OpenedProject,
+  type Role,
+  type SeqTrack,
 } from "../../lib/types";
+
+type SoundRole = Extract<Role, "mic" | "background">;
+
+/** One audio track as the mix shows it. */
+interface SoundLane {
+  id: string;
+  label: string;
+  track: SeqTrack;
+  /** Speech: as marked on the track, else what its clips are. */
+  role: SoundRole;
+}
+
+function soundLanes(project: OpenedProject): SoundLane[] {
+  return project.sequence.tracks
+    .filter((t) => t.kind === "audio")
+    .map((track) => {
+      const names = [...new Set(track.clips.map((c) => clipName(project, c)))];
+      const clipRoles = track.clips.map((c) => clipRole(project, track, c));
+      const role: SoundRole =
+        track.role === "mic" || track.role === "background" ? track.role : clipRoles.includes("mic") ? "mic" : "background";
+      const name = trackLabel(project.sequence, track);
+      return {
+        id: track.id,
+        track,
+        role,
+        label: names.length === 0 ? name : `${name} · ${names.slice(0, 2).join(", ")}${names.length > 2 ? "…" : ""}`,
+      };
+    });
+}
 
 interface EffectRowProps {
   label: string;
@@ -109,14 +139,14 @@ const LaneRow: React.FC<{
   onDuck: (db: number | undefined) => void;
 }> = ({ lane, role, muted, volumeDb, denoiseDb, duckDb, onRole, onMute, onVolume, onDenoise, onDuck }) => (
   <div className="space-y-1">
-    <div className="grid grid-cols-[auto_6rem_minmax(0,1fr)_auto_auto_auto_auto] items-center gap-1">
+    <div className="grid grid-cols-[auto_7rem_minmax(0,1fr)_auto_auto_auto_auto] items-center gap-1">
       <LaneToggle
         on={role === "mic"}
         label={`${lane.label}: ${role === "mic" ? "speech" : "background"}`}
         title={
           role === "mic"
-            ? "Speech: transcribed, captioned, and what background sound ducks under. Click for background."
-            : "Background (music, game, desktop): can duck under speech. Click for speech."
+            ? "Speech: what background sound ducks under. Click to mark the track as background."
+            : "Background (music, game, desktop): can duck under speech. Click to mark the track as speech."
         }
         onClick={() => onRole(role === "mic" ? "background" : "mic")}
       >
@@ -151,7 +181,7 @@ const LaneRow: React.FC<{
         on={duckDb !== undefined}
         disabled={role === "mic" && duckDb === undefined}
         label={`Lower ${lane.label} under speech`}
-        title={role === "mic" ? "Speech lanes are what others duck under" : "Lower this lane while speech plays on a speech lane"}
+        title={role === "mic" ? "Speech tracks are what others duck under" : "Lower this track while speech plays on a speech track"}
         onClick={() => onDuck(duckDb === undefined ? DEFAULT_DUCK_DB : undefined)}
       >
         <ArrowDownToLine className="w-4 h-4" />
@@ -182,7 +212,6 @@ const LaneRow: React.FC<{
 /** Track mix and audio polish. Saved to the project, so playback and export both use them. */
 export const AudioSection: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
-  const audioTracks = useProjectStore((s) => s.tracks).filter((t) => isAudioTrack(t.trackType));
   const [volumeDraft, setVolumeDraft] = useState<Record<string, number>>({});
   const volumeTimer = useRef<number>();
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
@@ -209,42 +238,38 @@ export const AudioSection: React.FC = () => {
 
   if (!openedProject) return null;
 
-  // Every lane, named as on the timeline (ids match src-tauri/src/media/audio.rs).
-  const overlay = openedProject.overlayTracks ?? [];
+  // Every audio track is one lane of the mix; its settings are kept under its id.
   const lanes = soundLanes(openedProject);
   const mix = (lane: SoundLane) => openedProject.audio?.tracks?.[lane.id];
-  const laneMuted = (lane: SoundLane) =>
-    lane.trackId ? !!overlay.find((t) => t.id === lane.trackId)?.muted : !!mix(lane)?.muted;
-  const muteLane = (lane: SoundLane) => {
-    const track = overlay.find((t) => t.id === lane.trackId);
-    if (!track) {
-      void saveMix({ [lane.id]: { muted: !laneMuted(lane) } });
-      return;
-    }
+  const setTrack = (lane: SoundLane, change: Partial<Pick<SeqTrack, "muted" | "role">>) => {
+    const next = { ...lane.track, ...change };
     void api
-      .projectTracksEdit(openedProject.projectHandle, openedProject.revision, {
+      .projectSequenceEdit(openedProject.projectHandle, openedProject.revision, {
         kind: "setTrack",
-        trackId: track.id,
-        hidden: track.hidden,
-        muted: !track.muted,
+        trackId: lane.id,
+        name: next.name ?? "",
+        hidden: !!next.hidden,
+        muted: !!next.muted,
+        locked: !!next.locked,
+        role: next.role ?? null,
       })
       .then(applyOpenedProject)
       .catch((err) => setError(String(err)));
   };
-  // The older project-wide switches still apply to the recording's own tracks.
+  // The project-wide switches apply to speech (noise reduction) and background (ducking).
   const denoiseOf = (lane: SoundLane) =>
-    mix(lane)?.denoiseDb ?? (lane.recorded === "mic" && draft.noiseReduction ? draft.noiseReductionDb : undefined);
+    mix(lane)?.denoiseDb ?? (lane.role === "mic" && draft.noiseReduction ? draft.noiseReductionDb : undefined);
   const duckOf = (lane: SoundLane) =>
-    mix(lane)?.duckDb ?? (lane.recorded === "system" && draft.duckSystemAudio ? draft.duckDb : undefined);
-  /** Saves a lane's polish; the first per-lane change turns the old switches into per-lane ones. */
+    mix(lane)?.duckDb ?? (lane.role === "background" && draft.duckSystemAudio ? draft.duckDb : undefined);
+  /** Saves a lane's polish; the first per-lane change turns the project-wide switches into per-lane ones. */
   const setPolish = (lane: SoundLane, patch: { denoiseDb?: number | undefined; duckDb?: number | undefined }) => {
     const patches: Record<string, Partial<TrackMix>> = {};
     const migrate = draft.noiseReduction || draft.duckSystemAudio;
     if (migrate) {
       for (const other of lanes) {
-        if (other.recorded === "mic" && draft.noiseReduction && mix(other)?.denoiseDb === undefined)
+        if (other.role === "mic" && draft.noiseReduction && mix(other)?.denoiseDb === undefined)
           patches[other.id] = { ...patches[other.id], denoiseDb: draft.noiseReductionDb };
-        if (other.recorded === "system" && draft.duckSystemAudio && mix(other)?.duckDb === undefined)
+        if (other.role === "background" && draft.duckSystemAudio && mix(other)?.duckDb === undefined)
           patches[other.id] = { ...patches[other.id], duckDb: draft.duckDb };
       }
     }
@@ -262,7 +287,7 @@ export const AudioSection: React.FC = () => {
       timer.current = undefined;
       const opened = openedRef.current;
       if (!opened) return;
-      // Track mutes and volumes are saved on their own; keep the latest ones.
+      // Track volumes are saved on their own; keep the latest ones.
       void api
         .projectAudioUpdate(opened.projectHandle, opened.revision, {
           ...next,
@@ -294,8 +319,6 @@ export const AudioSection: React.FC = () => {
     }, 250);
   };
 
-  const allMuted = audioTracks.length > 0 && audioTracks.every((t) => t.muted);
-
   return (
     <InspectorSection id="audio" title="Audio" icon={Volume2}>
       {error && (
@@ -304,42 +327,25 @@ export const AudioSection: React.FC = () => {
         </Notice>
       )}
       {lanes.length === 0 ? (
-        <p className="text-label text-studio-500">No sound yet.</p>
+        <p className="text-label text-studio-500">No audio tracks yet.</p>
       ) : (
         <div className="space-y-2 pb-3 border-b border-studio-800">
           {lanes.map((lane) => (
             <LaneRow
               key={lane.id}
               lane={lane}
-              role={laneRole(openedProject, lane)}
-              muted={laneMuted(lane)}
+              role={lane.role}
+              muted={!!lane.track.muted}
               volumeDb={volumeDraft[lane.id] ?? mix(lane)?.volumeDb ?? 0}
               denoiseDb={denoiseOf(lane)}
               duckDb={duckOf(lane)}
-              onRole={(role) => void saveMix({ [lane.id]: { role } })}
-              onMute={() => muteLane(lane)}
+              onRole={(role) => setTrack(lane, { role })}
+              onMute={() => setTrack(lane, { muted: !lane.track.muted })}
               onVolume={(db) => setVolume(lane.id, db)}
               onDenoise={(db) => setPolish(lane, { denoiseDb: db })}
               onDuck={(db) => setPolish(lane, { duckDb: db })}
             />
           ))}
-          {audioTracks.length > 0 && (
-            <Button
-              variant={allMuted ? "subtle" : "danger"}
-              size="sm"
-              className="w-full mt-1"
-              onClick={() =>
-                void saveMix(Object.fromEntries(audioTracks.map((t) => [t.id, { muted: !allMuted }])))
-              }
-              title={
-                allMuted
-                  ? "Bring every recorded track back"
-                  : "Mute every recorded track. With nothing else playing, export writes no audio stream."
-              }
-            >
-              {allMuted ? "Restore recorded audio" : "Mute recorded audio"}
-            </Button>
-          )}
         </div>
       )}
       <EffectRow

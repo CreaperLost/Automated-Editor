@@ -5,12 +5,19 @@ import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import { OpenedProject, SilenceConfig } from "../../lib/types";
-import { transcribableSounds } from "../../lib/trackUtils";
+import { soundSources } from "../../lib/sequence";
 import { Button, IconButton, Segmented, cn } from "../ui";
 
-/** Speech first: the recording's mic, else an imported speech lane, else any sound. */
+/** The sounds worth scanning: those on the timeline (all of them when none is yet). */
+function scannableSounds(project: OpenedProject | null) {
+  const sounds = soundSources(project);
+  const placed = sounds.filter((sound) => sound.placed);
+  return placed.length > 0 ? placed : sounds;
+}
+
+/** Speech on the timeline first, else any sound there. */
 function preferredAudioTrackId(project: OpenedProject | null): string | undefined {
-  return transcribableSounds(project)[0]?.id;
+  return scannableSounds(project)[0]?.key;
 }
 
 function errorMessage(err: unknown): string {
@@ -93,9 +100,9 @@ export const SilenceModal: React.FC = () => {
 
   if (!isSilenceModalOpen) return null;
 
-  const sounds = transcribableSounds(openedProject);
+  const sounds = scannableSounds(openedProject);
   const audioTrackId =
-    chosenTrack && sounds.some((sound) => sound.id === chosenTrack) ? chosenTrack : preferredAudioTrackId(openedProject);
+    chosenTrack && sounds.some((sound) => sound.key === chosenTrack) ? chosenTrack : preferredAudioTrackId(openedProject);
 
   const handleRunDetection = async (settings: SilenceConfig = config) => {
     if (!openedProject) {
@@ -179,12 +186,12 @@ export const SilenceModal: React.FC = () => {
     const cuts = activeSilenceBlocks
       .filter((block) => block.selected)
       .map((block) => ({ startUs: block.startUs, endUs: block.endUs }));
-    // Every track loses the same time, so unlinked sound and clips above stay in step.
+    // Every track loses the same time and closes up, so pictures and other sound stay in step.
     void api
-      .projectTracksEdit(silenceAnalysis.projectHandle, silenceAnalysis.revision, {
-        kind: "rippleDelete",
+      .projectSequenceEdit(silenceAnalysis.projectHandle, silenceAnalysis.revision, {
+        kind: "deleteRange",
         ranges: cuts,
-        allTracks: true,
+        ripple: true,
       })
       .then((next) => {
         applyOpenedProject(next);
@@ -274,7 +281,7 @@ export const SilenceModal: React.FC = () => {
                 className="ui-field min-w-0 max-w-[16rem] truncate"
               >
                 {sounds.map((sound) => (
-                  <option key={sound.id} value={sound.id}>
+                  <option key={sound.key} value={sound.key}>
                     {sound.label}
                   </option>
                 ))}

@@ -7,7 +7,7 @@ import {
   EditCut,
   PreviewQuality,
   PreviewStatus,
-  TrackEdit,
+  SequenceEdit,
   PreviewViewport,
   PreviewHitMode,
   MediaInteropStatus,
@@ -38,8 +38,7 @@ import {
   TranscriptSettings,
   TranscriptSettingsView,
   TranscriptView,
-  PictureRole,
-  SoundRole,
+  Role,
   CaptionEdit,
   CaptionTrackView,
 } from "./types";
@@ -88,6 +87,7 @@ export const api = {
   closeProject: (projectHandle: string) => invokeTauri<void>("close_project", { projectHandle }),
   projectSegments: (projectHandle: string, trackId: string, offset = 0, limit = 100) =>
     invokeTauri<SegmentPage>("project_segments", { projectHandle, trackId, offset, limit }),
+  /** A sound's waveform (`<asset>.<stream>`) over its own time; each clip draws its part. */
   projectWaveform: (
     projectHandle: string,
     trackId: string,
@@ -98,10 +98,9 @@ export const api = {
     invokeTauri<WaveformPage>("project_waveform", {
       projectHandle,
       trackId,
-      startUs,
-      endUs,
+      startUs: Math.max(0, Math.round(startUs)),
+      endUs: Math.max(1, Math.round(endUs)),
       bucketCount,
-      shortId: editTarget,
     }),
   projectZoomSuggestions: (projectHandle: string, config?: ZoomConfig) =>
     invokeTauri<ZoomGeneration>(
@@ -220,60 +219,9 @@ export const api = {
       expectedRevision,
       cuts,
     }),
-  /** Premiere-style Q ("previous") and E ("next") ripple trim at the playhead. */
-  projectRippleTrim: (
-    projectHandle: string,
-    expectedRevision: number,
-    playheadUs: number,
-    side: "previous" | "next",
-  ) =>
-    invokeTauri<OpenedProject>("project_ripple_trim", {
-      projectHandle,
-      expectedRevision,
-      playheadUs: Math.max(0, Math.round(playheadUs)),
-      side,
-    }),
-  /** Moves the edited range [startUs, endUs) (a clip) to edited position targetUs. */
-  projectMoveRange: (
-    projectHandle: string,
-    expectedRevision: number,
-    startUs: number,
-    endUs: number,
-    targetUs: number,
-  ) =>
-    invokeTauri<OpenedProject>("project_move_range", {
-      projectHandle,
-      expectedRevision,
-      startUs: Math.max(0, Math.round(startUs)),
-      endUs: Math.max(0, Math.round(endUs)),
-      targetUs: Math.max(0, Math.round(targetUs)),
-    }),
-  projectSplit: (projectHandle: string, expectedRevision: number, editedUs: number) =>
-    invokeTauri<OpenedProject>("project_split", {
-      projectHandle,
-      expectedRevision,
-      editedUs: Math.max(0, Math.round(editedUs)),
-    }),
-  /**
-   * Puts removed media back. `grow` picks the clip that grows when the media touches two
-   * clips that are no longer neighbours: "end" (default) the one ending where it starts,
-   * "start" the one starting where it ends.
-   */
-  projectRestoreCuts: (
-    projectHandle: string,
-    expectedRevision: number,
-    ranges: EditCut[],
-    grow: "end" | "start" = "end",
-    /** Clips on the other tracks from here on move right by what comes back. */
-    shiftTracksAtUs?: number,
-  ) =>
-    invokeTauri<OpenedProject>("project_restore_cuts", {
-      projectHandle,
-      expectedRevision,
-      ranges,
-      grow,
-      shiftTracksAt: shiftTracksAtUs === undefined ? null : Math.round(shiftTracksAtUs),
-    }),
+  /** One timeline edit, in this window's timeline (the video's, or a short's own). */
+  projectSequenceEdit: (projectHandle: string, expectedRevision: number, edit: SequenceEdit) =>
+    invokeTauri<OpenedProject>("project_sequence_edit", { projectHandle, expectedRevision, edit, shortId: editTarget }),
   projectUndo: (projectHandle: string, expectedRevision: number) =>
     invokeTauri<OpenedProject>("project_undo", { projectHandle, expectedRevision, shortId: editTarget }),
   projectRedo: (projectHandle: string, expectedRevision: number) =>
@@ -318,8 +266,6 @@ export const api = {
   previewQuality: () => invokeTauri<PreviewQuality>("preview_quality"),
   previewQualitySet: (quality: PreviewQuality) =>
     invokeTauri<PreviewQuality>("preview_quality_set", { quality }),
-  projectTracksEdit: (projectHandle: string, expectedRevision: number, edit: TrackEdit) =>
-    invokeTauri<OpenedProject>("project_tracks_edit", { projectHandle, expectedRevision, edit, shortId: editTarget }),
   previewHitTest: (x: number, y: number) => invokeTauri<boolean>("preview_hit_test", { x, y }),
   previewDetach: (windowLabel: string, generation?: number) =>
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),
@@ -399,37 +345,28 @@ export const api = {
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
   pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
   pickMediaFolder: () => invokeTauri<string | null>("pick_media_folder"),
+  /** Sets what an asset's streams stand for. */
   projectMediaRoles: (
     projectHandle: string,
     expectedRevision: number,
     assetId: string,
-    pictureRole: PictureRole,
-    soundRoles: SoundRole[],
+    roles: { stream: string; role: Role }[],
   ) =>
     invokeTauri<OpenedProject>("project_media_roles", {
       projectHandle,
       expectedRevision,
       assetId,
-      pictureRole,
-      soundRoles,
+      roles,
     }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
     invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
-  /** Places the asset's default clip (whole video/audio, 5 s for images) at targetUs. */
-  projectMediaInsert: (projectHandle: string, expectedRevision: number, assetId: string, targetUs: number) =>
-    invokeTauri<OpenedProject>("project_media_insert", {
-      projectHandle,
-      expectedRevision,
-      assetId,
-      targetUs: Math.max(0, Math.round(targetUs)),
-    }),
   projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
     invokeTauri<OpenedProject>("project_chapters_set", {
       projectHandle,
       expectedRevision,
-      chapters: chapters.map(({ id, sourceUs, title }) => ({ id, sourceUs, title })),
+      chapters: chapters.map(({ id, sourceUs, title, media }) => ({ id, sourceUs, title, media })),
     }),
   /** Asks the AI provider for chapters from a track's transcript. */
   projectChaptersGenerate: (projectHandle: string, trackId: string) =>

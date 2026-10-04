@@ -59,10 +59,10 @@ export const StagePanel: React.FC = () => {
           </button>
         </div>
       )}
-      {project.editedDurationUs === 0 && (
+      {project.durationUs === 0 && (
         <p className="m-2 mb-0 shrink-0 rounded-control border border-accent/40 bg-accent/10 px-3 py-2 text-label text-accent-fg">
-          {project.recordingPath
-            ? "Everything was cut. Undo, or put clips back from the timeline."
+          {project.assets.length > 0
+            ? "The timeline is empty. Drag media from the Media panel onto it, or Undo."
             : "This project starts empty. Import video, images or audio in the Media panel, then drag them onto the timeline."}
         </p>
       )}

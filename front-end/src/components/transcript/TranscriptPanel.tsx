@@ -10,12 +10,12 @@ import {
   TranscriptView,
 } from "../../lib/types";
 import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
-import { transcribableSounds } from "../../lib/trackUtils";
+import { soundSources } from "../../lib/sequence";
 import { Badge, Button, IconButton, Notice, Segmented, cn } from "../ui";
 
-/** The recording's audio tracks and imported sound, speech first. */
+/** Every sound in the project, speech first, as `{ id, label, placed }`. */
 function audioTracks(project: OpenedProject | null) {
-  return transcribableSounds(project);
+  return soundSources(project).map((sound) => ({ ...sound, id: sound.key }));
 }
 
 function formatTime(us: number): string {
@@ -382,7 +382,7 @@ export const TranscriptPanel: React.FC = () => {
             {view.words.filter((w) => w.editedStartUs !== null).length} of {view.words.length} words kept
           </span>
         )}
-        {view && view.words.length > 0 && view.words.every((w) => w.editedStartUs === null) && trackId.startsWith("msound-") && (
+        {view && view.words.length > 0 && !tracks.find((t) => t.id === trackId)?.placed && (
           <Badge tone="suggest" title="Its words show once a clip of it is on the timeline, on any track">
             Not on the timeline yet
           </Badge>

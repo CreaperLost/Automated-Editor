@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Check, ClipboardCopy, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import { editedToSourceUs } from "../../lib/projectUtils";
+import { clipAt, soundSources } from "../../lib/sequence";
 import type { Chapter, OpenedProject } from "../../lib/types";
 
 /** YouTube's rules for description chapters. */
@@ -58,9 +58,8 @@ export const ChaptersPanel: React.FC = () => {
   const chapters = openedProject?.chapters ?? [];
   useEffect(() => setTitles({}), [openedProject?.revision]);
 
-  const speechTrack =
-    openedProject?.tracks.find((t) => t.descriptor.trackType === "mic_audio") ??
-    openedProject?.tracks.find((t) => t.descriptor.trackType === "system_audio");
+  // The speech on the timeline the AI reads.
+  const speechKey = soundSources(openedProject).find((sound) => sound.placed)?.key;
 
   const run = async (label: string, work: (project: OpenedProject) => Promise<OpenedProject>) => {
     const project = useProjectStore.getState().openedProject;
@@ -86,13 +85,18 @@ export const ChaptersPanel: React.FC = () => {
 
   const addAtPlayhead = () => {
     if (!openedProject) return;
-    const sourceUs = editedToSourceUs(openedProject.retainedIntervals, currentTimeUs);
-    if (sourceUs === null) {
-      setError("Move the playhead onto the recording (not imported media) to add a chapter there.");
+    // Anchored to what plays there: the top picture, else any clip.
+    const tracks = [...openedProject.sequence.tracks.filter((t) => t.kind === "video")].reverse().concat(
+      openedProject.sequence.tracks.filter((t) => t.kind === "audio"),
+    );
+    const clip = tracks.map((t) => clipAt(t, currentTimeUs)).find((c) => c !== undefined);
+    if (!clip) {
+      setError("Move the playhead onto a clip to add a chapter there.");
       return;
     }
-    const id = `ch-${Math.round(sourceUs)}-${Date.now().toString(36)}`;
-    void save([...chapters, { id, sourceUs: Math.round(sourceUs), title: "New chapter" }]);
+    const sourceUs = Math.round(clip.inUs + (currentTimeUs - clip.startUs));
+    const id = `ch-${sourceUs}-${Date.now().toString(36)}`;
+    void save([...chapters, { id, sourceUs, title: "New chapter", media: clip.asset }]);
   };
 
   const commitTitle = (chapter: Chapter) => {
@@ -130,11 +134,11 @@ export const ChaptersPanel: React.FC = () => {
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
-          disabled={!!busy || !speechTrack}
+          disabled={!!busy || !speechKey}
           onClick={() =>
-            speechTrack &&
+            speechKey &&
             void run("Finding chapters", (project) =>
-              api.projectChaptersGenerate(project.projectHandle, speechTrack.descriptor.id),
+              api.projectChaptersGenerate(project.projectHandle, speechKey),
             )
           }
           className={`${button} bg-studio-800/40 border-studio-600/40 text-studio-100 hover:bg-studio-700/50`}
@@ -152,7 +156,7 @@ export const ChaptersPanel: React.FC = () => {
           <Plus className="w-3.5 h-3.5" /> Add at playhead
         </button>
       </div>
-      {!speechTrack && <p className="text-meta text-studio-500">Finding chapters needs a microphone or system audio track.</p>}
+      {!speechKey && <p className="text-meta text-studio-500">Finding chapters needs speech on the timeline, transcribed.</p>}
       {error && (
         <p role="alert" className="text-meta text-danger-fg bg-danger/10 border border-danger/30 rounded p-2">
           {error}

@@ -194,7 +194,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const defaultExportPath = getDefaultExportPath(path, project?.manifest.projectName);
+  const defaultExportPath = getDefaultExportPath(path, project?.name);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-950 text-studio-100 select-none">
@@ -259,7 +259,7 @@ export const App: React.FC = () => {
       {project && exportOpen && (
         <ExportDialog
           aspectRatio={canvas.aspectRatio}
-          editedDurationUs={project.editedDurationUs}
+          editedDurationUs={project.durationUs}
           destination={exportDestination || defaultExportPath || ""}
           exportJob={exportJob}
           onChooseDestination={() => void chooseExportDestination()}

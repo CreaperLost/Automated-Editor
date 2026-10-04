@@ -1,6 +1,6 @@
 import { api } from "../lib/ipc";
 import { create } from "zustand";
-import { Track, ZoomKeyframe, SilenceBlock, ProjectManifest, OpenedProject, WaveformPage, PlaybackStatus, studioTrackType, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
+import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformBucket, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
 import { useSettingsStore } from "./settingsStore";
 
@@ -29,15 +29,6 @@ function saveStoredRecentProjects(projects: string[]) {
   } catch {
     // ignore save error
   }
-}
-
-/** A track's mute and volume as saved in the project's audio settings. */
-function trackMixFields(project: OpenedProject, trackId: string): Pick<Track, "muted" | "volume"> {
-  const mix = project.audio?.tracks?.[trackId];
-  return {
-    muted: mix?.muted ?? false,
-    volume: mix ? 10 ** (mix.volumeDb / 20) : 1,
-  };
 }
 
 function barsFromSuggestion(suggestion: ZoomSuggestion, pending: boolean, source?: ProjectZoom["source"]): ZoomKeyframe[] {
@@ -96,15 +87,16 @@ interface ProjectStore {
   applyPlaybackStatus: (status: PlaybackStatus) => void;
   loadOpenedProject: (project: OpenedProject, projectPath?: string) => void;
   clearProject: () => void;
-  manifest: ProjectManifest | null;
-  tracks: Track[];
+  /** Waveforms by sound (`<asset>.<stream>`), over its own time. */
+  waveforms: Record<string, WaveformBucket[]>;
+  setWaveform: (key: string, buckets: WaveformBucket[]) => void;
   zoomKeyframes: ZoomKeyframe[];
   pendingZoomSuggestions: ZoomSuggestion[];
   zoomDiagnostics: string[];
   /** The zoom picked on the timeline lane or in the Zoom panel. */
   selectedZoomId?: string;
-  /** The clip picked on a video track above the main sequence. */
-  selectedOverlayClipId?: string;
+  /** The clips selected on the timeline (linked partners included); the Inspector shows the first. */
+  selectedClipIds: string[];
   /** The short this window shows as its timeline (the Shorts Studio), if any. */
   viewShort?: string;
   setViewShort: (shortId: string | undefined) => void;
@@ -128,13 +120,12 @@ interface ProjectStore {
   addRecentProject: (path: string) => void;
   removeRecentProject: (path: string) => void;
   clearRecentProjects: () => void;
-  setManifest: (manifest: ProjectManifest | null) => void;
   setCurrentTimeUs: (timeUs: number) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   togglePlayPause: () => void;
   applyZoomGeneration: (generation: Pick<ZoomGeneration, "suggestions" | "diagnostics">) => void;
   setSelectedZoomId: (id?: string) => void;
-  setSelectedOverlayClipId: (id?: string) => void;
+  setSelectedClipIds: (ids: string[]) => void;
   setTimelineSelection: (selection: { startUs: number; endUs: number } | null) => void;
   setSilenceBlocks: (
     blocks: SilenceBlock[],
@@ -143,7 +134,6 @@ interface ProjectStore {
   toggleSilenceBlock: (id: string) => void;
   applySilenceCuts: () => void;
   setIsSilenceModalOpen: (open: boolean) => void;
-  setTrackWaveform: (trackId: string, waveform: WaveformPage) => void;
   /** Applies an edit's result. `remote` marks one broadcast by another window: it is applied
    *  only if newer, and not broadcast again. */
   applyOpenedProject: (project: OpenedProject, options?: { remote?: boolean }) => void;
@@ -195,8 +185,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       openedProject: project,
       projectPath: resolvedPath ?? null,
       playbackGeneration: 0, playbackError: null, previewAvailable: false,
-      manifest: project.manifest,
-      durationUs: project.editedDurationUs,
+      durationUs: project.durationUs,
+      waveforms: {},
+      selectedClipIds: [],
       currentTimeUs: 0,
       isPlaying: false,
       pendingZoomSuggestions: [],
@@ -205,13 +196,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       activeSilenceBlocks: [],
       silenceAnalysis: null,
       isSilenceModalOpen: false,
-      tracks: project.tracks.map(({ descriptor, segmentCount, availableSegmentCount }) => ({
-        id: descriptor.id,
-        trackType: studioTrackType(descriptor.trackType),
-        name: `${descriptor.id} · ${availableSegmentCount}/${segmentCount} segments available`,
-        ...trackMixFields(project, descriptor.id),
-        intervals: [],
-      })),
     });
   },
   clearProject: () => {
@@ -221,8 +205,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       projectPath: null,
       playbackError: null,
       previewAvailable: false,
-      manifest: null,
-      tracks: [],
+      waveforms: {},
+      selectedClipIds: [],
       durationUs: 0,
       currentTimeUs: 0,
       isPlaying: false,
@@ -234,13 +218,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       isSilenceModalOpen: false,
     });
   },
-  manifest: null,
-  tracks: [],
+  waveforms: {},
+  setWaveform: (key, buckets) => set((state) => ({ waveforms: { ...state.waveforms, [key]: buckets } })),
   zoomKeyframes: [],
   pendingZoomSuggestions: [],
   zoomDiagnostics: [],
   selectedZoomId: undefined,
-  selectedOverlayClipId: undefined,
+  selectedClipIds: [],
   captionsVersion: 0,
   viewShort: undefined,
   setViewShort: (viewShort) => set({ viewShort }),
@@ -257,12 +241,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   silenceAnalysis: null,
   isSilenceModalOpen: false,
 
-  setManifest: (manifest) =>
-    set({
-      manifest,
-      durationUs: manifest ? manifest.durationUs : 0,
-    }),
-
   setCurrentTimeUs: (timeUs) => {
     const { durationUs } = get();
     const clamped = Math.max(0, Math.min(timeUs, durationUs));
@@ -274,7 +252,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   togglePlayPause: () => set((state) => ({ isPlaying: !state.isPlaying })),
 
   setSelectedZoomId: (selectedZoomId) => set({ selectedZoomId }),
-  setSelectedOverlayClipId: (selectedOverlayClipId) => set({ selectedOverlayClipId }),
+  setSelectedClipIds: (selectedClipIds) => set({ selectedClipIds }),
   setTimelineSelection: (timelineSelection) => set({ timelineSelection }),
 
   applyZoomGeneration: (generation) =>
@@ -310,13 +288,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   setIsSilenceModalOpen: (open) => set({ isSilenceModalOpen: open }),
 
-  setTrackWaveform: (trackId, waveform) =>
-    set((state) => ({
-      tracks: state.tracks.map((track) =>
-        track.id === trackId ? { ...track, waveform } : track
-      ),
-    })),
-
   applyOpenedProject: (project, options) => {
     const current = get().openedProject;
     // A window showing a short turns every project it is handed into that short's view.
@@ -348,26 +319,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         !state.silenceAnalysis ||
         state.silenceAnalysis.projectHandle !== project.projectHandle ||
         state.silenceAnalysis.revision !== project.revision;
+      const clipIds = new Set(project.sequence.tracks.flatMap((t) => t.clips.map((c) => c.id)));
+      const kept = state.selectedClipIds.filter((id) => clipIds.has(id));
       return {
         openedProject: project,
-        manifest: project.manifest,
-        durationUs: project.editedDurationUs,
-        currentTimeUs: Math.min(state.currentTimeUs, project.editedDurationUs),
+        durationUs: project.durationUs,
+        currentTimeUs: Math.min(state.currentTimeUs, project.durationUs),
+        selectedClipIds: kept.length === state.selectedClipIds.length ? state.selectedClipIds : kept,
         pendingZoomSuggestions: pending,
         zoomKeyframes: mergeZoomBars(project.zooms, pending),
         activeSilenceBlocks: silenceStale ? [] : state.activeSilenceBlocks,
         silenceAnalysis: silenceStale ? null : state.silenceAnalysis,
-        tracks: project.tracks.map(({ descriptor, segmentCount, availableSegmentCount }) => {
-          const existing = state.tracks.find((track) => track.id === descriptor.id);
-          return {
-            id: descriptor.id,
-            trackType: studioTrackType(descriptor.trackType),
-            name: `${descriptor.id} · ${availableSegmentCount}/${segmentCount} segments available`,
-            ...trackMixFields(project, descriptor.id),
-            intervals: existing?.intervals ?? [],
-            waveform: existing?.waveform,
-          };
-        }),
       };
     });
   },

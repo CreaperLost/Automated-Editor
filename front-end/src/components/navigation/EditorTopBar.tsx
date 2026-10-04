@@ -235,26 +235,26 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
 const ProjectName: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
-  const [value, setValue] = useState(project?.manifest.projectName ?? "");
+  const [value, setValue] = useState(project?.name ?? "");
   const [renaming, setRenaming] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
-    setValue(project?.manifest.projectName ?? "");
-  }, [project?.projectHandle, project?.manifest.projectName]);
+    setValue(project?.name ?? "");
+  }, [project?.projectHandle, project?.name]);
 
   if (!project) return null;
   const rename = async () => {
     const trimmed = value.trim();
-    if (renaming || !trimmed || trimmed === project.manifest.projectName) {
-      setValue(project.manifest.projectName);
+    if (renaming || !trimmed || trimmed === project.name) {
+      setValue(project.name);
       return;
     }
     setRenaming(true);
     try {
       applyOpenedProject(await api.projectRename(project.projectHandle, trimmed));
     } catch {
-      setValue(project.manifest.projectName);
+      setValue(project.name);
     } finally {
       setRenaming(false);
     }
@@ -275,7 +275,7 @@ const ProjectName: React.FC = () => {
       onKeyDown={(e) => {
         if (e.key === "Enter") e.currentTarget.blur();
         if (e.key === "Escape") {
-          setValue(project.manifest.projectName);
+          setValue(project.name);
           e.currentTarget.blur();
         }
       }}

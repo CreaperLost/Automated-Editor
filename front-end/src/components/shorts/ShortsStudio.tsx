@@ -17,7 +17,6 @@ import {
   Pencil,
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
-import { GAP } from "../../lib/projectUtils";
 import { releaseShortPlayback, takeShortPlayback } from "../../lib/playbackControl";
 import { useEngineFrames } from "../canvas/NativePreviewHost";
 import { PreviewBar } from "../layout/PreviewBar";
@@ -36,7 +35,7 @@ import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
 import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
-import { transcribableSounds } from "../../lib/trackUtils";
+import { clipAt, soundSources } from "../../lib/sequence";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { Button, Notice, Switch } from "../ui";
 import { InspectorSection } from "../inspector/InspectorSection";
@@ -59,14 +58,14 @@ const DEFAULT_LAYOUT: ShortLayout = {
   backgroundPreset: "aurora",
 };
 
-/** Which clock edited time `editedUs` plays on (the recording, or an imported file) and
- *  where on it; `null` past the end. */
-function clockAt(project: OpenedProject, editedUs: number): { media?: string; us: number } | null {
-  let cursor = 0;
-  for (const interval of project.retainedIntervals) {
-    const length = interval.endUs - interval.startUs;
-    if (editedUs < cursor + length) return { media: interval.media, us: interval.startUs + (editedUs - cursor) };
-    cursor += length;
+/** Which asset's clock timeline time `editedUs` plays on (its top picture, else any clip) and
+ *  where on it; `null` where nothing plays. */
+function clockAt(project: OpenedProject, editedUs: number): { media: string; us: number } | null {
+  const tracks = project.sequence.tracks.filter((t) => t.kind === "video").reverse()
+    .concat(project.sequence.tracks.filter((t) => t.kind === "audio"));
+  for (const track of tracks) {
+    const clip = clipAt(track, editedUs);
+    if (clip) return { media: clip.asset, us: clip.inUs + (editedUs - clip.startUs) };
   }
   return null;
 }
@@ -213,7 +212,7 @@ export const ShortsStudio: React.FC = () => {
   const layout = useMemo(() => ({ ...DEFAULT_LAYOUT, ...(baseLayout ?? {}) }), [baseLayout]);
   // The store shows the selected short's own timeline once its view has arrived.
   const viewing = !!selected && project?.shortView === selected.id;
-  const lengthUs = viewing ? project!.editedDurationUs : 0;
+  const lengthUs = viewing ? project!.durationUs : 0;
   const playable = viewing && lengthUs > 0;
   const ownEdit = !!selected?.edit;
 
@@ -275,8 +274,8 @@ export const ShortsStudio: React.FC = () => {
       .catch(() => undefined);
   }, [project?.revision, project?.projectHandle]);
 
-  // Speech first, the recording's or an imported file's.
-  const speechTrack = transcribableSounds(project)[0];
+  // Speech on the timeline first, the recording's or an imported file's.
+  const speechTrack = soundSources(project).find((sound) => sound.placed) ?? soundSources(project)[0];
 
   const run = async (label: string, work: (p: OpenedProject) => Promise<OpenedProject>) => {
     const current = useProjectStore.getState().openedProject;
@@ -332,9 +331,8 @@ export const ShortsStudio: React.FC = () => {
     if (!main) return null;
     const start = clockAt(main, startEdited);
     const end = clockAt(main, endEdited - 1);
-    if (!start || !end) return null;
-    if (start.media === GAP || end.media === GAP) {
-      setError("A short cannot start or end in a gap on V1.");
+    if (!start || !end) {
+      setError("A short starts and ends on a clip; nothing plays there.");
       return null;
     }
     if (start.media !== end.media) {
@@ -348,7 +346,7 @@ export const ShortsStudio: React.FC = () => {
     if (!main) return;
     // From the start of the video: the playhead here is in the selected short.
     const startEdited = 0;
-    const ends = anchors(startEdited, Math.min(main.editedDurationUs, startEdited + NEW_SHORT_US));
+    const ends = anchors(startEdited, Math.min(main.durationUs, startEdited + NEW_SHORT_US));
     if (!ends) return;
     const id = `short-${Date.now().toString(36)}`;
     setSelectedId(id);
@@ -817,7 +815,7 @@ export const ShortsStudio: React.FC = () => {
         <img src="/aeroedits-icon.svg" alt="" className="w-7 h-7" draggable={false} />
         <div className="min-w-0 flex items-baseline gap-2 pr-2">
           <span className="font-display text-body font-semibold text-studio-100 shrink-0">Shorts Studio</span>
-          <span className="text-label text-studio-500 truncate">{project.manifest.projectName}</span>
+          <span className="text-label text-studio-500 truncate">{project.name}</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button
@@ -838,7 +836,7 @@ export const ShortsStudio: React.FC = () => {
             disabled={!!busy || !speechTrack}
             onClick={() =>
               speechTrack &&
-              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.id))
+              void run("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speechTrack.key))
             }
             title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable in the editor)."
           >

@@ -44,14 +44,14 @@ export const InspectorPanel: React.FC = () => {
   } = useSettingsStore();
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
-  const selectedClipId = useProjectStore((s) => s.selectedOverlayClipId);
+  const selectedClipId = useProjectStore((s) => s.selectedClipIds[0]);
   const persistTimer = useRef<number>();
   const openedRef = useRef(openedProject);
   openedRef.current = openedProject;
   const [persistError, setPersistError] = useState<string>();
 
-  // The Clip page exists while a clip on a track is selected; selecting one opens it.
-  const clipSelected = !!selectedClipId && (openedProject?.overlayTracks ?? []).some((t) =>
+  // The Clip page exists while a clip is selected; selecting one opens it.
+  const clipSelected = !!selectedClipId && (openedProject?.sequence.tracks ?? []).some((t) =>
     t.clips.some((c) => c.id === selectedClipId),
   );
   const [chosenTab, setChosenTab] = useState<InspectorTab>(loadTab);

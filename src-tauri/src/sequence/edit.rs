@@ -133,6 +133,13 @@ pub enum SequenceEdit {
         clip_id: String,
         fit: Fit,
     },
+    /// Puts back the time cut between clips that were one stretch of their source: each listed
+    /// clip grows to meet the next clip of its sound or picture, pushing the rest along. None
+    /// listed: every cut on the timeline.
+    RestoreCuts {
+        #[serde(default)]
+        clip_ids: Vec<String>,
+    },
 }
 
 /// What an edit changed, besides the sequence itself.
@@ -587,8 +594,80 @@ impl<'a> Editor<'a> {
                 self.seq.tracks[t].clips[c].fit = *fit;
                 Ok(())
             }
+            SequenceEdit::RestoreCuts { clip_ids } => self.restore_cuts(clip_ids),
         }
         .map(|()| EditOutcome::default())
+    }
+
+    /// The source time cut between `clip` and the next clip on its track, when they are one
+    /// stretch of the same stream side by side.
+    fn cut_after(&self, t: usize, c: usize) -> Option<u64> {
+        let clips = &self.seq.tracks[t].clips;
+        let (left, right) = (clips.get(c)?, clips.get(c + 1)?);
+        (left.asset == right.asset
+            && left.stream == right.stream
+            && left.end_us() == right.start_us
+            && left.out_us() < right.in_us
+            && !self.is_still(&left.asset))
+        .then(|| right.in_us - left.out_us())
+    }
+
+    fn restore_cuts(&mut self, clip_ids: &[String]) -> Result<(), String> {
+        // Left clips of every cut, latest first: restoring one moves only what comes after.
+        let mut lefts: Vec<(u64, String)> = Vec::new();
+        for (t, track) in self.seq.tracks.iter().enumerate() {
+            if track.locked {
+                continue;
+            }
+            for (c, clip) in track.clips.iter().enumerate() {
+                if (clip_ids.is_empty() || clip_ids.contains(&clip.id))
+                    && self.cut_after(t, c).is_some()
+                {
+                    lefts.push((clip.end_us(), clip.id.clone()));
+                }
+            }
+        }
+        lefts.sort_by(|a, b| b.cmp(a));
+        let mut restored: BTreeSet<String> = BTreeSet::new();
+        for (_, id) in lefts {
+            let Ok((t, c)) = self.find(&id) else {
+                continue;
+            };
+            // A partner's restore may have put this one back already.
+            let Some(gap) = self.cut_after(t, c) else {
+                continue;
+            };
+            let clip = &self.seq.tracks[t].clips[c];
+            let (end, link) = (clip.end_us(), clip.link.clone());
+            if self.trim(&id, Edge::End, end + gap, true).is_ok() {
+                restored.insert(id);
+                restored.extend(link);
+            }
+        }
+        if restored.is_empty() {
+            return Err("There is no cut to restore".into());
+        }
+        // What was one stretch is one clip again.
+        for track in &mut self.seq.tracks {
+            let mut i = 0;
+            while i + 1 < track.clips.len() {
+                let (left, right) = (&track.clips[i], &track.clips[i + 1]);
+                let mine = restored.contains(&left.id)
+                    || left.link.as_ref().is_some_and(|l| restored.contains(l));
+                if mine
+                    && left.asset == right.asset
+                    && left.stream == right.stream
+                    && left.end_us() == right.start_us
+                    && left.out_us() == right.in_us
+                {
+                    let right = track.clips.remove(i + 1);
+                    track.clips[i].duration_us += right.duration_us;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Every unlocked track's clip edges, with 0.
@@ -1734,6 +1813,72 @@ mod tests {
             },
         );
         assert_eq!(split.tracks[0].clips[1].in_us, 0);
+    }
+
+    #[test]
+    fn restoring_cuts_puts_the_time_back_in_one_step() {
+        let (assets, seq) = rec_project();
+        let cut = run(
+            &seq,
+            &assets,
+            super::tests::cut(&[(2 * S, 3 * S), (5 * S, 6 * S)]),
+        );
+        assert_eq!(cut.duration_us(), 8 * S);
+        let all = run(
+            &cut,
+            &assets,
+            SequenceEdit::RestoreCuts { clip_ids: vec![] },
+        );
+        assert_eq!(layout(&all), layout(&seq));
+        // Just one: the first cut comes back, the second stays.
+        let first = cut.tracks[0].clips[0].id.clone();
+        let one = run(
+            &cut,
+            &assets,
+            SequenceEdit::RestoreCuts {
+                clip_ids: vec![first],
+            },
+        );
+        assert_eq!(one.duration_us(), 9 * S);
+        assert_eq!(one.tracks[2].clips[0].duration_us, 5 * S);
+        assert!(apply(
+            &seq,
+            &assets,
+            &SequenceEdit::RestoreCuts { clip_ids: vec![] }
+        )
+        .is_err());
+    }
+
+    /// The edits exactly as the timeline sends them.
+    #[test]
+    fn edits_read_the_ui_messages() {
+        let messages = [
+            r#"{"kind":"split","atUs":25000000,"clipIds":[]}"#,
+            r#"{"kind":"rippleTrim","atUs":25000000,"side":"previous"}"#,
+            r#"{"kind":"unlink","clipIds":["c2","c5"]}"#,
+            r#"{"kind":"delete","clipIds":["c2"],"ripple":null}"#,
+            r#"{"kind":"delete","clipIds":["c2"],"ripple":true}"#,
+            r#"{"kind":"moveClips","clipIds":["c7"],"deltaUs":9491876,"trackId":null,"anchorId":"c7"}"#,
+            r#"{"kind":"moveClips","clipIds":["c7"],"deltaUs":-5,"trackId":"t3","anchorId":"c7"}"#,
+            r#"{"kind":"trimClip","clipId":"c1","edge":"end","toUs":17152437}"#,
+            r#"{"kind":"trimClip","clipId":"c1","edge":"start","toUs":5,"ripple":true}"#,
+            r#"{"kind":"placeAsset","assetId":"m-1","atUs":0,"trackId":null}"#,
+            r#"{"kind":"placeAsset","assetId":"m-1","atUs":0,"trackId":"t1","range":{"startUs":0,"endUs":5}}"#,
+            r#"{"kind":"addTrack","trackKind":"audio"}"#,
+            r#"{"kind":"setTrack","trackId":"t1","name":"","hidden":false,"muted":true,"locked":false,"role":"mic"}"#,
+            r#"{"kind":"setTrack","trackId":"t1","name":"B","hidden":true,"muted":false,"locked":true,"role":null}"#,
+            r#"{"kind":"moveTrack","trackId":"t1","up":true}"#,
+            r#"{"kind":"deleteRange","ranges":[{"startUs":1,"endUs":2}],"ripple":true}"#,
+            r#"{"kind":"setMagnetic","magnetic":false}"#,
+            r#"{"kind":"setClip","clipId":"c1","fit":"cover"}"#,
+            r#"{"kind":"restoreCuts","clipIds":[]}"#,
+            r#"{"kind":"link","clipIds":["a","b"]}"#,
+            r#"{"kind":"removeTrack","trackId":"t1"}"#,
+        ];
+        for message in messages {
+            serde_json::from_str::<SequenceEdit>(message)
+                .unwrap_or_else(|e| panic!("{message}: {e}"));
+        }
     }
 
     #[test]
