@@ -107,6 +107,49 @@ impl ColorInfo {
     }
 }
 
+/// A frame's pixels, shared: cloning a frame (a cached still, the wallpaper, a decoded frame
+/// handed to the compositor) does not copy them. Writing to them copies only if another frame
+/// still shares them. Reads and writes like a `Vec<u8>`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct PixelBuffer(std::sync::Arc<Vec<u8>>);
+
+impl PixelBuffer {
+    /// The bytes, copied only if they are shared.
+    pub fn into_vec(self) -> Vec<u8> {
+        std::sync::Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
+    }
+
+    /// Whether no other frame shares these bytes.
+    pub fn is_unique(&self) -> bool {
+        std::sync::Arc::strong_count(&self.0) == 1
+    }
+}
+
+impl From<Vec<u8>> for PixelBuffer {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(std::sync::Arc::new(bytes))
+    }
+}
+
+impl std::ops::Deref for PixelBuffer {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Vec<u8> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for PixelBuffer {
+    fn deref_mut(&mut self) -> &mut Vec<u8> {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+impl std::fmt::Debug for PixelBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PixelBuffer({} bytes)", self.0.len())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VideoFrame {
     pub pts_us: u64,
@@ -115,7 +158,7 @@ pub struct VideoFrame {
     pub stride: u32,
     pub format: PixelFormat,
     pub color: ColorInfo,
-    pub data: Vec<u8>,
+    pub data: PixelBuffer,
 }
 
 impl VideoFrame {
@@ -165,7 +208,7 @@ impl VideoFrame {
             stride: self.width * 4,
             format: PixelFormat::Bgra8888,
             color: ColorInfo::rec709_full(),
-            data,
+            data: data.into(),
         }
     }
 
@@ -193,7 +236,7 @@ impl VideoFrame {
             stride,
             format: PixelFormat::Bgra8888,
             color: ColorInfo::rec709_full(),
-            data,
+            data: data.into(),
         })
     }
 }
@@ -401,10 +444,9 @@ pub fn decode_h264_frame_limited(
 
 /// Starts decoding `path` at `time_us` ahead of need, where the backend keeps decoders open
 /// (FFmpeg): a cut coming up then plays without waiting for one.
-pub fn prefetch_video(path: &Path, time_us: u64, limit: ffmpeg::DecodeLimit) {
-    if media_backend() == MediaBackend::Ffmpeg {
-        ffmpeg::prefetch(path, time_us, limit);
-    }
+/// False when it was turned away for now (ask again later).
+pub fn prefetch_video(path: &Path, time_us: u64, limit: ffmpeg::DecodeLimit) -> bool {
+    media_backend() != MediaBackend::Ffmpeg || ffmpeg::prefetch(path, time_us, limit)
 }
 
 /// Container duration of a media file.

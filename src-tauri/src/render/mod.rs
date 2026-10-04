@@ -1188,7 +1188,7 @@ impl Compositor {
             stride: scene.width * 4,
             format: PixelFormat::Bgra8888,
             color: ColorInfo::rec709_full(),
-            data: bgra,
+            data: bgra.into(),
         })
     }
 }

@@ -223,13 +223,19 @@ pub fn remove_files(root: &Path, asset: &Asset) {
 /// after every edit. Bounded in bytes; the least recently used go first.
 const IMAGE_CACHE_BYTES: usize = 384 << 20;
 
-/// [`decode_image`], cached while the file stays the same.
-pub fn decode_image_cached(path: &Path) -> Result<VideoFrame, String> {
+/// [`decode_image`], no larger than `max` (width, height; 0 for no limit, keeping its shape),
+/// cached while the file stays the same. A 4K still in a 720p preview is held at 720p.
+pub fn decode_image_cached(path: &Path, max: (u32, u32)) -> Result<VideoFrame, String> {
     use std::sync::Mutex;
-    type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    type Key = (
+        std::path::PathBuf,
+        u64,
+        Option<std::time::SystemTime>,
+        (u32, u32),
+    );
     static CACHE: Mutex<Vec<(Key, VideoFrame)>> = Mutex::new(Vec::new());
     let meta = fs::metadata(path).map_err(|e| format!("Unreadable image: {e}"))?;
-    let key: Key = (path.to_path_buf(), meta.len(), meta.modified().ok());
+    let key: Key = (path.to_path_buf(), meta.len(), meta.modified().ok(), max);
     {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(index) = cache.iter().position(|(k, _)| *k == key) {
@@ -239,15 +245,46 @@ pub fn decode_image_cached(path: &Path) -> Result<VideoFrame, String> {
             return Ok(frame);
         }
     }
-    let frame = decode_image(path)?;
+    let frame = fit_within(decode_image(path)?, max);
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.retain(|(k, _)| k.0 != key.0);
+    // Another version of the file (it changed) is not wanted again; other sizes may be.
+    cache.retain(|(k, _)| k.0 != key.0 || (k.1, k.2) == (key.1, key.2));
     cache.push((key, frame.clone()));
     let mut total: usize = cache.iter().map(|(_, f)| f.data.len()).sum();
     while total > IMAGE_CACHE_BYTES && cache.len() > 1 {
         total -= cache.remove(0).1.data.len();
     }
     Ok(frame)
+}
+
+/// `frame` scaled down to fit inside `max` (0 for no limit), keeping its shape.
+fn fit_within(frame: VideoFrame, (max_w, max_h): (u32, u32)) -> VideoFrame {
+    let mut scale = 1.0f64;
+    if max_w > 0 && frame.width > max_w {
+        scale = scale.min(max_w as f64 / frame.width as f64);
+    }
+    if max_h > 0 && frame.height > max_h {
+        scale = scale.min(max_h as f64 / frame.height as f64);
+    }
+    if scale >= 1.0 || frame.stride != frame.width * 4 {
+        return frame;
+    }
+    let w = ((frame.width as f64 * scale).round() as u32).max(1);
+    let h = ((frame.height as f64 * scale).round() as u32).max(1);
+    // BGRA resizes as any four channels do.
+    let Some(image) =
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone().into_vec())
+    else {
+        return frame;
+    };
+    let small = image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle);
+    VideoFrame {
+        width: w,
+        height: h,
+        stride: w * 4,
+        data: small.into_raw().into(),
+        ..frame
+    }
 }
 
 /// Decodes an image asset to a BGRA frame no larger than the working-set limit.
@@ -274,7 +311,7 @@ pub fn decode_image(path: &Path) -> Result<VideoFrame, String> {
         stride: width * 4,
         format: PixelFormat::Bgra8888,
         color: ColorInfo::rec709_full(),
-        data,
+        data: data.into(),
     })
 }
 

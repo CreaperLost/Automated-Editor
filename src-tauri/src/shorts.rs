@@ -426,6 +426,8 @@ pub fn edited_range(short: &Short, mapper: &TimelineMapper) -> Option<(u64, u64)
 /// short's own timeline or its stretch of the video, without building a whole document per
 /// short (the summary is refreshed after every edit).
 pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
+    // One clock per source, not one per short: building one walks the whole sequence.
+    let mut clocks: std::collections::HashMap<String, TimelineMapper> = Default::default();
     for short in shorts {
         // A short with its own edit no longer sits on the video's timeline.
         if let Some(own) = &short.edit {
@@ -434,7 +436,14 @@ pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
             short.edited_end_us = None;
             continue;
         }
-        let range = edited_range_in(short, document);
+        let range = document
+            .clock_asset(short.media.as_deref())
+            .and_then(|asset| {
+                let clock = clocks
+                    .entry(asset.to_string())
+                    .or_insert_with(|| document.asset_clock(asset));
+                edited_range(short, clock)
+            });
         short.length_us = range.map(|(start, end)| {
             slice_sequence(&document.sequence, &document.assets, start, end).duration_us()
         });

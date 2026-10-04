@@ -51,14 +51,13 @@ pub fn entries(sequence: &Sequence, pick: impl Fn(&Track, &Clip) -> bool) -> Vec
     out
 }
 
-/// `[from, to)` less the ranges in `used` (merged and in order).
+/// `[from, to)` less the ranges in `used` (merged and in order). Starts at the first range
+/// that can touch it, so a long jump-cut sequence costs a binary search per clip.
 fn unplaced(used: &[(u64, u64)], from: u64, to: u64) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     let mut at = from;
-    for &(a, b) in used {
-        if b <= at {
-            continue;
-        }
+    let first = used.partition_point(|&(_, b)| b <= from);
+    for &(a, b) in &used[first..] {
         if a >= to {
             break;
         }
@@ -73,18 +72,18 @@ fn unplaced(used: &[(u64, u64)], from: u64, to: u64) -> Vec<(u64, u64)> {
     out
 }
 
-/// Adds `range` to `used`, keeping it merged and in order.
+/// Adds `range` to `used`, keeping it merged and in order: only the ranges it touches are
+/// merged, in place.
 fn place(used: &mut Vec<(u64, u64)>, range: (u64, u64)) {
-    let index = used.partition_point(|&(a, _)| a < range.0);
-    used.insert(index, range);
-    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(used.len());
-    for &(a, b) in used.iter() {
-        match merged.last_mut() {
-            Some(last) if a <= last.1 => last.1 = last.1.max(b),
-            _ => merged.push((a, b)),
-        }
+    let (mut a, mut b) = range;
+    let first = used.partition_point(|&(_, end)| end < a);
+    let mut last = first;
+    while last < used.len() && used[last].0 <= b {
+        a = a.min(used[last].0);
+        b = b.max(used[last].1);
+        last += 1;
     }
-    *used = merged;
+    used.splice(first..last, std::iter::once((a, b)));
 }
 
 pub fn mapper(entries: &[RetainedInterval]) -> TimelineMapper {

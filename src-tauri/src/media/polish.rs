@@ -41,7 +41,9 @@ const DUCK_RELEASE_BLOCKS: f32 = 40.0;
 const MAX_NORMALIZE_DB: f64 = 20.0;
 /// Peaks above -1 dBFS are softly limited after normalization.
 const LIMIT_THRESHOLD: f64 = 0.891;
-const CACHE_LIMIT: usize = 256;
+/// Analyses kept for reuse, in bytes: an hour of sound analyses to well under a megabyte, so
+/// this holds every segment of many long recordings. The least recently used go first.
+const CACHE_BYTES: usize = 128 << 20;
 
 /// What one audio file sounds like, at its own sample rate.
 #[derive(Debug)]
@@ -57,8 +59,22 @@ pub struct SegmentAnalysis {
 
 type CacheKey = (PathBuf, u64, Option<SystemTime>);
 
-fn cache() -> &'static Mutex<HashMap<CacheKey, Arc<SegmentAnalysis>>> {
-    static CACHE: OnceLock<Mutex<HashMap<CacheKey, Arc<SegmentAnalysis>>>> = OnceLock::new();
+/// Analyses with when each was last used.
+#[derive(Default)]
+struct AnalysisCache {
+    entries: HashMap<CacheKey, (Arc<SegmentAnalysis>, u64)>,
+    tick: u64,
+    bytes: usize,
+}
+
+impl SegmentAnalysis {
+    fn bytes(&self) -> usize {
+        self.voice.len() + self.loudness.len() * 8 + 4096
+    }
+}
+
+fn cache() -> &'static Mutex<AnalysisCache> {
+    static CACHE: OnceLock<Mutex<AnalysisCache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
@@ -66,15 +82,37 @@ fn cache() -> &'static Mutex<HashMap<CacheKey, Arc<SegmentAnalysis>>> {
 pub fn analyze_cached(path: &Path) -> Result<Arc<SegmentAnalysis>, String> {
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let key = (path.to_path_buf(), metadata.len(), metadata.modified().ok());
-    if let Some(hit) = cache().lock().get(&key) {
-        return Ok(Arc::clone(hit));
+    {
+        let mut cache = cache().lock();
+        cache.tick += 1;
+        let tick = cache.tick;
+        if let Some((hit, used)) = cache.entries.get_mut(&key) {
+            *used = tick;
+            return Ok(Arc::clone(hit));
+        }
     }
     let analysis = Arc::new(analyze(path)?);
     let mut cache = cache().lock();
-    if cache.len() >= CACHE_LIMIT {
-        cache.clear();
+    cache.tick += 1;
+    let tick = cache.tick;
+    cache.bytes += analysis.bytes();
+    if let Some((old, _)) = cache.entries.insert(key, (Arc::clone(&analysis), tick)) {
+        cache.bytes -= old.bytes();
     }
-    cache.insert(key, Arc::clone(&analysis));
+    // Over budget: the least recently used go, never the whole cache at once.
+    while cache.bytes > CACHE_BYTES && cache.entries.len() > 1 {
+        let Some(oldest) = cache
+            .entries
+            .iter()
+            .min_by_key(|(_, (_, used))| *used)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        if let Some((gone, _)) = cache.entries.remove(&oldest) {
+            cache.bytes -= gone.bytes();
+        }
+    }
     Ok(analysis)
 }
 
@@ -255,12 +293,13 @@ impl PolishPlan {
             let Some(db) = settings.lane_denoise_db(&lane.id, lane.speech) else {
                 continue;
             };
-            for segment in lane
-                .clips
-                .iter()
-                .flat_map(|c| c.segments.iter())
-                .filter(|s| s.available)
-            {
+            // Only the segments a clip plays: a short clip of a long recording does not
+            // need the rest of it analyzed.
+            for segment in lane.clips.iter().flat_map(|c| {
+                c.segments.iter().filter(move |s| {
+                    s.available && s.start_us < c.in_us + c.len && c.in_us < s.end_us
+                })
+            }) {
                 let key = (lane.id.clone(), segment.relative_path.clone());
                 if denoisers.contains_key(&key) {
                     continue;

@@ -42,16 +42,32 @@ struct WebviewJob {
     for_short: bool,
 }
 
+/// Set while the encoder works on a frame. The media worker then skips drawing a frame it
+/// would have to wait to hand over: it goes on feeding audio and draws a fresh frame once
+/// the encoder is free, rather than blocking on a frame that is stale by the time it is sent.
+static ENCODING: AtomicBool = AtomicBool::new(false);
+
+/// Clears [`ENCODING`] however a job ends.
+struct Encoding;
+
+impl Drop for Encoding {
+    fn drop(&mut self) {
+        ENCODING.store(false, Ordering::Release);
+    }
+}
+
 /// Encodes and presents webview frames on their own thread, so the next frame decodes and
-/// composites while this one is compressed. The channel holds no buffer: handing over a frame
-/// waits for the previous one to finish, which keeps at most one frame in flight.
+/// composites while this one is compressed. One frame waits at most: the media worker draws
+/// one only while the encoder is free (see [`ENCODING`]), and never waits to hand it over.
 fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
-    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(0);
+    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(1);
     thread::spawn(move || {
         // With AEROEDITS_PROFILE set, reports the presented preview rate every two seconds.
         let mut window = std::time::Instant::now();
         let mut presented = 0u32;
         for job in jobs {
+            ENCODING.store(true, Ordering::Release);
+            let _encoding = Encoding;
             if window.elapsed() >= Duration::from_secs(2) {
                 if presented > 0 && crate::media::profiling() {
                     eprintln!(
@@ -321,21 +337,28 @@ fn tick(
     if *last_frame == Some(key) {
         return Ok(playing);
     }
+    if preview.surface == "webview" && ENCODING.load(Ordering::Acquire) {
+        return Ok(playing);
+    }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
     if status.state == PlaybackState::Playing {
         runtime.evaluator.prefetch(render_us, PREFETCH_US);
     }
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.
-        encoder
-            .send(WebviewJob {
-                frame,
-                generation,
-                surface_generation: preview.generation,
-                for_short,
-            })
-            .map_err(|_| error("The preview encoder stopped".to_string()))?;
-        *last_frame = Some(key);
+        match encoder.try_send(WebviewJob {
+            frame,
+            generation,
+            surface_generation: preview.generation,
+            for_short,
+        }) {
+            Ok(()) => *last_frame = Some(key),
+            // Taken up a moment ago: this frame is dropped and drawn again next tick.
+            Err(mpsc::TrySendError::Full(_)) => {}
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(error("The preview encoder stopped".to_string()))
+            }
+        }
         return Ok(playing);
     }
     pending.store(true, Ordering::Release);

@@ -1,6 +1,13 @@
 import React, { useEffect, useRef } from "react";
 import { WaveformBucket } from "../../lib/types";
 
+/**
+ * The most backing pixels a waveform canvas gets across (and down). A zoomed-in clip can be
+ * hundreds of thousands of CSS pixels wide; its waveform has a few hundred bars, so past this
+ * the extra pixels add nothing but memory (three canvases of them). The canvas is stretched.
+ */
+const MAX_BACKING_PX = 4096;
+
 interface WaveformRendererProps {
   buckets: WaveformBucket[];
   /** Edited-timeline window this canvas shows; buckets outside it are skipped. */
@@ -56,15 +63,18 @@ export const WaveformRenderer: React.FC<WaveformRendererProps> = ({
       return;
     }
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
+    canvas.width = Math.max(1, Math.min(MAX_BACKING_PX, Math.round(width * dpr)));
+    canvas.height = Math.max(1, Math.min(MAX_BACKING_PX, Math.round(height * dpr)));
+    // Drawing is in CSS pixels, scaled to however many backing pixels there are.
+    const sx = canvas.width / width;
+    const sy = canvas.height / height;
     const paint = (color: string) => {
       const layer = document.createElement("canvas");
       layer.width = canvas.width;
       layer.height = canvas.height;
       const ctx = layer.getContext("2d");
       if (!ctx) return layer;
-      ctx.scale(dpr, dpr);
+      ctx.scale(sx, sy);
       const spanUs = endUs - startUs;
       if (buckets.length === 0 || spanUs <= 0) return layer;
       const pxPerUs = width / spanUs;

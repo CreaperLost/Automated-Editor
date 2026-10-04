@@ -46,7 +46,6 @@ import {
   clipRole,
   cutJoins,
   defaultClipUs,
-  findClip,
   formatRulerLabel,
   rulerStepUs,
   sequenceEdges,
@@ -166,13 +165,25 @@ function rowFromElement(element: Element | null): Row | null {
   return value.startsWith("track:") ? { kind: "track", trackId: value.slice(6) } : null;
 }
 
-/** The row under a screen point, also while the pointer is captured by a dragged clip. */
-function rowAtPoint(x: number, y: number): Row | null {
-  for (const element of document.elementsFromPoint(x, y)) {
+/** Where each row is on screen (the track rows and the new-track rows). */
+type RowBox = { row: Row; rect: DOMRect };
+
+/** The rows' boxes, read when a drag starts. */
+function rowBoxes(): RowBox[] {
+  return [...document.querySelectorAll("[data-track-row]")].flatMap((element) => {
     const row = rowFromElement(element);
-    if (row) return row;
-  }
-  return null;
+    return row ? [{ row, rect: element.getBoundingClientRect() }] : [];
+  });
+}
+
+/**
+ * The row under a screen point, also while the pointer is captured by a dragged clip. By the
+ * rows' boxes: asking the page what is under the point hit-tests every clip (thousands on a
+ * long timeline, tens of ms a pointer move).
+ */
+function rowAtPoint(boxes: RowBox[], x: number, y: number): Row | null {
+  const hit = boxes.find(({ rect }) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom);
+  return hit?.row ?? null;
 }
 
 /** A clip being dragged: moved (with the clips that go with it) or trimmed at one edge. */
@@ -186,6 +197,16 @@ interface ClipDrag {
   anchorTrack: SeqTrack;
   /** The clips that move or trim together. */
   ids: string[];
+  /** The same, for lookups while dragging. */
+  idSet: Set<string>;
+  /** Where the earliest of them starts: a move stops at the timeline's start. */
+  earliestUs: number;
+  /** Clip edges to snap to, the dragged clips' own left out; worked out when the drag starts. */
+  snapEdges: number[];
+  /** Where the rows are, and when that was read (it is read again now and then, in case
+   * the timeline scrolled). */
+  rows: RowBox[];
+  rowsAt: number;
   /** Pointer time minus the anchor's edge (or start, when moving) at the press. */
   grabUs: number;
   /** Moving: how far; trimming: where the edge goes. */
@@ -413,6 +434,14 @@ export const TimelineStudio: React.FC = () => {
   const audioTracks = sequence.tracks.filter((t) => t.kind === "audio");
   const frameUs = Math.round(1e6 / (openedProject?.fps || 30));
   const edges = useMemo(() => sequenceEdges(sequence), [openedProject?.revision, openedProject?.shortView]);
+  // Clips by id with their tracks, and every clip edge: built once per sequence, so drags and
+  // selections do not search the timeline for each clip.
+  const clipIndex = useMemo(() => {
+    const index = new Map<string, { track: SeqTrack; clip: Clip }>();
+    for (const track of sequence.tracks) for (const clip of track.clips) index.set(clip.id, { track, clip });
+    return index;
+  }, [sequence]);
+  const clipEdges = useMemo(() => sequence.tracks.flatMap((t) => t.clips.flatMap((c) => [c.startUs, clipEnd(c)])), [sequence]);
   const previousInfo = useRef(new Map<string, ClipInfo>());
   const clipInfo = useMemo(() => {
     const info = new Map<string, ClipInfo>();
@@ -585,7 +614,7 @@ export const TimelineStudio: React.FC = () => {
     setSelectedClipIds([]);
   };
   const selectedClips = selectedClipIds.flatMap((id) => {
-    const found = findClip(sequence, id);
+    const found = clipIndex.get(id);
     return found ? [found.clip] : [];
   });
   // The selected clips' span: what Cam Focus, Normal view and the Zoom panel act on without a range.
@@ -605,11 +634,7 @@ export const TimelineStudio: React.FC = () => {
   };
 
   // ---- Snapping -----------------------------------------------------------------------------
-  const snapPoints = (ignore: string[] = []) => [
-    nowUs(),
-    0,
-    ...sequence.tracks.flatMap((t) => t.clips.filter((c) => !ignore.includes(c.id)).flatMap((c) => [c.startUs, clipEnd(c)])),
-  ];
+  const snapPoints = (edges: number[] = clipEdges) => [nowUs(), 0].concat(edges);
 
   // ---- Edits --------------------------------------------------------------------------------
   /** S: the selected clips split at the playhead; with none selected, every track. */
@@ -921,6 +946,7 @@ export const TimelineStudio: React.FC = () => {
 
   // ---- Dragging clips: move (along and between tracks) or trim an edge -----------------------
   const dragRef = useRef<ClipDrag | null>(null);
+  const dragFrame = useRef<number | null>(null);
   const [drag, setDrag] = useState<ClipDrag | null>(null);
   const beginClipDrag = (event: React.PointerEvent<HTMLElement>, track: SeqTrack, clip: Clip, mode: ClipDrag["mode"]) => {
     if (event.button !== 0 || editing || !openedProject || track.locked) return;
@@ -935,7 +961,14 @@ export const TimelineStudio: React.FC = () => {
           ? [clip.id]
           : withPartners(sequence, [clip.id]);
     const edge = mode === "end" ? clipEnd(clip) : clip.startUs;
+    const idSet = new Set(ids);
+    const moving = ids.flatMap((id) => clipIndex.get(id)?.clip ?? []);
     dragRef.current = {
+      rows: rowBoxes(),
+      rowsAt: performance.now(),
+      idSet,
+      earliestUs: Math.min(...moving.map((c) => c.startUs)),
+      snapEdges: sequence.tracks.flatMap((t) => t.clips.filter((c) => !idSet.has(c.id)).flatMap((c) => [c.startUs, clipEnd(c)])),
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -961,15 +994,23 @@ export const TimelineStudio: React.FC = () => {
     }
     const pointerUs = clientXToUs(event.clientX);
     if (current.mode === "move") {
-      const moving = current.ids.flatMap((id) => findClip(sequence, id)?.clip ?? []);
-      const earliest = Math.min(...moving.map((c) => c.startUs));
-      const start = snapStart(pointerUs - current.grabUs, current.anchor.durationUs, snapPoints(current.ids), snapUs());
-      current.deltaUs = Math.max(-earliest, start - current.anchor.startUs);
-      current.row = rowAtPoint(event.clientX, event.clientY) ?? current.row;
+      const start = snapStart(pointerUs - current.grabUs, current.anchor.durationUs, snapPoints(current.snapEdges), snapUs());
+      current.deltaUs = Math.max(-current.earliestUs, start - current.anchor.startUs);
+      if (performance.now() - current.rowsAt > 250) {
+        current.rows = rowBoxes();
+        current.rowsAt = performance.now();
+      }
+      current.row = rowAtPoint(current.rows, event.clientX, event.clientY) ?? current.row;
     } else {
-      current.edgeUs = Math.max(0, snapStart(pointerUs - current.grabUs, 0, snapPoints(current.ids), snapUs()));
+      current.edgeUs = Math.max(0, snapStart(pointerUs - current.grabUs, 0, snapPoints(current.snapEdges), snapUs()));
     }
-    setDrag({ ...current });
+    // Pointer events come faster than frames: the timeline redraws once a frame at most.
+    if (dragFrame.current === null) {
+      dragFrame.current = requestAnimationFrame(() => {
+        dragFrame.current = null;
+        if (dragRef.current) setDrag({ ...dragRef.current });
+      });
+    }
   };
   const endClipDrag = (event: React.PointerEvent<HTMLElement>) => {
     const current = dragRef.current;
@@ -1026,7 +1067,7 @@ export const TimelineStudio: React.FC = () => {
       offset = ofKind.length - anchorIndex;
     }
     return drag.ids.flatMap((id) => {
-      const found = findClip(sequence, id);
+      const found = clipIndex.get(id);
       if (!found) return [];
       const own = sequence.tracks.filter((t) => t.kind === found.track.kind);
       const index = own.findIndex((t) => t.id === found.track.id) + (found.track.kind === kind ? offset : 0);
@@ -1036,7 +1077,7 @@ export const TimelineStudio: React.FC = () => {
   })();
   /** The trimmed or extended part while an edge is dragged, on each clip that trims. */
   const trimShade = (clip: Clip) => {
-    if (!drag?.active || drag.mode === "move" || !drag.ids.includes(clip.id)) return null;
+    if (!drag?.active || drag.mode === "move" || !drag.idSet.has(clip.id)) return null;
     const edgeBefore = drag.mode === "start" ? drag.anchor.startUs : clipEnd(drag.anchor);
     const mine = drag.mode === "start" ? clip.startUs : clipEnd(clip);
     if (mine !== edgeBefore) return null;
@@ -1345,7 +1386,7 @@ export const TimelineStudio: React.FC = () => {
         spanUs={spanUs}
         info={clipInfo.get(clip.id) ?? { name: clipName(openedProject, clip), image: false, missing: true, unlinked: false }}
         selected={selected.has(clip.id)}
-        moving={!!(drag?.active && drag.mode === "move" && drag.ids.includes(clip.id))}
+        moving={!!(drag?.active && drag.mode === "move" && drag.idSet.has(clip.id))}
         shade={trimShade(clip)}
         buckets={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
         audioHeight={audioHeight}
@@ -1417,7 +1458,7 @@ export const TimelineStudio: React.FC = () => {
     drag?.active && drag.mode === "move" && magnetic && dragGhosts.some((g) => {
       if (g.row.kind !== "track") return false;
       const track = sequence.tracks.find((t) => t.id === (g.row as { trackId: string }).trackId);
-      return !!track?.clips.some((c) => !drag.ids.includes(c.id) && c.startUs < g.startUs + g.durationUs && g.startUs < clipEnd(c));
+      return !!track?.clips.some((c) => !drag.idSet.has(c.id) && c.startUs < g.startUs + g.durationUs && g.startUs < clipEnd(c));
     })
       ? Math.min(...dragGhosts.map((g) => g.startUs))
       : null;

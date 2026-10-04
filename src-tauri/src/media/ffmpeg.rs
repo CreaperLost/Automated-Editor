@@ -24,6 +24,9 @@ const MAX_OPEN_STREAMS: usize = 8;
 /// A decoder this many frames short of a time reads forward to it; further than that, one is
 /// started there ahead of time (see [`prefetch`]).
 const PREFETCH_MIN_FRAMES: u64 = 6;
+/// Decoders being started ahead at once, at most. Each is an FFmpeg process seeking; more
+/// than this (many tracks with cuts close together) would crowd out the decoders playing.
+const MAX_PENDING_PREFETCH: usize = 4;
 /// Threads each preview decoder uses.
 const PREVIEW_DECODE_THREADS: u32 = 4;
 /// Interactive decoding uses the GPU only for sources bigger than this (in pixels).
@@ -689,8 +692,9 @@ struct FrameStream {
     start_us: u64,
     /// Index of the next frame the pipe will deliver.
     next_index: u64,
-    /// The frame at `next_index - 1`, if any has been read.
-    last: Option<Vec<u8>>,
+    /// The frame at `next_index - 1`, if any has been read. Shared with the frames handed out,
+    /// so handing one out copies nothing.
+    last: Option<crate::media::PixelBuffer>,
     eof: bool,
 }
 
@@ -816,8 +820,11 @@ impl FrameStream {
         let piped = self.frames.recv().unwrap_or(Piped::End { partial: false });
         match piped {
             Piped::Frame(buffer) => {
-                if let Some(spent) = self.last.replace(buffer) {
-                    let _ = self.recycle.try_send(spent);
+                // A buffer nobody holds any more goes back to the reader to fill again.
+                if let Some(spent) = self.last.replace(buffer.into()) {
+                    if spent.is_unique() {
+                        let _ = self.recycle.try_send(spent.into_vec());
+                    }
                 }
                 self.next_index += 1;
                 Ok(true)
@@ -940,7 +947,8 @@ fn take_stream(path: &Path, limit: DecodeLimit, time_us: u64) -> Option<FrameStr
 /// Starts a decoder of `path` at `time_us` in the background, unless an open one already
 /// gets there within a few frames. The playback worker calls it for the clip edges coming
 /// up, so a cut far into a clip plays from a decoder that is already there.
-pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) {
+/// Returns false when it is turned away (too many being started), to be asked again later.
+pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) -> bool {
     {
         let mut cache = DECODERS.lock();
         let ready = cache.streams.iter().any(|s| {
@@ -954,7 +962,10 @@ pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) {
             .iter()
             .any(|(p, l, t)| p == path && *l == limit && *t == time_us);
         if ready || pending {
-            return;
+            return true;
+        }
+        if cache.pending.len() >= MAX_PENDING_PREFETCH {
+            return false;
         }
         cache.pending.push((path.to_path_buf(), limit, time_us));
     }
@@ -984,6 +995,7 @@ pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) {
             .pending
             .retain(|(p, l, t)| !(p == path && *l == limit && *t == time_us));
     }
+    true
 }
 
 /// Decodes the frame shown at `time_us` (relative to the start of the file) as BGRA.

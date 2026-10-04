@@ -459,6 +459,10 @@ fn index_recording(root: &Path) -> Result<RecordingIndex, String> {
         let mut previous_end = 0u64;
         let mut previous_index = 0;
         for i in 0..entries.len() {
+            // A file that is missing plays nothing, so it neither overlaps nor cuts anything.
+            if !entries[i].available {
+                continue;
+            }
             // A long recording is written in rolling segments, and each one starts a moment
             // before the last ends (a frame of video, a few ms of sound). The earlier segment
             // then ends where the next begins, so nothing plays twice. A longer overlap is a
@@ -1102,10 +1106,22 @@ mod tests {
         });
         // 0-1 s, 0.998-2 s (2 ms early, as the recorder writes them), then 1.5-3 s (a
         // half-second conflict).
-        let parts = [(0, 1_000_000), (998_000, 2_000_000), (1_500_000, 3_000_000)];
+        // Then 3-4 s exactly adjacent, a gap, 4.5-5.5 s, a 4 us handover (as the screen's),
+        // and a file that is missing on disk.
+        let parts = [
+            (0, 1_000_000),
+            (998_000, 2_000_000),
+            (1_500_000, 3_000_000),
+            (3_000_000, 4_000_000),
+            (4_500_000, 5_500_000),
+            (5_499_996, 6_500_000),
+            (6_499_000, 7_000_000),
+        ];
         for (n, (start_us, end_us)) in parts.into_iter().enumerate() {
             let relative = format!("media/mic/{:06}.wav", n + 1);
-            std::fs::write(bundle.root_path().join(&relative), &wav).unwrap();
+            if n != 6 {
+                std::fs::write(bundle.root_path().join(&relative), &wav).unwrap();
+            }
             bundle.append_journal(JournalRecord::SegmentCommitted {
                 seq: n as u64,
                 track_id: "mic".into(),
@@ -1119,8 +1135,8 @@ mod tests {
                 host_anchor_us: start_us as i64,
             });
         }
-        bundle.manifest_mut().duration_us = 3_000_000;
-        bundle.manifest_mut().active_duration_us = 3_000_000;
+        bundle.manifest_mut().duration_us = 7_000_000;
+        bundle.manifest_mut().active_duration_us = 7_000_000;
         bundle.save_manifest();
         let (_, tracks, _, diagnostics) = read_recording(bundle.root_path()).unwrap();
         let spans: Vec<_> = tracks[0]
@@ -1133,7 +1149,12 @@ mod tests {
             vec![
                 (0, 998_000, true),
                 (998_000, 2_000_000, false),
-                (1_500_000, 3_000_000, false)
+                (1_500_000, 3_000_000, false),
+                (3_000_000, 4_000_000, true),
+                (4_500_000, 5_499_996, true),
+                (5_499_996, 6_500_000, true),
+                // Missing: not available, and nothing before it is cut short for it.
+                (6_499_000, 7_000_000, false),
             ]
         );
         assert_eq!(

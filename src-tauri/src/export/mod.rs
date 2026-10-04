@@ -764,6 +764,7 @@ impl SceneEvaluator {
                 .into_iter()
                 .filter_map(|clip| Some((clip, clip.local_us(edge - 1)?)))
                 .collect();
+            let mut accepted = true;
             for clip in self.shown(edge).pictures(webcam) {
                 let local = clip.local_us(edge).unwrap_or(clip.in_us);
                 // A short jump on in the file already playing: its decoder reads on to it.
@@ -790,7 +791,7 @@ impl SceneEvaluator {
                             continue;
                         };
                         if let Ok(path) = safe_path(&self.root, &segment.relative_path) {
-                            crate::media::prefetch_video(
+                            accepted &= crate::media::prefetch_video(
                                 &path,
                                 local - segment.start_us,
                                 DecodeLimit {
@@ -801,10 +802,14 @@ impl SceneEvaluator {
                         }
                     }
                     Ok(StreamSource::Video(path)) => {
-                        crate::media::prefetch_video(&path, local, self.decode_limit)
+                        accepted &= crate::media::prefetch_video(&path, local, self.decode_limit)
                     }
                     _ => {}
                 }
+            }
+            // Turned away for now (too many decoders starting): try this edge again later.
+            if !accepted {
+                done.remove(&edge);
             }
         }
     }
@@ -975,6 +980,7 @@ impl SceneEvaluator {
                 }
                 Some(PictureJob::Ready(crate::media_bin::decode_image_cached(
                     &path,
+                    (self.decode_limit.max_width, self.decode_limit.max_height),
                 )?))
             }
         })
@@ -3042,7 +3048,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pattern.mp4");
         let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
-            .args(["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1"])
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=640x360:rate=30",
+                "-t",
+                "1",
+            ])
             .args(["-pix_fmt", "yuv420p", "-c:v", "libx264", "-y"])
             .arg(&path)
             .status()
@@ -3076,7 +3091,10 @@ mod tests {
             .map(|(x, y)| (0..3).map(|c| x[c].abs_diff(y[c]) as u64).sum::<u64>())
             .sum();
         let mean = total as f64 / (640.0 * 360.0 * 3.0);
-        assert!(mean < 3.0, "NV12 differs from BGRA by {mean:.2} levels on average");
+        assert!(
+            mean < 3.0,
+            "NV12 differs from BGRA by {mean:.2} levels on average"
+        );
         // The CPU conversion (for the CPU compositor) agrees with the shader.
         let cpu = nv12.to_bgra();
         let total: u64 = cpu

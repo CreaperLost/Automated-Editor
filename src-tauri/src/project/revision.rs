@@ -194,9 +194,15 @@ impl EditDocument {
 
     /// Whether `zoom` shares timeline time with any other zoom: zooms never overlap.
     pub fn zoom_overlaps(&self, zoom: &ZoomKeyframe) -> bool {
-        let mine = self.zoom_edited(zoom);
+        let clocks = self.zoom_clocks();
+        let edited = |z: &ZoomKeyframe| {
+            clocks(z.media.as_deref())
+                .map(|m| m.source_range_to_edited(z.source_start_us, z.source_end_us))
+                .unwrap_or_default()
+        };
+        let mine = edited(zoom);
         self.zooms.iter().filter(|z| z.id != zoom.id).any(|other| {
-            let theirs = self.zoom_edited(other);
+            let theirs = edited(other);
             mine.iter()
                 .any(|&(a, b)| theirs.iter().any(|&(c, d)| a < d && c < b))
         })
@@ -205,8 +211,28 @@ impl EditDocument {
     /// The zooms with where each lands on the timeline, each on its own clock.
     pub fn zooms_with_ranges(&self) -> Vec<ZoomKeyframe> {
         let mut zooms = self.zooms.clone();
-        crate::zoom::attach_zoom_edited_ranges_with(&mut zooms, &|media| self.zoom_clock(media));
+        let clocks = self.zoom_clocks();
+        crate::zoom::attach_zoom_edited_ranges_with(&mut zooms, &|media| clocks(media));
         zooms
+    }
+
+    /// Zoom clocks by recording, each built once: building one walks the whole sequence,
+    /// and there is a zoom every few seconds.
+    fn zoom_clocks(&self) -> impl Fn(Option<&str>) -> Option<std::rc::Rc<TimelineMapper>> + '_ {
+        let built = std::cell::RefCell::new(std::collections::HashMap::<
+            String,
+            std::rc::Rc<TimelineMapper>,
+        >::new());
+        move |media| {
+            let asset = self.clock_asset(media)?;
+            let mut built = built.borrow_mut();
+            Some(
+                built
+                    .entry(asset.to_string())
+                    .or_insert_with(|| std::rc::Rc::new(self.picture_clock(asset)))
+                    .clone(),
+            )
+        }
     }
 
     pub fn attach_zoom_ranges(&mut self) {
