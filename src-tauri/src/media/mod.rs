@@ -345,6 +345,14 @@ pub fn decode_h264_frame_limited(
     }
 }
 
+/// Starts decoding `path` at `time_us` ahead of need, where the backend keeps decoders open
+/// (FFmpeg): a cut coming up then plays without waiting for one.
+pub fn prefetch_video(path: &Path, time_us: u64, limit: ffmpeg::DecodeLimit) {
+    if media_backend() == MediaBackend::Ffmpeg {
+        ffmpeg::prefetch(path, time_us, limit);
+    }
+}
+
 /// Container duration of a media file.
 pub fn media_duration_us(path: &Path) -> Result<u64, String> {
     match media_backend() {

@@ -189,22 +189,9 @@ pub fn query_waveform(
     })
 }
 
+/// The source ranges playing over `[start_us, end_us)` of the clock, gaps left out.
 fn edited_range_to_source(mapper: &TimelineMapper, start_us: u64, end_us: u64) -> Vec<(u64, u64)> {
-    let mut ranges = Vec::new();
-    let mut edited_cursor = 0u64;
-    for interval in mapper.intervals() {
-        let duration = interval.duration_us();
-        let interval_end = edited_cursor + duration;
-        let a = start_us.max(edited_cursor);
-        let b = end_us.min(interval_end);
-        if a < b {
-            let source_a = interval.start_us + (a - edited_cursor);
-            let source_b = interval.start_us + (b - edited_cursor);
-            ranges.push((source_a, source_b));
-        }
-        edited_cursor = interval_end;
-    }
-    ranges
+    mapper.edited_range_to_source(start_us, end_us)
 }
 
 fn lookup_source_range(
@@ -397,7 +384,40 @@ fn cache_path(
     safe_path(root, &relative)
 }
 
+/// A hash of the whole file, so a cache entry is used only for the bytes it was built from.
+/// Remembered while the file's size and modification time stay the same: a cached waveform of
+/// a long recording then loads without reading the recording again.
 fn wav_fingerprint(
+    path: &Path,
+    info: &WavInfo,
+    file_len: u64,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<u64, String> {
+    use std::sync::{Mutex, OnceLock};
+    type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    static KNOWN: OnceLock<Mutex<std::collections::HashMap<Key, u64>>> = OnceLock::new();
+    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let key: Key = (path.to_path_buf(), file_len, modified);
+    let known = KNOWN.get_or_init(Default::default);
+    if let Some(hash) = known.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(*hash);
+    }
+    let hash = hash_wav(path, info, file_len, cancelled)?;
+    // A file written within the last moments may still change at the same size and time.
+    let settled = modified
+        .and_then(|m| m.elapsed().ok())
+        .is_some_and(|age| age > std::time::Duration::from_secs(2));
+    if settled {
+        let mut known = known.lock().unwrap_or_else(|e| e.into_inner());
+        if known.len() >= 256 {
+            known.clear();
+        }
+        known.insert(key, hash);
+    }
+    Ok(hash)
+}
+
+fn hash_wav(
     path: &Path,
     _info: &WavInfo,
     file_len: u64,

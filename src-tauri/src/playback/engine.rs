@@ -18,9 +18,12 @@ use tauri::Manager;
 /// Audio queued ahead of the play position, in mixer chunks. The cpal queue (Windows) can
 /// take a deep lead, so a slow preview frame does not starve the audio clock.
 const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
+/// While playing, decoders start this far ahead of the clip edges coming up.
+const PREFETCH_US: u64 = 1_200_000;
 
+/// The scene and mixer for what plays. Kept across seeks; rebuilt when an edit changes it.
 struct Runtime {
-    generation: u64,
+    content: u64,
     /// Built for the webview preview, which copies frames through JPEG.
     webview: bool,
     quality: PreviewQuality,
@@ -174,10 +177,9 @@ fn tick(
         .preview_quality
         .lock()
         .unwrap_or_else(|| PreviewQuality::default_for(webview));
-    if runtime
-        .as_ref()
-        .map(|r| (r.generation, r.webview, r.quality))
-        != Some((generation, webview, quality))
+    let content = state.playback.lock().content_generation();
+    if runtime.as_ref().map(|r| (r.content, r.webview, r.quality))
+        != Some((content, webview, quality))
     {
         let rebuild_started = std::time::Instant::now();
         let (root, document) = {
@@ -209,7 +211,7 @@ fn tick(
             .map_err(error)?
             .with_decode_limit(quality.decode_limit((width, height), webview));
         *runtime = Some(Runtime {
-            generation,
+            content,
             webview,
             quality,
             evaluator,
@@ -217,9 +219,12 @@ fn tick(
             _lease: lease,
         });
         *last_frame = None;
-        crate::media::profile("rebuild after seek", rebuild_started);
+        crate::media::profile("rebuild after edit", rebuild_started);
     }
     let runtime = runtime.as_mut().unwrap();
+    if status.state == PlaybackState::Playing && !runtime.mixer.has_audio() {
+        state.playback.lock().run_without_audio(generation);
+    }
     if status.state == PlaybackState::Playing && runtime.mixer.has_audio() {
         let initialize = {
             let owner = state.playback.lock();
@@ -317,6 +322,9 @@ fn tick(
         return Ok(playing);
     }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
+    if status.state == PlaybackState::Playing {
+        runtime.evaluator.prefetch(render_us, PREFETCH_US);
+    }
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.
         encoder

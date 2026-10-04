@@ -226,8 +226,9 @@ pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
     gain: f64,
     limit: bool,
-    /// Noise reduction for speech files, by relative path.
-    denoisers: HashMap<String, Arc<Denoiser>>,
+    /// Noise reduction by lane and file (relative path): each audio track has its own
+    /// setting, even where two play the same sound.
+    denoisers: HashMap<(String, String), Arc<Denoiser>>,
     /// Gain per 10 ms of timeline time for each ducked lane, under speech on any speech lane.
     lane_ducks: HashMap<String, Arc<Vec<f32>>>,
 }
@@ -260,14 +261,12 @@ impl PolishPlan {
                 .flat_map(|c| c.segments.iter())
                 .filter(|s| s.available)
             {
-                if denoisers.contains_key(&segment.relative_path) {
+                let key = (lane.id.clone(), segment.relative_path.clone());
+                if denoisers.contains_key(&key) {
                     continue;
                 }
                 if let Some(profile) = analyze(segment).and_then(|a| a.noise.clone()) {
-                    denoisers.insert(
-                        segment.relative_path.clone(),
-                        Arc::new(Denoiser::new(&profile, db)),
-                    );
+                    denoisers.insert(key, Arc::new(Denoiser::new(&profile, db)));
                 }
             }
         }
@@ -355,8 +354,11 @@ impl PolishPlan {
         a + (b - a) * t
     }
 
-    pub fn denoiser(&self, relative_path: &str) -> Option<&Denoiser> {
-        self.denoisers.get(relative_path).map(|d| d.as_ref())
+    /// The noise reduction for `relative_path` played on lane `lane`, if that lane has it on.
+    pub fn denoiser(&self, lane: &str, relative_path: &str) -> Option<&Denoiser> {
+        self.denoisers
+            .get(&(lane.to_string(), relative_path.to_string()))
+            .map(|d| d.as_ref())
     }
 
     /// Applies normalization gain and, when normalizing, a soft limiter above -1 dBFS.

@@ -18,8 +18,16 @@ use std::sync::{mpsc, OnceLock};
 pub const FFMPEG_ENV: &str = "AEROEDITS_FFMPEG";
 /// Overrides the ffprobe binary location.
 pub const FFPROBE_ENV: &str = "AEROEDITS_FFPROBE";
-/// Decoded streams kept open between calls so sequential reads stay on one process.
-const MAX_OPEN_STREAMS: usize = 4;
+/// Decoded streams kept open between calls so sequential reads stay on one process. Enough
+/// for the screen, the camera and a few overlays, plus the decoders started ahead of cuts.
+const MAX_OPEN_STREAMS: usize = 8;
+/// A decoder this many frames short of a time reads forward to it; further than that, one is
+/// started there ahead of time (see [`prefetch`]).
+const PREFETCH_MIN_FRAMES: u64 = 6;
+/// Threads each preview decoder uses.
+const PREVIEW_DECODE_THREADS: u32 = 4;
+/// Interactive decoding uses the GPU only for sources bigger than this (in pixels).
+const SOFTWARE_PREVIEW_MAX_PIXELS: u64 = 2560 * 1600;
 /// A request this far past the stream position is read forward instead of re-seeking.
 const MAX_FORWARD_READ_US: u64 = 2_000_000;
 /// Decode rate used when the source does not report a usable frame rate.
@@ -387,6 +395,8 @@ pub struct DecodeLimit {
     pub max_width: u32,
     pub max_height: u32,
     pub max_rate: u32,
+    /// For the preview, where seeks and cuts wait on a new decoder: see [`hwaccel_for_stream`].
+    pub interactive: bool,
 }
 
 impl DecodeLimit {
@@ -394,6 +404,7 @@ impl DecodeLimit {
         max_width: 0,
         max_height: 0,
         max_rate: 0,
+        interactive: false,
     };
 
     /// Output size and rate for a source, keeping its aspect ratio.
@@ -435,6 +446,19 @@ const HWACCEL_CANDIDATES: &[&str] = &[];
 /// Set once a GPU decode fails at runtime; software decoding is used from then on.
 static HWACCEL_BROKEN: AtomicBool = AtomicBool::new(false);
 static HWACCEL_CHOSEN: OnceLock<Option<&'static str>> = OnceLock::new();
+
+/// The GPU decode API for a decoder of `path` at `limit`. On Windows the preview decodes in
+/// software: starting a D3D11/CUDA decoder costs about 300 ms more than a software one, and
+/// every seek and every cut far into a clip starts one; at preview sizes the CPU also decodes
+/// faster. Sources larger than 1600p still use the GPU, as does anything when it is forced.
+fn hwaccel_for_stream(path: &Path, info: &VideoInfo, limit: DecodeLimit) -> Option<&'static str> {
+    let forced = env::var(HWACCEL_ENV).is_ok_and(|v| !v.trim().is_empty());
+    let pixels = info.width as u64 * info.height as u64;
+    if cfg!(windows) && limit.interactive && !forced && pixels <= SOFTWARE_PREVIEW_MAX_PIXELS {
+        return None;
+    }
+    hwaccel_for(path)
+}
 
 /// The GPU decode API to use, probed once per machine against `sample` (any source video).
 fn hwaccel_for(sample: &Path) -> Option<&'static str> {
@@ -675,6 +699,12 @@ impl FrameStream {
             // Frames come back to system memory, so the filters below work unchanged.
             cmd.args(["-hwaccel", api]);
         }
+        if limit.interactive {
+            // Several decoders run at once while previewing (the clip playing and those started
+            // ahead of cuts). Four threads decode as fast as all of them here, and leave the
+            // other cores to the decoders already playing.
+            cmd.args(["-threads", &PREVIEW_DECODE_THREADS.to_string()]);
+        }
         cmd.args(["-ss", &seconds_arg(start_us)])
             .arg("-i")
             .arg(file_arg(path))
@@ -746,6 +776,14 @@ impl FrameStream {
                 .saturating_add(MAX_FORWARD_READ_US)
     }
 
+    /// Frames to read before `time_us` (which it can serve) is on screen.
+    fn frames_to(&self, time_us: u64) -> u64 {
+        if self.eof {
+            return 0;
+        }
+        (self.index_at(time_us) + 1).saturating_sub(self.next_index)
+    }
+
     fn read_next(&mut self) -> Result<bool, String> {
         if self.eof {
             return Ok(false);
@@ -811,11 +849,14 @@ struct DecoderCache {
     info: Vec<(PathBuf, VideoInfo)>,
     /// Most recently used first.
     streams: Vec<FrameStream>,
+    /// Decoders being started ahead of time: file, limit and start.
+    pending: Vec<(PathBuf, DecodeLimit, u64)>,
 }
 
 static DECODERS: Mutex<DecoderCache> = Mutex::new(DecoderCache {
     info: Vec::new(),
     streams: Vec::new(),
+    pending: Vec::new(),
 });
 
 fn cached_info(path: &Path) -> Result<VideoInfo, String> {
@@ -831,6 +872,91 @@ fn cached_info(path: &Path) -> Result<VideoInfo, String> {
     Ok(info)
 }
 
+/// Keeps `stream` as the most recently used. Returns the streams that no longer fit, to be
+/// stopped with [`stop_streams`] once the lock is released.
+fn keep_stream(cache: &mut DecoderCache, stream: FrameStream) -> Vec<FrameStream> {
+    cache.streams.insert(0, stream);
+    if cache.streams.len() > MAX_OPEN_STREAMS {
+        cache.streams.split_off(MAX_OPEN_STREAMS)
+    } else {
+        Vec::new()
+    }
+}
+
+/// Stops decoders on a thread of their own: waiting for a killed FFmpeg to exit takes long
+/// enough on Windows to hold up the frame being drawn.
+fn stop_streams(streams: Vec<FrameStream>) {
+    if streams.is_empty() {
+        return;
+    }
+    // Without a thread to spare, the closure and its streams are dropped right here.
+    let _ = std::thread::Builder::new()
+        .name("aeroedits-decoder-stop".into())
+        .spawn(move || drop(streams));
+}
+
+/// The open decoder of `path` that reaches `time_us` with the least reading, taken out.
+fn take_stream(path: &Path, limit: DecodeLimit, time_us: u64) -> Option<FrameStream> {
+    let mut cache = DECODERS.lock();
+    let best = cache
+        .streams
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.path == path && s.limit == limit && s.can_serve(time_us))
+        .min_by_key(|(_, s)| s.frames_to(time_us))
+        .map(|(index, _)| index)?;
+    Some(cache.streams.remove(best))
+}
+
+/// Starts a decoder of `path` at `time_us` in the background, unless an open one already
+/// gets there within a few frames. The playback worker calls it for the clip edges coming
+/// up, so a cut far into a clip plays from a decoder that is already there.
+pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) {
+    {
+        let mut cache = DECODERS.lock();
+        let ready = cache.streams.iter().any(|s| {
+            s.path == path
+                && s.limit == limit
+                && s.can_serve(time_us)
+                && s.frames_to(time_us) <= PREFETCH_MIN_FRAMES
+        });
+        let pending = cache
+            .pending
+            .iter()
+            .any(|(p, l, t)| p == path && *l == limit && *t == time_us);
+        if ready || pending {
+            return;
+        }
+        cache.pending.push((path.to_path_buf(), limit, time_us));
+    }
+    let owned = path.to_path_buf();
+    let started = std::thread::Builder::new()
+        .name("aeroedits-prefetch".into())
+        .spawn(move || {
+            let opened = cached_info(&owned).and_then(|info| {
+                let hwaccel = hwaccel_for_stream(&owned, &info, limit);
+                FrameStream::open(&owned, &info, limit, time_us, hwaccel)
+            });
+            let evicted = {
+                let mut cache = DECODERS.lock();
+                cache
+                    .pending
+                    .retain(|(p, l, t)| !(p == &owned && *l == limit && *t == time_us));
+                match opened {
+                    Ok(stream) => keep_stream(&mut cache, stream),
+                    Err(_) => Vec::new(),
+                }
+            };
+            stop_streams(evicted);
+        });
+    if started.is_err() {
+        DECODERS
+            .lock()
+            .pending
+            .retain(|(p, l, t)| !(p == path && *l == limit && *t == time_us));
+    }
+}
+
 /// Decodes the frame shown at `time_us` (relative to the start of the file) as BGRA.
 pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
     decode_bgra_limited(path, time_us, DecodeLimit::NONE)
@@ -842,23 +968,21 @@ pub fn decode_bgra_limited(
     time_us: u64,
     limit: DecodeLimit,
 ) -> Result<VideoFrame, String> {
-    let taken = {
-        let mut cache = DECODERS.lock();
-        cache
-            .streams
-            .iter()
-            .position(|s| s.path == path && s.limit == limit && s.can_serve(time_us))
-            .map(|index| cache.streams.remove(index))
-    };
-    let (mut stream, mut frame) = match taken {
-        Some(mut stream) => {
-            let frame = stream.frame_at(time_us);
-            (stream, frame)
+    let mut reused = None;
+    if let Some(mut stream) = take_stream(path, limit, time_us) {
+        let frame = stream.frame_at(time_us);
+        // A decoder started ahead that failed before its first frame (a GPU that does not
+        // work, say) is replaced below by a fresh one, which can fall back to software.
+        if frame.is_ok() || stream.next_index > 0 || !stream.failed {
+            reused = Some((stream, frame));
         }
+    }
+    let (mut stream, mut frame) = match reused {
+        Some(found) => found,
         None => {
             let started = std::time::Instant::now();
             let info = cached_info(path)?;
-            let hwaccel = hwaccel_for(path);
+            let hwaccel = hwaccel_for_stream(path, &info, limit);
             let mut stream = FrameStream::open(path, &info, limit, time_us, hwaccel)?;
             let mut frame = stream.frame_at(time_us);
             if let (Err(error), Some(api)) = (&frame, stream.hwaccel) {
@@ -869,7 +993,13 @@ pub fn decode_bgra_limited(
                     frame = stream.frame_at(time_us);
                 }
             }
-            super::profile("decoder seek (new FFmpeg process)", started);
+            super::profile(
+                &format!(
+                    "decoder seek (new FFmpeg process) {} at {time_us}",
+                    path.display()
+                ),
+                started,
+            );
             (stream, frame)
         }
     };
@@ -882,14 +1012,13 @@ pub fn decode_bgra_limited(
             &info,
             limit,
             tail_start.min(time_us),
-            hwaccel_for(path),
+            hwaccel_for_stream(path, &info, limit),
         )?;
         frame = stream.frame_at(time_us);
     }
     if frame.is_ok() {
-        let mut cache = DECODERS.lock();
-        cache.streams.insert(0, stream);
-        cache.streams.truncate(MAX_OPEN_STREAMS);
+        let evicted = keep_stream(&mut DECODERS.lock(), stream);
+        stop_streams(evicted);
     }
     frame
 }
@@ -1570,6 +1699,7 @@ mod tests {
             max_width: 1280,
             max_height: 1280,
             max_rate: 30,
+            interactive: false,
         };
         assert_eq!(
             limit.apply(&source),
@@ -1600,6 +1730,7 @@ mod tests {
             max_width: 32,
             max_height: 32,
             max_rate: 10,
+            interactive: true,
         };
         let frame = decode_bgra_limited(&path, 250_000, limit).unwrap();
         assert_eq!((frame.width, frame.height), (32, 16));

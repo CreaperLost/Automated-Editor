@@ -65,11 +65,17 @@ struct Span {
 
 pub struct AudioMixer {
     root: PathBuf,
-    /// Every audible clip, by where it starts.
-    spans: Vec<Span>,
+    /// Every audible clip, by lane, each lane's by where they start. Clips on one lane never
+    /// overlap, so a chunk finds the few it needs by binary search.
+    lanes: Vec<Vec<Span>>,
     polish: Option<PolishPlan>,
+    /// Open sound files, so sequential chunks do not open and parse them again.
+    readers: std::sync::Mutex<Vec<(PathBuf, PcmReader)>>,
     pub total_frames: u64,
 }
+
+/// Sound files a mixer keeps open.
+const MAX_OPEN_READERS: usize = 16;
 
 /// One audio track as the mixer plays it.
 pub struct Lane {
@@ -140,8 +146,9 @@ impl AudioMixer {
         let duration = document.duration_us();
         let lanes = lanes(root, document);
         let polish = PolishPlan::build(root, &document.audio, &lanes, duration);
-        let mut spans = Vec::new();
+        let mut by_lane = Vec::new();
         for lane in &lanes {
+            let mut spans = Vec::new();
             for (i, clip) in lane.clips.iter().enumerate() {
                 // Sound fades in and out where a clip cuts into it, not where it starts or ends
                 // anyway, nor where it carries straight on into the next clip on the lane.
@@ -163,19 +170,42 @@ impl AudioMixer {
                     segments: clip.segments.clone(),
                 });
             }
+            spans.sort_by_key(|s| s.edited_start);
+            by_lane.push(spans);
         }
-        spans.sort_by_key(|s| s.edited_start);
         Ok(Self {
             root: root.into(),
-            spans,
+            lanes: by_lane,
             polish,
+            readers: std::sync::Mutex::new(Vec::new()),
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
         })
     }
     pub fn has_audio(&self) -> bool {
-        self.spans
+        self.lanes
             .iter()
+            .flatten()
             .any(|s| s.segments.iter().any(|segment| segment.available))
+    }
+
+    /// Runs `read` on an open reader of `path`, opening it once.
+    fn with_reader<T>(
+        &self,
+        path: &Path,
+        read: impl FnOnce(&mut PcmReader) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut readers = self.readers.lock().unwrap_or_else(|e| e.into_inner());
+        let index = match readers.iter().position(|(p, _)| p == path) {
+            Some(index) => index,
+            None => {
+                if readers.len() >= MAX_OPEN_READERS {
+                    readers.remove(0);
+                }
+                readers.push((path.to_path_buf(), PcmReader::open(path)?));
+                readers.len() - 1
+            }
+        };
+        read(&mut readers[index].1)
     }
     pub fn read_frames(&self, start: u64, count: usize) -> Result<Vec<i16>, String> {
         if count > CHUNK_FRAMES {
@@ -184,14 +214,14 @@ impl AudioMixer {
         let count = count.min(self.total_frames.saturating_sub(start) as usize);
         let end = start + count as u64;
         let mut out = vec![0f64; count * 2];
-        let last = self
-            .spans
-            .partition_point(|s| ceil_frame(s.edited_start) < end);
-        for span in self.spans[..last]
-            .iter()
-            .filter(|s| ceil_frame(s.edited_end) > start)
-        {
-            self.mix_span(span, start, end, &mut out)?;
+        for spans in &self.lanes {
+            let first = spans.partition_point(|s| ceil_frame(s.edited_end) <= start);
+            for span in spans[first..]
+                .iter()
+                .take_while(|s| ceil_frame(s.edited_start) < end)
+            {
+                self.mix_span(span, start, end, &mut out)?;
+            }
         }
         Ok(out
             .into_iter()
@@ -238,9 +268,9 @@ impl AudioMixer {
                         continue;
                     }
                     let path = safe_path(&self.root, &segment.relative_path)?;
-                    let mut reader = PcmReader::open(&path)
+                    let info = self
+                        .with_reader(&path, |reader| Ok(reader.info().clone()))
                         .map_err(|e| format!("{}: {}", segment.relative_path, e))?;
-                    let info = reader.info().clone();
                     let rate = info.sample_rate as f64;
                     let local = |frame: u64| {
                         ((frame as f64 / SAMPLE_RATE as f64 * 1e6 - span.edited_start as f64
@@ -261,21 +291,22 @@ impl AudioMixer {
                     let denoiser = self
                         .polish
                         .as_ref()
-                        .and_then(|plan| plan.denoiser(&segment.relative_path));
+                        .and_then(|plan| plan.denoiser(&span.lane, &segment.relative_path));
                     let (samples, got) = match denoiser {
                         Some(denoiser) => {
                             let (from, to) = denoiser.input_range(read_start, read_end);
-                            let input = read_padded(&mut reader, from, to)?;
+                            let input =
+                                self.with_reader(&path, |reader| read_padded(reader, from, to))?;
                             let samples = denoiser.process(&input, channels, read_start, read_end);
                             (samples, (read_end - read_start) as usize)
                         }
-                        None => {
+                        None => self.with_reader(&path, |reader| {
                             reader.seek_to_frame(read_start)?;
                             let want = (read_end - read_start) as usize;
                             let mut samples = vec![0f32; want * channels];
                             let got = reader.read_frames(&mut samples, want)?;
-                            (samples, got)
-                        }
+                            Ok((samples, got))
+                        })?,
                     };
                     if got == 0 {
                         continue;
@@ -463,6 +494,54 @@ mod tests {
 
     fn fixture(rate: u32, channels: u16, values: Vec<i16>) -> (tempfile::TempDir, EditDocument) {
         files(vec![("mic", Role::Mic, rate, channels, values)])
+    }
+
+    #[test]
+    fn noise_reduction_is_each_tracks_own_where_two_play_one_sound() {
+        // A second of faint hiss, then a tone over it: enough quiet for a noise profile.
+        let rate = 48_000u32;
+        let mut state = 1u64;
+        let values: Vec<i16> = (0..rate * 2)
+            .map(|i| {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let hiss = ((state >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 300.0;
+                let tone = if i >= rate {
+                    8000.0 * (std::f32::consts::TAU * 220.0 * i as f32 / rate as f32).sin()
+                } else {
+                    0.0
+                };
+                (hiss + tone) as i16
+            })
+            .collect();
+        let (dir, mut doc) = fixture(rate, 1, values);
+        doc.sequence = crate::sequence::edit::apply(
+            &doc.sequence,
+            &doc.assets,
+            &SequenceEdit::PlaceAsset {
+                asset_id: "mic".into(),
+                at_us: 0,
+                track_id: None,
+                streams: vec![],
+                range: None,
+            },
+        )
+        .unwrap()
+        .0;
+        let (a1, a2) = (lane(&doc, 0), lane(&doc, 1));
+        doc.audio.tracks.insert(
+            a1.clone(),
+            TrackMix {
+                denoise_db: Some(18.0),
+                ..Default::default()
+            },
+        );
+        let lanes = lanes(dir.path(), &doc);
+        let plan = PolishPlan::build(dir.path(), &doc.audio, &lanes, doc.duration_us()).unwrap();
+        assert!(plan.denoiser(&a1, "assets/media/mic.wav").is_some());
+        assert!(
+            plan.denoiser(&a2, "assets/media/mic.wav").is_none(),
+            "A2 has it off"
+        );
     }
 
     /// The id of audio track `n` (0 is A1).

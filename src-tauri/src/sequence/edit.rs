@@ -155,7 +155,22 @@ pub fn apply(
     assets: &[Asset],
     edit: &SequenceEdit,
 ) -> Result<(Sequence, EditOutcome), String> {
+    apply_reserving(sequence, assets, edit, std::iter::empty())
+}
+
+/// [`apply`], numbering new tracks past every id in `taken` as well. A track's id names its
+/// mix settings, so a new track must not take the id of one deleted (still in the settings)
+/// or of a track in another sequence of the document (a short's).
+pub fn apply_reserving<'t>(
+    sequence: &Sequence,
+    assets: &[Asset],
+    edit: &SequenceEdit,
+    taken: impl IntoIterator<Item = &'t str>,
+) -> Result<(Sequence, EditOutcome), String> {
     let mut editor = Editor::new(sequence.clone(), assets);
+    for id in taken {
+        editor.next_track = editor.next_track.max(number_after('t', id) + 1);
+    }
     let outcome = editor.apply(edit)?;
     let mut next = editor.seq;
     tidy(&mut next);
@@ -210,6 +225,9 @@ fn tidy(sequence: &mut Sequence) {
         }
     }
 }
+
+/// The links given to right pieces while splitting: by old link and where it was split.
+type SplitLinks = HashMap<(String, u64), String>;
 
 struct Editor<'a> {
     seq: Sequence,
@@ -342,7 +360,7 @@ impl<'a> Editor<'a> {
 
     /// Splits the clip on track `t` that spans `at`. The right piece gets a new id, and a link
     /// of its own shared with the right pieces of its partners (through `links`).
-    fn split_track(&mut self, t: usize, at: u64, links: &mut HashMap<String, String>) -> bool {
+    fn split_track(&mut self, t: usize, at: u64, links: &mut SplitLinks) -> bool {
         let Some(index) = self.seq.tracks[t]
             .clips
             .iter()
@@ -353,12 +371,14 @@ impl<'a> Editor<'a> {
         let clip = self.seq.tracks[t].clips[index].clone();
         let mut right = self.right_piece(&clip, at);
         right.id = self.clip_id();
+        // Partners split at the same point share the right pieces' new link; a split elsewhere
+        // (another cut of the same edit) gets one of its own.
         right.link = match &clip.link {
-            Some(link) => Some(match links.get(link) {
+            Some(link) => Some(match links.get(&(link.clone(), at)) {
                 Some(new) => new.clone(),
                 None => {
                     let new = self.link_id();
-                    links.insert(link.clone(), new.clone());
+                    links.insert((link.clone(), at), new.clone());
                     new
                 }
             }),
@@ -370,7 +390,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Empties `[a, b)` on track `t`: clips across it lose that part, slivers go.
-    fn clear(&mut self, t: usize, a: u64, b: u64, links: &mut HashMap<String, String>) {
+    fn clear(&mut self, t: usize, a: u64, b: u64, links: &mut SplitLinks) {
         self.split_track(t, a, links);
         self.split_track(t, b, links);
         self.seq.tracks[t].clips.retain(|c| {
@@ -390,7 +410,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Opens `len` of empty time at `at` on every unlocked track.
-    fn insert_time(&mut self, at: u64, len: u64, links: &mut HashMap<String, String>) {
+    fn insert_time(&mut self, at: u64, len: u64, links: &mut SplitLinks) {
         for t in self.unlocked() {
             self.split_track(t, at, links);
             self.shift(t, at, len as i64);
@@ -398,7 +418,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Cuts `[a, b)` out of every unlocked track and closes it up.
-    fn ripple_delete(&mut self, a: u64, b: u64, links: &mut HashMap<String, String>) {
+    fn ripple_delete(&mut self, a: u64, b: u64, links: &mut SplitLinks) {
         for t in self.unlocked() {
             self.clear(t, a, b, links);
             self.shift(t, b, -((b - a) as i64));
@@ -430,6 +450,9 @@ impl<'a> Editor<'a> {
             SequenceEdit::AddTrack { track_kind } => self.add_track(*track_kind).map(|_| ()),
             SequenceEdit::RemoveTrack { track_id } => {
                 let t = self.track_index(track_id)?;
+                if self.seq.tracks[t].locked {
+                    return Err("Unlock the track to remove it".into());
+                }
                 self.seq.tracks.remove(t);
                 Ok(())
             }
@@ -553,7 +576,10 @@ impl<'a> Editor<'a> {
                     return Err("Choose two or more clips to link".into());
                 }
                 for id in &ids {
-                    self.find(id)?;
+                    let (t, _) = self.find(id)?;
+                    if self.seq.tracks[t].locked {
+                        return Err("That track is locked".into());
+                    }
                 }
                 let link = self.link_id();
                 for track in &mut self.seq.tracks {
@@ -569,6 +595,9 @@ impl<'a> Editor<'a> {
                 let mut links = BTreeSet::new();
                 for id in clip_ids {
                     let (t, c) = self.find(id)?;
+                    if self.seq.tracks[t].locked {
+                        return Err("That track is locked".into());
+                    }
                     if let Some(link) = &self.seq.tracks[t].clips[c].link {
                         links.insert(link.clone());
                     }
@@ -576,7 +605,8 @@ impl<'a> Editor<'a> {
                 if links.is_empty() {
                     return Err("Those clips are not linked".into());
                 }
-                for track in &mut self.seq.tracks {
+                // Partners on locked tracks keep theirs (it goes once nothing shares it).
+                for track in self.seq.tracks.iter_mut().filter(|t| !t.locked) {
                     for clip in &mut track.clips {
                         if clip.link.as_ref().is_some_and(|l| links.contains(l)) {
                             clip.link = None;
@@ -591,6 +621,9 @@ impl<'a> Editor<'a> {
             }
             SequenceEdit::SetClip { clip_id, fit } => {
                 let (t, c) = self.find(clip_id)?;
+                if self.seq.tracks[t].locked {
+                    return Err("That track is locked".into());
+                }
                 self.seq.tracks[t].clips[c].fit = *fit;
                 Ok(())
             }
@@ -1735,6 +1768,94 @@ mod tests {
         assert_eq!(cut.tracks[0].clips.len(), 2);
         assert_eq!(cut.number(&cut.tracks[3].id).unwrap(), "A2");
         assert_eq!(cut.tracks[3].name, "Music");
+    }
+
+    #[test]
+    fn several_cuts_link_each_piece_only_with_its_partners() {
+        let (assets, seq) = rec_project();
+        let seq = run(&seq, &assets, cut(&[(2 * S, 3 * S), (6 * S, 7 * S)]));
+        // Every track: 0-2, 3-6 and 7-10 of the source, three linked sets across the tracks.
+        for track in &seq.tracks {
+            let ins: Vec<_> = track.clips.iter().map(|c| c.in_us).collect();
+            assert_eq!(ins, vec![0, 3 * S, 7 * S]);
+        }
+        for piece in 0..3 {
+            let links: BTreeSet<_> = seq
+                .tracks
+                .iter()
+                .map(|t| t.clips[piece].link.clone())
+                .collect();
+            assert_eq!(links.len(), 1, "piece {piece} is one set");
+        }
+        let sets: BTreeSet<_> = seq.tracks[0].clips.iter().map(|c| c.link.clone()).collect();
+        assert_eq!(sets.len(), 3, "the pieces are separate sets");
+    }
+
+    #[test]
+    fn locked_clips_keep_their_fit_links_and_track() {
+        let (assets, seq) = rec_project();
+        let mut locked = seq.clone();
+        locked.tracks[1].locked = true;
+        let camera = locked.tracks[1].clips[0].id.clone();
+        let screen = locked.tracks[0].clips[0].id.clone();
+        let refused = |edit: SequenceEdit| apply(&locked, &assets, &edit).unwrap_err();
+        assert_eq!(
+            refused(SequenceEdit::SetClip {
+                clip_id: camera.clone(),
+                fit: Fit::Cover
+            }),
+            "That track is locked"
+        );
+        assert_eq!(
+            refused(SequenceEdit::Unlink {
+                clip_ids: vec![camera.clone()]
+            }),
+            "That track is locked"
+        );
+        assert_eq!(
+            refused(SequenceEdit::Link {
+                clip_ids: vec![camera, screen.clone()]
+            }),
+            "That track is locked"
+        );
+        assert_eq!(
+            refused(SequenceEdit::RemoveTrack {
+                track_id: locked.tracks[1].id.clone()
+            }),
+            "Unlock the track to remove it"
+        );
+        // Unlinking the others leaves the locked camera's link alone until nothing shares it.
+        let unlinked = run(
+            &locked,
+            &assets,
+            SequenceEdit::Unlink {
+                clip_ids: vec![screen],
+            },
+        );
+        assert_eq!(unlinked.tracks[0].clips[0].link, None);
+        assert_eq!(unlinked.tracks[1].clips[0].link, None, "alone, so it goes");
+    }
+
+    #[test]
+    fn new_tracks_take_ids_no_other_track_had() {
+        let (assets, seq) = rec_project();
+        let last = seq.tracks.last().unwrap().id.clone();
+        let removed = run(
+            &seq,
+            &assets,
+            SequenceEdit::RemoveTrack {
+                track_id: last.clone(),
+            },
+        );
+        let add = SequenceEdit::AddTrack {
+            track_kind: TrackKind::Audio,
+        };
+        // Without anything to avoid, the number comes back...
+        let (again, _) = apply(&removed, &assets, &add).unwrap();
+        assert_eq!(again.tracks.last().unwrap().id, last);
+        // ...so callers pass the ids the document still knows (mix settings, shorts).
+        let (fresh, _) = apply_reserving(&removed, &assets, &add, [last.as_str(), "t9"]).unwrap();
+        assert_eq!(fresh.tracks.last().unwrap().id, "t10");
     }
 
     #[test]

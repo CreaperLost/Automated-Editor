@@ -9,6 +9,7 @@ pub mod fixtures;
 pub mod media;
 pub mod media_bin;
 mod parity;
+mod perf;
 pub mod playback;
 pub mod project;
 pub mod render;

@@ -9,8 +9,10 @@ use std::path::Path;
 use wgpu::util::DeviceExt;
 
 pub const COPIES_COMPOSITE: u32 = 2;
-/// Background, screen, webcam border, webcam and captions.
-pub const MAX_LAYERS: usize = 5;
+/// Background, screen, webcam border, webcam, pointer and captions, plus an overlay for every
+/// other video track a sequence may have (16 in all), with room to spare. A valid sequence
+/// never runs out of layers.
+pub const MAX_LAYERS: usize = 24;
 const SHADER: &str = include_str!("composite.wgsl");
 const WEBCAM_SHADOW_BLUR_PX: f32 = 16.0;
 const WEBCAM_SHADOW_OPACITY: f32 = 0.55;
@@ -477,7 +479,9 @@ impl Scene {
         self.layers.insert(index + 1, layer);
     }
 
-    pub fn push_overlay(&mut self, frame: VideoFrame, cover: bool) {
+    /// `cache_key` names a picture that is the same on every frame (a still), so the GPU can
+    /// keep it rather than upload it again.
+    pub fn push_overlay(&mut self, frame: VideoFrame, cover: bool, cache_key: Option<u64>) {
         if self.layers.len() >= MAX_LAYERS || frame.width == 0 || frame.height == 0 {
             return;
         }
@@ -492,6 +496,8 @@ impl Scene {
             Layer::placed(frame, (canvas_w - w) / 2, (canvas_h - h) / 2, w, h)
         }
         .with_role(LayerRole::Overlay);
+        let mut layer = layer;
+        layer.cache_key = cache_key;
         let at = self
             .layers
             .iter()

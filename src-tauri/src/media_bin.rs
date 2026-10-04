@@ -219,6 +219,37 @@ pub fn remove_files(root: &Path, asset: &Asset) {
     );
 }
 
+/// Decoded pictures kept for the whole app, so the preview does not decode a still again
+/// after every edit. Bounded in bytes; the least recently used go first.
+const IMAGE_CACHE_BYTES: usize = 384 << 20;
+
+/// [`decode_image`], cached while the file stays the same.
+pub fn decode_image_cached(path: &Path) -> Result<VideoFrame, String> {
+    use std::sync::Mutex;
+    type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    static CACHE: Mutex<Vec<(Key, VideoFrame)>> = Mutex::new(Vec::new());
+    let meta = fs::metadata(path).map_err(|e| format!("Unreadable image: {e}"))?;
+    let key: Key = (path.to_path_buf(), meta.len(), meta.modified().ok());
+    {
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache.remove(index);
+            let frame = entry.1.clone();
+            cache.push(entry);
+            return Ok(frame);
+        }
+    }
+    let frame = decode_image(path)?;
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|(k, _)| k.0 != key.0);
+    cache.push((key, frame.clone()));
+    let mut total: usize = cache.iter().map(|(_, f)| f.data.len()).sum();
+    while total > IMAGE_CACHE_BYTES && cache.len() > 1 {
+        total -= cache.remove(0).1.data.len();
+    }
+    Ok(frame)
+}
+
 /// Decodes an image asset to a BGRA frame no larger than the working-set limit.
 pub fn decode_image(path: &Path) -> Result<VideoFrame, String> {
     let mut image = image::open(path)

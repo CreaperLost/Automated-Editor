@@ -130,6 +130,7 @@ impl PreviewQuality {
             max_width: if capped { canvas.0 } else { 0 },
             max_height: if capped { canvas.1 } else { 0 },
             max_rate: self.fps,
+            interactive: true,
         }
     }
 
@@ -555,12 +556,19 @@ mod tests {
             DecodeLimit {
                 max_width: 640,
                 max_height: 360,
-                max_rate: 60
+                max_rate: 60,
+                interactive: true,
             }
         );
         let full = PreviewQuality::default_for(false);
         assert_eq!(full.canvas(1920, 1080), (1920, 1080));
-        assert_eq!(full.decode_limit((1920, 1080), false), DecodeLimit::NONE);
+        assert_eq!(
+            full.decode_limit((1920, 1080), false),
+            DecodeLimit {
+                interactive: true,
+                ..DecodeLimit::NONE
+            }
+        );
         assert_eq!(full.decode_limit((1920, 1080), true).max_width, 1920);
         assert_eq!(full.frame_time(1_234_567), 1_234_567);
         assert_eq!(p360.frame_time(1_020_000), 1_016_666);

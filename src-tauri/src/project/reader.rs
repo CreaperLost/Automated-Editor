@@ -518,7 +518,13 @@ impl ProjectReader {
             Ok(Some(document)) => document,
             Ok(None) => Self::starting_document(&root, &project_file)?,
             Err(error) => {
-                diagnostics.push(format!("Edit document ignored: {error}"));
+                // Kept under another name, so the first save cannot overwrite it.
+                let kept = revision::set_aside_edit_document(&root).map_err(|e| {
+                    format!("This project's edit could not be read ({error}) or set aside ({e})")
+                })?;
+                diagnostics.push(format!(
+                    "The edit saved here could not be read ({error}); it was kept as {kept} and the project starts fresh"
+                ));
                 Self::starting_document(&root, &project_file)?
             }
         };

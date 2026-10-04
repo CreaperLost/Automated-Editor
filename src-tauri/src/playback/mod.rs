@@ -64,6 +64,9 @@ pub struct PlaybackOwner {
     project_handle: String,
     state: PlaybackState,
     generation: u64,
+    /// Bumped when what plays changes (an edit, another short), not on a seek: the engine
+    /// keeps its scene and mixer across seeks.
+    content: u64,
     position_us: u64,
     duration_us: u64,
     /// Some audio track has clips to play, so the audio device is the clock.
@@ -138,6 +141,7 @@ impl PlaybackOwner {
             project_handle: String::new(),
             state: PlaybackState::Closed,
             generation: 0,
+            content: 0,
             position_us: 0,
             duration_us: 0,
             has_sound: false,
@@ -164,6 +168,7 @@ impl PlaybackOwner {
                 PlaybackState::Ready
             },
             generation: next_generation(),
+            content: next_generation(),
             position_us: 0,
             duration_us,
             has_sound: has_sound(document),
@@ -181,6 +186,7 @@ impl PlaybackOwner {
         // it plays, or a caption, no longer stops it.
         let was_playing = self.state == PlaybackState::Playing;
         self.bump_generation();
+        self.content = next_generation();
         // A short that is gone or no longer valid hands playback back to the video.
         let playable = match self.playable_document(document) {
             Ok(playable) => playable,
@@ -215,6 +221,23 @@ impl PlaybackOwner {
 
     pub fn close(&mut self) {
         *self = Self::closed();
+    }
+
+    /// Changes when what plays changes; seeks leave it alone.
+    pub fn content_generation(&self) -> u64 {
+        self.content
+    }
+
+    /// Nothing on the audio tracks can be heard (its recording is missing, say), so no audio
+    /// device starts: the clock runs on its own rather than waiting for one.
+    pub fn run_without_audio(&mut self, generation: u64) {
+        if self.generation == generation
+            && self.state == PlaybackState::Playing
+            && self.audio.is_none()
+            && self.play_anchor.is_none()
+        {
+            self.play_anchor = Some((Instant::now(), self.position_us));
+        }
     }
 
     pub fn play(&mut self) -> Result<PlaybackStatus, String> {
@@ -406,6 +429,40 @@ mod tests {
         // An empty timeline opens, ended.
         let empty = PlaybackOwner::open("e".into(), &EditDocument::default()).unwrap();
         assert_eq!(empty.snapshot().state, PlaybackState::Ended);
+    }
+
+    #[test]
+    fn with_nothing_audible_the_clock_runs_on_its_own() {
+        let mut owner = PlaybackOwner::open("h".into(), &document()).unwrap();
+        owner.native_enabled = true;
+        let played = owner.play().unwrap();
+        // The clock waits for the audio device...
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(owner.status().unwrap().position_us, 0);
+        // ...which never starts when the engine finds nothing to hear (a missing recording).
+        owner.run_without_audio(played.generation);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let status = owner.status().unwrap();
+        assert!(status.position_us > 0);
+        assert_eq!(status.clock_kind, ClockKind::Monotonic);
+        // A stale request (from before a seek) does nothing.
+        let seeked = owner.seek(0).unwrap();
+        owner.run_without_audio(played.generation);
+        assert_ne!(seeked.generation, played.generation);
+        assert_eq!(owner.status().unwrap().position_us, 0);
+    }
+
+    #[test]
+    fn seeks_keep_the_content_and_edits_change_it() {
+        let document = document();
+        let mut owner = PlaybackOwner::open("h".into(), &document).unwrap();
+        let content = owner.content_generation();
+        owner.seek(1_000_000).unwrap();
+        owner.play().unwrap();
+        owner.pause().unwrap();
+        assert_eq!(owner.content_generation(), content);
+        owner.apply_document(&document).unwrap();
+        assert_ne!(owner.content_generation(), content);
     }
 
     #[test]

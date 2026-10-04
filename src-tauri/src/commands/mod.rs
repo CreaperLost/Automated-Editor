@@ -11,7 +11,6 @@ use crate::sequence::edit::SequenceEdit;
 use crate::sequence::{Role, StreamKind};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +30,8 @@ pub struct AppState {
     pub preview_frame_ready: tokio::sync::Notify,
     pub encoder_gate: Arc<EncoderGate>,
     pub export: Mutex<crate::export::ExportOwner>,
+    /// Bumped when the project opens or closes (or media goes), which stops waveform reads.
     pub waveform_epoch: AtomicU64,
-    pub waveform_generations: Mutex<HashMap<String, u64>>,
     pub native_capture_enabled: bool,
     /// The renderer behind the Shorts Studio preview, kept while the same short and layout
     /// are being scrubbed.
@@ -60,7 +59,6 @@ impl AppState {
             encoder_gate: Arc::new(EncoderGate::new()),
             export: Mutex::new(crate::export::ExportOwner::new()),
             waveform_epoch: AtomicU64::new(0),
-            waveform_generations: Mutex::new(HashMap::new()),
             // Playback has an audio output (and audio clock) on macOS and Windows.
             native_capture_enabled: cfg!(any(target_os = "macos", windows)),
             short_preview: Mutex::new(None),
@@ -260,7 +258,6 @@ pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject
     owner.native_enabled = state.native_capture_enabled;
     *state.playback.lock() = owner;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    state.waveform_generations.lock().clear();
     Ok(summary)
 }
 
@@ -275,7 +272,6 @@ pub fn close_project_impl(state: &AppState, project_handle: String) -> Result<()
     *opened = None;
     state.playback.lock().close();
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    state.waveform_generations.lock().clear();
     Ok(())
 }
 
@@ -304,13 +300,9 @@ pub fn project_waveform_impl(
     end_us: u64,
     bucket_count: usize,
 ) -> Result<WaveformPage, String> {
+    // A waveform is on its sound's own time, so edits leave it valid; only closing the
+    // project stops one. Two windows asking for the same sound both get it.
     let epoch = state.waveform_epoch.load(Ordering::SeqCst);
-    let generation = {
-        let mut generations = state.waveform_generations.lock();
-        let slot = generations.entry(track_id.clone()).or_insert(0);
-        *slot += 1;
-        *slot
-    };
     let ctx = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
@@ -318,16 +310,7 @@ pub fn project_waveform_impl(
         sound_context(reader, &track_id, false)?
     };
     crate::project::waveform::query_waveform(&ctx, start_us, end_us, bucket_count, &|| {
-        if state.waveform_epoch.load(Ordering::SeqCst) != epoch {
-            return true;
-        }
-        state
-            .waveform_generations
-            .lock()
-            .get(&track_id)
-            .copied()
-            .unwrap_or(0)
-            != generation
+        state.waveform_epoch.load(Ordering::SeqCst) != epoch
     })
 }
 
@@ -729,6 +712,7 @@ pub fn short_preview_frame_impl(
                     max_width: width * 2,
                     max_height: height * 2,
                     max_rate: 0,
+                    interactive: true,
                 });
         *cache = Some(ShortPreviewCache { key, evaluator });
     }
@@ -867,7 +851,6 @@ pub fn project_ripple_cuts_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -983,7 +966,6 @@ pub fn project_sequence_edit_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -1003,7 +985,6 @@ pub fn project_undo_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -1023,7 +1004,6 @@ pub fn project_redo_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -1053,7 +1033,6 @@ pub fn project_short_resync_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(view)
 }
 
