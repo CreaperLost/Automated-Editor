@@ -717,6 +717,8 @@ export interface PlaybackStatus {
   clockKind: ClockKind;
   /** The short playing instead of the video, while the Shorts Studio has one in focus. */
   shortId?: string;
+  /** How fast it plays: 1 is normal speed. */
+  speed?: number;
   previewAvailable: boolean;
   error: string | null;
   diagnostics: string[];

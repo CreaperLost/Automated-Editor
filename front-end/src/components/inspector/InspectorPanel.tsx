@@ -33,6 +33,16 @@ function loadTab(): InspectorTab {
   return "video";
 }
 
+/** The camera border's ready colours (the editor's indigo first: it is the default). */
+const CAMERA_BORDER_COLORS = [
+  { label: "Indigo", value: "#6366f1" },
+  { label: "Black", value: "#000000" },
+  { label: "White", value: "#ffffff" },
+  { label: "Red", value: "#ef4444" },
+  { label: "Blue", value: "#3b82f6" },
+  { label: "Green", value: "#22c55e" },
+];
+
 /// The inspector: what the selected clip does (when a track clip is selected), and how the
 /// whole video looks, sounds and is captioned, one page each.
 export const InspectorPanel: React.FC = () => {
@@ -463,6 +473,39 @@ export const InspectorPanel: React.FC = () => {
                     unit="px"
                     onChange={(borderWidth) => setCamera({ borderWidth })}
                   />
+                  {cameraBubble.borderWidth > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-label text-studio-400">Border colour</span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {CAMERA_BORDER_COLORS.map(({ label, value }) => {
+                          const chosen = cameraBubble.borderColor.toLowerCase() === value;
+                          return (
+                            <button
+                              key={value}
+                              type="button"
+                              aria-label={`${label} border`}
+                              aria-pressed={chosen}
+                              title={label}
+                              onClick={() => setCamera({ borderColor: value })}
+                              className={cn(
+                                "h-7 w-7 rounded-full border transition-shadow",
+                                chosen ? "border-accent-fg shadow-[0_0_0_2px_rgb(var(--accent-hover)/0.8)]" : "border-studio-600 hover:border-studio-400",
+                              )}
+                              style={{ background: value }}
+                            />
+                          );
+                        })}
+                        <input
+                          type="color"
+                          aria-label="Another border colour"
+                          title="Another colour"
+                          value={cameraBubble.borderColor.toLowerCase()}
+                          onChange={(e) => setCamera({ borderColor: e.target.value })}
+                          className="h-7 w-9 bg-studio-850 border border-studio-700 rounded-control cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
                     <Switch checked={cameraBubble.mirror} onChange={(mirror) => setCamera({ mirror })} label="Mirror" />
                     <Switch checked={cameraBubble.shadow} onChange={(shadow) => setCamera({ shadow })} label="Shadow" />

@@ -3,7 +3,7 @@ import { AlertTriangle, Gauge, Pause, Play, SkipBack } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { PREVIEW_FPS, PREVIEW_RESOLUTIONS, usePreviewQualityStore } from "../../stores/previewQualityStore";
 import { formatBinding, useHotkeyStore } from "../../stores/hotkeyStore";
-import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
+import { PLAYBACK_SPEEDS, seekPlayback, setPlaybackSpeed, togglePlayback } from "../../lib/playbackControl";
 import { formatTimeUs } from "../../hooks/useTimeline";
 import { Badge, IconButton, cn } from "../ui";
 
@@ -17,6 +17,7 @@ export const PreviewQualityControls: React.FC = () => {
   const init = usePreviewQualityStore((s) => s.init);
   const setQuality = usePreviewQualityStore((s) => s.setQuality);
   const isPlaying = useProjectStore((s) => s.isPlaying);
+  const speed = useProjectStore((s) => s.playbackSpeed);
 
   useEffect(() => {
     void init();
@@ -47,6 +48,19 @@ export const PreviewQualityControls: React.FC = () => {
         {PREVIEW_FPS.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Playback speed"
+        title="Playback speed. L plays; L again plays at 2x; K stops."
+        value={speed}
+        onChange={(e) => void setPlaybackSpeed(Number(e.target.value))}
+        className={selectClass}
+      >
+        {PLAYBACK_SPEEDS.map((value) => (
+          <option key={value} value={value}>
+            {value}x
           </option>
         ))}
       </select>

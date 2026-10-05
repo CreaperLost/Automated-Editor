@@ -1096,6 +1096,19 @@ pub fn playback_play_impl(
     playback.play()
 }
 
+/// Plays at `speed` (1, 1.25, 1.5 or 2), carrying on if it is playing.
+pub fn playback_set_speed_impl(
+    state: &AppState,
+    project_handle: String,
+    speed: f64,
+) -> Result<PlaybackStatus, String> {
+    let mut playback = state.playback.lock();
+    if playback.status()?.project_handle != project_handle {
+        return Err("Stale project handle".into());
+    }
+    playback.set_speed(speed)
+}
+
 pub fn playback_pause_impl(
     state: &AppState,
     project_handle: String,

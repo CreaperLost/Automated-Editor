@@ -241,17 +241,20 @@ fn tick(
     if status.state == PlaybackState::Playing && !runtime.mixer.has_audio() {
         state.playback.lock().run_without_audio(generation);
     }
+    // Faster playback plays through the sound faster: queue that much more ahead.
+    let lead_chunks = AUDIO_LEAD_CHUNKS * status.speed.ceil().max(1.0) as u64;
     if status.state == PlaybackState::Playing && runtime.mixer.has_audio() {
         let initialize = {
             let owner = state.playback.lock();
-            owner.audio.is_none()
+            owner.audio.is_none() && owner.needs_audio()
         };
         if initialize {
             let base = (status.position_us as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64;
             let mut output = AudioOutput::new().map_err(error)?;
+            output.set_speed(status.speed);
             let mut queued = base;
             while queued
-                < (base + CHUNK_FRAMES as u64 * AUDIO_LEAD_CHUNKS).min(runtime.mixer.total_frames)
+                < (base + CHUNK_FRAMES as u64 * lead_chunks).min(runtime.mixer.total_frames)
             {
                 let chunk = runtime
                     .mixer
@@ -286,7 +289,7 @@ fn tick(
                 )
             };
             if queued >= runtime.mixer.total_frames
-                || queued >= position + AUDIO_LEAD_CHUNKS * CHUNK_FRAMES as u64
+                || queued >= position + lead_chunks * CHUNK_FRAMES as u64
             {
                 break;
             }
@@ -342,7 +345,9 @@ fn tick(
     }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
     if status.state == PlaybackState::Playing {
-        runtime.evaluator.prefetch(render_us, PREFETCH_US);
+        // Decoders start the same real time ahead at any speed.
+        let horizon = (PREFETCH_US as f64 * status.speed.max(1.0)) as u64;
+        runtime.evaluator.prefetch(render_us, horizon);
     }
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.

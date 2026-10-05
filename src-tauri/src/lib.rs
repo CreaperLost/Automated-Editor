@@ -560,6 +560,16 @@ fn playback_status(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn playback_set_speed(
+    state: State<'_, AppState>,
+    project_handle: String,
+    speed: f64,
+) -> Result<playback::PlaybackStatus, String> {
+    commands::playback_set_speed_impl(&state, project_handle, speed)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn playback_play(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1356,6 +1366,7 @@ pub fn run() {
             project_redo,
             playback_status,
             playback_play,
+            playback_set_speed,
             playback_pause,
             playback_seek,
             preview_attach,

@@ -49,9 +49,25 @@ pub struct PlaybackStatus {
     /// The short playing instead of the video, when the Shorts Studio has one in focus.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_id: Option<String>,
+    /// How fast it plays: 1 is normal speed.
+    #[serde(default = "normal_speed")]
+    pub speed: f64,
     pub preview_available: bool,
     pub error: Option<String>,
     pub diagnostics: Vec<String>,
+}
+
+fn normal_speed() -> f64 {
+    1.0
+}
+
+/// The playback speeds offered (the preview bar's menu, and L played twice: 2x).
+pub const PLAYBACK_SPEEDS: [f64; 4] = [1.0, 1.25, 1.5, 2.0];
+
+/// Whether this platform's audio output can play at `speed` (Windows resamples; the macOS
+/// output plays at normal speed only, so faster playback there is silent).
+fn audio_plays_at(speed: f64) -> bool {
+    cfg!(windows) || speed == 1.0
 }
 
 pub struct PlaybackOwner {
@@ -78,6 +94,8 @@ pub struct PlaybackOwner {
     short_focus: Option<String>,
     /// Where the video was when a short took over playback.
     main_position_us: u64,
+    /// How fast it plays (one of [`PLAYBACK_SPEEDS`]).
+    speed: f64,
 }
 
 impl PlaybackOwner {
@@ -150,6 +168,7 @@ impl PlaybackOwner {
             diagnostics: Vec::new(),
             short_focus: None,
             main_position_us: 0,
+            speed: 1.0,
         }
     }
 
@@ -177,6 +196,7 @@ impl PlaybackOwner {
             diagnostics: Vec::new(),
             short_focus: None,
             main_position_us: 0,
+            speed: 1.0,
         })
     }
 
@@ -221,6 +241,31 @@ impl PlaybackOwner {
 
     pub fn close(&mut self) {
         *self = Self::closed();
+    }
+
+    /// Plays at `speed` from here on, carrying on if it is playing. With sound, the audio
+    /// device plays faster (and its clock with it); where it cannot, the clock runs on its own.
+    pub fn set_speed(&mut self, speed: f64) -> Result<PlaybackStatus, String> {
+        self.ensure_open()?;
+        if !PLAYBACK_SPEEDS.contains(&speed) {
+            return Err("Choose a playback speed of 1x, 1.25x, 1.5x or 2x".into());
+        }
+        self.advance();
+        self.speed = speed;
+        if self.state == PlaybackState::Playing {
+            let keeps_audio = match self.audio.as_mut() {
+                Some(audio) => audio.set_speed(speed),
+                None => false,
+            };
+            if !keeps_audio {
+                // Running on the clock alone: from here, at the new speed. A device that
+                // cannot play this fast stops; the engine starts one again at normal speed.
+                self.audio = None;
+                self.play_anchor =
+                    (!self.needs_audio()).then(|| (Instant::now(), self.position_us));
+            }
+        }
+        self.status()
     }
 
     /// Changes when what plays changes; seeks leave it alone.
@@ -340,8 +385,10 @@ impl PlaybackOwner {
             let Some((anchor, start_us)) = self.play_anchor else {
                 return;
             };
-            let elapsed = Instant::now().saturating_duration_since(anchor).as_micros() as u64;
-            self.position_us = start_us.saturating_add(elapsed).min(self.duration_us);
+            let elapsed = Instant::now().saturating_duration_since(anchor).as_micros() as f64;
+            self.position_us = start_us
+                .saturating_add((elapsed * self.speed) as u64)
+                .min(self.duration_us);
         }
         if self.position_us >= self.duration_us {
             self.position_us = self.duration_us;
@@ -357,8 +404,13 @@ impl PlaybackOwner {
             ClockKind::Monotonic
         }
     }
-    fn needs_audio(&self) -> bool {
-        self.native_enabled && self.has_sound
+    /// Whether the audio device is the clock (and the engine should start one).
+    pub(crate) fn needs_audio(&self) -> bool {
+        self.native_enabled && self.has_sound && audio_plays_at(self.speed)
+    }
+
+    pub fn speed(&self) -> f64 {
+        self.speed
     }
     pub fn fail(&mut self, generation: u64, error: String) {
         if self.generation != generation {
@@ -390,6 +442,7 @@ impl PlaybackOwner {
             duration_us: self.duration_us,
             clock_kind: self.clock_kind(),
             short_id: self.short_focus.clone(),
+            speed: self.speed,
             preview_available: self.preview_available,
             error: self.error.clone(),
             diagnostics: self.diagnostics.clone(),
@@ -450,6 +503,26 @@ mod tests {
         owner.run_without_audio(played.generation);
         assert_ne!(seeked.generation, played.generation);
         assert_eq!(owner.status().unwrap().position_us, 0);
+    }
+
+    #[test]
+    fn faster_playback_moves_the_clock_faster() {
+        let mut owner = PlaybackOwner::open("h".into(), &document()).unwrap();
+        assert!(owner.set_speed(3.0).is_err(), "only the offered speeds");
+        owner.play().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let normal = owner.status().unwrap().position_us;
+        let at = owner.set_speed(2.0).unwrap();
+        assert_eq!(at.speed, 2.0);
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let fast = owner.status().unwrap().position_us - at.position_us;
+        assert!(
+            fast > normal * 3 / 2,
+            "2x moved {fast} us against {normal} at 1x"
+        );
+        // Pausing keeps the speed for the next play.
+        owner.pause().unwrap();
+        assert_eq!(owner.status().unwrap().speed, 2.0);
     }
 
     #[test]

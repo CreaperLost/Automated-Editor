@@ -246,6 +246,9 @@ export const api = {
     invokeTauri<PlaybackStatus>("playback_play", { projectHandle }),
   playbackPause: (projectHandle: string) =>
     invokeTauri<PlaybackStatus>("playback_pause", { projectHandle }),
+  /** Plays at `speed` (1, 1.25, 1.5 or 2), carrying on if it is playing. */
+  playbackSetSpeed: (projectHandle: string, speed: number) =>
+    invokeTauri<PlaybackStatus>("playback_set_speed", { projectHandle, speed }),
   playbackSeek: (projectHandle: string, editedUs: number) =>
     invokeTauri<PlaybackStatus>("playback_seek", { projectHandle, editedUs: Math.max(0, Math.round(editedUs)) }),
   previewAttach: (windowLabel: string, hitMode: PreviewHitMode = "consume") =>

@@ -38,6 +38,7 @@ import { WaveformRenderer } from "../waveform/WaveformRenderer";
 import { MEDIA_DRAG_TYPE, currentMediaDrag } from "../media/MediaPanel";
 import { placedChapters } from "../chapters/ChaptersPanel";
 import { api } from "../../lib/ipc";
+import { pausePlayback, shuttleForward } from "../../lib/playbackControl";
 import { hotkeyHint, useHotkeyStore, type HotkeyAction } from "../../stores/hotkeyStore";
 import {
   assetById,
@@ -605,9 +606,28 @@ export const TimelineStudio: React.FC = () => {
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
-    // Ctrl/Cmd + wheel zooms around the cursor; the listener is not passive so it can stop page zoom.
+    // The wheel scrolls the timeline sideways (Shift + wheel: the tracks up and down, as over
+    // the track headers); Ctrl/Cmd + wheel zooms around the cursor. A trackpad's sideways swipe
+    // scrolls as it always does. The listener is not passive so it can take the wheel over.
     const onWheel = (event: WheelEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
+      if (!(event.ctrlKey || event.metaKey)) {
+        const unit = event.deltaMode === 1 ? 32 : event.deltaMode === 2 ? element.clientWidth : 1;
+        // Shift: up and down. Browsers turn Shift + wheel into sideways, so either axis counts.
+        if (event.shiftKey) {
+          const tracks = element.parentElement?.closest(".overflow-y-auto") as HTMLElement | null;
+          if (!tracks) return;
+          event.preventDefault();
+          tracks.scrollTop += (event.deltaY || event.deltaX) * unit;
+          return;
+        }
+        const sideways = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+        if (sideways || event.deltaY === 0) return;
+        // Nothing to scroll sideways (the whole video fits): the wheel scrolls the tracks.
+        if (element.scrollWidth <= element.clientWidth) return;
+        event.preventDefault();
+        element.scrollLeft += event.deltaY * unit;
+        return;
+      }
       event.preventDefault();
       const rect = element.getBoundingClientRect();
       const offsetPx = event.clientX - rect.left;
@@ -855,6 +875,8 @@ export const TimelineStudio: React.FC = () => {
   const actions = useRef<Partial<Record<HotkeyAction, () => void>>>({});
   actions.current = {
     playPause: togglePlayPause,
+    shuttleForward,
+    pause: pausePlayback,
     split: () => (captions.active ? captions.splitCue() : void splitAtPlayhead()),
     rippleTrimPrevious: () => void rippleTrim("previous"),
     rippleTrimNext: () => void rippleTrim("next"),
@@ -887,7 +909,7 @@ export const TimelineStudio: React.FC = () => {
     goToEnd: () => seekToUs(Number.MAX_SAFE_INTEGER),
   };
   // Actions that act once per press; the rest (stepping, zoom) repeat while the key is held.
-  const ONCE: HotkeyAction[] = ["playPause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
+  const ONCE: HotkeyAction[] = ["playPause", "shuttleForward", "pause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;

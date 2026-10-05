@@ -103,6 +103,8 @@ interface ProjectStore {
   setViewShort: (shortId: string | undefined) => void;
   /** The short playing instead of the video (set by the Shorts Studio). */
   playbackShortId?: string;
+  /** How fast playback goes (1, 1.25, 1.5 or 2), as the engine reports it. */
+  playbackSpeed: number;
   /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
   captionsVersion: number;
   /** Marks transcripts changed here (and tells the other windows) or in another window. */
@@ -147,6 +149,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   playbackGeneration: 0,
   playbackError: null,
   previewAvailable: false,
+  playbackSpeed: 1,
   setProjectPath: (path) => set({ projectPath: path }),
   addRecentProject: (path) => {
     const clean = path.trim();
@@ -171,7 +174,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     // video in the Shorts Studio): note it, but keep this window's own playhead.
     const next: Partial<ProjectStore> =
       (status.shortId ?? undefined) !== state.viewShort
-        ? { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation }
+        ? { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation, playbackSpeed: status.speed ?? 1 }
         : {
             currentTimeUs: Math.min(status.positionUs, state.durationUs),
             isPlaying: status.state === "playing",
@@ -179,6 +182,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
             playbackError: status.error,
             previewAvailable: status.previewAvailable,
             playbackShortId: status.shortId,
+            playbackSpeed: status.speed ?? 1,
           };
     // Polled many times a second: nothing changed means nothing to tell the components.
     const changed = (Object.keys(next) as (keyof ProjectStore)[]).some((key) => !Object.is(next[key], state[key]));
