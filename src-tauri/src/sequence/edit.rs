@@ -632,17 +632,29 @@ impl<'a> Editor<'a> {
         .map(|()| EditOutcome::default())
     }
 
-    /// The source time cut between `clip` and the next clip on its track, when they are one
-    /// stretch of the same stream side by side.
-    fn cut_after(&self, t: usize, c: usize) -> Option<u64> {
+    /// The recorded stretches cut from between `clip` and the next clip on its track, when they
+    /// are one stream side by side. A recorder pause between them is no cut: nothing was
+    /// recorded there.
+    fn cut_after(&self, t: usize, c: usize) -> Option<Vec<(u64, u64)>> {
         let clips = &self.seq.tracks[t].clips;
         let (left, right) = (clips.get(c)?, clips.get(c + 1)?);
-        (left.asset == right.asset
-            && left.stream == right.stream
-            && left.end_us() == right.start_us
-            && left.out_us() < right.in_us
-            && !self.is_still(&left.asset))
-        .then(|| right.in_us - left.out_us())
+        if left.asset != right.asset
+            || left.stream != right.stream
+            || left.end_us() != right.start_us
+            || left.out_us() >= right.in_us
+            || self.is_still(&left.asset)
+        {
+            return None;
+        }
+        let cut: Vec<(u64, u64)> = self
+            .asset(&left.asset)
+            .ok()?
+            .spans()
+            .iter()
+            .map(|s| (s.start_us.max(left.out_us()), s.end_us.min(right.in_us)))
+            .filter(|(a, b)| b > a)
+            .collect();
+        (!cut.is_empty()).then_some(cut)
     }
 
     fn restore_cuts(&mut self, clip_ids: &[String]) -> Result<(), String> {
@@ -667,14 +679,50 @@ impl<'a> Editor<'a> {
                 continue;
             };
             // A partner's restore may have put this one back already.
-            let Some(gap) = self.cut_after(t, c) else {
+            let Some(cut) = self.cut_after(t, c) else {
                 continue;
             };
-            let clip = &self.seq.tracks[t].clips[c];
-            let (end, link) = (clip.end_us(), clip.link.clone());
-            if self.trim(&id, Edge::End, end + gap, true).is_ok() {
-                restored.insert(id);
+            let at = self.seq.tracks[t].clips[c].end_us();
+            // The clip and the partners ending with it.
+            let Ok(partners) = self.with_partners(std::slice::from_ref(&id)) else {
+                continue;
+            };
+            let group: Vec<(usize, Clip)> = partners
+                .iter()
+                .filter_map(|p| {
+                    let (t, c) = self.find(p).ok()?;
+                    let clip = &self.seq.tracks[t].clips[c];
+                    (clip.end_us() == at).then(|| (t, clip.clone()))
+                })
+                .collect();
+            // Everything after moves along, and each recorded stretch comes back as a piece:
+            // across a recorder pause, the pieces stay apart as they were recorded.
+            let total: u64 = cut.iter().map(|(a, b)| b - a).sum();
+            let mut links = HashMap::new();
+            self.insert_time(at, total, &mut links);
+            let mut start = at;
+            for (a, b) in cut {
+                let link = (group.len() > 1).then(|| self.link_id());
+                for (t, member) in &group {
+                    let piece = Clip {
+                        id: self.clip_id(),
+                        start_us: start,
+                        in_us: a,
+                        duration_us: b - a,
+                        link: link.clone(),
+                        ..member.clone()
+                    };
+                    restored.insert(piece.id.clone());
+                    let clips = &mut self.seq.tracks[*t].clips;
+                    let index = clips.partition_point(|c| c.start_us < start);
+                    clips.insert(index, piece);
+                }
                 restored.extend(link);
+                start += b - a;
+            }
+            for (_, member) in group {
+                restored.insert(member.id);
+                restored.extend(member.link);
             }
         }
         if restored.is_empty() {
@@ -1968,6 +2016,61 @@ mod tests {
             &SequenceEdit::RestoreCuts { clip_ids: vec![] }
         )
         .is_err());
+    }
+
+    /// Restoring puts back exactly the layout from before the cuts, recorder pauses and all:
+    /// a pause is no cut, and a cut across one comes back as the pieces either side of it.
+    #[test]
+    fn restoring_cuts_across_recorder_pauses_leaves_no_gap() {
+        let assets = vec![recording("rec", 10 * S, &[(4 * S, 5 * S), (6 * S, 7 * S)])];
+        let seq = starting_sequence(&assets, "rec").unwrap();
+        assert_eq!(seq.duration_us(), 8 * S);
+        assert!(
+            apply(
+                &seq,
+                &assets,
+                &SequenceEdit::RestoreCuts { clip_ids: vec![] }
+            )
+            .is_err(),
+            "pauses alone are no cut"
+        );
+        // Timeline 3s..6s is source 3..4, 5..6 and 7..8: across both pauses.
+        for ranges in [
+            vec![(3 * S, 6 * S)],
+            vec![(3 * S, 4 * S)],
+            vec![(S, 2 * S), (3 * S + S / 2, 7 * S)],
+        ] {
+            let cut = run(&seq, &assets, super::tests::cut(&ranges));
+            assert!(cut.duration_us() < seq.duration_us());
+            let all = run(
+                &cut,
+                &assets,
+                SequenceEdit::RestoreCuts { clip_ids: vec![] },
+            );
+            assert_eq!(layout(&all), layout(&seq), "cut {ranges:?}");
+            // One by one, latest first, comes to the same.
+            let mut one = cut.clone();
+            loop {
+                let last = one.tracks[0]
+                    .clips
+                    .iter()
+                    .rev()
+                    .find(|c| {
+                        let edit = SequenceEdit::RestoreCuts {
+                            clip_ids: vec![c.id.clone()],
+                        };
+                        apply(&one, &assets, &edit).is_ok()
+                    })
+                    .map(|c| c.id.clone());
+                let Some(id) = last else { break };
+                one = run(
+                    &one,
+                    &assets,
+                    SequenceEdit::RestoreCuts { clip_ids: vec![id] },
+                );
+            }
+            assert_eq!(layout(&one), layout(&seq), "cut {ranges:?}, one by one");
+        }
     }
 
     /// The edits exactly as the timeline sends them.

@@ -95,21 +95,37 @@ export function sourceAt(project: OpenedProject, assetId: string, editedUs: numb
   return pick(role) ?? pick();
 }
 
-/** Where cut time can be put back on a track: two clips of one source side by side with time missing between. */
+/** The recorded time in `[a, b)` of an asset's own clock: a recorder pause holds none. */
+function recordedBetween(pauses: { startUs: number; endUs: number }[] | undefined, a: number, b: number): number {
+  let recorded = 0;
+  let cursor = a;
+  for (const pause of [...(pauses ?? [])].sort((x, y) => x.startUs - y.startUs)) {
+    recorded += Math.max(0, Math.min(b, pause.startUs) - cursor);
+    cursor = Math.max(cursor, Math.min(b, pause.endUs));
+  }
+  return recorded + Math.max(0, b - cursor);
+}
+
+/**
+ * Where cut time can be put back on a track: two clips of one source side by side with recorded
+ * time missing between. A recorder pause alone is no cut.
+ */
 export function cutJoins(project: OpenedProject, track: SeqTrack): { clipId: string; atUs: number; gapUs: number }[] {
   const joins = [];
   for (let i = 0; i + 1 < track.clips.length; i++) {
     const left = track.clips[i];
     const right = track.clips[i + 1];
-    const still = assetById(project, left.asset)?.kind === "image";
+    const asset = assetById(project, left.asset);
+    const out = left.inUs + left.durationUs;
     if (
-      !still &&
+      asset?.kind !== "image" &&
       left.asset === right.asset &&
       left.stream === right.stream &&
       clipEnd(left) === right.startUs &&
-      left.inUs + left.durationUs < right.inUs
+      out < right.inUs
     ) {
-      joins.push({ clipId: left.id, atUs: right.startUs, gapUs: right.inUs - (left.inUs + left.durationUs) });
+      const gapUs = recordedBetween(asset?.pauses, out, right.inUs);
+      if (gapUs > 0) joins.push({ clipId: left.id, atUs: right.startUs, gapUs });
     }
   }
   return joins;

@@ -322,6 +322,11 @@ fn perf_export() {
         let seconds: u64 = settle.to_string_lossy().parse().unwrap_or(15);
         std::thread::sleep(std::time::Duration::from_secs(seconds));
     }
+    println!(
+        "PERF export encoder {:?}, compositor {:?}",
+        crate::media::ffmpeg::encoder_name(),
+        crate::render::Compositor::new().map(|c| c.adapter_name().to_string())
+    );
     export_timed(&root, &document(&state), "straight");
     jump_cut(&state, &handle, 1_200_000, 250_000);
     export_timed(&root, &document(&state), "jump cuts");
@@ -559,4 +564,139 @@ fn perf_long_mixer_with_polish() {
             t.elapsed().as_secs_f64() * 1000.0
         );
     }
+}
+
+/// Cutting every pause of a real recording and restoring every cut gives back the timeline
+/// it started from (`AERO_REC`, or the probe recording under `AERO_PROBE`).
+#[test]
+#[ignore]
+fn probe_restore_all_cuts() {
+    let recording = match (std::env::var_os("AERO_REC"), probe_dir()) {
+        (Some(path), _) => PathBuf::from(path),
+        (None, Some(dir)) => dir.join("aero"),
+        _ => return,
+    };
+    let work = tempfile::tempdir().unwrap();
+    let folder =
+        crate::project::folder::create_project_folder(work.path(), "Restore", Some(&recording))
+            .unwrap();
+    let state = AppState::new();
+    let opened = commands::open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
+    let handle = opened.project_handle.clone();
+    let asset = opened.assets[0].id.clone();
+    // Each track as the source time it plays where, contiguous pieces joined.
+    let spans = |doc: &crate::project::revision::EditDocument| -> Vec<Vec<(u64, u64, u64)>> {
+        doc.sequence
+            .tracks
+            .iter()
+            .map(|t| {
+                let mut out: Vec<(u64, u64, u64)> = Vec::new();
+                for c in &t.clips {
+                    match out.last_mut() {
+                        Some(last)
+                            if last.0 + last.2 == c.start_us && last.1 + last.2 == c.in_us =>
+                        {
+                            last.2 += c.duration_us
+                        }
+                        _ => out.push((c.start_us, c.in_us, c.duration_us)),
+                    }
+                }
+                out
+            })
+            .collect()
+    };
+    let before = spans(&document(&state));
+    let pauses = commands::detect_silence_impl(
+        &state,
+        handle.clone(),
+        format!("{asset}.mic"),
+        crate::dsp::silence::SilenceConfig {
+            threshold_db: -38.0,
+            min_duration_ms: 400,
+            padding_ms: 50,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cuts: Vec<_> = pauses
+        .suggestions
+        .iter()
+        .map(|s| commands::EditCut {
+            start_us: s.start_us,
+            end_us: s.end_us,
+        })
+        .collect();
+    println!("PROBE {} pauses cut", cuts.len());
+    commands::project_ripple_cuts_impl(&state, handle.clone(), revision(&state), cuts).unwrap();
+    if std::env::var_os("AERO_RESTORE_ONE_BY_ONE").is_some() {
+        // As clicking each cut's mark: the left clip of each join on the first video track,
+        // in a scrambled order, until none is left.
+        let mut round = 0u64;
+        loop {
+            let doc = document(&state);
+            let track = &doc.sequence.tracks[0];
+            let joins: Vec<String> = track
+                .clips
+                .windows(2)
+                .filter(|w| {
+                    w[0].asset == w[1].asset
+                        && w[0].stream == w[1].stream
+                        && w[0].start_us + w[0].duration_us == w[1].start_us
+                        && w[0].in_us + w[0].duration_us < w[1].in_us
+                })
+                .map(|w| w[0].id.clone())
+                .collect();
+            if joins.is_empty() {
+                break;
+            }
+            round += 1;
+            let pick = joins[(round as usize * 7919) % joins.len()].clone();
+            commands::project_sequence_edit_impl(
+                &state,
+                handle.clone(),
+                revision(&state),
+                crate::sequence::edit::SequenceEdit::RestoreCuts {
+                    clip_ids: vec![pick],
+                },
+                None,
+            )
+            .unwrap();
+        }
+        println!("PROBE restored {round} cuts one by one");
+    } else {
+        commands::project_sequence_edit_impl(
+            &state,
+            handle.clone(),
+            revision(&state),
+            crate::sequence::edit::SequenceEdit::RestoreCuts { clip_ids: vec![] },
+            None,
+        )
+        .unwrap();
+    }
+    let after = spans(&document(&state));
+    println!(
+        "PROBE clips per track after restoring: {:?}",
+        document(&state)
+            .sequence
+            .tracks
+            .iter()
+            .map(|t| t.clips.len())
+            .collect::<Vec<_>>()
+    );
+    for (t, (a, b)) in before.iter().zip(&after).enumerate() {
+        if a != b {
+            println!("PROBE track {t} differs:\n  before {a:?}\n  after  {b:?}");
+        }
+    }
+    println!(
+        "PROBE duration before {} after {}",
+        document(&state).duration_us(),
+        before
+            .iter()
+            .flatten()
+            .map(|s| s.0 + s.2)
+            .max()
+            .unwrap_or(0)
+    );
+    assert_eq!(before, after);
 }
