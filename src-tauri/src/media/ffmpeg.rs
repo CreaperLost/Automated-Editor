@@ -27,6 +27,9 @@ const PREFETCH_MIN_FRAMES: u64 = 6;
 /// Decoders being started ahead at once, at most. Each is an FFmpeg process seeking; more
 /// than this (many tracks with cuts close together) would crowd out the decoders playing.
 const MAX_PENDING_PREFETCH: usize = 4;
+/// Keep decoders used by recent playback safe from speculative eviction. Older decoders
+/// may yield their slot, otherwise a cache filled by past segments would disable lookahead.
+const PREFETCH_PROTECT_TIME: std::time::Duration = std::time::Duration::from_secs(2);
 /// Threads each preview decoder uses.
 const PREVIEW_DECODE_THREADS: u32 = 4;
 /// Interactive decoding uses the GPU only for sources bigger than this (in pixels).
@@ -881,18 +884,100 @@ impl Drop for FrameStream {
     }
 }
 
+/// Speculative work never displaces a recently used decoder. Both groups share one
+/// capacity limit; a used warm decoder is promoted on its return.
+struct StreamCache<T> {
+    active: Vec<(T, std::time::Instant)>,
+    prefetched: Vec<T>,
+}
+
+impl<T> StreamCache<T> {
+    fn len(&self) -> usize {
+        self.active.len() + self.prefetched.len()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.active
+            .iter()
+            .map(|(stream, _)| stream)
+            .chain(&self.prefetched)
+    }
+
+    fn remove(&mut self, index: usize) -> T {
+        if index < self.active.len() {
+            self.active.remove(index).0
+        } else {
+            self.prefetched.remove(index - self.active.len())
+        }
+    }
+
+    fn keep_active(&mut self, stream: T) -> Vec<T> {
+        self.active.insert(0, (stream, std::time::Instant::now()));
+        let mut evicted = Vec::new();
+        while self.len() > MAX_OPEN_STREAMS {
+            // Discard unused warm-ups before any active decoder.
+            if let Some(stream) = self
+                .prefetched
+                .pop()
+                .or_else(|| self.active.pop().map(|(stream, _)| stream))
+            {
+                evicted.push(stream);
+            }
+        }
+        evicted
+    }
+
+    fn keep_prefetched(&mut self, stream: T) -> Vec<T> {
+        let mut evicted = Vec::new();
+        if self.len() >= MAX_OPEN_STREAMS
+            && self
+                .active
+                .last()
+                .is_some_and(|(_, used)| used.elapsed() >= PREFETCH_PROTECT_TIME)
+        {
+            evicted.push(self.active.pop().unwrap().0);
+        }
+        if self.len() < MAX_OPEN_STREAMS {
+            self.prefetched.push(stream);
+            evicted
+        } else {
+            // Demand may have filled the slot while the warm-up was opening.
+            vec![stream]
+        }
+    }
+
+    fn prefetch_slots(&self) -> usize {
+        let protected = self
+            .active
+            .iter()
+            .filter(|(_, used)| used.elapsed() < PREFETCH_PROTECT_TIME)
+            .count();
+        MAX_OPEN_STREAMS.saturating_sub(protected + self.prefetched.len())
+    }
+
+    fn drain(&mut self) -> Vec<T> {
+        let mut streams: Vec<T> = self.active.drain(..).map(|(stream, _)| stream).collect();
+        streams.append(&mut self.prefetched);
+        streams
+    }
+}
+
 struct DecoderCache {
     info: Vec<(PathBuf, VideoInfo)>,
-    /// Most recently used first.
-    streams: Vec<FrameStream>,
-    /// Decoders being started ahead of time: file, limit and start.
-    pending: Vec<(PathBuf, DecodeLimit, u64)>,
+    streams: StreamCache<FrameStream>,
+    /// Decoders being started ahead of time: file, limit, start and cache generation.
+    pending: Vec<(PathBuf, DecodeLimit, u64, u64)>,
+    generation: u64,
 }
 
 static DECODERS: Mutex<DecoderCache> = Mutex::new(DecoderCache {
     info: Vec::new(),
-    streams: Vec::new(),
+    streams: StreamCache {
+        active: Vec::new(),
+        prefetched: Vec::new(),
+    },
     pending: Vec::new(),
+    generation: 0,
 });
 
 fn cached_info(path: &Path) -> Result<VideoInfo, String> {
@@ -911,12 +996,7 @@ fn cached_info(path: &Path) -> Result<VideoInfo, String> {
 /// Keeps `stream` as the most recently used. Returns the streams that no longer fit, to be
 /// stopped with [`stop_streams`] once the lock is released.
 fn keep_stream(cache: &mut DecoderCache, stream: FrameStream) -> Vec<FrameStream> {
-    cache.streams.insert(0, stream);
-    if cache.streams.len() > MAX_OPEN_STREAMS {
-        cache.streams.split_off(MAX_OPEN_STREAMS)
-    } else {
-        Vec::new()
-    }
+    cache.streams.keep_active(stream)
 }
 
 /// Stops decoders on a thread of their own: waiting for a killed FFmpeg to exit takes long
@@ -949,7 +1029,7 @@ fn take_stream(path: &Path, limit: DecodeLimit, time_us: u64) -> Option<FrameStr
 /// up, so a cut far into a clip plays from a decoder that is already there.
 /// Returns false when it is turned away (too many being started), to be asked again later.
 pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) -> bool {
-    {
+    let generation = {
         let mut cache = DECODERS.lock();
         let ready = cache.streams.iter().any(|s| {
             s.path == path
@@ -957,18 +1037,23 @@ pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) -> bool {
                 && s.can_serve(time_us)
                 && s.frames_to(time_us) <= PREFETCH_MIN_FRAMES
         });
-        let pending = cache
-            .pending
-            .iter()
-            .any(|(p, l, t)| p == path && *l == limit && *t == time_us);
+        let pending = cache.pending.iter().any(|(p, l, t, generation)| {
+            p == path && *l == limit && *t == time_us && *generation == cache.generation
+        });
         if ready || pending {
             return true;
         }
-        if cache.pending.len() >= MAX_PENDING_PREFETCH {
+        if cache.pending.len() >= MAX_PENDING_PREFETCH
+            || cache.pending.len() >= cache.streams.prefetch_slots()
+        {
             return false;
         }
-        cache.pending.push((path.to_path_buf(), limit, time_us));
-    }
+        let generation = cache.generation;
+        cache
+            .pending
+            .push((path.to_path_buf(), limit, time_us, generation));
+        generation
+    };
     let owned = path.to_path_buf();
     let started = std::thread::Builder::new()
         .name("aeroedits-prefetch".into())
@@ -979,21 +1064,25 @@ pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) -> bool {
             });
             let evicted = {
                 let mut cache = DECODERS.lock();
-                cache
-                    .pending
-                    .retain(|(p, l, t)| !(p == &owned && *l == limit && *t == time_us));
+                cache.pending.retain(|(p, l, t, g)| {
+                    !(p == &owned && *l == limit && *t == time_us && *g == generation)
+                });
                 match opened {
-                    Ok(stream) => keep_stream(&mut cache, stream),
+                    Ok(stream) if cache.generation == generation => {
+                        cache.streams.keep_prefetched(stream)
+                    }
+                    // release_decoders happened during the open: do not repopulate it.
+                    Ok(stream) => vec![stream],
                     Err(_) => Vec::new(),
                 }
             };
             stop_streams(evicted);
         });
     if started.is_err() {
-        DECODERS
-            .lock()
-            .pending
-            .retain(|(p, l, t)| !(p == path && *l == limit && *t == time_us));
+        DECODERS.lock().pending.retain(|(p, l, t, g)| {
+            !(p == path && *l == limit && *t == time_us && *g == generation)
+        });
+        return false;
     }
     true
 }
@@ -1066,7 +1155,11 @@ pub fn decode_bgra_limited(
 
 /// Stops every cached decoder process, e.g. once an export finishes.
 pub fn release_decoders() {
-    let streams = std::mem::take(&mut DECODERS.lock().streams);
+    let streams = {
+        let mut cache = DECODERS.lock();
+        cache.generation = cache.generation.wrapping_add(1);
+        cache.streams.drain()
+    };
     drop(streams);
 }
 
@@ -1554,6 +1647,81 @@ pub fn write_solid_mp4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn active_streams(values: impl IntoIterator<Item = usize>) -> Vec<(usize, std::time::Instant)> {
+        values
+            .into_iter()
+            .map(|value| (value, std::time::Instant::now()))
+            .collect()
+    }
+
+    #[test]
+    fn speculative_decoders_cannot_evict_the_active_working_set() {
+        let mut cache = StreamCache {
+            active: active_streams(0..MAX_OPEN_STREAMS),
+            prefetched: vec![],
+        };
+        assert_eq!(cache.keep_prefetched(100), vec![100]);
+        assert_eq!(
+            cache.iter().copied().collect::<Vec<_>>(),
+            (0..MAX_OPEN_STREAMS).collect::<Vec<_>>()
+        );
+        assert_eq!(cache.prefetch_slots(), 0);
+        assert!(cache.prefetched.is_empty());
+        assert_eq!(cache.len(), MAX_OPEN_STREAMS);
+    }
+
+    #[test]
+    fn demand_evicts_warmups_before_active_decoders_and_promotes_hits() {
+        let mut cache = StreamCache {
+            active: active_streams(0..MAX_OPEN_STREAMS - 2),
+            prefetched: vec![100, 101],
+        };
+        assert_eq!(cache.keep_active(200), vec![101]);
+        assert_eq!(cache.prefetched, vec![100]);
+        assert_eq!(cache.active.len(), MAX_OPEN_STREAMS - 1);
+        let index = cache.iter().position(|&value| value == 100).unwrap();
+        let warm = cache.remove(index);
+        assert!(cache.keep_active(warm).is_empty());
+        assert!(cache.prefetched.is_empty());
+        assert_eq!(cache.active[0].0, 100);
+        // With no warm-ups left, the least recently used active decoder goes.
+        assert_eq!(cache.keep_active(300), vec![MAX_OPEN_STREAMS - 3]);
+        assert_eq!(cache.len(), MAX_OPEN_STREAMS);
+        let drained = cache.drain();
+        assert_eq!(drained.len(), MAX_OPEN_STREAMS);
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn late_warmup_completion_is_discarded_when_demand_filled_its_slot() {
+        let mut cache = StreamCache {
+            active: active_streams(0..MAX_OPEN_STREAMS - 1),
+            prefetched: vec![],
+        };
+        assert!(cache.keep_active(100).is_empty());
+        assert_eq!(cache.keep_prefetched(200), vec![200]);
+        assert_eq!(cache.active[0].0, 100);
+        assert_eq!(cache.len(), MAX_OPEN_STREAMS);
+    }
+
+    #[test]
+    fn old_recording_segments_yield_slots_without_displacing_recent_frames() {
+        let mut cache = StreamCache {
+            active: active_streams(0..MAX_OPEN_STREAMS),
+            prefetched: vec![],
+        };
+        cache.active.last_mut().unwrap().1 -= PREFETCH_PROTECT_TIME;
+        assert_eq!(cache.prefetch_slots(), 1);
+        assert_eq!(cache.keep_prefetched(100), vec![MAX_OPEN_STREAMS - 1]);
+        assert_eq!(cache.len(), MAX_OPEN_STREAMS);
+        assert_eq!(cache.prefetched, vec![100]);
+        assert_eq!(cache.prefetch_slots(), 0);
+        assert!(cache
+            .active
+            .iter()
+            .all(|(value, _)| *value < MAX_OPEN_STREAMS - 1));
+    }
 
     /// CI sets this so a missing FFmpeg fails the run instead of skipping media tests.
     const REQUIRE_ENV: &str = "AEROEDITS_REQUIRE_FFMPEG";

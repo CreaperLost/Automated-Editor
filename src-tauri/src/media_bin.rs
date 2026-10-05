@@ -272,9 +272,11 @@ fn fit_within(frame: VideoFrame, (max_w, max_h): (u32, u32)) -> VideoFrame {
     let w = ((frame.width as f64 * scale).round() as u32).max(1);
     let h = ((frame.height as f64 * scale).round() as u32).max(1);
     // BGRA resizes as any four channels do.
-    let Some(image) =
-        image::RgbaImage::from_raw(frame.width, frame.height, frame.data.clone().into_vec())
-    else {
+    let Some(image) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+        frame.width,
+        frame.height,
+        frame.data.as_slice(),
+    ) else {
         return frame;
     };
     let small = image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle);
@@ -318,6 +320,30 @@ pub fn decode_image(path: &Path) -> Result<VideoFrame, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_still_sizes_share_pixels_without_mutating_other_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("still.png");
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([255, 0, 0, 128]))
+            .save(&path)
+            .unwrap();
+        let mut small = decode_image_cached(&path, (10, 10)).unwrap();
+        let cached = decode_image_cached(&path, (10, 10)).unwrap();
+        assert_eq!((small.width, small.height, small.stride), (10, 5, 40));
+        assert_eq!(&small.data[..4], &[0, 0, 255, 128]);
+        assert_eq!(small.data.as_ptr(), cached.data.as_ptr());
+        small.data[0] = 42;
+        assert_eq!(
+            cached.data[0], 0,
+            "modifying one frame must not change the cache"
+        );
+        let full = decode_image_cached(&path, (0, 0)).unwrap();
+        assert_eq!((full.width, full.height), (40, 20));
+        assert_eq!(&full.data[..4], &[0, 0, 255, 128]);
+        let larger_limit = decode_image_cached(&path, (400, 400)).unwrap();
+        assert_eq!((larger_limit.width, larger_limit.height), (40, 20));
+    }
 
     #[test]
     fn kinds_follow_extensions_and_paths_stay_in_the_media_folder() {

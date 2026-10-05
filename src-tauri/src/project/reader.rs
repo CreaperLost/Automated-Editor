@@ -1166,6 +1166,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rolling_audio_handover_plays_each_side_once_without_changing_the_recording() {
+        use crate::fixtures::generate_pcm16_wav;
+        use crate::project::manifest::TrackType;
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "handover");
+        bundle.manifest_mut().tracks.push(TrackDescriptor {
+            id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            codec: "pcm".into(),
+            relative_path: "media/mic/000001.wav".into(),
+            width: None,
+            height: None,
+            fps: None,
+            sample_rate: Some(48_000),
+            channels: Some(1),
+            gaps_total: 0,
+            media_timescale: Some(48_000),
+        });
+        for (i, start_us, end_us, sample, frames) in [
+            (1, 0, 1_000_000, 1_000, 48_000),
+            (2, 998_000, 2_000_000, 2_000, 48_096),
+        ] {
+            let relative = format!("media/mic/{i:06}.wav");
+            let wav = generate_pcm16_wav(48_000, 1, &vec![sample; frames]);
+            fs::write(bundle.root_path().join(&relative), &wav).unwrap();
+            bundle.append_journal(JournalRecord::SegmentCommitted {
+                seq: i,
+                track_id: "mic".into(),
+                relative_path: relative,
+                start_us,
+                end_us,
+                size_bytes: wav.len() as u64,
+                is_keyframe_start: true,
+                media_timescale: 48_000,
+                media_start_value: 0,
+                host_anchor_us: start_us as i64,
+            });
+        }
+        bundle.manifest_mut().duration_us = 2_000_000;
+        bundle.manifest_mut().active_duration_us = 2_000_000;
+        bundle.save_manifest();
+        let journal = fs::read(bundle.root_path().join("journal.jsonl")).unwrap();
+        let manifest = fs::read(bundle.root_path().join("manifest.json")).unwrap();
+        let project = project_for(bundle.root_path(), &dir.path().join("Projects"));
+        let reader = ProjectReader::open(&project).unwrap();
+        let mixer = crate::media::audio::AudioMixer::new(reader.root(), reader.document()).unwrap();
+        // 998,000 us = frame 47,904. The old file ends and the new file starts there.
+        let samples = mixer.read_frames(47_894, 30).unwrap();
+        for (i, stereo) in samples.chunks_exact(2).enumerate() {
+            let expected = if i < 10 { 1_000 } else { 2_000 };
+            assert!(
+                stereo.iter().all(|&s| (s - expected).abs() <= 1),
+                "frame {i}: {stereo:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(bundle.root_path().join("journal.jsonl")).unwrap(),
+            journal
+        );
+        assert_eq!(
+            fs::read(bundle.root_path().join("manifest.json")).unwrap(),
+            manifest
+        );
+    }
+
     /// A project folder made from a recording, as the app makes them.
     fn project_for(recording: &Path, parent: &Path) -> PathBuf {
         crate::project::folder::create_project_folder(parent, "Edit", Some(recording)).unwrap()

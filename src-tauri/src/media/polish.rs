@@ -13,7 +13,7 @@ use crate::project::{
     reader::{safe_path, SegmentSummary},
 };
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
@@ -69,7 +69,13 @@ struct AnalysisCache {
 
 impl SegmentAnalysis {
     fn bytes(&self) -> usize {
-        self.voice.len() + self.loudness.len() * 8 + 4096
+        std::mem::size_of::<Self>()
+            + self.voice.capacity()
+            + self.loudness.capacity() * std::mem::size_of::<f64>()
+            + self
+                .noise
+                .as_ref()
+                .map_or(0, |n| n.power.capacity() * std::mem::size_of::<f32>())
     }
 }
 
@@ -261,13 +267,19 @@ fn noise_profile(
 
 /// Analyzes, side by side, the files the enabled effects will read: loudness reads every
 /// lane, noise reduction the lanes that have it, ducking the speech lanes. One after another,
-/// switching an effect on for a long recording held playback up for over a second; the plan
-/// is then built from the cache.
-fn prepare_analyses(root: &Path, settings: &crate::project::AudioSettings, lanes: &[Lane]) {
+/// switching an effect on for a long recording held playback up for over a second. Retain
+/// the results for the whole plan build: repeated clips need no more filesystem lookups,
+/// and cache eviction while another file is analyzed cannot discard this plan's work.
+fn prepare_analyses<'a>(
+    root: &Path,
+    settings: &crate::project::AudioSettings,
+    lanes: &'a [Lane],
+) -> HashMap<&'a str, Arc<SegmentAnalysis>> {
     let ducking = lanes
         .iter()
         .any(|lane| !lane.speech && settings.lane_duck_db(&lane.id, true).is_some());
-    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
     for lane in lanes {
         let wanted = settings.normalize
             || settings.lane_denoise_db(&lane.id, lane.speech).is_some()
@@ -279,16 +291,23 @@ fn prepare_analyses(root: &Path, settings: &crate::project::AudioSettings, lanes
             for segment in clip.segments.iter().filter(|s| {
                 s.available && s.start_us < clip.in_us + clip.len && clip.in_us < s.end_us
             }) {
-                if let Ok(path) = safe_path(root, &segment.relative_path) {
-                    if !paths.contains(&path) {
-                        paths.push(path);
-                    }
+                // Deduplicate before safe_path: resolving a recording mount can touch the
+                // filesystem, and thousands of cut clips commonly share the same file.
+                let relative = segment.relative_path.as_str();
+                if seen.insert(relative) {
+                    paths.push(relative);
                 }
             }
         }
     }
+    let analyze = |relative| {
+        safe_path(root, relative)
+            .and_then(|path| analyze_cached(&path))
+            .ok()
+            .map(|analysis| (relative, analysis))
+    };
     if paths.len() < 2 {
-        return;
+        return paths.into_iter().filter_map(analyze).collect();
     }
     let workers = std::thread::available_parallelism()
         .map_or(4, |n| n.get())
@@ -296,14 +315,25 @@ fn prepare_analyses(root: &Path, settings: &crate::project::AudioSettings, lanes
         .min(8);
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| loop {
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(path) = paths.get(i) else { break };
-                let _ = analyze_cached(path);
-            });
-        }
-    });
+        let jobs: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut found = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&path) = paths.get(i) else { break };
+                        if let Some(entry) = analyze(path) {
+                            found.push(entry);
+                        }
+                    }
+                    found
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .flat_map(|job| job.join().unwrap())
+            .collect()
+    })
 }
 
 /// Polish derived for one edit: everything the mixer needs per sample.
@@ -329,12 +359,9 @@ impl PolishPlan {
         if !settings.any_enabled() {
             return None;
         }
-        let analyze = |segment: &SegmentSummary| {
-            safe_path(root, &segment.relative_path)
-                .and_then(|path| analyze_cached(&path))
-                .ok()
-        };
-        prepare_analyses(root, settings, lanes);
+        let analyses = prepare_analyses(root, settings, lanes);
+        let analyze =
+            |segment: &SegmentSummary| analyses.get(segment.relative_path.as_str()).cloned();
         // Noise reduction where a lane has it on (speech by default when switched on).
         let mut denoisers = HashMap::new();
         for lane in lanes {
@@ -569,6 +596,116 @@ mod tests {
         assert_eq!(fold_stereo(&[0.0, 1.0, 2.0, 3.0]), [1.0, 2.0]);
     }
     use crate::fixtures::generate_pcm16_wav;
+
+    #[test]
+    fn preparing_effects_keeps_only_unique_audible_files() {
+        use super::super::audio::LaneClip;
+        let dir = tempfile::tempdir().unwrap();
+        let wav = generate_pcm16_wav(48_000, 1, &vec![1_000; 48_000]);
+        for name in ["first.wav", "second.wav", "unused.wav"] {
+            std::fs::write(dir.path().join(name), &wav).unwrap();
+        }
+        let segment = |name: &str, start_us| SegmentSummary {
+            track_id: "mic".into(),
+            relative_path: name.into(),
+            start_us,
+            end_us: start_us + 1_000_000,
+            size_bytes: wav.len() as u64,
+            media_timescale: 48_000,
+            media_start_value: 0,
+            host_anchor_us: 0,
+            is_keyframe_start: None,
+            available: true,
+        };
+        let segments = Arc::new(vec![
+            segment("first.wav", 0),
+            segment("second.wav", 1_000_000),
+            segment("unused.wav", 2_000_000),
+        ]);
+        let mut lanes = vec![Lane {
+            id: "speech".into(),
+            speech: true,
+            gain: 1.0,
+            clips: (0..20)
+                .map(|i| LaneClip {
+                    edited_start: i * 100_000,
+                    in_us: i * 100_000,
+                    len: 100_000,
+                    source_end: 3_000_000,
+                    segments: segments.clone(),
+                })
+                .collect(),
+        }];
+        // Another lane uses the otherwise unused file, but has no enabled effect.
+        lanes.push(Lane {
+            id: "background".into(),
+            speech: false,
+            gain: 1.0,
+            clips: vec![LaneClip {
+                edited_start: 0,
+                in_us: 2_000_000,
+                len: 1_000_000,
+                source_end: 3_000_000,
+                segments,
+            }],
+        });
+        let settings = crate::project::AudioSettings {
+            noise_reduction: true,
+            ..Default::default()
+        };
+        let analyses = prepare_analyses(dir.path(), &settings, &lanes);
+        assert_eq!(analyses.len(), 2);
+        assert!(analyses.contains_key("first.wav") && analyses.contains_key("second.wav"));
+        // Results remain usable throughout the build without reopening their files.
+        std::fs::remove_file(dir.path().join("first.wav")).unwrap();
+        assert_eq!(analyses["first.wav"].voice.len(), 100);
+        assert_eq!(analyses["second.wav"].loudness.len(), 10);
+    }
+
+    #[test]
+    fn normalization_is_unchanged_when_a_file_is_split_into_many_clips() {
+        use super::super::audio::LaneClip;
+        let dir = tempfile::tempdir().unwrap();
+        let samples: Vec<i16> = (0..96_000)
+            .map(|i| (3_000.0 * (std::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin()) as i16)
+            .collect();
+        let wav = generate_pcm16_wav(48_000, 1, &samples);
+        std::fs::write(dir.path().join("speech.wav"), &wav).unwrap();
+        let segments = Arc::new(vec![SegmentSummary {
+            track_id: "mic".into(),
+            relative_path: "speech.wav".into(),
+            start_us: 0,
+            end_us: 2_000_000,
+            size_bytes: wav.len() as u64,
+            media_timescale: 48_000,
+            media_start_value: 0,
+            host_anchor_us: 0,
+            is_keyframe_start: None,
+            available: true,
+        }]);
+        let lane = |count| Lane {
+            id: "speech".into(),
+            speech: true,
+            gain: 1.0,
+            clips: (0..count)
+                .map(|i| LaneClip {
+                    edited_start: i * (2_000_000 / count),
+                    in_us: i * (2_000_000 / count),
+                    len: 2_000_000 / count,
+                    source_end: 2_000_000,
+                    segments: segments.clone(),
+                })
+                .collect(),
+        };
+        let settings = crate::project::AudioSettings {
+            normalize: true,
+            ..Default::default()
+        };
+        let whole = PolishPlan::build(dir.path(), &settings, &[lane(1)], 2_000_000).unwrap();
+        let cuts = PolishPlan::build(dir.path(), &settings, &[lane(200)], 2_000_000).unwrap();
+        assert!(whole.gain > 1.0);
+        assert!((whole.gain - cuts.gain).abs() < 1e-12);
+    }
 
     #[test]
     fn duck_envelope_ramps_around_speech() {
