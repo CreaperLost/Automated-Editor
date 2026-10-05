@@ -105,6 +105,15 @@ impl ColorInfo {
             compositing_space: "bt709_encoded".into(),
         }
     }
+
+    /// SDR Rec.709 YCbCr, limited range: NV12 as decoded, or as made for the encoder.
+    pub fn rec709_limited() -> Self {
+        Self {
+            matrix: "bt709".into(),
+            range: "limited".into(),
+            ..Self::rec709_full()
+        }
+    }
 }
 
 /// A frame's pixels, shared: cloning a frame (a cached still, the wallpaper, a decoded frame

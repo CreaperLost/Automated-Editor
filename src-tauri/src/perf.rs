@@ -700,3 +700,92 @@ fn probe_restore_all_cuts() {
     );
     assert_eq!(before, after);
 }
+
+/// Export frames of the probe recording as the GPU now converts them (NV12) against what the
+/// export made before (BGRA through FFmpeg's default conversion): worst and mean difference in
+/// levels per plane.
+#[test]
+#[ignore]
+fn probe_export_nv12_against_bgra() {
+    use std::io::{Read, Write};
+    let Some(dir) = probe_dir() else { return };
+    let work = tempfile::tempdir().unwrap();
+    let (state, _, root) = opened(work.path(), &dir);
+    let document = document(&state);
+    let (w, h) = (1920usize, 1080usize);
+    let evaluator = |nv12: bool| {
+        SceneEvaluator::new(root.clone(), document.clone(), w as u32, h as u32)
+            .unwrap()
+            .with_nv12_output(nv12)
+    };
+    let (mut bgra, mut nv12) = (evaluator(false), evaluator(true));
+    let mut worst = [0u8; 3];
+    let mut total = [0u64; 3];
+    let mut count = [0u64; 3];
+    let duration = document.duration_us();
+    for i in 0..12 {
+        let at = duration * i / 12;
+        let rgb = bgra.preview_at(at).unwrap();
+        let yuv = nv12.preview_at(at).unwrap();
+        let mut child = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgra",
+                "-video_size",
+            ])
+            .arg(format!("{w}x{h}"))
+            .args(["-i", "pipe:0", "-vf"])
+            .arg("scale=out_color_matrix=bt709:out_range=tv,format=yuv420p")
+            .args(["-f", "rawvideo", "pipe:1"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let pixels = rgb.data.clone();
+        let feed = std::thread::spawn(move || stdin.write_all(&pixels).unwrap());
+        let mut old = Vec::new();
+        child.stdout.take().unwrap().read_to_end(&mut old).unwrap();
+        feed.join().unwrap();
+        child.wait().unwrap();
+        let quarter = w * h / 4;
+        let chroma = &yuv.data[w * h..];
+        let planes: [Vec<(u8, u8)>; 3] = [
+            yuv.data[..w * h]
+                .iter()
+                .copied()
+                .zip(old[..w * h].iter().copied())
+                .collect(),
+            chroma
+                .iter()
+                .step_by(2)
+                .copied()
+                .zip(old[w * h..][..quarter].iter().copied())
+                .collect(),
+            chroma[1..]
+                .iter()
+                .step_by(2)
+                .copied()
+                .zip(old[w * h + quarter..].iter().copied())
+                .collect(),
+        ];
+        for (p, pairs) in planes.iter().enumerate() {
+            for &(a, b) in pairs {
+                worst[p] = worst[p].max(a.abs_diff(b));
+                total[p] += a.abs_diff(b) as u64;
+                count[p] += 1;
+            }
+        }
+    }
+    for (p, name) in ["Y", "Cb", "Cr"].iter().enumerate() {
+        println!(
+            "PROBE {name}: worst {} levels, mean {:.3}",
+            worst[p],
+            total[p] as f64 / count[p] as f64
+        );
+    }
+}

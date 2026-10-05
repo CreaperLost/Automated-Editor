@@ -871,7 +871,11 @@ impl FrameStream {
             height: self.height,
             stride,
             format,
-            color: ColorInfo::rec709_full(),
+            color: if self.limit.yuv {
+                ColorInfo::rec709_limited()
+            } else {
+                ColorInfo::rec709_full()
+            },
             data,
         })
     }
@@ -1419,12 +1423,14 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// Streams BGRA frames into an H.264 video track and PCM into a side file, then muxes them
-/// with AAC audio into one MP4 on `finish`.
+/// Streams BGRA or NV12 frames into an H.264 video track and PCM into a side file, then
+/// muxes them with AAC audio into one MP4 on `finish`.
 pub struct FfmpegExport {
     path: PathBuf,
     width: u32,
     height: u32,
+    /// The frames it takes.
+    input: PixelFormat,
     sample_rate: u32,
     channels: u16,
     child: Option<Child>,
@@ -1452,9 +1458,14 @@ impl FfmpegExport {
             sample_rate,
             channels,
             RateControl::default(),
+            PixelFormat::Bgra8888,
         )
     }
 
+    /// `input`: the frames it will be given. NV12 must already be limited-range BT.709 (as the
+    /// GPU compositor makes it): it goes to the encoder as it is. BGRA is converted here, on
+    /// the CPU.
+    #[allow(clippy::too_many_arguments)]
     pub fn begin_with_rate(
         path: &Path,
         width: u32,
@@ -1463,6 +1474,7 @@ impl FfmpegExport {
         sample_rate: u32,
         channels: u16,
         rate: RateControl,
+        input: PixelFormat,
     ) -> Result<Self, String> {
         validate_dim(width, height)?;
         if width % 2 != 0 || height % 2 != 0 {
@@ -1475,15 +1487,28 @@ impl FfmpegExport {
         let encoder = h264_encoder_for(width, height)?;
         let video_path = sibling(path, ".video.mp4");
         let (mut cmd, log) = command(ffmpeg_path()?)?;
-        cmd.args(["-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgra"])
-            .args(["-video_size", &format!("{width}x{height}")])
+        cmd.args(["-nostdin", "-y", "-f", "rawvideo"]);
+        match input {
+            PixelFormat::Bgra8888 => cmd.args(["-pix_fmt", "bgra"]),
+            PixelFormat::Nv12 => cmd.args(["-pix_fmt", "nv12", "-color_range", "tv"]).args([
+                "-colorspace",
+                "bt709",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "bt709",
+            ]),
+        };
+        cmd.args(["-video_size", &format!("{width}x{height}")])
             .args(["-framerate", &fps.to_string()])
-            .args(["-i", "pipe:0", "-an"])
-            .args([
+            .args(["-i", "pipe:0", "-an"]);
+        if input == PixelFormat::Bgra8888 {
+            cmd.args([
                 "-vf",
                 "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
-            ])
-            .args(["-c:v", encoder.name])
+            ]);
+        }
+        cmd.args(["-c:v", encoder.name])
             .args(encoder.rate_args(rate, width, height, fps));
         cmd.args([
             "-colorspace",
@@ -1515,6 +1540,7 @@ impl FfmpegExport {
             path: path.to_path_buf(),
             width,
             height,
+            input,
             sample_rate,
             channels,
             child: Some(child),
@@ -1530,17 +1556,24 @@ impl FfmpegExport {
         if frame.width != self.width || frame.height != self.height {
             return Err("Export frame geometry does not match the session".into());
         }
-        let row_len = self.width as usize * 4;
+        if frame.format != self.input {
+            return Err("Export frame format does not match the session".into());
+        }
+        // NV12: the luma rows, then half as many rows of chroma pairs, as wide.
+        let (row_len, rows) = match self.input {
+            PixelFormat::Bgra8888 => (self.width as usize * 4, self.height as usize),
+            PixelFormat::Nv12 => (self.width as usize, self.height as usize * 3 / 2),
+        };
         let stride = frame.stride as usize;
-        if stride < row_len || frame.data.len() < stride * (self.height as usize - 1) + row_len {
+        if stride < row_len || frame.data.len() < stride * (rows - 1) + row_len {
             return Err("Export frame buffer is truncated".into());
         }
         let stdin = self.stdin.as_mut().ok_or("Export session is closed")?;
         let result = if stride == row_len {
-            stdin.write_all(&frame.data[..row_len * self.height as usize])
+            stdin.write_all(&frame.data[..row_len * rows])
         } else {
             self.row.clear();
-            for y in 0..self.height as usize {
+            for y in 0..rows {
                 self.row
                     .extend_from_slice(&frame.data[y * stride..y * stride + row_len]);
             }

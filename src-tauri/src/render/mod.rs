@@ -14,6 +14,7 @@ pub const COPIES_COMPOSITE: u32 = 2;
 /// never runs out of layers.
 pub const MAX_LAYERS: usize = 24;
 const SHADER: &str = include_str!("composite.wgsl");
+const TO_YUV: &str = include_str!("to_yuv.wgsl");
 const WEBCAM_SHADOW_BLUR_PX: f32 = 16.0;
 const WEBCAM_SHADOW_OPACITY: f32 = 0.55;
 const SHADOW_OFFSET_FACTOR: f32 = 0.35;
@@ -641,6 +642,19 @@ struct TargetCache {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     staging: wgpu::Buffer,
+    /// The NV12 planes for the encoder, made the first time they are asked for.
+    yuv: Option<YuvTarget>,
+}
+
+/// The composited frame converted to NV12's two planes, and their readback (luma rows, then
+/// chroma rows, each padded to the copy alignment).
+struct YuvTarget {
+    luma_view: wgpu::TextureView,
+    luma: wgpu::Texture,
+    chroma_view: wgpu::TextureView,
+    chroma: wgpu::Texture,
+    bind: wgpu::BindGroup,
+    staging: wgpu::Buffer,
 }
 
 /// A layer texture kept for the layer in the same position on the next frame.
@@ -670,6 +684,10 @@ pub struct Compositor {
     slots: std::sync::Mutex<Vec<LayerSlot>>,
     /// Bound as the chroma plane of layers that have none (BGRA).
     no_chroma: wgpu::TextureView,
+    /// Converting the composited frame to NV12 (see `to_yuv.wgsl`).
+    yuv_layout: wgpu::BindGroupLayout,
+    luma_pipeline: wgpu::RenderPipeline,
+    chroma_pipeline: wgpu::RenderPipeline,
 }
 
 impl Compositor {
@@ -769,6 +787,57 @@ impl Compositor {
             multiview: None,
             cache: None,
         });
+        let yuv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("aeroedits-to-yuv"),
+            source: wgpu::ShaderSource::Wgsl(TO_YUV.into()),
+        });
+        let yuv_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("aeroedits-to-yuv"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let yuv_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("aeroedits-to-yuv-layout"),
+            bind_group_layouts: &[&yuv_layout],
+            push_constant_ranges: &[],
+        });
+        let plane_pipeline = |entry: &str, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&yuv_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &yuv_shader,
+                    entry_point: Some("vs_full"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &yuv_shader,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let luma_pipeline = plane_pipeline("fs_luma", wgpu::TextureFormat::R8Unorm);
+        let chroma_pipeline = plane_pipeline("fs_chroma", wgpu::TextureFormat::Rg8Unorm);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             // Bilinear: layers are almost never drawn 1:1 (padding, screen size, zoom), and
             // nearest sampling dropped or doubled whole pixel columns of screen text.
@@ -807,6 +876,9 @@ impl Compositor {
             target: std::sync::Mutex::new(None),
             slots: std::sync::Mutex::new(Vec::new()),
             no_chroma,
+            yuv_layout,
+            luma_pipeline,
+            chroma_pipeline,
         })
     }
 
@@ -844,7 +916,74 @@ impl Compositor {
         Ok(frame)
     }
 
+    /// The scene as BGRA.
     pub fn composite(&self, scene: &Scene) -> Result<VideoFrame, String> {
+        self.render(scene, false)
+    }
+
+    /// The scene as NV12 in limited-range BT.709, as an H.264 encoder takes it: the GPU
+    /// converts it, and reading it back moves 1.5 bytes a pixel instead of 4. Even sizes only.
+    pub fn composite_nv12(&self, scene: &Scene) -> Result<VideoFrame, String> {
+        if scene.width % 2 != 0 || scene.height % 2 != 0 {
+            return Err("NV12 needs an even width and height".into());
+        }
+        self.render(scene, true)
+    }
+
+    /// The NV12 planes for a target of `target`'s size.
+    fn yuv_target(&self, target: &TargetCache) -> YuvTarget {
+        let plane = |label: &str, width: u32, height: u32, format: wgpu::TextureFormat| {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            (texture, view)
+        };
+        let (w, h) = (target.width, target.height);
+        let (luma, luma_view) = plane("aeroedits-luma", w, h, wgpu::TextureFormat::R8Unorm);
+        let (chroma, chroma_view) = plane(
+            "aeroedits-chroma",
+            w / 2,
+            h / 2,
+            wgpu::TextureFormat::Rg8Unorm,
+        );
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("aeroedits-to-yuv-bind"),
+            layout: &self.yuv_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&target.view),
+            }],
+        });
+        // Both planes have `w` bytes a row (chroma: w/2 pairs).
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("aeroedits-yuv-readback"),
+            size: u64::from(aligned_row(w)) * u64::from(h + h / 2),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        YuvTarget {
+            luma_view,
+            luma,
+            chroma_view,
+            chroma,
+            bind,
+            staging,
+        }
+    }
+
+    fn render(&self, scene: &Scene, nv12: bool) -> Result<VideoFrame, String> {
         validate_dim(scene.width, scene.height)?;
         if scene.layers.len() > MAX_LAYERS {
             return Err("Compositor layer count exceeds the F2 bound".into());
@@ -866,7 +1005,10 @@ impl Compositor {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Bgra8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                // Read by the NV12 conversion.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -882,10 +1024,18 @@ impl Compositor {
                 texture,
                 view,
                 staging,
+                yuv: None,
             });
         }
+        if nv12 {
+            let cached = target_cache.as_mut().unwrap();
+            if cached.yuv.is_none() {
+                cached.yuv = Some(self.yuv_target(cached));
+            }
+        }
         let cached = target_cache.as_ref().unwrap();
-        let (target, view, staging) = (&cached.texture, &cached.view, &cached.staging);
+        let (target, view) = (&cached.texture, &cached.view);
+        let yuv = cached.yuv.as_ref().filter(|_| nv12);
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
         slots.truncate(scene.layers.len());
         let mut draws = Vec::new();
@@ -1144,27 +1294,79 @@ impl Compositor {
             }
         }
 
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(scene.height),
+        let copy = |encoder: &mut wgpu::CommandEncoder,
+                    texture: &wgpu::Texture,
+                    buffer: &wgpu::Buffer,
+                    offset: u64,
+                    row: u32,
+                    (width, height): (u32, u32)| {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-            },
-            wgpu::Extent3d {
-                width: scene.width,
-                height: scene.height,
-                depth_or_array_layers: 1,
-            },
-        );
+                wgpu::TexelCopyBufferInfo {
+                    buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset,
+                        bytes_per_row: Some(row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        };
+        let (w, h) = (scene.width, scene.height);
+        // What to read back: the buffer, its padded row, the bytes of each row and the rows.
+        let (staging, padded, row_bytes, rows) = match yuv {
+            Some(yuv) => {
+                for (pipeline, plane) in [
+                    (&self.luma_pipeline, &yuv.luma_view),
+                    (&self.chroma_pipeline, &yuv.chroma_view),
+                ] {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("aeroedits-to-yuv"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: plane,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &yuv.bind, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+                let row = aligned_row(w);
+                copy(&mut encoder, &yuv.luma, &yuv.staging, 0, row, (w, h));
+                let chroma_at = u64::from(row) * u64::from(h);
+                copy(
+                    &mut encoder,
+                    &yuv.chroma,
+                    &yuv.staging,
+                    chroma_at,
+                    row,
+                    (w / 2, h / 2),
+                );
+                (&yuv.staging, row, w, h + h / 2)
+            }
+            None => {
+                copy(&mut encoder, target, &cached.staging, 0, padded, (w, h));
+                (&cached.staging, padded, w * 4, h)
+            }
+        };
         self.queue.submit(Some(encoder.finish()));
         let slice = staging.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| ());
@@ -1172,23 +1374,30 @@ impl Compositor {
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|e| format!("Compositor readback poll failed: {e}"))?;
         let data = slice.get_mapped_range();
-        let mut packed = Vec::with_capacity((scene.width * scene.height * 4) as usize);
-        for row in 0..scene.height {
+        let mut packed = Vec::with_capacity(row_bytes as usize * rows as usize);
+        for row in 0..rows {
             let start = (row * padded) as usize;
-            packed.extend_from_slice(&data[start..start + (scene.width * 4) as usize]);
+            packed.extend_from_slice(&data[start..start + row_bytes as usize]);
         }
         drop(data);
         staging.unmap();
-        let bgra = packed;
         let _keep = draws;
         Ok(VideoFrame {
             pts_us: scene.layers.first().map(|l| l.frame.pts_us).unwrap_or(0),
-            width: scene.width,
-            height: scene.height,
-            stride: scene.width * 4,
-            format: PixelFormat::Bgra8888,
-            color: ColorInfo::rec709_full(),
-            data: bgra.into(),
+            width: w,
+            height: h,
+            stride: row_bytes,
+            format: if nv12 {
+                PixelFormat::Nv12
+            } else {
+                PixelFormat::Bgra8888
+            },
+            color: if nv12 {
+                ColorInfo::rec709_limited()
+            } else {
+                ColorInfo::rec709_full()
+            },
+            data: packed.into(),
         })
     }
 }
@@ -1703,9 +1912,12 @@ fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
 }
 
 fn padded_bytes_per_row(width: u32) -> u32 {
-    let unpadded = width * 4;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    (unpadded + align - 1) / align * align
+    aligned_row(width * 4)
+}
+
+/// `bytes` rounded up to the row alignment of a texture-to-buffer copy.
+fn aligned_row(bytes: u32) -> u32 {
+    bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
 }
 
 fn quad_vertices(canvas_w: u32, canvas_h: u32, layer: &Layer, pad: f32) -> [Vertex; 6] {

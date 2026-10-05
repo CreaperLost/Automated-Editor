@@ -5,7 +5,7 @@ mod native;
 use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
 use crate::media::{
     decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate, MediaBackend,
-    RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
+    PixelFormat, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
 };
 use crate::project::reader::{safe_path, SegmentSummary};
 use crate::project::revision::EditDocument;
@@ -261,6 +261,8 @@ pub struct SceneEvaluator {
     width: u32,
     height: u32,
     decode_limit: DecodeLimit,
+    /// Frames come out as NV12 (for an encoder) rather than BGRA, when the GPU composites.
+    nv12_output: bool,
     /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
     /// Enabled webcam focus segments on the timeline, merged.
@@ -402,6 +404,7 @@ impl SceneEvaluator {
             width,
             height,
             decode_limit: DecodeLimit::NONE,
+            nv12_output: false,
             wallpaper,
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
@@ -440,6 +443,22 @@ impl SceneEvaluator {
         self
     }
 
+    /// With `nv12` and a GPU compositor, frames come out as limited-range BT.709 NV12, as an
+    /// H.264 encoder takes them (see [`SceneEvaluator::output_format`]).
+    pub fn with_nv12_output(mut self, nv12: bool) -> Self {
+        self.nv12_output = nv12;
+        self
+    }
+
+    /// The format of the frames [`SceneEvaluator::preview_at`] makes.
+    pub fn output_format(&self) -> PixelFormat {
+        if self.nv12_output && self.compositor.is_some() {
+            PixelFormat::Nv12
+        } else {
+            PixelFormat::Bgra8888
+        }
+    }
+
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
         let started = std::time::Instant::now();
         let mut scene = self.scene_at(edited_us)?;
@@ -465,6 +484,7 @@ impl SceneEvaluator {
         }
         let started = std::time::Instant::now();
         let mut frame = match self.compositor.as_mut() {
+            Some(compositor) if self.nv12_output => compositor.composite_nv12(&scene)?,
             Some(compositor) => compositor.composite(&scene)?,
             None => Compositor::composite_cpu(&scene)?,
         };
@@ -1119,6 +1139,13 @@ enum WriteJob {
 const EXPORT_PREFETCH_US: u64 = 1_500_000;
 
 impl ExportWriter {
+    /// Whether it takes NV12 frames (from the GPU compositor) as well as BGRA.
+    fn takes_nv12() -> bool {
+        media_backend() == MediaBackend::Ffmpeg
+    }
+
+    /// `input`: the frames it will be given; NV12 only if [`ExportWriter::takes_nv12`].
+    #[allow(clippy::too_many_arguments)]
     fn begin(
         path: &Path,
         width: u32,
@@ -1127,16 +1154,25 @@ impl ExportWriter {
         sample_rate: u32,
         channels: u16,
         rate: RateControl,
+        input: PixelFormat,
     ) -> Result<Self, String> {
         match media_backend() {
-            MediaBackend::Native => {
+            MediaBackend::Native if input == PixelFormat::Bgra8888 => {
                 NativeExport::begin(path, width, height, fps, sample_rate, channels, rate)
                     .map(Self::Native)
             }
-            MediaBackend::Ffmpeg => {
-                FfmpegExport::begin_with_rate(path, width, height, fps, sample_rate, channels, rate)
-                    .map(Self::Ffmpeg)
-            }
+            MediaBackend::Native => Err("This export writer takes BGRA frames only".into()),
+            MediaBackend::Ffmpeg => FfmpegExport::begin_with_rate(
+                path,
+                width,
+                height,
+                fps,
+                sample_rate,
+                channels,
+                rate,
+                input,
+            )
+            .map(Self::Ffmpeg),
         }
     }
 
@@ -1653,16 +1689,6 @@ fn export_to_temp(
     } else {
         (0, 0)
     };
-    let mut session = ExportWriter::begin(
-        &captured.temp,
-        captured.settings.width,
-        captured.settings.height,
-        captured.settings.fps,
-        sample_rate,
-        channels,
-        captured.settings.rate_control(),
-    )
-    .map_err(|message| ExportFailure::Native { message })?;
     let mut evaluator = SceneEvaluator::new(
         captured.root.clone(),
         captured.document.clone(),
@@ -1674,7 +1700,21 @@ fn export_to_temp(
         captured.settings.width,
         captured.settings.height,
         captured.settings.fps,
-    ));
+    ))
+    // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
+    // pipe, and no conversion on the CPU.
+    .with_nv12_output(ExportWriter::takes_nv12());
+    let mut session = ExportWriter::begin(
+        &captured.temp,
+        captured.settings.width,
+        captured.settings.height,
+        captured.settings.fps,
+        sample_rate,
+        channels,
+        captured.settings.rate_control(),
+        evaluator.output_format(),
+    )
+    .map_err(|message| ExportFailure::Native { message })?;
 
     // The encoder is fed on a thread of its own, a couple of frames behind: while it takes
     // one frame, the next is decoded and composited.
@@ -2889,6 +2929,7 @@ mod tests {
             width: 320,
             height: 180,
             decode_limit: DecodeLimit::NONE,
+            nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
@@ -2941,6 +2982,7 @@ mod tests {
             width,
             height,
             decode_limit: DecodeLimit::NONE,
+            nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
@@ -3105,6 +3147,123 @@ mod tests {
             .sum();
         assert!((total as f64 / (640.0 * 360.0 * 3.0)) < 3.0);
         crate::media::ffmpeg::release_decoders();
+    }
+
+    /// Export frames are converted to the encoder's YUV on the GPU; they must match FFmpeg's
+    /// own conversion of the same picture to a level. (Its default bicubic filter shrinks colour
+    /// a little differently at sharp colour edges, up to 9 levels there and 0.3 on average; the
+    /// GPU averages each 2x2 block, like FFmpeg's `area`.)
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_nv12_output_matches_ffmpeg_conversion() {
+        use std::io::{Read, Write};
+        let (w, h) = (640usize, 360usize);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pattern.mp4");
+        let ffmpeg = crate::media::ffmpeg::ffmpeg_path().unwrap();
+        // Colour bars, gradients, moving shapes and text: sharp colour edges included.
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg(format!("testsrc2=size={w}x{h}:rate=30"))
+            .args([
+                "-t", "1", "-pix_fmt", "yuv444p", "-c:v", "libx264", "-qp", "0", "-y",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let limit = DecodeLimit {
+            max_width: w as u32,
+            max_height: h as u32,
+            max_rate: 30,
+            interactive: true,
+            yuv: false,
+        };
+        let picture = crate::media::ffmpeg::decode_bgra_limited(&path, 500_000, limit).unwrap();
+        let compositor = Compositor::new().unwrap();
+        let scene = Scene {
+            width: w as u32,
+            height: h as u32,
+            background: [0.0, 0.0, 0.0, 1.0],
+            layers: vec![crate::render::Layer::placed(
+                picture, 0, 0, w as u32, h as u32,
+            )],
+        };
+        let bgra = compositor.composite(&scene).unwrap();
+        let nv12 = compositor.composite_nv12(&scene).unwrap();
+        assert_eq!(nv12.format, crate::media::PixelFormat::Nv12);
+        assert_eq!((nv12.stride as usize, nv12.data.len()), (w, w * h * 3 / 2));
+        // FFmpeg's conversion, as the export ran it, with a box filter for colour.
+        let mut child = std::process::Command::new(ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgra",
+                "-video_size",
+            ])
+            .arg(format!("{w}x{h}"))
+            .args(["-i", "pipe:0", "-vf"])
+            .arg("scale=out_color_matrix=bt709:out_range=tv:flags=area,format=yuv420p")
+            .args(["-f", "rawvideo", "pipe:1"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let pixels = bgra.data.clone();
+        let feed = std::thread::spawn(move || stdin.write_all(&pixels).unwrap());
+        let mut expected = Vec::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_end(&mut expected)
+            .unwrap();
+        feed.join().unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(expected.len(), w * h * 3 / 2);
+        // (worst, mean) difference in levels.
+        let differ = |a: &mut dyn Iterator<Item = (u8, u8)>| {
+            let (mut worst, mut total, mut count) = (0u8, 0u64, 0u64);
+            for (x, y) in a {
+                worst = worst.max(x.abs_diff(y));
+                total += x.abs_diff(y) as u64;
+                count += 1;
+            }
+            (worst, total as f64 / count as f64)
+        };
+        let quarter = w * h / 4;
+        let chroma = &nv12.data[w * h..];
+        let luma = differ(
+            &mut nv12.data[..w * h]
+                .iter()
+                .copied()
+                .zip(expected[..w * h].iter().copied()),
+        );
+        let cb = differ(
+            &mut chroma
+                .iter()
+                .step_by(2)
+                .copied()
+                .zip(expected[w * h..][..quarter].iter().copied()),
+        );
+        let cr = differ(
+            &mut chroma[1..]
+                .iter()
+                .step_by(2)
+                .copied()
+                .zip(expected[w * h + quarter..].iter().copied()),
+        );
+        println!("luma {luma:?}, cb {cb:?}, cr {cr:?} (worst, mean levels)");
+        for plane in [luma, cb, cr] {
+            assert!(plane.0 <= 1 && plane.1 < 0.05, "differs: {plane:?}");
+        }
     }
 
     #[test]
