@@ -18,9 +18,12 @@ use tauri::Manager;
 /// Audio queued ahead of the play position, in mixer chunks. The cpal queue (Windows) can
 /// take a deep lead, so a slow preview frame does not starve the audio clock.
 const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
+/// While playing, decoders start this far ahead of the clip edges coming up.
+const PREFETCH_US: u64 = 1_200_000;
 
+/// The scene and mixer for what plays. Kept across seeks; rebuilt when an edit changes it.
 struct Runtime {
-    generation: u64,
+    content: u64,
     /// Built for the webview preview, which copies frames through JPEG.
     webview: bool,
     quality: PreviewQuality,
@@ -39,16 +42,32 @@ struct WebviewJob {
     for_short: bool,
 }
 
+/// Set while the encoder works on a frame. The media worker then skips drawing a frame it
+/// would have to wait to hand over: it goes on feeding audio and draws a fresh frame once
+/// the encoder is free, rather than blocking on a frame that is stale by the time it is sent.
+static ENCODING: AtomicBool = AtomicBool::new(false);
+
+/// Clears [`ENCODING`] however a job ends.
+struct Encoding;
+
+impl Drop for Encoding {
+    fn drop(&mut self) {
+        ENCODING.store(false, Ordering::Release);
+    }
+}
+
 /// Encodes and presents webview frames on their own thread, so the next frame decodes and
-/// composites while this one is compressed. The channel holds no buffer: handing over a frame
-/// waits for the previous one to finish, which keeps at most one frame in flight.
+/// composites while this one is compressed. One frame waits at most: the media worker draws
+/// one only while the encoder is free (see [`ENCODING`]), and never waits to hand it over.
 fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
-    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(0);
+    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(1);
     thread::spawn(move || {
         // With AEROEDITS_PROFILE set, reports the presented preview rate every two seconds.
         let mut window = std::time::Instant::now();
         let mut presented = 0u32;
         for job in jobs {
+            ENCODING.store(true, Ordering::Release);
+            let _encoding = Encoding;
             if window.elapsed() >= Duration::from_secs(2) {
                 if presented > 0 && crate::media::profiling() {
                     eprintln!(
@@ -174,10 +193,9 @@ fn tick(
         .preview_quality
         .lock()
         .unwrap_or_else(|| PreviewQuality::default_for(webview));
-    if runtime
-        .as_ref()
-        .map(|r| (r.generation, r.webview, r.quality))
-        != Some((generation, webview, quality))
+    let content = state.playback.lock().content_generation();
+    if runtime.as_ref().map(|r| (r.content, r.webview, r.quality))
+        != Some((content, webview, quality))
     {
         let rebuild_started = std::time::Instant::now();
         let (root, document) = {
@@ -209,7 +227,7 @@ fn tick(
             .map_err(error)?
             .with_decode_limit(quality.decode_limit((width, height), webview));
         *runtime = Some(Runtime {
-            generation,
+            content,
             webview,
             quality,
             evaluator,
@@ -217,20 +235,26 @@ fn tick(
             _lease: lease,
         });
         *last_frame = None;
-        crate::media::profile("rebuild after seek", rebuild_started);
+        crate::media::profile("rebuild after edit", rebuild_started);
     }
     let runtime = runtime.as_mut().unwrap();
+    if status.state == PlaybackState::Playing && !runtime.mixer.has_audio() {
+        state.playback.lock().run_without_audio(generation);
+    }
+    // Faster playback plays through the sound faster: queue that much more ahead.
+    let lead_chunks = AUDIO_LEAD_CHUNKS * status.speed.ceil().max(1.0) as u64;
     if status.state == PlaybackState::Playing && runtime.mixer.has_audio() {
         let initialize = {
             let owner = state.playback.lock();
-            owner.audio.is_none()
+            owner.audio.is_none() && owner.needs_audio()
         };
         if initialize {
             let base = (status.position_us as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64;
             let mut output = AudioOutput::new().map_err(error)?;
+            output.set_speed(status.speed);
             let mut queued = base;
             while queued
-                < (base + CHUNK_FRAMES as u64 * AUDIO_LEAD_CHUNKS).min(runtime.mixer.total_frames)
+                < (base + CHUNK_FRAMES as u64 * lead_chunks).min(runtime.mixer.total_frames)
             {
                 let chunk = runtime
                     .mixer
@@ -265,7 +289,7 @@ fn tick(
                 )
             };
             if queued >= runtime.mixer.total_frames
-                || queued >= position + AUDIO_LEAD_CHUNKS * CHUNK_FRAMES as u64
+                || queued >= position + lead_chunks * CHUNK_FRAMES as u64
             {
                 break;
             }
@@ -316,18 +340,30 @@ fn tick(
     if *last_frame == Some(key) {
         return Ok(playing);
     }
+    if preview.surface == "webview" && ENCODING.load(Ordering::Acquire) {
+        return Ok(playing);
+    }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
+    if status.state == PlaybackState::Playing {
+        // Decoders start the same real time ahead at any speed.
+        let horizon = (PREFETCH_US as f64 * status.speed.max(1.0)) as u64;
+        runtime.evaluator.prefetch(render_us, horizon);
+    }
     if preview.surface == "webview" {
         // The webview fetches frames itself, so nothing here needs the UI thread.
-        encoder
-            .send(WebviewJob {
-                frame,
-                generation,
-                surface_generation: preview.generation,
-                for_short,
-            })
-            .map_err(|_| error("The preview encoder stopped".to_string()))?;
-        *last_frame = Some(key);
+        match encoder.try_send(WebviewJob {
+            frame,
+            generation,
+            surface_generation: preview.generation,
+            for_short,
+        }) {
+            Ok(()) => *last_frame = Some(key),
+            // Taken up a moment ago: this frame is dropped and drawn again next tick.
+            Err(mpsc::TrySendError::Full(_)) => {}
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(error("The preview encoder stopped".to_string()))
+            }
+        }
         return Ok(playing);
     }
     pending.store(true, Ordering::Release);

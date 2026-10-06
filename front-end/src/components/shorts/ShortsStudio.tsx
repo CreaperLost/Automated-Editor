@@ -291,17 +291,41 @@ export const ShortsStudio: React.FC = () => {
     }
   };
 
-  const saveShorts = (next: Short[]) =>
-    run("Saving", (p) => api.projectShortsSet(p.projectHandle, p.revision, next));
+  /**
+   * Saves a change to the shorts. The change is applied to the list as it is when the save
+   * goes out, not as it was when it was asked for: a layout save waits a moment, and must not
+   * undo what happened meanwhile (another short renamed, this one edited on its own). Saves go
+   * out one at a time, each on the revision the one before left. `null` saves nothing.
+   */
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const saveShorts = (change: (current: Short[]) => Short[] | null) => {
+    saveQueue.current = saveQueue.current.then(async () => {
+      const current = useProjectStore.getState().openedProject;
+      const next = current ? change(current.shorts ?? []) : null;
+      if (!current || !next) return;
+      setBusy("Saving");
+      setError(undefined);
+      try {
+        applyOpenedProject(await api.projectShortsSet(current.projectHandle, current.revision, next));
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusy(null);
+      }
+    });
+    return saveQueue.current;
+  };
 
   /** Renames a short (the title is also its file name). */
   const renameShort = (id: string, title: string) =>
-    void saveShorts(shorts.map((s) => (s.id === id ? { ...s, title } : s)));
+    void saveShorts((list) => list.map((s) => (s.id === id ? { ...s, title } : s)));
   const [renaming, setRenaming] = useState<string | null>(null);
 
   const patchSelected = (patch: Partial<Short>) => {
     if (!selected) return;
-    void saveShorts(shorts.map((s) => (s.id === selected.id ? { ...s, ...patch } : s)));
+    const id = selected.id;
+    // A short removed in the meantime is not brought back.
+    void saveShorts((list) => (list.some((s) => s.id === id) ? list.map((s) => (s.id === id ? { ...s, ...patch } : s)) : null));
   };
 
   /** Layout changes show in the preview at once and are saved shortly after. */
@@ -350,7 +374,7 @@ export const ShortsStudio: React.FC = () => {
     if (!ends) return;
     const id = `short-${Date.now().toString(36)}`;
     setSelectedId(id);
-    void saveShorts([...shorts, { id, title: `Short ${shorts.length + 1}`, layout: DEFAULT_LAYOUT, ...ends }]);
+    void saveShorts((list) => [...list, { id, title: `Short ${list.length + 1}`, layout: DEFAULT_LAYOUT, ...ends }]);
   };
 
   const exportShorts = async (ids: string[]) => {
@@ -768,7 +792,7 @@ export const ShortsStudio: React.FC = () => {
               <button
                 type="button"
                 disabled={!!busy || shorts.length < 2}
-                onClick={() => void saveShorts(shorts.map((s) => ({ ...s, layout })))}
+                onClick={() => void saveShorts((list) => list.map((s) => ({ ...s, layout })))}
                 className="h-control px-3 rounded-control bg-studio-800 border border-studio-700 hover:bg-studio-700 disabled:opacity-40"
               >
                 Use this look for every short
@@ -777,8 +801,9 @@ export const ShortsStudio: React.FC = () => {
                 type="button"
                 disabled={!!busy}
                 onClick={() => {
+                  const id = selected.id;
                   setSelectedId(undefined);
-                  void saveShorts(shorts.filter((s) => s.id !== selected.id));
+                  void saveShorts((list) => list.filter((s) => s.id !== id));
                 }}
                 className="h-control flex items-center justify-center gap-1.5 px-3 rounded-control text-danger-fg hover:bg-danger/15 disabled:opacity-40"
               >

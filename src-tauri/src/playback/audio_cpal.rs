@@ -15,6 +15,9 @@ pub(crate) struct PcmQueue {
     phase: f64,
     pub(crate) playing: bool,
     pub(crate) failed: Option<String>,
+    /// Source frames played per frame of real time (0 means 1): faster playback plays its
+    /// sound faster, higher in pitch.
+    pub(crate) speed: f64,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -40,7 +43,8 @@ impl PcmQueue {
     /// paused or starved, without advancing the clock.
     pub(crate) fn render(&mut self, out: &mut [f32], channels: usize, device_rate: u32) {
         let channels = channels.max(1);
-        let step = f64::from(SAMPLE_RATE) / f64::from(device_rate.max(1));
+        let speed = if self.speed > 0.0 { self.speed } else { 1.0 };
+        let step = f64::from(SAMPLE_RATE) / f64::from(device_rate.max(1)) * speed;
         for frame in out.chunks_mut(channels) {
             let sample = if self.playing {
                 self.next_frame(step)
@@ -181,6 +185,13 @@ mod device {
             self.queue.lock().playing = true;
         }
 
+        /// Plays the queued sound `speed` times as fast. The clock counts source frames, so
+        /// it runs at that speed too. Always possible here.
+        pub fn set_speed(&mut self, speed: f64) -> bool {
+            self.queue.lock().speed = speed;
+            true
+        }
+
         pub fn position_frames(&self) -> Result<u64, String> {
             let queue = self.queue.lock();
             match &queue.failed {
@@ -244,6 +255,17 @@ mod tests {
         let half = 50.0 / f32::from(i16::MAX);
         assert!((out[2] - half).abs() < 1e-6, "interpolated {}", out[2]);
         assert_eq!(queue.consumed(), 1);
+    }
+
+    #[test]
+    fn faster_playback_plays_through_the_sound_faster() {
+        let mut queue = PcmQueue::default();
+        queue.push(&ramp(100));
+        queue.playing = true;
+        queue.speed = 2.0;
+        let mut out = vec![0.0f32; 10 * 2];
+        queue.render(&mut out, 2, 48_000);
+        assert_eq!(queue.consumed(), 20, "two source frames per output frame");
     }
 
     #[test]

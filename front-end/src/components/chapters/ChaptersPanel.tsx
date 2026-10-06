@@ -48,7 +48,6 @@ export const ChaptersPanel: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const applyPlaybackStatus = useProjectStore((s) => s.applyPlaybackStatus);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const durationUs = useProjectStore((s) => s.durationUs);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
@@ -85,6 +84,7 @@ export const ChaptersPanel: React.FC = () => {
 
   const addAtPlayhead = () => {
     if (!openedProject) return;
+    const currentTimeUs = useProjectStore.getState().currentTimeUs;
     // Anchored to what plays there: the top picture, else any clip.
     const tracks = [...openedProject.sequence.tracks.filter((t) => t.kind === "video")].reverse().concat(
       openedProject.sequence.tracks.filter((t) => t.kind === "audio"),

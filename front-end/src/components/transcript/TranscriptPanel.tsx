@@ -74,8 +74,140 @@ function errorMessage(err: unknown): string {
   return "Something went wrong.";
 }
 
+/** What a transcript line does for clicks and typing; read through a ref, so a line does not
+ * re-render because the panel made new handlers. */
+interface LineActions {
+  pick: (index: number, extend: boolean) => void;
+  seekTo: (us: number) => void;
+  setEditing: (editing: { index: number; text: string } | null) => void;
+  commitEdit: () => void;
+}
+
+/**
+ * One line of the transcript. Memoized: the playing word moving on, or a selection changing,
+ * redraws only the lines it touches, not every word of a long transcript.
+ */
+const TranscriptLineRow = React.memo(function TranscriptLineRow({
+  line,
+  lineIndex,
+  playing,
+  active,
+  selFrom,
+  selTo,
+  editing,
+  suggestionKind,
+  activeRef,
+  actions,
+}: {
+  line: TranscriptLine;
+  lineIndex: number;
+  playing: boolean;
+  /** The playing word, if it is in this line; else -1. */
+  active: number;
+  /** The selected words of this line (indices into the transcript); -1 when none are. */
+  selFrom: number;
+  selTo: number;
+  editing: { index: number; text: string } | null;
+  suggestionKind: Map<string, string>;
+  activeRef: React.MutableRefObject<HTMLSpanElement | null>;
+  actions: React.MutableRefObject<LineActions>;
+}) {
+  return (
+    <div
+      className={`flex gap-4 rounded-control px-2 py-1.5 ${playing ? "bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent-hover))]" : lineIndex % 2 ? "bg-studio-850/40" : ""}`}
+    >
+      <button
+        type="button"
+        disabled={line.startUs === null}
+        onClick={() => line.startUs !== null && actions.current.seekTo(line.startUs)}
+        className={`shrink-0 w-14 pt-1 text-left font-mono text-meta tabular-nums disabled:cursor-default ${
+          playing ? "text-accent-fg" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-accent-fg"
+        }`}
+        title={line.startUs === null ? "This line is cut" : "Jump here"}
+      >
+        {formatTime(line.startUs ?? line.sourceStartUs)}
+      </button>
+      <p className="flex-1 min-w-0">
+        {line.words.map(({ w, i }, position) => {
+          const cut = w.editedStartUs === null;
+          const selected = selFrom >= 0 && i >= selFrom && i <= selTo;
+          const kind = suggestionKind.get(w.id);
+          if (editing?.index === i) {
+            return (
+              <React.Fragment key={w.id}>
+                <input
+                  autoFocus
+                  aria-label="Word text"
+                  value={editing.text}
+                  size={Math.max(4, editing.text.length + 1)}
+                  onChange={(e) => actions.current.setEditing({ index: i, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") actions.current.commitEdit();
+                    else if (e.key === "Escape") actions.current.setEditing(null);
+                  }}
+                  onBlur={() => actions.current.commitEdit()}
+                  className="bg-studio-950 text-white rounded px-1 border border-accent-hover"
+                />{" "}
+              </React.Fragment>
+            );
+          }
+          const classes = [
+            "rounded px-0.5 cursor-pointer",
+            cut ? "line-through decoration-danger/70 text-studio-500" : "hover:bg-studio-800",
+            selected && !cut ? "bg-accent/30 text-white shadow-[0_0_0_1px_rgb(var(--accent-hover)/0.6)]" : "",
+            i === active && !selected ? "bg-studio-700 text-white" : "",
+            kind === "filler" && !cut ? "underline decoration-suggest decoration-2" : "",
+            kind === "retake" && !cut ? "underline decoration-studio-400 decoration-2" : "",
+            w.kind === "audioEvent" ? "italic text-studio-400" : "",
+            // Heard but left out of the captions.
+            w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
+          ].join(" ");
+          return (
+            <React.Fragment key={w.id}>
+              {w.captionBreak && !cut && (
+                <span
+                  className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-suggest/80 rounded"
+                  title="A new caption starts here"
+                  aria-label="Caption break"
+                />
+              )}
+              <span
+                ref={i === active ? activeRef : undefined}
+                className={classes}
+                title={
+                  kind === "filler"
+                    ? "Filler sound"
+                    : kind === "retake"
+                      ? "Abandoned take"
+                      : w.captionHidden
+                        ? "Hidden from the captions"
+                        : undefined
+                }
+                onClick={(e) => {
+                  if (cut) return;
+                  actions.current.pick(i, e.shiftKey);
+                }}
+                onDoubleClick={() => {
+                  if (w.editedStartUs !== null) actions.current.seekTo(w.editedStartUs);
+                }}
+              >
+                {w.text}
+              </span>
+              {/* No space before punctuation that comes as a word of its own. */}
+              {/^[^\p{L}\p{N}]+$/u.test(line.words[position + 1]?.w.text ?? "") ? "" : " "}
+            </React.Fragment>
+          );
+        })}
+      </p>
+    </div>
+  );
+});
+
 export const TranscriptPanel: React.FC = () => {
-  const { openedProject, applyOpenedProject, applyPlaybackStatus, currentTimeUs } = useProjectStore();
+  const openedProject = useProjectStore((s) => s.openedProject);
+  const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
+  const applyPlaybackStatus = useProjectStore((s) => s.applyPlaybackStatus);
   const tracks = audioTracks(openedProject);
   const [trackId, setTrackId] = useState<string>("");
   const [view, setView] = useState<TranscriptView | null>(null);
@@ -94,7 +226,6 @@ export const TranscriptPanel: React.FC = () => {
   const activeRef = useRef<HTMLSpanElement | null>(null);
 
   const handle = openedProject?.projectHandle;
-  const revision = openedProject?.revision;
   const captionsVersion = useProjectStore((s) => s.captionsVersion);
   const bumpCaptions = useProjectStore((s) => s.bumpCaptions);
 
@@ -142,10 +273,13 @@ export const TranscriptPanel: React.FC = () => {
     }
   };
 
-  // Edited positions change with every cut and undo, so reload on each revision.
+  // Where words land changes with the sequence (cuts, moves, undo), and their text and caption
+  // marks with the transcript. Other edits (layout, captions' look, zooms) keep the same
+  // sequence object, so they do not reload and redraw a long transcript.
+  const sequence = openedProject?.sequence;
   useEffect(() => {
     void refresh();
-  }, [refresh, revision, captionsVersion]);
+  }, [refresh, sequence, captionsVersion]);
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -181,12 +315,15 @@ export const TranscriptPanel: React.FC = () => {
   );
   const rejectedCount = suggestions.length - pending.length;
 
-  const activeIndex = useMemo(
-    () =>
-      words.findIndex(
-        (w) => w.editedStartUs !== null && w.editedEndUs !== null && currentTimeUs >= w.editedStartUs && currentTimeUs < w.editedEndUs,
-      ),
-    [words, currentTimeUs],
+  // The word and line under the playhead: the panel re-renders when they change, not on
+  // every tick of the playhead.
+  const activeIndex = useProjectStore((s) =>
+    words.findIndex(
+      (w) => w.editedStartUs !== null && w.editedEndUs !== null && s.currentTimeUs >= w.editedStartUs && s.currentTimeUs < w.editedEndUs,
+    ),
+  );
+  const playingLine = useProjectStore((s) =>
+    lines.findIndex((line) => line.startUs !== null && line.endUs !== null && s.currentTimeUs >= line.startUs && s.currentTimeUs < line.endUs),
   );
 
   useEffect(() => {
@@ -334,6 +471,17 @@ export const TranscriptPanel: React.FC = () => {
       .playbackSeek(handle, us)
       .then(applyPlaybackStatus)
       .catch(() => undefined);
+  };
+
+  const selectionRange: [number, number] | null = selection
+    ? [Math.min(selection.anchor, selection.focus), Math.max(selection.anchor, selection.focus)]
+    : null;
+  const lineActions = useRef<LineActions>(null as unknown as LineActions);
+  lineActions.current = {
+    pick: (index, extend) => setSelection(extend && selection ? { anchor: selection.anchor, focus: index } : { anchor: index, focus: index }),
+    seekTo,
+    setEditing,
+    commitEdit: () => void commitEdit(),
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -521,101 +669,26 @@ export const TranscriptPanel: React.FC = () => {
           </p>
         )}
         {lines.map((line, lineIndex) => {
-          const playing =
-            line.startUs !== null && line.endUs !== null && currentTimeUs >= line.startUs && currentTimeUs < line.endUs;
+          // Each line gets only what concerns it, so a change elsewhere leaves it alone.
+          const first = line.words[0].i;
+          const last = line.words[line.words.length - 1].i;
+          const lo = selectionRange ? Math.max(selectionRange[0], first) : -1;
+          const hi = selectionRange ? Math.min(selectionRange[1], last) : -1;
+          const inLine = lo <= hi && lo >= 0;
           return (
-            <div
+            <TranscriptLineRow
               key={line.words[0].w.id}
-              className={`flex gap-4 rounded-control px-2 py-1.5 ${playing ? "bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent-hover))]" : lineIndex % 2 ? "bg-studio-850/40" : ""}`}
-            >
-              <button
-                type="button"
-                disabled={line.startUs === null}
-                onClick={() => line.startUs !== null && seekTo(line.startUs)}
-                className={`shrink-0 w-14 pt-1 text-left font-mono text-meta tabular-nums disabled:cursor-default ${
-                  playing ? "text-accent-fg" : line.startUs === null ? "text-studio-600 line-through" : "text-studio-500 hover:text-accent-fg"
-                }`}
-                title={line.startUs === null ? "This line is cut" : "Jump here"}
-              >
-                {formatTime(line.startUs ?? line.sourceStartUs)}
-              </button>
-              <p className="flex-1 min-w-0">
-                {line.words.map(({ w, i }) => {
-                  const cut = w.editedStartUs === null;
-                  const selected =
-                    selection !== null &&
-                    i >= Math.min(selection.anchor, selection.focus) &&
-                    i <= Math.max(selection.anchor, selection.focus);
-                  const kind = suggestionKind.get(w.id);
-                  if (editing?.index === i) {
-                    return (
-                      <React.Fragment key={w.id}>
-                        <input
-                          autoFocus
-                          aria-label="Word text"
-                          value={editing.text}
-                          size={Math.max(4, editing.text.length + 1)}
-                          onChange={(e) => setEditing({ index: i, text: e.target.value })}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === "Enter") void commitEdit();
-                            else if (e.key === "Escape") setEditing(null);
-                          }}
-                          onBlur={() => void commitEdit()}
-                          className="bg-studio-950 text-white rounded px-1 border border-accent-hover"
-                        />{" "}
-                      </React.Fragment>
-                    );
-                  }
-                  const classes = [
-                    "rounded px-0.5 cursor-pointer",
-                    cut ? "line-through decoration-danger/70 text-studio-500" : "hover:bg-studio-800",
-                    selected && !cut ? "bg-accent/30 text-white shadow-[0_0_0_1px_rgb(var(--accent-hover)/0.6)]" : "",
-                    i === activeIndex && !selected ? "bg-studio-700 text-white" : "",
-                    kind === "filler" && !cut ? "underline decoration-suggest decoration-2" : "",
-                    kind === "retake" && !cut ? "underline decoration-studio-400 decoration-2" : "",
-                    w.kind === "audioEvent" ? "italic text-studio-400" : "",
-                    // Heard but left out of the captions.
-                    w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
-                  ].join(" ");
-                  return (
-                    <React.Fragment key={w.id}>
-                      {w.captionBreak && !cut && (
-                        <span
-                          className="inline-block w-0.5 h-3 mx-0.5 align-middle bg-suggest/80 rounded"
-                          title="A new caption starts here"
-                          aria-label="Caption break"
-                        />
-                      )}
-                      <span
-                        ref={i === activeIndex ? activeRef : undefined}
-                        className={classes}
-                        title={
-                          kind === "filler"
-                            ? "Filler sound"
-                            : kind === "retake"
-                              ? "Abandoned take"
-                              : w.captionHidden
-                                ? "Hidden from the captions"
-                                : undefined
-                        }
-                        onClick={(e) => {
-                          if (cut) return;
-                          setSelection(e.shiftKey && selection ? { anchor: selection.anchor, focus: i } : { anchor: i, focus: i });
-                        }}
-                        onDoubleClick={() => {
-                          if (w.editedStartUs !== null) seekTo(w.editedStartUs);
-                        }}
-                      >
-                        {w.text}
-                      </span>
-                      {/* No space before punctuation that comes as a word of its own. */}
-                      {/^[^\p{L}\p{N}]+$/u.test(line.words[line.words.findIndex((x) => x.i === i) + 1]?.w.text ?? "") ? "" : " "}
-                    </React.Fragment>
-                  );
-                        })}
-              </p>
-            </div>
+              line={line}
+              lineIndex={lineIndex}
+              playing={lineIndex === playingLine}
+              active={activeIndex >= first && activeIndex <= last ? activeIndex : -1}
+              selFrom={inLine ? lo : -1}
+              selTo={inLine ? hi : -1}
+              editing={editing && editing.index >= first && editing.index <= last ? editing : null}
+              suggestionKind={suggestionKind}
+              activeRef={activeRef}
+              actions={lineActions}
+            />
           );
         })}
       </div>

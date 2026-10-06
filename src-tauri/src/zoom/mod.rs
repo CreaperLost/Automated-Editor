@@ -379,7 +379,7 @@ pub fn validate_zooms(zooms: &[ZoomKeyframe]) -> Result<(), String> {
 /// source (the recording, or an imported recording's own clips).
 pub fn attach_zoom_edited_ranges_with(
     zooms: &mut [ZoomKeyframe],
-    mapper_for: &dyn Fn(Option<&str>) -> Option<TimelineMapper>,
+    mapper_for: &dyn Fn(Option<&str>) -> Option<std::rc::Rc<TimelineMapper>>,
 ) {
     for zoom in zooms {
         zoom.edited_ranges = mapper_for(zoom.media.as_deref())

@@ -80,7 +80,7 @@ pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
             stride: stride as u32,
             format: PixelFormat::Bgra8888,
             color: ColorInfo::rec709_full(),
-            data: bytes,
+            data: bytes.into(),
         })
     }
     #[cfg(not(all(target_os = "macos", not(stub_swift_ffi))))]

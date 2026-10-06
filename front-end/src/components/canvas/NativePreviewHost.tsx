@@ -138,6 +138,10 @@ export function NativePreviewHost({
   // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
   useEngineFrames(canvasRef, webviewGeneration !== undefined, webviewGeneration);
 
+  // Tells the backend where the preview is on screen (and whether it can be seen). Measuring
+  // the host and its ancestors forces layout, so it runs only when something may have moved:
+  // a resize of the host or an ancestor, a scroll, the window showing or hiding, and a slow
+  // check for anything else (a sibling growing).
   useEffect(() => {
     let cancelled = false;
     let revision = 0;
@@ -145,11 +149,12 @@ export function NativePreviewHost({
     let animation = 0;
     let lastGeometry = "";
     let sending = false;
+    let dirty = true;
     const update = () => {
-      if (cancelled) return;
-      animation = requestAnimationFrame(update);
+      animation = 0;
       const el = hostRef.current;
-      if (!el || generation === undefined || sending) return;
+      if (cancelled || !el || generation === undefined || sending || !dirty) return;
+      dirty = false;
       const rect = el.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
       let left = Math.max(0, rect.left), top = Math.max(0, rect.top);
@@ -171,9 +176,26 @@ export function NativePreviewHost({
       sending = true;
       void api.previewLayout({ ...viewport, revision: ++revision })
         .then(next => { if (!cancelled) { lastGeometry = key; setStatus(next); setError(undefined); } })
-        .catch(err => { if (!cancelled) setError(String(err)); })
-        .finally(() => { sending = false; });
+        .catch(err => { if (!cancelled) { lastGeometry = ""; setError(String(err)); } })
+        .finally(() => {
+          sending = false;
+          // Something moved while this was on its way: send that too.
+          if (dirty) schedule();
+        });
     };
+    const schedule = () => {
+      if (!animation && !cancelled) animation = requestAnimationFrame(update);
+    };
+    const markDirty = () => {
+      dirty = true;
+      schedule();
+    };
+    const resized = new ResizeObserver(markDirty);
+    for (let el: HTMLElement | null = hostRef.current; el; el = el.parentElement) resized.observe(el);
+    window.addEventListener("resize", markDirty);
+    window.addEventListener("scroll", markDirty, true);
+    document.addEventListener("visibilitychange", markDirty);
+    const check = window.setInterval(markDirty, 250);
     void api.previewAttach(windowLabel, hitMode).then(attached => {
       generation = attached.generation;
       if (cancelled) {
@@ -181,11 +203,16 @@ export function NativePreviewHost({
         return;
       }
       setStatus(attached); setError(undefined);
-      update();
+      markDirty();
     }).catch(err => { if (!cancelled) setError(String(err)); });
     return () => {
       cancelled = true;
       cancelAnimationFrame(animation);
+      resized.disconnect();
+      window.removeEventListener("resize", markDirty);
+      window.removeEventListener("scroll", markDirty, true);
+      document.removeEventListener("visibilitychange", markDirty);
+      window.clearInterval(check);
       if (generation !== undefined) {
         void api.previewDetach(windowLabel, generation).catch(() => undefined);
       }

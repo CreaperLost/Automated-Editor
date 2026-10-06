@@ -7,6 +7,8 @@ import { create } from "zustand";
  */
 export type HotkeyAction =
   | "playPause"
+  | "shuttleForward"
+  | "pause"
   | "split"
   | "rippleTrimPrevious"
   | "rippleTrimNext"
@@ -33,6 +35,8 @@ export type HotkeyAction =
 
 export const HOTKEY_ACTIONS: { action: HotkeyAction; label: string; group: string; defaults: string[] }[] = [
   { action: "playPause", label: "Play / pause", group: "Playback", defaults: ["Space"] },
+  { action: "shuttleForward", label: "Play; press again for 2x", group: "Playback", defaults: ["KeyL"] },
+  { action: "pause", label: "Stop", group: "Playback", defaults: ["KeyK"] },
   { action: "stepBack", label: "Back one frame", group: "Playback", defaults: ["ArrowLeft"] },
   { action: "stepForward", label: "Forward one frame", group: "Playback", defaults: ["ArrowRight"] },
   { action: "stepBackLong", label: "Back one second", group: "Playback", defaults: ["Shift+ArrowLeft"] },

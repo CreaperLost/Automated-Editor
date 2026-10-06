@@ -64,7 +64,6 @@ export const ZoomPanel: React.FC = () => {
   const selectedZoomId = useProjectStore((s) => s.selectedZoomId);
   const setSelectedZoomId = useProjectStore((s) => s.setSelectedZoomId);
   const selection = useProjectStore((s) => s.timelineSelection);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const durationUs = useProjectStore((s) => s.durationUs);
   // The project's settings, shown at once while a change is being saved.
   const saved = openedProject?.zoomSettings ?? DEFAULT_ZOOM_SETTINGS;
@@ -128,6 +127,7 @@ export const ZoomPanel: React.FC = () => {
   };
 
   const addZoom = () => {
+    const currentTimeUs = useProjectStore.getState().currentTimeUs;
     const useSelection = selection && selection.endUs - selection.startUs >= 3;
     const startUs = useSelection ? selection.startUs : Math.max(0, currentTimeUs - 600_000);
     const endUs = useSelection

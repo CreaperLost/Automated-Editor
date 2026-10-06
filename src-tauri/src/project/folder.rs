@@ -277,6 +277,8 @@ mod tests {
             crate::media::audio::AudioMixer::new(reader.root(), &reader.history().current).unwrap();
         let pcm = mixer.read_frames(24_000, 480).unwrap();
         assert!(pcm.iter().any(|&s| s.unsigned_abs() > 5_000));
+        // The mixer keeps its files open while it plays; Windows will not move them then.
+        drop(mixer);
 
         reader
             .edit_sequence(

@@ -3,7 +3,7 @@ import { AlertTriangle, Gauge, Pause, Play, SkipBack } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { PREVIEW_FPS, PREVIEW_RESOLUTIONS, usePreviewQualityStore } from "../../stores/previewQualityStore";
 import { formatBinding, useHotkeyStore } from "../../stores/hotkeyStore";
-import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
+import { PLAYBACK_SPEEDS, seekPlayback, setPlaybackSpeed, togglePlayback } from "../../lib/playbackControl";
 import { formatTimeUs } from "../../hooks/useTimeline";
 import { Badge, IconButton, cn } from "../ui";
 
@@ -17,6 +17,7 @@ export const PreviewQualityControls: React.FC = () => {
   const init = usePreviewQualityStore((s) => s.init);
   const setQuality = usePreviewQualityStore((s) => s.setQuality);
   const isPlaying = useProjectStore((s) => s.isPlaying);
+  const speed = useProjectStore((s) => s.playbackSpeed);
 
   useEffect(() => {
     void init();
@@ -50,6 +51,19 @@ export const PreviewQualityControls: React.FC = () => {
           </option>
         ))}
       </select>
+      <select
+        aria-label="Playback speed"
+        title="Playback speed. L plays; L again plays at 2x; K stops."
+        value={speed}
+        onChange={(e) => void setPlaybackSpeed(Number(e.target.value))}
+        className={selectClass}
+      >
+        {PLAYBACK_SPEEDS.map((value) => (
+          <option key={value} value={value}>
+            {value}x
+          </option>
+        ))}
+      </select>
       {isPlaying && measuredFps !== null && (
         <span className="font-mono text-meta tabular-nums text-accent-fg w-12" aria-label="Frames drawn per second">
           {measuredFps} fps
@@ -57,6 +71,12 @@ export const PreviewQualityControls: React.FC = () => {
       )}
     </div>
   );
+};
+
+/** The playhead's time; only this re-renders as it moves. */
+const PlayheadTime: React.FC = () => {
+  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
+  return <span className="font-semibold text-studio-100">{formatTimeUs(currentTimeUs)}</span>;
 };
 
 /// The bar under a preview: go to start, play, where the playhead is, then the preview's
@@ -68,7 +88,6 @@ export const PreviewBar: React.FC<{
   notes?: string[];
 }> = ({ aspect, aspectTitle, notes = [] }) => {
   const project = useProjectStore((s) => s.openedProject);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const durationUs = useProjectStore((s) => s.durationUs);
   const isPlaying = useProjectStore((s) => s.isPlaying);
   const bindings = useHotkeyStore((s) => s.bindings);
@@ -89,7 +108,7 @@ export const PreviewBar: React.FC<{
         {isPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-white ml-0.5" />}
       </button>
       <div className="px-2 font-mono text-label tabular-nums whitespace-nowrap" aria-label="Playhead time">
-        <span className="font-semibold text-studio-100">{formatTimeUs(currentTimeUs)}</span>
+        <PlayheadTime />
         <span className="mx-1 text-studio-600">/</span>
         <span className="text-studio-400">{formatTimeUs(durationUs)}</span>
       </div>

@@ -4,8 +4,8 @@ mod native;
 
 use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
 use crate::media::{
-    decode_h264_frame, decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate,
-    MediaBackend, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
+    decode_h264_frame_limited, media_backend, media_duration_us, EncoderGate, MediaBackend,
+    PixelFormat, RateControl, VideoFrame, VideoQuality, MAX_FRAME_DIM,
 };
 use crate::project::reader::{safe_path, SegmentSummary};
 use crate::project::revision::EditDocument;
@@ -250,6 +250,10 @@ pub struct CapturedExport {
 
 type Zooms = std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>;
 
+/// A cut that skips at most this much of what is playing reads on through it on the open
+/// decoder (a few frames); a longer one gets a decoder of its own, started ahead.
+const READ_ON_US: u64 = 200_000;
+
 pub struct SceneEvaluator {
     root: PathBuf,
     document: EditDocument,
@@ -257,6 +261,8 @@ pub struct SceneEvaluator {
     width: u32,
     height: u32,
     decode_limit: DecodeLimit,
+    /// Frames come out as NV12 (for an encoder) rather than BGRA, when the GPU composites.
+    nv12_output: bool,
     /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
     /// Enabled webcam focus segments on the timeline, merged.
@@ -265,12 +271,13 @@ pub struct SceneEvaluator {
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The last cue drawn and its colored frame for the active word.
     caption_cache: std::cell::RefCell<CaptionCache>,
-    /// Decoded stills, most recently used last.
-    image_cache: std::cell::RefCell<Vec<(String, VideoFrame)>>,
-    /// Recorded pointers by recording, read once per evaluator.
+    /// Recorded pointers by recording, looked up once per evaluator.
     cursors: std::cell::RefCell<
         std::collections::HashMap<String, Option<std::sync::Arc<crate::cursor::CursorTrack>>>,
     >,
+    /// Clip edges whose decoders have been started ahead (see [`SceneEvaluator::prefetch`]),
+    /// and where that last looked from.
+    prefetched: std::cell::RefCell<(u64, std::collections::BTreeSet<u64>)>,
     /// Zooms by recording, with the camera paths that follow the mouse, worked out once.
     zooms: std::cell::RefCell<std::collections::HashMap<String, Zooms>>,
     /// Pointer pictures by file, decoded once.
@@ -288,6 +295,14 @@ struct CaptionCache {
 pub struct EvaluatorReuse {
     compositor: Compositor,
     background: Option<(String, Option<VideoFrame>)>,
+}
+
+/// The background a document draws: the project's, or the short's own choice.
+fn background_layout(document: &EditDocument) -> crate::project::layout::EditLayout {
+    match &document.short_layout {
+        Some(short) => crate::shorts::background_layout(&document.layout, short),
+        None => document.layout.clone(),
+    }
 }
 
 fn background_key(
@@ -315,9 +330,13 @@ enum PictureJob {
 }
 
 impl PictureJob {
-    fn run(self, root: &Path, limit: DecodeLimit) -> Result<VideoFrame, String> {
+    /// `yuv`: recording video comes as NV12, for a GPU compositor to convert (imported files
+    /// stay BGRA: they may carry transparency).
+    fn run(self, root: &Path, limit: DecodeLimit, yuv: bool) -> Result<VideoFrame, String> {
         match self {
-            PictureJob::Segment(segment, time) => decode_layer(root, &segment, time, limit),
+            PictureJob::Segment(segment, time) => {
+                decode_layer(root, &segment, time, DecodeLimit { yuv, ..limit })
+            }
             PictureJob::Video(path, time) => {
                 crate::media::ffmpeg::decode_bgra_limited(&path, time, limit)
             }
@@ -337,6 +356,19 @@ struct Shown<'a> {
     overlays: Vec<(usize, &'a Clip)>,
 }
 
+impl<'a> Shown<'a> {
+    /// The clips whose pictures show: the screen, the camera (when the bubble is on) and the
+    /// overlays.
+    fn pictures(self, webcam: bool) -> Vec<&'a Clip> {
+        self.screen
+            .map(|(_, clip)| clip)
+            .into_iter()
+            .chain(self.webcam.filter(|_| webcam))
+            .chain(self.overlays.into_iter().map(|(_, clip)| clip))
+            .collect()
+    }
+}
+
 impl SceneEvaluator {
     pub fn new(
         root: PathBuf,
@@ -354,7 +386,7 @@ impl SceneEvaluator {
         height: u32,
         reuse: Option<EvaluatorReuse>,
     ) -> Result<Self, String> {
-        let key = background_key(&root, &document.layout, width, height);
+        let key = background_key(&root, &background_layout(&document), width, height);
         let wallpaper = std::cell::OnceCell::new();
         let compositor = match reuse {
             Some(reuse) => {
@@ -372,12 +404,13 @@ impl SceneEvaluator {
             width,
             height,
             decode_limit: DecodeLimit::NONE,
+            nv12_output: false,
             wallpaper,
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            image_cache: std::cell::RefCell::new(Vec::new()),
             cursors: Default::default(),
+            prefetched: Default::default(),
             zooms: Default::default(),
             cursor_images: Default::default(),
         })
@@ -385,7 +418,12 @@ impl SceneEvaluator {
 
     /// Gives up the parts a replacement evaluator can reuse.
     pub fn into_reuse(self) -> Option<EvaluatorReuse> {
-        let key = background_key(&self.root, &self.document.layout, self.width, self.height);
+        let key = background_key(
+            &self.root,
+            &background_layout(&self.document),
+            self.width,
+            self.height,
+        );
         let background = self.wallpaper.into_inner().map(|frame| (key, frame));
         self.compositor.map(|compositor| EvaluatorReuse {
             compositor,
@@ -393,10 +431,32 @@ impl SceneEvaluator {
         })
     }
 
+    /// Whether recording video is decoded as NV12: a third of BGRA's bytes through the decoder
+    /// pipe (its slowest part), converted by the GPU compositor. Without one, BGRA.
+    fn yuv(&self) -> bool {
+        self.compositor.is_some()
+    }
+
     /// Decodes sources no larger or faster than `limit`, for preview.
     pub fn with_decode_limit(mut self, limit: DecodeLimit) -> Self {
         self.decode_limit = limit;
         self
+    }
+
+    /// With `nv12` and a GPU compositor, frames come out as limited-range BT.709 NV12, as an
+    /// H.264 encoder takes them (see [`SceneEvaluator::output_format`]).
+    pub fn with_nv12_output(mut self, nv12: bool) -> Self {
+        self.nv12_output = nv12;
+        self
+    }
+
+    /// The format of the frames [`SceneEvaluator::preview_at`] makes.
+    pub fn output_format(&self) -> PixelFormat {
+        if self.nv12_output && self.compositor.is_some() {
+            PixelFormat::Nv12
+        } else {
+            PixelFormat::Bgra8888
+        }
     }
 
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
@@ -412,13 +472,19 @@ impl SceneEvaluator {
             {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                background_key(&self.root, &self.document.layout, self.width, self.height)
-                    .hash(&mut hasher);
+                background_key(
+                    &self.root,
+                    &background_layout(&self.document),
+                    self.width,
+                    self.height,
+                )
+                .hash(&mut hasher);
                 layer.cache_key = Some(hasher.finish());
             }
         }
         let started = std::time::Instant::now();
         let mut frame = match self.compositor.as_mut() {
+            Some(compositor) if self.nv12_output => compositor.composite_nv12(&scene)?,
             Some(compositor) => compositor.composite(&scene)?,
             None => Compositor::composite_cpu(&scene)?,
         };
@@ -464,10 +530,12 @@ impl SceneEvaluator {
             .map(|clip| self.picture_job(clip, at(clip)))
             .transpose()?
             .flatten();
-        let (root, limit) = (&self.root, self.decode_limit);
+        let (root, limit, yuv) = (&self.root, self.decode_limit, self.yuv());
         let (screen, webcam) = std::thread::scope(|scope| {
-            let webcam = webcam_job.map(|job| scope.spawn(move || job.run(root, limit)));
-            let screen = screen_job.map(|job| job.run(root, limit)).transpose()?;
+            let webcam = webcam_job.map(|job| scope.spawn(move || job.run(root, limit, yuv)));
+            let screen = screen_job
+                .map(|job| job.run(root, limit, yuv))
+                .transpose()?;
             let webcam = match webcam {
                 Some(handle) => Some(
                     handle
@@ -534,21 +602,7 @@ impl SceneEvaluator {
                 unit,
             );
         }
-        // Overlays draw in track order; one below the screen's track goes under it.
-        let screen_track = shown.screen.map(|(index, _)| index);
-        for (index, clip) in &shown.overlays {
-            let job = self.picture_job(clip, at(clip))?;
-            if let Some(frame) = job
-                .map(|job| job.run(&self.root, self.decode_limit))
-                .transpose()?
-            {
-                let before = scene.layers.len();
-                scene.push_overlay(frame, clip.fit == crate::sequence::Fit::Cover);
-                if screen_track.is_some_and(|screen| *index < screen) {
-                    scene.move_under_main(before);
-                }
-            }
-        }
+        self.push_overlays(&mut scene, &shown, edited_us)?;
         // Captions go over everything.
         if let Some((frame, x, y)) = self.caption_at(edited_us) {
             scene.push_caption(frame, x, y);
@@ -633,6 +687,7 @@ impl SceneEvaluator {
         if let (Some(clip), Some(local)) = (screen_clip, local) {
             self.push_cursor(&mut scene, &clip.asset, local)?;
         }
+        self.push_overlays(&mut scene, shown, edited_us)?;
         if let Some((frame, x, _)) = self.caption_at(edited_us) {
             let y = crate::shorts::caption_y(short.caption_spot, &rects, frame.height, self.height);
             scene.push_caption(frame, x, y);
@@ -640,15 +695,169 @@ impl SceneEvaluator {
         Ok(scene)
     }
 
+    /// Overlay clips over the canvas in track order; one below the screen's track goes under
+    /// it. A still keeps its texture on the GPU from frame to frame.
+    fn push_overlays(
+        &self,
+        scene: &mut Scene,
+        shown: &Shown<'_>,
+        edited_us: u64,
+    ) -> Result<(), String> {
+        let screen_track = shown.screen.map(|(index, _)| index);
+        for (index, clip) in &shown.overlays {
+            let local = clip.local_us(edited_us).unwrap_or(clip.in_us);
+            let job = self.picture_job(clip, local)?;
+            let still = matches!(job, Some(PictureJob::Ready(_)));
+            if let Some(mut frame) = job
+                .map(|job| job.run(&self.root, self.decode_limit, self.yuv()))
+                .transpose()?
+            {
+                let key = still.then(|| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    ("still", &clip.asset).hash(&mut hasher);
+                    hasher.finish()
+                });
+                frame.pts_us = edited_us;
+                let before = scene.layers.len();
+                scene.push_overlay(frame, clip.fit == crate::sequence::Fit::Cover, key);
+                if screen_track.is_some_and(|screen| *index < screen) {
+                    scene.move_under_main(before);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// While playing: starts decoders for what the video tracks show at each clip edge in the
+    /// next `horizon_us` after `edited_us`, so a cut plays from a decoder that is already
+    /// there rather than waiting for one to start and seek.
+    pub fn prefetch(&self, edited_us: u64, horizon_us: u64) {
+        let end = edited_us.saturating_add(horizon_us);
+        let mut edges = std::collections::BTreeSet::new();
+        for track in self.document.sequence.video_tracks().filter(|t| !t.hidden) {
+            // Clips are in order: skip those that end before now, stop after the horizon.
+            let first = track.clips.partition_point(|c| c.end_us() <= edited_us);
+            for clip in track.clips[first..]
+                .iter()
+                .take_while(|c| c.start_us <= end)
+            {
+                for edge in [clip.start_us, clip.end_us()] {
+                    if edge > edited_us && edge <= end {
+                        edges.insert(edge);
+                    }
+                }
+            }
+        }
+        // A long recording is in segment files one after another: where the next one starts
+        // inside a clip playing now, a decoder of that file is needed too.
+        let webcam = self.document.layout.webcam_enabled;
+        for clip in self.shown(edited_us).pictures(webcam) {
+            let Some(local) = clip.local_us(edited_us) else {
+                continue;
+            };
+            let Some(segments) = self.segments_of(clip) else {
+                continue;
+            };
+            let reach = local.saturating_add(horizon_us).min(clip.out_us());
+            for segment in segments
+                .iter()
+                .filter(|s| s.available && s.start_us > local && s.start_us < reach)
+            {
+                edges.insert(clip.start_us + (segment.start_us - clip.in_us));
+            }
+        }
+        let mut prefetched = self.prefetched.borrow_mut();
+        let (from, done) = &mut *prefetched;
+        // After a seek the edges ahead are new ones.
+        if edited_us < *from || edited_us > from.saturating_add(horizon_us) {
+            done.clear();
+        }
+        *from = edited_us;
+        for edge in edges {
+            if !done.insert(edge) {
+                continue;
+            }
+            let before: Vec<(&Clip, u64)> = self
+                .shown(edge - 1)
+                .pictures(webcam)
+                .into_iter()
+                .filter_map(|clip| Some((clip, clip.local_us(edge - 1)?)))
+                .collect();
+            let mut accepted = true;
+            for clip in self.shown(edge).pictures(webcam) {
+                let local = clip.local_us(edge).unwrap_or(clip.in_us);
+                // A short jump on in the file already playing: its decoder reads on to it.
+                let reads_on = before.iter().any(|(was, at)| {
+                    was.asset == clip.asset
+                        && was.stream == clip.stream
+                        && local >= *at
+                        && local - at <= READ_ON_US
+                        && self.segment_file(was, *at) == self.segment_file(clip, local)
+                });
+                if reads_on {
+                    continue;
+                }
+                let Some(asset) = self.document.asset(&clip.asset) else {
+                    continue;
+                };
+                use crate::sequence::sources::{stream_source, StreamSource};
+                match stream_source(&self.root, asset, &clip.stream) {
+                    Ok(StreamSource::Segments(segments)) => {
+                        let Some(segment) = segments
+                            .iter()
+                            .find(|s| s.available && s.start_us <= local && local < s.end_us)
+                        else {
+                            continue;
+                        };
+                        if let Ok(path) = safe_path(&self.root, &segment.relative_path) {
+                            accepted &= crate::media::prefetch_video(
+                                &path,
+                                local - segment.start_us,
+                                DecodeLimit {
+                                    yuv: self.yuv(),
+                                    ..self.decode_limit
+                                },
+                            );
+                        }
+                    }
+                    Ok(StreamSource::Video(path)) => {
+                        accepted &= crate::media::prefetch_video(&path, local, self.decode_limit)
+                    }
+                    _ => {}
+                }
+            }
+            // Turned away for now (too many decoders starting): try this edge again later.
+            if !accepted {
+                done.remove(&edge);
+            }
+        }
+    }
+
+    /// The segment files of a clip's stream, when it plays from a recording's segments.
+    fn segments_of(&self, clip: &Clip) -> Option<Vec<SegmentSummary>> {
+        use crate::sequence::sources::{stream_source, StreamSource};
+        let asset = self.document.asset(&clip.asset)?;
+        match stream_source(&self.root, asset, &clip.stream).ok()? {
+            StreamSource::Segments(segments) => Some(segments),
+            _ => None,
+        }
+    }
+
+    /// Which segment file plays `local` of a clip's stream (none for other sources).
+    fn segment_file(&self, clip: &Clip, local: u64) -> Option<String> {
+        self.segments_of(clip)?
+            .into_iter()
+            .find(|s| s.available && s.start_us <= local && local < s.end_us)
+            .map(|s| s.relative_path)
+    }
+
     /// The wallpaper or gradient, built once per evaluator. A short draws its own choice.
     fn background(&self) -> Result<Option<VideoFrame>, String> {
         Ok(match self.wallpaper.get() {
             Some(cached) => cached.clone(),
             None => {
-                let layout = match &self.document.short_layout {
-                    Some(short) => crate::shorts::background_layout(&self.document.layout, short),
-                    None => self.document.layout.clone(),
-                };
+                let layout = background_layout(&self.document);
                 let loaded =
                     crate::render::background_frame(&self.root, &layout, self.width, self.height)?;
                 self.wallpaper.get_or_init(|| loaded).clone()
@@ -702,12 +911,7 @@ impl SceneEvaluator {
             .document
             .asset(asset)
             .filter(|a| a.is_recording())
-            .and_then(|a| {
-                crate::cursor::CursorTrack::load(Path::new(&a.path))
-                    .ok()
-                    .flatten()
-            })
-            .map(std::sync::Arc::new);
+            .and_then(|a| crate::cursor::CursorTrack::load_cached(Path::new(&a.path)));
         self.cursors
             .borrow_mut()
             .insert(asset.to_string(), track.clone());
@@ -756,7 +960,6 @@ impl SceneEvaluator {
     /// shows nothing; a missing file shows nothing.
     fn picture_job(&self, clip: &Clip, local_us: u64) -> Result<Option<PictureJob>, String> {
         use crate::sequence::sources::{stream_source, StreamSource};
-        const MAX_CACHED_IMAGES: usize = 4;
         let Some(asset) = self.document.asset(&clip.asset) else {
             return Ok(None);
         };
@@ -795,16 +998,10 @@ impl SceneEvaluator {
                 if !path.is_file() {
                     return Ok(None);
                 }
-                let mut cache = self.image_cache.borrow_mut();
-                let frame = match cache.iter().position(|(id, _)| *id == clip.asset) {
-                    Some(index) => cache.remove(index).1,
-                    None => crate::media_bin::decode_image(&path)?,
-                };
-                cache.push((clip.asset.clone(), frame.clone()));
-                if cache.len() > MAX_CACHED_IMAGES {
-                    cache.remove(0);
-                }
-                Some(PictureJob::Ready(frame))
+                Some(PictureJob::Ready(crate::media_bin::decode_image_cached(
+                    &path,
+                    (self.decode_limit.max_width, self.decode_limit.max_height),
+                )?))
             }
         })
     }
@@ -889,12 +1086,16 @@ pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
 
 /// Sources larger than twice the output are shrunk by FFmpeg's filtered scaler before
 /// compositing; the compositor's bilinear sampling aliases at bigger reductions. Twice the
-/// output keeps full detail for smart zoom up to 2x.
-fn export_decode_limit(width: u32, height: u32) -> DecodeLimit {
+/// output keeps full detail for smart zoom up to 2x. Sources are decoded no faster than the
+/// export's frame rate: a 60 fps recording in a 30 fps export would otherwise pass every
+/// other frame through the decoder pipe for nothing (the pipe is the slowest part).
+fn export_decode_limit(width: u32, height: u32, fps: u32) -> DecodeLimit {
     DecodeLimit {
         max_width: width.saturating_mul(2),
         max_height: height.saturating_mul(2),
-        max_rate: 0,
+        max_rate: fps,
+        interactive: false,
+        yuv: false,
     }
 }
 
@@ -924,7 +1125,27 @@ enum ExportWriter {
     Ffmpeg(FfmpegExport),
 }
 
+/// Work for the export's writer thread.
+enum WriteJob {
+    Video(u64, VideoFrame),
+    /// Audio at a time: interleaved samples and the number of sample frames.
+    Audio(u64, Vec<i16>, u32),
+    EndAudio,
+}
+
+/// While exporting, decoders start this far (in video time) ahead of the cuts coming up:
+/// about as much wall time as a decoder takes to start, at export speed. Further ahead,
+/// they crowd out the ones playing (and each other) in the decoder cache.
+const EXPORT_PREFETCH_US: u64 = 1_500_000;
+
 impl ExportWriter {
+    /// Whether it takes NV12 frames (from the GPU compositor) as well as BGRA.
+    fn takes_nv12() -> bool {
+        media_backend() == MediaBackend::Ffmpeg
+    }
+
+    /// `input`: the frames it will be given; NV12 only if [`ExportWriter::takes_nv12`].
+    #[allow(clippy::too_many_arguments)]
     fn begin(
         path: &Path,
         width: u32,
@@ -933,16 +1154,25 @@ impl ExportWriter {
         sample_rate: u32,
         channels: u16,
         rate: RateControl,
+        input: PixelFormat,
     ) -> Result<Self, String> {
         match media_backend() {
-            MediaBackend::Native => {
+            MediaBackend::Native if input == PixelFormat::Bgra8888 => {
                 NativeExport::begin(path, width, height, fps, sample_rate, channels, rate)
                     .map(Self::Native)
             }
-            MediaBackend::Ffmpeg => {
-                FfmpegExport::begin_with_rate(path, width, height, fps, sample_rate, channels, rate)
-                    .map(Self::Ffmpeg)
-            }
+            MediaBackend::Native => Err("This export writer takes BGRA frames only".into()),
+            MediaBackend::Ffmpeg => FfmpegExport::begin_with_rate(
+                path,
+                width,
+                height,
+                fps,
+                sample_rate,
+                channels,
+                rate,
+                input,
+            )
+            .map(Self::Ffmpeg),
         }
     }
 
@@ -1459,16 +1689,6 @@ fn export_to_temp(
     } else {
         (0, 0)
     };
-    let mut session = ExportWriter::begin(
-        &captured.temp,
-        captured.settings.width,
-        captured.settings.height,
-        captured.settings.fps,
-        sample_rate,
-        channels,
-        captured.settings.rate_control(),
-    )
-    .map_err(|message| ExportFailure::Native { message })?;
     let mut evaluator = SceneEvaluator::new(
         captured.root.clone(),
         captured.document.clone(),
@@ -1479,27 +1699,84 @@ fn export_to_temp(
     .with_decode_limit(export_decode_limit(
         captured.settings.width,
         captured.settings.height,
-    ));
+        captured.settings.fps,
+    ))
+    // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
+    // pipe, and no conversion on the CPU.
+    .with_nv12_output(ExportWriter::takes_nv12());
+    let mut session = ExportWriter::begin(
+        &captured.temp,
+        captured.settings.width,
+        captured.settings.height,
+        captured.settings.fps,
+        sample_rate,
+        channels,
+        captured.settings.rate_control(),
+        evaluator.output_format(),
+    )
+    .map_err(|message| ExportFailure::Native { message })?;
+
+    // The encoder is fed on a thread of its own, a couple of frames behind: while it takes
+    // one frame, the next is decoded and composited.
+    let (jobs, queue) = std::sync::mpsc::sync_channel::<WriteJob>(2);
+    let writer = std::thread::Builder::new()
+        .name("aeroedits-export-writer".into())
+        .spawn(move || -> Result<ExportWriter, String> {
+            for job in queue {
+                match job {
+                    WriteJob::Video(pts_us, frame) => session.write_video(pts_us, &frame)?,
+                    WriteJob::Audio(pts_us, pcm, count) => {
+                        session.write_audio(pts_us, &pcm, count, CHANNELS)?
+                    }
+                    WriteJob::EndAudio => session.end_audio()?,
+                }
+            }
+            Ok(session)
+        })
+        .map_err(|e| ExportFailure::Native {
+            message: format!("Could not start the export writer: {e}"),
+        })?;
+    // Stops the writer and gives back its session, or the error that stopped it.
+    let stop_writer =
+        |jobs: std::sync::mpsc::SyncSender<WriteJob>,
+         writer: std::thread::JoinHandle<Result<ExportWriter, String>>| {
+            drop(jobs);
+            writer
+                .join()
+                .map_err(|_| "The export writer stopped unexpectedly".to_string())?
+        };
+    let cancelled = || ExportFailure::Cancelled {
+        message: "Export cancelled".into(),
+    };
 
     let mut audio_frame = 0u64;
     let mut audio_ended = channels == 0;
+    let mut written = Ok(());
     for index in 0..frames {
         if cancel.load(Ordering::SeqCst) {
-            drop(session);
-            return Err(ExportFailure::Cancelled {
-                message: "Export cancelled".into(),
-            });
+            drop(stop_writer(jobs, writer));
+            return Err(cancelled());
         }
         let pts_us = frame_time_us(index, captured.settings.fps);
         if pts_us >= duration_us {
             break;
         }
-        let frame = evaluator
-            .preview_at(pts_us)
-            .map_err(|message| ExportFailure::Native { message })?;
-        session
-            .write_video(pts_us, &frame)
-            .map_err(|message| ExportFailure::Native { message })?;
+        let frame = match evaluator.preview_at(pts_us) {
+            Ok(frame) => frame,
+            Err(message) => {
+                drop(stop_writer(jobs, writer));
+                return Err(ExportFailure::Native { message });
+            }
+        };
+        // Decoders for the cuts coming up start while this stretch is exported.
+        evaluator.prefetch(pts_us, EXPORT_PREFETCH_US);
+        let started = std::time::Instant::now();
+        // A writer that stopped has dropped its end: its error comes back when it is joined.
+        if jobs.send(WriteJob::Video(pts_us, frame)).is_err() {
+            break;
+        }
+        crate::media::profile("export encode (waiting)", started);
+        let started = std::time::Instant::now();
         if channels > 0 {
             // Audio runs a second ahead of video: the macOS writer interleaves its
             // tracks and can hold video back until it has audio past that point.
@@ -1507,31 +1784,43 @@ fn export_to_temp(
                 as u64
                 + SAMPLE_RATE as u64;
             let end = end.min(mixer.total_frames);
-            while audio_frame < end {
+            while audio_frame < end && written.is_ok() {
                 if cancel.load(Ordering::SeqCst) {
-                    return Err(ExportFailure::Cancelled {
-                        message: "Export cancelled".into(),
-                    });
+                    drop(stop_writer(jobs, writer));
+                    return Err(cancelled());
                 }
                 let count = CHUNK_FRAMES.min((end - audio_frame) as usize);
-                let chunk = mixer
-                    .read_frames(audio_frame, count)
-                    .map_err(|message| ExportFailure::Io { message })?;
+                let chunk = match mixer.read_frames(audio_frame, count) {
+                    Ok(chunk) => chunk,
+                    Err(message) => {
+                        drop(stop_writer(jobs, writer));
+                        return Err(ExportFailure::Io { message });
+                    }
+                };
                 let pts = (audio_frame as u128 * 1_000_000 / SAMPLE_RATE as u128) as u64;
-                session
-                    .write_audio(pts, &chunk, count as u32, CHANNELS)
-                    .map_err(|message| ExportFailure::Native { message })?;
+                if jobs
+                    .send(WriteJob::Audio(pts, chunk, count as u32))
+                    .is_err()
+                {
+                    written = Err(());
+                }
                 audio_frame += count as u64;
             }
-            if !audio_ended && audio_frame >= mixer.total_frames {
-                session
-                    .end_audio()
-                    .map_err(|message| ExportFailure::Native { message })?;
+            if written.is_ok() && !audio_ended && audio_frame >= mixer.total_frames {
+                if jobs.send(WriteJob::EndAudio).is_err() {
+                    written = Err(());
+                }
                 audio_ended = true;
             }
         }
+        crate::media::profile("export audio", started);
+        if written.is_err() {
+            break;
+        }
         on_progress(index + 1, frames);
     }
+    let session = stop_writer(jobs, writer).map_err(|message| ExportFailure::Native { message })?;
+    let started = std::time::Instant::now();
     session
         .finish(duration_us)
         .map_err(|message| ExportFailure::Native { message })?;
@@ -1540,6 +1829,8 @@ fn export_to_temp(
             message: "Export cancelled".into(),
         });
     }
+    crate::media::profile("export finish", started);
+    let started = std::time::Instant::now();
     let actual_duration =
         media_duration_us(&captured.temp).map_err(|message| ExportFailure::Native { message })?;
     if actual_duration.abs_diff(duration_us) > AUDIO_DURATION_SLACK_US {
@@ -1550,8 +1841,17 @@ fn export_to_temp(
             ),
         });
     }
+    // Two frames are decoded to check the file: as the preview decodes (in software on
+    // Windows), which starts far sooner than a GPU decoder for so little.
+    let check = DecodeLimit {
+        max_width: captured.settings.width,
+        max_height: captured.settings.height,
+        max_rate: 0,
+        interactive: true,
+        yuv: false,
+    };
     for pts in [0, frame_time_us(frames - 1, captured.settings.fps)] {
-        let decoded = decode_h264_frame(&captured.temp, pts)
+        let decoded = decode_h264_frame_limited(&captured.temp, pts, check)
             .map_err(|message| ExportFailure::Native { message })?;
         if (decoded.width, decoded.height) != (captured.settings.width, captured.settings.height) {
             return Err(ExportFailure::Native {
@@ -1564,6 +1864,7 @@ fn export_to_temp(
             message: "Export cancelled".into(),
         });
     }
+    crate::media::profile("export verify", started);
     // Windows cannot rename or delete the temp file while a decoder still has it open.
     crate::media::release_decoders();
     write_chapters(&captured.temp, &captured.document, duration_us)
@@ -1672,6 +1973,7 @@ fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::decode_h264_frame;
 
     #[test]
     fn rejects_prores_and_odd_dimensions() {
@@ -1720,10 +2022,10 @@ mod tests {
 
     #[test]
     fn export_decode_limit_is_twice_the_output() {
-        let limit = export_decode_limit(1920, 1080);
+        let limit = export_decode_limit(1920, 1080, 30);
         assert_eq!(
             (limit.max_width, limit.max_height, limit.max_rate),
-            (3840, 2160, 0)
+            (3840, 2160, 30)
         );
     }
 
@@ -2525,6 +2827,8 @@ mod tests {
                     max_width: 32,
                     max_height: 32,
                     max_rate: 30,
+                    interactive: true,
+                    yuv: false,
                 });
         // Play forward across the cut the way the playback worker does.
         let mut last = None;
@@ -2625,12 +2929,13 @@ mod tests {
             width: 320,
             height: 180,
             decode_limit: DecodeLimit::NONE,
+            nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            image_cache: std::cell::RefCell::new(Vec::new()),
             cursors: Default::default(),
+            prefetched: Default::default(),
             zooms: Default::default(),
             cursor_images: Default::default(),
         };
@@ -2665,6 +2970,299 @@ mod tests {
                 gpu_bright.abs_diff(bright) <= bright / 10,
                 "gpu {gpu_bright} vs cpu {bright}"
             );
+        }
+    }
+
+    /// An evaluator without a GPU: scenes only.
+    fn scenes(root: &Path, document: EditDocument, width: u32, height: u32) -> SceneEvaluator {
+        SceneEvaluator {
+            root: root.into(),
+            document,
+            compositor: None,
+            width,
+            height,
+            decode_limit: DecodeLimit::NONE,
+            nv12_output: false,
+            wallpaper: std::cell::OnceCell::new(),
+            webcam_focus: std::cell::OnceCell::new(),
+            caption_cues: std::cell::OnceCell::new(),
+            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
+            cursors: Default::default(),
+            prefetched: Default::default(),
+            zooms: Default::default(),
+            cursor_images: Default::default(),
+        }
+    }
+
+    /// A 2x2 red picture on `count` video tracks, as overlays.
+    fn overlays_document(dir: &Path, count: usize) -> EditDocument {
+        let path = dir.join("logo.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let mut document = EditDocument::default();
+        document.assets = vec![serde_json::from_value(serde_json::json!({
+            "id": "logo", "name": "Logo", "kind": "image", "path": path,
+            "durationUs": 5_000_000, "width": 2, "height": 2,
+            "streams": [{"id": "picture", "name": "Picture", "kind": "picture", "role": "overlay"}]
+        }))
+        .unwrap()];
+        for i in 1..=count {
+            let mut track =
+                crate::sequence::Track::new(format!("t{i}"), crate::sequence::TrackKind::Video);
+            track.clips.push(Clip {
+                id: format!("c{i}"),
+                asset: "logo".into(),
+                stream: "picture".into(),
+                start_us: 0,
+                in_us: 0,
+                duration_us: 5_000_000,
+                link: None,
+                fit: crate::sequence::Fit::Contain,
+            });
+            document.sequence.tracks.push(track);
+        }
+        document.validate().unwrap();
+        document
+    }
+
+    #[test]
+    fn every_video_track_and_the_captions_have_a_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = overlays_document(dir.path(), 16);
+        let scene = scenes(dir.path(), document, 64, 64)
+            .scene_at(1_000_000)
+            .unwrap();
+        let overlays = scene
+            .layers
+            .iter()
+            .filter(|l| l.role == crate::render::LayerRole::Overlay)
+            .count();
+        assert_eq!(overlays, 16);
+        // Stills keep their texture on the GPU from frame to frame.
+        assert!(scene.layers.iter().all(|l| l.cache_key.is_some()));
+        let mut scene = scene;
+        let caption = scene.layers[0].frame.clone();
+        scene.push_caption(caption, 0, 0);
+        assert!(scene
+            .layers
+            .iter()
+            .any(|l| l.role == crate::render::LayerRole::Caption));
+    }
+
+    #[test]
+    fn a_short_draws_its_overlays_and_its_own_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = overlays_document(dir.path(), 1);
+        let short: crate::shorts::Short = serde_json::from_value(serde_json::json!({
+            "id": "s1", "title": "Short", "media": "logo",
+            "sourceStartUs": 0, "sourceEndUs": 5_000_000
+        }))
+        .unwrap();
+        let mut short_document = crate::shorts::short_document(&document, &short, false).unwrap();
+        let scene = scenes(dir.path(), short_document.clone(), 64, 64)
+            .scene_at(1_000_000)
+            .unwrap();
+        assert!(scene
+            .layers
+            .iter()
+            .any(|l| l.role == crate::render::LayerRole::Overlay));
+        // A preview kept across edits keeps its background only while the short's choice
+        // stays the same.
+        let key = |document: &EditDocument| {
+            background_key(dir.path(), &background_layout(document), 64, 64)
+        };
+        let before = key(&short_document);
+        let layout = short_document.short_layout.as_mut().unwrap();
+        layout.background_type = "gradient".into();
+        layout.background_color_start = "#0000FF".into();
+        assert_ne!(key(&short_document), before);
+    }
+
+    /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the
+    /// BGRA FFmpeg makes itself.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_nv12_layers_match_bgra() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pattern.mp4");
+        let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=640x360:rate=30",
+                "-t",
+                "1",
+            ])
+            .args(["-pix_fmt", "yuv420p", "-c:v", "libx264", "-y"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let limit = |yuv| DecodeLimit {
+            max_width: 640,
+            max_height: 360,
+            max_rate: 30,
+            interactive: true,
+            yuv,
+        };
+        let compositor = Compositor::new().unwrap();
+        let draw = |frame: VideoFrame| {
+            let scene = Scene {
+                width: 640,
+                height: 360,
+                background: [0.0, 0.0, 0.0, 1.0],
+                layers: vec![crate::render::Layer::placed(frame, 0, 0, 640, 360)],
+            };
+            compositor.composite(&scene).unwrap()
+        };
+        let bgra = crate::media::ffmpeg::decode_bgra_limited(&path, 500_000, limit(false)).unwrap();
+        let nv12 = crate::media::ffmpeg::decode_bgra_limited(&path, 500_000, limit(true)).unwrap();
+        assert_eq!(nv12.format, crate::media::PixelFormat::Nv12);
+        let (a, b) = (draw(bgra), draw(nv12.clone()));
+        let total: u64 = a
+            .data
+            .chunks_exact(4)
+            .zip(b.data.chunks_exact(4))
+            .map(|(x, y)| (0..3).map(|c| x[c].abs_diff(y[c]) as u64).sum::<u64>())
+            .sum();
+        let mean = total as f64 / (640.0 * 360.0 * 3.0);
+        assert!(
+            mean < 3.0,
+            "NV12 differs from BGRA by {mean:.2} levels on average"
+        );
+        // The CPU conversion (for the CPU compositor) agrees with the shader.
+        let cpu = nv12.to_bgra();
+        let total: u64 = cpu
+            .data
+            .chunks_exact(4)
+            .zip(b.data.chunks_exact(4))
+            .map(|(x, y)| (0..3).map(|c| x[c].abs_diff(y[c]) as u64).sum::<u64>())
+            .sum();
+        assert!((total as f64 / (640.0 * 360.0 * 3.0)) < 3.0);
+        crate::media::ffmpeg::release_decoders();
+    }
+
+    /// Export frames are converted to the encoder's YUV on the GPU; they must match FFmpeg's
+    /// own conversion of the same picture to a level. (Its default bicubic filter shrinks colour
+    /// a little differently at sharp colour edges, up to 9 levels there and 0.3 on average; the
+    /// GPU averages each 2x2 block, like FFmpeg's `area`.)
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_nv12_output_matches_ffmpeg_conversion() {
+        use std::io::{Read, Write};
+        let (w, h) = (640usize, 360usize);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pattern.mp4");
+        let ffmpeg = crate::media::ffmpeg::ffmpeg_path().unwrap();
+        // Colour bars, gradients, moving shapes and text: sharp colour edges included.
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg(format!("testsrc2=size={w}x{h}:rate=30"))
+            .args([
+                "-t", "1", "-pix_fmt", "yuv444p", "-c:v", "libx264", "-qp", "0", "-y",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let limit = DecodeLimit {
+            max_width: w as u32,
+            max_height: h as u32,
+            max_rate: 30,
+            interactive: true,
+            yuv: false,
+        };
+        let picture = crate::media::ffmpeg::decode_bgra_limited(&path, 500_000, limit).unwrap();
+        let compositor = Compositor::new().unwrap();
+        let scene = Scene {
+            width: w as u32,
+            height: h as u32,
+            background: [0.0, 0.0, 0.0, 1.0],
+            layers: vec![crate::render::Layer::placed(
+                picture, 0, 0, w as u32, h as u32,
+            )],
+        };
+        let bgra = compositor.composite(&scene).unwrap();
+        let nv12 = compositor.composite_nv12(&scene).unwrap();
+        assert_eq!(nv12.format, crate::media::PixelFormat::Nv12);
+        assert_eq!((nv12.stride as usize, nv12.data.len()), (w, w * h * 3 / 2));
+        // FFmpeg's conversion, as the export ran it, with a box filter for colour.
+        let mut child = std::process::Command::new(ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgra",
+                "-video_size",
+            ])
+            .arg(format!("{w}x{h}"))
+            .args(["-i", "pipe:0", "-vf"])
+            .arg("scale=out_color_matrix=bt709:out_range=tv:flags=area,format=yuv420p")
+            .args(["-f", "rawvideo", "pipe:1"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let pixels = bgra.data.clone();
+        let feed = std::thread::spawn(move || stdin.write_all(&pixels).unwrap());
+        let mut expected = Vec::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_end(&mut expected)
+            .unwrap();
+        feed.join().unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(expected.len(), w * h * 3 / 2);
+        // (worst, mean) difference in levels.
+        let differ = |a: &mut dyn Iterator<Item = (u8, u8)>| {
+            let (mut worst, mut total, mut count) = (0u8, 0u64, 0u64);
+            for (x, y) in a {
+                worst = worst.max(x.abs_diff(y));
+                total += x.abs_diff(y) as u64;
+                count += 1;
+            }
+            (worst, total as f64 / count as f64)
+        };
+        let quarter = w * h / 4;
+        let chroma = &nv12.data[w * h..];
+        let luma = differ(
+            &mut nv12.data[..w * h]
+                .iter()
+                .copied()
+                .zip(expected[..w * h].iter().copied()),
+        );
+        let cb = differ(
+            &mut chroma
+                .iter()
+                .step_by(2)
+                .copied()
+                .zip(expected[w * h..][..quarter].iter().copied()),
+        );
+        let cr = differ(
+            &mut chroma[1..]
+                .iter()
+                .step_by(2)
+                .copied()
+                .zip(expected[w * h + quarter..].iter().copied()),
+        );
+        println!("luma {luma:?}, cb {cb:?}, cr {cr:?} (worst, mean levels)");
+        for plane in [luma, cb, cr] {
+            assert!(plane.0 <= 1 && plane.1 < 0.05, "differs: {plane:?}");
         }
     }
 

@@ -95,21 +95,37 @@ export function sourceAt(project: OpenedProject, assetId: string, editedUs: numb
   return pick(role) ?? pick();
 }
 
-/** Where cut time can be put back on a track: two clips of one source side by side with time missing between. */
+/** The recorded time in `[a, b)` of an asset's own clock: a recorder pause holds none. */
+function recordedBetween(pauses: { startUs: number; endUs: number }[] | undefined, a: number, b: number): number {
+  let recorded = 0;
+  let cursor = a;
+  for (const pause of [...(pauses ?? [])].sort((x, y) => x.startUs - y.startUs)) {
+    recorded += Math.max(0, Math.min(b, pause.startUs) - cursor);
+    cursor = Math.max(cursor, Math.min(b, pause.endUs));
+  }
+  return recorded + Math.max(0, b - cursor);
+}
+
+/**
+ * Where cut time can be put back on a track: two clips of one source side by side with recorded
+ * time missing between. A recorder pause alone is no cut.
+ */
 export function cutJoins(project: OpenedProject, track: SeqTrack): { clipId: string; atUs: number; gapUs: number }[] {
   const joins = [];
   for (let i = 0; i + 1 < track.clips.length; i++) {
     const left = track.clips[i];
     const right = track.clips[i + 1];
-    const still = assetById(project, left.asset)?.kind === "image";
+    const asset = assetById(project, left.asset);
+    const out = left.inUs + left.durationUs;
     if (
-      !still &&
+      asset?.kind !== "image" &&
       left.asset === right.asset &&
       left.stream === right.stream &&
       clipEnd(left) === right.startUs &&
-      left.inUs + left.durationUs < right.inUs
+      out < right.inUs
     ) {
-      joins.push({ clipId: left.id, atUs: right.startUs, gapUs: right.inUs - (left.inUs + left.durationUs) });
+      const gapUs = recordedBetween(asset?.pauses, out, right.inUs);
+      if (gapUs > 0) joins.push({ clipId: left.id, atUs: right.startUs, gapUs });
     }
   }
   return joins;
@@ -124,10 +140,21 @@ export interface SoundSource {
   placed: boolean;
 }
 
-/** Every sound stream in the project: speech first, then what is on the timeline. */
+/**
+ * Every sound stream in the project: speech first, then what is on the timeline. Speech is what
+ * the timeline plays as speech (the sound's own role, or its track's), else its own role.
+ */
 export function soundSources(project: OpenedProject | null | undefined): SoundSource[] {
   if (!project) return [];
-  const placed = new Set(project.sequence.tracks.flatMap((t) => t.clips.map((c) => streamKey(c.asset, c.stream))));
+  const placed = new Set<string>();
+  const spoken = new Set<string>();
+  for (const track of project.sequence.tracks) {
+    for (const clip of track.clips) {
+      const key = streamKey(clip.asset, clip.stream);
+      placed.add(key);
+      if (clipRole(project, track, clip) === "mic") spoken.add(key);
+    }
+  }
   const sounds = project.assets.flatMap((asset) =>
     asset.streams
       .filter((s) => s.kind === "sound")
@@ -137,7 +164,7 @@ export function soundSources(project: OpenedProject | null | undefined): SoundSo
         return {
           key,
           label: asset.kind === "recording" || several ? `${shortLabel(asset.name)} · ${stream.name}` : shortLabel(asset.name, 32),
-          speech: stream.role === "mic",
+          speech: placed.has(key) ? spoken.has(key) : stream.role === "mic",
           placed: placed.has(key),
         };
       }),
@@ -195,4 +222,43 @@ export function formatRulerLabel(timeUs: number, stepUs: number): string {
   const minutes = Math.floor(tenths / 600);
   const seconds = String(Math.floor((tenths % 600) / 10)).padStart(2, "0");
   return stepUs < 1_000_000 ? `${minutes}:${seconds}.${tenths % 10}` : `${minutes}:${seconds}`;
+}
+
+const sameFields = <T extends object>(a: T, b: T) => {
+  const keys = Object.keys(a) as (keyof T)[];
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.is(a[key], b[key]));
+};
+
+/**
+ * `next` with every clip and track that did not change taken from `previous`, so components
+ * that compare by identity (each clip on the timeline) re-render only for what an edit changed.
+ */
+export function shareSequence(previous: Sequence | undefined, next: Sequence): Sequence {
+  if (!previous) return next;
+  const oldTracks = new Map(previous.tracks.map((t) => [t.id, t]));
+  let allSame = previous.tracks.length === next.tracks.length && previous.magnetic === next.magnetic;
+  const tracks = next.tracks.map((track, index) => {
+    const old = oldTracks.get(track.id);
+    if (!old) {
+      allSame = false;
+      return track;
+    }
+    const oldClips = new Map(old.clips.map((c) => [c.id, c]));
+    let clipsSame = old.clips.length === track.clips.length;
+    const clips = track.clips.map((clip, i) => {
+      const was = oldClips.get(clip.id);
+      if (was && sameFields(was, clip)) {
+        if (old.clips[i] !== was) clipsSame = false;
+        return was;
+      }
+      clipsSame = false;
+      return clip;
+    });
+    const { clips: _a, ...fields } = track;
+    const { clips: _b, ...oldFields } = old;
+    const shared = clipsSame && sameFields(fields, oldFields) ? old : { ...track, clips: clipsSame ? old.clips : clips };
+    if (shared !== old || previous.tracks[index] !== old) allSame = false;
+    return shared;
+  });
+  return allSame ? previous : { ...next, tracks };
 }

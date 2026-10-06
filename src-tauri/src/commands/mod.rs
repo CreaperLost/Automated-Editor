@@ -4,14 +4,11 @@ use crate::playback::{
     self, PlaybackOwner, PlaybackStatus, PreviewHitMode, PreviewOwner, PreviewStatus,
     PreviewViewport,
 };
-use crate::project::{
-    OpenedProject, ProjectReader, SegmentPage, WaveformPage, WaveformTrackContext,
-};
+use crate::project::{OpenedProject, ProjectReader, SegmentPage, WaveformTrackContext};
 use crate::sequence::edit::SequenceEdit;
 use crate::sequence::{Role, StreamKind};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +28,8 @@ pub struct AppState {
     pub preview_frame_ready: tokio::sync::Notify,
     pub encoder_gate: Arc<EncoderGate>,
     pub export: Mutex<crate::export::ExportOwner>,
+    /// Bumped when the project opens or closes (or media goes), which stops waveform reads.
     pub waveform_epoch: AtomicU64,
-    pub waveform_generations: Mutex<HashMap<String, u64>>,
     pub native_capture_enabled: bool,
     /// The renderer behind the Shorts Studio preview, kept while the same short and layout
     /// are being scrubbed.
@@ -60,7 +57,6 @@ impl AppState {
             encoder_gate: Arc::new(EncoderGate::new()),
             export: Mutex::new(crate::export::ExportOwner::new()),
             waveform_epoch: AtomicU64::new(0),
-            waveform_generations: Mutex::new(HashMap::new()),
             // Playback has an audio output (and audio clock) on macOS and Windows.
             native_capture_enabled: cfg!(any(target_os = "macos", windows)),
             short_preview: Mutex::new(None),
@@ -192,7 +188,12 @@ pub(crate) fn sound_context(
     })
 }
 
-/// Finds pauses in a sound stream (`<asset>.<stream>`), in timeline time through its clips.
+/// Asks [`detect_silence_impl`] for the pauses in all the speech on the timeline at once.
+pub const ALL_SPEECH: &str = "speech";
+
+/// Finds pauses in a sound stream (`<asset>.<stream>`), in timeline time through its clips, or
+/// with [`ALL_SPEECH`], in every sound the timeline plays as speech (see
+/// [`crate::project::silence::common_pauses`]).
 pub fn detect_silence_impl(
     state: &AppState,
     project_handle: String,
@@ -200,6 +201,9 @@ pub fn detect_silence_impl(
     config: SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
+    if track_id == ALL_SPEECH {
+        return detect_speech_silence(state, &project_handle, &config);
+    }
     let ctx = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
@@ -207,6 +211,110 @@ pub fn detect_silence_impl(
         sound_context(reader, &track_id, true)?
     };
     crate::project::silence::detect_track_silence(&ctx, &config)
+}
+
+/// Every sound the timeline plays as speech (its own role, or its track's), with where its
+/// clips play: muted tracks left out.
+fn speech_on_timeline(
+    document: &crate::project::revision::EditDocument,
+) -> Vec<(String, Vec<(u64, u64)>)> {
+    let mut speech: Vec<(String, Vec<(u64, u64)>)> = Vec::new();
+    for track in document.sequence.tracks.iter().filter(|t| !t.muted) {
+        for clip in &track.clips {
+            if crate::sequence::clip_role(&document.assets, track, clip) != Some(Role::Mic) {
+                continue;
+            }
+            let key = crate::sequence::StreamRef::new(&clip.asset, &clip.stream).key();
+            let plays = (clip.start_us, clip.end_us());
+            match speech.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, ranges)) => ranges.push(plays),
+                None => speech.push((key, vec![plays])),
+            }
+        }
+    }
+    speech
+}
+
+fn detect_speech_silence(
+    state: &AppState,
+    project_handle: &str,
+    config: &SilenceConfig,
+) -> Result<SilenceDetectionResult, String> {
+    let sounds = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, project_handle)?;
+        speech_on_timeline(reader.document())
+            .into_iter()
+            .map(|(key, plays)| Ok((sound_context(reader, &key, true)?, plays)))
+            .collect::<Result<Vec<_>, String>>()?
+    };
+    if sounds.is_empty() {
+        return Err("Nothing on the timeline is marked as speech: choose a sound to scan".into());
+    }
+    // Each sound is read on a thread of its own.
+    let found = std::thread::scope(|scope| {
+        let jobs: Vec<_> = sounds
+            .iter()
+            .map(|(ctx, _)| {
+                scope.spawn(move || crate::project::silence::detect_track_silence(ctx, config))
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .unwrap_or_else(|_| Err("Silence detection failed".into()))
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
+    let lists: Vec<crate::project::silence::PlaysAndPauses> = sounds
+        .iter()
+        .zip(&found)
+        .map(|((_, plays), result)| {
+            let silent = result
+                .suggestions
+                .iter()
+                .map(|s| (s.start_us, s.end_us))
+                .collect();
+            (plays.clone(), silent)
+        })
+        .collect();
+    let min_us = u64::from(config.min_duration_ms.saturating_sub(2 * config.padding_ms)) * 1_000;
+    let mut diagnostics: Vec<String> = Vec::new();
+    for result in &found {
+        for line in &result.diagnostics {
+            if !diagnostics.contains(line) {
+                diagnostics.push(line.clone());
+            }
+        }
+    }
+    let mut pauses = crate::project::silence::common_pauses(&lists, min_us);
+    if pauses.len() > crate::project::revision::MAX_CUTS_PER_REVISION {
+        pauses.truncate(crate::project::revision::MAX_CUTS_PER_REVISION);
+        diagnostics
+            .push("Silence suggestion count was bounded to one revision of ripple cuts".into());
+    }
+    let first = &found[0];
+    Ok(SilenceDetectionResult {
+        track_id: ALL_SPEECH.into(),
+        sample_rate: first.sample_rate,
+        channels: first.channels,
+        channel_policy: first.channel_policy.clone(),
+        suggestions: pauses
+            .into_iter()
+            .enumerate()
+            .map(|(i, (start_us, end_us))| crate::dsp::SilenceCutInterval {
+                id: format!("silence-{}", i + 1),
+                start_us,
+                end_us,
+                duration_ms: (end_us - start_us) / 1_000,
+                selected: true,
+                source_start_us: start_us,
+                source_end_us: end_us,
+            })
+            .collect(),
+        diagnostics,
+    })
 }
 
 #[cfg(test)]
@@ -260,7 +368,6 @@ pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject
     owner.native_enabled = state.native_capture_enabled;
     *state.playback.lock() = owner;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    state.waveform_generations.lock().clear();
     Ok(summary)
 }
 
@@ -275,7 +382,6 @@ pub fn close_project_impl(state: &AppState, project_handle: String) -> Result<()
     *opened = None;
     state.playback.lock().close();
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    state.waveform_generations.lock().clear();
     Ok(())
 }
 
@@ -294,40 +400,22 @@ pub fn project_segments_impl(
     reader.page(&track_id, offset, limit)
 }
 
-/// A sound stream's waveform (`<asset>.<stream>`) over `[start_us, end_us)` of its own time;
+/// A sound's whole waveform (`<asset>.<stream>`), fine enough to see pauses, on its own time:
 /// the timeline draws each clip's part of it.
-pub fn project_waveform_impl(
+pub fn project_waveform_overview_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
-    start_us: u64,
-    end_us: u64,
-    bucket_count: usize,
-) -> Result<WaveformPage, String> {
+) -> Result<crate::project::waveform::WaveformOverview, String> {
     let epoch = state.waveform_epoch.load(Ordering::SeqCst);
-    let generation = {
-        let mut generations = state.waveform_generations.lock();
-        let slot = generations.entry(track_id.clone()).or_insert(0);
-        *slot += 1;
-        *slot
-    };
     let ctx = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
         sound_context(reader, &track_id, false)?
     };
-    crate::project::waveform::query_waveform(&ctx, start_us, end_us, bucket_count, &|| {
-        if state.waveform_epoch.load(Ordering::SeqCst) != epoch {
-            return true;
-        }
-        state
-            .waveform_generations
-            .lock()
-            .get(&track_id)
-            .copied()
-            .unwrap_or(0)
-            != generation
+    crate::project::waveform::waveform_overview(&ctx, &|| {
+        state.waveform_epoch.load(Ordering::SeqCst) != epoch
     })
 }
 
@@ -729,6 +817,8 @@ pub fn short_preview_frame_impl(
                     max_width: width * 2,
                     max_height: height * 2,
                     max_rate: 0,
+                    interactive: true,
+                    yuv: false,
                 });
         *cache = Some(ShortPreviewCache { key, evaluator });
     }
@@ -867,7 +957,6 @@ pub fn project_ripple_cuts_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -983,7 +1072,6 @@ pub fn project_sequence_edit_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -1003,7 +1091,6 @@ pub fn project_undo_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -1023,7 +1110,6 @@ pub fn project_redo_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
 }
 
@@ -1053,7 +1139,6 @@ pub fn project_short_resync_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(view)
 }
 
@@ -1114,6 +1199,19 @@ pub fn playback_play_impl(
         return Err("Stale project handle".into());
     }
     playback.play()
+}
+
+/// Plays at `speed` (1, 1.25, 1.5 or 2), carrying on if it is playing.
+pub fn playback_set_speed_impl(
+    state: &AppState,
+    project_handle: String,
+    speed: f64,
+) -> Result<PlaybackStatus, String> {
+    let mut playback = state.playback.lock();
+    if playback.status()?.project_handle != project_handle {
+        return Err("Stale project handle".into());
+    }
+    playback.set_speed(speed)
 }
 
 pub fn playback_pause_impl(

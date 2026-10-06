@@ -53,7 +53,43 @@ pub struct CursorTrack {
     pub source_height: f64,
 }
 
+/// When a recording's pointer files were last written, to tell a cached read is still good.
+type Stamp = [Option<(u64, Option<std::time::SystemTime>)>; 2];
+
+fn stamp(folder: &Path) -> Stamp {
+    let telemetry = folder.join("telemetry");
+    ["geometry.jsonl", "events.jsonl"].map(|name| {
+        std::fs::metadata(telemetry.join(name))
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    })
+}
+
 impl CursorTrack {
+    /// Like [`CursorTrack::load`], read once while the recording's files stay the same: the
+    /// preview rebuilds its scene after every edit, and a long recording's pointer takes a
+    /// while to read. A pointer that cannot be read is `None`.
+    pub fn load_cached(folder: &Path) -> Option<std::sync::Arc<Self>> {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex, OnceLock};
+        type Cache = Mutex<HashMap<PathBuf, (Stamp, Option<Arc<CursorTrack>>)>>;
+        static CACHE: OnceLock<Cache> = OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        let now = stamp(folder);
+        if let Some((seen, track)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
+            if *seen == now {
+                return track.clone();
+            }
+        }
+        let track = Self::load(folder).ok().flatten().map(Arc::new);
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= 32 {
+            cache.clear();
+        }
+        cache.insert(folder.to_path_buf(), (now, track.clone()));
+        track
+    }
+
     /// The pointer of the recording in `folder`, or `None` when it is baked into the video or
     /// was not recorded.
     pub fn load(folder: &Path) -> Result<Option<Self>, String> {

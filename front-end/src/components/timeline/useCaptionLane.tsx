@@ -47,7 +47,9 @@ export function useCaptionLane({
     return () => {
       active = false;
     };
-  }, [openedProject?.projectHandle, openedProject?.revision, captionsVersion, openedProject?.captions?.trackId]);
+    // Cues change with the sequence, the transcript and the caption settings, not with every
+    // edit (a layout slider makes many).
+  }, [openedProject?.projectHandle, openedProject?.sequence, captionsVersion, JSON.stringify(openedProject?.captions ?? null)]);
   useEffect(() => setSelected(null), [openedProject?.projectHandle]);
 
   const edit = async (change: CaptionEdit) => {
@@ -66,7 +68,7 @@ export function useCaptionLane({
   /** A new caption starts at the first word at or after the playhead. */
   const splitCue = () => {
     if (!cue) return;
-    const index = cue.wordStartsUs.findIndex((start, i) => i > 0 && start >= view.currentTimeUs);
+    const index = cue.wordStartsUs.findIndex((start, i) => i > 0 && start >= view.nowUs());
     if (index <= 0) {
       onError("Put the playhead between two words of the caption to split it.");
       return;

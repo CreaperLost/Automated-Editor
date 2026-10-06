@@ -109,7 +109,7 @@ export const TrackClipSection: React.FC = () => {
           <select
             aria-label="How the clip fills the frame"
             value={clip.fit ?? "contain"}
-            disabled={busy}
+            disabled={busy || track.locked}
             onChange={(event) => void edit({ kind: "setClip", clipId: clip.id, fit: event.target.value as Fit })}
             className="w-full min-w-0 truncate bg-studio-800 text-studio-100 text-label rounded px-2 py-1 border border-studio-700 focus:outline-none focus:border-accent-hover"
           >

@@ -4,7 +4,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-pub const MAX_WAV_BYTES: u64 = 512 * 1024 * 1024;
+/// The most a RIFF file can hold (its sizes are 32-bit): over six hours of the 48 kHz stereo
+/// 16-bit sound extracted at import. Files are read in chunks, never whole.
+pub const MAX_WAV_BYTES: u64 = u32::MAX as u64;
 pub const MAX_CHANNELS: u16 = 8;
 pub const MIN_SAMPLE_RATE: u32 = 8_000;
 pub const MAX_SAMPLE_RATE: u32 = 192_000;

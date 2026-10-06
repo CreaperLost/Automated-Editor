@@ -104,6 +104,22 @@ impl EditDocument {
         self.sequence.duration_us()
     }
 
+    /// Every track id the document knows: the video's tracks, the shorts' own and those
+    /// with mix settings (a deleted track's stay until undo has no use for them).
+    pub fn track_ids_in_use(&self) -> impl Iterator<Item = &str> {
+        let shorts = self
+            .shorts
+            .iter()
+            .filter_map(|s| s.edit.as_ref())
+            .flat_map(|own| own.sequence.tracks.iter());
+        self.sequence
+            .tracks
+            .iter()
+            .chain(shorts)
+            .map(|t| t.id.as_str())
+            .chain(self.audio.tracks.keys().map(String::as_str))
+    }
+
     pub fn asset(&self, id: &str) -> Option<&Asset> {
         self.assets.iter().find(|a| a.id == id)
     }
@@ -178,9 +194,15 @@ impl EditDocument {
 
     /// Whether `zoom` shares timeline time with any other zoom: zooms never overlap.
     pub fn zoom_overlaps(&self, zoom: &ZoomKeyframe) -> bool {
-        let mine = self.zoom_edited(zoom);
+        let clocks = self.zoom_clocks();
+        let edited = |z: &ZoomKeyframe| {
+            clocks(z.media.as_deref())
+                .map(|m| m.source_range_to_edited(z.source_start_us, z.source_end_us))
+                .unwrap_or_default()
+        };
+        let mine = edited(zoom);
         self.zooms.iter().filter(|z| z.id != zoom.id).any(|other| {
-            let theirs = self.zoom_edited(other);
+            let theirs = edited(other);
             mine.iter()
                 .any(|&(a, b)| theirs.iter().any(|&(c, d)| a < d && c < b))
         })
@@ -189,8 +211,28 @@ impl EditDocument {
     /// The zooms with where each lands on the timeline, each on its own clock.
     pub fn zooms_with_ranges(&self) -> Vec<ZoomKeyframe> {
         let mut zooms = self.zooms.clone();
-        crate::zoom::attach_zoom_edited_ranges_with(&mut zooms, &|media| self.zoom_clock(media));
+        let clocks = self.zoom_clocks();
+        crate::zoom::attach_zoom_edited_ranges_with(&mut zooms, &|media| clocks(media));
         zooms
+    }
+
+    /// Zoom clocks by recording, each built once: building one walks the whole sequence,
+    /// and there is a zoom every few seconds.
+    fn zoom_clocks(&self) -> impl Fn(Option<&str>) -> Option<std::rc::Rc<TimelineMapper>> + '_ {
+        let built = std::cell::RefCell::new(std::collections::HashMap::<
+            String,
+            std::rc::Rc<TimelineMapper>,
+        >::new());
+        move |media| {
+            let asset = self.clock_asset(media)?;
+            let mut built = built.borrow_mut();
+            Some(
+                built
+                    .entry(asset.to_string())
+                    .or_insert_with(|| std::rc::Rc::new(self.picture_clock(asset)))
+                    .clone(),
+            )
+        }
     }
 
     pub fn attach_zoom_ranges(&mut self) {
@@ -229,6 +271,28 @@ impl EditDocument {
         crate::shorts::validate_edits(self)?;
         Ok(())
     }
+}
+
+/// Moves a `project.json` the editor could not read (made by an earlier AeroEdits, or
+/// damaged) out of the way, to `project.unreadable.json` (numbered when that is taken), so the
+/// next save cannot overwrite it. Nothing reads it again; old edits are not migrated. Returns
+/// the name it was given.
+pub fn set_aside_edit_document(root: &Path) -> Result<String, String> {
+    let path = safe_path(root, "project.json")?;
+    for n in 1..1000 {
+        let name = if n == 1 {
+            "project.unreadable.json".to_string()
+        } else {
+            format!("project.unreadable-{n}.json")
+        };
+        let target = safe_path(root, &name)?;
+        if fs::symlink_metadata(&target).is_ok() {
+            continue;
+        }
+        fs::rename(&path, &target).map_err(|e| e.to_string())?;
+        return Ok(name);
+    }
+    Err("There are too many set-aside edit documents".into())
 }
 
 pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
@@ -423,8 +487,12 @@ impl EditHistory {
         persist_root: &Path,
     ) -> Result<EditOutcome, String> {
         self.check(expected_revision)?;
-        let (sequence, outcome) =
-            crate::sequence::edit::apply(&self.current.sequence, &self.current.assets, edit)?;
+        let (sequence, outcome) = crate::sequence::edit::apply_reserving(
+            &self.current.sequence,
+            &self.current.assets,
+            edit,
+            self.current.track_ids_in_use(),
+        )?;
         let mut next = self.current.clone();
         next.sequence = sequence;
         self.commit_next(expected_revision, persist_root, next)?;
@@ -991,8 +1059,12 @@ impl EditHistory {
             .find(|s| s.id == short_id)
             .ok_or("That short no longer exists")?;
         let timeline = crate::shorts::short_timeline(&self.current, short)?;
-        let (sequence, outcome) =
-            crate::sequence::edit::apply(&timeline.sequence, &self.current.assets, edit)?;
+        let (sequence, outcome) = crate::sequence::edit::apply_reserving(
+            &timeline.sequence,
+            &self.current.assets,
+            edit,
+            self.current.track_ids_in_use(),
+        )?;
         let mut next = self.current.clone();
         let own = next
             .shorts
@@ -1173,6 +1245,84 @@ mod tests {
         let mut history = EditHistory::new(doc(S));
         history.ripple_cuts(0, &[(0, 100_000)], dir.path()).unwrap();
         assert_eq!(load_edit_document(dir.path()).unwrap().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn an_unreadable_edit_is_set_aside_before_anything_saves_over_it() {
+        let dir = tempdir().unwrap();
+        let root = crate::project::folder::create_project_folder(dir.path(), "Old", None).unwrap();
+        let original = r#"{"schemaVersion":1,"revision":42,"retainedIntervals":[]}"#;
+        fs::write(root.join("project.json"), original).unwrap();
+        let mut reader = crate::project::ProjectReader::open(&root).unwrap();
+        assert!(reader
+            .summary
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("project.unreadable.json")));
+        reader
+            .edit_sequence(
+                0,
+                &SequenceEdit::AddTrack {
+                    track_kind: TrackKind::Video,
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("project.unreadable.json")).unwrap(),
+            original
+        );
+        assert_eq!(load_edit_document(&root).unwrap().unwrap().revision, 1);
+        drop(reader);
+        // A second one is kept beside the first.
+        fs::write(root.join("project.json"), "not json").unwrap();
+        crate::project::ProjectReader::open(&root).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("project.unreadable-2.json")).unwrap(),
+            "not json"
+        );
+    }
+
+    #[test]
+    fn a_new_track_never_inherits_a_deleted_tracks_mix() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(S));
+        let a2 = history.current.sequence.tracks[3].id.clone();
+        let mut audio = history.current.audio.clone();
+        audio.tracks.insert(
+            a2.clone(),
+            crate::project::audio::TrackMix {
+                volume_db: -12.0,
+                denoise_db: Some(30.0),
+                duck_db: None,
+            },
+        );
+        history.update_audio(0, audio, dir.path()).unwrap();
+        history
+            .edit_sequence(
+                1,
+                &SequenceEdit::RemoveTrack {
+                    track_id: a2.clone(),
+                },
+                dir.path(),
+            )
+            .unwrap();
+        history
+            .edit_sequence(
+                2,
+                &SequenceEdit::AddTrack {
+                    track_kind: TrackKind::Audio,
+                },
+                dir.path(),
+            )
+            .unwrap();
+        let added = history.current.sequence.tracks.last().unwrap().id.clone();
+        assert_ne!(added, a2);
+        assert_eq!(history.current.audio.track_gain(&added), 1.0);
+        // Undo brings the old track back with its mix.
+        history.undo(3, dir.path()).unwrap();
+        history.undo(4, dir.path()).unwrap();
+        assert!(history.current.audio.track_gain(&a2) < 1.0);
     }
 
     #[test]

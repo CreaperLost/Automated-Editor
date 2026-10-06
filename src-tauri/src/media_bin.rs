@@ -219,6 +219,76 @@ pub fn remove_files(root: &Path, asset: &Asset) {
     );
 }
 
+/// Decoded pictures kept for the whole app, so the preview does not decode a still again
+/// after every edit. Bounded in bytes; the least recently used go first.
+const IMAGE_CACHE_BYTES: usize = 384 << 20;
+
+/// [`decode_image`], no larger than `max` (width, height; 0 for no limit, keeping its shape),
+/// cached while the file stays the same. A 4K still in a 720p preview is held at 720p.
+pub fn decode_image_cached(path: &Path, max: (u32, u32)) -> Result<VideoFrame, String> {
+    use std::sync::Mutex;
+    type Key = (
+        std::path::PathBuf,
+        u64,
+        Option<std::time::SystemTime>,
+        (u32, u32),
+    );
+    static CACHE: Mutex<Vec<(Key, VideoFrame)>> = Mutex::new(Vec::new());
+    let meta = fs::metadata(path).map_err(|e| format!("Unreadable image: {e}"))?;
+    let key: Key = (path.to_path_buf(), meta.len(), meta.modified().ok(), max);
+    {
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache.remove(index);
+            let frame = entry.1.clone();
+            cache.push(entry);
+            return Ok(frame);
+        }
+    }
+    let frame = fit_within(decode_image(path)?, max);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    // Another version of the file (it changed) is not wanted again; other sizes may be.
+    cache.retain(|(k, _)| k.0 != key.0 || (k.1, k.2) == (key.1, key.2));
+    cache.push((key, frame.clone()));
+    let mut total: usize = cache.iter().map(|(_, f)| f.data.len()).sum();
+    while total > IMAGE_CACHE_BYTES && cache.len() > 1 {
+        total -= cache.remove(0).1.data.len();
+    }
+    Ok(frame)
+}
+
+/// `frame` scaled down to fit inside `max` (0 for no limit), keeping its shape.
+fn fit_within(frame: VideoFrame, (max_w, max_h): (u32, u32)) -> VideoFrame {
+    let mut scale = 1.0f64;
+    if max_w > 0 && frame.width > max_w {
+        scale = scale.min(max_w as f64 / frame.width as f64);
+    }
+    if max_h > 0 && frame.height > max_h {
+        scale = scale.min(max_h as f64 / frame.height as f64);
+    }
+    if scale >= 1.0 || frame.stride != frame.width * 4 {
+        return frame;
+    }
+    let w = ((frame.width as f64 * scale).round() as u32).max(1);
+    let h = ((frame.height as f64 * scale).round() as u32).max(1);
+    // BGRA resizes as any four channels do.
+    let Some(image) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+        frame.width,
+        frame.height,
+        frame.data.as_slice(),
+    ) else {
+        return frame;
+    };
+    let small = image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle);
+    VideoFrame {
+        width: w,
+        height: h,
+        stride: w * 4,
+        data: small.into_raw().into(),
+        ..frame
+    }
+}
+
 /// Decodes an image asset to a BGRA frame no larger than the working-set limit.
 pub fn decode_image(path: &Path) -> Result<VideoFrame, String> {
     let mut image = image::open(path)
@@ -243,13 +313,37 @@ pub fn decode_image(path: &Path) -> Result<VideoFrame, String> {
         stride: width * 4,
         format: PixelFormat::Bgra8888,
         color: ColorInfo::rec709_full(),
-        data,
+        data: data.into(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_still_sizes_share_pixels_without_mutating_other_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("still.png");
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([255, 0, 0, 128]))
+            .save(&path)
+            .unwrap();
+        let mut small = decode_image_cached(&path, (10, 10)).unwrap();
+        let cached = decode_image_cached(&path, (10, 10)).unwrap();
+        assert_eq!((small.width, small.height, small.stride), (10, 5, 40));
+        assert_eq!(&small.data[..4], &[0, 0, 255, 128]);
+        assert_eq!(small.data.as_ptr(), cached.data.as_ptr());
+        small.data[0] = 42;
+        assert_eq!(
+            cached.data[0], 0,
+            "modifying one frame must not change the cache"
+        );
+        let full = decode_image_cached(&path, (0, 0)).unwrap();
+        assert_eq!((full.width, full.height), (40, 20));
+        assert_eq!(&full.data[..4], &[0, 0, 255, 128]);
+        let larger_limit = decode_image_cached(&path, (400, 400)).unwrap();
+        assert_eq!((larger_limit.width, larger_limit.height), (40, 20));
+    }
 
     #[test]
     fn kinds_follow_extensions_and_paths_stay_in_the_media_folder() {

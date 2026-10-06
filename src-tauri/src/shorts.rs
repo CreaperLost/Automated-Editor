@@ -422,18 +422,31 @@ pub fn edited_range(short: &Short, mapper: &TimelineMapper) -> Option<(u64, u64)
     (end > start).then_some((start, end))
 }
 
+/// Fills in where each short sits on the video and how long it plays. Lengths come from the
+/// short's own timeline or its stretch of the video, without building a whole document per
+/// short (the summary is refreshed after every edit).
 pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
+    // One clock per source, not one per short: building one walks the whole sequence.
+    let mut clocks: std::collections::HashMap<String, TimelineMapper> = Default::default();
     for short in shorts {
-        short.length_us = short_timeline(document, short)
-            .ok()
-            .map(|t| t.duration_us());
         // A short with its own edit no longer sits on the video's timeline.
-        if short.edit.is_some() {
+        if let Some(own) = &short.edit {
+            short.length_us = Some(own.sequence.duration_us());
             short.edited_start_us = None;
             short.edited_end_us = None;
             continue;
         }
-        let range = edited_range_in(short, document);
+        let range = document
+            .clock_asset(short.media.as_deref())
+            .and_then(|asset| {
+                let clock = clocks
+                    .entry(asset.to_string())
+                    .or_insert_with(|| document.asset_clock(asset));
+                edited_range(short, clock)
+            });
+        short.length_us = range.map(|(start, end)| {
+            slice_sequence(&document.sequence, &document.assets, start, end).duration_us()
+        });
         short.edited_start_us = range.map(|r| r.0);
         short.edited_end_us = range.map(|r| r.1);
     }
@@ -732,6 +745,32 @@ mod tests {
         assert!(history.current.shorts[0].edit.is_none());
         // Following the video now, whose first 20 s were cut: the short's start is gone.
         assert!(short_timeline(&history.current, &history.current.shorts[0]).is_err());
+    }
+
+    #[test]
+    fn summaries_give_each_short_its_timelines_length() {
+        let mut base = doc(60 * S);
+        cut(&mut base, 20 * S, 25 * S);
+        let mut own = short(30 * S, 50 * S);
+        own.id = "own".into();
+        own.edit = Some(ShortEdit {
+            sequence: slice_sequence(&base.sequence, &base.assets, 0, 7 * S),
+        });
+        let mut gone = short(21 * S, 40 * S);
+        gone.id = "gone".into();
+        let mut shorts = vec![short(10 * S, 30 * S), own, gone];
+        base.shorts = shorts.clone();
+        attach_edited(&mut shorts, &base);
+        // Each length is what its timeline plays, as a full short document has it.
+        for summary in &shorts {
+            let expected = short_timeline(&base, summary).ok().map(|t| t.duration_us());
+            assert_eq!(summary.length_us, expected, "{}", summary.id);
+        }
+        assert_eq!(shorts[0].length_us, Some(15 * S));
+        assert_eq!(shorts[0].edited_start_us, Some(10 * S));
+        assert_eq!(shorts[1].length_us, Some(7 * S));
+        assert_eq!(shorts[1].edited_start_us, None, "edited on its own");
+        assert_eq!(shorts[2].length_us, None, "its start was cut");
     }
 
     #[test]

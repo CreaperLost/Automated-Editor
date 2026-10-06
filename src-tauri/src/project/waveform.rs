@@ -61,18 +61,85 @@ struct CachedSegment {
     rms: Vec<f32>,
 }
 
+/// A sound's whole waveform, a bar every [`OVERVIEW_BUCKET_US`] or so, packed small: the
+/// timeline draws each clip's part of it, at any zoom, from this one answer.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformOverview {
+    pub track_id: String,
+    /// The bars split `[0, duration_us)` of the sound's own time evenly.
+    pub duration_us: u64,
+    /// Each bar's peak and RMS level as `round(sqrt(level) * 254)`, which keeps detail in quiet
+    /// sound; [`OVERVIEW_GAP`] where there is no sound to read (a missing file).
+    pub peaks: Vec<u8>,
+    pub rms: Vec<u8>,
+    pub diagnostics: Vec<String>,
+}
+
+/// A bar with no sound behind it, in [`WaveformOverview`].
+pub const OVERVIEW_GAP: u8 = 255;
+/// Fine enough to see a pause between words.
+pub const OVERVIEW_BUCKET_US: u64 = 20_000;
+/// A two-hour sound still fits (at 36 ms a bar).
+const MAX_OVERVIEW_BUCKETS: u64 = 200_000;
+
+/// The whole of `ctx`'s sound as a [`WaveformOverview`], from the same per-segment summaries
+/// (cached on disk) as [`query_waveform`].
+pub fn waveform_overview(
+    ctx: &WaveformTrackContext,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<WaveformOverview, String> {
+    let duration_us = ctx.edited_duration_us;
+    if duration_us == 0 {
+        return Err("That sound is empty".into());
+    }
+    let bucket_us = OVERVIEW_BUCKET_US.max(duration_us.div_ceil(MAX_OVERVIEW_BUCKETS));
+    let count = duration_us.div_ceil(bucket_us) as usize;
+    let page = query_buckets(ctx, 0, duration_us, count, cancelled)?;
+    let level = |v: f32| (v.clamp(0.0, 1.0).sqrt() * 254.0).round() as u8;
+    let (peaks, rms) = page
+        .buckets
+        .iter()
+        .map(|b| {
+            if b.gap {
+                (OVERVIEW_GAP, OVERVIEW_GAP)
+            } else {
+                (level(b.peak), level(b.rms))
+            }
+        })
+        .unzip();
+    Ok(WaveformOverview {
+        track_id: page.track_id,
+        duration_us: page.end_us,
+        peaks,
+        rms,
+        diagnostics: page.diagnostics,
+    })
+}
+
 pub fn query_waveform(
     ctx: &WaveformTrackContext,
     start_us: u64,
     end_us: u64,
     bucket_count: usize,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<WaveformPage, String> {
+    if bucket_count == 0 || bucket_count > MAX_QUERY_BUCKETS {
+        return Err("Waveform bucket count must be 1–512".into());
+    }
+    query_buckets(ctx, start_us, end_us, bucket_count, cancelled)
+}
+
+/// [`query_waveform`] for any number of buckets.
+fn query_buckets(
+    ctx: &WaveformTrackContext,
+    start_us: u64,
+    end_us: u64,
+    bucket_count: usize,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<WaveformPage, String> {
     if !matches!(ctx.track_type, TrackType::MicAudio | TrackType::SystemAudio) {
         return Err("Track is not audio".into());
-    }
-    if bucket_count == 0 || bucket_count > MAX_QUERY_BUCKETS {
-        return Err("Waveform bucket count must be 1–512".into());
     }
     if start_us >= end_us {
         return Err("Waveform range must be a half-open interval".into());
@@ -119,18 +186,24 @@ pub fn query_waveform(
     let visible = edited_range_to_source(&mapper, query_start, query_end);
     let mut energies = vec![0.0f64; count];
     let mut weights = vec![0u64; count];
-    // Hold at most one segment cache. Output memory is bounded by viewport resolution.
-    for segment in &ctx.segments {
+    // The visible segments' summaries, read or built side by side: a long recording is many
+    // segment files, and building each reads the whole file. Summaries are small (a bucket per
+    // 10 ms or more), so holding them all is fine.
+    let wanted: Vec<&SegmentSummary> = ctx
+        .segments
+        .iter()
+        .filter(|segment| {
+            visible
+                .iter()
+                .any(|(a, b)| *a < segment.end_us && segment.start_us < *b)
+        })
+        .collect();
+    let built = build_segments(ctx, &wanted, cancelled);
+    for (segment, result) in wanted.iter().copied().zip(built) {
         if cancelled() {
             return Err("Waveform query cancelled".into());
         }
-        if !visible
-            .iter()
-            .any(|(a, b)| *a < segment.end_us && segment.start_us < *b)
-        {
-            continue;
-        }
-        match load_or_build_segment(ctx, segment, cancelled) {
+        match result {
             Ok(Some(cache)) => {
                 if sample_rate == 0 {
                     sample_rate = cache.sample_rate;
@@ -138,6 +211,9 @@ pub fn query_waveform(
                 }
                 for (i, spans) in ranges.iter().enumerate() {
                     for &(a, b) in spans {
+                        if b <= cache.source_start_us || a >= cache.source_end_us {
+                            continue;
+                        }
                         if let Some((peak, rms, weight)) =
                             lookup_source_range(std::slice::from_ref(&cache), a, b)
                         {
@@ -189,22 +265,9 @@ pub fn query_waveform(
     })
 }
 
+/// The source ranges playing over `[start_us, end_us)` of the clock, gaps left out.
 fn edited_range_to_source(mapper: &TimelineMapper, start_us: u64, end_us: u64) -> Vec<(u64, u64)> {
-    let mut ranges = Vec::new();
-    let mut edited_cursor = 0u64;
-    for interval in mapper.intervals() {
-        let duration = interval.duration_us();
-        let interval_end = edited_cursor + duration;
-        let a = start_us.max(edited_cursor);
-        let b = end_us.min(interval_end);
-        if a < b {
-            let source_a = interval.start_us + (a - edited_cursor);
-            let source_b = interval.start_us + (b - edited_cursor);
-            ranges.push((source_a, source_b));
-        }
-        edited_cursor = interval_end;
-    }
-    ranges
+    mapper.edited_range_to_source(start_us, end_us)
 }
 
 fn lookup_source_range(
@@ -239,10 +302,53 @@ fn lookup_source_range(
     }
 }
 
+/// [`load_or_build_segment`] for each of `segments`, a few at a time, in order.
+fn build_segments(
+    ctx: &WaveformTrackContext,
+    segments: &[&SegmentSummary],
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Vec<Result<Option<CachedSegment>, String>> {
+    let workers = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(1, 8)
+        .min(segments.len().max(1));
+    if workers <= 1 {
+        return segments
+            .iter()
+            .map(|segment| load_or_build_segment(ctx, segment, cancelled))
+            .collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<Result<Option<CachedSegment>, String>>>> = segments
+        .iter()
+        .map(|_| std::sync::Mutex::new(None))
+        .collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(segment) = segments.get(i) else {
+                    break;
+                };
+                let result = load_or_build_segment(ctx, segment, cancelled);
+                *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+            });
+        }
+    });
+    results
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(|| Err("Waveform query cancelled".into()))
+        })
+        .collect()
+}
+
 fn load_or_build_segment(
     ctx: &WaveformTrackContext,
     segment: &SegmentSummary,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<CachedSegment>, String> {
     if !segment.available {
         return Ok(None);
@@ -282,7 +388,7 @@ fn load_or_build_segment(
 fn analyze_segment(
     segment: &SegmentSummary,
     path: &Path,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<CachedSegment, String> {
     let mut reader = PcmReader::open(path)?;
     let info = reader.info().clone();
@@ -297,9 +403,17 @@ fn analyze_segment(
     let channels = info.channels as usize;
     let mut channel_peak = vec![0.0f32; bucket_count * channels];
     let mut channel_sum_sq = vec![0.0f32; bucket_count * channels];
+    // Frame `f` is at `floor(f * 1e6 / rate)` us into the segment, so bucket `i` starts at the
+    // first frame with `f * 1e6 / rate >= i * bucket_us`. Working out where each bucket (and
+    // the segment) ends once, rather than dividing for every sample, keeps this loop cheap.
+    let rate = info.sample_rate.max(1) as u128;
+    let first_frame_at = |us: u64| (us as u128 * rate).div_ceil(1_000_000) as u64;
+    let end_frame = first_frame_at(segment.end_us.saturating_sub(segment.start_us));
+    let mut idx = 0usize;
+    let mut next_bucket = first_frame_at(bucket_us);
     let mut frame_index = 0u64;
     let mut interleaved = vec![0.0f32; READ_FRAME_CHUNK * channels];
-    loop {
+    'read: loop {
         if cancelled() {
             return Err("Waveform query cancelled".into());
         }
@@ -307,27 +421,29 @@ fn analyze_segment(
         if frames == 0 {
             break;
         }
-        for frame in 0..frames {
-            let local_us = info.frame_us(frame_index);
-            let source_us = segment.start_us.saturating_add(local_us);
-            if source_us >= segment.end_us {
-                break;
+        let mut frame = 0usize;
+        while frame < frames {
+            if frame_index >= end_frame || idx >= bucket_count {
+                break 'read;
             }
-            let idx = ((source_us - segment.start_us) / bucket_us) as usize;
-            if idx < bucket_count {
-                let base = frame * channels;
-                let acc = idx * channels;
+            // The frames of this chunk that fall in bucket `idx`.
+            let run = ((next_bucket.min(end_frame) - frame_index) as usize).min(frames - frame);
+            let acc = idx * channels;
+            for f in frame..frame + run {
+                let base = f * channels;
                 for ch in 0..channels {
                     let x = interleaved[base + ch];
                     channel_peak[acc + ch] = channel_peak[acc + ch].max(x.abs());
                     channel_sum_sq[acc + ch] += x * x;
                 }
-                counts[idx] += 1;
             }
-            frame_index += 1;
-        }
-        if segment.start_us.saturating_add(info.frame_us(frame_index)) >= segment.end_us {
-            break;
+            counts[idx] += run as u32;
+            frame += run;
+            frame_index += run as u64;
+            if frame_index >= next_bucket {
+                idx += 1;
+                next_bucket = first_frame_at(bucket_us * (idx as u64 + 1));
+            }
         }
     }
     for i in 0..bucket_count {
@@ -397,11 +513,44 @@ fn cache_path(
     safe_path(root, &relative)
 }
 
+/// A hash of the whole file, so a cache entry is used only for the bytes it was built from.
+/// Remembered while the file's size and modification time stay the same: a cached waveform of
+/// a long recording then loads without reading the recording again.
 fn wav_fingerprint(
+    path: &Path,
+    info: &WavInfo,
+    file_len: u64,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<u64, String> {
+    use std::sync::{Mutex, OnceLock};
+    type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+    static KNOWN: OnceLock<Mutex<std::collections::HashMap<Key, u64>>> = OnceLock::new();
+    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let key: Key = (path.to_path_buf(), file_len, modified);
+    let known = KNOWN.get_or_init(Default::default);
+    if let Some(hash) = known.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(*hash);
+    }
+    let hash = hash_wav(path, info, file_len, cancelled)?;
+    // A file written within the last moments may still change at the same size and time.
+    let settled = modified
+        .and_then(|m| m.elapsed().ok())
+        .is_some_and(|age| age > std::time::Duration::from_secs(2));
+    if settled {
+        let mut known = known.lock().unwrap_or_else(|e| e.into_inner());
+        if known.len() >= 256 {
+            known.clear();
+        }
+        known.insert(key, hash);
+    }
+    Ok(hash)
+}
+
+fn hash_wav(
     path: &Path,
     _info: &WavInfo,
     file_len: u64,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<u64, String> {
     let mut file = super::reader::open_regular(path)?;
     let mut hash = fnv1a64(&file_len.to_le_bytes());
@@ -414,10 +563,22 @@ fn wav_fingerprint(
         let wanted = remaining.min(buf.len() as u64) as usize;
         file.read_exact(&mut buf[..wanted])
             .map_err(|e| e.to_string())?;
-        hash = fnv1a64_continue(hash, &buf[..wanted]);
+        hash = hash_words(hash, &buf[..wanted]);
         remaining -= wanted as u64;
     }
     Ok(hash)
+}
+
+/// Mixes `bytes` into `hash` eight at a time: a long recording is hundreds of MB, and a byte
+/// at a time took a quarter of a cold waveform load. Only tells content apart, nothing more.
+fn hash_words(mut hash: u64, bytes: &[u8]) -> u64 {
+    for chunk in bytes.chunks(8) {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash = (hash ^ u64::from_le_bytes(word)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        hash ^= hash >> 29;
+    }
+    hash
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -542,6 +703,67 @@ fn write_cache(
 
 #[cfg(test)]
 mod tests {
+
+    /// Buckets hold exactly the frames the per-sample formula puts in them, at rates that do
+    /// not divide a microsecond evenly and with an end that is not on a frame.
+    #[test]
+    fn buckets_match_the_per_sample_formula() {
+        for (rate, channels) in [(44_100u32, 2u16), (48_000, 1), (22_050, 2)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("a.wav");
+            let frames = rate as usize * 3 + 123;
+            let values: Vec<i16> = (0..frames * channels as usize)
+                .map(|i| ((i * 7919) % 20_000) as i16 - 10_000)
+                .collect();
+            std::fs::write(
+                &path,
+                crate::fixtures::generate_pcm16_wav(rate, channels, &values),
+            )
+            .unwrap();
+            let segment = SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: "a.wav".into(),
+                start_us: 1_000_000,
+                end_us: 3_712_345,
+                size_bytes: 0,
+                media_timescale: rate,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: Some(true),
+                available: true,
+            };
+            let built = analyze_segment(&segment, &path, &|| false).unwrap();
+            // The per-sample formula, as the loop used to work it out.
+            let info = super::super::pcm::parse_wav(&path).unwrap();
+            let mut peaks = vec![0.0f32; built.peaks.len()];
+            for f in 0..frames as u64 {
+                let local = info.frame_us(f);
+                if segment.start_us + local >= segment.end_us {
+                    break;
+                }
+                let idx = (local / built.bucket_us) as usize;
+                if idx < peaks.len() {
+                    for ch in 0..channels as usize {
+                        let x = values[f as usize * channels as usize + ch] as f32 / 32768.0;
+                        peaks[idx] = peaks[idx].max(x.abs());
+                    }
+                }
+            }
+            for (i, (a, b)) in built.peaks.iter().zip(&peaks).enumerate() {
+                // Multi-channel buckets report the loudest channel's peak: never above these.
+                assert!(*a <= *b + 1e-6, "rate {rate} bucket {i}: {a} > {b}");
+                if channels == 1 {
+                    assert_eq!(a, b, "rate {rate} bucket {i}");
+                }
+            }
+            assert_eq!(
+                built.peaks.iter().filter(|p| **p > 0.0).count(),
+                peaks.iter().filter(|p| **p > 0.0).count(),
+                "rate {rate}: the same buckets have sound"
+            );
+        }
+    }
+
     use super::*;
     use crate::fixtures::generate_pcm16_wav;
     use crate::fixtures::TestProject;
@@ -627,6 +849,58 @@ mod tests {
             }],
             edited_duration_us: end_us,
         }
+    }
+
+    /// The overview has a bar every 20 ms over the whole sound, packed as sqrt levels: a
+    /// pause between two loud stretches reads as near-silent bars.
+    #[test]
+    fn overview_shows_pauses_bar_by_bar() {
+        // 0.3 s loud (half scale), 0.2 s silent, 0.3 s at a quarter.
+        let rate = 48_000usize;
+        let samples: Vec<i16> = (0..rate * 8 / 10)
+            .map(|i| match i * 10 / rate {
+                0..=2 => {
+                    if i % 2 == 0 {
+                        16_384
+                    } else {
+                        -16_384
+                    }
+                }
+                3..=4 => 0,
+                _ => {
+                    if i % 2 == 0 {
+                        8_192
+                    } else {
+                        -8_192
+                    }
+                }
+            })
+            .collect();
+        let (dir, root, _) = audio_bundle(&samples, 1, 0, 48_000);
+        let size = fs::metadata(root.join("media/mic/000001.wav"))
+            .unwrap()
+            .len();
+        let overview =
+            waveform_overview(&ctx_from(root, 0, 800_000, true, size), &|| false).unwrap();
+        assert_eq!(overview.duration_us, 800_000);
+        assert_eq!(overview.peaks.len(), 40, "a bar every 20 ms");
+        let level = |v: f32| (v.sqrt() * 254.0).round() as u8;
+        assert!(overview.peaks[..15].iter().all(|&p| p == level(0.5)));
+        assert!(overview.peaks[15..25].iter().all(|&p| p == 0), "the pause");
+        assert!(overview.peaks[25..].iter().all(|&p| p == level(0.25)));
+        assert_eq!(
+            overview.rms[0],
+            level(0.5),
+            "a square wave's RMS is its peak"
+        );
+        drop(dir);
+        // A missing file is no sound at all, not silence.
+        let overview = waveform_overview(
+            &ctx_from(PathBuf::from("nowhere"), 0, 800_000, false, 0),
+            &|| false,
+        )
+        .unwrap();
+        assert!(overview.peaks.iter().all(|&p| p == OVERVIEW_GAP));
     }
 
     #[test]

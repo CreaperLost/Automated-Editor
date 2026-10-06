@@ -1,21 +1,11 @@
-export interface WaveformBucket {
-  startUs: number;
-  endUs: number;
-  peak: number;
-  rms: number;
-  gap: boolean;
-}
-
-export interface WaveformPage {
+/** A sound's whole waveform: bars splitting `[0, durationUs)` of its own time evenly. */
+export interface WaveformOverview {
   trackId: string;
-  startUs: number;
-  endUs: number;
-  sampleRate: number;
-  channels: number;
-  channelPolicy: string;
-  buckets: WaveformBucket[];
+  durationUs: number;
+  /** Each bar's peak and RMS as `round(sqrt(level) * 254)`; 255 where there is no sound. */
+  peaks: number[];
+  rms: number[];
   diagnostics: string[];
-  cancelled: boolean;
 }
 
 export type ZoomOrigin = "click" | "dwell" | "cluster";
@@ -717,6 +707,8 @@ export interface PlaybackStatus {
   clockKind: ClockKind;
   /** The short playing instead of the video, while the Shorts Studio has one in focus. */
   shortId?: string;
+  /** How fast it plays: 1 is normal speed. */
+  speed?: number;
   previewAvailable: boolean;
   error: string | null;
   diagnostics: string[];

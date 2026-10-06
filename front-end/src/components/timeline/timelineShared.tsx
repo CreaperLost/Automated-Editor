@@ -141,7 +141,8 @@ export const HeaderRow: React.FC<{
 export interface TimelineView {
   durationUs: number;
   pxPerUs: number;
-  currentTimeUs: number;
+  /** The playhead now. Read it in handlers: the timeline does not re-render as it moves. */
+  nowUs: () => number;
   /** Percent of the lane for a time. */
   pct: (us: number) => string;
   clientXToUs: (clientX: number) => number;

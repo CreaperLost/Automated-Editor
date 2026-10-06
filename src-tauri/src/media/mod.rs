@@ -78,6 +78,10 @@ impl RateControl {
 #[serde(rename_all = "snake_case")]
 pub enum PixelFormat {
     Bgra8888,
+    /// 4:2:0 video as decoded: a full-size luma plane, then a half-size plane of interleaved
+    /// chroma pairs, each `stride` bytes a row. Limited-range BT.709, as FFmpeg is asked for.
+    /// A third of BGRA's bytes; the GPU compositor converts it to RGB.
+    Nv12,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -101,6 +105,58 @@ impl ColorInfo {
             compositing_space: "bt709_encoded".into(),
         }
     }
+
+    /// SDR Rec.709 YCbCr, limited range: NV12 as decoded, or as made for the encoder.
+    pub fn rec709_limited() -> Self {
+        Self {
+            matrix: "bt709".into(),
+            range: "limited".into(),
+            ..Self::rec709_full()
+        }
+    }
+}
+
+/// A frame's pixels, shared: cloning a frame (a cached still, the wallpaper, a decoded frame
+/// handed to the compositor) does not copy them. Writing to them copies only if another frame
+/// still shares them. Reads and writes like a `Vec<u8>`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct PixelBuffer(std::sync::Arc<Vec<u8>>);
+
+impl PixelBuffer {
+    /// The bytes, copied only if they are shared.
+    pub fn into_vec(self) -> Vec<u8> {
+        std::sync::Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
+    }
+
+    /// Whether no other frame shares these bytes.
+    pub fn is_unique(&self) -> bool {
+        std::sync::Arc::strong_count(&self.0) == 1
+    }
+}
+
+impl From<Vec<u8>> for PixelBuffer {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(std::sync::Arc::new(bytes))
+    }
+}
+
+impl std::ops::Deref for PixelBuffer {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Vec<u8> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for PixelBuffer {
+    fn deref_mut(&mut self) -> &mut Vec<u8> {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+impl std::fmt::Debug for PixelBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PixelBuffer({} bytes)", self.0.len())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,10 +167,60 @@ pub struct VideoFrame {
     pub stride: u32,
     pub format: PixelFormat,
     pub color: ColorInfo,
-    pub data: Vec<u8>,
+    pub data: PixelBuffer,
 }
 
 impl VideoFrame {
+    /// Bytes the pixels take: BGRA rows, or NV12's luma rows then half as many chroma rows.
+    pub fn byte_len(&self) -> usize {
+        let rows = match self.format {
+            PixelFormat::Bgra8888 => self.height as usize,
+            PixelFormat::Nv12 => self.height as usize + (self.height as usize).div_ceil(2),
+        };
+        self.stride as usize * rows
+    }
+
+    /// The picture as BGRA, for code that works on RGB pixels (the CPU compositor). NV12 is
+    /// converted the way the GPU compositor's shader does it.
+    pub fn to_bgra(&self) -> VideoFrame {
+        if self.format == PixelFormat::Bgra8888 {
+            return self.clone();
+        }
+        let (w, h, stride) = (
+            self.width as usize,
+            self.height as usize,
+            self.stride as usize,
+        );
+        let mut data = vec![0u8; w * h * 4];
+        let chroma = &self.data[stride * h..];
+        let clamp = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+        for y in 0..h {
+            for x in 0..w {
+                let luma = self.data.get(y * stride + x).copied().unwrap_or(16);
+                let i = (y / 2) * stride + (x / 2) * 2;
+                let cb = chroma.get(i).copied().unwrap_or(128);
+                let cr = chroma.get(i + 1).copied().unwrap_or(128);
+                let l = (luma as f32 - 16.0) / 219.0;
+                let u = (cb as f32 - 128.0) / 224.0;
+                let v = (cr as f32 - 128.0) / 224.0;
+                let o = (y * w + x) * 4;
+                data[o] = clamp(l + 1.8556 * u);
+                data[o + 1] = clamp(l - 0.1873 * u - 0.4681 * v);
+                data[o + 2] = clamp(l + 1.5748 * v);
+                data[o + 3] = 255;
+            }
+        }
+        VideoFrame {
+            pts_us: self.pts_us,
+            width: self.width,
+            height: self.height,
+            stride: self.width * 4,
+            format: PixelFormat::Bgra8888,
+            color: ColorInfo::rec709_full(),
+            data: data.into(),
+        }
+    }
+
     pub fn solid(
         width: u32,
         height: u32,
@@ -139,7 +245,7 @@ impl VideoFrame {
             stride,
             format: PixelFormat::Bgra8888,
             color: ColorInfo::rec709_full(),
-            data,
+            data: data.into(),
         })
     }
 }
@@ -343,6 +449,13 @@ pub fn decode_h264_frame_limited(
         MediaBackend::Native => native::decode_bgra(path, time_us),
         MediaBackend::Ffmpeg => ffmpeg::decode_bgra_limited(path, time_us, limit),
     }
+}
+
+/// Starts decoding `path` at `time_us` ahead of need, where the backend keeps decoders open
+/// (FFmpeg): a cut coming up then plays without waiting for one.
+/// False when it was turned away for now (ask again later).
+pub fn prefetch_video(path: &Path, time_us: u64, limit: ffmpeg::DecodeLimit) -> bool {
+    media_backend() != MediaBackend::Ffmpeg || ffmpeg::prefetch(path, time_us, limit)
 }
 
 /// Container duration of a media file.

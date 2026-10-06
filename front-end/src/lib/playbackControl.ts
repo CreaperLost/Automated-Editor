@@ -46,6 +46,36 @@ export function seekPlayback(timeUs: number) {
     .catch((err) => console.warn("[Playback] seek failed:", err));
 }
 
+/** The playback speeds offered: normal, a quarter faster, half as fast again, double. */
+export const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
+
+/** Plays at `speed`, carrying on if it is playing. */
+export function setPlaybackSpeed(speed: number) {
+  const { openedProject, applyPlaybackStatus } = useProjectStore.getState();
+  if (!openedProject) return Promise.resolve();
+  return api
+    .playbackSetSpeed(openedProject.projectHandle, speed)
+    .then(applyPlaybackStatus)
+    .catch((err) => console.warn("[Playback] speed failed:", err));
+}
+
+/**
+ * L, as in Premiere: plays from the playhead; pressed again while playing (L L), plays at 2x.
+ */
+export function shuttleForward() {
+  const { isPlaying, playbackSpeed } = useProjectStore.getState();
+  if (!isPlaying) {
+    togglePlayback();
+    return;
+  }
+  if (playbackSpeed !== 2) void setPlaybackSpeed(2);
+}
+
+/** K, as in Premiere: stops. */
+export function pausePlayback() {
+  if (useProjectStore.getState().isPlaying) togglePlayback();
+}
+
 /**
  * The Shorts Studio takes the engine while it is the active window, so its preview is live
  * (paused frames, scrubbing, resolution and frame rate) like the editor's. The short keeps

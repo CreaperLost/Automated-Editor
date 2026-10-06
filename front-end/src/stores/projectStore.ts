@@ -1,7 +1,8 @@
 import { api } from "../lib/ipc";
 import { create } from "zustand";
-import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformBucket, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
+import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformOverview, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
+import { shareSequence } from "../lib/sequence";
 import { useSettingsStore } from "./settingsStore";
 
 const RECENT_PROJECTS_KEY = "aeroedits.recentProjects";
@@ -88,8 +89,8 @@ interface ProjectStore {
   loadOpenedProject: (project: OpenedProject, projectPath?: string) => void;
   clearProject: () => void;
   /** Waveforms by sound (`<asset>.<stream>`), over its own time. */
-  waveforms: Record<string, WaveformBucket[]>;
-  setWaveform: (key: string, buckets: WaveformBucket[]) => void;
+  waveforms: Record<string, WaveformOverview>;
+  setWaveform: (key: string, overview: WaveformOverview) => void;
   zoomKeyframes: ZoomKeyframe[];
   pendingZoomSuggestions: ZoomSuggestion[];
   zoomDiagnostics: string[];
@@ -102,6 +103,8 @@ interface ProjectStore {
   setViewShort: (shortId: string | undefined) => void;
   /** The short playing instead of the video (set by the Shorts Studio). */
   playbackShortId?: string;
+  /** How fast playback goes (1, 1.25, 1.5 or 2), as the engine reports it. */
+  playbackSpeed: number;
   /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
   captionsVersion: number;
   /** Marks transcripts changed here (and tells the other windows) or in another window. */
@@ -146,6 +149,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   playbackGeneration: 0,
   playbackError: null,
   previewAvailable: false,
+  playbackSpeed: 1,
   setProjectPath: (path) => set({ projectPath: path }),
   addRecentProject: (path) => {
     const clean = path.trim();
@@ -168,10 +172,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     if (state.openedProject?.projectHandle !== status.projectHandle || status.generation < state.playbackGeneration) return state;
     // The engine plays something this window does not show (a short in the editor, or the
     // video in the Shorts Studio): note it, but keep this window's own playhead.
-    if ((status.shortId ?? undefined) !== state.viewShort) {
-      return { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation };
-    }
-    return { currentTimeUs: Math.min(status.positionUs, state.durationUs), isPlaying: status.state === "playing", playbackGeneration: status.generation, playbackError: status.error, previewAvailable: status.previewAvailable, playbackShortId: status.shortId };
+    const next: Partial<ProjectStore> =
+      (status.shortId ?? undefined) !== state.viewShort
+        ? { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation, playbackSpeed: status.speed ?? 1 }
+        : {
+            currentTimeUs: Math.min(status.positionUs, state.durationUs),
+            isPlaying: status.state === "playing",
+            playbackGeneration: status.generation,
+            playbackError: status.error,
+            previewAvailable: status.previewAvailable,
+            playbackShortId: status.shortId,
+            playbackSpeed: status.speed ?? 1,
+          };
+    // Polled many times a second: nothing changed means nothing to tell the components.
+    const changed = (Object.keys(next) as (keyof ProjectStore)[]).some((key) => !Object.is(next[key], state[key]));
+    return changed ? next : state;
   }),
   loadOpenedProject: (project, projectPath) => {
     const resolvedPath = projectPath ?? project.projectPath ?? get().projectPath ?? undefined;
@@ -219,7 +234,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
   waveforms: {},
-  setWaveform: (key, buckets) => set((state) => ({ waveforms: { ...state.waveforms, [key]: buckets } })),
+  setWaveform: (key, overview) => set((state) => ({ waveforms: { ...state.waveforms, [key]: overview } })),
   zoomKeyframes: [],
   pendingZoomSuggestions: [],
   zoomDiagnostics: [],
@@ -300,8 +315,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (!options?.remote) broadcastProject(project);
       return;
     }
-    // An older (or the same) revision is stale, unless it is a different view of it (a short's).
-    if (options?.remote && current && project.revision <= current.revision && project.projectHandle === current.projectHandle && project.shortView === current.shortView) {
+    // An older revision is stale, whether it came from another window or is this window's own
+    // late reply; from another window the same revision is too. A different view of it (a
+    // short's) is not.
+    if (
+      current &&
+      project.projectHandle === current.projectHandle &&
+      project.shortView === current.shortView &&
+      (project.revision < current.revision || (options?.remote && project.revision === current.revision))
+    ) {
       return;
     }
     if (!options?.remote && current?.projectHandle === project.projectHandle) broadcastProject(project);
@@ -321,8 +343,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         state.silenceAnalysis.revision !== project.revision;
       const clipIds = new Set(project.sequence.tracks.flatMap((t) => t.clips.map((c) => c.id)));
       const kept = state.selectedClipIds.filter((id) => clipIds.has(id));
+      // Clips the edit left alone keep their objects, so only the changed ones re-render.
+      const sequence = state.openedProject?.shortView === project.shortView ? shareSequence(state.openedProject?.sequence, project.sequence) : project.sequence;
       return {
-        openedProject: project,
+        openedProject: sequence === project.sequence ? project : { ...project, sequence },
         durationUs: project.durationUs,
         currentTimeUs: Math.min(state.currentTimeUs, project.durationUs),
         selectedClipIds: kept.length === state.selectedClipIds.length ? state.selectedClipIds : kept,

@@ -52,6 +52,10 @@ impl AudioOutput {
             aeroshoot_audio_play(self.handle.as_ptr());
         }
     }
+    /// This output plays at normal speed only.
+    pub fn set_speed(&mut self, speed: f64) -> bool {
+        speed == 1.0
+    }
     pub fn position_frames(&self) -> Result<u64, String> {
         #[cfg(all(target_os = "macos", not(stub_swift_ffi)))]
         unsafe {
