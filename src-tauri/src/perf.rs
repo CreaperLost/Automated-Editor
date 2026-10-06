@@ -789,3 +789,109 @@ fn probe_export_nv12_against_bgra() {
         );
     }
 }
+
+/// Jump cuts on an imported video's sound.
+#[test]
+#[ignore]
+fn probe_imported_video_jump_cuts() {
+    let dir = tempfile::tempdir().unwrap();
+    let video = dir.path().join("talk.mp4");
+    let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=30",
+        ])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc='if(lt(mod(t,2),1),0.5*sin(440*2*PI*t),0)':s=48000",
+        ])
+        .args([
+            "-t",
+            "6",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-y",
+        ])
+        .arg(&video)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // With the probe recording first on the timeline, when there is one.
+    let recording = probe_dir().map(|d| d.join("aero"));
+    let folder =
+        crate::project::folder::create_project_folder(dir.path(), "Imported", recording.as_deref())
+            .unwrap();
+    let state = AppState::new();
+    let opened = commands::open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
+    let handle = opened.project_handle.clone();
+    let end_us = opened.sequence.duration_us();
+    let opened = commands::project_media_import_impl(
+        &state,
+        handle.clone(),
+        opened.revision,
+        vec![video.to_string_lossy().into()],
+    )
+    .unwrap();
+    let asset = opened.assets.last().unwrap().clone();
+    println!(
+        "PROBE streams {:?}",
+        asset
+            .streams
+            .iter()
+            .map(|s| (&s.id, s.role, &s.audio_path))
+            .collect::<Vec<_>>()
+    );
+    let opened = commands::project_sequence_edit_impl(
+        &state,
+        handle.clone(),
+        opened.revision,
+        crate::sequence::edit::SequenceEdit::PlaceAsset {
+            asset_id: asset.id.clone(),
+            at_us: end_us,
+            track_id: None,
+            streams: vec![],
+            range: None,
+        },
+        None,
+    )
+    .unwrap();
+    println!(
+        "PROBE video placed at {end_us}us of {}us",
+        opened.sequence.duration_us()
+    );
+    let sound = asset
+        .streams
+        .iter()
+        .find(|s| s.kind == crate::sequence::StreamKind::Sound)
+        .unwrap();
+    let key = format!("{}.{}", asset.id, sound.id);
+    let _ = opened;
+    for key in [key, commands::ALL_SPEECH.to_string()] {
+        let result = commands::detect_silence_impl(
+            &state,
+            handle.clone(),
+            key.clone(),
+            crate::dsp::silence::SilenceConfig::default(),
+        )
+        .unwrap();
+        let in_video: Vec<_> = result
+            .suggestions
+            .iter()
+            .filter(|s| s.start_us >= end_us)
+            .map(|s| (s.start_us - end_us, s.end_us - end_us))
+            .collect();
+        println!(
+            "PROBE {key}: {} pauses, in the video {in_video:?}",
+            result.suggestions.len()
+        );
+    }
+}

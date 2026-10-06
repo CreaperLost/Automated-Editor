@@ -289,6 +289,61 @@ pub fn detect_track_silence(
     })
 }
 
+/// Where a sound plays on the timeline, and its pauses there.
+pub(crate) type PlaysAndPauses = (Vec<(u64, u64)>, Vec<(u64, u64)>);
+
+/// The pauses in several speech sounds at once, in timeline time: where some speech plays and
+/// every speech playing there is silent. Each sound comes as where its clips play on the
+/// timeline and its own pauses there (from [`detect_track_silence`]). Pieces shorter than
+/// `min_us` (left where one sound's pause ends inside another's) are dropped.
+pub(crate) fn common_pauses(sounds: &[PlaysAndPauses], min_us: u64) -> Vec<(u64, u64)> {
+    let merged = |mut ranges: Vec<(u64, u64)>| {
+        ranges.retain(|(a, b)| b > a);
+        ranges.sort_unstable();
+        let mut out: Vec<(u64, u64)> = Vec::new();
+        for (a, b) in ranges {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
+        }
+        out
+    };
+    let sounds: Vec<PlaysAndPauses> = sounds
+        .iter()
+        .map(|(plays, silent)| (merged(plays.clone()), merged(silent.clone())))
+        .collect();
+    let holds = |ranges: &[(u64, u64)], t: u64| {
+        let i = ranges.partition_point(|&(_, end)| end <= t);
+        ranges.get(i).is_some_and(|&(start, _)| start <= t)
+    };
+    let mut edges: Vec<u64> = sounds
+        .iter()
+        .flat_map(|(plays, silent)| plays.iter().chain(silent).flat_map(|&(a, b)| [a, b]))
+        .collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let mut pauses: Vec<(u64, u64)> = Vec::new();
+    for pair in edges.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let playing = sounds.iter().filter(|(plays, _)| holds(plays, a));
+        let mut any = false;
+        let mut all_silent = true;
+        for (_, silent) in playing {
+            any = true;
+            all_silent &= holds(silent, a);
+        }
+        if any && all_silent {
+            match pauses.last_mut() {
+                Some(last) if last.1 == a => last.1 = b,
+                _ => pauses.push((a, b)),
+            }
+        }
+    }
+    pauses.retain(|(a, b)| b - a >= min_us.max(1));
+    pauses
+}
+
 fn reset_detector(
     detector: &mut Option<StreamingSilenceDetector>,
     raw_regions: &mut Vec<(u64, u64)>,
@@ -309,6 +364,43 @@ fn push_diagnostic(diagnostics: &mut Vec<String>, message: &str) {
 mod tests {
     use super::*;
     use crate::project::reader::{RetainedInterval, SegmentSummary};
+
+    #[test]
+    fn common_pauses_need_every_speech_playing_to_be_silent() {
+        const S: u64 = 1_000_000;
+        // A recording's speech plays 0..10s, a video's 10..20s and again 15..20s on another
+        // track under it, so 15..20s has both.
+        let recording = (vec![(0, 10 * S)], vec![(2 * S, 3 * S), (9 * S, 10 * S)]);
+        let video = (
+            vec![(10 * S, 20 * S)],
+            vec![(10 * S, 11 * S), (12 * S, 13 * S), (16 * S, 18 * S)],
+        );
+        let under = (vec![(15 * S, 20 * S)], vec![(17 * S, 19 * S)]);
+        assert_eq!(
+            common_pauses(&[recording.clone(), video.clone()], S / 10),
+            // The recording's pause running into the video's is one pause.
+            vec![
+                (2 * S, 3 * S),
+                (9 * S, 11 * S),
+                (12 * S, 13 * S),
+                (16 * S, 18 * S)
+            ]
+        );
+        assert_eq!(
+            common_pauses(&[recording, video, under], S / 10),
+            vec![
+                (2 * S, 3 * S),
+                (9 * S, 11 * S),
+                (12 * S, 13 * S),
+                (17 * S, 18 * S)
+            ]
+        );
+        // Silence where no speech plays is no pause; slivers go.
+        let edge = (vec![(0, 4 * S)], vec![(3 * S, 6 * S)]);
+        let other = (vec![(0, 4 * S)], vec![(3 * S + S / 20, 4 * S)]);
+        assert_eq!(common_pauses(&[edge.clone()], S / 10), vec![(3 * S, 4 * S)]);
+        assert_eq!(common_pauses(&[edge, other], S), Vec::<(u64, u64)>::new());
+    }
 
     #[test]
     fn scan_reports_covered_audio_so_speech_can_be_derived() {

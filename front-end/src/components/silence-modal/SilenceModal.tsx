@@ -8,11 +8,20 @@ import { OpenedProject, SilenceConfig } from "../../lib/types";
 import { soundSources } from "../../lib/sequence";
 import { Button, IconButton, Segmented, cn } from "../ui";
 
-/** The sounds worth scanning: those on the timeline (all of them when none is yet). */
+/** Scans every sound the timeline plays as speech at once (the backend's `ALL_SPEECH`). */
+const ALL_SPEECH = "speech";
+
+/**
+ * The sounds worth scanning: those on the timeline (all of them when none is yet). With speech
+ * from more than one source (a recording and an imported video), first all of it together: a
+ * pause is where every speech playing is silent.
+ */
 function scannableSounds(project: OpenedProject | null) {
   const sounds = soundSources(project);
   const placed = sounds.filter((sound) => sound.placed);
-  return placed.length > 0 ? placed : sounds;
+  const list = placed.length > 0 ? placed : sounds;
+  if (placed.filter((sound) => sound.speech).length < 2) return list;
+  return [{ key: ALL_SPEECH, label: "All speech on the timeline", speech: true, placed: true }, ...list];
 }
 
 /** Speech on the timeline first, else any sound there. */

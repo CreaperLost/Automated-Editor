@@ -140,10 +140,21 @@ export interface SoundSource {
   placed: boolean;
 }
 
-/** Every sound stream in the project: speech first, then what is on the timeline. */
+/**
+ * Every sound stream in the project: speech first, then what is on the timeline. Speech is what
+ * the timeline plays as speech (the sound's own role, or its track's), else its own role.
+ */
 export function soundSources(project: OpenedProject | null | undefined): SoundSource[] {
   if (!project) return [];
-  const placed = new Set(project.sequence.tracks.flatMap((t) => t.clips.map((c) => streamKey(c.asset, c.stream))));
+  const placed = new Set<string>();
+  const spoken = new Set<string>();
+  for (const track of project.sequence.tracks) {
+    for (const clip of track.clips) {
+      const key = streamKey(clip.asset, clip.stream);
+      placed.add(key);
+      if (clipRole(project, track, clip) === "mic") spoken.add(key);
+    }
+  }
   const sounds = project.assets.flatMap((asset) =>
     asset.streams
       .filter((s) => s.kind === "sound")
@@ -153,7 +164,7 @@ export function soundSources(project: OpenedProject | null | undefined): SoundSo
         return {
           key,
           label: asset.kind === "recording" || several ? `${shortLabel(asset.name)} · ${stream.name}` : shortLabel(asset.name, 32),
-          speech: stream.role === "mic",
+          speech: placed.has(key) ? spoken.has(key) : stream.role === "mic",
           placed: placed.has(key),
         };
       }),
