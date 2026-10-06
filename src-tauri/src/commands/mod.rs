@@ -4,9 +4,7 @@ use crate::playback::{
     self, PlaybackOwner, PlaybackStatus, PreviewHitMode, PreviewOwner, PreviewStatus,
     PreviewViewport,
 };
-use crate::project::{
-    OpenedProject, ProjectReader, SegmentPage, WaveformPage, WaveformTrackContext,
-};
+use crate::project::{OpenedProject, ProjectReader, SegmentPage, WaveformTrackContext};
 use crate::sequence::edit::SequenceEdit;
 use crate::sequence::{Role, StreamKind};
 use parking_lot::Mutex;
@@ -402,18 +400,13 @@ pub fn project_segments_impl(
     reader.page(&track_id, offset, limit)
 }
 
-/// A sound stream's waveform (`<asset>.<stream>`) over `[start_us, end_us)` of its own time;
+/// A sound's whole waveform (`<asset>.<stream>`), fine enough to see pauses, on its own time:
 /// the timeline draws each clip's part of it.
-pub fn project_waveform_impl(
+pub fn project_waveform_overview_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
-    start_us: u64,
-    end_us: u64,
-    bucket_count: usize,
-) -> Result<WaveformPage, String> {
-    // A waveform is on its sound's own time, so edits leave it valid; only closing the
-    // project stops one. Two windows asking for the same sound both get it.
+) -> Result<crate::project::waveform::WaveformOverview, String> {
     let epoch = state.waveform_epoch.load(Ordering::SeqCst);
     let ctx = {
         let opened = state.opened_project.lock();
@@ -421,7 +414,7 @@ pub fn project_waveform_impl(
         require_handle(reader, &project_handle)?;
         sound_context(reader, &track_id, false)?
     };
-    crate::project::waveform::query_waveform(&ctx, start_us, end_us, bucket_count, &|| {
+    crate::project::waveform::waveform_overview(&ctx, &|| {
         state.waveform_epoch.load(Ordering::SeqCst) != epoch
     })
 }

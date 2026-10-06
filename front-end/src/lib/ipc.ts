@@ -2,7 +2,7 @@ import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
   OpenedProject,
   SegmentPage,
-  WaveformPage,
+  WaveformOverview,
   PlaybackStatus,
   EditCut,
   PreviewQuality,
@@ -87,21 +87,10 @@ export const api = {
   closeProject: (projectHandle: string) => invokeTauri<void>("close_project", { projectHandle }),
   projectSegments: (projectHandle: string, trackId: string, offset = 0, limit = 100) =>
     invokeTauri<SegmentPage>("project_segments", { projectHandle, trackId, offset, limit }),
-  /** A sound's waveform (`<asset>.<stream>`) over its own time; each clip draws its part. */
-  projectWaveform: (
-    projectHandle: string,
-    trackId: string,
-    startUs: number,
-    endUs: number,
-    bucketCount = 256,
-  ) =>
-    invokeTauri<WaveformPage>("project_waveform", {
-      projectHandle,
-      trackId,
-      startUs: Math.max(0, Math.round(startUs)),
-      endUs: Math.max(1, Math.round(endUs)),
-      bucketCount,
-    }),
+  /** A sound's whole waveform (`<asset>.<stream>`), a bar every 20 ms or so, on its own time;
+   *  each clip draws its part. */
+  projectWaveformOverview: (projectHandle: string, trackId: string) =>
+    invokeTauri<WaveformOverview>("project_waveform_overview", { projectHandle, trackId }),
   projectZoomSuggestions: (projectHandle: string, config?: ZoomConfig) =>
     invokeTauri<ZoomGeneration>(
       "project_zoom_suggestions",

@@ -147,23 +147,13 @@ fn project_segments(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-async fn project_waveform(
+async fn project_waveform_overview(
     app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
-    start_us: u64,
-    end_us: u64,
-    bucket_count: usize,
-) -> Result<project::WaveformPage, String> {
+) -> Result<project::waveform::WaveformOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::project_waveform_impl(
-            &app.state::<AppState>(),
-            project_handle,
-            track_id,
-            start_us,
-            end_us,
-            bucket_count,
-        )
+        commands::project_waveform_overview_impl(&app.state::<AppState>(), project_handle, track_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1334,7 +1324,7 @@ pub fn run() {
             close_project,
             project_rename,
             project_segments,
-            project_waveform,
+            project_waveform_overview,
             project_zoom_suggestions,
             project_zoom_accept,
             project_zoom_reload,

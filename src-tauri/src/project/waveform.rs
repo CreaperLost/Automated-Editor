@@ -61,7 +61,77 @@ struct CachedSegment {
     rms: Vec<f32>,
 }
 
+/// A sound's whole waveform, a bar every [`OVERVIEW_BUCKET_US`] or so, packed small: the
+/// timeline draws each clip's part of it, at any zoom, from this one answer.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformOverview {
+    pub track_id: String,
+    /// The bars split `[0, duration_us)` of the sound's own time evenly.
+    pub duration_us: u64,
+    /// Each bar's peak and RMS level as `round(sqrt(level) * 254)`, which keeps detail in quiet
+    /// sound; [`OVERVIEW_GAP`] where there is no sound to read (a missing file).
+    pub peaks: Vec<u8>,
+    pub rms: Vec<u8>,
+    pub diagnostics: Vec<String>,
+}
+
+/// A bar with no sound behind it, in [`WaveformOverview`].
+pub const OVERVIEW_GAP: u8 = 255;
+/// Fine enough to see a pause between words.
+pub const OVERVIEW_BUCKET_US: u64 = 20_000;
+/// A two-hour sound still fits (at 36 ms a bar).
+const MAX_OVERVIEW_BUCKETS: u64 = 200_000;
+
+/// The whole of `ctx`'s sound as a [`WaveformOverview`], from the same per-segment summaries
+/// (cached on disk) as [`query_waveform`].
+pub fn waveform_overview(
+    ctx: &WaveformTrackContext,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<WaveformOverview, String> {
+    let duration_us = ctx.edited_duration_us;
+    if duration_us == 0 {
+        return Err("That sound is empty".into());
+    }
+    let bucket_us = OVERVIEW_BUCKET_US.max(duration_us.div_ceil(MAX_OVERVIEW_BUCKETS));
+    let count = duration_us.div_ceil(bucket_us) as usize;
+    let page = query_buckets(ctx, 0, duration_us, count, cancelled)?;
+    let level = |v: f32| (v.clamp(0.0, 1.0).sqrt() * 254.0).round() as u8;
+    let (peaks, rms) = page
+        .buckets
+        .iter()
+        .map(|b| {
+            if b.gap {
+                (OVERVIEW_GAP, OVERVIEW_GAP)
+            } else {
+                (level(b.peak), level(b.rms))
+            }
+        })
+        .unzip();
+    Ok(WaveformOverview {
+        track_id: page.track_id,
+        duration_us: page.end_us,
+        peaks,
+        rms,
+        diagnostics: page.diagnostics,
+    })
+}
+
 pub fn query_waveform(
+    ctx: &WaveformTrackContext,
+    start_us: u64,
+    end_us: u64,
+    bucket_count: usize,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<WaveformPage, String> {
+    if bucket_count == 0 || bucket_count > MAX_QUERY_BUCKETS {
+        return Err("Waveform bucket count must be 1–512".into());
+    }
+    query_buckets(ctx, start_us, end_us, bucket_count, cancelled)
+}
+
+/// [`query_waveform`] for any number of buckets.
+fn query_buckets(
     ctx: &WaveformTrackContext,
     start_us: u64,
     end_us: u64,
@@ -70,9 +140,6 @@ pub fn query_waveform(
 ) -> Result<WaveformPage, String> {
     if !matches!(ctx.track_type, TrackType::MicAudio | TrackType::SystemAudio) {
         return Err("Track is not audio".into());
-    }
-    if bucket_count == 0 || bucket_count > MAX_QUERY_BUCKETS {
-        return Err("Waveform bucket count must be 1–512".into());
     }
     if start_us >= end_us {
         return Err("Waveform range must be a half-open interval".into());
@@ -144,6 +211,9 @@ pub fn query_waveform(
                 }
                 for (i, spans) in ranges.iter().enumerate() {
                     for &(a, b) in spans {
+                        if b <= cache.source_start_us || a >= cache.source_end_us {
+                            continue;
+                        }
                         if let Some((peak, rms, weight)) =
                             lookup_source_range(std::slice::from_ref(&cache), a, b)
                         {
@@ -779,6 +849,58 @@ mod tests {
             }],
             edited_duration_us: end_us,
         }
+    }
+
+    /// The overview has a bar every 20 ms over the whole sound, packed as sqrt levels: a
+    /// pause between two loud stretches reads as near-silent bars.
+    #[test]
+    fn overview_shows_pauses_bar_by_bar() {
+        // 0.3 s loud (half scale), 0.2 s silent, 0.3 s at a quarter.
+        let rate = 48_000usize;
+        let samples: Vec<i16> = (0..rate * 8 / 10)
+            .map(|i| match i * 10 / rate {
+                0..=2 => {
+                    if i % 2 == 0 {
+                        16_384
+                    } else {
+                        -16_384
+                    }
+                }
+                3..=4 => 0,
+                _ => {
+                    if i % 2 == 0 {
+                        8_192
+                    } else {
+                        -8_192
+                    }
+                }
+            })
+            .collect();
+        let (dir, root, _) = audio_bundle(&samples, 1, 0, 48_000);
+        let size = fs::metadata(root.join("media/mic/000001.wav"))
+            .unwrap()
+            .len();
+        let overview =
+            waveform_overview(&ctx_from(root, 0, 800_000, true, size), &|| false).unwrap();
+        assert_eq!(overview.duration_us, 800_000);
+        assert_eq!(overview.peaks.len(), 40, "a bar every 20 ms");
+        let level = |v: f32| (v.sqrt() * 254.0).round() as u8;
+        assert!(overview.peaks[..15].iter().all(|&p| p == level(0.5)));
+        assert!(overview.peaks[15..25].iter().all(|&p| p == 0), "the pause");
+        assert!(overview.peaks[25..].iter().all(|&p| p == level(0.25)));
+        assert_eq!(
+            overview.rms[0],
+            level(0.5),
+            "a square wave's RMS is its peak"
+        );
+        drop(dir);
+        // A missing file is no sound at all, not silence.
+        let overview = waveform_overview(
+            &ctx_from(PathBuf::from("nowhere"), 0, 800_000, false, 0),
+            &|| false,
+        )
+        .unwrap();
+        assert!(overview.peaks.iter().all(|&p| p == OVERVIEW_GAP));
     }
 
     #[test]

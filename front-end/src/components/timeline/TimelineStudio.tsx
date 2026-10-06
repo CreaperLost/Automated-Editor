@@ -34,7 +34,7 @@ import {
 import { Badge, Button, IconButton, cn } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTimeline } from "../../hooks/useTimeline";
-import { WaveformRenderer } from "../waveform/WaveformRenderer";
+import { ClipWaveform } from "../waveform/ClipWaveform";
 import { MEDIA_DRAG_TYPE, currentMediaDrag } from "../media/MediaPanel";
 import { placedChapters } from "../chapters/ChaptersPanel";
 import { api } from "../../lib/ipc";
@@ -65,6 +65,7 @@ import {
   type Role,
   type SeqTrack,
   type SequenceEdit,
+  type WaveformOverview,
 } from "../../lib/types";
 import {
   CLIP_DRAG_PX,
@@ -116,28 +117,6 @@ const FollowPlayhead: React.FC<{ scrollRef: React.RefObject<HTMLDivElement | nul
     }
   }, [timeUs, pxPerUs, zoom, scrollRef]);
   return null;
-};
-
-/** A sound clip's waveform. Only the clip under the playhead redraws as it moves. */
-const ClipWaveform: React.FC<{
-  clip: Clip;
-  buckets: React.ComponentProps<typeof WaveformRenderer>["buckets"];
-  speech: boolean;
-  heightPx: number;
-}> = ({ clip, buckets, speech, heightPx }) => {
-  const played = useProjectStore((s) => Math.max(0, Math.min(1, (s.currentTimeUs - clip.startUs) / Math.max(1, clip.durationUs))));
-  return (
-    <WaveformRenderer
-      buckets={buckets}
-      startUs={clip.inUs}
-      endUs={clip.inUs + clip.durationUs}
-      currentTimeUs={clip.inUs + played * clip.durationUs}
-      activeBarColor={speech ? "#34d399" : "#2bb38a"}
-      barColor={speech ? "#065f46" : "#134d40"}
-      className="w-full h-full"
-      heightPx={heightPx}
-    />
-  );
 };
 
 /** `ranges` minus `cut`, both as [start, end) ranges. */
@@ -251,8 +230,11 @@ interface ClipBlockProps {
   selected: boolean;
   moving: boolean;
   shade: { from: number; to: number; shrinking: boolean } | null;
-  buckets?: React.ComponentProps<typeof WaveformRenderer>["buckets"];
-  audioHeight: number;
+  /** A sound clip's waveform, and the part of the clip (timeline time) it is drawn over: the
+   *  part near the view, so a long clip zoomed in stays sharp. */
+  waveform?: WaveformOverview;
+  waveFromUs: number;
+  waveToUs: number;
   actions: React.MutableRefObject<ClipActions>;
 }
 
@@ -272,8 +254,9 @@ const ClipBlock = React.memo(function ClipBlock({
   selected,
   moving,
   shade,
-  buckets,
-  audioHeight,
+  waveform,
+  waveFromUs,
+  waveToUs,
   actions,
 }: ClipBlockProps) {
   const pct = (us: number) => `${(us / spanUs) * 100}%`;
@@ -283,10 +266,10 @@ const ClipBlock = React.memo(function ClipBlock({
     ? "bg-danger/15 border-danger/50"
     : audio
       ? selected
-        ? "bg-audio/35 border-accent-fg ring-2 ring-accent-hover/70"
+        ? "bg-audio/45 border-white ring-2 ring-accent-hover z-10"
         : "bg-audio/20 border-audio/50 hover:border-audio-fg"
       : selected
-        ? "bg-video/45 border-accent-fg ring-2 ring-accent-hover/70"
+        ? "bg-video/65 border-white ring-2 ring-accent-hover z-10"
         : "bg-video/30 border-video/60 hover:border-video-fg";
   const drag = (mode: ClipDrag["mode"]) => ({
     onPointerDown: (event: React.PointerEvent<HTMLElement>) => actions.current.begin(event, trackId, clip, mode),
@@ -294,10 +277,22 @@ const ClipBlock = React.memo(function ClipBlock({
     onPointerUp: (event: React.PointerEvent<HTMLElement>) => actions.current.end(event),
     onPointerCancel: () => actions.current.cancel(),
   });
+  // A click (not a drag) anywhere on the clip, its edges too, selects it: a narrow clip is
+  // mostly edge.
+  const click = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    const suppress = actions.current.suppressClick;
+    if (suppress.current) {
+      suppress.current = false;
+      return;
+    }
+    actions.current.pick(clip, event);
+  };
   return (
     <>
       <div
         role="button"
+        data-clip
         aria-label={`${name} on ${trackNo}`}
         aria-pressed={selected}
         className={cn(
@@ -309,26 +304,43 @@ const ClipBlock = React.memo(function ClipBlock({
         style={{ left: pct(clip.startUs), width: `max(2px, ${pct(clip.durationUs)})` }}
         title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${
           info.roleLabel ? ` · ${info.roleLabel}` : ""
-        }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click for more), drag to move, drag an edge to trim.`}
-        onClick={(event) => {
-          event.stopPropagation();
-          const suppress = actions.current.suppressClick;
-          if (suppress.current) {
-            suppress.current = false;
-            return;
-          }
-          actions.current.pick(clip, event);
-        }}
+        }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click to add or remove), drag to move, drag an edge to trim. Drag over empty space to select several.`}
+        onClick={click}
         {...drag("move")}
       >
-        {buckets && buckets.length > 0 && (
-          <div className="absolute inset-0 px-0.5 py-0.5 pointer-events-none opacity-80">
-            <ClipWaveform clip={clip} buckets={buckets} speech={role === "mic"} heightPx={audioHeight} />
-          </div>
+        {audio ? (
+          <>
+            {/* Sound shows as its waveform; its name is a small tag in the corner. */}
+            {waveform && waveToUs > waveFromUs && (
+              <div
+                className="absolute inset-y-0.5 pointer-events-none"
+                style={{
+                  left: `${((waveFromUs - clip.startUs) / clip.durationUs) * 100}%`,
+                  width: `${((waveToUs - waveFromUs) / clip.durationUs) * 100}%`,
+                }}
+              >
+                <ClipWaveform
+                  overview={waveform}
+                  fromUs={clip.inUs + (waveFromUs - clip.startUs)}
+                  toUs={clip.inUs + (waveToUs - clip.startUs)}
+                  speech={role === "mic"}
+                />
+              </div>
+            )}
+            {showName && (
+              <span className="absolute top-0.5 left-1 max-w-[calc(100%-0.5rem)] flex items-center gap-1 px-1 rounded-sm bg-studio-950/55 text-[10px] leading-4 font-medium text-white/85 truncate pointer-events-none">
+                {info.unlinked && <Unlink className="w-2.5 h-2.5 shrink-0" aria-label="Unlinked" />}
+                <span className="truncate">{name}</span>
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
+            {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
+            <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
+          </>
         )}
-        <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
-        {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
-        <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
         {!locked &&
           (["start", "end"] as const).map((side) => (
             <div
@@ -340,7 +352,7 @@ const ClipBlock = React.memo(function ClipBlock({
                 audio ? "hover:bg-audio-fg/80" : "hover:bg-video-fg/80",
                 side === "start" ? "left-0" : "right-0",
               )}
-              onClick={(event) => event.stopPropagation()}
+              onClick={click}
               {...drag(side)}
             />
           ))}
@@ -664,6 +676,102 @@ export const TimelineStudio: React.FC = () => {
     setRange(null);
     setSelectedClipIds([]);
   };
+  /** Click on a track's name: all its clips; Shift/Ctrl adds or removes them. */
+  const pickTrack = (track: SeqTrack, event: React.MouseEvent) => {
+    if (track.locked) return;
+    const ids = track.clips.map((c) => c.id);
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      const all = ids.length > 0 && ids.every((id) => selected.has(id));
+      selectClips(all ? selectedClipIds.filter((id) => !ids.includes(id)) : [...new Set([...selectedClipIds, ...ids])]);
+    } else {
+      selectClips(ids);
+    }
+    setRange(null);
+  };
+
+  // ---- Marquee: drag over empty space to select the clips the box touches -------------------
+  const marqueeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+    /** Shift/Ctrl: the box adds to what was selected. */
+    base: string[];
+    /** Alt: only the clips touched, not their linked partners. */
+    alone: boolean;
+    rows: RowBox[];
+    frame: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const onMarqueeDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    // A drag that ended on a handle never delivers its click here: clear its flag.
+    suppressClick.current = false;
+    const target = event.target as HTMLElement;
+    const empty =
+      target === event.currentTarget || target.hasAttribute("data-track-row") || target.hasAttribute("data-lanes-stack");
+    if (event.button !== 0 || !empty || target.closest("[data-clip]")) return;
+    marqueeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      base: event.shiftKey || event.ctrlKey || event.metaKey ? selectedClipIds : [],
+      alone: event.altKey,
+      rows: [],
+      frame: 0,
+      x: event.clientX,
+      y: event.clientY,
+    };
+  };
+  const marqueeSelect = () => {
+    const m = marqueeRef.current;
+    if (!m) return;
+    m.frame = 0;
+    const [left, right] = [Math.min(m.startX, m.x), Math.max(m.startX, m.x)];
+    const [top, bottom] = [Math.min(m.startY, m.y), Math.max(m.startY, m.y)];
+    const fromUs = clientXToUs(left);
+    const toUs = clientXToUs(right);
+    const rows = new Set(
+      m.rows.flatMap(({ row, rect }) => (row.kind === "track" && rect.bottom > top && rect.top < bottom ? [row.trackId] : [])),
+    );
+    const touched = sequence.tracks
+      .filter((t) => rows.has(t.id) && !t.locked)
+      .flatMap((t) => t.clips.filter((c) => c.startUs < toUs && clipEnd(c) > fromUs).map((c) => c.id));
+    const ids = m.alone ? touched : withPartners(sequence, touched);
+    setSelectedClipIds(m.base.length > 0 ? [...new Set([...m.base, ...ids])] : ids);
+    setMarquee({ x0: m.startX, y0: m.startY, x1: m.x, y1: m.y });
+  };
+  const onMarqueeMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const m = marqueeRef.current;
+    if (!m || m.pointerId !== event.pointerId) return;
+    m.x = event.clientX;
+    m.y = event.clientY;
+    if (!m.active) {
+      if (Math.hypot(m.x - m.startX, m.y - m.startY) < CLIP_DRAG_PX) return;
+      m.active = true;
+      m.rows = rowBoxes();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setRange(null);
+      setSelectedZoomId(undefined);
+      captions.clear();
+    }
+    // One selection pass a frame, however fast the pointer moves.
+    if (!m.frame) m.frame = requestAnimationFrame(marqueeSelect);
+  };
+  const onMarqueeUp = () => {
+    const m = marqueeRef.current;
+    marqueeRef.current = null;
+    if (!m?.active) return;
+    if (m.frame) cancelAnimationFrame(m.frame);
+    marqueeRef.current = m;
+    marqueeSelect();
+    marqueeRef.current = null;
+    setMarquee(null);
+    // The click that ends the drag neither seeks nor clears what the box selected.
+    suppressClick.current = true;
+  };
   const selectedClips = selectedClipIds.flatMap((id) => {
     const found = clipIndex.get(id);
     return found ? [found.clip] : [];
@@ -985,11 +1093,11 @@ export const TimelineStudio: React.FC = () => {
   useEffect(() => {
     if (!openedProject) return;
     let active = true;
-    for (const [key, length] of soundKeys) {
+    for (const key of soundKeys.keys()) {
       if (waveforms[key]) continue;
       void api
-        .projectWaveform(openedProject.projectHandle, key, 0, length, 512)
-        .then((page) => active && !page.cancelled && setWaveform(key, page.buckets))
+        .projectWaveformOverview(openedProject.projectHandle, key)
+        .then((overview) => active && setWaveform(key, overview))
         .catch((err) => console.warn("[Timeline] Waveform failed:", err));
     }
     return () => {
@@ -1299,7 +1407,12 @@ export const TimelineStudio: React.FC = () => {
               className="w-full bg-studio-950 text-label text-white px-1.5 h-6 rounded outline-none border border-accent"
             />
           ) : (
-            <span onDoubleClick={() => setRenaming({ trackId: track.id, name: track.name ?? "" })} title="Double-click to rename">
+            <span
+              className="cursor-pointer"
+              onClick={(event) => pickTrack(track, event)}
+              onDoubleClick={() => setRenaming({ trackId: track.id, name: track.name ?? "" })}
+              title="Click to select its clips (Shift+click to add or remove them). Double-click to rename."
+            >
               {track.name ? `${number} · ${label}` : number}
             </span>
           )
@@ -1424,7 +1537,6 @@ export const TimelineStudio: React.FC = () => {
     },
     suppressClick,
   };
-  const audioHeight = lanes.height("lane:audio");
   const clipBlock = (track: SeqTrack, trackNo: string, clip: Clip, index: number) => {
     const audio = track.kind === "audio";
     return (
@@ -1441,8 +1553,9 @@ export const TimelineStudio: React.FC = () => {
         selected={selected.has(clip.id)}
         moving={!!(drag?.active && drag.mode === "move" && drag.idSet.has(clip.id))}
         shade={trimShade(clip)}
-        buckets={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
-        audioHeight={audioHeight}
+        waveform={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
+        waveFromUs={audio ? Math.max(clip.startUs, drawnUs.from) : 0}
+        waveToUs={audio ? Math.min(clipEnd(clip), drawnUs.to) : 0}
         actions={clipActions}
       />
     );
@@ -1774,12 +1887,28 @@ export const TimelineStudio: React.FC = () => {
                 }}
                 onDrop={onMediaDrop}
                 onClick={handleLanesClick}
-                onPointerDown={() => {
-                  // A drag that ended on a handle never delivers its click here: clear its flag.
-                  suppressClick.current = false;
-                }}
+                onPointerDown={onMarqueeDown}
+                onPointerMove={onMarqueeMove}
+                onPointerUp={onMarqueeUp}
+                onPointerCancel={onMarqueeUp}
                 className="flex-1 relative cursor-pointer py-2 bg-studio-950/40"
               >
+                {marquee &&
+                  (() => {
+                    const rect = lanesRef.current?.getBoundingClientRect();
+                    if (!rect) return null;
+                    return (
+                      <div
+                        className="absolute z-50 pointer-events-none rounded-sm border border-accent-hover bg-accent/15"
+                        style={{
+                          left: Math.min(marquee.x0, marquee.x1) - rect.left,
+                          top: Math.min(marquee.y0, marquee.y1) - rect.top,
+                          width: Math.abs(marquee.x1 - marquee.x0),
+                          height: Math.abs(marquee.y1 - marquee.y0),
+                        }}
+                      />
+                    );
+                  })()}
                 <AtPlayhead spanUs={spanUs}>
                   {(left, timeUs) => (
                     <>
@@ -1821,7 +1950,7 @@ export const TimelineStudio: React.FC = () => {
                 {dragInsertAt !== null && marker(dragInsertAt, "Insert here")}
                 {insertAtUs !== null && marker(insertAtUs, "Insert here")}
 
-                <div className="space-y-2">
+                <div data-lanes-stack className="space-y-2">
                   {captions.lane}
                   {zooms.lane}
                   {newTrackRow(false)}

@@ -462,16 +462,27 @@ fn perf_long_recording() {
         let key = format!("{asset}.{key}");
         for pass in ["cold", "warm"] {
             let t = Instant::now();
-            commands::project_waveform_impl(
-                &state,
-                handle.clone(),
-                key.clone(),
-                0,
-                doc.duration_us(),
-                512,
-            )
-            .unwrap();
+            let overview =
+                commands::project_waveform_overview_impl(&state, handle.clone(), key.clone())
+                    .unwrap();
             time(&format!("waveform {key} {pass}"), t);
+            if pass == "warm" {
+                let json = serde_json::to_string(&overview).unwrap();
+                println!(
+                    "PERF waveform {key}: {} bars, {} bytes of JSON",
+                    overview.peaks.len(),
+                    json.len()
+                );
+                // To look at real waveforms in a browser mock: AERO_WAVE_DUMP=<folder>.
+                if let Some(dump) = std::env::var_os("AERO_WAVE_DUMP") {
+                    let name = if key.ends_with(".mic") {
+                        "mic.json"
+                    } else {
+                        "system.json"
+                    };
+                    std::fs::write(PathBuf::from(dump).join(name), json).unwrap();
+                }
+            }
         }
     }
     let t = Instant::now();

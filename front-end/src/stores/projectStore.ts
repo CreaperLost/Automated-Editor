@@ -1,6 +1,6 @@
 import { api } from "../lib/ipc";
 import { create } from "zustand";
-import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformBucket, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
+import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformOverview, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
 import { shareSequence } from "../lib/sequence";
 import { useSettingsStore } from "./settingsStore";
@@ -89,8 +89,8 @@ interface ProjectStore {
   loadOpenedProject: (project: OpenedProject, projectPath?: string) => void;
   clearProject: () => void;
   /** Waveforms by sound (`<asset>.<stream>`), over its own time. */
-  waveforms: Record<string, WaveformBucket[]>;
-  setWaveform: (key: string, buckets: WaveformBucket[]) => void;
+  waveforms: Record<string, WaveformOverview>;
+  setWaveform: (key: string, overview: WaveformOverview) => void;
   zoomKeyframes: ZoomKeyframe[];
   pendingZoomSuggestions: ZoomSuggestion[];
   zoomDiagnostics: string[];
@@ -234,7 +234,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
   waveforms: {},
-  setWaveform: (key, buckets) => set((state) => ({ waveforms: { ...state.waveforms, [key]: buckets } })),
+  setWaveform: (key, overview) => set((state) => ({ waveforms: { ...state.waveforms, [key]: overview } })),
   zoomKeyframes: [],
   pendingZoomSuggestions: [],
   zoomDiagnostics: [],
