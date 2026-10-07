@@ -25,54 +25,6 @@ pub const MAX_WEBCAM_ROUNDNESS_PCT: f32 = 50.0;
 pub const BACKGROUND_PRESETS: [&str; 6] =
     ["aurora", "sunset", "ocean", "forest", "candy", "graphite"];
 
-fn default_aspect() -> String {
-    "16:9".into()
-}
-
-fn default_background_type() -> String {
-    "gradient".into()
-}
-
-fn default_color_start() -> String {
-    "#312e81".into()
-}
-
-fn default_color_end() -> String {
-    "#0f172a".into()
-}
-
-fn default_shadow_opacity() -> f32 {
-    0.5
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_webcam_shape() -> String {
-    "rect".into()
-}
-
-fn default_webcam_size() -> String {
-    "md".into()
-}
-
-fn default_webcam_position() -> String {
-    "bottom-right".into()
-}
-
-fn default_border_color() -> String {
-    "#6366f1".into()
-}
-
-fn default_hundred() -> f32 {
-    100.0
-}
-
-fn default_background_preset() -> String {
-    "aurora".into()
-}
-
 /// The webcam size slider value a legacy S/M/L/XL preset maps to.
 pub fn webcam_size_preset_pct(size: &str) -> f32 {
     match size {
@@ -83,119 +35,84 @@ pub fn webcam_size_preset_pct(size: &str) -> f32 {
     }
 }
 
-fn default_custom_x() -> f32 {
-    80.0
-}
-
-fn default_custom_y() -> f32 {
-    80.0
-}
-
+/// Fields missing from a stored layout take the values of [`EditLayout::default`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct EditLayout {
-    #[serde(default = "default_aspect")]
     pub aspect_ratio: String,
-    #[serde(default)]
     pub padding_px: u32,
-    #[serde(default = "default_background_type")]
     pub background_type: String,
-    #[serde(default = "default_color_start")]
     pub color_start: String,
-    #[serde(default = "default_color_end")]
     pub color_end: String,
-    #[serde(default)]
     pub corner_radius_px: u32,
-    #[serde(default)]
     pub shadow_blur_px: u32,
-    #[serde(default = "default_shadow_opacity")]
     pub shadow_opacity: f32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wallpaper_asset: Option<String>,
-    #[serde(default = "default_background_preset")]
     pub background_preset: String,
     /// Percent of the source trimmed from each screen edge.
-    #[serde(default)]
     pub screen_crop_left: f32,
-    #[serde(default)]
     pub screen_crop_top: f32,
-    #[serde(default)]
     pub screen_crop_right: f32,
-    #[serde(default)]
     pub screen_crop_bottom: f32,
     /// Screen size as a percent of the padded content area.
-    #[serde(default = "default_hundred")]
     pub screen_scale_pct: f32,
-    #[serde(default = "default_true")]
     pub webcam_enabled: bool,
-    #[serde(default = "default_webcam_shape")]
     pub webcam_shape: String,
-    #[serde(default = "default_webcam_size")]
     pub webcam_size: String,
     /// Bubble long side as a percent of the canvas short side. Overrides `webcam_size`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub webcam_size_pct: Option<f32>,
     /// Corner radius of a rect webcam, as a percent of the bubble's short side.
-    #[serde(default)]
     pub webcam_roundness_pct: f32,
-    #[serde(default = "default_webcam_position")]
     pub webcam_position: String,
-    #[serde(default = "default_custom_x")]
     pub webcam_custom_x: f32,
-    #[serde(default = "default_custom_y")]
     pub webcam_custom_y: f32,
-    #[serde(default = "default_border_color")]
     pub webcam_border_color: String,
-    #[serde(default)]
     pub webcam_border_width: u32,
-    #[serde(default = "default_true")]
     pub webcam_mirror: bool,
-    #[serde(default)]
     pub webcam_shadow: bool,
     /// Draw the recorded mouse pointer (recordings that left it out of the video).
-    #[serde(default = "default_true")]
     pub cursor_visible: bool,
     /// The pointer's size, percent of its recorded size (a little larger reads better).
-    #[serde(default = "default_cursor_size")]
     pub cursor_size_pct: f32,
 }
 
-fn default_cursor_size() -> f32 {
-    150.0
-}
-
+/// A new project's look: the screen a little smaller with rounded corners on the Forest
+/// background, the bottom of the screen (the taskbar) cropped off, and a large squircle
+/// camera bottom left with a border and a shadow.
 impl Default for EditLayout {
     fn default() -> Self {
         Self {
-            aspect_ratio: default_aspect(),
+            aspect_ratio: "16:9".into(),
             padding_px: 0,
-            background_type: default_background_type(),
-            color_start: default_color_start(),
-            color_end: default_color_end(),
-            corner_radius_px: 0,
+            background_type: "preset".into(),
+            color_start: "#312e81".into(),
+            color_end: "#0f172a".into(),
+            corner_radius_px: 17,
             shadow_blur_px: 0,
-            shadow_opacity: default_shadow_opacity(),
+            shadow_opacity: 0.5,
             wallpaper_asset: None,
-            background_preset: default_background_preset(),
+            background_preset: "forest".into(),
             screen_crop_left: 0.0,
             screen_crop_top: 0.0,
             screen_crop_right: 0.0,
-            screen_crop_bottom: 0.0,
-            screen_scale_pct: default_hundred(),
+            screen_crop_bottom: 5.5,
+            screen_scale_pct: 84.0,
             webcam_enabled: true,
-            webcam_shape: default_webcam_shape(),
-            webcam_size: default_webcam_size(),
-            webcam_size_pct: None,
+            webcam_shape: "squircle".into(),
+            webcam_size: "md".into(),
+            webcam_size_pct: Some(MAX_WEBCAM_SIZE_PCT),
             webcam_roundness_pct: 0.0,
-            webcam_position: default_webcam_position(),
-            webcam_custom_x: default_custom_x(),
-            webcam_custom_y: default_custom_y(),
-            webcam_border_color: default_border_color(),
-            webcam_border_width: 0,
+            webcam_position: "bottom-left".into(),
+            webcam_custom_x: 80.0,
+            webcam_custom_y: 80.0,
+            webcam_border_color: "#6366f1".into(),
+            webcam_border_width: MAX_BORDER_WIDTH,
             webcam_mirror: true,
-            webcam_shadow: false,
+            webcam_shadow: true,
             cursor_visible: true,
-            cursor_size_pct: default_cursor_size(),
+            cursor_size_pct: 150.0,
         }
     }
 }
@@ -470,6 +387,26 @@ pub fn ingest_wallpaper(root: &Path, source: &Path) -> Result<String, String> {
 }
 
 #[cfg(test)]
+impl EditLayout {
+    /// A neutral layout for tests: the screen fills the canvas, nothing cropped or rounded,
+    /// a plain webcam rectangle bottom right, a gradient behind.
+    pub fn plain() -> Self {
+        Self {
+            background_type: "gradient".into(),
+            corner_radius_px: 0,
+            screen_crop_bottom: 0.0,
+            screen_scale_pct: 100.0,
+            webcam_shape: "rect".into(),
+            webcam_size_pct: None,
+            webcam_position: "bottom-right".into(),
+            webcam_border_width: 0,
+            webcam_shadow: false,
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -492,13 +429,24 @@ mod tests {
 
     #[test]
     fn crop_scale_and_webcam_controls_validate_and_default() {
-        let legacy: EditLayout =
-            serde_json::from_str(r#"{"aspectRatio":"16:9","paddingPx":0,"webcamSize":"lg"}"#)
-                .unwrap();
-        assert_eq!(legacy.screen_crop_uv(), (0.0, 0.0, 1.0, 1.0));
-        assert_eq!(legacy.screen_scale_pct, 100.0);
-        assert!((legacy.webcam_size_fraction() - 0.28).abs() < 1e-6);
-        legacy.validate().unwrap();
+        // A new project: the bottom 5.5 % cropped off, the screen at 84 %, the largest webcam.
+        let fresh = EditLayout::default();
+        fresh.validate().unwrap();
+        let (x, y, w, h) = fresh.screen_crop_uv();
+        assert!(x == 0.0 && y == 0.0 && w == 1.0 && (h - 0.945).abs() < 1e-6);
+        assert_eq!(fresh.screen_scale_pct, 84.0);
+        assert!((fresh.webcam_size_fraction() - 0.6).abs() < 1e-6);
+        // Fields missing from a stored layout take those defaults.
+        let sparse: EditLayout =
+            serde_json::from_str(r#"{"aspectRatio":"9:16","webcamShape":"rect"}"#).unwrap();
+        assert_eq!(
+            sparse,
+            EditLayout {
+                aspect_ratio: "9:16".into(),
+                webcam_shape: "rect".into(),
+                ..EditLayout::default()
+            }
+        );
 
         let mut layout = EditLayout::default();
         layout.screen_crop_left = 10.0;

@@ -29,7 +29,7 @@ fn default_pause_tolerance_ms() -> u32 {
 }
 
 fn default_idle_ms() -> u32 {
-    5_000
+    30_000
 }
 
 fn default_min_focus_ms() -> u32 {
@@ -62,7 +62,7 @@ pub struct WebcamFocusSettings {
     #[serde(default = "default_idle_ms")]
     pub idle_ms: u32,
     /// Also require speech: the webcam only fills the frame while the speaker talks.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub require_speech: bool,
     /// Shorter talking-while-idle stretches are ignored.
     #[serde(default = "default_min_focus_ms")]
@@ -84,7 +84,7 @@ impl Default for WebcamFocusSettings {
             speech_threshold_db: default_speech_threshold_db(),
             pause_tolerance_ms: default_pause_tolerance_ms(),
             idle_ms: default_idle_ms(),
-            require_speech: false,
+            require_speech: true,
             min_focus_ms: default_min_focus_ms(),
             transition_ms: default_transition_ms(),
             cursor_moves_are_activity: true,
@@ -519,6 +519,14 @@ mod tests {
     use crate::timeline::SourceInterval;
     use std::collections::BTreeMap;
 
+    /// Detection with a five-second idle wait, so a few seconds of rest are enough.
+    fn quick() -> WebcamFocusSettings {
+        WebcamFocusSettings {
+            idle_ms: 5_000,
+            ..WebcamFocusSettings::default()
+        }
+    }
+
     fn stream(events: Vec<(u64, CanonicalKind)>) -> TelemetryStream {
         TelemetryStream {
             events: events
@@ -573,7 +581,7 @@ mod tests {
 
     #[test]
     fn clicks_carve_activity_out_of_speech_with_lead_and_idle() {
-        let settings = WebcamFocusSettings::default();
+        let settings = quick();
         let ranges = detect_focus_ranges(&[(0, 30 * S)], &stream(vec![click(10 * S)]), &settings);
         let lead = settings.transition_us() + ACTIVITY_LEAD_US;
         let idle = settings.idle_ms as u64 * 1_000;
@@ -582,7 +590,7 @@ mod tests {
 
     #[test]
     fn short_stretches_and_silence_never_focus() {
-        let settings = WebcamFocusSettings::default();
+        let settings = quick();
         // Clicks every second leave no idle gap long enough.
         let busy: Vec<_> = (0..10).map(|i| click(i * S)).collect();
         assert!(detect_focus_ranges(&[(0, 10 * S)], &stream(busy), &settings).is_empty());
@@ -592,7 +600,7 @@ mod tests {
 
     #[test]
     fn cursor_jitter_is_not_activity_but_real_moves_are() {
-        let mut settings = WebcamFocusSettings::default();
+        let mut settings = quick();
         let jitter = stream(vec![mv(1 * S, 0.5), mv(5 * S, 0.501), mv(9 * S, 0.5)]);
         assert_eq!(
             detect_focus_ranges(&[(0, 20 * S)], &jitter, &settings),
@@ -612,7 +620,7 @@ mod tests {
 
     #[test]
     fn telemetry_gaps_block_focus() {
-        let settings = WebcamFocusSettings::default();
+        let settings = quick();
         let gap = stream(vec![(
             10 * S,
             CanonicalKind::Gap {
@@ -766,8 +774,10 @@ mod tests {
         let mut bad = parsed.clone();
         bad.settings.idle_ms = MAX_IDLE_MS + 1;
         assert!(bad.validate().is_err());
-        // Older projects without the new fields keep loading, and save without them.
-        assert!(!parsed.settings.require_speech);
+        // Missing fields take the defaults: only while talking, after 30 s of rest. An empty
+        // normal view is left out when saved.
+        assert!(parsed.settings.require_speech);
+        assert_eq!(parsed.settings.idle_ms, 30_000);
         assert!(parsed.normal_view.is_empty());
         assert!(!serde_json::to_string(&parsed)
             .unwrap()

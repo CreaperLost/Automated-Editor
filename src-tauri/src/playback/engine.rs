@@ -20,6 +20,8 @@ use tauri::Manager;
 const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
 /// While playing, decoders start this far ahead of the clip edges coming up.
 const PREFETCH_US: u64 = 1_200_000;
+/// The most frames per second the window preview draws at "Source fps" (recordings are 60).
+const WINDOW_SOURCE_FPS: u32 = 60;
 
 /// The scene and mixer for what plays. Kept across seeks; rebuilt when an edit changes it.
 struct Runtime {
@@ -30,6 +32,56 @@ struct Runtime {
     evaluator: SceneEvaluator,
     mixer: AudioMixer,
     _lease: std::fs::File,
+}
+
+/// Drawing the preview straight into the window (Windows): the swapchain, kept across edits
+/// and seeks, and the layout it last drew with.
+#[derive(Default)]
+struct Underlay {
+    presenter: Option<crate::render::present::WindowPresenter>,
+    /// The preview attachment the presenter belongs to.
+    generation: u64,
+    layout_revision: u64,
+    /// With AEROEDITS_PROFILE set, the presented rate is reported every two seconds.
+    presented: u32,
+    window: Option<std::time::Instant>,
+}
+
+impl Underlay {
+    /// Counts a frame drawn; once a second, returns the rate drawn since the last time.
+    fn count_presented(&mut self) -> Option<f64> {
+        let started = *self.window.get_or_insert_with(std::time::Instant::now);
+        self.presented += 1;
+        if started.elapsed() < Duration::from_secs(1) {
+            return None;
+        }
+        let fps = self.presented as f64 / started.elapsed().as_secs_f64();
+        if crate::media::profiling() {
+            eprintln!("[profile] preview presented {fps:.1} fps (window)");
+        }
+        self.window = Some(std::time::Instant::now());
+        self.presented = 0;
+        Some(fps)
+    }
+}
+
+/// The window could not show the preview: frames go to the webview as JPEGs from now on, and
+/// the page is told so it can draw them.
+fn fall_back_to_webview(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    underlay: &mut Underlay,
+    error: String,
+) {
+    use tauri::Emitter;
+    eprintln!("[preview] drawing into the window failed, using the webview: {error}");
+    underlay.presenter = None;
+    let status = {
+        let mut preview = state.preview.lock();
+        preview.fall_back_to_webview();
+        preview.status()
+    };
+    let _ = app.emit("preview-status", status);
 }
 
 /// A composited frame waiting for JPEG encoding and presentation on the webview surface.
@@ -120,6 +172,7 @@ pub fn start(app: tauri::AppHandle) {
     thread::spawn(move || {
         let encoder = start_webview_encoder(app.clone());
         let mut runtime: Option<Runtime> = None;
+        let mut underlay = Underlay::default();
         let pending = Arc::new(AtomicBool::new(false));
         let mut last_frame: Option<(u64, u64, u64)> = None;
         while !app
@@ -134,6 +187,7 @@ pub fn start(app: tauri::AppHandle) {
                 &state,
                 &encoder,
                 &mut runtime,
+                &mut underlay,
                 &pending,
                 &mut last_frame,
             );
@@ -177,6 +231,7 @@ fn tick(
     state: &AppState,
     encoder: &mpsc::SyncSender<WebviewJob>,
     runtime: &mut Option<Runtime>,
+    underlay: &mut Underlay,
     pending: &Arc<AtomicBool>,
     last_frame: &mut Option<(u64, u64, u64)>,
 ) -> Result<bool, (u64, String)> {
@@ -318,8 +373,16 @@ fn tick(
         return Ok(playing);
     }
     let preview = state.preview.lock().status();
-    // A short in focus is watched in the Shorts Studio, whatever the editor's window does.
-    let for_short = status.short_id.is_some() && preview.surface == "webview";
+    let in_window = preview.surface == "underlay";
+    if !in_window || underlay.generation != preview.generation {
+        // Detached or gone back to the webview: let the window's swapchain go, so a new one
+        // can be made on the same window.
+        underlay.presenter = None;
+        underlay.generation = preview.generation;
+    }
+    // A short in focus is watched in the Shorts Studio, whatever the editor's window does. It
+    // takes its frames as JPEGs, so they go through the webview path.
+    let for_short = status.short_id.is_some() && (preview.surface == "webview" || in_window);
     if !preview.attached
         || !(preview.visible || for_short)
         || status.duration_us == 0
@@ -332,11 +395,57 @@ fn tick(
     // so without this the same source frame was composited and encoded again and again,
     // holding up the next real frame.
     let render_us = if status.state == PlaybackState::Playing {
-        runtime.quality.frame_time(status.position_us)
+        if in_window && runtime.quality.fps == 0 {
+            // Drawing into the window is cheap enough to redraw on every tick, which would show
+            // the same source frame several times over: follow the source at most at 60 fps.
+            super::preview::frame_start_us(status.position_us, WINDOW_SOURCE_FPS)
+        } else {
+            runtime.quality.frame_time(status.position_us)
+        }
     } else {
         status.position_us
     };
     let key = (generation, render_us, preview.generation);
+    // Decoders start the same real time ahead at any speed.
+    let horizon = (PREFETCH_US as f64 * status.speed.max(1.0)) as u64;
+    if in_window && !for_short {
+        let Some((window, placement)) = state.preview.lock().underlay() else {
+            return Ok(playing); // Not laid out yet.
+        };
+        if *last_frame == Some(key) {
+            // The same frame: draw it again only if the preview moved.
+            if underlay.layout_revision != preview.layout_revision {
+                match runtime
+                    .evaluator
+                    .present_again(&mut underlay.presenter, &window, &placement)
+                {
+                    Ok(_) => underlay.layout_revision = preview.layout_revision,
+                    Err(e) => fall_back_to_webview(app, state, underlay, e),
+                }
+            }
+            return Ok(playing);
+        }
+        match runtime
+            .evaluator
+            .present_at(render_us, &mut underlay.presenter, &window, &placement)
+        {
+            Ok(_) => {
+                *last_frame = Some(key);
+                underlay.layout_revision = preview.layout_revision;
+                let fps = underlay.count_presented();
+                state.preview.lock().mark_underlay_presented(fps);
+                state.playback.lock().mark_presented(generation);
+                if playing {
+                    runtime.evaluator.prefetch(render_us, horizon);
+                }
+            }
+            Err(crate::export::PresentError::Scene(e)) => return Err(error(e)),
+            Err(crate::export::PresentError::Window(e)) => {
+                fall_back_to_webview(app, state, underlay, e)
+            }
+        }
+        return Ok(playing);
+    }
     if *last_frame == Some(key) {
         return Ok(playing);
     }
@@ -345,11 +454,21 @@ fn tick(
     }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
     if status.state == PlaybackState::Playing {
-        // Decoders start the same real time ahead at any speed.
-        let horizon = (PREFETCH_US as f64 * status.speed.max(1.0)) as u64;
         runtime.evaluator.prefetch(render_us, horizon);
     }
-    if preview.surface == "webview" {
+    if in_window && preview.visible {
+        // The short's frame (sent to the Shorts Studio below) shows in the editor too.
+        if let Some((window, placement)) = state.preview.lock().underlay() {
+            if let Err(e) =
+                runtime
+                    .evaluator
+                    .present_again(&mut underlay.presenter, &window, &placement)
+            {
+                fall_back_to_webview(app, state, underlay, e);
+            }
+        }
+    }
+    if preview.surface == "webview" || in_window {
         // The webview fetches frames itself, so nothing here needs the UI thread.
         match encoder.try_send(WebviewJob {
             frame,

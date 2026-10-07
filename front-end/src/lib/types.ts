@@ -92,12 +92,12 @@ export interface ZoomSettings {
 }
 
 export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
-  clickScale: 1.8,
+  clickScale: 1.6,
   hoverScale: 1.4,
   transitionMs: 700,
-  minHoldMs: 1800,
-  mergeGapMs: 2500,
-  maxZooms: 10,
+  minHoldMs: 5000,
+  mergeGapMs: 5000,
+  maxZooms: 20,
   follow: true,
   followMs: 700,
 };
@@ -673,8 +673,8 @@ export interface WebcamFocusDetection {
 export const DEFAULT_WEBCAM_FOCUS_SETTINGS: WebcamFocusSettings = {
   speechThresholdDb: -38,
   pauseToleranceMs: 800,
-  idleMs: 5000,
-  requireSpeech: false,
+  idleMs: 30000,
+  requireSpeech: true,
   minFocusMs: 2500,
   transitionMs: 0,
   cursorMovesAreActivity: true,
@@ -738,6 +738,19 @@ export interface PreviewViewport {
   visible: boolean;
   occluded: boolean;
   revision: number;
+  /** Drawn in the window: the box the frame fits in (from the page's top left). */
+  frame?: [number, number, number, number];
+  frameRadius?: number;
+  /** Drawn in the window: backgrounds the page cleared over the preview, outermost first. */
+  fills?: PreviewFill[];
+}
+
+/** A background the page no longer paints over the preview; the window paints it instead. */
+export interface PreviewFill {
+  rect: [number, number, number, number];
+  /** RGBA, 0 to 1. */
+  color: [number, number, number, number];
+  radius: number;
 }
 
 export interface PreviewStatus {
@@ -756,8 +769,13 @@ export interface PreviewStatus {
   visible: boolean;
   occluded: boolean;
   hitMode: PreviewHitMode;
-  /** "native": a macOS child view draws frames. "webview": fetch them with `previewFrame`. */
-  surface: "native" | "webview";
+  /**
+   * "native": a macOS child view draws frames. "underlay": the window draws them under the
+   * page, which must be see-through over the preview. "webview": fetch them with `previewFrame`.
+   */
+  surface: "native" | "underlay" | "webview";
+  /** Drawn in the window: frames per second drawn over the last second. */
+  presentedFps: number | null;
   diagnostics: string[];
 }
 

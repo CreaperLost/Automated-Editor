@@ -27,30 +27,54 @@ use commands::*;
 #[cfg(feature = "tauri-app")]
 use tauri::{Manager, State};
 
-/// The NSWindow for the native preview view, or `None` where preview frames go to the
+/// Set to `webview` to send preview frames to the page as JPEGs on Windows, as before the
+/// preview was drawn into the window.
+#[cfg(feature = "tauri-app")]
+const PREVIEW_ENV: &str = "AEROEDITS_PREVIEW";
+
+/// What the preview draws into: on macOS the NSWindow for the native preview view, on Windows
+/// the window itself under a webview made transparent; `None` where preview frames go to the
 /// webview instead.
 #[cfg(feature = "tauri-app")]
-fn preview_ns_window(
+fn preview_target(
     app: &tauri::AppHandle,
     window_label: &str,
-) -> Result<Option<*mut std::ffi::c_void>, String> {
+) -> Result<Option<playback::preview::PreviewTarget>, String> {
     let window = app
         .get_webview_window(window_label)
         .ok_or_else(|| format!("Unknown window label: {window_label}"))?;
-    if media::media_backend() != media::MediaBackend::Native {
-        return Ok(None);
-    }
-    #[cfg(target_os = "macos")]
+    #[cfg(windows)]
     {
+        if std::env::var(PREVIEW_ENV).is_ok_and(|v| v.trim().eq_ignore_ascii_case("webview")) {
+            return Ok(None);
+        }
+        // Only the page's own backgrounds hide the window now; it clears them over the
+        // preview once it sees the `underlay` surface.
         window
-            .ns_window()
-            .map(Some)
-            .map_err(|e| format!("Failed to get NSWindow: {e}"))
+            .as_ref()
+            .set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)))
+            .map_err(|e| format!("Could not make the page transparent: {e}"))?;
+        Ok(Some(playback::preview::PreviewTarget::Underlay(
+            std::sync::Arc::new(window),
+        )))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(windows))]
     {
-        let _ = window;
-        Ok(None)
+        if media::media_backend() != media::MediaBackend::Native {
+            return Ok(None);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            window
+                .ns_window()
+                .map(|w| Some(playback::preview::PreviewTarget::NativeView(w)))
+                .map_err(|e| format!("Failed to get NSWindow: {e}"))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = window;
+            Ok(None)
+        }
     }
 }
 
@@ -593,8 +617,8 @@ fn preview_attach(
     window_label: String,
     hit_mode: playback::PreviewHitMode,
 ) -> Result<playback::PreviewStatus, String> {
-    let ns_window = preview_ns_window(&app, &window_label)?;
-    commands::preview_attach_impl(&app.state::<AppState>(), window_label, hit_mode, ns_window)
+    let target = preview_target(&app, &window_label)?;
+    commands::preview_attach_impl(&app.state::<AppState>(), window_label, hit_mode, target)
 }
 
 #[cfg(feature = "tauri-app")]

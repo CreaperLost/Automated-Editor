@@ -8,6 +8,9 @@ use std::io::Read;
 use std::path::Path;
 use wgpu::util::DeviceExt;
 
+pub mod present;
+use present::{Placement, WindowPresenter, WindowTarget};
+
 pub const COPIES_COMPOSITE: u32 = 2;
 /// Background, screen, webcam border, webcam, pointer and captions, plus an overlay for every
 /// other video track a sequence may have (16 in all), with room to spare. A valid sequence
@@ -671,7 +674,26 @@ struct LayerSlot {
     key: Option<u64>,
 }
 
+/// What a render produces: the frame read back, or whether it reached the window.
+enum Output {
+    Frame(VideoFrame),
+    Presented(bool),
+}
+
+/// Where a render goes.
+enum Destination<'a> {
+    Readback { nv12: bool },
+    Window(&'a mut WindowPresenter, &'a Placement),
+}
+
+static NEXT_COMPOSITOR_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Compositor {
+    /// Kept to make window surfaces, which must come from the device's own instance.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    /// Tells a [`WindowPresenter`] which device it was made on.
+    id: u64,
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
@@ -866,6 +888,9 @@ impl Compositor {
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
         Ok(Self {
+            instance,
+            adapter,
+            id: NEXT_COMPOSITOR_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             device,
             queue,
             pipeline,
@@ -880,6 +905,56 @@ impl Compositor {
             luma_pipeline,
             chroma_pipeline,
         })
+    }
+
+    /// A presenter that draws this compositor's frames into `window`.
+    pub fn window_presenter(&self, window: WindowTarget) -> Result<WindowPresenter, String> {
+        WindowPresenter::new(&self.instance, &self.adapter, &self.device, window, self.id)
+    }
+
+    /// Whether `presenter` was made on this compositor's device.
+    pub fn owns(&self, presenter: &WindowPresenter) -> bool {
+        presenter.compositor_id == self.id
+    }
+
+    /// Composites `scene` and draws it straight into the presenter's window, with nothing read
+    /// back. Returns false when the window had nothing to draw into (minimised, say).
+    pub fn composite_present(
+        &self,
+        scene: &Scene,
+        presenter: &mut WindowPresenter,
+        placement: &Placement,
+    ) -> Result<bool, String> {
+        match self.render(scene, Destination::Window(presenter, placement))? {
+            Output::Presented(presented) => Ok(presented),
+            Output::Frame(_) => Err("The compositor read back a frame it should have shown".into()),
+        }
+    }
+
+    /// Draws the last composited frame into the presenter's window again (the preview moved),
+    /// or returns false when there is none.
+    pub fn present_last(
+        &self,
+        presenter: &mut WindowPresenter,
+        placement: &Placement,
+    ) -> Result<bool, String> {
+        let target = self.target.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(cached) = target.as_ref() else {
+            return Ok(false);
+        };
+        let encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aeroedits-present-again"),
+            });
+        presenter.present(
+            &self.device,
+            &self.queue,
+            encoder,
+            &cached.view,
+            (cached.width, cached.height),
+            placement,
+        )
     }
 
     pub fn adapter_name(&self) -> &str {
@@ -918,7 +993,7 @@ impl Compositor {
 
     /// The scene as BGRA.
     pub fn composite(&self, scene: &Scene) -> Result<VideoFrame, String> {
-        self.render(scene, false)
+        self.read_back(scene, false)
     }
 
     /// The scene as NV12 in limited-range BT.709, as an H.264 encoder takes it: the GPU
@@ -927,7 +1002,16 @@ impl Compositor {
         if scene.width % 2 != 0 || scene.height % 2 != 0 {
             return Err("NV12 needs an even width and height".into());
         }
-        self.render(scene, true)
+        self.read_back(scene, true)
+    }
+
+    fn read_back(&self, scene: &Scene, nv12: bool) -> Result<VideoFrame, String> {
+        match self.render(scene, Destination::Readback { nv12 })? {
+            Output::Frame(frame) => Ok(frame),
+            Output::Presented(_) => {
+                Err("The compositor showed a frame it should have read back".into())
+            }
+        }
     }
 
     /// The NV12 planes for a target of `target`'s size.
@@ -983,7 +1067,8 @@ impl Compositor {
         }
     }
 
-    fn render(&self, scene: &Scene, nv12: bool) -> Result<VideoFrame, String> {
+    fn render(&self, scene: &Scene, destination: Destination<'_>) -> Result<Output, String> {
+        let nv12 = matches!(destination, Destination::Readback { nv12: true });
         validate_dim(scene.width, scene.height)?;
         if scene.layers.len() > MAX_LAYERS {
             return Err("Compositor layer count exceeds the F2 bound".into());
@@ -1323,6 +1408,12 @@ impl Compositor {
             );
         };
         let (w, h) = (scene.width, scene.height);
+        if let Destination::Window(presenter, placement) = destination {
+            let presented =
+                presenter.present(&self.device, &self.queue, encoder, view, (w, h), placement)?;
+            let _keep = draws;
+            return Ok(Output::Presented(presented));
+        }
         // What to read back: the buffer, its padded row, the bytes of each row and the rows.
         let (staging, padded, row_bytes, rows) = match yuv {
             Some(yuv) => {
@@ -1382,7 +1473,7 @@ impl Compositor {
         drop(data);
         staging.unmap();
         let _keep = draws;
-        Ok(VideoFrame {
+        Ok(Output::Frame(VideoFrame {
             pts_us: scene.layers.first().map(|l| l.frame.pts_us).unwrap_or(0),
             width: w,
             height: h,
@@ -1398,7 +1489,7 @@ impl Compositor {
                 ColorInfo::rec709_full()
             },
             data: packed.into(),
-        })
+        }))
     }
 }
 
@@ -2123,7 +2214,7 @@ mod tests {
     #[test]
     fn layout_letterboxes_without_stretching() {
         let screen = VideoFrame::solid(16, 8, 0, 0, 255, 0).unwrap();
-        let mut landscape = EditLayout::default();
+        let mut landscape = EditLayout::plain();
         landscape.background_type = "solid".into();
         landscape.color_start = "#000000".into();
         landscape.webcam_enabled = false;
@@ -2157,7 +2248,7 @@ mod tests {
     fn webcam_mirror_flips_only_webcam_pixels() {
         let screen = split_frame(16, 16, [0, 0, 255], [255, 0, 0]);
         let webcam = split_frame(16, 8, [0, 255, 0], [255, 255, 255]);
-        let mut layout = EditLayout::default();
+        let mut layout = EditLayout::plain();
         layout.background_type = "solid".into();
         layout.color_start = "#000000".into();
         layout.padding_px = 0;
@@ -2203,7 +2294,7 @@ mod tests {
     #[test]
     fn styled_solid_background_differs_from_identity() {
         let screen = VideoFrame::solid(8, 8, 0, 0, 255, 0).unwrap();
-        let mut identity = EditLayout::default();
+        let mut identity = EditLayout::plain();
         identity.background_type = "solid".into();
         identity.color_start = "#000000".into();
         identity.padding_px = 2;
@@ -2251,7 +2342,7 @@ mod tests {
     }
 
     fn solid_layout() -> EditLayout {
-        let mut layout = EditLayout::default();
+        let mut layout = EditLayout::plain();
         layout.background_type = "solid".into();
         layout.color_start = "#00ff00".into();
         layout.padding_px = 4;

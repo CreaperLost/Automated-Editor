@@ -108,12 +108,12 @@ pub struct ZoomSettings {
 impl Default for ZoomSettings {
     fn default() -> Self {
         Self {
-            click_scale: 1.8,
+            click_scale: 1.6,
             hover_scale: 1.4,
             transition_ms: 700,
-            min_hold_ms: 1_800,
-            merge_gap_ms: 2_500,
-            max_zooms: 10,
+            min_hold_ms: 5_000,
+            merge_gap_ms: 5_000,
+            max_zooms: 20,
             follow: true,
             follow_ms: 700,
         }
