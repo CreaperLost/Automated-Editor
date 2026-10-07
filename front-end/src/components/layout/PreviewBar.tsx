@@ -65,7 +65,7 @@ export const PreviewQualityControls: React.FC = () => {
         ))}
       </select>
       {isPlaying && measuredFps !== null && (
-        <span className="font-mono text-meta tabular-nums text-accent-fg w-12" aria-label="Frames drawn per second">
+        <span className="font-mono text-meta tabular-nums text-accent-fg w-14 whitespace-nowrap" aria-label="Frames drawn per second">
           {measuredFps} fps
         </span>
       )}

@@ -1241,13 +1241,10 @@ pub fn preview_attach_impl(
     state: &AppState,
     window_label: String,
     hit_mode: PreviewHitMode,
-    native_window: Option<*mut std::ffi::c_void>,
+    target: Option<crate::playback::preview::PreviewTarget>,
 ) -> Result<PreviewStatus, String> {
-    // No native window means the webview preview, where frames are fetched by the page.
-    state
-        .preview
-        .lock()
-        .attach(window_label, hit_mode, native_window)
+    // No target means the webview preview, where frames are fetched by the page.
+    state.preview.lock().attach(window_label, hit_mode, target)
 }
 
 pub fn preview_layout_impl(

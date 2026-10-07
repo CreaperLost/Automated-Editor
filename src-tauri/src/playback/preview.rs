@@ -1,13 +1,37 @@
 //! Preview surface session. Geometry and lifetime are owned here. On macOS pixels go to a
-//! native child view; elsewhere frames are JPEG-encoded and fetched by the webview.
+//! native child view; on Windows the compositor draws into the window under the webview,
+//! which is transparent over the preview (see [`crate::render::present`]); elsewhere frames
+//! are JPEG-encoded and fetched by the webview.
 use crate::media::ffmpeg::DecodeLimit;
+use crate::render::present::{Fill, Placement, WindowTarget, MAX_FILLS};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub const ARRANGEMENT: &str = "child_overlay";
 pub const WEBVIEW_ARRANGEMENT: &str = "webview";
+pub const UNDERLAY_ARRANGEMENT: &str = "underlay";
 const WEBVIEW_JPEG_QUALITY: u8 = 82;
 pub const MAX_VIEWPORT: f64 = 8_192.0;
+
+/// A background the page stopped painting over the preview so the window shows through,
+/// for the presenter to paint instead. In the page's CSS pixels.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewFill {
+    /// x, y, width, height from the top left of the page.
+    pub rect: [f64; 4],
+    /// RGBA, 0 to 1.
+    pub color: [f64; 4],
+    pub radius: f64,
+}
+
+/// What the preview draws into.
+pub enum PreviewTarget {
+    /// The macOS window for the Swift child view.
+    NativeView(*mut std::ffi::c_void),
+    /// The window to draw into under the webview.
+    Underlay(WindowTarget),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +49,14 @@ pub struct PreviewViewport {
     pub generation: u64,
     #[serde(default)]
     pub clip: Option<[f64; 4]>,
+    /// Drawn under the webview: the box the frame fits in (the host's content box, from the
+    /// top left of the page) and its corner radius, and the page's backgrounds behind it.
+    #[serde(default)]
+    pub frame: Option<[f64; 4]>,
+    #[serde(default)]
+    pub frame_radius: f64,
+    #[serde(default)]
+    pub fills: Vec<PreviewFill>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -64,8 +96,11 @@ pub struct PreviewStatus {
     pub visible: bool,
     pub occluded: bool,
     pub hit_mode: PreviewHitMode,
-    /// "native" (Swift child view) or "webview" (frames fetched with `preview_frame`).
+    /// "native" (Swift child view), "underlay" (drawn in the window under the page) or
+    /// "webview" (frames fetched with `preview_frame`).
     pub surface: String,
+    /// Drawn in the window: the frames per second drawn over the last second.
+    pub presented_fps: Option<f64>,
     pub diagnostics: Vec<String>,
 }
 
@@ -186,6 +221,32 @@ pub fn encode_webview_frame(frame: &crate::media::VideoFrame) -> Result<Vec<u8>,
 }
 
 impl PreviewViewport {
+    /// Where the presenter draws, in window pixels.
+    pub fn placement(&self) -> Placement {
+        let scale = self.backing_scale;
+        let px =
+            |[x, y, w, h]: [f64; 4]| [x * scale, y * scale, w * scale, h * scale].map(|v| v as f32);
+        Placement {
+            fills: self
+                .fills
+                .iter()
+                .map(|fill| Fill {
+                    rect: px(fill.rect),
+                    color: fill.color.map(|c| c as f32),
+                    radius: (fill.radius * scale) as f32,
+                })
+                .collect(),
+            frame: px(self
+                .frame
+                .unwrap_or([self.x, self.y, self.width, self.height])),
+            frame_radius: (self.frame_radius * scale) as f32,
+            // The clip is from the host's top left.
+            clip: self
+                .clip
+                .map(|[cx, cy, cw, ch]| px([self.x + cx, self.y + cy, cw, ch])),
+        }
+    }
+
     pub fn physical(&self) -> Result<PhysicalRect, String> {
         validate_viewport(self)?;
         let scale = self.backing_scale;
@@ -223,6 +284,26 @@ pub fn validate_viewport(viewport: &PreviewViewport) -> Result<(), String> {
     {
         return Err("Invalid preview viewport".into());
     }
+    let finite_box = |b: &[f64; 4]| {
+        b.iter()
+            .all(|v| v.is_finite() && v.abs() <= MAX_VIEWPORT * 2.0)
+            && b[2] >= 0.0
+            && b[3] >= 0.0
+    };
+    if viewport.fills.len() > MAX_FILLS
+        || viewport.fills.iter().any(|fill| {
+            !finite_box(&fill.rect)
+                || !fill.radius.is_finite()
+                || fill.color.iter().any(|c| !c.is_finite())
+        })
+        || viewport
+            .frame
+            .as_ref()
+            .is_some_and(|frame| !finite_box(frame))
+        || !viewport.frame_radius.is_finite()
+    {
+        return Err("Invalid preview viewport".into());
+    }
     Ok(())
 }
 
@@ -244,6 +325,8 @@ pub struct PreviewOwner {
     viewport: Option<PreviewViewport>,
     attached: bool,
     native: Option<std::ptr::NonNull<std::ffi::c_void>>,
+    /// The window the playback engine draws the preview into, under the webview.
+    underlay: Option<WindowTarget>,
     presented_kind: String,
     copies: u64,
     presented_bytes: u64,
@@ -252,6 +335,7 @@ pub struct PreviewOwner {
     /// Latest webview frame: an 8-byte little-endian sequence number, then JPEG bytes.
     web_frame: Option<Arc<Vec<u8>>>,
     web_seq: u64,
+    presented_fps: Option<f64>,
 }
 
 impl PreviewOwner {
@@ -262,6 +346,7 @@ impl PreviewOwner {
             viewport: None,
             attached: false,
             native: None,
+            underlay: None,
             presented_kind: "none".into(),
             copies: 0,
             presented_bytes: 0,
@@ -269,6 +354,7 @@ impl PreviewOwner {
             supported: true,
             web_frame: None,
             web_seq: 0,
+            presented_fps: None,
         }
     }
 
@@ -278,7 +364,9 @@ impl PreviewOwner {
             window_label: self.window_label.clone(),
             generation: self.generation,
             layout_revision: self.viewport.as_ref().map(|v| v.revision).unwrap_or(0),
-            arrangement: if self.attached && self.native.is_none() {
+            arrangement: if self.underlay.is_some() {
+                UNDERLAY_ARRANGEMENT.into()
+            } else if self.attached && self.native.is_none() {
                 WEBVIEW_ARRANGEMENT.into()
             } else {
                 ARRANGEMENT.into()
@@ -299,9 +387,12 @@ impl PreviewOwner {
             hit_mode: self.hit_mode,
             surface: if self.native.is_some() {
                 "native".into()
+            } else if self.underlay.is_some() {
+                "underlay".into()
             } else {
                 "webview".into()
             },
+            presented_fps: self.presented_fps.filter(|_| self.underlay.is_some()),
             diagnostics: Vec::new(),
         }
     }
@@ -310,7 +401,7 @@ impl PreviewOwner {
         &mut self,
         window_label: String,
         hit_mode: PreviewHitMode,
-        native_window: Option<*mut std::ffi::c_void>,
+        target: Option<PreviewTarget>,
     ) -> Result<PreviewStatus, String> {
         if !self.supported {
             return Err("Native preview is not implemented on this platform".into());
@@ -322,15 +413,42 @@ impl PreviewOwner {
         self.presented_kind = "none".into();
         self.copies = 0;
         self.presented_bytes = 0;
-        if let Some(window) = native_window {
-            let handle = super::native::attach(window, self.generation)?;
-            super::native::set_hit_mode(handle, hit_mode)?;
-            self.native = Some(handle);
-            self.attached = true;
-        } else {
-            self.attached = true;
+        match target {
+            Some(PreviewTarget::NativeView(window)) => {
+                let handle = super::native::attach(window, self.generation)?;
+                super::native::set_hit_mode(handle, hit_mode)?;
+                self.native = Some(handle);
+            }
+            Some(PreviewTarget::Underlay(window)) => self.underlay = Some(window),
+            None => {}
         }
+        self.attached = true;
         Ok(self.status())
+    }
+
+    /// The window to draw the preview into and where, while the preview is drawn under the
+    /// webview and laid out.
+    pub fn underlay(&self) -> Option<(WindowTarget, Placement)> {
+        let window = self.underlay.clone()?;
+        let viewport = self.viewport.as_ref()?;
+        Some((window, viewport.placement()))
+    }
+
+    /// Drawing into the window failed: frames go to the webview from now on. The page learns
+    /// it from the status (the `surface` changes).
+    pub fn fall_back_to_webview(&mut self) {
+        self.underlay = None;
+    }
+
+    /// Records a frame the playback engine drew into the window itself, with the rate drawn
+    /// when a new one was measured.
+    pub fn mark_underlay_presented(&mut self, fps: Option<f64>) {
+        self.presented_kind = "project".into();
+        self.copies += 1;
+        self.presented_bytes = 0;
+        if fps.is_some() {
+            self.presented_fps = fps;
+        }
     }
 
     pub fn layout(&mut self, viewport: PreviewViewport) -> Result<PreviewStatus, String> {
@@ -360,6 +478,9 @@ impl PreviewOwner {
         self.ensure_generation(generation)?;
         if let Some(handle) = self.native {
             super::native::present_fixed(handle, r, g, b, self.generation)?;
+        } else if self.underlay.is_some() {
+            // The playback engine owns the window's swapchain; a failed preview keeps its
+            // last frame rather than a colour.
         } else {
             let to_u8 = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
             let frame = crate::media::VideoFrame::solid(16, 16, to_u8(b), to_u8(g), to_u8(r), 0)?;
@@ -465,6 +586,7 @@ impl PreviewOwner {
         if let Some(handle) = self.native.take() {
             super::native::detach(handle);
         }
+        self.underlay = None;
         self.attached = false;
         self.window_label = None;
         self.viewport = None;
@@ -537,7 +659,37 @@ mod tests {
             revision,
             generation: 0,
             clip: None,
+            frame: None,
+            frame_radius: 0.0,
+            fills: vec![],
         }
+    }
+
+    #[test]
+    fn placements_are_in_window_pixels() {
+        let mut v = viewport(1);
+        v.clip = Some([0.0, 10.0, 320.0, 100.0]);
+        v.frame = Some([11.0, 21.0, 318.0, 178.0]);
+        v.frame_radius = 6.0;
+        v.fills = vec![PreviewFill {
+            rect: [0.0, 0.0, 400.0, 300.0],
+            color: [0.1, 0.2, 0.3, 1.0],
+            radius: 12.0,
+        }];
+        let p = v.placement();
+        assert_eq!(p.frame, [22.0, 42.0, 636.0, 356.0]);
+        assert_eq!(p.frame_radius, 12.0);
+        // The clip is from the host's corner (10, 20).
+        assert_eq!(p.clip, Some([20.0, 60.0, 640.0, 200.0]));
+        assert_eq!(p.fills[0].rect, [0.0, 0.0, 800.0, 600.0]);
+        assert_eq!(p.fills[0].radius, 24.0);
+        assert!(validate_viewport(&v).is_ok());
+        v.fills[0].color[0] = f64::NAN;
+        assert!(validate_viewport(&v).is_err());
+        let mut many = viewport(1);
+        many.fills = vec![v.fills[0].clone(); MAX_FILLS + 1];
+        many.fills.iter_mut().for_each(|f| f.color[0] = 0.0);
+        assert!(validate_viewport(&many).is_err());
     }
 
     #[test]
@@ -670,6 +822,9 @@ mod tests {
                 revision: 1,
                 generation: 0,
                 clip: None,
+                frame: None,
+                frame_radius: 0.0,
+                fills: vec![],
             })
             .unwrap();
         assert!(owner.hit_test(60.0, 60.0));

@@ -9,6 +9,7 @@ use crate::media::{
 };
 use crate::project::reader::{safe_path, SegmentSummary};
 use crate::project::revision::EditDocument;
+use crate::render::present::{Placement, WindowPresenter, WindowTarget};
 use crate::render::{Compositor, Scene};
 use crate::sequence::{Asset, Clip, Role};
 use native::NativeExport;
@@ -345,6 +346,15 @@ impl PictureJob {
     }
 }
 
+/// Why [`SceneEvaluator::present_at`] drew nothing.
+#[derive(Debug)]
+pub enum PresentError {
+    /// The frame could not be made (a source that will not decode, say).
+    Scene(String),
+    /// The window could not show it: the preview has to go back to the webview.
+    Window(String),
+}
+
 /// The video clips showing at one moment: the screen, the camera and the overlays.
 #[derive(Default)]
 struct Shown<'a> {
@@ -460,6 +470,76 @@ impl SceneEvaluator {
     }
 
     pub fn preview_at(&mut self, edited_us: u64) -> Result<VideoFrame, String> {
+        let scene = self.composed_scene(edited_us)?;
+        let started = std::time::Instant::now();
+        let mut frame = match self.compositor.as_mut() {
+            Some(compositor) if self.nv12_output => compositor.composite_nv12(&scene)?,
+            Some(compositor) => compositor.composite(&scene)?,
+            None => Compositor::composite_cpu(&scene)?,
+        };
+        crate::media::profile("composite", started);
+        frame.pts_us = edited_us;
+        Ok(frame)
+    }
+
+    /// Like [`SceneEvaluator::preview_at`], but draws the frame straight into the window of
+    /// `presenter` (made here on first use, and again if the compositor changed). Returns false
+    /// when the window had nothing to draw into.
+    pub fn present_at(
+        &mut self,
+        edited_us: u64,
+        presenter: &mut Option<WindowPresenter>,
+        window: &WindowTarget,
+        placement: &Placement,
+    ) -> Result<bool, PresentError> {
+        let scene = self
+            .composed_scene(edited_us)
+            .map_err(PresentError::Scene)?;
+        let started = std::time::Instant::now();
+        let presenter = self
+            .presenter_for(presenter, window)
+            .map_err(PresentError::Window)?;
+        let compositor = self.compositor.as_ref().ok_or(PresentError::Window(
+            "The window preview needs the GPU compositor".into(),
+        ))?;
+        let presented = compositor
+            .composite_present(&scene, presenter, placement)
+            .map_err(PresentError::Window)?;
+        crate::media::profile("composite and present", started);
+        Ok(presented)
+    }
+
+    /// Draws the last frame into the window again, for a preview that moved. Returns false
+    /// when there is no frame yet.
+    pub fn present_again(
+        &mut self,
+        presenter: &mut Option<WindowPresenter>,
+        window: &WindowTarget,
+        placement: &Placement,
+    ) -> Result<bool, String> {
+        let presenter = self.presenter_for(presenter, window)?;
+        let compositor = self.compositor.as_ref().ok_or("No GPU compositor")?;
+        compositor.present_last(presenter, placement)
+    }
+
+    fn presenter_for<'p>(
+        &self,
+        presenter: &'p mut Option<WindowPresenter>,
+        window: &WindowTarget,
+    ) -> Result<&'p mut WindowPresenter, String> {
+        let compositor = self
+            .compositor
+            .as_ref()
+            .ok_or("The window preview needs the GPU compositor")?;
+        if !presenter.as_ref().is_some_and(|p| compositor.owns(p)) {
+            *presenter = None;
+            *presenter = Some(compositor.window_presenter(window.clone())?);
+        }
+        Ok(presenter.as_mut().unwrap())
+    }
+
+    /// The scene at `edited_us`, with the static background marked for the GPU to keep.
+    fn composed_scene(&mut self, edited_us: u64) -> Result<Scene, String> {
         let started = std::time::Instant::now();
         let mut scene = self.scene_at(edited_us)?;
         crate::media::profile("scene (decode)", started);
@@ -482,15 +562,7 @@ impl SceneEvaluator {
                 layer.cache_key = Some(hasher.finish());
             }
         }
-        let started = std::time::Instant::now();
-        let mut frame = match self.compositor.as_mut() {
-            Some(compositor) if self.nv12_output => compositor.composite_nv12(&scene)?,
-            Some(compositor) => compositor.composite(&scene)?,
-            None => Compositor::composite_cpu(&scene)?,
-        };
-        crate::media::profile("composite", started);
-        frame.pts_us = edited_us;
-        Ok(frame)
+        Ok(scene)
     }
 
     /// What the video tracks show at `edited_us`, by role.

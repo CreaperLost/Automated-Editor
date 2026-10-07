@@ -509,16 +509,20 @@ mod tests {
     fn faster_playback_moves_the_clock_faster() {
         let mut owner = PlaybackOwner::open("h".into(), &document()).unwrap();
         assert!(owner.set_speed(3.0).is_err(), "only the offered speeds");
+        // Rates against the time each stretch really took: a busy machine oversleeps.
+        let started = std::time::Instant::now();
         owner.play().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(40));
-        let normal = owner.status().unwrap().position_us;
+        let normal = owner.status().unwrap().position_us as f64 / started.elapsed().as_secs_f64();
         let at = owner.set_speed(2.0).unwrap();
+        let sped_up = std::time::Instant::now();
         assert_eq!(at.speed, 2.0);
         std::thread::sleep(std::time::Duration::from_millis(40));
-        let fast = owner.status().unwrap().position_us - at.position_us;
+        let moved = owner.status().unwrap().position_us - at.position_us;
+        let fast = moved as f64 / sped_up.elapsed().as_secs_f64();
         assert!(
-            fast > normal * 3 / 2,
-            "2x moved {fast} us against {normal} at 1x"
+            fast > normal * 1.5,
+            "2x moved {fast:.0} us/s against {normal:.0} us/s at 1x"
         );
         // Pausing keeps the speed for the next play.
         owner.pause().unwrap();

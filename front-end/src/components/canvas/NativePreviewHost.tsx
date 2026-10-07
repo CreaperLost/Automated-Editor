@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../../stores/projectStore";
-import { api } from "../../lib/ipc";
+import { api, isTauriEnvironment } from "../../lib/ipc";
 import { PreviewHitMode, PreviewStatus } from "../../lib/types";
 import { usePreviewQualityStore } from "../../stores/previewQualityStore";
+import { restoreSeeThrough, seeThroughPath } from "./seeThrough";
 
 type Picture = ImageBitmap | HTMLImageElement;
 
@@ -134,9 +135,58 @@ export function NativePreviewHost({
   const [error, setError] = useState<string>();
   const webview = status?.attached === true && status.surface === "webview";
   const webviewGeneration = webview ? status.generation : undefined;
+  const underlay = status?.attached === true && status.surface === "underlay";
+  // Read by the layout effect, which outlives status changes.
+  const underlayRef = useRef(false);
+  const markDirtyRef = useRef<() => void>();
 
   // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
   useEngineFrames(canvasRef, webviewGeneration !== undefined, webviewGeneration);
+
+  // Drawn in the window under the page: make the page see-through over the preview (on the
+  // next layout), or paint it again when frames go back to the webview.
+  useEffect(() => {
+    underlayRef.current = underlay;
+    if (!underlay) restoreSeeThrough();
+    markDirtyRef.current?.();
+  }, [underlay]);
+  useEffect(() => restoreSeeThrough, []);
+
+  // Drawn in the window, the page sees no frames: the engine counts the rate drawn.
+  const setMeasuredFps = usePreviewQualityStore((s) => s.setMeasuredFps);
+  useEffect(() => {
+    if (!underlay) return;
+    const poll = window.setInterval(() => {
+      void api.previewStatus().then((next) => {
+        setMeasuredFps(next.presentedFps ? Math.round(next.presentedFps) : null);
+      }).catch(() => undefined);
+    }, 1000);
+    return () => {
+      window.clearInterval(poll);
+      setMeasuredFps(null);
+    };
+  }, [underlay, setMeasuredFps]);
+
+  // The engine went back to the webview (the window could not draw): it says so here.
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<PreviewStatus>("preview-status", (event) => {
+        setStatus((current) =>
+          current && current.generation === event.payload.generation ? event.payload : current,
+        );
+      }).then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      }),
+    );
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   // Tells the backend where the preview is on screen (and whether it can be seen). Measuring
   // the host and its ancestors forces layout, so it runs only when something may have moved:
@@ -169,8 +219,15 @@ export function NativePreviewHost({
       }
       const clip: [number, number, number, number] = [left - rect.left, top - rect.top, Math.max(0, right - left), Math.max(0, bottom - top)];
       const visible = !document.hidden && clip[2] > 0 && clip[3] > 0;
+      // Drawn in the window: the frame fits in the host's content box, inside its border.
+      const style = underlayRef.current ? getComputedStyle(el) : null;
+      const drawn = style ? {
+        frame: [rect.left + el.clientLeft, rect.top + el.clientTop, el.clientWidth, el.clientHeight] as [number, number, number, number],
+        frameRadius: Math.max(0, (parseFloat(style.borderTopLeftRadius) || 0) - el.clientLeft),
+        fills: seeThroughPath(el),
+      } : {};
       const viewport = { windowLabel, x: rect.left, y: rect.top, width: rect.width, height: rect.height,
-        backingScale: window.devicePixelRatio || 1, visible, occluded: !visible, generation, clip };
+        backingScale: window.devicePixelRatio || 1, visible, occluded: !visible, generation, clip, ...drawn };
       const key = JSON.stringify(viewport);
       if (key === lastGeometry) return;
       sending = true;
@@ -190,6 +247,7 @@ export function NativePreviewHost({
       dirty = true;
       schedule();
     };
+    markDirtyRef.current = markDirty;
     const resized = new ResizeObserver(markDirty);
     for (let el: HTMLElement | null = hostRef.current; el; el = el.parentElement) resized.observe(el);
     window.addEventListener("resize", markDirty);
@@ -207,6 +265,7 @@ export function NativePreviewHost({
     }).catch(err => { if (!cancelled) setError(String(err)); });
     return () => {
       cancelled = true;
+      markDirtyRef.current = undefined;
       cancelAnimationFrame(animation);
       resized.disconnect();
       window.removeEventListener("resize", markDirty);

@@ -170,7 +170,6 @@ fn query_buckets(
     let width = query_end.saturating_sub(query_start);
     let count = bucket_count.min(width as usize);
     let mut buckets = Vec::with_capacity(count);
-    let mut ranges = Vec::with_capacity(count);
     for i in 0..count {
         let a = query_start + (width as u128 * i as u128 / count as u128) as u64;
         let b = query_start + (width as u128 * (i + 1) as u128 / count as u128) as u64;
@@ -181,9 +180,8 @@ fn query_buckets(
             rms: 0.0,
             gap: true,
         });
-        ranges.push(edited_range_to_source(&mapper, a, b));
     }
-    let visible = edited_range_to_source(&mapper, query_start, query_end);
+    let spans = bucket_source_spans(&mapper, &buckets);
     let mut energies = vec![0.0f64; count];
     let mut weights = vec![0u64; count];
     // The visible segments' summaries, read or built side by side: a long recording is many
@@ -192,11 +190,7 @@ fn query_buckets(
     let wanted: Vec<&SegmentSummary> = ctx
         .segments
         .iter()
-        .filter(|segment| {
-            visible
-                .iter()
-                .any(|(a, b)| *a < segment.end_us && segment.start_us < *b)
-        })
+        .filter(|segment| !overlapping_spans(&spans, segment.start_us, segment.end_us).is_empty())
         .collect();
     let built = build_segments(ctx, &wanted, cancelled);
     for (segment, result) in wanted.iter().copied().zip(built) {
@@ -209,19 +203,17 @@ fn query_buckets(
                     sample_rate = cache.sample_rate;
                     channels = cache.channels;
                 }
-                for (i, spans) in ranges.iter().enumerate() {
-                    for &(a, b) in spans {
-                        if b <= cache.source_start_us || a >= cache.source_end_us {
-                            continue;
-                        }
-                        if let Some((peak, rms, weight)) =
-                            lookup_source_range(std::slice::from_ref(&cache), a, b)
-                        {
-                            buckets[i].gap = false;
-                            buckets[i].peak = buckets[i].peak.max(peak);
-                            energies[i] += (rms as f64).powi(2) * weight as f64;
-                            weights[i] += weight;
-                        }
+                for span in overlapping_spans(&spans, cache.source_start_us, cache.source_end_us) {
+                    if let Some((peak, rms, weight)) = lookup_source_range(
+                        std::slice::from_ref(&cache),
+                        span.start_us,
+                        span.end_us,
+                    ) {
+                        let i = span.bucket;
+                        buckets[i].gap = false;
+                        buckets[i].peak = buckets[i].peak.max(peak);
+                        energies[i] += (rms as f64).powi(2) * weight as f64;
+                        weights[i] += weight;
                     }
                 }
             }
@@ -265,9 +257,72 @@ fn query_buckets(
     })
 }
 
-/// The source ranges playing over `[start_us, end_us)` of the clock, gaps left out.
-fn edited_range_to_source(mapper: &TimelineMapper, start_us: u64, end_us: u64) -> Vec<(u64, u64)> {
-    mapper.edited_range_to_source(start_us, end_us)
+/// The part of an output bucket belonging to one retained recording interval.
+#[derive(Debug, PartialEq, Eq)]
+struct BucketSourceSpan {
+    bucket: usize,
+    start_us: u64,
+    end_us: u64,
+}
+
+/// Walk the edited buckets and intervals together, then index by source time. Reordered
+/// clips can make source time run backwards; the mapper guarantees that recording ranges
+/// do not overlap. Both span starts and ends are therefore sorted for binary searches.
+/// This also avoids mapping each of up to 200,000 bars through the entire clock separately.
+fn bucket_source_spans(
+    mapper: &TimelineMapper,
+    buckets: &[WaveformBucket],
+) -> Vec<BucketSourceSpan> {
+    let mut spans = Vec::with_capacity(buckets.len());
+    let mut cursor = 0;
+    let mut first = 0;
+    for interval in mapper.intervals() {
+        let end = cursor + interval.duration_us();
+        while first < buckets.len() && buckets[first].end_us <= cursor {
+            first += 1;
+        }
+        if first == buckets.len() {
+            break;
+        }
+        if interval.is_recording() {
+            for (bucket, bar) in buckets.iter().enumerate().skip(first) {
+                if bar.start_us >= end {
+                    break;
+                }
+                let a = bar.start_us.max(cursor);
+                let b = bar.end_us.min(end);
+                if a < b {
+                    spans.push(BucketSourceSpan {
+                        bucket,
+                        start_us: interval.start_us + (a - cursor),
+                        end_us: interval.start_us + (b - cursor),
+                    });
+                }
+            }
+        }
+        cursor = end;
+    }
+    if spans
+        .windows(2)
+        .any(|pair| pair[0].start_us > pair[1].start_us)
+    {
+        spans.sort_unstable_by_key(|span| span.start_us);
+    }
+    spans
+}
+
+/// Only the bars that touch this file, rather than every bar for every recording segment.
+fn overlapping_spans(
+    spans: &[BucketSourceSpan],
+    start_us: u64,
+    end_us: u64,
+) -> &[BucketSourceSpan] {
+    if start_us >= end_us {
+        return &[];
+    }
+    let first = spans.partition_point(|span| span.end_us <= start_us);
+    let count = spans[first..].partition_point(|span| span.start_us < end_us);
+    &spans[first..first + count]
 }
 
 fn lookup_source_range(
@@ -513,6 +568,64 @@ fn cache_path(
     safe_path(root, &relative)
 }
 
+/// Fingerprints are small; keep enough for long recordings and several sounds, evicting
+/// only the least recently used file. Clearing all 256 entries made every warm query of a
+/// larger recording read all its PCM again. One entry per path also bounds stale versions.
+const MAX_FINGERPRINTS: usize = 4096;
+
+struct Fingerprint {
+    file_len: u64,
+    modified: std::time::SystemTime,
+    hash: u64,
+    used: u64,
+}
+
+#[derive(Default)]
+struct FingerprintCache {
+    entries: std::collections::HashMap<PathBuf, Fingerprint>,
+    tick: u64,
+}
+
+impl FingerprintCache {
+    fn get(
+        &mut self,
+        path: &Path,
+        file_len: u64,
+        modified: Option<std::time::SystemTime>,
+    ) -> Option<u64> {
+        let entry = self.entries.get_mut(path)?;
+        if entry.file_len != file_len || Some(entry.modified) != modified {
+            return None;
+        }
+        self.tick += 1;
+        entry.used = self.tick;
+        Some(entry.hash)
+    }
+
+    fn insert(&mut self, path: &Path, file_len: u64, modified: std::time::SystemTime, hash: u64) {
+        if self.entries.len() >= MAX_FINGERPRINTS && !self.entries.contains_key(path) {
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.used)
+                .map(|(p, _)| p.clone())
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.tick += 1;
+        self.entries.insert(
+            path.to_owned(),
+            Fingerprint {
+                file_len,
+                modified,
+                hash,
+                used: self.tick,
+            },
+        );
+    }
+}
+
 /// A hash of the whole file, so a cache entry is used only for the bytes it was built from.
 /// Remembered while the file's size and modification time stay the same: a cached waveform of
 /// a long recording then loads without reading the recording again.
@@ -523,13 +636,15 @@ fn wav_fingerprint(
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<u64, String> {
     use std::sync::{Mutex, OnceLock};
-    type Key = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
-    static KNOWN: OnceLock<Mutex<std::collections::HashMap<Key, u64>>> = OnceLock::new();
+    static KNOWN: OnceLock<Mutex<FingerprintCache>> = OnceLock::new();
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    let key: Key = (path.to_path_buf(), file_len, modified);
     let known = KNOWN.get_or_init(Default::default);
-    if let Some(hash) = known.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return Ok(*hash);
+    if let Some(hash) = known
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(path, file_len, modified)
+    {
+        return Ok(hash);
     }
     let hash = hash_wav(path, info, file_len, cancelled)?;
     // A file written within the last moments may still change at the same size and time.
@@ -538,10 +653,7 @@ fn wav_fingerprint(
         .is_some_and(|age| age > std::time::Duration::from_secs(2));
     if settled {
         let mut known = known.lock().unwrap_or_else(|e| e.into_inner());
-        if known.len() >= 256 {
-            known.clear();
-        }
-        known.insert(key, hash);
+        known.insert(path, file_len, modified.unwrap(), hash);
     }
     Ok(hash)
 }
@@ -771,6 +883,240 @@ mod tests {
     use crate::project::JournalRecord;
     use std::sync::atomic::Ordering;
     use tempfile::tempdir;
+
+    #[test]
+    fn indexed_spans_match_clock_ranges_across_cuts_reordering_and_media() {
+        let intervals = [9, 0, 7, 2, 11, 4, 1, 10, 5, 8, 3, 6]
+            .into_iter()
+            .map(|i| {
+                SourceInterval::new(format!("{i}"), i * 100, i * 100 + 31 + i)
+                    .with_media((i % 4 == 0).then(|| "image".into()))
+            })
+            .collect();
+        let mapper = TimelineMapper::try_new(intervals).unwrap();
+        for (from, to) in [(0, 438), (13, 117), (64, 450), (500, 550)] {
+            for count in [1, 3, 19, 64] {
+                let buckets: Vec<_> = (0..count)
+                    .map(|i| WaveformBucket {
+                        start_us: from + (to - from) * i / count,
+                        end_us: from + (to - from) * (i + 1) / count,
+                        peak: 0.0,
+                        rms: 0.0,
+                        gap: true,
+                    })
+                    .collect();
+                let spans = bucket_source_spans(&mapper, &buckets);
+                let mut expected: Vec<_> = buckets
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(bucket, bar)| {
+                        mapper
+                            .edited_range_to_source(bar.start_us, bar.end_us)
+                            .into_iter()
+                            .map(move |(start_us, end_us)| BucketSourceSpan {
+                                bucket,
+                                start_us,
+                                end_us,
+                            })
+                    })
+                    .collect();
+                expected.sort_unstable_by_key(|s| s.start_us);
+                assert_eq!(spans, expected);
+                for start in (0..1200).step_by(17) {
+                    for width in [0, 1, 13, 211] {
+                        let got = overlapping_spans(&spans, start, start + width);
+                        let want: Vec<_> = expected
+                            .iter()
+                            .filter(|s| width > 0 && s.end_us > start && s.start_us < start + width)
+                            .collect();
+                        assert_eq!(got.iter().collect::<Vec<_>>(), want);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_waveforms_preserve_peaks_rms_and_gaps_for_reordered_audio() {
+        let (_dir, root, _) = audio_bundle(&vec![8192; 2400], 1, 0, 48_000);
+        let size = fs::metadata(root.join("media/mic/000001.wav"))
+            .unwrap()
+            .len();
+        let mut ctx = ctx_from(root, 0, 50_000, true, size);
+        for i in 1..4 {
+            let mut segment = ctx.segments[0].clone();
+            segment.start_us = i * 50_000;
+            segment.end_us = segment.start_us + 50_000;
+            segment.relative_path = format!("media/mic/{:06}.wav", i + 1);
+            segment.available = i != 1;
+            if segment.available {
+                // One file ends before the journal says; the final file varies within a bar.
+                let values: Vec<_> = if i == 2 {
+                    vec![16384; 1200]
+                } else {
+                    (0..2400)
+                        .map(|j| if j < 1200 { 4096 } else { 24576 })
+                        .collect()
+                };
+                let wav = generate_pcm16_wav(48_000, 1, &values);
+                segment.size_bytes = wav.len() as u64;
+                fs::write(ctx.root.join(&segment.relative_path), wav).unwrap();
+            }
+            ctx.segments.push(segment);
+        }
+        ctx.retained = vec![
+            RetainedInterval::recording(160_001, 199_999),
+            RetainedInterval::recording(0, 35_001),
+            RetainedInterval {
+                start_us: 0,
+                end_us: 15_013,
+                media: Some("image".into()),
+            },
+            RetainedInterval::recording(90_007, 145_999),
+            RetainedInterval::recording(40_003, 75_003),
+        ];
+        ctx.edited_duration_us = ctx.retained.iter().map(|i| i.end_us - i.start_us).sum();
+        let mapper = TimelineMapper::try_new(
+            ctx.retained
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    SourceInterval::new(format!("{i}"), r.start_us, r.end_us)
+                        .with_media(r.media.clone())
+                })
+                .collect(),
+        )
+        .unwrap();
+        let caches: Vec<_> = ctx
+            .segments
+            .iter()
+            .filter_map(|s| load_or_build_segment(&ctx, s, &|| false).unwrap())
+            .collect();
+        for (start, end, count) in [
+            (0, ctx.edited_duration_us, 1),
+            (0, ctx.edited_duration_us, 37),
+            (7777, 133337, 17),
+            (ctx.edited_duration_us, ctx.edited_duration_us + 1, 5),
+        ] {
+            let page = query_waveform(&ctx, start, end, count, &|| false).unwrap();
+            for bucket in page.buckets {
+                // The former exhaustive query: every segment visits every clock span of each bar.
+                let ranges = mapper.edited_range_to_source(bucket.start_us, bucket.end_us);
+                let (mut peak, mut energy, mut weight) = (0.0f32, 0.0f64, 0u64);
+                for cache in &caches {
+                    for &(a, b) in &ranges {
+                        if let Some((p, r, w)) =
+                            lookup_source_range(std::slice::from_ref(cache), a, b)
+                        {
+                            peak = peak.max(p);
+                            energy += (r as f64).powi(2) * w as f64;
+                            weight += w;
+                        }
+                    }
+                }
+                let rms = if weight == 0 {
+                    0.0
+                } else {
+                    (energy / weight as f64).sqrt() as f32
+                };
+                assert_eq!(bucket.gap, weight == 0);
+                assert_eq!(bucket.peak, peak);
+                assert!(
+                    (bucket.rms - rms).abs() < 1e-7,
+                    "{}: {} != {rms}",
+                    bucket.start_us,
+                    bucket.rms
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fingerprint_eviction_keeps_recent_files_and_checks_metadata() {
+        let mut cache = FingerprintCache::default();
+        let modified = std::time::SystemTime::UNIX_EPOCH;
+        let paths: Vec<_> = (0..=MAX_FINGERPRINTS)
+            .map(|i| PathBuf::from(format!("{i}.wav")))
+            .collect();
+        for (i, path) in paths[..MAX_FINGERPRINTS].iter().enumerate() {
+            cache.insert(path, 100, modified, i as u64);
+        }
+        assert_eq!(cache.get(&paths[0], 100, Some(modified)), Some(0));
+        cache.insert(&paths[MAX_FINGERPRINTS], 100, modified, 9999);
+        assert_eq!(cache.entries.len(), MAX_FINGERPRINTS);
+        assert_eq!(
+            cache.get(&paths[1], 100, Some(modified)),
+            None,
+            "only the oldest file goes"
+        );
+        for (i, path) in paths[..MAX_FINGERPRINTS]
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != 1)
+        {
+            assert_eq!(cache.get(path, 100, Some(modified)), Some(i as u64));
+        }
+        assert_eq!(cache.get(&paths[0], 101, Some(modified)), None);
+        assert_eq!(cache.get(&paths[0], 100, None), None);
+        let newer = modified + std::time::Duration::from_secs(1);
+        assert_eq!(cache.get(&paths[0], 100, Some(newer)), None);
+        cache.insert(&paths[0], 101, newer, 42);
+        assert_eq!(
+            cache.entries.len(),
+            MAX_FINGERPRINTS,
+            "replace a path's old version"
+        );
+        assert_eq!(cache.get(&paths[0], 100, Some(modified)), None);
+        assert_eq!(cache.get(&paths[0], 101, Some(newer)), Some(42));
+    }
+
+    #[test]
+    fn settled_fingerprints_hit_but_recent_same_size_writes_are_rehashed() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("audio.wav");
+        let constant = generate_pcm16_wav(48_000, 1, &vec![16384; 480]);
+        fs::write(&path, &constant).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let info = crate::project::pcm::parse_wav(&path).unwrap();
+        let hash = wav_fingerprint(&path, &info, constant.len() as u64, &|| false).unwrap();
+        assert_eq!(
+            wav_fingerprint(&path, &info, constant.len() as u64, &|| panic!(
+                "cached PCM must not be read"
+            ))
+            .unwrap(),
+            hash
+        );
+        let zeros = generate_pcm16_wav(48_000, 1, &vec![0; 480]);
+        assert_eq!(zeros.len(), constant.len());
+        let recent = std::time::SystemTime::now();
+        fs::write(&path, &zeros).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recent)
+            .unwrap();
+        let changed = wav_fingerprint(&path, &info, zeros.len() as u64, &|| false).unwrap();
+        assert_ne!(changed, hash);
+        fs::write(&path, &constant).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recent)
+            .unwrap();
+        assert_eq!(
+            wav_fingerprint(&path, &info, constant.len() as u64, &|| false).unwrap(),
+            hash,
+            "recent files must be rehashed even at the same size and modification time"
+        );
+    }
 
     fn audio_bundle(
         samples: &[i16],
