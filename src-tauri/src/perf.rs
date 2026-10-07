@@ -166,6 +166,38 @@ fn seeks(root: &Path, document: &crate::project::revision::EditDocument, label: 
     );
 }
 
+/// Going back over what was just shown: frame steps (←), one-second jumps (Shift+←) and a
+/// backward drag of the playhead, each after two seconds of playback from a fresh start.
+fn steps_back(root: &Path, document: &crate::project::revision::EditDocument, label: &str) {
+    let quality = PreviewQuality::default_for(true);
+    let frame = 1_000_000 / 30;
+    let duration = document.duration_us();
+    let scenarios: [(&str, u64, u64, usize); 3] = [
+        ("frame steps back", 20_000_000, frame, 45),
+        ("1s jumps back", 60_000_000, 1_000_000, 5),
+        ("drag back", 100_000_000, 100_000, 30),
+    ];
+    for (what, from, step, count) in scenarios {
+        let from = from.min(duration.saturating_sub(6_000_000));
+        crate::media::ffmpeg::release_decoders();
+        let (mut evaluator, _) = rebuild(root, document, None);
+        for i in 0..60 {
+            evaluator
+                .preview_at(quality.frame_time(from + i * frame))
+                .unwrap();
+        }
+        let mut at = from + 59 * frame;
+        let mut times = Vec::new();
+        for _ in 0..count {
+            at = at.saturating_sub(step);
+            let started = Instant::now();
+            evaluator.preview_at(quality.frame_time(at)).unwrap();
+            times.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("PERF {}", Stats(times).line(&format!("{what} {label}")));
+    }
+}
+
 fn mix(root: &Path, document: &crate::project::revision::EditDocument, label: &str) {
     let mixer = AudioMixer::new(root, document).unwrap();
     let started = Instant::now();
@@ -192,6 +224,8 @@ fn jump_cut(state: &AppState, handle: &str, every_us: u64, cut_us: u64) {
     let cuts: Vec<_> = (1..)
         .map(|i| i * every_us)
         .take_while(|at| at + cut_us < duration)
+        // One edit takes so many; long recordings get cuts over their first part only.
+        .take(crate::project::revision::MAX_CUTS_PER_REVISION)
         .map(|at| commands::EditCut {
             start_us: at,
             end_us: at + cut_us,
@@ -250,6 +284,7 @@ fn perf_preview() {
     );
     play(&root, &straight, "straight");
     seeks(&root, &straight, "straight");
+    steps_back(&root, &straight, "straight");
     mix(&root, &straight, "straight");
     edits(&state, &handle, "straight");
 
@@ -265,8 +300,25 @@ fn perf_preview() {
     );
     play(&root, &cut, "jump cuts");
     seeks(&root, &cut, "jump cuts");
+    steps_back(&root, &cut, "jump cuts");
     mix(&root, &cut, "jump cuts");
     edits(&state, &handle, "jump cuts");
+}
+
+/// Only the steps back of [`perf_preview`], straight and with jump cuts: quick to repeat.
+#[test]
+#[ignore]
+fn perf_steps_back() {
+    let Some(dir) = probe_dir() else { return };
+    let work = tempfile::tempdir().unwrap();
+    let (state, handle, root) = opened(work.path(), &dir);
+    if let Some(settle) = std::env::var_os("AERO_PERF_SETTLE") {
+        let seconds: u64 = settle.to_string_lossy().parse().unwrap_or(15);
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+    }
+    steps_back(&root, &document(&state), "straight");
+    jump_cut(&state, &handle, 1_200_000, 250_000);
+    steps_back(&root, &document(&state), "jump cuts");
 }
 
 #[cfg(windows)]

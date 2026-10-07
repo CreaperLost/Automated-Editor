@@ -5,6 +5,7 @@ use super::{
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -45,6 +46,18 @@ const TAIL_SEEK_US: u64 = 1_000_000;
 /// caller composites. Bounded in bytes: large frames get fewer slots.
 const READ_AHEAD_BYTES: usize = 32 << 20;
 const MAX_READ_AHEAD_FRAMES: usize = 3;
+/// Frames a preview decoder keeps behind its position, in bytes (about a second at 720p).
+/// Stepping or scrubbing back a little reads them instead of starting a new FFmpeg process,
+/// which costs 130-180 ms on a 1080p recording.
+const HISTORY_BYTES: usize = 48 << 20;
+/// Only the decoders used most recently keep their history.
+const HISTORY_STREAMS: usize = 4;
+/// A request at most this far behind the last frame served from the same file is a small
+/// step back (frame steps, a slow drag): the decoder started for it begins [`BACK_LEAD_US`]
+/// earlier, so the next steps are in its history. Bigger jumps would pay for reading that
+/// second and step past it anyway, so their decoders start where they are asked to.
+const BACK_STEP_US: u64 = 500_000;
+const BACK_LEAD_US: u64 = 1_100_000;
 const AUDIO_BITRATE: &str = "192k";
 
 fn exe_name(base: &str) -> String {
@@ -698,6 +711,10 @@ struct FrameStream {
     /// The frame at `next_index - 1`, if any has been read. Shared with the frames handed out,
     /// so handing one out copies nothing.
     last: Option<crate::media::PixelBuffer>,
+    /// The frames read before `last`, oldest first: the newest is `next_index - 2`.
+    history: VecDeque<crate::media::PixelBuffer>,
+    /// Frames `history` may hold; none for exports, which never read backwards.
+    history_cap: usize,
     eof: bool,
 }
 
@@ -754,6 +771,7 @@ impl FrameStream {
             width as usize * height as usize * 4
         };
         let (frames, recycle) = spawn_frame_reader(stdout, frame_len)?;
+        let history_cap = Self::history_frames(source, limit) as usize;
         Ok(Self {
             path: path.to_path_buf(),
             limit,
@@ -769,8 +787,87 @@ impl FrameStream {
             start_us,
             next_index: 0,
             last: None,
+            history: VecDeque::new(),
+            history_cap,
             eof: false,
         })
+    }
+
+    /// Frames a preview decoder of `source` at `limit` keeps behind its position.
+    fn history_frames(source: &VideoInfo, limit: DecodeLimit) -> u64 {
+        if !limit.interactive {
+            return 0;
+        }
+        let info = limit.apply(source);
+        let frame_len = info.width as usize * info.height as usize * if limit.yuv { 3 } else { 8 };
+        // In half bytes, so NV12's 1.5 bytes a pixel stays whole.
+        (HISTORY_BYTES * 2 / frame_len.max(1)) as u64
+    }
+
+    /// Where to start a decoder for a step back to `time_us`: [`BACK_LEAD_US`] earlier, rounded
+    /// up to a whole number of frames (so `time_us` is still a frame of its own), but no
+    /// earlier than the file's start or than its history can hold.
+    fn back_start(source: &VideoInfo, limit: DecodeLimit, time_us: u64) -> u64 {
+        let (num, den) = limit.apply(source).rate;
+        let (num, den) = (num as u128, den as u128 * 1_000_000);
+        let wanted = (BACK_LEAD_US as u128 * num).div_ceil(den) as u64;
+        let room = (time_us as u128 * num / den) as u64;
+        let fit = Self::history_frames(source, limit).saturating_sub(1);
+        let frames = wanted.min(room).min(fit);
+        time_us - (frames as u128 * den / num) as u64
+    }
+
+    /// Index of the oldest frame still held (in `history`, else `last`).
+    fn oldest_index(&self) -> Option<u64> {
+        self.next_index
+            .checked_sub(1 + self.history.len() as u64)
+            .filter(|_| self.last.is_some())
+    }
+
+    /// Gives a frame nobody else holds back to the reader to fill again.
+    fn recycle_buffer(&self, spent: crate::media::PixelBuffer) {
+        if spent.is_unique() {
+            let _ = self.recycle.try_send(spent.into_vec());
+        }
+    }
+
+    fn remember(&mut self, frame: crate::media::PixelBuffer) {
+        if self.history_cap == 0 {
+            return self.recycle_buffer(frame);
+        }
+        self.history.push_back(frame);
+        while self.history.len() > self.history_cap {
+            if let Some(oldest) = self.history.pop_front() {
+                self.recycle_buffer(oldest);
+            }
+        }
+    }
+
+    fn clear_history(&mut self) {
+        while let Some(frame) = self.history.pop_front() {
+            self.recycle_buffer(frame);
+        }
+    }
+
+    fn video_frame(&self, index: u64, data: crate::media::PixelBuffer) -> VideoFrame {
+        let (stride, format) = if self.limit.yuv {
+            (self.width, PixelFormat::Nv12)
+        } else {
+            (self.width * 4, PixelFormat::Bgra8888)
+        };
+        VideoFrame {
+            pts_us: self.time_of(index),
+            width: self.width,
+            height: self.height,
+            stride,
+            format,
+            color: if self.limit.yuv {
+                ColorInfo::rec709_limited()
+            } else {
+                ColorInfo::rec709_full()
+            },
+            data,
+        }
     }
 
     fn time_of(&self, index: u64) -> u64 {
@@ -794,7 +891,7 @@ impl FrameStream {
         let target = self.index_at(time_us);
         if let Some(current) = self.next_index.checked_sub(1) {
             if target < current {
-                return false;
+                return self.oldest_index().is_some_and(|oldest| oldest <= target);
             }
             if target == current || self.eof {
                 // At the end of the file every later time shows the last frame.
@@ -823,11 +920,8 @@ impl FrameStream {
         let piped = self.frames.recv().unwrap_or(Piped::End { partial: false });
         match piped {
             Piped::Frame(buffer) => {
-                // A buffer nobody holds any more goes back to the reader to fill again.
-                if let Some(spent) = self.last.replace(buffer.into()) {
-                    if spent.is_unique() {
-                        let _ = self.recycle.try_send(spent.into_vec());
-                    }
+                if let Some(previous) = self.last.replace(buffer.into()) {
+                    self.remember(previous);
                 }
                 self.next_index += 1;
                 Ok(true)
@@ -851,6 +945,19 @@ impl FrameStream {
 
     fn frame_at(&mut self, time_us: u64) -> Result<VideoFrame, String> {
         let target = self.index_at(time_us);
+        if let Some(current) = self.next_index.checked_sub(1) {
+            if target < current {
+                // A step back: the frame is in the history, or nowhere in this decoder.
+                let back = (current - target) as usize;
+                let data = self
+                    .history
+                    .len()
+                    .checked_sub(back)
+                    .and_then(|i| self.history.get(i).cloned())
+                    .ok_or_else(|| format!("No video frame at {}us", time_us))?;
+                return Ok(self.video_frame(target, data));
+            }
+        }
         while self.next_index <= target {
             if !self.read_next()? {
                 break;
@@ -860,24 +967,7 @@ impl FrameStream {
             .last
             .clone()
             .ok_or_else(|| format!("No video frame at {}us", time_us))?;
-        let (stride, format) = if self.limit.yuv {
-            (self.width, PixelFormat::Nv12)
-        } else {
-            (self.width * 4, PixelFormat::Bgra8888)
-        };
-        Ok(VideoFrame {
-            pts_us: self.time_of(self.next_index.saturating_sub(1)),
-            width: self.width,
-            height: self.height,
-            stride,
-            format,
-            color: if self.limit.yuv {
-                ColorInfo::rec709_limited()
-            } else {
-                ColorInfo::rec709_full()
-            },
-            data,
-        })
+        Ok(self.video_frame(self.next_index.saturating_sub(1), data))
     }
 }
 
@@ -972,6 +1062,8 @@ struct DecoderCache {
     /// Decoders being started ahead of time: file, limit, start and cache generation.
     pending: Vec<(PathBuf, DecodeLimit, u64, u64)>,
     generation: u64,
+    /// The last time served from each file and limit, most recent first.
+    served: Vec<(PathBuf, DecodeLimit, u64)>,
 }
 
 static DECODERS: Mutex<DecoderCache> = Mutex::new(DecoderCache {
@@ -982,6 +1074,7 @@ static DECODERS: Mutex<DecoderCache> = Mutex::new(DecoderCache {
     },
     pending: Vec::new(),
     generation: 0,
+    served: Vec::new(),
 });
 
 fn cached_info(path: &Path) -> Result<VideoInfo, String> {
@@ -1000,7 +1093,40 @@ fn cached_info(path: &Path) -> Result<VideoInfo, String> {
 /// Keeps `stream` as the most recently used. Returns the streams that no longer fit, to be
 /// stopped with [`stop_streams`] once the lock is released.
 fn keep_stream(cache: &mut DecoderCache, stream: FrameStream) -> Vec<FrameStream> {
-    cache.streams.keep_active(stream)
+    let evicted = cache.streams.keep_active(stream);
+    for (older, _) in cache.streams.active.iter_mut().skip(HISTORY_STREAMS) {
+        older.clear_history();
+    }
+    evicted
+}
+
+/// Remembers `time_us` as the last time served from `path` at `limit`.
+fn note_served(cache: &mut DecoderCache, path: &Path, limit: DecodeLimit, time_us: u64) {
+    match cache
+        .served
+        .iter()
+        .position(|(p, l, _)| p == path && *l == limit)
+    {
+        Some(index) => {
+            cache.served[index].2 = time_us;
+            cache.served[..=index].rotate_right(1);
+        }
+        None => {
+            cache.served.insert(0, (path.to_path_buf(), limit, time_us));
+            cache.served.truncate(MAX_OPEN_STREAMS * 2);
+        }
+    }
+}
+
+/// Whether `time_us` is a small step behind the last frame served from `path` (see
+/// [`BACK_STEP_US`]).
+fn stepping_back(path: &Path, limit: DecodeLimit, time_us: u64) -> bool {
+    DECODERS
+        .lock()
+        .served
+        .iter()
+        .find(|(p, l, _)| p == path && *l == limit)
+        .is_some_and(|&(_, _, last)| last > time_us && last - time_us <= BACK_STEP_US)
 }
 
 /// Stops decoders on a thread of their own: waiting for a killed FFmpeg to exit takes long
@@ -1117,13 +1243,20 @@ pub fn decode_bgra_limited(
             let started = std::time::Instant::now();
             let info = cached_info(path)?;
             let hwaccel = hwaccel_for_stream(path, &info, limit);
-            let mut stream = FrameStream::open(path, &info, limit, time_us, hwaccel)?;
+            // Stepping back past a decoder's history: start a little earlier, so the next
+            // steps back are read from this one's history.
+            let start = if stepping_back(path, limit, time_us) {
+                FrameStream::back_start(&info, limit, time_us)
+            } else {
+                time_us
+            };
+            let mut stream = FrameStream::open(path, &info, limit, start, hwaccel)?;
             let mut frame = stream.frame_at(time_us);
             if let (Err(error), Some(api)) = (&frame, stream.hwaccel) {
                 // Only a failed process, not a seek past the last frame, rules out the GPU.
                 if stream.failed && stream.next_index == 0 {
                     disable_hwaccel(api, error);
-                    stream = FrameStream::open(path, &info, limit, time_us, None)?;
+                    stream = FrameStream::open(path, &info, limit, start, None)?;
                     frame = stream.frame_at(time_us);
                 }
             }
@@ -1151,7 +1284,11 @@ pub fn decode_bgra_limited(
         frame = stream.frame_at(time_us);
     }
     if frame.is_ok() {
-        let evicted = keep_stream(&mut DECODERS.lock(), stream);
+        let evicted = {
+            let mut cache = DECODERS.lock();
+            note_served(&mut cache, path, limit, time_us);
+            keep_stream(&mut cache, stream)
+        };
         stop_streams(evicted);
     }
     frame
@@ -1162,6 +1299,7 @@ pub fn release_decoders() {
     let streams = {
         let mut cache = DECODERS.lock();
         cache.generation = cache.generation.wrapping_add(1);
+        cache.served.clear();
         cache.streams.drain()
     };
     drop(streams);
@@ -1928,6 +2066,127 @@ mod tests {
         check(900_000, 9);
         check(5_000_000, 9);
         release_decoders();
+    }
+
+    #[test]
+    fn preview_decoders_step_back_through_their_history() {
+        if !ffmpeg_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ramp.mp4");
+        let frames = numbered_frames(10, 32, 32);
+        encode_bgra_mp4(&path, &frames, 10).unwrap();
+        let expected: Vec<f32> = frames.iter().map(mean_level).collect();
+        let info = probe_video(&path).unwrap();
+        let preview = DecodeLimit {
+            interactive: true,
+            ..DecodeLimit::NONE
+        };
+        let mut stream = FrameStream::open(&path, &info, preview, 0, None).unwrap();
+        stream.frame_at(800_000).unwrap();
+        assert!(stream.can_serve(500_000) && stream.can_serve(0));
+        for (time_us, index) in [(500_000, 5), (550_000, 5), (0, 0), (700_000, 7)] {
+            let frame = stream.frame_at(time_us).unwrap();
+            assert_eq!(frame.pts_us, index as u64 * 100_000);
+            let level = mean_level(&frame);
+            assert!(
+                (level - expected[index]).abs() < 6.0,
+                "at {time_us}us got level {level}, expected frame {index}"
+            );
+        }
+        // Reading on afterwards carries on from where it was.
+        assert_eq!(stream.frame_at(900_000).unwrap().pts_us, 900_000);
+        // Exports never read backwards, so they keep nothing.
+        let mut export = FrameStream::open(&path, &info, DecodeLimit::NONE, 0, None).unwrap();
+        export.frame_at(800_000).unwrap();
+        assert!(!export.can_serve(500_000));
+        assert!(export.history.is_empty());
+    }
+
+    #[test]
+    fn a_step_back_past_the_history_starts_its_decoder_early() {
+        if !ffmpeg_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ramp.mp4");
+        let frames = numbered_frames(10, 32, 32);
+        encode_bgra_mp4(&path, &frames, 10).unwrap();
+        let expected: Vec<f32> = frames.iter().map(mean_level).collect();
+        let preview = DecodeLimit {
+            interactive: true,
+            ..DecodeLimit::NONE
+        };
+        decode_bgra_limited(&path, 700_000, preview).unwrap();
+        // Behind the decoder at 0.7 s, which started there: a new one starts a second earlier.
+        let frame = decode_bgra_limited(&path, 600_000, preview).unwrap();
+        assert_eq!(frame.pts_us, 600_000);
+        let starts = |path: &Path| -> Vec<u64> {
+            let cache = DECODERS.lock();
+            let streams = cache.streams.iter().filter(|s| s.path == path);
+            streams.map(|s| s.start_us).collect()
+        };
+        assert!(starts(&path).contains(&0));
+        let frame = decode_bgra_limited(&path, 200_000, preview).unwrap();
+        assert_eq!(frame.pts_us, 200_000);
+        assert!((mean_level(&frame) - expected[2]).abs() < 6.0);
+
+        // A bigger jump back starts its decoder where it is asked to. (Other tests share the
+        // decoder cache, so only what was started is checked, not how many are left.)
+        let other = dir.path().join("other.mp4");
+        encode_bgra_mp4(&other, &frames, 10).unwrap();
+        decode_bgra_limited(&other, 900_000, preview).unwrap();
+        decode_bgra_limited(&other, 300_000, preview).unwrap();
+        assert!(starts(&other).contains(&300_000));
+        release_decoders();
+    }
+
+    #[test]
+    fn back_starts_land_on_whole_frames_within_the_history() {
+        let source = VideoInfo {
+            width: 1920,
+            height: 1080,
+            rate: (60, 1),
+        };
+        let preview = DecodeLimit {
+            max_width: 1280,
+            max_height: 720,
+            max_rate: 30,
+            interactive: true,
+            yuv: true,
+        };
+        // 33 frames back at 30 fps, and the request is a whole frame of the new decoder.
+        assert_eq!(
+            FrameStream::back_start(&source, preview, 5_000_000),
+            3_900_000
+        );
+        assert_eq!(FrameStream::back_start(&source, preview, 300_000), 0);
+        assert_eq!(FrameStream::back_start(&source, preview, 316_000), 16_000);
+        let odd = DecodeLimit {
+            max_rate: 0,
+            ..preview
+        };
+        // A camera's average rate just under 30 fps still reaches more than a second back.
+        for rate in [(30000, 1001), (4125000, 137509)] {
+            let camera = VideoInfo { rate, ..source };
+            let start = FrameStream::back_start(&camera, odd, 7_777_777);
+            assert!(7_777_777 - start > 1_000_000, "{rate:?}: back to {start}");
+            let frames =
+                (7_777_777 - start + 1) as u128 * rate.0 as u128 / (1_000_000 * rate.1 as u128);
+            assert_eq!(frames, 33, "{rate:?}: whole frames back");
+        }
+        // Big frames: no further back than the history holds.
+        let full = DecodeLimit {
+            max_width: 0,
+            max_height: 0,
+            ..preview
+        };
+        let held = FrameStream::history_frames(&source, full);
+        let frame_us = 1_000_000 / 30;
+        assert!(5_000_000 - FrameStream::back_start(&source, full, 5_000_000) < held * frame_us);
+        // Exports keep no history.
+        assert_eq!(FrameStream::history_frames(&source, DecodeLimit::NONE), 0);
     }
 
     #[test]
