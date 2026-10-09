@@ -362,13 +362,22 @@ fn project_layout_update(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_audio_update(
-    state: State<'_, AppState>,
+async fn project_audio_update(
+    app: tauri::AppHandle,
     project_handle: String,
     expected_revision: u64,
     audio: project::AudioSettings,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_audio_update_impl(&state, project_handle, expected_revision, audio)
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::project_audio_update_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            audio,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -726,9 +735,33 @@ async fn detect_silence(
     project_handle: String,
     track_id: String,
     config: dsp::SilenceConfig,
+    track_ids: Option<Vec<String>>,
+    transcript_assisted: Option<bool>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::detect_silence_impl(&app.state::<AppState>(), project_handle, track_id, config)
+        if transcript_assisted.unwrap_or(false) {
+            return commands::transcript_pauses::detect_transcript_pauses_impl(
+                &app.state::<AppState>(),
+                project_handle,
+                track_id,
+                track_ids,
+                config,
+            );
+        }
+        match track_ids {
+            Some(ids) => commands::detect_silence_sources_impl(
+                &app.state::<AppState>(),
+                project_handle,
+                ids,
+                config,
+            ),
+            None => commands::detect_silence_impl(
+                &app.state::<AppState>(),
+                project_handle,
+                track_id,
+                config,
+            ),
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -738,6 +771,46 @@ async fn detect_silence(
 #[tauri::command]
 fn transcript_settings_get() -> transcript::TranscriptSettingsView {
     commands::transcript::transcript_settings_get_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn detect_non_speech_gaps(
+    app: tauri::AppHandle,
+    project_handle: String,
+    track_id: String,
+    track_ids: Option<Vec<String>>,
+    config: transcript::pauses::TranscriptGapConfig,
+) -> Result<dsp::SilenceDetectionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::transcript_pauses::detect_non_speech_gaps_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            track_id,
+            track_ids,
+            config,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn apply_jump_cuts(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    ranges: Vec<zoom::EditedRange>,
+    transcript_dependencies: Vec<transcript::TranscriptDependency>,
+) -> Result<project::OpenedProject, String> {
+    commands::transcript_pauses::apply_jump_cuts_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        ranges,
+        transcript_dependencies,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1100,13 +1173,15 @@ fn transcript_cut_words(
     expected_revision: u64,
     track_id: String,
     word_ids: Vec<String>,
+    expected_word_stamp: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::transcript::transcript_cut_words_impl(
+    commands::transcript::transcript_cut_words_checked_impl(
         &state,
         project_handle,
         expected_revision,
         track_id,
         word_ids,
+        expected_word_stamp,
     )
 }
 
@@ -1399,6 +1474,8 @@ pub fn run() {
             export_status,
             export_cancel,
             detect_silence,
+            detect_non_speech_gaps,
+            apply_jump_cuts,
             transcript_settings_get,
             transcript_settings_set,
             transcript_set_api_key,
@@ -1441,6 +1518,7 @@ pub fn run() {
                 app.state::<AppState>()
                     .playback_shutdown
                     .store(true, std::sync::atomic::Ordering::Release);
+                media::declick::shutdown();
             }
         });
 }

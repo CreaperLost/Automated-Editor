@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Mic, Music, Volume2, VolumeX, Wand2 } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
-import { Notice, Switch } from "../ui";
+import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
@@ -209,6 +209,53 @@ const LaneRow: React.FC<{
   </div>
 );
 
+/** Cleanup is committed only after a reusable audio copy has been prepared. */
+const MouthClickCleanup: React.FC = () => {
+  const project = useProjectStore((s) => s.openedProject);
+  const enabled = project?.audio?.mouthClicks ?? false;
+  const savedStrength = project?.audio?.mouthClickStrength ?? 35;
+  const [strength, setStrength] = useState(savedStrength);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const generation = useRef(0);
+  useEffect(() => { setStrength(savedStrength); }, [savedStrength, project?.projectHandle]);
+  useEffect(() => {
+    ++generation.current;
+    setBusy(false);
+    setError(undefined);
+    return () => { ++generation.current; };
+  }, [project?.projectHandle]);
+  const save = async (mouthClicks: boolean) => {
+    const current = useProjectStore.getState().openedProject;
+    if (!current || busy) return;
+    const run = ++generation.current;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const next = await api.projectAudioUpdate(current.projectHandle, current.revision, {
+        ...DEFAULT_AUDIO_SETTINGS, ...current.audio, mouthClicks, mouthClickStrength: strength,
+      });
+      if (run === generation.current && useProjectStore.getState().openedProject?.projectHandle === current.projectHandle)
+        useProjectStore.getState().applyOpenedProject(next);
+    } catch (err) {
+      if (run === generation.current) setError(String(err));
+    } finally {
+      if (run === generation.current) setBusy(false);
+    }
+  };
+  return <fieldset disabled={busy} className="space-y-2 py-3 border-b border-studio-800" aria-busy={busy}>
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-label text-studio-200">Reduce mouth clicks</span>
+      <Switch checked={enabled} onChange={(value) => void save(value)} title="Reduce mouth clicks on speech tracks" />
+    </div>
+    <p className="text-meta text-studio-500">Repairs short clicks on tracks marked Speech, keeping timing intact. Turn off to compare with the original. Strong settings can soften consonants.</p>
+    <RangeRow label="Cleanup strength" value={strength} min={1} max={100} unit="%" onChange={setStrength} />
+    {enabled && strength !== savedStrength && <Button variant="secondary" size="sm" onClick={() => void save(true)}>Apply strength</Button>}
+    {busy && <p role="status" className="text-meta text-studio-400">Preparing speech audio… Long recordings can take a few minutes.</p>}
+    {error && <Notice tone="danger" onDismiss={() => setError(undefined)}>{error}</Notice>}
+  </fieldset>;
+};
+
 /** Track mix and audio polish. Saved to the project, so playback and export both use them. */
 export const AudioSection: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
@@ -348,6 +395,7 @@ export const AudioSection: React.FC = () => {
           ))}
         </div>
       )}
+      {lanes.some((lane) => lane.role === "mic") && <MouthClickCleanup />}
       <EffectRow
         label="Normalize loudness"
         hint="Scales the whole edit to a standard loudness. -14 LUFS matches YouTube."

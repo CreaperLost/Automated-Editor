@@ -242,8 +242,16 @@ export const TranscriptPanel: React.FC = () => {
 
   // Only the latest refresh may apply: a slow older reply must not replace a newer one.
   const refreshGeneration = useRef(0);
+  const loadedContext = useRef<{ sequence: NonNullable<typeof openedProject>["sequence"]; captionsVersion: number } | null>(null);
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current;
+    const requested = useProjectStore.getState();
+    const requestedSequence = requested.openedProject?.sequence;
+    const version = requested.captionsVersion;
+    loadedContext.current = null;
+    setView(null);
+    setSuggestions([]);
+    setSelection(null);
     if (!handle || !trackId) {
       setView(null);
       setSuggestions([]);
@@ -253,6 +261,9 @@ export const TranscriptPanel: React.FC = () => {
       const next = await api.transcriptGet(handle, trackId);
       const nextSuggestions = next ? await api.transcriptSuggestions(handle, trackId) : [];
       if (generation !== refreshGeneration.current) return;
+      const current = useProjectStore.getState();
+      if (current.openedProject?.projectHandle !== handle || current.openedProject.sequence !== requestedSequence || current.captionsVersion !== version) return;
+      loadedContext.current = { sequence: current.openedProject.sequence, captionsVersion: version };
       setView(next);
       setSuggestions(nextSuggestions);
     } catch (err) {
@@ -338,9 +349,15 @@ export const TranscriptPanel: React.FC = () => {
 
   const cutWords = async (ids: string[], label: string) => {
     if (!openedProject || !trackId || ids.length === 0) return;
+    const current = useProjectStore.getState();
+    if (!view || view.trackId !== trackId || current.openedProject?.projectHandle !== openedProject.projectHandle
+        || loadedContext.current?.sequence !== current.openedProject.sequence || loadedContext.current.captionsVersion !== current.captionsVersion) {
+      setNotice("The timeline or transcript changed. Review the refreshed words before cutting.");
+      return;
+    }
     setError(null);
     try {
-      const next = await api.transcriptCutWords(openedProject.projectHandle, openedProject.revision, trackId, ids);
+      const next = await api.transcriptCutWords(openedProject.projectHandle, openedProject.revision, trackId, ids, view.wordStamp);
       applyOpenedProject(next);
       setSelection(null);
       setNotice(`${label}. Undo restores it.`);

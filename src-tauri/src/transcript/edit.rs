@@ -1,7 +1,6 @@
 //! Edits derived from a transcript. Everything here returns cuts in edited time for the
 //! current revision, so they go through the same ripple-cut path as silence and manual cuts.
 use super::{Transcript, TranscriptWord, WordKind};
-use crate::project::revision::MAX_CUTS_PER_REVISION;
 use crate::timeline::TimelineMapper;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -61,6 +60,7 @@ pub struct TranscriptView {
     pub language: Option<String>,
     pub created_at: String,
     pub revision: u64,
+    pub word_stamp: String,
     pub words: Vec<TranscriptViewWord>,
 }
 
@@ -158,6 +158,7 @@ pub fn view(transcript: &Transcript, mapper: &TimelineMapper, revision: u64) -> 
         language: transcript.language.clone(),
         created_at: transcript.created_at.clone(),
         revision,
+        word_stamp: transcript.dependency().word_stamp.unwrap_or_default(),
         words,
     }
 }
@@ -224,12 +225,6 @@ pub fn word_cuts(
     }
     if cuts.is_empty() {
         return Err("Those words are already cut".into());
-    }
-    if cuts.len() > MAX_CUTS_PER_REVISION {
-        return Err(format!(
-            "That would make {} cuts; select fewer words (up to {MAX_CUTS_PER_REVISION} separate runs at once)",
-            cuts.len()
-        ));
     }
     Ok(cuts)
 }
@@ -459,6 +454,35 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn filler_cuts_cover_the_entire_tutorial_beyond_256_ranges() {
+        let words: Vec<_> = (0..600)
+            .map(|i| {
+                (
+                    if i % 2 == 0 { "um" } else { "keep" },
+                    i * 500,
+                    i * 500 + 200,
+                )
+            })
+            .collect();
+        let t = transcript(&words);
+        let m = mapper(&[(0, 300_000)]);
+        let ids = t
+            .words
+            .iter()
+            .filter(|w| w.text == "um")
+            .map(|w| w.id.clone())
+            .collect::<Vec<_>>();
+        let cuts = word_cuts(&t, &ids, &m).unwrap();
+        assert_eq!(cuts.len(), 300);
+        assert_eq!(*cuts.last().unwrap(), (298_850_000, 299_350_000));
+        for word in t.words.iter().filter(|w| w.text == "keep") {
+            assert!(cuts
+                .iter()
+                .all(|&(a, b)| b <= word.source_start_us || a >= word.source_end_us));
+        }
     }
 
     #[test]

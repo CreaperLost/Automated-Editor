@@ -16,6 +16,8 @@ import {
   ExportStatus,
   SilenceConfig,
   SilenceDetectionResult,
+  TranscriptGapConfig,
+  TranscriptDependency,
   ZoomGeneration,
   ZoomConfig,
   ZoomSettings,
@@ -268,8 +270,12 @@ export const api = {
   exportStatus: (jobId?: string) =>
     invokeTauri<ExportStatus>("export_status", { jobId: jobId ?? null }),
   exportCancel: (jobId: string) => invokeTauri<ExportStatus>("export_cancel", { jobId }),
-  detectSilence: (projectHandle: string, trackId: string, config: SilenceConfig) =>
-    invokeTauri<SilenceDetectionResult>("detect_silence", { projectHandle, trackId, config }),
+  detectSilence: (projectHandle: string, trackId: string, config: SilenceConfig, trackIds?: string[], transcriptAssisted = false) =>
+    invokeTauri<SilenceDetectionResult>("detect_silence", { projectHandle, trackId, config, trackIds, transcriptAssisted }),
+  detectNonSpeechGaps: (projectHandle: string, trackId: string, config: TranscriptGapConfig, trackIds?: string[]) =>
+    invokeTauri<SilenceDetectionResult>("detect_non_speech_gaps", { projectHandle, trackId, config, trackIds }),
+  applyJumpCuts: (projectHandle: string, expectedRevision: number, ranges: {startUs: number; endUs: number}[], transcriptDependencies: TranscriptDependency[]) =>
+    invokeTauri<OpenedProject>("apply_jump_cuts", { projectHandle, expectedRevision, ranges, transcriptDependencies }),
   transcriptSettingsGet: () => invokeTauri<TranscriptSettingsView>("transcript_settings_get"),
   transcriptSettingsSet: (settings: TranscriptSettings) =>
     invokeTauri<TranscriptSettingsView>("transcript_settings_set", { settings }),
@@ -296,12 +302,14 @@ export const api = {
     expectedRevision: number,
     trackId: string,
     wordIds: string[],
+    expectedWordStamp?: string,
   ) =>
     invokeTauri<OpenedProject>("transcript_cut_words", {
       projectHandle,
       expectedRevision,
       trackId,
       wordIds,
+      expectedWordStamp,
     }),
   projectCaptionCues: (projectHandle: string) =>
     invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle, shortId: editTarget }),

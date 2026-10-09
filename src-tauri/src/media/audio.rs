@@ -69,6 +69,7 @@ pub struct AudioMixer {
     /// overlap, so a chunk finds the few it needs by binary search.
     lanes: Vec<Vec<Span>>,
     polish: Option<PolishPlan>,
+    clean_files: super::declick::CleanFiles,
     /// Open sound files, so sequential chunks do not open and parse them again.
     readers: std::sync::Mutex<Vec<(PathBuf, PcmReader)>>,
     pub total_frames: u64,
@@ -145,6 +146,7 @@ impl AudioMixer {
     pub fn new(root: &Path, document: &EditDocument) -> Result<Self, String> {
         let duration = document.duration_us();
         let lanes = lanes(root, document);
+        let clean_files = super::declick::prepare(root, &document.audio, &lanes)?;
         let polish = PolishPlan::build(root, &document.audio, &lanes, duration);
         let mut by_lane = Vec::new();
         for lane in &lanes {
@@ -177,6 +179,7 @@ impl AudioMixer {
             root: root.into(),
             lanes: by_lane,
             polish,
+            clean_files,
             readers: std::sync::Mutex::new(Vec::new()),
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
         })
@@ -267,7 +270,13 @@ impl AudioMixer {
                     if hi <= lo {
                         continue;
                     }
-                    let path = safe_path(&self.root, &segment.relative_path)?;
+                    let path = match self
+                        .clean_files
+                        .get(&(span.lane.clone(), segment.relative_path.clone()))
+                    {
+                        Some(clean) => clean.path().to_path_buf(),
+                        None => safe_path(&self.root, &segment.relative_path)?,
+                    };
                     let info = self
                         .with_reader(&path, |reader| Ok(reader.info().clone()))
                         .map_err(|e| format!("{}: {}", segment.relative_path, e))?;
@@ -494,6 +503,70 @@ mod tests {
 
     fn fixture(rate: u32, channels: u16, values: Vec<i16>) -> (tempfile::TempDir, EditDocument) {
         files(vec![("mic", Role::Mic, rate, channels, values)])
+    }
+
+    #[test]
+    fn mouth_click_cleanup_preserves_timing_background_and_chunked_reads() {
+        if super::super::ffmpeg::ffmpeg_path().is_err() {
+            return;
+        }
+        let mut values = vec![0i16; 48_000];
+        values[24_000] = 25_000;
+        let (dir, mut doc) = files(vec![
+            ("mic", Role::Mic, 48_000, 1, values.clone()),
+            ("pc", Role::Background, 48_000, 1, values),
+        ]);
+        let original = std::fs::read(dir.path().join("assets/media/mic.wav")).unwrap();
+        let before = AudioMixer::new(dir.path(), &doc).unwrap();
+        let plain = before.read_frames(23_000, 2_000).unwrap();
+        doc.audio.mouth_clicks = true;
+        doc.audio.mouth_click_strength = 75;
+        let repaired = AudioMixer::new(dir.path(), &doc).unwrap();
+        assert_eq!(before.total_frames, repaired.total_frames);
+        assert_eq!(
+            repaired.clean_files.len(),
+            1,
+            "Background audio is never repaired"
+        );
+        let whole = repaired.read_frames(23_000, 2_000).unwrap();
+        let pieces: Vec<_> = [
+            repaired.read_frames(23_000, 777).unwrap(),
+            repaired.read_frames(23_777, 1_223).unwrap(),
+        ]
+        .concat();
+        assert_eq!(whole, pieces);
+        assert!(
+            whole[2_000].abs() < plain[2_000].abs(),
+            "The mic impulse must be reduced"
+        );
+        assert!(whole[2_000] > 20_000, "The PC impulse must remain");
+        assert_eq!(
+            std::fs::read(dir.path().join("assets/media/mic.wav")).unwrap(),
+            original
+        );
+        // Bypass is sample-identical, including after another mixer has prepared cleanup.
+        doc.audio.mouth_clicks = false;
+        assert_eq!(
+            AudioMixer::new(dir.path(), &doc)
+                .unwrap()
+                .read_frames(23_000, 2_000)
+                .unwrap(),
+            plain
+        );
+        // Reordered/repeated excerpts read the same repaired source, not a new repair at cuts.
+        doc.audio.mouth_clicks = true;
+        doc.sequence
+            .tracks
+            .retain(|t| t.clips.iter().any(|c| c.asset == "mic"));
+        clips(
+            &mut doc,
+            &[(0, 400_000, 200_000), (200_000, 400_000, 200_000)],
+        );
+        let repeated = AudioMixer::new(dir.path(), &doc).unwrap();
+        assert_eq!(
+            repeated.read_frames(2_000, 3_000).unwrap(),
+            repeated.read_frames(11_600, 3_000).unwrap()
+        );
     }
 
     #[test]

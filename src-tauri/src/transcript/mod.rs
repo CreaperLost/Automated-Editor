@@ -8,11 +8,13 @@ pub mod audio;
 pub mod edit;
 pub mod elevenlabs;
 pub mod parakeet;
+pub mod pauses;
 pub mod provider;
 pub mod settings;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 
 pub use edit::{
     SuggestionSource, TranscriptCutSuggestion, TranscriptSuggestionKind, TranscriptView,
@@ -23,6 +25,14 @@ pub use settings::{TranscriptSettings, TranscriptSettingsView};
 pub const TRANSCRIPT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_WORDS: usize = 500_000;
 pub const MAX_WORD_CHARS: usize = 256;
+
+/// Content used by cuts, independent of caption styling and dismissed suggestions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptDependency {
+    pub track_id: String,
+    pub word_stamp: Option<String>,
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +122,25 @@ pub const MAX_AI_SUGGESTIONS: usize = 20_000;
 pub const MAX_DISMISSED_SUGGESTIONS: usize = 10_000;
 
 impl Transcript {
+    pub fn dependency(&self) -> TranscriptDependency {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.track_id.hash(&mut hash);
+        self.words.len().hash(&mut hash);
+        for word in &self.words {
+            word.id.hash(&mut hash);
+            word.text.hash(&mut hash);
+            (word.kind == WordKind::Word).hash(&mut hash);
+            word.source_start_us.hash(&mut hash);
+            word.source_end_us.hash(&mut hash);
+            word.confidence.map(f32::to_bits).hash(&mut hash);
+            word.speaker.hash(&mut hash);
+        }
+        TranscriptDependency {
+            track_id: self.track_id.clone(),
+            word_stamp: Some(format!("{:016x}", hash.finish())),
+        }
+    }
+
     pub fn new(
         track_id: String,
         provider: ProviderKind,

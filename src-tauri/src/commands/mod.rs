@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod transcript;
+pub mod transcript_pauses;
 
 pub struct AppState {
     pub command_lock: Mutex<()>,
@@ -204,31 +205,51 @@ pub fn detect_silence_impl(
     if track_id == ALL_SPEECH {
         return detect_speech_silence(state, &project_handle, &config);
     }
-    let ctx = {
+    let (ctx, transcript, revision) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
-        sound_context(reader, &track_id, true)?
+        (
+            sound_context(reader, &track_id, true)?,
+            crate::transcript::store::load_transcript(reader.root(), &track_id)?,
+            reader.document().revision,
+        )
     };
-    crate::project::silence::detect_track_silence(&ctx, &config)
+    let mut result = crate::project::silence::detect_track_silence_with_words(
+        &ctx,
+        &config,
+        transcript.as_ref(),
+    )?;
+    result.transcript_dependencies = vec![transcript.as_ref().map(|t| t.dependency()).unwrap_or(
+        crate::transcript::TranscriptDependency {
+            track_id,
+            word_stamp: None,
+        },
+    )];
+    transcript_pauses::validate_analysis(
+        state,
+        &project_handle,
+        revision,
+        &result.transcript_dependencies,
+    )?;
+    Ok(result)
 }
 
 /// Every sound the timeline plays as speech (its own role, or its track's), with where its
 /// clips play: muted tracks left out.
 fn speech_on_timeline(
     document: &crate::project::revision::EditDocument,
-) -> Vec<(String, Vec<(u64, u64)>)> {
-    let mut speech: Vec<(String, Vec<(u64, u64)>)> = Vec::new();
+) -> Vec<(String, Vec<crate::sequence::Clip>)> {
+    let mut speech: Vec<(String, Vec<crate::sequence::Clip>)> = Vec::new();
     for track in document.sequence.tracks.iter().filter(|t| !t.muted) {
         for clip in &track.clips {
             if crate::sequence::clip_role(&document.assets, track, clip) != Some(Role::Mic) {
                 continue;
             }
             let key = crate::sequence::StreamRef::new(&clip.asset, &clip.stream).key();
-            let plays = (clip.start_us, clip.end_us());
             match speech.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, ranges)) => ranges.push(plays),
-                None => speech.push((key, vec![plays])),
+                Some((_, clips)) => clips.push(clip.clone()),
+                None => speech.push((key, vec![clip.clone()])),
             }
         }
     }
@@ -240,14 +261,73 @@ fn detect_speech_silence(
     project_handle: &str,
     config: &SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
-    let sounds = {
+    detect_combined_silence(state, project_handle, config, None)
+}
+
+/// Explicit sources may include desktop/voice-mode audio regardless of their speech role.
+/// Existing callers keep selecting one stream or ALL_SPEECH through detect_silence_impl.
+pub fn detect_silence_sources_impl(
+    state: &AppState,
+    project_handle: String,
+    track_ids: Vec<String>,
+    config: SilenceConfig,
+) -> Result<SilenceDetectionResult, String> {
+    config.validate()?;
+    if track_ids.len() != 2 || track_ids[0] == track_ids[1] {
+        return Err("Choose two different sound sources".into());
+    }
+    detect_combined_silence(state, &project_handle, &config, Some(&track_ids))
+}
+
+fn detect_combined_silence(
+    state: &AppState,
+    project_handle: &str,
+    config: &SilenceConfig,
+    track_ids: Option<&[String]>,
+) -> Result<SilenceDetectionResult, String> {
+    let (sounds, revision) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, project_handle)?;
-        speech_on_timeline(reader.document())
+        let selected = if let Some(keys) = track_ids {
+            keys.iter()
+                .map(|key| {
+                    let plays = reader
+                        .document()
+                        .sequence
+                        .tracks
+                        .iter()
+                        .filter(|track| !track.muted)
+                        .flat_map(|track| &track.clips)
+                        .filter(|clip| {
+                            crate::sequence::StreamRef::new(&clip.asset, &clip.stream).key() == *key
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if plays.is_empty() {
+                        return Err(
+                            "Both chosen sounds must be on an unmuted timeline track".to_string()
+                        );
+                    }
+                    Ok((key.clone(), plays))
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        } else {
+            speech_on_timeline(reader.document())
+        };
+        selected
             .into_iter()
-            .map(|(key, plays)| Ok((sound_context(reader, &key, true)?, plays)))
-            .collect::<Result<Vec<_>, String>>()?
+            // Scan source time once, then map through every audible clip below. A sound
+            // can play twice, even overlapping itself with different source positions.
+            .map(|(key, plays)| {
+                Ok((
+                    sound_context(reader, &key, false)?,
+                    plays,
+                    crate::transcript::store::load_transcript(reader.root(), &key)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(|sounds| (sounds, reader.document().revision))?
     };
     if sounds.is_empty() {
         return Err("Nothing on the timeline is marked as speech: choose a sound to scan".into());
@@ -256,8 +336,14 @@ fn detect_speech_silence(
     let found = std::thread::scope(|scope| {
         let jobs: Vec<_> = sounds
             .iter()
-            .map(|(ctx, _)| {
-                scope.spawn(move || crate::project::silence::detect_track_silence(ctx, config))
+            .map(|(ctx, _, transcript)| {
+                scope.spawn(move || {
+                    crate::project::silence::detect_track_silence_with_words(
+                        ctx,
+                        config,
+                        transcript.as_ref(),
+                    )
+                })
             })
             .collect();
         jobs.into_iter()
@@ -270,16 +356,28 @@ fn detect_speech_silence(
     let lists: Vec<crate::project::silence::PlaysAndPauses> = sounds
         .iter()
         .zip(&found)
-        .map(|((_, plays), result)| {
-            let silent = result
-                .suggestions
-                .iter()
-                .map(|s| (s.start_us, s.end_us))
-                .collect();
-            (plays.clone(), silent)
+        .flat_map(|((_, clips, _), result)| {
+            clips.iter().map(move |clip| {
+                let silent = result
+                    .suggestions
+                    .iter()
+                    .filter_map(|pause| {
+                        let start = pause.start_us.max(clip.in_us);
+                        let end = pause.end_us.min(clip.out_us());
+                        (end > start).then(|| {
+                            (
+                                clip.start_us + start - clip.in_us,
+                                clip.start_us + end - clip.in_us,
+                            )
+                        })
+                    })
+                    .collect();
+                (vec![(clip.start_us, clip.end_us())], silent)
+            })
         })
         .collect();
-    let min_us = u64::from(config.min_duration_ms.saturating_sub(2 * config.padding_ms)) * 1_000;
+    let min_us =
+        u64::from(config.min_duration_ms).saturating_sub(2 * u64::from(config.padding_ms)) * 1_000;
     let mut diagnostics: Vec<String> = Vec::new();
     for result in &found {
         for line in &result.diagnostics {
@@ -288,13 +386,20 @@ fn detect_speech_silence(
             }
         }
     }
-    let mut pauses = crate::project::silence::common_pauses(&lists, min_us);
-    if pauses.len() > crate::project::revision::MAX_CUTS_PER_REVISION {
-        pauses.truncate(crate::project::revision::MAX_CUTS_PER_REVISION);
-        diagnostics
-            .push("Silence suggestion count was bounded to one revision of ripple cuts".into());
-    }
+    let pauses = crate::project::silence::common_pauses(&lists, min_us);
     let first = &found[0];
+    let dependencies = sounds
+        .iter()
+        .map(|(ctx, _, transcript)| {
+            transcript.as_ref().map(|t| t.dependency()).unwrap_or(
+                crate::transcript::TranscriptDependency {
+                    track_id: ctx.track_id.clone(),
+                    word_stamp: None,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    transcript_pauses::validate_analysis(state, project_handle, revision, &dependencies)?;
     Ok(SilenceDetectionResult {
         track_id: ALL_SPEECH.into(),
         sample_rate: first.sample_rate,
@@ -314,12 +419,346 @@ fn detect_speech_silence(
             })
             .collect(),
         diagnostics,
+        thresholds: found
+            .iter()
+            .flat_map(|result| result.thresholds.clone())
+            .collect(),
+        transcript_dependencies: dependencies,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn silence_cuts_cover_the_whole_clip_beyond_256_pauses() {
+        use crate::fixtures::{generate_pcm16_wav, TestProject};
+        use crate::project::{JournalRecord, TrackDescriptor, TrackType};
+        const PAUSES: u32 = 400;
+        const RATE: u32 = 8_000;
+        let duration_us = u64::from(PAUSES) * 1_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "many-pauses");
+        for (id, track_type) in [
+            ("mic", TrackType::MicAudio),
+            ("system", TrackType::SystemAudio),
+        ] {
+            // A 600 ms pause each second, with speech on either side including the end
+            // of the clip. Balanced should find every pause, not only the first 256.
+            let samples: Vec<i16> = (0..RATE * PAUSES)
+                .map(|i| {
+                    if (RATE * 3 / 10..RATE * 9 / 10).contains(&(i % RATE)) {
+                        0
+                    } else {
+                        (((i % RATE) as f32 * 110.0 * std::f32::consts::TAU / RATE as f32).sin()
+                            * 3_000.0) as i16
+                    }
+                })
+                .collect();
+            let wav = generate_pcm16_wav(RATE, 1, &samples);
+            let relative_path = format!("media/{id}/voice.wav");
+            fs::write(bundle.root_path().join(&relative_path), &wav).unwrap();
+            bundle.manifest_mut().tracks.push(TrackDescriptor {
+                id: id.into(),
+                track_type,
+                codec: "pcm".into(),
+                relative_path: relative_path.clone(),
+                width: None,
+                height: None,
+                fps: None,
+                sample_rate: Some(RATE),
+                channels: Some(1),
+                gaps_total: 0,
+                media_timescale: Some(RATE),
+            });
+            bundle.append_journal(JournalRecord::SegmentCommitted {
+                seq: 0,
+                track_id: id.into(),
+                relative_path,
+                start_us: 0,
+                end_us: duration_us,
+                size_bytes: wav.len() as u64,
+                is_keyframe_start: true,
+                media_timescale: RATE,
+                media_start_value: 0,
+                host_anchor_us: 0,
+            });
+        }
+        bundle.manifest_mut().duration_us = duration_us;
+        bundle.manifest_mut().active_duration_us = duration_us;
+        bundle.save_manifest();
+        let folder = crate::project::folder::create_project_folder(
+            dir.path(),
+            "Edit",
+            Some(bundle.root_path()),
+        )
+        .unwrap();
+        let state = AppState::new();
+        let original = open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
+        let keys: Vec<_> = original
+            .assets
+            .iter()
+            .flat_map(|asset| {
+                asset
+                    .streams
+                    .iter()
+                    .filter(|stream| stream.kind == StreamKind::Sound)
+                    .map(|stream| crate::sequence::StreamRef::new(&asset.id, &stream.id).key())
+            })
+            .collect();
+        let config = SilenceConfig {
+            auto_level: Some(0.2),
+            min_duration_ms: 500,
+            padding_ms: 120,
+            ..SilenceConfig::default()
+        };
+        let single = detect_silence_impl(
+            &state,
+            original.project_handle.clone(),
+            keys[0].clone(),
+            config.clone(),
+        )
+        .unwrap();
+        assert_eq!(single.suggestions.len(), PAUSES as usize);
+        let all = detect_silence_impl(
+            &state,
+            original.project_handle.clone(),
+            ALL_SPEECH.into(),
+            config.clone(),
+        )
+        .unwrap();
+        assert_eq!(all.suggestions.len(), PAUSES as usize);
+        let combined =
+            detect_silence_sources_impl(&state, original.project_handle.clone(), keys, config)
+                .unwrap();
+        assert_eq!(combined.suggestions.len(), PAUSES as usize);
+        assert_eq!(single.suggestions.last(), combined.suggestions.last());
+        assert!(combined.suggestions.last().unwrap().start_us >= duration_us - 1_000_000);
+        let removed: u64 = combined
+            .suggestions
+            .iter()
+            .map(|pause| pause.end_us - pause.start_us)
+            .sum();
+        let applied = project_sequence_edit_impl(
+            &state,
+            original.project_handle.clone(),
+            original.revision,
+            SequenceEdit::DeleteRange {
+                ranges: combined
+                    .suggestions
+                    .iter()
+                    .map(|pause| crate::zoom::EditedRange {
+                        start_us: pause.start_us,
+                        end_us: pause.end_us,
+                    })
+                    .collect(),
+                ripple: Some(true),
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(applied.duration_us, duration_us - removed);
+        assert_eq!(applied.revision, original.revision + 1);
+        for track in &applied.sequence.tracks {
+            assert_eq!(track.clips.len(), PAUSES as usize + 1);
+            assert_eq!(track.clips.last().unwrap().end_us(), applied.duration_us);
+        }
+        let reopened = ProjectReader::open(&folder).unwrap();
+        assert_eq!(reopened.document().sequence, applied.sequence);
+        let restored =
+            project_undo_impl(&state, original.project_handle, applied.revision, None).unwrap();
+        assert_eq!(restored.sequence, original.sequence);
+        assert_eq!(restored.duration_us, duration_us);
+    }
+
+    #[test]
+    fn two_source_silence_keeps_both_voices_and_single_source_still_works() {
+        use crate::fixtures::{generate_pcm16_wav, TestProject};
+        use crate::project::{JournalRecord, TrackDescriptor, TrackType};
+        let dir = tempfile::tempdir().unwrap();
+        let mut bundle = TestProject::create(dir.path(), "conversation");
+        let rate = 16_000;
+        for (id, track_type, amplitude) in [
+            ("mic", TrackType::MicAudio, 1_000),
+            ("system", TrackType::SystemAudio, 10_000),
+        ] {
+            let relative_path = format!("media/{id}/voice.wav");
+            let samples: Vec<i16> = (0..rate * 8)
+                .map(|i| {
+                    let t = i as f32 / rate as f32;
+                    let speaking = if id == "mic" {
+                        t < 2.0 || (4.0..5.0).contains(&t)
+                    } else {
+                        (2.0..4.0).contains(&t) || (5.0..6.0).contains(&t)
+                    };
+                    if speaking {
+                        // A quiet mic phrase while system audio is silent must survive
+                        // both the single-source scan and the combined scan.
+                        let spoken_amplitude = if id == "mic" && (0.5..1.5).contains(&t) {
+                            amplitude / 10
+                        } else {
+                            amplitude
+                        };
+                        ((t * 440.0 * std::f32::consts::TAU).sin() * spoken_amplitude as f32) as i16
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            let wav = generate_pcm16_wav(rate, 1, &samples);
+            fs::write(bundle.root_path().join(&relative_path), &wav).unwrap();
+            bundle.manifest_mut().tracks.push(TrackDescriptor {
+                id: id.into(),
+                track_type,
+                codec: "pcm".into(),
+                relative_path: relative_path.clone(),
+                width: None,
+                height: None,
+                fps: None,
+                sample_rate: Some(rate),
+                channels: Some(1),
+                gaps_total: 0,
+                media_timescale: Some(rate),
+            });
+            bundle.append_journal(JournalRecord::SegmentCommitted {
+                seq: 0,
+                track_id: id.into(),
+                relative_path,
+                start_us: 0,
+                end_us: 8_000_000,
+                size_bytes: wav.len() as u64,
+                is_keyframe_start: true,
+                media_timescale: rate,
+                media_start_value: 0,
+                host_anchor_us: 0,
+            });
+        }
+        bundle.manifest_mut().duration_us = 8_000_000;
+        bundle.manifest_mut().active_duration_us = 8_000_000;
+        bundle.save_manifest();
+        let folder = crate::project::folder::create_project_folder(
+            dir.path(),
+            "Edit",
+            Some(bundle.root_path()),
+        )
+        .unwrap();
+        let reader = ProjectReader::open(&folder).unwrap();
+        let handle = reader.summary.project_handle.clone();
+        let keys: Vec<String> = reader
+            .document()
+            .assets
+            .iter()
+            .flat_map(|asset| {
+                asset
+                    .streams
+                    .iter()
+                    .filter(|stream| stream.kind == StreamKind::Sound)
+                    .map(|stream| crate::sequence::StreamRef::new(&asset.id, &stream.id).key())
+            })
+            .collect();
+        assert_eq!(keys.len(), 2);
+        let mic_key = reader
+            .document()
+            .assets
+            .iter()
+            .find_map(|asset| {
+                asset
+                    .streams
+                    .iter()
+                    .find(|stream| stream.role == Role::Mic)
+                    .map(|stream| crate::sequence::StreamRef::new(&asset.id, &stream.id).key())
+            })
+            .unwrap();
+        let state = AppState::new();
+        *state.opened_project.lock() = Some(reader);
+        let config = SilenceConfig {
+            auto_level: Some(0.2),
+            min_duration_ms: 500,
+            padding_ms: 120,
+            ..SilenceConfig::default()
+        };
+        let combined =
+            detect_silence_sources_impl(&state, handle.clone(), keys.clone(), config.clone())
+                .unwrap();
+        assert_eq!(combined.suggestions.len(), 1, "{:?}", combined.suggestions);
+        assert!(combined.suggestions[0].start_us >= 6_120_000);
+        assert!(combined.suggestions[0].end_us <= 7_880_000);
+        assert_eq!(combined.thresholds.len(), 2);
+        assert!(
+            (combined.thresholds[0].threshold_db - combined.thresholds[1].threshold_db).abs()
+                > 30.0
+        );
+        let single = detect_silence_impl(&state, handle.clone(), mic_key, config.clone()).unwrap();
+        assert_eq!(single.suggestions.len(), 2, "{:?}", single.suggestions);
+        assert!(single
+            .suggestions
+            .iter()
+            .all(|pause| pause.end_us <= 500_000 || pause.start_us >= 1_500_000));
+        let all_speech =
+            detect_silence_impl(&state, handle.clone(), ALL_SPEECH.into(), config.clone()).unwrap();
+        assert_eq!(
+            all_speech.thresholds.len(),
+            1,
+            "System audio retains its background role"
+        );
+        assert!(all_speech.suggestions.len() > combined.suggestions.len());
+        assert!(detect_silence_sources_impl(
+            &state,
+            handle.clone(),
+            vec![keys[0].clone(); 2],
+            config.clone()
+        )
+        .is_err());
+        assert!(
+            detect_silence_sources_impl(&state, "stale".into(), keys.clone(), config.clone())
+                .is_err()
+        );
+        // Repeat the mic's first spoken second over the final shared pause. It must protect
+        // that second even though a different part of the same source is silent underneath.
+        {
+            let mut opened = state.opened_project.lock();
+            let reader = opened.as_mut().unwrap();
+            let mic = reader
+                .document()
+                .assets
+                .iter()
+                .find_map(|asset| {
+                    asset
+                        .streams
+                        .iter()
+                        .find(|stream| stream.role == Role::Mic)
+                        .map(|stream| (asset.id.clone(), stream.id.clone()))
+                })
+                .unwrap();
+            reader
+                .edit_sequence(
+                    reader.summary.revision,
+                    &SequenceEdit::SetMagnetic { magnetic: false },
+                    None,
+                )
+                .unwrap();
+            reader
+                .edit_sequence(
+                    reader.summary.revision,
+                    &SequenceEdit::PlaceAsset {
+                        asset_id: mic.0,
+                        at_us: 6_000_000,
+                        track_id: None,
+                        streams: vec![mic.1],
+                        range: Some(crate::sequence::SourceRange {
+                            start_us: 0,
+                            end_us: 1_000_000,
+                        }),
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        let repeated = detect_silence_sources_impl(&state, handle, keys, config).unwrap();
+        assert_eq!(repeated.suggestions.len(), 1, "{:?}", repeated.suggestions);
+        assert!(repeated.suggestions[0].start_us >= 7_000_000);
+    }
 
     #[test]
     fn test_window_title_formatting() {
@@ -643,6 +1082,28 @@ pub fn project_audio_update_impl(
     expected_revision: u64,
     audio: crate::project::AudioSettings,
 ) -> Result<OpenedProject, String> {
+    audio.validate()?;
+    // Prepare outside the project/command locks, then let the revision check fence the
+    // commit. A failed repair never saves an enabled effect that cannot be played.
+    let prepared = if audio.mouth_clicks {
+        let (root, document) = {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().ok_or("No opened project")?;
+            require_handle(reader, &project_handle)?;
+            if reader.document().revision != expected_revision {
+                return Err("Stale edit revision".into());
+            }
+            (reader.root().to_path_buf(), reader.document().clone())
+        };
+        Some(crate::media::declick::prepare(
+            &root,
+            &audio,
+            &crate::media::audio::lanes(&root, &document),
+        )?)
+    } else {
+        None
+    };
+    let _prepared = prepared;
     mutate_opened(state, project_handle, |reader| {
         reader.update_audio(expected_revision, audio)
     })
@@ -1067,7 +1528,18 @@ pub fn project_sequence_edit_impl(
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    let (summary, _) = reader.edit_sequence(expected_revision, &edit, short_id.as_deref())?;
+    edit_sequence_locked(state, reader, expected_revision, &edit, short_id.as_deref())
+}
+
+/// The caller holds command_lock and opened_project, including any dependency validation.
+fn edit_sequence_locked(
+    state: &AppState,
+    reader: &mut ProjectReader,
+    expected_revision: u64,
+    edit: &SequenceEdit,
+    short_id: Option<&str>,
+) -> Result<OpenedProject, String> {
+    let (summary, _) = reader.edit_sequence(expected_revision, edit, short_id)?;
     state
         .playback
         .lock()

@@ -1,6 +1,6 @@
 import { api } from "../lib/ipc";
 import { create } from "zustand";
-import { ZoomKeyframe, SilenceBlock, OpenedProject, WaveformOverview, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
+import { ZoomKeyframe, OpenedProject, WaveformOverview, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
 import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
 import { shareSequence } from "../lib/sequence";
 import { useSettingsStore } from "./settingsStore";
@@ -114,8 +114,6 @@ interface ProjectStore {
   currentTimeUs: number;
   durationUs: number;
   isPlaying: boolean;
-  activeSilenceBlocks: SilenceBlock[];
-  silenceAnalysis: { projectHandle: string; revision: number } | null;
   isSilenceModalOpen: boolean;
 
   // Actions
@@ -130,12 +128,6 @@ interface ProjectStore {
   setSelectedZoomId: (id?: string) => void;
   setSelectedClipIds: (ids: string[]) => void;
   setTimelineSelection: (selection: { startUs: number; endUs: number } | null) => void;
-  setSilenceBlocks: (
-    blocks: SilenceBlock[],
-    analysis?: { projectHandle: string; revision: number } | null,
-  ) => void;
-  toggleSilenceBlock: (id: string) => void;
-  applySilenceCuts: () => void;
   setIsSilenceModalOpen: (open: boolean) => void;
   /** Applies an edit's result. `remote` marks one broadcast by another window: it is applied
    *  only if newer, and not broadcast again. */
@@ -208,8 +200,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       pendingZoomSuggestions: [],
       zoomKeyframes: mergeZoomBars(project.zooms, []),
       zoomDiagnostics: [],
-      activeSilenceBlocks: [],
-      silenceAnalysis: null,
       isSilenceModalOpen: false,
     });
   },
@@ -228,8 +218,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       zoomKeyframes: [],
       pendingZoomSuggestions: [],
       zoomDiagnostics: [],
-      activeSilenceBlocks: [],
-      silenceAnalysis: null,
       isSilenceModalOpen: false,
     });
   },
@@ -252,8 +240,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   currentTimeUs: 0,
   durationUs: 0,
   isPlaying: false,
-  activeSilenceBlocks: [],
-  silenceAnalysis: null,
   isSilenceModalOpen: false,
 
   setCurrentTimeUs: (timeUs) => {
@@ -276,30 +262,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       pendingZoomSuggestions: generation.suggestions,
       zoomKeyframes: mergeZoomBars(state.openedProject?.zooms, generation.suggestions),
     })),
-
-  setSilenceBlocks: (blocks, analysis = null) =>
-    set({
-      activeSilenceBlocks: blocks,
-      silenceAnalysis: blocks.length === 0 ? null : analysis,
-    }),
-
-  toggleSilenceBlock: (id) =>
-    set((state) => ({
-      activeSilenceBlocks: state.activeSilenceBlocks.map((b) =>
-        b.id === id ? { ...b, selected: !b.selected } : b
-      ),
-    })),
-
-  applySilenceCuts: () => {
-    const { activeSilenceBlocks } = get();
-    const selectedBlocks = activeSilenceBlocks.filter((b) => b.selected);
-    if (selectedBlocks.length === 0) return;
-    set({
-      activeSilenceBlocks: [],
-      silenceAnalysis: null,
-      isSilenceModalOpen: false,
-    });
-  },
 
   setIsSilenceModalOpen: (open) => set({ isSilenceModalOpen: open }),
 
@@ -337,10 +299,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       if (project.layout) {
         useSettingsStore.getState().hydrateLayout(project.layout);
       }
-      const silenceStale =
-        !state.silenceAnalysis ||
-        state.silenceAnalysis.projectHandle !== project.projectHandle ||
-        state.silenceAnalysis.revision !== project.revision;
       const clipIds = new Set(project.sequence.tracks.flatMap((t) => t.clips.map((c) => c.id)));
       const kept = state.selectedClipIds.filter((id) => clipIds.has(id));
       // Clips the edit left alone keep their objects, so only the changed ones re-render.
@@ -352,8 +310,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         selectedClipIds: kept.length === state.selectedClipIds.length ? state.selectedClipIds : kept,
         pendingZoomSuggestions: pending,
         zoomKeyframes: mergeZoomBars(project.zooms, pending),
-        activeSilenceBlocks: silenceStale ? [] : state.activeSilenceBlocks,
-        silenceAnalysis: silenceStale ? null : state.silenceAnalysis,
       };
     });
   },

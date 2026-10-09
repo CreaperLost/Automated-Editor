@@ -176,6 +176,9 @@ export interface CanvasSettings {
 
 /** Audio polish. Each effect has its own switch and applies to playback and export. */
 export interface AudioSettings {
+  mouthClicks?: boolean;
+  /** Mouth-click repair strength, 1 to 100. */
+  mouthClickStrength?: number;
   normalize: boolean;
   /** Integrated loudness target in LUFS, -30 to -8. */
   targetLufs: number;
@@ -203,6 +206,8 @@ export const DEFAULT_TRACK_MIX: TrackMix = { volumeDb: 0 };
 export const TRACK_VOLUME_DB_RANGE = { min: -30, max: 12 } as const;
 
 export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
+  mouthClicks: false,
+  mouthClickStrength: 35,
   normalize: false,
   targetLufs: -14,
   noiseReduction: false,
@@ -434,6 +439,7 @@ export interface SilenceConfig {
   thresholdDb: number; // e.g. -38
   minDurationMs: number; // e.g. 400
   paddingMs: number; // e.g. 50
+  autoLevel?: number;
   windowMs?: number;
   stepMs?: number;
   channelPolicy?: string;
@@ -449,6 +455,18 @@ export interface SilenceBlock {
   sourceEndUs?: number;
 }
 
+export interface TranscriptDependency {
+  trackId: string;
+  wordStamp: string | null;
+}
+
+export interface TranscriptGapConfig {
+  minDurationMs: number;
+  paddingMs: number;
+  refineWordEdges?: boolean;
+  edgeThresholdDb?: number;
+}
+
 export interface SilenceDetectionResult {
   trackId: string;
   sampleRate: number;
@@ -456,6 +474,8 @@ export interface SilenceDetectionResult {
   channelPolicy: string;
   suggestions: SilenceBlock[];
   diagnostics: string[];
+  thresholds: { trackId: string; thresholdDb: number }[];
+  transcriptDependencies: TranscriptDependency[];
 }
 
 // The timeline as tracks of clips (src-tauri/src/sequence)
@@ -941,6 +961,7 @@ export interface TranscriptViewWord {
 }
 
 export interface TranscriptView {
+  wordStamp: string;
   trackId: string;
   provider: TranscriptProvider;
   model: string;

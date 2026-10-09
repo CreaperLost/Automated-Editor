@@ -1,10 +1,13 @@
 import { useShallow } from "zustand/react/shallow";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X, Scissors, AlertCircle, ChevronDown, Play, Loader2 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import { useJumpCutStore } from "../../stores/jumpCutStore";
+import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { api } from "../../lib/ipc";
 import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
-import { OpenedProject, SilenceConfig } from "../../lib/types";
+import { OpenedProject } from "../../lib/types";
+import { SILENCE_PRESETS as PRESETS, GAP_PRESETS, JumpCutPreset as Preset, JumpCutSettings, gapSettings, presetOf } from "../../lib/jumpCutConfig";
 import { soundSources } from "../../lib/sequence";
 import { Button, IconButton, Segmented, cn } from "../ui";
 
@@ -35,27 +38,6 @@ function errorMessage(err: unknown): string {
   return "Silence detection failed.";
 }
 
-/** How hard to cut: a gentle pass leaves breathing room, a tight one keeps the pace up. */
-const PRESETS = {
-  gentle: { label: "Gentle", hint: "Only long pauses, with room around words", config: { thresholdDb: -42, minDurationMs: 800, paddingMs: 100 } },
-  balanced: { label: "Balanced", hint: "Pauses of half a second or more", config: { thresholdDb: -38, minDurationMs: 400, paddingMs: 50 } },
-  tight: { label: "Tight", hint: "Short pauses too, for a fast pace", config: { thresholdDb: -34, minDurationMs: 250, paddingMs: 30 } },
-} as const;
-type Preset = keyof typeof PRESETS;
-
-function presetOf(config: SilenceConfig): Preset | "custom" {
-  return (
-    (Object.keys(PRESETS) as Preset[]).find((key) => {
-      const preset = PRESETS[key].config;
-      return (
-        preset.thresholdDb === config.thresholdDb &&
-        preset.minDurationMs === config.minDurationMs &&
-        preset.paddingMs === config.paddingMs
-      );
-    }) ?? "custom"
-  );
-}
-
 function formatTime(us: number): string {
   const total = us / 1_000_000;
   const minutes = Math.floor(total / 60);
@@ -69,34 +51,27 @@ export const SilenceModal: React.FC = () => {
   const {
     isSilenceModalOpen,
     setIsSilenceModalOpen,
-    activeSilenceBlocks,
-    setSilenceBlocks,
-    toggleSilenceBlock,
-    applySilenceCuts,
     openedProject,
     applyOpenedProject,
-    silenceAnalysis,
   } = useProjectStore(
     useShallow((s) => ({
       isSilenceModalOpen: s.isSilenceModalOpen,
       setIsSilenceModalOpen: s.setIsSilenceModalOpen,
-      activeSilenceBlocks: s.activeSilenceBlocks,
-      setSilenceBlocks: s.setSilenceBlocks,
-      toggleSilenceBlock: s.toggleSilenceBlock,
-      applySilenceCuts: s.applySilenceCuts,
       openedProject: s.openedProject,
       applyOpenedProject: s.applyOpenedProject,
-      silenceAnalysis: s.silenceAnalysis,
     })),
   );
 
-  const [config, setConfig] = useState<SilenceConfig>({ ...PRESETS.balanced.config });
+  const { activePass, review, silenceConfig, gapConfig, configureSilence, configureGaps, chooseSources, setActivePass } = useJumpCutStore(useShallow(s => ({
+    activePass: s.activePass, review: s.reviews[s.activePass], silenceConfig: s.silenceConfig, gapConfig: s.gapConfig,
+    configureSilence: s.configureSilence, configureGaps: s.configureGaps, chooseSources: s.chooseSources, setActivePass: s.setActivePass,
+  })));
+  const transcriptAssisted = activePass === "nonSpeech";
+  const config: JumpCutSettings = transcriptAssisted ? { ...silenceConfig, ...gapConfig } : silenceConfig;
+  const presets = transcriptAssisted ? GAP_PRESETS : PRESETS;
+  const { blocks: activeSilenceBlocks, snapshot: silenceAnalysis, busy: isDetecting, error, diagnostics, thresholds, sourceMode, chosenTrack, secondTrack, notice } = review;
   const [advanced, setAdvanced] = useState(false);
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [diagnostics, setDiagnostics] = useState<string[]>([]);
-  const detectGeneration = useRef(0);
-  const [chosenTrack, setChosenTrack] = useState<string>();
+  const [isApplying, setIsApplying] = useState(false);
 
   useEffect(() => {
     if (!isSilenceModalOpen) return;
@@ -110,59 +85,50 @@ export const SilenceModal: React.FC = () => {
   if (!isSilenceModalOpen) return null;
 
   const sounds = scannableSounds(openedProject);
+  const individualSounds = sounds.filter((sound) => sound.key !== ALL_SPEECH);
+  const twoSources = sourceMode === "two" && individualSounds.length >= 2;
+  const firstSounds = twoSources ? (transcriptAssisted ? [...individualSounds].sort((a, b) => Number(b.speech) - Number(a.speech)) : individualSounds) : sounds;
   const audioTrackId =
-    chosenTrack && sounds.some((sound) => sound.key === chosenTrack) ? chosenTrack : preferredAudioTrackId(openedProject);
+    chosenTrack && firstSounds.some((sound) => sound.key === chosenTrack) ? chosenTrack :
+      twoSources ? firstSounds[0]?.key : preferredAudioTrackId(openedProject);
+  const secondSounds = individualSounds.filter((sound) => sound.key !== audioTrackId);
+  const secondAudioTrackId = secondSounds.some((sound) => sound.key === secondTrack) ? secondTrack : secondSounds[0]?.key;
 
-  const handleRunDetection = async (settings: SilenceConfig = config) => {
-    if (!openedProject) {
-      setError("Open a project to detect silence.");
-      return;
-    }
-    if (!audioTrackId) {
-      setError("There is no sound to scan yet: import or record some first.");
-      return;
-    }
+  const changeConfig = (settings: JumpCutSettings) => {
+    if (transcriptAssisted) configureGaps(gapSettings(settings));
+    else configureSilence(settings);
+  };
+
+  const handleRunDetection = async (settings: JumpCutSettings = config) => {
+    if (!openedProject || !audioTrackId) return;
     const analyzedHandle = openedProject.projectHandle;
     const analyzedRevision = openedProject.revision;
-    const generation = ++detectGeneration.current;
-    setIsDetecting(true);
-    setError(null);
-    setDiagnostics([]);
+    const analyzedCaptionsVersion = useProjectStore.getState().captionsVersion;
+    const store = useJumpCutStore.getState();
+    const generation = store.beginScan(activePass);
     try {
-      const result = await api.detectSilence(analyzedHandle, audioTrackId, settings);
-      if (generation !== detectGeneration.current) return;
-      const current = useProjectStore.getState().openedProject;
-      if (
-        !current ||
-        current.projectHandle !== analyzedHandle ||
-        current.revision !== analyzedRevision
-      ) {
-        return;
-      }
-      setSilenceBlocks(result.suggestions, {
+      const ids = twoSources && secondAudioTrackId ? [audioTrackId, secondAudioTrackId] : undefined;
+      const result = transcriptAssisted
+        ? await api.detectNonSpeechGaps(analyzedHandle, audioTrackId, gapSettings(settings), ids)
+        : await api.detectSilence(analyzedHandle, audioTrackId, settings, ids);
+      store.finishScan(activePass, generation, result, {
         projectHandle: analyzedHandle,
         revision: analyzedRevision,
+        captionsVersion: analyzedCaptionsVersion,
+        transcriptDependencies: result.transcriptDependencies,
       });
-      setDiagnostics(result.diagnostics ?? []);
-      if (result.suggestions.length === 0 && (result.diagnostics?.length ?? 0) > 0) {
-        setError(result.diagnostics.join(" · "));
-      }
     } catch (err) {
-      if (generation !== detectGeneration.current) return;
-      setSilenceBlocks([]);
-      setDiagnostics([]);
-      setError(errorMessage(err));
-    } finally {
-      if (generation === detectGeneration.current) setIsDetecting(false);
+      store.failScan(activePass, generation, errorMessage(err));
     }
   };
 
-  const preset = presetOf(config);
+  const preset = presetOf(config, transcriptAssisted);
   const choosePreset = (next: Preset) => {
-    const settings = { ...config, ...PRESETS[next].config };
-    setConfig(settings);
+    const settings = { ...config, ...presets[next].config, autoLevel: undefined };
+    const rescan = activeSilenceBlocks.length > 0 || silenceAnalysis !== null || isDetecting;
+    changeConfig(settings);
     // Already scanned: show what this preset finds straight away.
-    if (activeSilenceBlocks.length > 0 || silenceAnalysis) void handleRunDetection(settings);
+    if (rescan) void handleRunDetection(settings);
   };
 
   const selectedCount = activeSilenceBlocks.filter((b) => b.selected).length;
@@ -171,10 +137,7 @@ export const SilenceModal: React.FC = () => {
     .reduce((acc, b) => acc + b.durationMs, 0);
   const allSelected = selectedCount === activeSilenceBlocks.length;
   const selectAll = (selected: boolean) =>
-    setSilenceBlocks(
-      activeSilenceBlocks.map((block) => ({ ...block, selected })),
-      silenceAnalysis ?? undefined,
-    );
+    useJumpCutStore.getState().select(activePass, null, selected);
 
   /** Plays from a moment before the pause, so you hear what the cut joins. */
   const audition = (startUs: number) => {
@@ -183,31 +146,31 @@ export const SilenceModal: React.FC = () => {
   };
 
   const apply = () => {
-    if (!openedProject || !silenceAnalysis) return;
+    if (!openedProject || !silenceAnalysis || isDetecting || isApplying) return;
     if (
       silenceAnalysis.projectHandle !== openedProject.projectHandle ||
-      silenceAnalysis.revision !== openedProject.revision
+      silenceAnalysis.revision !== openedProject.revision || silenceAnalysis.captionsVersion !== useProjectStore.getState().captionsVersion
     ) {
-      setSilenceBlocks([]);
-      setError("These pauses were found before a later edit. Scan again.");
+      useJumpCutStore.getState().invalidate("These suggestions were found before a later change. Find again.");
       return;
     }
     const cuts = activeSilenceBlocks
       .filter((block) => block.selected)
       .map((block) => ({ startUs: block.startUs, endUs: block.endUs }));
     // Every track loses the same time and closes up, so pictures and other sound stay in step.
+    if (!cuts.length) return;
+    setIsApplying(true);
     void api
-      .projectSequenceEdit(silenceAnalysis.projectHandle, silenceAnalysis.revision, {
-        kind: "deleteRange",
-        ranges: cuts,
-        ripple: true,
-      })
+      .applyJumpCuts(silenceAnalysis.projectHandle, silenceAnalysis.revision, cuts, silenceAnalysis.transcriptDependencies)
       .then((next) => {
         applyOpenedProject(next);
-        applySilenceCuts();
-        setError(null);
+        setIsSilenceModalOpen(false);
       })
-      .catch((err) => setError(errorMessage(err)));
+      .catch((err) => {
+        const store = useJumpCutStore.getState();
+        store.invalidate("Find suggestions again after the latest change.");
+        store.failScan(activePass, store.reviews[activePass].generation, errorMessage(err));
+      }).finally(() => setIsApplying(false));
   };
 
   const slider = (
@@ -254,46 +217,93 @@ export const SilenceModal: React.FC = () => {
         <div className="px-5 py-4 border-b border-studio-800 flex items-start justify-between gap-4">
           <div>
             <h2 className="text-heading text-studio-100">Jump cuts</h2>
-            <p className="text-label text-studio-400">Find the pauses and cut them out. Every track stays in step.</p>
+            <p className="text-label text-studio-400">Remove silence, then gaps without words. Each pass also works on its own.</p>
           </div>
           <IconButton icon={X} label="Close (Esc)" onClick={() => setIsSilenceModalOpen(false)} />
         </div>
 
         <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1">
           <div className="space-y-2">
+            <Segmented<"silence" | "nonSpeech">
+              label="Cleanup pass"
+              value={activePass}
+              onChange={setActivePass}
+              options={[
+                { value: "silence", label: "1. Remove silence" },
+                { value: "nonSpeech", label: "2. Gaps without words" },
+              ]}
+            />
+            {transcriptAssisted && (
+              <p className="text-meta text-studio-400">
+                Use saved transcripts to find gaps containing breaths, mouth noises, or clicks, regardless of loudness.
+                {twoSources ? " Transcribe the primary source first. The protected source is checked for any sound, even without a transcript." : " Transcribe the chosen source first."}
+                {" Listen and select suggestions before applying."}
+              </p>
+            )}
+            {!transcriptAssisted && <p className="text-meta text-studio-400">Find very quiet parts from the audio. Saved word timings add protection when available; transcription is optional.</p>}
+            <div className="flex items-center justify-between gap-3 rounded-control bg-studio-850 px-3 py-2">
+              <span className="text-meta text-studio-400">3. Edit words, fillers, and retakes in Transcript.</span>
+              <Button size="sm" variant="ghost" onClick={() => { setIsSilenceModalOpen(false); useWorkspaceStore.getState().setWorkspace("cleanup"); }}>Edit words</Button>
+            </div>
+          </div>
+          <div className="space-y-2">
             <Segmented<Preset | "custom">
               label="How much to cut"
               className="w-full"
               value={preset}
               onChange={(next) => next !== "custom" && choosePreset(next)}
-              options={(Object.keys(PRESETS) as Preset[]).map((key) => ({
+              options={(Object.keys(presets) as Preset[]).map((key) => ({
                 value: key,
-                label: PRESETS[key].label,
-                title: PRESETS[key].hint,
+                label: presets[key].label,
+                title: presets[key].hint,
               }))}
             />
             <p className="text-meta text-studio-500">
-              {preset === "custom" ? "Your own settings (see Advanced)." : PRESETS[preset].hint}.
+              {preset === "custom" ? "Your own settings (see Advanced)" : presets[preset].hint}.
             </p>
           </div>
 
+          {individualSounds.length > 1 && (
+            <div className="space-y-2">
+              <Segmented<"one" | "two">
+                label="Sources to listen to"
+                value={sourceMode}
+                onChange={(sourceMode) => chooseSources(activePass, { sourceMode })}
+                options={[{ value: "one", label: "One source" }, { value: "two", label: "Two sources" }]}
+              />
+              {twoSources && <p className="text-meta text-studio-400">
+                {transcriptAssisted ? "Find gaps in the primary transcript. Keep speech, music, video audio, and other sounds on the protected source." : "Keep either voice. Cut only when both chosen sources are quiet."}
+              </p>}
+            </div>
+          )}
+
           {sounds.length > 1 && (
             <label className="flex items-center justify-between gap-3 text-label text-studio-300">
-              <span>Sound to listen to</span>
+              <span>{twoSources ? transcriptAssisted ? "Primary source (text)" : "First source" : "Sound to listen to"}</span>
               <select
                 aria-label="Sound to scan"
                 value={audioTrackId ?? ""}
                 onChange={(e) => {
-                  setChosenTrack(e.target.value);
-                  setSilenceBlocks([]);
+                  chooseSources(activePass, { chosenTrack: e.target.value });
                 }}
                 className="ui-field min-w-0 max-w-[16rem] truncate"
               >
-                {sounds.map((sound) => (
+                {firstSounds.map((sound) => (
                   <option key={sound.key} value={sound.key}>
                     {sound.label}
                   </option>
                 ))}
+              </select>
+            </label>
+          )}
+
+          {twoSources && (
+            <label className="flex items-center justify-between gap-3 text-label text-studio-300">
+              <span>{transcriptAssisted ? "Protected source (audio)" : "Second source"}</span>
+              <select aria-label="Second sound to scan" value={secondAudioTrackId ?? ""}
+                onChange={(e) => chooseSources(activePass, { secondTrack: e.target.value })}
+                className="ui-field min-w-0 max-w-[16rem] truncate">
+                {secondSounds.map((sound) => <option key={sound.key} value={sound.key}>{sound.label}</option>)}
               </select>
             </label>
           )}
@@ -310,34 +320,53 @@ export const SilenceModal: React.FC = () => {
             </button>
             {advanced && (
               <div className="px-3 pb-3 space-y-4">
-                {slider(
+                {!transcriptAssisted && <label className="flex items-center gap-2 text-label text-studio-300">
+                  <input type="checkbox" checked={config.autoLevel !== undefined}
+                    onChange={(e) => changeConfig({ ...config, autoLevel: e.target.checked ? 0.8 : undefined })} />
+                  Adapt to each source’s volume
+                </label>}
+                {!transcriptAssisted && (config.autoLevel !== undefined ? slider(
+                  "Pause sensitivity", config.autoLevel, `${Math.round(config.autoLevel * 100)}%`,
+                  0, 1, 0.05, (autoLevel) => changeConfig({ ...config, autoLevel }),
+                  "Higher removes louder pauses and may cut soft speech. Saved words add protection when available.",
+                ) : slider(
                   "Quieter than",
                   config.thresholdDb,
                   `${config.thresholdDb} dB`,
                   -60,
                   -20,
                   1,
-                  (thresholdDb) => setConfig({ ...config, thresholdDb }),
+                  (thresholdDb) => changeConfig({ ...config, thresholdDb }),
                   "Lower finds only near-silence; higher also counts quiet background as a pause.",
+                ))}
+                {transcriptAssisted && <label className="flex items-center gap-2 text-label text-studio-300">
+                  <input type="checkbox" checked={config.refineWordEdges ?? false}
+                    onChange={e => changeConfig({ ...config, refineWordEdges: e.target.checked })} />
+                  Refine quiet word edges
+                </label>}
+                {transcriptAssisted && config.refineWordEdges && slider(
+                  "Word edge threshold", config.edgeThresholdDb ?? -42, `${config.edgeThresholdDb ?? -42} dB`,
+                  -70, -20, 1, edgeThresholdDb => changeConfig({ ...config, edgeThresholdDb }),
+                  "Trims measured quiet tails at word boundaries for this pass. Higher may trim soft consonants. Saved transcript timings stay unchanged.",
                 )}
                 {slider(
-                  "Pauses longer than",
+                  transcriptAssisted ? "Gaps longer than" : "Quiet parts longer than",
                   config.minDurationMs,
                   `${(config.minDurationMs / 1000).toFixed(2)} s`,
-                  200,
+                  20,
                   1500,
-                  50,
-                  (minDurationMs) => setConfig({ ...config, minDurationMs }),
+                  10,
+                  (minDurationMs) => changeConfig({ ...config, minDurationMs }),
                 )}
                 {slider(
                   "Room kept around words",
                   config.paddingMs,
                   `${config.paddingMs} ms`,
-                  20,
-                  150,
-                  10,
-                  (paddingMs) => setConfig({ ...config, paddingMs }),
-                  "So the first and last sounds of words are never clipped.",
+                  0,
+                  300,
+                  5,
+                  (paddingMs) => changeConfig({ ...config, paddingMs }),
+                  "Less room makes tighter cuts. Review word endings, especially at zero.",
                 )}
               </div>
             )}
@@ -349,10 +378,18 @@ export const SilenceModal: React.FC = () => {
             icon={isDetecting ? Loader2 : undefined}
             className={cn("w-full", isDetecting && "[&>svg]:animate-spin")}
             onClick={() => void handleRunDetection()}
-            disabled={isDetecting || !openedProject || !audioTrackId}
+            disabled={isDetecting || isApplying || !openedProject || !audioTrackId}
           >
-            {isDetecting ? "Listening…" : activeSilenceBlocks.length > 0 ? "Find again" : "Find pauses"}
+            {isDetecting ? "Analyzing…" : silenceAnalysis ? "Find again" : transcriptAssisted ? "Find gaps" : "Find silence"}
           </Button>
+
+          {!transcriptAssisted && thresholds.length > 0 && <div className="text-meta text-studio-400 space-y-1">
+            {thresholds.map(level => <p key={level.trackId}>
+              {sounds.find(sound => sound.key === level.trackId)?.label ?? level.trackId}: measured cutoff {level.thresholdDb.toFixed(1)} dB
+            </p>)}
+          </div>}
+
+          {notice && <p role="status" className="text-label text-studio-400">{notice}</p>}
 
           {error && (
             <div role="alert" className="px-3 py-2 rounded-control bg-danger/10 border border-danger/30 flex items-start gap-2 text-label text-danger-fg">
@@ -373,7 +410,7 @@ export const SilenceModal: React.FC = () => {
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-label font-medium text-suggest-fg">
-                  {selectedCount} of {activeSilenceBlocks.length} pauses selected · {(totalTrimDurationMs / 1000).toFixed(1)}s shorter
+                  {selectedCount} of {activeSilenceBlocks.length} {transcriptAssisted ? "gaps" : "quiet parts"} selected · {(totalTrimDurationMs / 1000).toFixed(1)}s shorter
                 </span>
                 <Button variant="ghost" size="sm" onClick={() => selectAll(!allSelected)}>
                   {allSelected ? "Select none" : "Select all"}
@@ -392,7 +429,7 @@ export const SilenceModal: React.FC = () => {
                     <input
                       type="checkbox"
                       checked={block.selected}
-                      onChange={() => toggleSilenceBlock(block.id)}
+                      onChange={() => useJumpCutStore.getState().select(activePass, block.id)}
                       aria-label={`Cut the pause at ${formatTime(block.startUs)}`}
                       className="w-4 h-4 cursor-pointer"
                     />
@@ -416,7 +453,7 @@ export const SilenceModal: React.FC = () => {
 
           {activeSilenceBlocks.length === 0 && !isDetecting && !error && (
             <p className="text-label text-studio-500">
-              Pick how much to cut, then Find pauses. Nothing is cut until you apply.
+              {silenceAnalysis ? "No matching intervals found with these settings." : "Choose settings and find suggestions. Nothing is cut until you apply."}
             </p>
           )}
         </div>
@@ -430,7 +467,7 @@ export const SilenceModal: React.FC = () => {
             <Button
               variant="primary"
               icon={Scissors}
-              disabled={selectedCount === 0 || !openedProject || !silenceAnalysis}
+              disabled={isDetecting || isApplying || selectedCount === 0 || !openedProject || !silenceAnalysis}
               onClick={apply}
             >
               Apply {selectedCount} cut{selectedCount === 1 ? "" : "s"}

@@ -1572,6 +1572,8 @@ mod tests {
         assert!(history.update_layout(3, bad, dir.path()).is_err());
         let audio = AudioSettings {
             normalize: true,
+            mouth_clicks: true,
+            mouth_click_strength: 60,
             ..Default::default()
         };
         history.update_audio(3, audio.clone(), dir.path()).unwrap();
@@ -1579,11 +1581,16 @@ mod tests {
             load_edit_document(dir.path()).unwrap().unwrap().audio,
             audio
         );
+        history.undo(4, dir.path()).unwrap();
+        assert!(!history.current.audio.mouth_clicks);
+        history.redo(5, dir.path()).unwrap();
+        assert!(history.current.audio.mouth_clicks);
+        assert_eq!(history.current.audio.mouth_click_strength, 60);
         let bad = AudioSettings {
             target_lufs: 0.0,
             ..audio
         };
-        assert!(history.update_audio(4, bad, dir.path()).is_err());
+        assert!(history.update_audio(6, bad, dir.path()).is_err());
     }
 
     /// Media that is imported, placed, and removed again: its clips go with it and undo
