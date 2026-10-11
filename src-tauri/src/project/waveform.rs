@@ -3,7 +3,7 @@ use super::manifest::TrackType;
 use super::pcm::{max_energy, PcmReader, WavInfo, READ_FRAME_CHUNK};
 use super::reader::{is_safe_track_id, safe_path, SegmentSummary};
 use super::RetainedInterval;
-use crate::timeline::{SourceInterval, TimelineMapper};
+use crate::timeline::TimelineMapper;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -152,10 +152,7 @@ fn query_buckets(
         ctx.retained
             .iter()
             .enumerate()
-            .map(|(i, interval)| {
-                SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
-                    .with_media(interval.media.clone())
-            })
+            .map(|(i, interval)| interval.interval(format!("ret-{i}")))
             .collect(),
     );
     let edited_end = mapper
@@ -294,8 +291,8 @@ fn bucket_source_spans(
                 if a < b {
                     spans.push(BucketSourceSpan {
                         bucket,
-                        start_us: interval.start_us + (a - cursor),
-                        end_us: interval.start_us + (b - cursor),
+                        start_us: interval.source_at(a - cursor),
+                        end_us: interval.source_at(b - cursor),
                     });
                 }
             }
@@ -881,6 +878,7 @@ mod tests {
     use crate::fixtures::TestProject;
     use crate::project::manifest::{TrackDescriptor, TrackType};
     use crate::project::JournalRecord;
+    use crate::timeline::SourceInterval;
     use std::sync::atomic::Ordering;
     use tempfile::tempdir;
 
@@ -971,6 +969,7 @@ mod tests {
                 start_us: 0,
                 end_us: 15_013,
                 media: Some("image".into()),
+                edited_len_us: None,
             },
             RetainedInterval::recording(90_007, 145_999),
             RetainedInterval::recording(40_003, 75_003),
@@ -1192,6 +1191,7 @@ mod tests {
                 start_us: 0,
                 end_us,
                 media: None,
+                edited_len_us: None,
             }],
             edited_duration_us: end_us,
         }
@@ -1328,6 +1328,7 @@ mod tests {
             start_us: 0,
             end_us: 2_100_000,
             media: None,
+            edited_len_us: None,
         }];
         ctx.edited_duration_us = 2_100_000;
         let page = query_waveform(&ctx, 0, 2_100_000, 21, &|| false).unwrap();

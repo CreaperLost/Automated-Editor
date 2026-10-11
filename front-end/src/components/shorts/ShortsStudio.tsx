@@ -35,7 +35,7 @@ import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
 import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
-import { clipAt, soundSources } from "../../lib/sequence";
+import { clipAt, clipSourceAt, soundSources } from "../../lib/sequence";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { Button, Notice, Switch } from "../ui";
 import { InspectorSection } from "../inspector/InspectorSection";
@@ -65,7 +65,7 @@ function clockAt(project: OpenedProject, editedUs: number): { media: string; us:
     .concat(project.sequence.tracks.filter((t) => t.kind === "audio"));
   for (const track of tracks) {
     const clip = clipAt(track, editedUs);
-    if (clip) return { media: clip.asset, us: clip.inUs + (editedUs - clip.startUs) };
+    if (clip) return { media: clip.asset, us: clipSourceAt(clip, editedUs) };
   }
   return null;
 }

@@ -10,6 +10,19 @@ pub struct SourceInterval {
     /// that asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
+    /// How long it plays in edited time when that is not its source length (a clip played
+    /// faster or slower).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_len_us: Option<u64>,
+}
+
+/// `x * num / den`, exact when `num == den`.
+fn scale(x: u64, num: u64, den: u64) -> u64 {
+    if num == den {
+        x
+    } else {
+        (x as u128 * num as u128 / den.max(1) as u128) as u64
+    }
 }
 
 impl SourceInterval {
@@ -20,6 +33,7 @@ impl SourceInterval {
             start_us,
             end_us,
             media: None,
+            edited_len_us: None,
         }
     }
 
@@ -28,12 +42,39 @@ impl SourceInterval {
         self
     }
 
+    /// Plays for `len` of edited time (`None`: its source length).
+    pub fn with_edited_len(mut self, len: Option<u64>) -> Self {
+        self.edited_len_us = len.filter(|&len| len != self.source_duration_us());
+        self
+    }
+
     pub fn is_recording(&self) -> bool {
         self.media.is_none()
     }
 
+    /// How long it plays in edited time.
     pub fn duration_us(&self) -> u64 {
+        self.edited_len_us
+            .unwrap_or_else(|| self.source_duration_us())
+    }
+
+    /// How much source time it holds.
+    pub fn source_duration_us(&self) -> u64 {
         self.end_us.saturating_sub(self.start_us)
+    }
+
+    /// The source time playing `offset` of edited time into it.
+    pub fn source_at(&self, offset: u64) -> u64 {
+        self.start_us + scale(offset, self.source_duration_us(), self.duration_us())
+    }
+
+    /// How far into it (in edited time) source time `source_us` plays.
+    pub fn edited_offset(&self, source_us: u64) -> u64 {
+        scale(
+            source_us.saturating_sub(self.start_us),
+            self.duration_us(),
+            self.source_duration_us(),
+        )
     }
 
     pub fn contains_source_us(&self, source_us: u64) -> bool {
@@ -49,28 +90,29 @@ impl SourceInterval {
         }
 
         let mut results = Vec::new();
+        // A part keeps the speed it played at.
+        let edited = |start: u64, end: u64| {
+            self.edited_len_us
+                .map(|_| self.edited_offset(end) - self.edited_offset(start))
+        };
 
         // Leading portion before the cut
         if cut_start > self.start_us {
+            let end = cut_start.min(self.end_us);
             results.push(
-                SourceInterval::new(
-                    format!("{}-a", self.id),
-                    self.start_us,
-                    cut_start.min(self.end_us),
-                )
-                .with_media(self.media.clone()),
+                SourceInterval::new(format!("{}-a", self.id), self.start_us, end)
+                    .with_media(self.media.clone())
+                    .with_edited_len(edited(self.start_us, end)),
             );
         }
 
         // Trailing portion after the cut
         if cut_end < self.end_us {
+            let start = cut_end.max(self.start_us);
             results.push(
-                SourceInterval::new(
-                    format!("{}-b", self.id),
-                    cut_end.max(self.start_us),
-                    self.end_us,
-                )
-                .with_media(self.media.clone()),
+                SourceInterval::new(format!("{}-b", self.id), start, self.end_us)
+                    .with_media(self.media.clone())
+                    .with_edited_len(edited(start, self.end_us)),
             );
         }
 

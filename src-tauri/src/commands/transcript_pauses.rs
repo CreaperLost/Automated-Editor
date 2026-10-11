@@ -149,16 +149,7 @@ pub fn detect_non_speech_gaps_impl(
             clips.iter().map(move |clip| {
                 let mapped = gaps
                     .iter()
-                    .filter_map(|&(a, b)| {
-                        let start = a.max(clip.in_us);
-                        let end = b.min(clip.out_us());
-                        (end > start).then(|| {
-                            (
-                                clip.start_us + start - clip.in_us,
-                                clip.start_us + end - clip.in_us,
-                            )
-                        })
-                    })
+                    .filter_map(|&(a, b)| clip.timeline_range(a, b))
                     .collect();
                 (vec![(clip.start_us, clip.end_us())], mapped)
             })

@@ -831,12 +831,14 @@ impl SceneEvaluator {
             let Some(segments) = self.segments_of(clip) else {
                 continue;
             };
-            let reach = local.saturating_add(horizon_us).min(clip.out_us());
+            let reach = local
+                .saturating_add(clip.source_offset(horizon_us))
+                .min(clip.out_us());
             for segment in segments
                 .iter()
                 .filter(|s| s.available && s.start_us > local && s.start_us < reach)
             {
-                edges.insert(clip.start_us + (segment.start_us - clip.in_us));
+                edges.insert(clip.timeline_at(segment.start_us));
             }
         }
         let mut prefetched = self.prefetched.borrow_mut();
@@ -3091,6 +3093,7 @@ mod tests {
                 duration_us: 5_000_000,
                 link: None,
                 fit: crate::sequence::Fit::Contain,
+                speed: 1.0,
             });
             document.sequence.tracks.push(track);
         }
