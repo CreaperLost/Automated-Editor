@@ -65,6 +65,7 @@ import {
   type Role,
   type SeqTrack,
   type SequenceEdit,
+  type SourceSpan,
   type WaveformOverview,
 } from "../../lib/types";
 import {
@@ -226,6 +227,7 @@ interface ClipBlockProps {
   locked: boolean;
   showName: boolean;
   spanUs: number;
+  widthPx: number;
   info: ClipInfo;
   selected: boolean;
   moving: boolean;
@@ -235,6 +237,8 @@ interface ClipBlockProps {
   waveform?: WaveformOverview;
   waveFromUs: number;
   waveToUs: number;
+  /** A sound clip's muted moments (mouth noises), in its sound's own time. */
+  mutes?: SourceSpan[];
   actions: React.MutableRefObject<ClipActions>;
 }
 
@@ -250,6 +254,7 @@ const ClipBlock = React.memo(function ClipBlock({
   locked,
   showName,
   spanUs,
+  widthPx,
   info,
   selected,
   moving,
@@ -257,19 +262,22 @@ const ClipBlock = React.memo(function ClipBlock({
   waveform,
   waveFromUs,
   waveToUs,
+  mutes,
   actions,
 }: ClipBlockProps) {
   const pct = (us: number) => `${(us / spanUs) * 100}%`;
+  const showContents = widthPx >= 40;
+  const showTrimHandles = widthPx >= 24;
   const { name, role, missing } = info;
   const Icon = audio ? (role === "mic" ? Mic : AudioLines) : info.image ? ImageIcon : role === "webcam" ? Camera : Film;
   const tint = missing
     ? "bg-danger/15 border-danger/50"
     : audio
       ? selected
-        ? "bg-audio/45 border-white ring-2 ring-accent-hover z-10"
+        ? "bg-audio/45 border-white ring-2 ring-inset ring-accent-hover z-10"
         : "bg-audio/20 border-audio/50 hover:border-audio-fg"
       : selected
-        ? "bg-video/65 border-white ring-2 ring-accent-hover z-10"
+        ? "bg-video/65 border-white ring-2 ring-inset ring-accent-hover z-10"
         : "bg-video/30 border-video/60 hover:border-video-fg";
   const drag = (mode: ClipDrag["mode"]) => ({
     onPointerDown: (event: React.PointerEvent<HTMLElement>) => actions.current.begin(event, trackId, clip, mode),
@@ -296,12 +304,15 @@ const ClipBlock = React.memo(function ClipBlock({
         aria-label={`${name} on ${trackNo}`}
         aria-pressed={selected}
         className={cn(
-          "absolute top-1 bottom-1 rounded-control border overflow-hidden flex items-center gap-1.5 px-2",
+          "absolute top-1 bottom-1 rounded-control border overflow-hidden flex items-center gap-1.5 min-w-0",
+          showContents && "px-2",
           locked ? "cursor-not-allowed" : "cursor-grab",
           tint,
           moving && "opacity-40",
         )}
-        style={{ left: pct(clip.startUs), width: `max(2px, ${pct(clip.durationUs)})` }}
+        // Padding/borders must not widen a short clip over its neighbours. Subpixel
+        // clips show their fill alone; zooming in reveals their border and trim handles.
+        style={{ left: pct(clip.startUs), width: pct(clip.durationUs), borderWidth: widthPx < 2 ? 0 : undefined }}
         title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${
           info.roleLabel ? ` · ${info.roleLabel}` : ""
         }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click to add or remove), drag to move, drag an edge to trim. Drag over empty space to select several.`}
@@ -327,21 +338,36 @@ const ClipBlock = React.memo(function ClipBlock({
                 />
               </div>
             )}
-            {showName && (
+            {/* Muted moments: a mark over the waveform where the sound is silenced. */}
+            {mutes
+              ?.filter((m) => m.endUs > clip.inUs && m.startUs < clip.inUs + clip.durationUs)
+              .map((m) => {
+                const from = Math.max(m.startUs, clip.inUs) - clip.inUs;
+                const to = Math.min(m.endUs, clip.inUs + clip.durationUs) - clip.inUs;
+                return (
+                  <div
+                    key={m.startUs}
+                    aria-hidden
+                    className="absolute inset-y-0 bg-danger/60 pointer-events-none"
+                    style={{ left: `${(from / clip.durationUs) * 100}%`, width: `max(1px, ${((to - from) / clip.durationUs) * 100}%)` }}
+                  />
+                );
+              })}
+            {showContents && showName && (
               <span className="absolute top-0.5 left-1 max-w-[calc(100%-0.5rem)] flex items-center gap-1 px-1 rounded-sm bg-studio-950/55 text-[10px] leading-4 font-medium text-white/85 truncate pointer-events-none">
                 {info.unlinked && <Unlink className="w-2.5 h-2.5 shrink-0" aria-label="Unlinked" />}
                 <span className="truncate">{name}</span>
               </span>
             )}
           </>
-        ) : (
+        ) : showContents ? (
           <>
             <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
             {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
             <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
           </>
-        )}
-        {!locked &&
+        ) : null}
+        {!locked && showTrimHandles &&
           (["start", "end"] as const).map((side) => (
             <div
               key={side}
@@ -380,34 +406,41 @@ const ClipBlock = React.memo(function ClipBlock({
 const CutMarks = React.memo(function CutMarks({
   joins,
   spanUs,
+  pxPerUs,
   editing,
   restore,
 }: {
   joins: { clipId: string; atUs: number; gapUs: number }[];
   spanUs: number;
+  pxPerUs: number;
   editing: boolean;
   restore: React.MutableRefObject<(clipId: string) => void>;
 }) {
   return (
     <>
-      {joins.map((join) => {
+      {joins.map((join, index) => {
         const left = `${(join.atUs / spanUs) * 100}%`;
+        const before = join.atUs - (joins[index - 1]?.atUs ?? 0);
+        const after = (joins[index + 1]?.atUs ?? spanUs) - join.atUs;
+        const capWidth = Math.min(14, Math.max(0, Math.min(before, after) * pxPerUs - 2));
         return (
           <React.Fragment key={`join-${join.clipId}`}>
             {/* The line marks the cut; only its cap restores, so the clip edges stay draggable. */}
             <span className="absolute top-0 bottom-0 w-px -translate-x-1/2 bg-danger/70 z-10 pointer-events-none" style={{ left }} />
-            <button
-              disabled={editing}
-              aria-label="Restore cut"
-              className="absolute top-0 h-2.5 w-3.5 -translate-x-1/2 z-30 rounded-b-sm bg-danger hover:bg-danger-fg disabled:opacity-40"
-              style={{ left }}
-              title={`Restore the ${(join.gapUs / 1e6).toFixed(2)}s cut here (everything after moves along)`}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                restore.current(join.clipId);
-              }}
-            />
+            {capWidth >= 4 && (
+              <button
+                disabled={editing}
+                aria-label="Restore cut"
+                className="absolute top-0 h-2.5 -translate-x-1/2 z-30 rounded-b-sm bg-danger hover:bg-danger-fg disabled:opacity-40"
+                style={{ left, width: capWidth }}
+                title={`Restore the ${(join.gapUs / 1e6).toFixed(2)}s cut here (everything after moves along)`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  restore.current(join.clipId);
+                }}
+              />
+            )}
           </React.Fragment>
         );
       })}
@@ -1080,6 +1113,14 @@ export const TimelineStudio: React.FC = () => {
   };
 
   // ---- Waveforms: each sound once, over its own time; clips draw their part ------------------
+  // Muted moments by sound. Kept while they do not change, so clips are not redrawn for
+  // every edit.
+  const noiseMutesJson = JSON.stringify(openedProject?.noiseMutes ?? {});
+  const noiseMutes = useMemo(
+    () => JSON.parse(noiseMutesJson) as Record<string, SourceSpan[]>,
+    [noiseMutesJson],
+  );
+
   const soundKeys = useMemo(() => {
     const keys = new Map<string, number>();
     for (const track of audioTracks) {
@@ -1549,6 +1590,7 @@ export const TimelineStudio: React.FC = () => {
         locked={!!track.locked}
         showName={index === 0 || clip.durationUs * pxPerUs > 60}
         spanUs={spanUs}
+        widthPx={clip.durationUs * pxPerUs}
         info={clipInfo.get(clip.id) ?? { name: clipName(openedProject, clip), image: false, missing: true, unlinked: false }}
         selected={selected.has(clip.id)}
         moving={!!(drag?.active && drag.mode === "move" && drag.idSet.has(clip.id))}
@@ -1556,6 +1598,7 @@ export const TimelineStudio: React.FC = () => {
         waveform={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
         waveFromUs={audio ? Math.max(clip.startUs, drawnUs.from) : 0}
         waveToUs={audio ? Math.min(clipEnd(clip), drawnUs.to) : 0}
+        mutes={audio ? noiseMutes[streamKey(clip.asset, clip.stream)] : undefined}
         actions={clipActions}
       />
     );
@@ -1609,7 +1652,7 @@ export const TimelineStudio: React.FC = () => {
         {inView(track.clips).map(({ clip, index }) => clipBlock(track, trackNo, clip, index))}
         {/* Cut time between two pieces of one stretch: click to put it back */}
         {trackJoins && trackJoins.length > 0 && (
-          <CutMarks joins={joinsInView(trackJoins)} spanUs={spanUs} editing={editing} restore={restoreCut} />
+          <CutMarks joins={joinsInView(trackJoins)} spanUs={spanUs} pxPerUs={pxPerUs} editing={editing} restore={restoreCut} />
         )}
         {/* Auto webcam layout: where the camera fills the frame, and where it keeps its bubble */}
         {hasCamera &&

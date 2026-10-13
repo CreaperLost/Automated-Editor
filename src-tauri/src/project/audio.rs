@@ -27,6 +27,11 @@ fn default_duck_db() -> f32 {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSettings {
+    /// Repair short mouth clicks on speech lanes without changing their timing.
+    #[serde(default)]
+    pub mouth_clicks: bool,
+    #[serde(default = "default_mouth_click_strength")]
+    pub mouth_click_strength: u8,
     /// Scale the whole edit to `target_lufs` integrated loudness.
     #[serde(default)]
     pub normalize: bool,
@@ -75,6 +80,8 @@ impl TrackMix {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
+            mouth_clicks: false,
+            mouth_click_strength: default_mouth_click_strength(),
             normalize: false,
             target_lufs: DEFAULT_TARGET_LUFS,
             noise_reduction: false,
@@ -123,6 +130,9 @@ impl AudioSettings {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if !(1..=100).contains(&self.mouth_click_strength) {
+            return Err("Mouth click strength must be between 1 and 100".into());
+        }
         let check = |name: &str, value: f32, (lo, hi): (f32, f32)| {
             if value.is_finite() && (lo..=hi).contains(&value) {
                 Ok(())
@@ -150,6 +160,10 @@ impl AudioSettings {
     }
 }
 
+fn default_mouth_click_strength() -> u8 {
+    35
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,7 +175,17 @@ mod tests {
         assert_eq!(settings.target_lufs, DEFAULT_TARGET_LUFS);
         assert!(settings.validate().is_ok());
         assert!(AudioSettings::default().is_default());
+        assert!(!settings.mouth_clicks);
+        assert_eq!(settings.mouth_click_strength, 35);
         for bad in [
+            AudioSettings {
+                mouth_click_strength: 0,
+                ..Default::default()
+            },
+            AudioSettings {
+                mouth_click_strength: 101,
+                ..Default::default()
+            },
             AudioSettings {
                 target_lufs: -2.0,
                 ..Default::default()

@@ -12,10 +12,38 @@ exporting an MP4.
 - **Smart zoom from mouse telemetry:** reads `telemetry/events.jsonl` and
   `telemetry/geometry.jsonl` and suggests zooms and pans from clicks, dwell points and click
   clusters. Suggestions can be accepted, dismissed, edited or added by hand.
-- **Silence detection:** finds dead air on the audio tracks and ripple-cuts it with
-  user-chosen thresholds.
+- **Jump cuts:** finds pauses in one sound or two chosen sources, then ripple-cuts the
+  selected pauses from the timeline. Two-source mode preserves either voice (for example,
+  microphone and voice-mode system audio). **Remove silence** finds very quiet audio,
+  optionally protecting saved word timings. Balanced uses -42 dB, 250 ms pauses, and
+  40 ms margins. Gentle, Tight, and Aggressive presets and the Advanced controls allow
+  shorter gaps and margins down to zero. Automatic sensitivity is optional and shows
+  the measured cutoff for each source; higher sensitivity can cut soft untranscribed speech.
+  **Gaps without words** uses the primary source's saved transcript to suggest gaps
+  containing breaths, saliva noises, or clicks, regardless of loudness. In two-source mode,
+  the microphone is the default primary source; PC speech, music, video audio, and other
+  sounds veto cuts. The PC transcript is optional and adds word protection when present.
+  PC-only quiet footage never introduces cuts. Manual word/filler/retake editing keeps its
+  existing behavior. Gap detection uses the chosen microphone margin, while PC sound
+  protection keeps at least 80 ms regardless of the preset, including beyond trimmed
+  or moved PC clip boundaries on the timeline. Optional word-edge refinement
+  uses 5 ms audio windows to trim up to 200 ms of measured quiet at either word boundary,
+  without changing saved transcript or caption timings. Leading/trailing audio and
+  recognized audio events stay protected. Suggestions
+  start unchecked: transcription can miss words and tutorial clicks can be intentional.
+  Noises inside recognized words are kept. **Transcript** editing removes selected words,
+  fillers, and retakes. Each pass has its own settings and review and can run independently,
+  in any order. All cuts share timeline mapping and undo; timeline or transcript changes
+  invalidate stale suggestions, including analyses still running.
 - **Layout:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows
   and a styled webcam bubble.
+- **Mouth-click cleanup:** Audio → Reduce mouth clicks repairs short impulses on tracks
+  marked Speech using FFmpeg's `adeclick`. Strength is adjustable; switch it off to hear
+  the original. Playback and export share timing-preserving repaired audio, with undo/redo
+  and unchanged original recordings and transcripts. The first preparation can take a few
+  minutes for long recordings; temporary copies are cached for seeks and repeated clips.
+  Requires FFmpeg with `adeclick`, including on macOS. Strong settings can soften consonants;
+  this is general click repair, not a classifier for every mouth noise.
 - **Export:** H.264 video with AAC stereo audio at 720p, 1080p or 4K.
 
 ## Platform status
@@ -155,6 +183,10 @@ drop abandoned retakes. Two providers are supported, chosen in transcription set
 
 Transcripts are saved per audio track in `<project>.aero/transcripts/<track id>.json`, with
 word times in source time, so they stay valid across cuts and undo.
+Parakeet groups raw tokens into words without extending their speech span through
+separately timed punctuation or whitespace, and keeps consecutive repeated words.
+Its native token timestamp grid remains 80 ms; quiet-edge refinement helps existing
+transcripts, but does not identify every mouth noise inside a spoken word.
 
 ### Tests
 

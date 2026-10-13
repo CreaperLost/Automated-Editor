@@ -633,6 +633,7 @@ mod tests {
                     len: 100_000,
                     source_end: 3_000_000,
                     segments: segments.clone(),
+                    mutes: Default::default(),
                 })
                 .collect(),
         }];
@@ -647,6 +648,7 @@ mod tests {
                 len: 1_000_000,
                 source_end: 3_000_000,
                 segments,
+                mutes: Default::default(),
             }],
         });
         let settings = crate::project::AudioSettings {
@@ -694,6 +696,7 @@ mod tests {
                     len: 2_000_000 / count,
                     source_end: 2_000_000,
                     segments: segments.clone(),
+                    mutes: Default::default(),
                 })
                 .collect(),
         };

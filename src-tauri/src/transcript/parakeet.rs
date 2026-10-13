@@ -128,6 +128,43 @@ pub fn download_model(
     Ok(())
 }
 
+/// Keep the lexical token span: punctuation/whitespace can be timed well after speech.
+/// Unlike the library's Words grouping, retain repeated words ("very very").
+#[cfg(any(feature = "parakeet", test))]
+fn group_word_tokens(tokens: Vec<super::TranscriptWord>) -> Vec<super::TranscriptWord> {
+    let mut words: Vec<super::TranscriptWord> = Vec::new();
+    let mut separated = true;
+    let mut prefix = String::new();
+    for mut token in tokens {
+        let marked = token.text.starts_with('▁') || token.text.starts_with(char::is_whitespace);
+        let text = token.text.trim_start_matches('▁').trim();
+        if text.is_empty() {
+            separated = true;
+            continue;
+        }
+        if text.chars().all(|c| !c.is_alphanumeric()) {
+            if let Some(word) = words.last_mut() {
+                word.text.push_str(text);
+            } else {
+                prefix.push_str(text);
+            }
+            continue;
+        }
+        let suffix = text.starts_with(['\'', '’', '-']);
+        if !words.is_empty() && !separated && (!marked || suffix) {
+            let word = words.last_mut().unwrap();
+            word.text.push_str(text);
+            word.source_end_us = word.source_end_us.max(token.source_end_us);
+        } else {
+            token.text = format!("{prefix}{text}");
+            prefix.clear();
+            words.push(token);
+        }
+        separated = false;
+    }
+    words
+}
+
 #[cfg(feature = "parakeet")]
 mod engine {
     use super::super::audio::{AudioChunk, ChunkPlan, ASR_SAMPLE_RATE};
@@ -218,7 +255,7 @@ mod engine {
                     chunk.samples.clone(),
                     ASR_SAMPLE_RATE,
                     1,
-                    Some(TimestampMode::Words),
+                    Some(TimestampMode::Tokens),
                 )
                 .map_err(|e| format!("Parakeet failed: {e}"))?;
             let words = result
@@ -238,7 +275,7 @@ mod engine {
                 })
                 .collect();
             Ok(ChunkResult {
-                words,
+                words: super::group_word_tokens(words),
                 language: None,
             })
         }
@@ -285,6 +322,61 @@ impl super::provider::ChunkTranscriber for ParakeetTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_grouping_retains_repetitions_and_excludes_punctuation_time() {
+        use crate::transcript::test_word;
+        let words = group_word_tokens(vec![
+            test_word(" very", 0, 160),
+            test_word(" very", 240, 400),
+            test_word(".", 400, 800),
+            test_word(" ", 800, 880),
+            test_word(" to", 960, 1040),
+            test_word("day", 1040, 1200),
+            test_word("'s", 1200, 1280),
+            test_word("!", 1280, 1600),
+        ]);
+        assert_eq!(
+            words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+            ["very", "very.", "today's!"]
+        );
+        assert_eq!(words[1].source_end_us, 400_000);
+        assert_eq!(words[2].source_start_us, 960_000);
+        assert_eq!(words[2].source_end_us, 1_280_000);
+    }
+
+    #[test]
+    fn space_markers_and_unicode_suffixes_keep_lexical_timings() {
+        use crate::transcript::test_word;
+        let words = group_word_tokens(vec![
+            test_word(" ", 0, 80),
+            test_word("▁we", 80, 160),
+            test_word("’re", 160, 240),
+            test_word("▁twenty", 320, 400),
+            test_word("-two", 400, 480),
+            test_word(" ", 480, 640),
+            test_word("▁two", 720, 800),
+        ]);
+        assert_eq!(
+            words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(),
+            ["we’re", "twenty-two", "two"]
+        );
+        assert_eq!(words[1].source_end_us, 480_000);
+    }
+
+    #[test]
+    fn punctuation_inside_a_number_does_not_split_its_spoken_span() {
+        use crate::transcript::test_word;
+        let words = group_word_tokens(vec![
+            test_word(" 3", 0, 80),
+            test_word(".", 80, 160),
+            test_word("5", 160, 240),
+            test_word(" seconds", 320, 480),
+        ]);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].text, "3.5");
+        assert_eq!(words[0].source_end_us, 240_000);
+    }
 
     #[test]
     fn model_presence_needs_all_three_parts() {

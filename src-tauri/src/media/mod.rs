@@ -1,5 +1,6 @@
 //! Shared decoder/encoder adapters. Frames are owned on the native/Rust side.
 pub mod audio;
+pub mod declick;
 pub mod ffmpeg;
 mod native;
 pub mod polish;

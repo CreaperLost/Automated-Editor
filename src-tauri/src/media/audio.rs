@@ -61,6 +61,34 @@ struct Span {
     lane: String,
     gain: f64,
     segments: Arc<Vec<SegmentSummary>>,
+    /// Moments of its sound that are muted, in the sound's own time.
+    mutes: Arc<Vec<(u64, u64)>>,
+}
+
+/// How long a muted moment fades out before it and back in after it (so the mute itself
+/// makes no click).
+const MUTE_FADE_US: f64 = 3_000.0;
+
+/// Muted moments of a sound, in its own time (merged, in order).
+type Mutes = Arc<Vec<(u64, u64)>>;
+
+/// The gain at `source_us` of a sound with `mutes` (merged, in order): silent inside a muted
+/// moment, fading over [`MUTE_FADE_US`] either side of it.
+fn mute_gain(mutes: &[(u64, u64)], source_us: f64) -> f64 {
+    let at = mutes.partition_point(|&(_, end)| (end as f64) < source_us);
+    let distance = |i: usize| {
+        mutes.get(i).map_or(f64::MAX, |&(a, b)| {
+            if source_us < a as f64 {
+                a as f64 - source_us
+            } else if source_us >= b as f64 {
+                source_us - b as f64
+            } else {
+                0.0
+            }
+        })
+    };
+    let nearest = distance(at).min(at.checked_sub(1).map_or(f64::MAX, distance));
+    (nearest / MUTE_FADE_US).clamp(0.0, 1.0)
 }
 
 pub struct AudioMixer {
@@ -69,6 +97,7 @@ pub struct AudioMixer {
     /// overlap, so a chunk finds the few it needs by binary search.
     lanes: Vec<Vec<Span>>,
     polish: Option<PolishPlan>,
+    clean_files: super::declick::CleanFiles,
     /// Open sound files, so sequential chunks do not open and parse them again.
     readers: std::sync::Mutex<Vec<(PathBuf, PcmReader)>>,
     pub total_frames: u64,
@@ -95,11 +124,14 @@ pub struct LaneClip {
     /// Where its sound ends: a clip running to it needs no fade out.
     pub source_end: u64,
     pub segments: Arc<Vec<SegmentSummary>>,
+    /// Moments of its sound that are muted, in the sound's own time (merged, in order).
+    pub mutes: Arc<Vec<(u64, u64)>>,
 }
 
 /// The audible audio tracks of a document (muted ones and silent clips left out).
 pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
     let mut sounds: HashMap<(String, String), Arc<Vec<SegmentSummary>>> = HashMap::new();
+    let mut muted: HashMap<(String, String), Mutes> = HashMap::new();
     let mut out = Vec::new();
     for track in document.sequence.audio_tracks().filter(|t| !t.muted) {
         let gain = document.audio.track_gain(&track.id);
@@ -120,12 +152,26 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
                     Arc::new(sound_segments(root, asset, &clip.stream).unwrap_or_default())
                 })
                 .clone();
+            let mutes = muted
+                .entry((clip.asset.clone(), clip.stream.clone()))
+                .or_insert_with(|| {
+                    let key = crate::sequence::StreamRef::new(&clip.asset, &clip.stream).key();
+                    Arc::new(
+                        document
+                            .noise_mutes
+                            .get(&key)
+                            .map(|ranges| ranges.iter().map(|r| (r.start_us, r.end_us)).collect())
+                            .unwrap_or_default(),
+                    )
+                })
+                .clone();
             clips.push(LaneClip {
                 edited_start: clip.start_us,
                 in_us: clip.in_us,
                 len: clip.duration_us,
                 source_end: asset.duration_us,
                 segments,
+                mutes,
             });
         }
         out.push(Lane {
@@ -145,6 +191,7 @@ impl AudioMixer {
     pub fn new(root: &Path, document: &EditDocument) -> Result<Self, String> {
         let duration = document.duration_us();
         let lanes = lanes(root, document);
+        let clean_files = super::declick::prepare(root, &document.audio, &lanes)?;
         let polish = PolishPlan::build(root, &document.audio, &lanes, duration);
         let mut by_lane = Vec::new();
         for lane in &lanes {
@@ -168,6 +215,7 @@ impl AudioMixer {
                     lane: lane.id.clone(),
                     gain: lane.gain,
                     segments: clip.segments.clone(),
+                    mutes: clip.mutes.clone(),
                 });
             }
             spans.sort_by_key(|s| s.edited_start);
@@ -177,6 +225,7 @@ impl AudioMixer {
             root: root.into(),
             lanes: by_lane,
             polish,
+            clean_files,
             readers: std::sync::Mutex::new(Vec::new()),
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
         })
@@ -267,7 +316,13 @@ impl AudioMixer {
                     if hi <= lo {
                         continue;
                     }
-                    let path = safe_path(&self.root, &segment.relative_path)?;
+                    let path = match self
+                        .clean_files
+                        .get(&(span.lane.clone(), segment.relative_path.clone()))
+                    {
+                        Some(clean) => clean.path().to_path_buf(),
+                        None => safe_path(&self.root, &segment.relative_path)?,
+                    };
                     let info = self
                         .with_reader(&path, |reader| Ok(reader.info().clone()))
                         .map_err(|e| format!("{}: {}", segment.relative_path, e))?;
@@ -399,6 +454,10 @@ impl AudioMixer {
                     gain =
                         gain.min(((span.edited_end as f64 - t) / FADE_US as f64).clamp(0.0, 1.0));
                 }
+                if !span.mutes.is_empty() {
+                    let source = span.source_start as f64 + (t - span.edited_start as f64);
+                    gain = gain.min(mute_gain(&span.mutes, source));
+                }
                 for ch in 0..2 {
                     out[(frame - start) as usize * 2 + ch] *= gain;
                 }
@@ -494,6 +553,70 @@ mod tests {
 
     fn fixture(rate: u32, channels: u16, values: Vec<i16>) -> (tempfile::TempDir, EditDocument) {
         files(vec![("mic", Role::Mic, rate, channels, values)])
+    }
+
+    #[test]
+    fn mouth_click_cleanup_preserves_timing_background_and_chunked_reads() {
+        if super::super::ffmpeg::ffmpeg_path().is_err() {
+            return;
+        }
+        let mut values = vec![0i16; 48_000];
+        values[24_000] = 25_000;
+        let (dir, mut doc) = files(vec![
+            ("mic", Role::Mic, 48_000, 1, values.clone()),
+            ("pc", Role::Background, 48_000, 1, values),
+        ]);
+        let original = std::fs::read(dir.path().join("assets/media/mic.wav")).unwrap();
+        let before = AudioMixer::new(dir.path(), &doc).unwrap();
+        let plain = before.read_frames(23_000, 2_000).unwrap();
+        doc.audio.mouth_clicks = true;
+        doc.audio.mouth_click_strength = 75;
+        let repaired = AudioMixer::new(dir.path(), &doc).unwrap();
+        assert_eq!(before.total_frames, repaired.total_frames);
+        assert_eq!(
+            repaired.clean_files.len(),
+            1,
+            "Background audio is never repaired"
+        );
+        let whole = repaired.read_frames(23_000, 2_000).unwrap();
+        let pieces: Vec<_> = [
+            repaired.read_frames(23_000, 777).unwrap(),
+            repaired.read_frames(23_777, 1_223).unwrap(),
+        ]
+        .concat();
+        assert_eq!(whole, pieces);
+        assert!(
+            whole[2_000].abs() < plain[2_000].abs(),
+            "The mic impulse must be reduced"
+        );
+        assert!(whole[2_000] > 20_000, "The PC impulse must remain");
+        assert_eq!(
+            std::fs::read(dir.path().join("assets/media/mic.wav")).unwrap(),
+            original
+        );
+        // Bypass is sample-identical, including after another mixer has prepared cleanup.
+        doc.audio.mouth_clicks = false;
+        assert_eq!(
+            AudioMixer::new(dir.path(), &doc)
+                .unwrap()
+                .read_frames(23_000, 2_000)
+                .unwrap(),
+            plain
+        );
+        // Reordered/repeated excerpts read the same repaired source, not a new repair at cuts.
+        doc.audio.mouth_clicks = true;
+        doc.sequence
+            .tracks
+            .retain(|t| t.clips.iter().any(|c| c.asset == "mic"));
+        clips(
+            &mut doc,
+            &[(0, 400_000, 200_000), (200_000, 400_000, 200_000)],
+        );
+        let repeated = AudioMixer::new(dir.path(), &doc).unwrap();
+        assert_eq!(
+            repeated.read_frames(2_000, 3_000).unwrap(),
+            repeated.read_frames(11_600, 3_000).unwrap()
+        );
     }
 
     #[test]
@@ -834,6 +957,32 @@ mod tests {
         let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
         let pcm = mixer.read_frames(24_000 - 10, 20).unwrap();
         assert!(pcm.iter().any(|&s| (s as i32) < 8_000), "the cut fades");
+    }
+
+    /// A muted moment of a sound is silent wherever it plays, fading at its edges; the rest
+    /// plays as before.
+    #[test]
+    fn muted_moments_are_silent_and_fade() {
+        let (dir, mut doc) = fixture(48_000, 1, vec![16384; 48_000]);
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let key = crate::sequence::StreamRef::new("mic", "sound0").key();
+        doc.noise_mutes.insert(
+            key,
+            vec![crate::sequence::SourceRange {
+                start_us: 500_000,
+                end_us: 520_000,
+            }],
+        );
+        let muted = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let frame = |samples: &[f64], us: u64| samples[(us * 48 / 1000) as usize * 2];
+        assert_eq!(frame(&muted, 510_000), 0.0);
+        let edge = frame(&muted, 498_500);
+        assert!(
+            edge > 0.1 && edge < frame(&plain, 498_500),
+            "fading: {edge}"
+        );
+        assert_eq!(frame(&muted, 490_000), frame(&plain, 490_000));
+        assert_eq!(frame(&muted, 530_000), frame(&plain, 530_000));
     }
 
     #[test]

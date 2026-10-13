@@ -9,6 +9,28 @@ use std::path::{Path, PathBuf};
 pub const TRANSCRIPTS_DIR: &str = "transcripts";
 pub const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
 
+pub fn validate_dependencies(
+    root: &Path,
+    dependencies: &[super::TranscriptDependency],
+) -> Result<(), String> {
+    for expected in dependencies {
+        let current = load_transcript(root, &expected.track_id)?;
+        let actual = current
+            .as_ref()
+            .map(Transcript::dependency)
+            .unwrap_or_else(|| super::TranscriptDependency {
+                track_id: expected.track_id.clone(),
+                word_stamp: None,
+            });
+        if &actual != expected {
+            return Err(
+                "The transcript changed after this analysis. Find suggestions again.".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn transcript_path(root: &Path, track_id: &str) -> Result<PathBuf, String> {
     // A sound's key, `<asset>.<stream>`.
     if track_id.is_empty()

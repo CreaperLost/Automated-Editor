@@ -197,7 +197,16 @@ pub fn transcript_run_impl(
         &transcripts.cancel,
         progress,
     )?;
-    store::save_transcript(&ctx.root, &output.transcript)?;
+    {
+        let _guard = state.command_lock.lock();
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        super::require_handle(reader, &project_handle)?;
+        if reader.root() != ctx.root {
+            return Err("The project changed during transcription".into());
+        }
+        store::save_transcript(reader.root(), &output.transcript)?;
+    }
     refresh_playback(state);
     let view = current_view(state, &project_handle, &track_id)?
         .ok_or("The transcript was saved but could not be read back")?;
@@ -216,6 +225,7 @@ pub fn transcript_delete_impl(
     project_handle: String,
     track_id: String,
 ) -> Result<(), String> {
+    let _guard = state.command_lock.lock();
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, &project_handle)?;
@@ -291,9 +301,28 @@ pub fn transcript_cut_words_impl(
     track_id: String,
     word_ids: Vec<String>,
 ) -> Result<OpenedProject, String> {
+    transcript_cut_words_checked_impl(
+        state,
+        project_handle,
+        expected_revision,
+        track_id,
+        word_ids,
+        None,
+    )
+}
+
+pub fn transcript_cut_words_checked_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    track_id: String,
+    word_ids: Vec<String>,
+    expected_word_stamp: Option<String>,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
     let cuts = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
         super::require_handle(reader, &project_handle)?;
         let document = &reader.history().current;
         if document.revision != expected_revision {
@@ -301,6 +330,12 @@ pub fn transcript_cut_words_impl(
         }
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
+        if expected_word_stamp
+            .as_ref()
+            .is_some_and(|stamp| transcript.dependency().word_stamp.as_ref() != Some(stamp))
+        {
+            return Err("The transcript changed. Review the words again before cutting.".into());
+        }
         edit::word_cuts(
             &transcript,
             &word_ids,
@@ -313,11 +348,11 @@ pub fn transcript_cut_words_impl(
         .into_iter()
         .map(|(start_us, end_us)| crate::zoom::EditedRange { start_us, end_us })
         .collect();
-    super::project_sequence_edit_impl(
+    super::edit_sequence_locked(
         state,
-        project_handle,
+        reader,
         expected_revision,
-        crate::sequence::edit::SequenceEdit::DeleteRange {
+        &crate::sequence::edit::SequenceEdit::DeleteRange {
             ranges,
             ripple: Some(true),
         },
@@ -393,7 +428,7 @@ pub fn transcript_ai_suggest_impl(
     let mut client =
         crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
     let _run = RunGuard::start(transcripts, format!("AI review of {track_id}"))?;
-    let (created_at, words) = {
+    let (dependency, words) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         super::require_handle(reader, &project_handle)?;
@@ -406,7 +441,7 @@ pub fn transcript_ai_suggest_impl(
             .filter(|w| w.kind == crate::transcript::WordKind::Word && edit::kept(w, &mapper))
             .cloned()
             .collect();
-        (transcript.created_at, words)
+        (transcript.dependency(), words)
     };
     // No lock is held while waiting on the network.
     let refs: Vec<&crate::transcript::TranscriptWord> = words.iter().collect();
@@ -424,7 +459,7 @@ pub fn transcript_ai_suggest_impl(
     )?;
     let model = crate::ai::client::JsonModel::describe(&client);
     modify_transcript(state, &project_handle, &track_id, |t| {
-        if t.created_at != created_at {
+        if t.dependency() != dependency {
             return Err(
                 "The track was transcribed again during the AI review; run it again".into(),
             );

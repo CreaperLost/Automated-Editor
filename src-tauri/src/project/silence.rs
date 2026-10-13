@@ -4,14 +4,30 @@ use super::pcm::{PcmReader, READ_FRAME_CHUNK};
 use super::reader::safe_path;
 use super::waveform::WaveformTrackContext;
 use crate::dsp::silence::{
-    channel_policy_name, finalize_regions, ChannelPolicy, SilenceConfig, SilenceCutInterval,
-    SilenceDetectionResult, StreamingSilenceDetector,
+    channel_policy_name, finalize_regions, resolve_threshold, silent_runs, ChannelPolicy,
+    LevelBlock, SilenceConfig, SilenceCutInterval, SilenceDetectionResult, SoundThreshold,
+    StreamingSilenceDetector,
 };
-use crate::project::revision::MAX_CUTS_PER_REVISION;
 use crate::timeline::{SourceInterval, TimelineMapper};
 use std::fs;
 
 const MAX_DIAGNOSTICS: usize = 32;
+
+/// Fixed protection for the secondary source: even quiet, brief sounds count. It is
+/// independent of silence presets and has no minimum sound duration. Only measured,
+/// near-zero PCM is cuttable; unavailable audio remains protected by the coverage scan.
+/// Apply sound margins after mapping onto timeline clips, so they survive trimmed edges.
+pub(crate) fn secondary_audio_guard_config() -> SilenceConfig {
+    SilenceConfig {
+        threshold_db: -90.0,
+        min_duration_ms: 1,
+        padding_ms: 0,
+        window_ms: Some(10),
+        step_ms: Some(5),
+        channel_policy: Some("max_peak".into()),
+        ..SilenceConfig::default()
+    }
+}
 
 /// Silence found on one audio track, in source time, before it is mapped onto the edit.
 pub(crate) struct SilenceScan {
@@ -23,6 +39,7 @@ pub(crate) struct SilenceScan {
     pub channels: u16,
     pub policy: ChannelPolicy,
     pub diagnostics: Vec<String>,
+    pub threshold_db: f32,
 }
 
 pub(crate) fn scan_track_silence(
@@ -35,7 +52,7 @@ pub(crate) fn scan_track_silence(
     }
     let policy = config.resolved_policy()?;
     let mut diagnostics = Vec::new();
-    let mut raw_regions = Vec::new();
+    let mut blocks: Vec<LevelBlock> = Vec::new();
     let mut detector: Option<StreamingSilenceDetector> = None;
     let mut sample_rate = 0u32;
     let mut channels = 0u16;
@@ -52,6 +69,7 @@ pub(crate) fn scan_track_silence(
             channels,
             policy,
             diagnostics,
+            threshold_db: config.threshold_db,
         });
     }
     let mut covered = Vec::new();
@@ -60,7 +78,7 @@ pub(crate) fn scan_track_silence(
         let path = match safe_path(&ctx.root, &segment.relative_path) {
             Ok(path) => path,
             Err(error) => {
-                reset_detector(&mut detector, &mut raw_regions);
+                reset_detector(&mut detector, &mut blocks);
                 push_diagnostic(
                     &mut diagnostics,
                     &format!(
@@ -72,7 +90,7 @@ pub(crate) fn scan_track_silence(
             }
         };
         if !segment.available || !path.is_file() {
-            reset_detector(&mut detector, &mut raw_regions);
+            reset_detector(&mut detector, &mut blocks);
             push_diagnostic(
                 &mut diagnostics,
                 &format!(
@@ -85,7 +103,7 @@ pub(crate) fn scan_track_silence(
         let file_len = match fs::metadata(&path) {
             Ok(meta) => meta.len(),
             Err(_) => {
-                reset_detector(&mut detector, &mut raw_regions);
+                reset_detector(&mut detector, &mut blocks);
                 push_diagnostic(
                     &mut diagnostics,
                     &format!(
@@ -97,7 +115,7 @@ pub(crate) fn scan_track_silence(
             }
         };
         if file_len != segment.size_bytes {
-            reset_detector(&mut detector, &mut raw_regions);
+            reset_detector(&mut detector, &mut blocks);
             push_diagnostic(
                 &mut diagnostics,
                 &format!(
@@ -111,7 +129,7 @@ pub(crate) fn scan_track_silence(
         let mut reader = match PcmReader::open(&path) {
             Ok(reader) => reader,
             Err(error) => {
-                reset_detector(&mut detector, &mut raw_regions);
+                reset_detector(&mut detector, &mut blocks);
                 push_diagnostic(
                     &mut diagnostics,
                     &format!(
@@ -125,7 +143,7 @@ pub(crate) fn scan_track_silence(
         let info = reader.info().clone();
         if let Some(active) = detector.as_mut() {
             if active.sample_rate() != info.sample_rate || active.channels() != info.channels {
-                raw_regions.extend(active.take_raw_regions());
+                blocks.extend(active.take_blocks());
                 detector = None;
             }
         }
@@ -165,7 +183,7 @@ pub(crate) fn scan_track_silence(
                             segment.relative_path
                         ),
                     );
-                    reset_detector(&mut detector, &mut raw_regions);
+                    reset_detector(&mut detector, &mut blocks);
                     read_failed = true;
                     break;
                 }
@@ -188,6 +206,22 @@ pub(crate) fn scan_track_silence(
             if use_frames == 0 {
                 break;
             }
+            // Muted moments (mouth noises) are silence to pause detection.
+            let chunk_end = segment
+                .start_us
+                .saturating_add(info.frame_us(frame_index + use_frames as u64));
+            let first = ctx.muted.partition_point(|&(_, b)| b <= source_us);
+            if ctx.muted.get(first).is_some_and(|&(a, _)| a < chunk_end) {
+                for i in 0..use_frames {
+                    let at = segment
+                        .start_us
+                        .saturating_add(info.frame_us(frame_index + i as u64));
+                    let k = ctx.muted.partition_point(|&(_, b)| b <= at);
+                    if ctx.muted.get(k).is_some_and(|&(a, _)| a <= at) {
+                        interleaved[i * ch..(i + 1) * ch].fill(0.0);
+                    }
+                }
+            }
             let samples = &interleaved[..use_frames * ch];
             if let Some(active) = detector.as_mut() {
                 if let Err(error) = active.feed(samples, source_us) {
@@ -201,21 +235,26 @@ pub(crate) fn scan_track_silence(
             return Err(error);
         }
         if !read_failed && detector.is_some() {
-            covered.push((segment.start_us, segment.end_us));
+            let read_end = segment.start_us.saturating_add(info.frame_us(frame_index));
+            if read_end > segment.start_us {
+                covered.push((segment.start_us, read_end.min(segment.end_us)));
+            }
         }
     }
 
     if let Some(mut active) = detector.take() {
-        raw_regions.extend(active.take_raw_regions());
+        blocks.extend(active.take_blocks());
     }
 
+    let threshold_db = resolve_threshold(&blocks, config);
     Ok(SilenceScan {
-        source_ranges: finalize_regions(raw_regions, config),
+        source_ranges: finalize_regions(silent_runs(&blocks, threshold_db), config),
         covered,
         sample_rate,
         channels,
         policy,
         diagnostics,
+        threshold_db,
     })
 }
 
@@ -223,12 +262,21 @@ pub fn detect_track_silence(
     ctx: &WaveformTrackContext,
     config: &SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
+    detect_track_silence_with_words(ctx, config, None)
+}
+
+pub(crate) fn detect_track_silence_with_words(
+    ctx: &WaveformTrackContext,
+    config: &SilenceConfig,
+    transcript: Option<&crate::transcript::Transcript>,
+) -> Result<SilenceDetectionResult, String> {
     let SilenceScan {
         source_ranges,
         sample_rate,
         channels,
         policy,
-        mut diagnostics,
+        diagnostics,
+        threshold_db,
         ..
     } = scan_track_silence(ctx, config)?;
     let mapper = TimelineMapper::try_new(
@@ -242,16 +290,18 @@ pub fn detect_track_silence(
             .collect(),
     )?;
 
+    let source_ranges = if let Some(transcript) = transcript {
+        crate::transcript::pauses::protect_words(source_ranges, transcript, config.padding_ms)
+    } else {
+        source_ranges
+    };
+    let min_us =
+        u64::from(config.min_duration_ms).saturating_sub(2 * u64::from(config.padding_ms)) * 1_000;
     let mut suggestions = Vec::new();
-    let mut bounded = false;
     for (source_start, source_end) in source_ranges {
         for (edited_start, edited_end) in mapper.source_range_to_edited(source_start, source_end) {
-            if edited_end <= edited_start {
+            if edited_end.saturating_sub(edited_start) < min_us.max(1) {
                 continue;
-            }
-            if suggestions.len() >= MAX_CUTS_PER_REVISION {
-                bounded = true;
-                break;
             }
             suggestions.push(SilenceCutInterval {
                 id: format!("silence-{}", suggestions.len() + 1),
@@ -263,15 +313,6 @@ pub fn detect_track_silence(
                 source_end_us: source_end,
             });
         }
-        if bounded {
-            break;
-        }
-    }
-    if bounded {
-        push_diagnostic(
-            &mut diagnostics,
-            "Silence suggestion count was bounded to one revision of ripple cuts",
-        );
     }
     // Reordered clips map later source time earlier: list suggestions in timeline order.
     suggestions.sort_by_key(|s| s.start_us);
@@ -286,6 +327,11 @@ pub fn detect_track_silence(
         channel_policy: channel_policy_name(policy),
         suggestions,
         diagnostics,
+        thresholds: vec![SoundThreshold {
+            track_id: ctx.track_id.clone(),
+            threshold_db,
+        }],
+        transcript_dependencies: transcript.map(|t| vec![t.dependency()]).unwrap_or_default(),
     })
 }
 
@@ -313,44 +359,45 @@ pub(crate) fn common_pauses(sounds: &[PlaysAndPauses], min_us: u64) -> Vec<(u64,
         .iter()
         .map(|(plays, silent)| (merged(plays.clone()), merged(silent.clone())))
         .collect();
-    let holds = |ranges: &[(u64, u64)], t: u64| {
-        let i = ranges.partition_point(|&(_, end)| end <= t);
-        ranges.get(i).is_some_and(|&(start, _)| start <= t)
-    };
-    let mut edges: Vec<u64> = sounds
-        .iter()
-        .flat_map(|(plays, silent)| plays.iter().chain(silent).flat_map(|&(a, b)| [a, b]))
-        .collect();
-    edges.sort_unstable();
-    edges.dedup();
-    let mut pauses: Vec<(u64, u64)> = Vec::new();
-    for pair in edges.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let playing = sounds.iter().filter(|(plays, _)| holds(plays, a));
-        let mut any = false;
-        let mut all_silent = true;
-        for (_, silent) in playing {
-            any = true;
-            all_silent &= holds(silent, a);
+    // Sweep play/pause boundaries once. A source with many clips (or repeated clips) must
+    // not require checking every clip at every boundary.
+    let mut edges: Vec<(u64, i64, i64)> = Vec::new();
+    for (plays, silent) in &sounds {
+        for &(a, b) in plays {
+            edges.extend([(a, 1, 0), (b, -1, 0)]);
+            let first = silent.partition_point(|&(_, end)| end <= a);
+            for &(start, end) in &silent[first..] {
+                if start >= b {
+                    break;
+                }
+                edges.extend([(start.max(a), 0, 1), (end.min(b), 0, -1)]);
+            }
         }
-        if any && all_silent {
+    }
+    edges.sort_unstable_by_key(|edge| edge.0);
+    let mut pauses: Vec<(u64, u64)> = Vec::new();
+    let (mut playing, mut quiet) = (0i64, 0i64);
+    let mut previous = 0;
+    for (at, play_delta, quiet_delta) in edges {
+        let (a, b) = (previous, at);
+        if b > a && playing > 0 && playing == quiet {
             match pauses.last_mut() {
                 Some(last) if last.1 == a => last.1 = b,
                 _ => pauses.push((a, b)),
             }
         }
+        playing += play_delta;
+        quiet += quiet_delta;
+        previous = at;
     }
     pauses.retain(|(a, b)| b - a >= min_us.max(1));
     pauses
 }
 
-fn reset_detector(
-    detector: &mut Option<StreamingSilenceDetector>,
-    raw_regions: &mut Vec<(u64, u64)>,
-) {
+fn reset_detector(detector: &mut Option<StreamingSilenceDetector>, blocks: &mut Vec<LevelBlock>) {
     if let Some(active) = detector.as_mut() {
         active.notify_discontinuity();
-        raw_regions.extend(active.take_raw_regions());
+        blocks.extend(active.take_blocks());
     }
 }
 
@@ -442,6 +489,7 @@ mod tests {
                 media: None,
             }],
             edited_duration_us: 5_000_000,
+            muted: Vec::new(),
         };
         let config = SilenceConfig {
             padding_ms: 0,
@@ -453,5 +501,75 @@ mod tests {
         assert_eq!(speech.len(), 2, "{speech:?}");
         assert!(speech[0].1.abs_diff(2_000_000) < 60_000, "{speech:?}");
         assert!(speech[1].0.abs_diff(3_000_000) < 60_000, "{speech:?}");
+        // A journal can declare more time than the WAV contains. Transcript gap
+        // analysis must not treat that missing tail as available audio.
+        let mut longer = ctx;
+        longer.segments[0].end_us = 6_000_000;
+        let short_file = scan_track_silence(&longer, &config).unwrap();
+        assert_eq!(short_file.covered, vec![(0, 5_000_000)]);
+    }
+
+    /// A click in a pause splits it; muted, it is silence and the pause is whole again.
+    #[test]
+    fn a_muted_click_is_silence_to_pause_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let rate = 16_000u32;
+        // 2s tone, 1s silence with a click at 2.5 s, 2s tone.
+        let samples: Vec<i16> = (0..rate * 5)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                if (2.5..2.505).contains(&t) {
+                    if i % 2 == 0 {
+                        20_000
+                    } else {
+                        -20_000
+                    }
+                } else if (2.0..3.0).contains(&t) {
+                    0
+                } else {
+                    ((t * 440.0 * std::f32::consts::TAU).sin() * 12_000.0) as i16
+                }
+            })
+            .collect();
+        let wav = crate::fixtures::generate_pcm16_wav(rate, 1, &samples);
+        std::fs::create_dir_all(dir.path().join("audio")).unwrap();
+        std::fs::write(dir.path().join("audio/mic.wav"), &wav).unwrap();
+        let mut ctx = WaveformTrackContext {
+            root: dir.path().to_path_buf(),
+            track_id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            segments: vec![SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: "audio/mic.wav".into(),
+                start_us: 0,
+                end_us: 5_000_000,
+                size_bytes: wav.len() as u64,
+                media_timescale: rate,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: None,
+                available: true,
+            }],
+            retained: vec![RetainedInterval::recording(0, 5_000_000)],
+            edited_duration_us: 5_000_000,
+            muted: Vec::new(),
+        };
+        let config = SilenceConfig {
+            padding_ms: 0,
+            min_duration_ms: 300,
+            ..SilenceConfig::default()
+        };
+        let clicked = scan_track_silence(&ctx, &config).unwrap().source_ranges;
+        assert!(
+            clicked
+                .iter()
+                .all(|&(a, b)| b <= 2_500_000 || a >= 2_505_000),
+            "the click is not silence: {clicked:?}"
+        );
+        ctx.muted = vec![(2_495_000, 2_510_000)];
+        let muted = scan_track_silence(&ctx, &config).unwrap().source_ranges;
+        assert_eq!(muted.len(), 1, "{muted:?}");
+        assert!(muted[0].0.abs_diff(2_000_000) < 60_000, "{muted:?}");
+        assert!(muted[0].1.abs_diff(3_000_000) < 60_000, "{muted:?}");
     }
 }
