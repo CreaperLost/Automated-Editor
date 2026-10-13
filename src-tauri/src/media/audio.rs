@@ -61,6 +61,34 @@ struct Span {
     lane: String,
     gain: f64,
     segments: Arc<Vec<SegmentSummary>>,
+    /// Moments of its sound that are muted, in the sound's own time.
+    mutes: Arc<Vec<(u64, u64)>>,
+}
+
+/// How long a muted moment fades out before it and back in after it (so the mute itself
+/// makes no click).
+const MUTE_FADE_US: f64 = 3_000.0;
+
+/// Muted moments of a sound, in its own time (merged, in order).
+type Mutes = Arc<Vec<(u64, u64)>>;
+
+/// The gain at `source_us` of a sound with `mutes` (merged, in order): silent inside a muted
+/// moment, fading over [`MUTE_FADE_US`] either side of it.
+fn mute_gain(mutes: &[(u64, u64)], source_us: f64) -> f64 {
+    let at = mutes.partition_point(|&(_, end)| (end as f64) < source_us);
+    let distance = |i: usize| {
+        mutes.get(i).map_or(f64::MAX, |&(a, b)| {
+            if source_us < a as f64 {
+                a as f64 - source_us
+            } else if source_us >= b as f64 {
+                source_us - b as f64
+            } else {
+                0.0
+            }
+        })
+    };
+    let nearest = distance(at).min(at.checked_sub(1).map_or(f64::MAX, distance));
+    (nearest / MUTE_FADE_US).clamp(0.0, 1.0)
 }
 
 pub struct AudioMixer {
@@ -96,11 +124,14 @@ pub struct LaneClip {
     /// Where its sound ends: a clip running to it needs no fade out.
     pub source_end: u64,
     pub segments: Arc<Vec<SegmentSummary>>,
+    /// Moments of its sound that are muted, in the sound's own time (merged, in order).
+    pub mutes: Arc<Vec<(u64, u64)>>,
 }
 
 /// The audible audio tracks of a document (muted ones and silent clips left out).
 pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
     let mut sounds: HashMap<(String, String), Arc<Vec<SegmentSummary>>> = HashMap::new();
+    let mut muted: HashMap<(String, String), Mutes> = HashMap::new();
     let mut out = Vec::new();
     for track in document.sequence.audio_tracks().filter(|t| !t.muted) {
         let gain = document.audio.track_gain(&track.id);
@@ -121,12 +152,26 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
                     Arc::new(sound_segments(root, asset, &clip.stream).unwrap_or_default())
                 })
                 .clone();
+            let mutes = muted
+                .entry((clip.asset.clone(), clip.stream.clone()))
+                .or_insert_with(|| {
+                    let key = crate::sequence::StreamRef::new(&clip.asset, &clip.stream).key();
+                    Arc::new(
+                        document
+                            .noise_mutes
+                            .get(&key)
+                            .map(|ranges| ranges.iter().map(|r| (r.start_us, r.end_us)).collect())
+                            .unwrap_or_default(),
+                    )
+                })
+                .clone();
             clips.push(LaneClip {
                 edited_start: clip.start_us,
                 in_us: clip.in_us,
                 len: clip.duration_us,
                 source_end: asset.duration_us,
                 segments,
+                mutes,
             });
         }
         out.push(Lane {
@@ -170,6 +215,7 @@ impl AudioMixer {
                     lane: lane.id.clone(),
                     gain: lane.gain,
                     segments: clip.segments.clone(),
+                    mutes: clip.mutes.clone(),
                 });
             }
             spans.sort_by_key(|s| s.edited_start);
@@ -407,6 +453,10 @@ impl AudioMixer {
                 if span.fade_out {
                     gain =
                         gain.min(((span.edited_end as f64 - t) / FADE_US as f64).clamp(0.0, 1.0));
+                }
+                if !span.mutes.is_empty() {
+                    let source = span.source_start as f64 + (t - span.edited_start as f64);
+                    gain = gain.min(mute_gain(&span.mutes, source));
                 }
                 for ch in 0..2 {
                     out[(frame - start) as usize * 2 + ch] *= gain;
@@ -907,6 +957,32 @@ mod tests {
         let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
         let pcm = mixer.read_frames(24_000 - 10, 20).unwrap();
         assert!(pcm.iter().any(|&s| (s as i32) < 8_000), "the cut fades");
+    }
+
+    /// A muted moment of a sound is silent wherever it plays, fading at its edges; the rest
+    /// plays as before.
+    #[test]
+    fn muted_moments_are_silent_and_fade() {
+        let (dir, mut doc) = fixture(48_000, 1, vec![16384; 48_000]);
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let key = crate::sequence::StreamRef::new("mic", "sound0").key();
+        doc.noise_mutes.insert(
+            key,
+            vec![crate::sequence::SourceRange {
+                start_us: 500_000,
+                end_us: 520_000,
+            }],
+        );
+        let muted = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let frame = |samples: &[f64], us: u64| samples[(us * 48 / 1000) as usize * 2];
+        assert_eq!(frame(&muted, 510_000), 0.0);
+        let edge = frame(&muted, 498_500);
+        assert!(
+            edge > 0.1 && edge < frame(&plain, 498_500),
+            "fading: {edge}"
+        );
+        assert_eq!(frame(&muted, 490_000), frame(&plain, 490_000));
+        assert_eq!(frame(&muted, 530_000), frame(&plain, 530_000));
     }
 
     #[test]

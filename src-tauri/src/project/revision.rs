@@ -2,7 +2,7 @@
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path};
 use crate::sequence::edit::{EditOutcome, SequenceEdit};
-use crate::sequence::{clock, Asset, Role, Sequence, StreamRef};
+use crate::sequence::{clock, Asset, Role, Sequence, SourceRange, StreamRef};
 use crate::timeline::TimelineMapper;
 use crate::webcam_focus::WebcamFocus;
 use crate::zoom::{
@@ -23,6 +23,11 @@ pub const EDIT_SCHEMA_VERSION: u32 = 2;
 pub const MAX_EDIT_BYTES: u64 = 4_194_304;
 pub const MAX_UNDO: usize = 64;
 pub const MAX_CUTS_PER_REVISION: usize = 256;
+/// Muted moments one sound can hold.
+pub const MAX_NOISE_MUTES: usize = 50_000;
+
+/// Muted moments by sound: see [`EditDocument::noise_mutes`].
+pub type NoiseMutes = std::collections::BTreeMap<String, Vec<SourceRange>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +52,11 @@ pub struct EditDocument {
     /// Loudness, noise reduction and ducking. Applies to playback and export.
     #[serde(default, skip_serializing_if = "AudioSettings::is_default")]
     pub audio: AudioSettings,
+    /// Moments muted in a sound (mouth noises, knocks), by stream key (`<asset>.<stream>`), in
+    /// that sound's own time: wherever a clip plays it, those moments are silent, and pause
+    /// detection hears them as silence. Merged and in order.
+    #[serde(default, skip_serializing_if = "NoiseMutes::is_empty")]
+    pub noise_mutes: NoiseMutes,
     /// Captions burned into playback and export from a sound stream's transcript.
     #[serde(default, skip_serializing_if = "CaptionSettings::is_default")]
     pub captions: CaptionSettings,
@@ -76,6 +86,7 @@ impl Default for EditDocument {
             dismissed_zoom_ids: Vec::new(),
             webcam_focus: WebcamFocus::default(),
             audio: AudioSettings::default(),
+            noise_mutes: NoiseMutes::new(),
             captions: CaptionSettings::default(),
             chapters: Vec::new(),
             shorts: Vec::new(),
@@ -677,6 +688,70 @@ impl EditHistory {
         }
         let mut next = self.current.clone();
         next.audio = audio;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Mutes (`mute`) or unmutes (`unmute` set) moments of sound `key`'s own time.
+    pub fn update_noise_mutes(
+        &mut self,
+        expected_revision: u64,
+        key: &str,
+        ranges: &[SourceRange],
+        unmute: bool,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        self.check(expected_revision)?;
+        let source = self.current.stream_ref(key)?;
+        let asset = self
+            .current
+            .asset(&source.asset)
+            .ok_or("That sound is not in the project")?;
+        if asset
+            .stream(&source.stream)
+            .is_none_or(|s| s.kind != crate::sequence::StreamKind::Sound)
+        {
+            return Err("That stream has no sound".into());
+        }
+        if ranges
+            .iter()
+            .any(|r| r.end_us <= r.start_us || r.end_us > asset.duration_us)
+        {
+            return Err("A muted moment must lie inside its sound".into());
+        }
+        let current: Vec<(u64, u64)> = self
+            .current
+            .noise_mutes
+            .get(key)
+            .map(|ranges| ranges.iter().map(|r| (r.start_us, r.end_us)).collect())
+            .unwrap_or_default();
+        let changed: Vec<(u64, u64)> = ranges.iter().map(|r| (r.start_us, r.end_us)).collect();
+        let next_ranges = if unmute {
+            crate::transcript::pauses::subtract_ranges(&current, &changed)
+        } else {
+            crate::transcript::pauses::merge_ranges([current, changed].concat())
+        };
+        if next_ranges.len() > MAX_NOISE_MUTES {
+            return Err(format!("Mute at most {MAX_NOISE_MUTES} moments of a sound"));
+        }
+        let mut next = self.current.clone();
+        if next_ranges.is_empty() {
+            next.noise_mutes.remove(key);
+        } else {
+            next.noise_mutes.insert(
+                key.to_string(),
+                next_ranges
+                    .into_iter()
+                    .map(|(start_us, end_us)| SourceRange { start_us, end_us })
+                    .collect(),
+            );
+        }
+        if next.noise_mutes == self.current.noise_mutes {
+            return Err(if unmute {
+                "Those moments are not muted".into()
+            } else {
+                "Those moments are already muted".into()
+            });
+        }
         self.commit_next(expected_revision, persist_root, next)
     }
 

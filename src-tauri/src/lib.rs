@@ -797,6 +797,50 @@ async fn detect_non_speech_gaps(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+async fn detect_mouth_noises(
+    app: tauri::AppHandle,
+    project_handle: String,
+    key: String,
+    config: dsp::noises::NoiseConfig,
+) -> Result<commands::noises::NoiseScan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::noises::detect_mouth_noises_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            key,
+            config,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_noise_mutes(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    key: String,
+    ranges: Vec<sequence::SourceRange>,
+    unmute: bool,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::noises::project_noise_mutes_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            key,
+            ranges,
+            unmute,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn apply_jump_cuts(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1475,6 +1519,8 @@ pub fn run() {
             export_cancel,
             detect_silence,
             detect_non_speech_gaps,
+            detect_mouth_noises,
+            project_noise_mutes,
             apply_jump_cuts,
             transcript_settings_get,
             transcript_settings_set,

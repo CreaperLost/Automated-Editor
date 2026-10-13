@@ -65,6 +65,7 @@ import {
   type Role,
   type SeqTrack,
   type SequenceEdit,
+  type SourceSpan,
   type WaveformOverview,
 } from "../../lib/types";
 import {
@@ -236,6 +237,8 @@ interface ClipBlockProps {
   waveform?: WaveformOverview;
   waveFromUs: number;
   waveToUs: number;
+  /** A sound clip's muted moments (mouth noises), in its sound's own time. */
+  mutes?: SourceSpan[];
   actions: React.MutableRefObject<ClipActions>;
 }
 
@@ -259,6 +262,7 @@ const ClipBlock = React.memo(function ClipBlock({
   waveform,
   waveFromUs,
   waveToUs,
+  mutes,
   actions,
 }: ClipBlockProps) {
   const pct = (us: number) => `${(us / spanUs) * 100}%`;
@@ -334,6 +338,21 @@ const ClipBlock = React.memo(function ClipBlock({
                 />
               </div>
             )}
+            {/* Muted moments: a mark over the waveform where the sound is silenced. */}
+            {mutes
+              ?.filter((m) => m.endUs > clip.inUs && m.startUs < clip.inUs + clip.durationUs)
+              .map((m) => {
+                const from = Math.max(m.startUs, clip.inUs) - clip.inUs;
+                const to = Math.min(m.endUs, clip.inUs + clip.durationUs) - clip.inUs;
+                return (
+                  <div
+                    key={m.startUs}
+                    aria-hidden
+                    className="absolute inset-y-0 bg-danger/60 pointer-events-none"
+                    style={{ left: `${(from / clip.durationUs) * 100}%`, width: `max(1px, ${((to - from) / clip.durationUs) * 100}%)` }}
+                  />
+                );
+              })}
             {showContents && showName && (
               <span className="absolute top-0.5 left-1 max-w-[calc(100%-0.5rem)] flex items-center gap-1 px-1 rounded-sm bg-studio-950/55 text-[10px] leading-4 font-medium text-white/85 truncate pointer-events-none">
                 {info.unlinked && <Unlink className="w-2.5 h-2.5 shrink-0" aria-label="Unlinked" />}
@@ -1094,6 +1113,14 @@ export const TimelineStudio: React.FC = () => {
   };
 
   // ---- Waveforms: each sound once, over its own time; clips draw their part ------------------
+  // Muted moments by sound. Kept while they do not change, so clips are not redrawn for
+  // every edit.
+  const noiseMutesJson = JSON.stringify(openedProject?.noiseMutes ?? {});
+  const noiseMutes = useMemo(
+    () => JSON.parse(noiseMutesJson) as Record<string, SourceSpan[]>,
+    [noiseMutesJson],
+  );
+
   const soundKeys = useMemo(() => {
     const keys = new Map<string, number>();
     for (const track of audioTracks) {
@@ -1571,6 +1598,7 @@ export const TimelineStudio: React.FC = () => {
         waveform={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
         waveFromUs={audio ? Math.max(clip.startUs, drawnUs.from) : 0}
         waveToUs={audio ? Math.min(clipEnd(clip), drawnUs.to) : 0}
+        mutes={audio ? noiseMutes[streamKey(clip.asset, clip.stream)] : undefined}
         actions={clipActions}
       />
     );

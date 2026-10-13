@@ -24,6 +24,9 @@ pub struct WaveformTrackContext {
     pub segments: Vec<SegmentSummary>,
     pub retained: Vec<RetainedInterval>,
     pub edited_duration_us: u64,
+    /// Moments of the sound that are muted (merged, in order, its own time): pause detection
+    /// hears them as silence.
+    pub muted: Vec<(u64, u64)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1194,6 +1197,7 @@ mod tests {
                 media: None,
             }],
             edited_duration_us: end_us,
+            muted: Vec::new(),
         }
     }
 

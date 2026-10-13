@@ -189,6 +189,27 @@ pub(crate) fn merge_ranges(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     merged
 }
 
+/// `ranges` less `remove` (both any order), merged and in order.
+pub(crate) fn subtract_ranges(ranges: &[(u64, u64)], remove: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    let mut out = merge_ranges(ranges.to_vec());
+    for &(a, b) in &merge_ranges(remove.to_vec()) {
+        out = out
+            .into_iter()
+            .flat_map(|(x, y)| {
+                if b <= x || a >= y {
+                    vec![(x, y)]
+                } else {
+                    [(x, a.max(x)), (b.min(y), y)]
+                        .into_iter()
+                        .filter(|(p, q)| q > p)
+                        .collect()
+                }
+            })
+            .collect();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

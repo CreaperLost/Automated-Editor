@@ -206,6 +206,22 @@ pub(crate) fn scan_track_silence(
             if use_frames == 0 {
                 break;
             }
+            // Muted moments (mouth noises) are silence to pause detection.
+            let chunk_end = segment
+                .start_us
+                .saturating_add(info.frame_us(frame_index + use_frames as u64));
+            let first = ctx.muted.partition_point(|&(_, b)| b <= source_us);
+            if ctx.muted.get(first).is_some_and(|&(a, _)| a < chunk_end) {
+                for i in 0..use_frames {
+                    let at = segment
+                        .start_us
+                        .saturating_add(info.frame_us(frame_index + i as u64));
+                    let k = ctx.muted.partition_point(|&(_, b)| b <= at);
+                    if ctx.muted.get(k).is_some_and(|&(a, _)| a <= at) {
+                        interleaved[i * ch..(i + 1) * ch].fill(0.0);
+                    }
+                }
+            }
             let samples = &interleaved[..use_frames * ch];
             if let Some(active) = detector.as_mut() {
                 if let Err(error) = active.feed(samples, source_us) {
@@ -473,6 +489,7 @@ mod tests {
                 media: None,
             }],
             edited_duration_us: 5_000_000,
+            muted: Vec::new(),
         };
         let config = SilenceConfig {
             padding_ms: 0,
@@ -490,5 +507,69 @@ mod tests {
         longer.segments[0].end_us = 6_000_000;
         let short_file = scan_track_silence(&longer, &config).unwrap();
         assert_eq!(short_file.covered, vec![(0, 5_000_000)]);
+    }
+
+    /// A click in a pause splits it; muted, it is silence and the pause is whole again.
+    #[test]
+    fn a_muted_click_is_silence_to_pause_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let rate = 16_000u32;
+        // 2s tone, 1s silence with a click at 2.5 s, 2s tone.
+        let samples: Vec<i16> = (0..rate * 5)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                if (2.5..2.505).contains(&t) {
+                    if i % 2 == 0 {
+                        20_000
+                    } else {
+                        -20_000
+                    }
+                } else if (2.0..3.0).contains(&t) {
+                    0
+                } else {
+                    ((t * 440.0 * std::f32::consts::TAU).sin() * 12_000.0) as i16
+                }
+            })
+            .collect();
+        let wav = crate::fixtures::generate_pcm16_wav(rate, 1, &samples);
+        std::fs::create_dir_all(dir.path().join("audio")).unwrap();
+        std::fs::write(dir.path().join("audio/mic.wav"), &wav).unwrap();
+        let mut ctx = WaveformTrackContext {
+            root: dir.path().to_path_buf(),
+            track_id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            segments: vec![SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: "audio/mic.wav".into(),
+                start_us: 0,
+                end_us: 5_000_000,
+                size_bytes: wav.len() as u64,
+                media_timescale: rate,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: None,
+                available: true,
+            }],
+            retained: vec![RetainedInterval::recording(0, 5_000_000)],
+            edited_duration_us: 5_000_000,
+            muted: Vec::new(),
+        };
+        let config = SilenceConfig {
+            padding_ms: 0,
+            min_duration_ms: 300,
+            ..SilenceConfig::default()
+        };
+        let clicked = scan_track_silence(&ctx, &config).unwrap().source_ranges;
+        assert!(
+            clicked
+                .iter()
+                .all(|&(a, b)| b <= 2_500_000 || a >= 2_505_000),
+            "the click is not silence: {clicked:?}"
+        );
+        ctx.muted = vec![(2_495_000, 2_510_000)];
+        let muted = scan_track_silence(&ctx, &config).unwrap().source_ranges;
+        assert_eq!(muted.len(), 1, "{muted:?}");
+        assert!(muted[0].0.abs_diff(2_000_000) < 60_000, "{muted:?}");
+        assert!(muted[0].1.abs_diff(3_000_000) < 60_000, "{muted:?}");
     }
 }

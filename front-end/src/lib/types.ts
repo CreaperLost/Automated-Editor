@@ -467,6 +467,39 @@ export interface TranscriptGapConfig {
   edgeThresholdDb?: number;
 }
 
+/** A range of an asset's own time. */
+export interface SourceSpan {
+  startUs: number;
+  endUs: number;
+}
+
+/**
+ * "click": clicks and clusters of them; "knock": low pops, knocks and thumps; "mouth": lip
+ * smacks, wet mouth sounds, rustles; "breath": breaths.
+ */
+export type NoiseKind = "click" | "knock" | "mouth" | "breath";
+
+/** A mouth noise or knock found in a sound (src-tauri/src/commands/noises.rs). */
+export interface FoundNoise {
+  sourceStartUs: number;
+  sourceEndUs: number;
+  /** Where it plays on the timeline. */
+  startUs: number;
+  endUs: number;
+  kind: NoiseKind;
+  contrastDb: number;
+  /** Voiced speech is right next to it: it may be part of a word. */
+  nearSpeech: boolean;
+  muted: boolean;
+}
+
+export interface NoiseScan {
+  key: string;
+  revision: number;
+  noises: FoundNoise[];
+  diagnostics: string[];
+}
+
 export interface SilenceDetectionResult {
   trackId: string;
   sampleRate: number;
@@ -605,6 +638,8 @@ export interface OpenedProject {
   /** Auto webcam layout settings and segments. */
   webcamFocus?: WebcamFocus;
   audio?: AudioSettings;
+  /** Moments muted in each sound (mouth noises), by stream key, in that sound's own time. */
+  noiseMutes?: Record<string, SourceSpan[]>;
   captions?: CaptionSettings;
   chapters?: Chapter[];
   shorts?: Short[];

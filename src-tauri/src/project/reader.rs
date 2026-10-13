@@ -105,6 +105,9 @@ pub struct OpenedProject {
     #[serde(default)]
     pub webcam_focus: crate::webcam_focus::WebcamFocus,
     pub audio: crate::project::AudioSettings,
+    /// Moments muted in each sound, by stream key, in that sound's own time.
+    #[serde(default)]
+    pub noise_mutes: crate::project::revision::NoiseMutes,
     #[serde(default)]
     pub captions: crate::captions::CaptionSettings,
     #[serde(default)]
@@ -573,6 +576,7 @@ impl ProjectReader {
                 layout: EditLayout::default(),
                 webcam_focus: Default::default(),
                 audio: Default::default(),
+                noise_mutes: Default::default(),
                 captions: Default::default(),
                 chapters: Vec::new(),
                 shorts: Vec::new(),
@@ -904,6 +908,19 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    /// Mutes (or with `unmute`, unmutes) moments of sound `key`'s own time.
+    pub fn update_noise_mutes(
+        &mut self,
+        expected_revision: u64,
+        key: &str,
+        ranges: &[crate::sequence::SourceRange],
+        unmute: bool,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .update_noise_mutes(expected_revision, key, ranges, unmute, &self.root)?;
+        Ok(self.done())
+    }
+
     pub fn update_captions(
         &mut self,
         expected_revision: u64,
@@ -1066,6 +1083,7 @@ impl ProjectReader {
         focus.attach_edited_ranges(&document.focus_clock());
         self.summary.webcam_focus = focus;
         self.summary.audio = document.audio.clone();
+        self.summary.noise_mutes = document.noise_mutes.clone();
         self.summary.captions = document.captions.clone();
         let mut chapters = document.chapters.clone();
         crate::chapters::attach_edited(&mut chapters, document);

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub mod noises;
 pub mod transcript;
 pub mod transcript_pauses;
 
@@ -186,6 +187,11 @@ pub(crate) fn sound_context(
         segments,
         retained,
         edited_duration_us,
+        muted: document
+            .noise_mutes
+            .get(key)
+            .map(|ranges| ranges.iter().map(|r| (r.start_us, r.end_us)).collect())
+            .unwrap_or_default(),
     })
 }
 

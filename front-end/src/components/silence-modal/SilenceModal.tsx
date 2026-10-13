@@ -4,6 +4,8 @@ import { X, Scissors, AlertCircle, ChevronDown, Play, Loader2 } from "lucide-rea
 import { useProjectStore } from "../../stores/projectStore";
 import { useJumpCutStore } from "../../stores/jumpCutStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
+import { useNoiseStore } from "../../stores/noiseStore";
+import { NoisePass } from "./NoisePass";
 import { api } from "../../lib/ipc";
 import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import { OpenedProject } from "../../lib/types";
@@ -72,6 +74,7 @@ export const SilenceModal: React.FC = () => {
   const { blocks: activeSilenceBlocks, snapshot: silenceAnalysis, busy: isDetecting, error, diagnostics, thresholds, sourceMode, chosenTrack, secondTrack, notice } = review;
   const [advanced, setAdvanced] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
+  const noisesOpen = useNoiseStore((s) => s.open);
 
   useEffect(() => {
     if (!isSilenceModalOpen) return;
@@ -201,6 +204,22 @@ export const SilenceModal: React.FC = () => {
     </label>
   );
 
+  const passPicker = (
+    <Segmented<"noises" | "silence" | "nonSpeech">
+      label="Cleanup pass"
+      value={noisesOpen ? "noises" : activePass}
+      onChange={(pass) => {
+        useNoiseStore.getState().setOpen(pass === "noises");
+        if (pass !== "noises") setActivePass(pass);
+      }}
+      options={[
+        { value: "noises", label: "1. Mouth noises" },
+        { value: "silence", label: "2. Remove silence" },
+        { value: "nonSpeech", label: "3. Gaps without words" },
+      ]}
+    />
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
@@ -217,22 +236,27 @@ export const SilenceModal: React.FC = () => {
         <div className="px-5 py-4 border-b border-studio-800 flex items-start justify-between gap-4">
           <div>
             <h2 className="text-heading text-studio-100">Jump cuts</h2>
-            <p className="text-label text-studio-400">Remove silence, then gaps without words. Each pass also works on its own.</p>
+            <p className="text-label text-studio-400">Mute mouth noises, remove silence, then gaps without words. Each pass also works on its own.</p>
           </div>
           <IconButton icon={X} label="Close (Esc)" onClick={() => setIsSilenceModalOpen(false)} />
         </div>
 
+        {noisesOpen ? (
+          <>
+            <div className="px-5 pt-4 pb-4">{passPicker}</div>
+            <NoisePass
+              onClose={() => setIsSilenceModalOpen(false)}
+              onNext={() => {
+                useNoiseStore.getState().setOpen(false);
+                setActivePass("silence");
+              }}
+            />
+          </>
+        ) : (
+        <>
         <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1">
           <div className="space-y-2">
-            <Segmented<"silence" | "nonSpeech">
-              label="Cleanup pass"
-              value={activePass}
-              onChange={setActivePass}
-              options={[
-                { value: "silence", label: "1. Remove silence" },
-                { value: "nonSpeech", label: "2. Gaps without words" },
-              ]}
-            />
+            {passPicker}
             {transcriptAssisted && (
               <p className="text-meta text-studio-400">
                 Use saved transcripts to find gaps containing breaths, mouth noises, or clicks, regardless of loudness.
@@ -242,7 +266,7 @@ export const SilenceModal: React.FC = () => {
             )}
             {!transcriptAssisted && <p className="text-meta text-studio-400">Find very quiet parts from the audio. Saved word timings add protection when available; transcription is optional.</p>}
             <div className="flex items-center justify-between gap-3 rounded-control bg-studio-850 px-3 py-2">
-              <span className="text-meta text-studio-400">3. Edit words, fillers, and retakes in Transcript.</span>
+              <span className="text-meta text-studio-400">4. Edit words, fillers, and retakes in Transcript.</span>
               <Button size="sm" variant="ghost" onClick={() => { setIsSilenceModalOpen(false); useWorkspaceStore.getState().setWorkspace("cleanup"); }}>Edit words</Button>
             </div>
           </div>
@@ -474,6 +498,8 @@ export const SilenceModal: React.FC = () => {
             </Button>
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );
