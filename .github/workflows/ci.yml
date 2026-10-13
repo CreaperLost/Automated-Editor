@@ -215,10 +215,12 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: front-end/package-lock.json
-      - uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
-          version: 1
+      # Installed from apt directly: cache-apt-pkgs-action restored these without
+      # the glib/gobject pkg-config files, so gobject-sys and glib-sys failed to build.
+      - name: Install Tauri system libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
       # tauri::generate_context! needs front-end/dist to exist at compile time.
       - name: Build front-end
         working-directory: front-end
