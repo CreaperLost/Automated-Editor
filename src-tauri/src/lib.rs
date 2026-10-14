@@ -7,11 +7,13 @@ pub mod dsp;
 pub mod export;
 pub mod fixtures;
 pub mod media;
+pub mod mcp;
 pub mod media_bin;
 mod parity;
 mod perf;
 pub mod playback;
 pub mod project;
+pub mod proposals;
 pub mod render;
 pub mod secrets;
 pub mod sequence;
@@ -1006,6 +1008,195 @@ async fn open_shorts_window(app: tauri::AppHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// The app as the MCP server sees it: its state, and the windows to tell about agent edits.
+#[cfg(feature = "tauri-app")]
+struct McpHost(tauri::AppHandle);
+
+#[cfg(feature = "tauri-app")]
+impl mcp::Host for McpHost {
+    fn state(&self) -> &AppState {
+        self.0.state::<AppState>().inner()
+    }
+
+    fn project_changed(&self) {
+        use tauri::Emitter;
+        let project = self
+            .state()
+            .opened_project
+            .lock()
+            .as_ref()
+            .map(|reader| reader.summary.clone());
+        if let Some(project) = project {
+            // The same event the windows send each other (front-end/src/lib/windowSync.ts).
+            let payload = serde_json::json!({ "source": "agent", "project": project });
+            let _ = self.0.emit("aeroedits-project-updated", payload);
+        }
+    }
+
+    fn proposals_changed(&self) {
+        use tauri::Emitter;
+        let _ = self.0.emit("aeroedits-proposals-updated", ());
+    }
+
+    fn transcripts(&self) -> &commands::transcript::TranscriptState {
+        self.0
+            .state::<commands::transcript::TranscriptState>()
+            .inner()
+    }
+
+    fn project_opened(&self, path: &str) {
+        use tauri::Emitter;
+        let project = self
+            .state()
+            .opened_project
+            .lock()
+            .as_ref()
+            .map(|reader| reader.summary.clone());
+        let Some(project) = project else {
+            return;
+        };
+        if let Some(window) = self.0.get_webview_window("main") {
+            let _ = window.set_title(&commands::window_title_for_project(Some(&project.name)));
+        }
+        // The editor loads it as if opened from its own menu (front-end/src/App.tsx).
+        let payload = serde_json::json!({ "path": path, "project": project });
+        let _ = self.0.emit("aeroedits-agent-opened", payload);
+    }
+
+    fn transcript_changed(&self) {
+        use tauri::Emitter;
+        // The same event the windows send each other (front-end/src/lib/windowSync.ts).
+        let _ = self
+            .0
+            .emit("aeroedits-captions-changed", serde_json::json!({ "source": "agent" }));
+    }
+
+    fn activity_changed(&self) {
+        use tauri::Emitter;
+        let _ = self.0.emit("aeroedits-agent-activity", ());
+    }
+
+    fn autopilot(&self) -> bool {
+        mcp::load_settings(&transcript::settings::config_dir()).autopilot
+    }
+}
+
+#[cfg(feature = "tauri-app")]
+fn mcp_host(app: &tauri::AppHandle) -> std::sync::Arc<dyn mcp::Host> {
+    std::sync::Arc::new(McpHost(app.clone()))
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_status() -> mcp::McpStatus {
+    mcp::status(&transcript::settings::config_dir())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<mcp::McpStatus, String> {
+    mcp::set_enabled(&transcript::settings::config_dir(), mcp_host(&app), enabled)
+}
+
+/// Adds AeroEdits to the Claude app's or Codex's MCP settings, or takes it out.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_app_connect(app: mcp::clients::App, connected: bool) -> Result<mcp::McpStatus, String> {
+    mcp::set_app_connected(&transcript::settings::config_dir(), app, connected)
+}
+
+/// Installs the `aeroedits` skill for Claude Code or Codex, or takes it out.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_skill_install(home: mcp::skill::SkillHome, installed: bool) -> Result<mcp::McpStatus, String> {
+    mcp::set_skill_installed(&transcript::settings::config_dir(), home, installed)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_set_autopilot(app: tauri::AppHandle, autopilot: bool) -> Result<mcp::McpStatus, String> {
+    use tauri::Emitter;
+    let status = mcp::set_autopilot(&transcript::settings::config_dir(), autopilot)?;
+    // Every window's Agent panel shows the switch.
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    Ok(status)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn proposals_list(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+) -> Result<proposals::ProposalsView, String> {
+    commands::proposals::proposals_list_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn proposal_accept(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    batch_id: String,
+    item_ids: Option<Vec<String>>,
+    reject_rest: bool,
+) -> Result<commands::proposals::ProposalOutcome, String> {
+    use tauri::Emitter;
+    let outcome = commands::proposals::proposal_accept_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        batch_id,
+        item_ids,
+        reject_rest,
+    )?;
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    Ok(outcome)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn proposal_reject(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    batch_id: String,
+    item_ids: Option<Vec<String>>,
+    rejected: bool,
+) -> Result<proposals::ProposalsView, String> {
+    use tauri::Emitter;
+    let view = commands::proposals::proposal_reject_impl(
+        &state,
+        project_handle,
+        batch_id,
+        item_ids,
+        rejected,
+    )?;
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    Ok(view)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn proposal_undo(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    batch_id: String,
+) -> Result<commands::proposals::ProposalOutcome, String> {
+    use tauri::Emitter;
+    let outcome = commands::proposals::proposal_undo_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        batch_id,
+    )?;
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    Ok(outcome)
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn ai_settings_get() -> ai::AiSettingsView {
@@ -1447,6 +1638,10 @@ pub fn run() {
         .manage(commands::transcript::TranscriptState::default())
         .setup(|app| {
             playback::engine::start(app.handle().clone());
+            mcp::start_if_enabled(
+                &transcript::settings::config_dir(),
+                mcp_host(app.handle()),
+            );
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1525,6 +1720,15 @@ pub fn run() {
             transcript_settings_get,
             transcript_settings_set,
             transcript_set_api_key,
+            mcp_status,
+            mcp_set_enabled,
+            mcp_set_autopilot,
+            proposals_list,
+            proposal_accept,
+            proposal_reject,
+            proposal_undo,
+            mcp_app_connect,
+            mcp_skill_install,
             ai_settings_get,
             ai_settings_set,
             ai_set_api_key,

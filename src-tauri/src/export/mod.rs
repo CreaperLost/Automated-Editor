@@ -281,6 +281,14 @@ pub struct SceneEvaluator {
     prefetched: std::cell::RefCell<(u64, std::collections::BTreeSet<u64>)>,
     /// Zooms by recording, with the camera paths that follow the mouse, worked out once.
     zooms: std::cell::RefCell<std::collections::HashMap<String, Zooms>>,
+    /// What plays each stream, by asset and stream, looked up once: a lookup checks the
+    /// recording's files on disk, too slow to repeat for every layer of every frame.
+    sources: std::cell::RefCell<
+        std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, std::sync::Arc<crate::sequence::sources::StreamSource>>,
+        >,
+    >,
     /// Pointer pictures by file, decoded once.
     cursor_images: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<VideoFrame>>>,
 }
@@ -422,6 +430,7 @@ impl SceneEvaluator {
             cursors: Default::default(),
             prefetched: Default::default(),
             zooms: Default::default(),
+            sources: Default::default(),
             cursor_images: Default::default(),
         })
     }
@@ -828,7 +837,10 @@ impl SceneEvaluator {
             let Some(local) = clip.local_us(edited_us) else {
                 continue;
             };
-            let Some(segments) = self.segments_of(clip) else {
+            let Some(source) = self.segments_of(clip) else {
+                continue;
+            };
+            let crate::sequence::sources::StreamSource::Segments(segments) = &*source else {
                 continue;
             };
             let reach = local.saturating_add(horizon_us).min(clip.out_us());
@@ -873,9 +885,12 @@ impl SceneEvaluator {
                 let Some(asset) = self.document.asset(&clip.asset) else {
                     continue;
                 };
-                use crate::sequence::sources::{stream_source, StreamSource};
-                match stream_source(&self.root, asset, &clip.stream) {
-                    Ok(StreamSource::Segments(segments)) => {
+                use crate::sequence::sources::StreamSource;
+                let Ok(source) = self.stream_source(asset, &clip.stream) else {
+                    continue;
+                };
+                match &*source {
+                    StreamSource::Segments(segments) => {
                         let Some(segment) = segments
                             .iter()
                             .find(|s| s.available && s.start_us <= local && local < s.end_us)
@@ -893,8 +908,8 @@ impl SceneEvaluator {
                             );
                         }
                     }
-                    Ok(StreamSource::Video(path)) => {
-                        accepted &= crate::media::prefetch_video(&path, local, self.decode_limit)
+                    StreamSource::Video(path) => {
+                        accepted &= crate::media::prefetch_video(path, local, self.decode_limit)
                     }
                     _ => {}
                 }
@@ -906,22 +921,55 @@ impl SceneEvaluator {
         }
     }
 
-    /// The segment files of a clip's stream, when it plays from a recording's segments.
-    fn segments_of(&self, clip: &Clip) -> Option<Vec<SegmentSummary>> {
-        use crate::sequence::sources::{stream_source, StreamSource};
-        let asset = self.document.asset(&clip.asset)?;
-        match stream_source(&self.root, asset, &clip.stream).ok()? {
-            StreamSource::Segments(segments) => Some(segments),
-            _ => None,
+    /// What plays stream `stream` of `asset`, from this evaluator's cache. A failed lookup (a
+    /// recording that is gone) is not kept, so it shows again once it is back.
+    fn stream_source(
+        &self,
+        asset: &crate::sequence::Asset,
+        stream: &str,
+    ) -> Result<std::sync::Arc<crate::sequence::sources::StreamSource>, String> {
+        let cached = self
+            .sources
+            .borrow()
+            .get(asset.id.as_str())
+            .and_then(|streams| streams.get(stream))
+            .cloned();
+        if let Some(source) = cached {
+            return Ok(source);
         }
+        let source = std::sync::Arc::new(crate::sequence::sources::stream_source(
+            &self.root, asset, stream,
+        )?);
+        self.sources
+            .borrow_mut()
+            .entry(asset.id.clone())
+            .or_default()
+            .insert(stream.to_string(), source.clone());
+        Ok(source)
+    }
+
+    /// The segment files of a clip's stream, when it plays from a recording's segments.
+    fn segments_of(
+        &self,
+        clip: &Clip,
+    ) -> Option<std::sync::Arc<crate::sequence::sources::StreamSource>> {
+        use crate::sequence::sources::StreamSource;
+        let asset = self.document.asset(&clip.asset)?;
+        let source = self.stream_source(asset, &clip.stream).ok()?;
+        matches!(*source, StreamSource::Segments(_)).then_some(source)
     }
 
     /// Which segment file plays `local` of a clip's stream (none for other sources).
     fn segment_file(&self, clip: &Clip, local: u64) -> Option<String> {
-        self.segments_of(clip)?
-            .into_iter()
+        use crate::sequence::sources::StreamSource;
+        let source = self.segments_of(clip)?;
+        let StreamSource::Segments(segments) = &*source else {
+            return None;
+        };
+        segments
+            .iter()
             .find(|s| s.available && s.start_us <= local && local < s.end_us)
-            .map(|s| s.relative_path)
+            .map(|s| s.relative_path.clone())
     }
 
     /// The wallpaper or gradient, built once per evaluator. A short draws its own choice.
@@ -1031,16 +1079,16 @@ impl SceneEvaluator {
     /// recording's gap between segments the screen holds its last picture and the camera
     /// shows nothing; a missing file shows nothing.
     fn picture_job(&self, clip: &Clip, local_us: u64) -> Result<Option<PictureJob>, String> {
-        use crate::sequence::sources::{stream_source, StreamSource};
+        use crate::sequence::sources::StreamSource;
         let Some(asset) = self.document.asset(&clip.asset) else {
             return Ok(None);
         };
-        let source = match stream_source(&self.root, asset, &clip.stream) {
+        let source = match self.stream_source(asset, &clip.stream) {
             Ok(source) => source,
             // A recording that is gone shows nothing rather than stopping playback.
             Err(_) => return Ok(None),
         };
-        Ok(match source {
+        Ok(match &*source {
             StreamSource::Segments(segments) => {
                 let containing = segments
                     .iter()
@@ -1064,14 +1112,14 @@ impl SceneEvaluator {
             }
             // A file moved or deleted since import shows nothing.
             StreamSource::Video(path) => {
-                path.is_file().then_some(PictureJob::Video(path, local_us))
+                path.is_file().then(|| PictureJob::Video(path.clone(), local_us))
             }
             StreamSource::Image(path) => {
                 if !path.is_file() {
                     return Ok(None);
                 }
                 Some(PictureJob::Ready(crate::media_bin::decode_image_cached(
-                    &path,
+                    path,
                     (self.decode_limit.max_width, self.decode_limit.max_height),
                 )?))
             }
@@ -2008,37 +2056,78 @@ fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
                     message: "Export destination already exists".into(),
                 });
             }
-            #[cfg(target_os = "macos")]
-            {
-                use std::os::unix::ffi::OsStrExt;
-                let from = std::ffi::CString::new(temp.as_os_str().as_bytes()).map_err(|e| {
-                    ExportFailure::Io {
-                        message: e.to_string(),
-                    }
-                })?;
-                let to = std::ffi::CString::new(dest.as_os_str().as_bytes()).map_err(|e| {
-                    ExportFailure::Io {
-                        message: e.to_string(),
-                    }
-                })?;
-                if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
-                    return Ok(());
-                }
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    return Err(ExportFailure::Collision {
+            // No hard links there (exFAT, FAT32): move the file instead, never replacing one.
+            match move_no_replace(temp, dest) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(ExportFailure::Collision {
                         message: "Export destination already exists".into(),
-                    });
+                    })
                 }
-                Err(ExportFailure::Io {
+                Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+                    Err(ExportFailure::Io {
+                        message: _err.to_string(),
+                    })
+                }
+                Err(error) => Err(ExportFailure::Io {
                     message: error.to_string(),
-                })
+                }),
             }
-            #[cfg(not(target_os = "macos"))]
-            Err(ExportFailure::Io {
-                message: _err.to_string(),
-            })
         }
+    }
+}
+
+/// Renames `from` to `to` on the same volume, failing with `AlreadyExists` instead of
+/// replacing a file at `to`.
+fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |p: &Path| {
+            std::ffi::CString::new(p.as_os_str().as_bytes())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        };
+        let (from, to) = (c(from)?, c(to)?);
+        #[cfg(target_os = "macos")]
+        let done = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        #[cfg(target_os = "linux")]
+        let done = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if done == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let wide = |p: &Path| {
+            p.as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect::<Vec<u16>>()
+        };
+        let (from, to) = (wide(from), wide(to));
+        // Without MOVEFILE_REPLACE_EXISTING an existing `to` fails as ERROR_ALREADY_EXISTS.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } != 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (from, to);
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -2046,6 +2135,22 @@ fn publish_output(temp: &Path, dest: &Path) -> Result<(), ExportFailure> {
 mod tests {
     use super::*;
     use crate::media::decode_h264_frame;
+
+    #[test]
+    fn the_hard_link_fallback_moves_without_replacing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (temp, dest) = (dir.path().join("a.tmp"), dir.path().join("a.mp4"));
+        fs::write(&temp, b"new").unwrap();
+        move_no_replace(&temp, &dest).unwrap();
+        assert!(!temp.exists());
+        assert_eq!(fs::read(&dest).unwrap(), b"new");
+
+        fs::write(&temp, b"newer").unwrap();
+        let error = move_no_replace(&temp, &dest).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&dest).unwrap(), b"new");
+        assert!(temp.exists());
+    }
 
     #[test]
     fn rejects_prores_and_odd_dimensions() {
@@ -3009,6 +3114,7 @@ mod tests {
             cursors: Default::default(),
             prefetched: Default::default(),
             zooms: Default::default(),
+            sources: Default::default(),
             cursor_images: Default::default(),
         };
         let (_, _, y) = evaluator.caption_at(100_000).unwrap();
@@ -3062,6 +3168,7 @@ mod tests {
             cursors: Default::default(),
             prefetched: Default::default(),
             zooms: Default::default(),
+            sources: Default::default(),
             cursor_images: Default::default(),
         }
     }
@@ -3120,6 +3227,58 @@ mod tests {
             .layers
             .iter()
             .any(|l| l.role == crate::render::LayerRole::Caption));
+    }
+
+    /// A transparent WebM over a red picture: red shows through where the clip is clear.
+    #[test]
+    fn a_transparent_video_overlay_shows_what_is_below() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let path = dir.path().join("graphic.webm");
+        let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+            .args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("color=c=black@0.0:s=64x64:r=10:d=1,format=rgba,drawbox=x=16:y=16:w=32:h=32:color=white:t=fill:replace=1")
+            .args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "20"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        document.assets.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "graphic", "name": "Graphic", "kind": "video", "path": path,
+                "durationUs": 1_000_000, "width": 64, "height": 64,
+                "streams": [{"id": "picture", "name": "Picture", "kind": "picture", "role": "overlay"}]
+            }))
+            .unwrap(),
+        );
+        let mut track = crate::sequence::Track::new("t2".into(), crate::sequence::TrackKind::Video);
+        track.clips.push(Clip {
+            id: "g".into(),
+            asset: "graphic".into(),
+            stream: "picture".into(),
+            start_us: 0,
+            in_us: 0,
+            duration_us: 1_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+        });
+        document.sequence.tracks.push(track);
+        document.validate().unwrap();
+        let scene = scenes(dir.path(), document, 64, 64)
+            .scene_at(500_000)
+            .unwrap();
+        let frame = crate::render::Compositor::composite_cpu(&scene).unwrap();
+        let bgra = |x: u32, y: u32| {
+            let i = (y * frame.stride + x * 4) as usize;
+            [frame.data[i], frame.data[i + 1], frame.data[i + 2]]
+        };
+        let (corner, centre) = (bgra(4, 4), bgra(32, 32));
+        assert!(corner[2] > 230 && corner[0] < 25 && corner[1] < 25, "corner {corner:?}");
+        assert!(centre.iter().all(|&c| c > 230), "centre {centre:?}");
+        crate::media::ffmpeg::release_decoders();
     }
 
     #[test]

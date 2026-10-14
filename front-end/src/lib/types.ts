@@ -1022,19 +1022,88 @@ export interface ModelDownloadProgress {
   bytesTotal: number | null;
 }
 
+export type CutKind = "filler" | "retake" | "cut";
+
 export interface TranscriptCutSuggestion {
   id: string;
-  kind: "filler" | "retake";
+  kind: CutKind;
   wordIds: string[];
   text: string;
   editedStartUs: number;
   editedEndUs: number;
   /** Rejected in the review list; left out of "remove all". */
   dismissed: boolean;
-  /** Found by the built-in rules or by an AI review. */
-  source?: "rules" | "ai";
-  /** The AI's short explanation. */
+  /** Found by the built-in rules, by an AI review, or proposed by a connected agent. */
+  source?: "rules" | "ai" | "agent";
+  /** The AI's or agent's short explanation. */
   reason?: string;
+  /** For an agent's cut: the proposal item it is, decided through its batch. */
+  proposal?: { batchId: string; itemId: string; agent: string };
+}
+
+export type ProposalStatus = "pending" | "accepted" | "rejected" | "withdrawn" | "undone";
+export type ProposalItemState = "pending" | "accepted" | "rejected";
+
+/** One cut in an agent's batch, as it would land in the edit now. */
+export interface ProposalItem {
+  id: string;
+  kind: CutKind;
+  state: ProposalItemState;
+  text: string;
+  reason?: string;
+  firstWordId?: string;
+  lastWordId?: string;
+  /** The words it would cut now. */
+  wordIds: string[];
+  editedStartUs: number | null;
+  editedEndUs: number | null;
+  /** Waiting, but its words were already cut another way. */
+  alreadyCut: boolean;
+  /** A timeline range from an older revision. */
+  stale: boolean;
+}
+
+/** A batch an agent proposed over MCP: cuts, or timeline edits applied together. */
+export interface ProposalBatch {
+  id: string;
+  agent: string;
+  reason: string;
+  createdAt: string;
+  baseRevision: number;
+  /** `action`: one of the app's own actions the agent ran, applied at once. */
+  kind: "cuts" | "edits" | "action";
+  /** For an action: which (`silence`, `fillers`, ...). */
+  action?: string;
+  status: ProposalStatus;
+  decidedAt?: string;
+  /** Accepted by autopilot. */
+  auto: boolean;
+  appliedRevision: number | null;
+  /** What it does, one line each. */
+  summary: string[];
+  stream?: string;
+  edits?: SequenceEdit[];
+  items: ProposalItem[];
+  /** Made for an older revision; the agent has to propose it again. */
+  stale: boolean;
+  /** Its accept is the latest change, so it can be undone on its own. */
+  canUndo: boolean;
+}
+
+export interface ProposalsView {
+  /** The project these are of; batch ids repeat across projects. */
+  projectHandle: string;
+  revision: number;
+  /** Newest first. */
+  batches: ProposalBatch[];
+  /** A change was made but the Agent panel's history could not be saved. */
+  warning?: string;
+}
+
+export interface ProposalOutcome {
+  /** The project, when the edit changed. */
+  project: OpenedProject | null;
+  proposals: ProposalsView;
 }
 
 /** A chapter marker, anchored in source time so it survives cuts and reordering. */
@@ -1099,6 +1168,75 @@ export interface AiSettings {
   /** Empty uses the default model. */
   openaiModel: string;
   openrouterModel: string;
+}
+
+/** One tool call an AI agent made through the MCP server. */
+export interface McpActivity {
+  at: string;
+  /** The agent's name for itself, such as `claude-ai` or `codex`. */
+  client: string | null;
+  tool: string;
+  ok: boolean;
+  millis: number;
+  error?: string;
+}
+
+/** A call an agent is waiting on. */
+export interface McpWorking {
+  client: string | null;
+  tool: string;
+  /** 0 to 1, once the call has said. */
+  fraction: number | null;
+  message: string | null;
+}
+
+/** An agent app AeroEdits can add itself to. */
+export type McpApp = "claudeApp" | "codex";
+
+export interface McpAppState {
+  app: McpApp;
+  /** Its settings folder exists. */
+  installed: boolean;
+  /** Its settings start AeroEdits. */
+  connected: boolean;
+  /** They start a different copy of AeroEdits than this one. */
+  otherCopy: boolean;
+  configPath: string;
+}
+
+/** The local MCP server AI agents connect to, through `aeroedits --mcp-stdio`. */
+export interface McpStatus {
+  enabled: boolean;
+  /** Agents' proposals are accepted as they arrive. */
+  autopilot: boolean;
+  running: boolean;
+  /** The private pipe (or socket) the bridge connects to. */
+  endpoint: string | null;
+  error: string | null;
+  /** Agents connected now, by name. */
+  connected: string[];
+  /** Newest first. */
+  activity: McpActivity[];
+  /** Calls agents are waiting on, oldest first. */
+  working: McpWorking[];
+  /** This app's program; agents start it with `--mcp-stdio`. */
+  bridgeCommand: string | null;
+  apps: McpAppState[];
+  /** The `aeroedits` editing skill in agents that read skills from disk. */
+  skills: McpSkillState[];
+}
+
+/** An agent that reads skills from a folder: `~/.claude/skills` or `~/.codex/skills`. */
+export type McpSkillHome = "claudeCode" | "codex";
+
+export interface McpSkillState {
+  home: McpSkillHome;
+  /** The agent's settings folder exists. */
+  available: boolean;
+  installed: boolean;
+  /** The installed files are this app's. */
+  current: boolean;
+  path: string;
 }
 
 export interface AiSettingsView {

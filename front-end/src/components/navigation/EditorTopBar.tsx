@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   AlertCircle,
+  Bot,
   Check,
   Clock,
   Download,
@@ -31,6 +32,8 @@ import {
   resetWorkspaceLayout,
   type LayoutPreset,
 } from "../layout/dockLayout";
+import { AgentsDialog } from "../settings/AgentsDialog";
+import { useAgentStore } from "../../stores/agentStore";
 import { HotkeysDialog } from "../settings/HotkeysDialog";
 import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
 
@@ -76,6 +79,9 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   const setWorkspace = useWorkspaceStore((s) => s.setWorkspace);
   const bindings = useHotkeyStore((s) => s.bindings);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
+  // The Agent panel opens it too.
+  const agentsOpen = useAgentStore((s) => s.dialogOpen);
+  const setAgentsOpen = useAgentStore((s) => s.setDialogOpen);
 
   const shortcut = (action: "undo" | "redo") => (bindings[action][0] ? formatBinding(bindings[action][0]) : undefined);
   const run = (work: () => Promise<unknown>) => void work().catch((err) => onError(String(err)));
@@ -122,6 +128,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     { label: "Reset this workspace", icon: RotateCcw, onSelect: resetWorkspaceLayout, disabled: !project },
     { kind: "separator" },
     { label: "Keyboard shortcuts…", icon: Keyboard, onSelect: () => setHotkeysOpen(true) },
+    { label: "AI agents…", icon: Bot, onSelect: () => setAgentsOpen(true) },
   ];
 
   return (
@@ -227,6 +234,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
         )}
       </div>
       {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
+      {agentsOpen && <AgentsDialog onClose={() => setAgentsOpen(false)} />}
     </header>
   );
 };

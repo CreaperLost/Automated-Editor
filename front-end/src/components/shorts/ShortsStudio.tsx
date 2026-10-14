@@ -31,7 +31,7 @@ import {
 } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import "../layout/dockTheme.css";
-import { listenForCaptionChanges, listenForProjects } from "../../lib/windowSync";
+import { listenForCaptionChanges, listenForProjects, listenForProjectSwitches } from "../../lib/windowSync";
 import { useProjectStore } from "../../stores/projectStore";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../../lib/types";
 import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
@@ -198,9 +198,30 @@ export const ShortsStudio: React.FC = () => {
       if (state.openedProject?.projectHandle !== next.projectHandle) state.loadOpenedProject(next);
       else state.applyOpenedProject(next, { remote: true });
     });
+    // The editor opened another project or closed this one: nothing of the old one carries over.
+    const stopSwitches = listenForProjectSwitches((next) => {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = undefined;
+      setSelectedId(undefined);
+      setDraft(null);
+      setChecked(new Set());
+      setExports({});
+      setError(undefined);
+      setRenaming(null);
+      const state = useProjectStore.getState();
+      state.setViewShort(undefined);
+      if (next) {
+        state.loadOpenedProject(next);
+      } else {
+        setEditTarget(null);
+        state.clearProject();
+      }
+      setMain(next);
+    });
     return () => {
       stopCaptions();
       stopProjects();
+      stopSwitches();
     };
   }, [loadOpenedProject]);
 
@@ -299,10 +320,13 @@ export const ShortsStudio: React.FC = () => {
    */
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveShorts = (change: (current: Short[]) => Short[] | null) => {
+    // A save asked for in one project never lands in the next one opened.
+    const handle = useProjectStore.getState().openedProject?.projectHandle;
     saveQueue.current = saveQueue.current.then(async () => {
       const current = useProjectStore.getState().openedProject;
-      const next = current ? change(current.shorts ?? []) : null;
-      if (!current || !next) return;
+      if (!current || current.projectHandle !== handle) return;
+      const next = change(current.shorts ?? []);
+      if (!next) return;
       setBusy("Saving");
       setError(undefined);
       try {

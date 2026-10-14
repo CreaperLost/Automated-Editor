@@ -5,6 +5,7 @@ import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
+import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { clipName, clipRole, trackLabel } from "../../lib/sequence";
 import {
   AudioSettings,
@@ -260,28 +261,18 @@ const MouthClickCleanup: React.FC = () => {
 export const AudioSection: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const [volumeDraft, setVolumeDraft] = useState<Record<string, number>>({});
-  const volumeTimer = useRef<number>();
+  const volumeSave = useDebouncedSave(250);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const saved = openedProject?.audio ?? DEFAULT_AUDIO_SETTINGS;
   const [draft, setDraft] = useState<AudioSettings>(saved);
   const [error, setError] = useState<string>();
-  const timer = useRef<number>();
-  const openedRef = useRef(openedProject);
-  openedRef.current = openedProject;
+  const settingsSave = useDebouncedSave(250);
 
   // Follow undo/redo and project switches while no edit is pending.
   const savedKey = JSON.stringify(saved);
   useEffect(() => {
-    if (timer.current === undefined) setDraft(saved);
+    if (!settingsSave.isPending()) setDraft(saved);
   }, [savedKey]);
-
-  useEffect(
-    () => () => {
-      window.clearTimeout(timer.current);
-      window.clearTimeout(volumeTimer.current);
-    },
-    [],
-  );
 
   if (!openedProject) return null;
 
@@ -329,11 +320,7 @@ export const AudioSection: React.FC = () => {
   const update = (patch: Partial<AudioSettings>) => {
     const next = { ...draft, ...patch };
     setDraft(next);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      timer.current = undefined;
-      const opened = openedRef.current;
-      if (!opened) return;
+    settingsSave.schedule((opened) => {
       // Track volumes are saved on their own; keep the latest ones.
       void api
         .projectAudioUpdate(opened.projectHandle, opened.revision, {
@@ -345,7 +332,7 @@ export const AudioSection: React.FC = () => {
           setError(undefined);
         })
         .catch((err) => setError(String(err)));
-    }, 250);
+    });
   };
 
   const saveMix = (patches: Parameters<typeof saveTrackMix>[0]) =>
@@ -356,14 +343,12 @@ export const AudioSection: React.FC = () => {
   const setVolume = (trackId: string, volumeDb: number) => {
     const drafts = { ...volumeDraft, [trackId]: volumeDb };
     setVolumeDraft(drafts);
-    window.clearTimeout(volumeTimer.current);
-    volumeTimer.current = window.setTimeout(() => {
-      volumeTimer.current = undefined;
+    volumeSave.schedule(() => {
       const patches = Object.fromEntries(
         Object.entries(drafts).map(([id, db]) => [id, { volumeDb: db }]),
       );
       void saveMix(patches).finally(() => setVolumeDraft({}));
-    }, 250);
+    });
   };
 
   return (

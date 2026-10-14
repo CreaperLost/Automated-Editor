@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, IconButton, cn } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
+import { useAgentStore } from "../../stores/agentStore";
 import { useTimeline } from "../../hooks/useTimeline";
 import { ClipWaveform } from "../waveform/ClipWaveform";
 import { MEDIA_DRAG_TYPE, currentMediaDrag } from "../media/MediaPanel";
@@ -460,6 +461,23 @@ const ROLE_LABEL: Record<Role, string> = {
 export const TimelineStudio: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const pendingZoomSuggestions = useProjectStore((s) => s.pendingZoomSuggestions);
+  const agentProposals = useAgentStore((s) => s.proposals);
+  const agentCuts = useMemo(
+    () =>
+      (agentProposals?.batches ?? [])
+        .filter((b) => b.status === "pending")
+        .flatMap((b) =>
+          b.items
+            .filter((i) => i.state === "pending" && !i.alreadyCut && !i.stale && i.editedStartUs !== null && i.editedEndUs !== null)
+            .map((i) => ({
+              key: `${b.id}-${i.id}`,
+              startUs: i.editedStartUs as number,
+              endUs: i.editedEndUs as number,
+              title: `${b.agent} proposes cutting "${i.text}" (${b.id}). Decide in the Agent panel.`,
+            })),
+        ),
+    [agentProposals],
+  );
   const zoomDiagnostics = useProjectStore((s) => s.zoomDiagnostics);
   const durationUs = useProjectStore((s) => s.durationUs);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
@@ -1936,6 +1954,20 @@ export const TimelineStudio: React.FC = () => {
                 onPointerCancel={onMarqueeUp}
                 className="flex-1 relative cursor-pointer py-2 bg-studio-950/40"
               >
+                {/* Cuts an agent proposes, striped across every track until they are decided */}
+                {agentCuts.map((cut) => (
+                  <div
+                    key={cut.key}
+                    className="absolute top-0 bottom-0 z-20 pointer-events-none border-x border-danger/60"
+                    style={{
+                      left: pct(cut.startUs),
+                      width: `max(2px, ${pct(cut.endUs - cut.startUs)})`,
+                      backgroundImage:
+                        "repeating-linear-gradient(135deg, rgb(var(--danger) / 0.32) 0 5px, transparent 5px 10px)",
+                    }}
+                    title={cut.title}
+                  />
+                ))}
                 {marquee &&
                   (() => {
                     const rect = lanesRef.current?.getBoundingClientRect();

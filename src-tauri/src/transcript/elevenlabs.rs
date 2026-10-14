@@ -3,15 +3,22 @@ use super::audio::{AudioChunk, ChunkPlan};
 use super::provider::{ChunkResult, ChunkTranscriber, ProviderKind};
 use super::{seconds_to_us, TranscriptWord, WordKind};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const DEFAULT_MODEL: &str = "scribe_v2";
 const ENDPOINT: &str = "https://api.elevenlabs.io/v1/speech-to-text";
 const MAX_ATTEMPTS: u32 = 3;
 const MAX_KEYTERMS: usize = 100;
+/// How often a request waiting on the network looks at Cancel.
+const CANCEL_POLL: Duration = Duration::from_millis(100);
+const CANCELLED: &str = "Transcription cancelled";
 
 pub struct ScribeTranscriber {
     client: reqwest::blocking::Client,
+    endpoint: String,
+    cancel: Arc<AtomicBool>,
     api_key: String,
     model: String,
     language: Option<String>,
@@ -34,6 +41,8 @@ impl ScribeTranscriber {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             client,
+            endpoint: ENDPOINT.into(),
+            cancel: Arc::new(AtomicBool::new(false)),
             api_key: api_key.trim().to_string(),
             model: model
                 .filter(|m| !m.trim().is_empty())
@@ -46,6 +55,48 @@ impl ScribeTranscriber {
                 .take(MAX_KEYTERMS)
                 .collect(),
         })
+    }
+
+    /// Stops waiting on an upload, and stops retrying, as soon as `cancel` is set.
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    /// Sends on a helper thread and waits for it, checking Cancel during the upload and while
+    /// the service works. A cancelled request is left to finish on its own; its answer is dropped.
+    fn send(&self, wav: Vec<u8>) -> Result<Result<(u16, String), String>, String> {
+        let request = self
+            .client
+            .post(&self.endpoint)
+            .header("xi-api-key", &self.api_key)
+            .multipart(self.form(wav)?);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = request.send().and_then(|response| {
+                let status = response.status().as_u16();
+                response.text().map(|text| (status, text))
+            });
+            let _ = tx.send(result);
+        });
+        loop {
+            if self.cancelled() {
+                return Err(CANCELLED.into());
+            }
+            match rx.recv_timeout(CANCEL_POLL) {
+                Ok(result) => {
+                    return Ok(result.map_err(|e| format!("Could not reach ElevenLabs: {e}")))
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Ok(Err("The request to ElevenLabs stopped".into()))
+                }
+            }
+        }
     }
 
     fn form(&self, wav: Vec<u8>) -> Result<reqwest::blocking::multipart::Form, String> {
@@ -94,28 +145,28 @@ impl ChunkTranscriber for ScribeTranscriber {
         let mut last_error = String::new();
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
-                std::thread::sleep(Duration::from_secs(2u64.pow(attempt)));
+                // Back off before retrying, still answering Cancel.
+                let wait = Duration::from_secs(2u64.pow(attempt));
+                let started = std::time::Instant::now();
+                while started.elapsed() < wait {
+                    if self.cancelled() {
+                        return Err(CANCELLED.into());
+                    }
+                    std::thread::sleep(CANCEL_POLL);
+                }
             }
-            let response = self
-                .client
-                .post(ENDPOINT)
-                .header("xi-api-key", &self.api_key)
-                .multipart(self.form(wav.clone())?)
-                .send();
-            let response = match response {
-                Ok(response) => response,
+            let (status, body) = match self.send(wav.clone())? {
+                Ok(answer) => answer,
                 Err(error) => {
-                    last_error = format!("Could not reach ElevenLabs: {error}");
+                    last_error = error;
                     continue;
                 }
             };
-            let status = response.status();
-            let body = response.text().map_err(|e| e.to_string())?;
-            if status.is_success() {
+            if (200..300).contains(&status) {
                 return parse_response(&body);
             }
-            last_error = describe_error(status.as_u16(), &body);
-            if !(status.as_u16() == 429 || status.is_server_error()) {
+            last_error = describe_error(status, &body);
+            if !(status == 429 || status >= 500) {
                 break;
             }
         }
@@ -237,5 +288,45 @@ mod tests {
     #[test]
     fn empty_key_is_rejected() {
         assert!(ScribeTranscriber::new("  ".into(), None, None, Vec::new()).is_err());
+    }
+
+    #[test]
+    fn cancel_stops_an_upload_that_is_still_waiting_and_does_not_retry() {
+        // A server that takes the upload and never answers; it counts the requests it gets.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = accepted.clone();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            let started = std::time::Instant::now();
+            while started.elapsed() < Duration::from_secs(10) {
+                if let Ok((stream, _)) = listener.accept() {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    held.push(stream);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut scribe = ScribeTranscriber::new("key".into(), None, None, Vec::new())
+            .unwrap()
+            .with_cancel(cancel.clone());
+        scribe.endpoint = url;
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let chunk = AudioChunk {
+            source_start_us: 0,
+            samples: vec![0.0; 1600],
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(scribe.transcribe_chunk(&chunk).err().as_deref(), Some(CANCELLED));
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
     }
 }

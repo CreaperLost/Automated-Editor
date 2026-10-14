@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod noises;
+pub mod proposals;
 pub mod transcript;
 pub mod transcript_pauses;
 
@@ -436,6 +437,41 @@ fn detect_combined_silence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captions_take_a_chosen_sound_by_its_stream_key() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, key) = crate::mcp::tests_support::lesson(dir.path());
+        let state = &host.state;
+        let opened = state.opened_project.lock().as_ref().unwrap().summary.clone();
+        let captions = |track_id: &str| crate::captions::CaptionSettings {
+            enabled: true,
+            track_id: Some(track_id.into()),
+            ..Default::default()
+        };
+        let saved = project_captions_update_impl(
+            state,
+            opened.project_handle.clone(),
+            opened.revision,
+            captions(&key),
+        )
+        .unwrap();
+        assert_eq!(saved.captions.track_id.as_deref(), Some(key.as_str()));
+        let (asset, _) = key.split_once('.').unwrap();
+        for missing in [format!("{asset}.nothing"), "nothing.sound0".to_string()] {
+            let error = project_captions_update_impl(
+                state,
+                saved.project_handle.clone(),
+                saved.revision,
+                captions(&missing),
+            )
+            .unwrap_err();
+            assert!(error.contains("is not a sound"), "{error}");
+        }
+    }
 
     #[test]
     fn silence_cuts_cover_the_whole_clip_beyond_256_pauses() {
@@ -1144,11 +1180,51 @@ pub fn project_webcam_focus_detect_impl(
     expected_revision: u64,
     settings: crate::webcam_focus::WebcamFocusSettings,
 ) -> Result<WebcamFocusDetection, String> {
+    let found = webcam_focus_find_impl(state, &project_handle, &settings)?;
+    webcam_focus_store_impl(state, project_handle, expected_revision, settings, found)
+}
+
+/// Stores stretches found by [`webcam_focus_find_impl`] as the auto segments and turns focus on.
+pub fn webcam_focus_store_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    settings: crate::webcam_focus::WebcamFocusSettings,
+    found: WebcamFocusFound,
+) -> Result<WebcamFocusDetection, String> {
+    let project = mutate_opened(state, project_handle, |reader| {
+        let mut focus = reader.history().current.webcam_focus.clone();
+        focus.enabled = true;
+        focus.media = Some(found.media.clone());
+        focus.settings = settings;
+        focus.replace_auto_segments(&found.ranges);
+        reader.update_webcam_focus(expected_revision, focus)
+    })?;
+    Ok(WebcamFocusDetection {
+        project,
+        detected: found.ranges.len(),
+        diagnostics: found.diagnostics,
+    })
+}
+
+/// Talking-while-idle stretches webcam focus would use, found without storing them.
+pub struct WebcamFocusFound {
+    /// Source ranges on `media`'s clock.
+    pub ranges: Vec<(u64, u64)>,
+    pub media: String,
+    pub diagnostics: Vec<String>,
+}
+
+pub fn webcam_focus_find_impl(
+    state: &AppState,
+    project_handle: &str,
+    settings: &crate::webcam_focus::WebcamFocusSettings,
+) -> Result<WebcamFocusFound, String> {
     settings.validate()?;
     let (ctx, root, source_duration_us, media) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
-        require_handle(reader, &project_handle)?;
+        require_handle(reader, project_handle)?;
         let document = reader.document();
         // The recording focus is on, else the first one.
         let asset = document
@@ -1201,18 +1277,9 @@ pub fn project_webcam_focus_detect_impl(
             "No mouse activity was recorded, so the whole recording counts as idle".into()
         });
     }
-    let detected = crate::webcam_focus::detect_focus_ranges(&speech, &telemetry, &settings);
-    let project = mutate_opened(state, project_handle, |reader| {
-        let mut focus = reader.history().current.webcam_focus.clone();
-        focus.enabled = true;
-        focus.media = Some(media);
-        focus.settings = settings;
-        focus.replace_auto_segments(&detected);
-        reader.update_webcam_focus(expected_revision, focus)
-    })?;
-    Ok(WebcamFocusDetection {
-        project,
-        detected: detected.len(),
+    Ok(WebcamFocusFound {
+        ranges: crate::webcam_focus::detect_focus_ranges(&speech, &telemetry, settings),
+        media,
         diagnostics,
     })
 }

@@ -167,6 +167,7 @@ pub fn apply_reserving<'t>(
     edit: &SequenceEdit,
     taken: impl IntoIterator<Item = &'t str>,
 ) -> Result<(Sequence, EditOutcome), String> {
+    check_times(edit)?;
     let mut editor = Editor::new(sequence.clone(), assets);
     for id in taken {
         editor.next_track = editor.next_track.max(number_after('t', id) + 1);
@@ -179,6 +180,32 @@ pub fn apply_reserving<'t>(
         return Err(unchanged(edit).into());
     }
     Ok((next, outcome))
+}
+
+/// Rejects times past the longest timeline before the editor adds them to anything: the sums
+/// then cannot overflow, and the result is checked against the limit afterwards anyway.
+fn check_times(edit: &SequenceEdit) -> Result<(), String> {
+    use super::MAX_TIMELINE_US as MAX;
+    let fits = match edit {
+        SequenceEdit::PlaceAsset { at_us, range, .. } => {
+            *at_us <= MAX
+                && range
+                    .as_ref()
+                    .is_none_or(|r| r.start_us <= super::MAX_SAFE_US && r.end_us <= super::MAX_SAFE_US)
+        }
+        SequenceEdit::MoveClips { delta_us, .. } => delta_us.unsigned_abs() <= MAX,
+        SequenceEdit::TrimClip { to_us, .. } => *to_us <= MAX,
+        SequenceEdit::Split { at_us, .. } | SequenceEdit::RippleTrim { at_us, .. } => *at_us <= MAX,
+        SequenceEdit::DeleteRange { ranges, .. } => {
+            ranges.iter().all(|r| r.start_us <= MAX && r.end_us <= MAX)
+        }
+        _ => true,
+    };
+    if fits {
+        Ok(())
+    } else {
+        Err("The timeline can be at most 48 hours long".into())
+    }
 }
 
 /// The opening sequence for a project made from a recording: its streams on V1, V2, A1, A2.

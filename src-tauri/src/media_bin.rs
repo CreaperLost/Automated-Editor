@@ -102,11 +102,12 @@ pub fn import(root: &Path, source: &Path) -> Result<Asset, String> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "media".into());
-    let source = fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let source = dunce::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
     let id = crate::sequence::sources::new_asset_id(false);
     fs::create_dir_all(safe_path(root, MEDIA_DIR)?)
         .map_err(|e| format!("Could not create {MEDIA_DIR}: {e}"))?;
-    let (duration_us, width, height, mut streams) = describe(root, &id, &source, kind)?;
+    let (duration_us, width, height, mut streams, transparent) =
+        describe(root, &id, &source, kind)?;
     let picture = |role| Stream {
         id: "picture".into(),
         kind: StreamKind::Picture,
@@ -116,6 +117,8 @@ pub fn import(root: &Path, source: &Path) -> Result<Asset, String> {
         fps: None,
     };
     match kind {
+        // A video with transparency is a graphic to lay over the others, not a screen.
+        AssetKind::Video if transparent => streams.insert(0, picture(Role::Overlay)),
         AssetKind::Video => streams.insert(0, picture(Role::Screen)),
         AssetKind::Image => streams.push(picture(Role::Overlay)),
         _ => {}
@@ -134,27 +137,28 @@ pub fn import(root: &Path, source: &Path) -> Result<Asset, String> {
     })
 }
 
-type Described = (u64, u32, u32, Vec<Stream>);
+type Described = (u64, u32, u32, Vec<Stream>, bool);
 
-/// Length, size and the sound streams (extracted) of a file.
+/// Length, size, the sound streams (extracted) of a file, and whether its picture has
+/// transparency.
 fn describe(root: &Path, id: &str, file: &Path, kind: AssetKind) -> Result<Described, String> {
     use crate::media::ffmpeg;
     match kind {
         AssetKind::Image => {
             let (width, height) =
                 image::image_dimensions(file).map_err(|e| format!("Unreadable image: {e}"))?;
-            Ok((IMAGE_MAX_US, width, height, Vec::new()))
+            Ok((IMAGE_MAX_US, width, height, Vec::new(), false))
         }
         AssetKind::Video | AssetKind::Audio => {
             let duration_us = ffmpeg::duration_us(file)?;
             if duration_us == 0 {
                 return Err("The file has no playable length".into());
             }
-            let (width, height) = if kind == AssetKind::Video {
+            let (width, height, transparent) = if kind == AssetKind::Video {
                 let info = ffmpeg::probe_video(file)?;
-                (info.width, info.height)
+                (info.width, info.height, info.alpha != ffmpeg::Alpha::None)
             } else {
-                (0, 0)
+                (0, 0, false)
             };
             let mut names = ffmpeg::audio_stream_names(file)?;
             names.truncate(MAX_AUDIO_STREAMS + 1);
@@ -189,7 +193,7 @@ fn describe(root: &Path, id: &str, file: &Path, kind: AssetKind) -> Result<Descr
                     fps: None,
                 });
             }
-            Ok((duration_us, width, height, streams))
+            Ok((duration_us, width, height, streams, transparent))
         }
         AssetKind::Recording => Err("A recording is imported from its folder".into()),
     }
@@ -204,10 +208,13 @@ fn remove_paths<'a>(root: &Path, paths: impl IntoIterator<Item = &'a String>) {
 }
 
 fn plain_path(path: &Path) -> String {
-    // Windows canonical paths carry a verbatim prefix other tools do not expect.
-    path.to_string_lossy()
-        .trim_start_matches(r"\\?\")
-        .to_string()
+    // Windows canonical paths carry a verbatim prefix other tools do not expect. A network
+    // share's (`\\?\UNC\server\share`) becomes `\\server\share`, which stays absolute.
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}");
+    }
+    text.trim_start_matches(r"\\?\").to_string()
 }
 
 /// Deletes the files an import made in the project; used when an import is abandoned before
@@ -443,6 +450,30 @@ mod tests {
         assert!(source.is_file(), "the user's own file is never removed");
     }
 
+    /// A rendered graphic with transparency comes in as an overlay, not a screen.
+    #[test]
+    fn a_transparent_video_imports_as_an_overlay() {
+        let Ok(ffmpeg) = crate::media::ffmpeg::ffmpeg_path() else {
+            eprintln!("skipping: FFmpeg is not available");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("lower-third.webm");
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("color=c=black@0.0:s=64x36:r=30:d=0.5,format=rgba")
+            .args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p"])
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let root = dir.path().join("p.aero");
+        fs::create_dir_all(&root).unwrap();
+        let asset = import(&root, &source).unwrap();
+        assert_eq!(asset.kind, AssetKind::Video);
+        assert_eq!(asset.streams[0].role, Role::Overlay);
+    }
+
     #[test]
     fn folders_expand_to_their_media_and_recordings_are_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -469,5 +500,17 @@ mod tests {
         let empty = dir.path().join("empty");
         fs::create_dir_all(&empty).unwrap();
         assert!(expand_import_paths(&[empty]).is_err());
+    }
+
+    #[test]
+    fn verbatim_paths_lose_their_prefix_and_stay_absolute() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\UNC\server\share\clip.mp4")),
+            r"\\server\share\clip.mp4"
+        );
+        assert_eq!(plain_path(Path::new(r"\\?\C:\clips\a.mp4")), r"C:\clips\a.mp4");
+        assert_eq!(plain_path(Path::new(r"C:\clips\a.mp4")), r"C:\clips\a.mp4");
+        #[cfg(windows)]
+        assert!(Path::new(&plain_path(Path::new(r"\\?\UNC\server\share\clip.mp4"))).is_absolute());
     }
 }

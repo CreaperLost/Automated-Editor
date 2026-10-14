@@ -763,6 +763,18 @@ impl EditHistory {
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
         captions.validate()?;
+        if let Some(key) = &captions.track_id {
+            let sound = crate::sequence::StreamRef::parse(key).and_then(|s| {
+                self.current
+                    .assets
+                    .iter()
+                    .find(|a| a.id == s.asset)?
+                    .stream(&s.stream)
+            });
+            if sound.map(|s| s.kind) != Some(crate::sequence::StreamKind::Sound) {
+                return Err(format!("{key} is not a sound in this project"));
+            }
+        }
         if captions == self.current.captions {
             return Ok(&self.current);
         }

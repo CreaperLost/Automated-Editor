@@ -383,14 +383,14 @@ fn tick(
     // A short in focus is watched in the Shorts Studio, whatever the editor's window does. It
     // takes its frames as JPEGs, so they go through the webview path.
     let for_short = status.short_id.is_some() && (preview.surface == "webview" || in_window);
-    if !preview.attached
-        || !(preview.visible || for_short)
-        || status.duration_us == 0
-        || status.position_us >= status.duration_us
-        || pending.load(Ordering::Acquire)
-    {
+    if !preview.attached || !(preview.visible || for_short) || pending.load(Ordering::Acquire) {
         return Ok(playing);
     }
+    // Parked at the end, the preview shows the last frame; an empty timeline shows the empty
+    // canvas. Both must be drawn: in the window, nothing else paints under the page.
+    let position_us = status
+        .position_us
+        .min(status.duration_us.saturating_sub(1));
     // While playing, the preview shows whole frames at its rate. The clock moves every tick,
     // so without this the same source frame was composited and encoded again and again,
     // holding up the next real frame.
@@ -398,12 +398,12 @@ fn tick(
         if in_window && runtime.quality.fps == 0 {
             // Drawing into the window is cheap enough to redraw on every tick, which would show
             // the same source frame several times over: follow the source at most at 60 fps.
-            super::preview::frame_start_us(status.position_us, WINDOW_SOURCE_FPS)
+            super::preview::frame_start_us(position_us, WINDOW_SOURCE_FPS)
         } else {
-            runtime.quality.frame_time(status.position_us)
+            runtime.quality.frame_time(position_us)
         }
     } else {
-        status.position_us
+        position_us
     };
     let key = (generation, render_us, preview.generation);
     // Decoders start the same real time ahead at any speed.

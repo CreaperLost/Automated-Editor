@@ -6,6 +6,7 @@ import { TrackClipSection } from "./TrackClipSection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
+import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { AudioSection } from "../audio/AudioSection";
 import { CaptionsSection } from "../captions/CaptionsSection";
 import { Button, Field, Notice, Segmented, Switch, Tabs, cn } from "../ui";
@@ -55,7 +56,7 @@ export const InspectorPanel: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const selectedClipId = useProjectStore((s) => s.selectedClipIds[0]);
-  const persistTimer = useRef<number>();
+  const layoutSave = useDebouncedSave(180);
   const openedRef = useRef(openedProject);
   openedRef.current = openedProject;
   const [persistError, setPersistError] = useState<string>();
@@ -80,11 +81,7 @@ export const InspectorPanel: React.FC = () => {
   };
 
   const persistLayout = (nextCanvas = canvas, nextCamera = cameraBubble) => {
-    if (!openedRef.current) return;
-    window.clearTimeout(persistTimer.current);
-    persistTimer.current = window.setTimeout(() => {
-      const opened = openedRef.current;
-      if (!opened) return;
+    layoutSave.schedule((opened) => {
       const layout = layoutFromSettings(
         nextCanvas,
         nextCamera,
@@ -97,10 +94,8 @@ export const InspectorPanel: React.FC = () => {
           setPersistError(undefined);
         })
         .catch((err) => setPersistError(String(err)));
-    }, 180);
+    });
   };
-
-  useEffect(() => () => window.clearTimeout(persistTimer.current), []);
 
   const setCanvas = (patch: Parameters<typeof updateCanvas>[0]) => {
     updateCanvas(patch);

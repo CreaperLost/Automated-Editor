@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import { useAgentStore } from "../../stores/agentStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import {
   OpenedProject,
@@ -159,6 +160,8 @@ const TranscriptLineRow = React.memo(function TranscriptLineRow({
             i === active && !selected ? "bg-studio-700 text-white" : "",
             kind === "filler" && !cut ? "underline decoration-suggest decoration-2" : "",
             kind === "retake" && !cut ? "underline decoration-studio-400 decoration-2" : "",
+            // An agent's proposed cut: striped, as it waits in the Agent panel.
+            kind === "cut" && !cut ? "underline decoration-danger/70 decoration-wavy" : "",
             w.kind === "audioEvent" ? "italic text-studio-400" : "",
             // Heard but left out of the captions.
             w.captionHidden && !cut ? "opacity-50 decoration-dotted underline decoration-studio-500" : "",
@@ -180,7 +183,9 @@ const TranscriptLineRow = React.memo(function TranscriptLineRow({
                     ? "Filler sound"
                     : kind === "retake"
                       ? "Abandoned take"
-                      : w.captionHidden
+                      : kind === "cut"
+                        ? "An agent proposes cutting this"
+                        : w.captionHidden
                         ? "Hidden from the captions"
                         : undefined
                 }
@@ -242,6 +247,12 @@ export const TranscriptPanel: React.FC = () => {
 
   // Only the latest refresh may apply: a slow older reply must not replace a newer one.
   const refreshGeneration = useRef(0);
+  // The project and track shown now. A reply for another (the track was switched while it ran)
+  // must not land here: word ids repeat across tracks, so its cuts would hit the wrong words.
+  const shown = useRef({ handle, trackId });
+  shown.current = { handle, trackId };
+  const stillShowing = (h: string | undefined, t: string) =>
+    shown.current.handle === h && shown.current.trackId === t;
   const loadedContext = useRef<{ sequence: NonNullable<typeof openedProject>["sequence"]; captionsVersion: number } | null>(null);
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current;
@@ -291,6 +302,43 @@ export const TranscriptPanel: React.FC = () => {
   useEffect(() => {
     void refresh();
   }, [refresh, sequence, captionsVersion]);
+
+  // An agent proposed, withdrew or someone decided a batch: only the review list changes.
+  const agentVersion = useAgentStore((s) => s.version);
+  const reloadSuggestions = useCallback(async () => {
+    if (!handle || !trackId || !loadedContext.current) return;
+    try {
+      const next = await api.transcriptSuggestions(handle, trackId);
+      if (stillShowing(handle, trackId)) setSuggestions(next);
+    } catch {
+      // The next full refresh brings them.
+    }
+  }, [handle, trackId]);
+  useEffect(() => {
+    void reloadSuggestions();
+  }, [agentVersion, reloadSuggestions]);
+
+  /** Cuts or rejects one agent item through its batch, so the Agent panel and undo agree. */
+  const decideAgentItem = async (s: TranscriptCutSuggestion, decision: "cut" | "reject" | "restore") => {
+    const proposal = s.proposal;
+    const current = useProjectStore.getState().openedProject;
+    if (!proposal || !current) return;
+    setError(null);
+    try {
+      if (decision === "cut") {
+        const outcome = await api.proposalAccept(current.projectHandle, current.revision, proposal.batchId, [proposal.itemId], false);
+        if (outcome.project) applyOpenedProject(outcome.project);
+        useAgentStore.getState().setProposals(outcome.proposals);
+        if (outcome.proposals.warning) setError(outcome.proposals.warning);
+        else setNotice(`Cut "${s.text}" from ${proposal.agent}'s ${proposal.batchId}. Undo restores it.`);
+      } else {
+        const view = await api.proposalReject(current.projectHandle, proposal.batchId, [proposal.itemId], decision === "reject");
+        useAgentStore.getState().setProposals(view);
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
 
   useEffect(() => {
     if (!isTauriEnvironment()) return;
@@ -374,9 +422,13 @@ export const TranscriptPanel: React.FC = () => {
     setProgress(null);
     try {
       const result = await api.transcriptRun(handle, trackId);
-      setView(result.view);
       bumpCaptions();
-      setSuggestions(await api.transcriptSuggestions(handle, trackId));
+      // Another track shown meanwhile reloads on its own; this one's transcript is saved.
+      if (!stillShowing(handle, trackId)) return;
+      setView(result.view);
+      const nextSuggestions = await api.transcriptSuggestions(handle, trackId);
+      if (!stillShowing(handle, trackId)) return;
+      setSuggestions(nextSuggestions);
       const count = result.view.words.length;
       setNotice(
         `Transcribed ${count} words.` + (result.diagnostics.length ? ` ${result.diagnostics.join(" · ")}` : ""),
@@ -413,7 +465,14 @@ export const TranscriptPanel: React.FC = () => {
     setProgress(null);
     try {
       const before = new Set(suggestions.map((s) => s.id));
+      const generation = refreshGeneration.current;
       const next = await api.transcriptAiSuggest(handle, trackId);
+      // Another track, or the words moved (a cut, undo) while the AI read them: its answer is
+      // about words no longer shown as they were.
+      if (!stillShowing(handle, trackId) || generation !== refreshGeneration.current) {
+        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Find with AI again.");
+        return;
+      }
       setSuggestions(next);
       const added = next.filter((s) => s.source === "ai" && !before.has(s.id)).length;
       setReviewOpen(true);
@@ -434,7 +493,8 @@ export const TranscriptPanel: React.FC = () => {
     if (!handle || !trackId || ids.length === 0) return;
     setError(null);
     try {
-      setSuggestions(await api.transcriptDismissSuggestions(handle, trackId, ids, dismissed));
+      const next = await api.transcriptDismissSuggestions(handle, trackId, ids, dismissed);
+      if (stillShowing(handle, trackId)) setSuggestions(next);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -459,7 +519,8 @@ export const TranscriptPanel: React.FC = () => {
     if (!handle || !trackId) return;
     setError(null);
     try {
-      setView(await api.transcriptStripPunctuation(handle, trackId));
+      const next = await api.transcriptStripPunctuation(handle, trackId);
+      if (stillShowing(handle, trackId)) setView(next);
       bumpCaptions();
       setNotice("Removed the punctuation. Fix a word by hand (Enter) to put any back.");
     } catch (err) {
@@ -474,7 +535,8 @@ export const TranscriptPanel: React.FC = () => {
     if (!word || editing.text.trim() === word.text) return;
     setError(null);
     try {
-      setView(await api.transcriptSetWordText(handle, trackId, word.id, editing.text));
+      const next = await api.transcriptSetWordText(handle, trackId, word.id, editing.text);
+      if (stillShowing(handle, trackId)) setView(next);
       bumpCaptions();
       setNotice(`Changed "${word.text}" to "${editing.text.trim()}".`);
     } catch (err) {
@@ -529,6 +591,8 @@ export const TranscriptPanel: React.FC = () => {
           <select
             aria-label="Transcript track"
             value={trackId}
+            disabled={running}
+            title={running ? "Available when the transcription or review finishes" : undefined}
             onChange={(e) => {
               setTrackId(e.target.value);
               setSelection(null);
@@ -758,8 +822,15 @@ export const TranscriptPanel: React.FC = () => {
                 onClick={() => focusSuggestion(s)}
               >
                 <div className="flex items-center gap-1.5">
-                  <Badge tone={s.kind === "filler" ? "suggest" : "neutral"}>{s.kind === "filler" ? "Filler" : "Retake"}</Badge>
+                  <Badge tone={s.kind === "filler" ? "suggest" : s.kind === "cut" ? "danger" : "neutral"}>
+                    {s.kind === "filler" ? "Filler" : s.kind === "retake" ? "Retake" : "Cut"}
+                  </Badge>
                   {s.source === "ai" && <Badge title="Found by the AI review">AI</Badge>}
+                  {s.source === "agent" && s.proposal && (
+                    <Badge tone="accent" title={`Proposed by ${s.proposal.agent} in ${s.proposal.batchId}; also in the Agent panel`}>
+                      {s.proposal.agent}
+                    </Badge>
+                  )}
                   <span className="font-mono text-meta tabular-nums text-studio-500">{formatTime(s.editedStartUs)}</span>
                   <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                     <button
@@ -774,7 +845,7 @@ export const TranscriptPanel: React.FC = () => {
                       <button
                         type="button"
                         title="Put it back in the review list"
-                        onClick={() => void dismiss([s.id], false)}
+                        onClick={() => void (s.proposal ? decideAgentItem(s, "restore") : dismiss([s.id], false))}
                         className="h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-700"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
@@ -785,7 +856,9 @@ export const TranscriptPanel: React.FC = () => {
                           type="button"
                           title="Cut these words"
                           onClick={() =>
-                            void cutWords(s.wordIds, `Cut ${s.kind === "filler" ? "filler" : "retake"} "${s.text}"`)
+                            void (s.proposal
+                              ? decideAgentItem(s, "cut")
+                              : cutWords(s.wordIds, `Cut ${s.kind === "filler" ? "filler" : "retake"} "${s.text}"`))
                           }
                           className="h-7 w-7 inline-flex items-center justify-center rounded-control text-danger-fg hover:bg-danger/15"
                         >
@@ -794,7 +867,7 @@ export const TranscriptPanel: React.FC = () => {
                         <button
                           type="button"
                           title="Keep these words"
-                          onClick={() => void dismiss([s.id], true)}
+                          onClick={() => void (s.proposal ? decideAgentItem(s, "reject") : dismiss([s.id], true))}
                           className="h-7 w-7 inline-flex items-center justify-center rounded-control text-studio-400 hover:text-studio-100 hover:bg-studio-700"
                         >
                           <Check className="w-3.5 h-3.5" />

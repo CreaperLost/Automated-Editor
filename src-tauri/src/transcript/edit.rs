@@ -64,11 +64,13 @@ pub struct TranscriptView {
     pub words: Vec<TranscriptViewWord>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum TranscriptSuggestionKind {
     Filler,
     Retake,
+    /// Anything else an agent suggests cutting (a tangent, a mistake, dead air).
+    Cut,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -90,6 +92,17 @@ pub struct TranscriptCutSuggestion {
     /// The AI's short explanation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// An agent's proposal item this is, decided through its batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<ProposalRef>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalRef {
+    pub batch_id: String,
+    pub item_id: String,
+    pub agent: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,6 +111,8 @@ pub enum SuggestionSource {
     #[default]
     Rules,
     Ai,
+    /// An agent connected over MCP proposed it.
+    Agent,
 }
 
 fn normalize(text: &str) -> String {
@@ -389,6 +404,7 @@ pub fn suggestions(
             match s.kind {
                 TranscriptSuggestionKind::Filler => "filler",
                 TranscriptSuggestionKind::Retake => "retake",
+                TranscriptSuggestionKind::Cut => "cut",
             },
             s.word_ids.first().map(String::as_str).unwrap_or(""),
             s.word_ids.last().map(String::as_str).unwrap_or("")
@@ -426,6 +442,7 @@ fn push_suggestion(
         dismissed: false,
         source: SuggestionSource::Rules,
         reason: None,
+        proposal: None,
     });
 }
 
