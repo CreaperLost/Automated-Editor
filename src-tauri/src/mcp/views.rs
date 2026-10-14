@@ -31,16 +31,17 @@ pub fn telemetry_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let mut lines = 0usize;
     for asset in &recordings {
         out.push_str(&format!("\nRecording {} ({}):\n", asset.name, asset.id));
-        let stream = match crate::telemetry::reader::read_telemetry(std::path::Path::new(&asset.path)) {
-            Ok(stream) => stream,
-            Err(error) => {
-                out.push_str(&format!("  no telemetry: {error}\n"));
-                continue;
-            }
-        };
+        let stream =
+            match crate::telemetry::reader::read_telemetry(std::path::Path::new(&asset.path)) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    out.push_str(&format!("  no telemetry: {error}\n"));
+                    continue;
+                }
+            };
         let clock_of = document.picture_clock(&asset.id);
         let mut scroll: Option<(u64, u64, usize, f64, f64)> = None;
-        let flush_scroll =|scroll: &mut Option<(u64, u64, usize, f64, f64)>, out: &mut String| {
+        let flush_scroll = |scroll: &mut Option<(u64, u64, usize, f64, f64)>, out: &mut String| {
             if let Some((start, end, count, x, y)) = scroll.take() {
                 out.push_str(&format!(
                     "  [{}-{}] scroll x{count} at {x:.3},{y:.3}\n",
@@ -60,7 +61,12 @@ pub fn telemetry_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 continue;
             }
             match &event.kind {
-                CanonicalKind::ButtonDown { button, norm_x, norm_y, .. } => {
+                CanonicalKind::ButtonDown {
+                    button,
+                    norm_x,
+                    norm_y,
+                    ..
+                } => {
                     flush_scroll(&mut scroll, &mut out);
                     let button = button.map(|b| format!(" button {b}")).unwrap_or_default();
                     out.push_str(&format!(
@@ -71,13 +77,18 @@ pub fn telemetry_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 }
                 CanonicalKind::Click { norm_x, norm_y, .. } => {
                     flush_scroll(&mut scroll, &mut out);
-                    out.push_str(&format!("  [{}] click at {norm_x:.3},{norm_y:.3}\n", clock(at)));
+                    out.push_str(&format!(
+                        "  [{}] click at {norm_x:.3},{norm_y:.3}\n",
+                        clock(at)
+                    ));
                     lines += 1;
                 }
                 CanonicalKind::Scroll { norm_x, norm_y, .. } => {
                     let (x, y) = (norm_x.unwrap_or(0.5), norm_y.unwrap_or(0.5));
                     match &mut scroll {
-                        Some((_, end, count, _, _)) if at.saturating_sub(*end) <= SCROLL_JOIN_US => {
+                        Some((_, end, count, _, _))
+                            if at.saturating_sub(*end) <= SCROLL_JOIN_US =>
+                        {
                             *end = at;
                             *count += 1;
                         }
@@ -116,7 +127,11 @@ pub fn telemetry_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                         zoom.scale,
                         zoom.center_x,
                         zoom.center_y,
-                        if zoom.fixed { " (fixed)" } else { " (follows the mouse)" }
+                        if zoom.fixed {
+                            " (fixed)"
+                        } else {
+                            " (follows the mouse)"
+                        }
                     )
                 })
         })
@@ -193,7 +208,11 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         let spoken = match &stream {
             Some(key) => match store::load_transcript(reader.root(), key)? {
                 Some(transcript) => {
-                    let view = words::view(&transcript, &document.transcript_clock(key)?, document.revision);
+                    let view = words::view(
+                        &transcript,
+                        &document.transcript_clock(key)?,
+                        document.revision,
+                    );
                     view.words
                         .into_iter()
                         .filter_map(|w| {
@@ -212,13 +231,29 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             .iter()
             .filter(|b| b.status == Status::Pending)
             .flat_map(|b| {
-                b.items.iter().filter(|i| i.state == ItemState::Pending).filter_map(|i| {
-                    Some((i.edited_start_us?, i.edited_end_us?, format!("{} {}", b.id, i.id)))
-                })
+                b.items
+                    .iter()
+                    .filter(|i| i.state == ItemState::Pending)
+                    .filter_map(|i| {
+                        Some((
+                            i.edited_start_us?,
+                            i.edited_end_us?,
+                            format!("{} {}", b.id, i.id),
+                        ))
+                    })
             })
             .filter(|&(a, b, _)| b > from && a < to)
             .collect();
-        Ok((from, to, canvas, stream, wave, spoken, cuts, document.revision))
+        Ok((
+            from,
+            to,
+            canvas,
+            stream,
+            wave,
+            spoken,
+            cuts,
+            document.revision,
+        ))
     })?;
     let (from, to, canvas, stream, wave, spoken, cuts, revision) = gathered;
     let span = (to - from) as f64;
@@ -264,19 +299,34 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             }
             let x0 = (i * width as usize / buckets) as i64;
             let x1 = (((i + 1) * width as usize / buckets) as i64).max(x0 + 1);
-            let half = |level: f32| (level.clamp(0.0, 1.0).sqrt() * (WAVE_H as f32 / 2.0 - 2.0)) as i64;
+            let half =
+                |level: f32| (level.clamp(0.0, 1.0).sqrt() * (WAVE_H as f32 / 2.0 - 2.0)) as i64;
             let (peak, rms) = (half(bucket.peak), half(bucket.rms));
             fill(&mut image, x0, middle - peak, x1, middle + peak + 1, WAVE);
             fill(&mut image, x0, middle - rms, x1, middle + rms + 1, WAVE_RMS);
         }
     } else {
-        draw_text(&mut image, 8, middle - 8, "no sound to draw", 13.0, RULER_TEXT);
+        draw_text(
+            &mut image,
+            8,
+            middle - 8,
+            "no sound to draw",
+            13.0,
+            RULER_TEXT,
+        );
     }
 
     // Pending cut proposals, shaded over the waveform and the words.
     for (a, b, label) in &cuts {
         let (x0, x1) = (x_of(*a).max(0), x_of(*b).min(width as i64));
-        fill(&mut image, x0, wave_y as i64, x1.max(x0 + 1), height as i64, CUT_SHADE);
+        fill(
+            &mut image,
+            x0,
+            wave_y as i64,
+            x1.max(x0 + 1),
+            height as i64,
+            CUT_SHADE,
+        );
         draw_text(&mut image, x0 + 2, wave_y as i64 + 2, label, 11.0, CUT_TEXT);
     }
 
@@ -290,7 +340,14 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         let word = word.trim();
         let w = text_width(word, 14.0) as i64;
         if let Some(row) = (0..2).find(|&r| x >= row_end[r] + 4) {
-            draw_text(&mut image, x, (words_y + row as u32 * WORD_ROW_H) as i64, word, 14.0, colour);
+            draw_text(
+                &mut image,
+                x,
+                (words_y + row as u32 * WORD_ROW_H) as i64,
+                word,
+                14.0,
+                colour,
+            );
             row_end[row] = x + w;
         }
         if x >= id_end + 4 {
@@ -323,8 +380,19 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 /// A ruler step that keeps labels about 110 pixels apart or more.
 fn tick_step(span_us: f64, width: u32) -> u64 {
     const STEPS: [u64; 13] = [
-        100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 15_000_000,
-        30_000_000, 60_000_000, 120_000_000, 300_000_000, 600_000_000,
+        100_000,
+        250_000,
+        500_000,
+        1_000_000,
+        2_000_000,
+        5_000_000,
+        10_000_000,
+        15_000_000,
+        30_000_000,
+        60_000_000,
+        120_000_000,
+        300_000_000,
+        600_000_000,
     ];
     let per_px = span_us / width as f64;
     STEPS
@@ -352,7 +420,9 @@ fn blend(pixel: &mut Rgba<u8>, colour: Rgba<u8>, alpha: u8) {
 
 fn text_width(text: &str, px: f32) -> f32 {
     let font = crate::captions::font();
-    text.chars().map(|ch| font.metrics(ch, px).advance_width).sum()
+    text.chars()
+        .map(|ch| font.metrics(ch, px).advance_width)
+        .sum()
 }
 
 /// Draws `text` with its top at `y`.

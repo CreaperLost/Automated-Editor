@@ -35,14 +35,22 @@ pub fn lesson(dir: &std::path::Path) -> (BareHost, String) {
                 ((i as f64 * 220.0 * std::f64::consts::TAU / rate as f64).sin() * 9000.0) as i16
             } else if (click..click + 24).contains(&i) {
                 // A mouth click in the pause at 1.2 s.
-                if i % 2 == 0 { 20_000 } else { -20_000 }
+                if i % 2 == 0 {
+                    20_000
+                } else {
+                    -20_000
+                }
             } else {
                 0
             }
         })
         .collect();
     let wav = dir.join("voice.wav");
-    std::fs::write(&wav, crate::fixtures::generate_pcm16_wav(rate as u32, 1, &samples)).unwrap();
+    std::fs::write(
+        &wav,
+        crate::fixtures::generate_pcm16_wav(rate as u32, 1, &samples),
+    )
+    .unwrap();
     let folder = crate::project::folder::create_project_folder(dir, "Lesson", None).unwrap();
     let host = BareHost::default();
     let state = &host.state;
@@ -98,15 +106,17 @@ pub fn lesson(dir: &std::path::Path) -> (BareHost, String) {
     transcript.words = words
         .iter()
         .enumerate()
-        .map(|(i, (text, start, end))| crate::transcript::TranscriptWord {
-            id: format!("w-{i}"),
-            text: (*text).into(),
-            kind: crate::transcript::WordKind::Word,
-            source_start_us: start * 1000,
-            source_end_us: end * 1000,
-            confidence: None,
-            speaker: None,
-        })
+        .map(
+            |(i, (text, start, end))| crate::transcript::TranscriptWord {
+                id: format!("w-{i}"),
+                text: (*text).into(),
+                kind: crate::transcript::WordKind::Word,
+                source_start_us: start * 1000,
+                source_end_us: end * 1000,
+                confidence: None,
+                speaker: None,
+            },
+        )
         .collect();
     crate::transcript::store::save_transcript(&folder, &transcript).unwrap();
     (host, key)

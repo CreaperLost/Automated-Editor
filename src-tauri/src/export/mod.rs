@@ -286,7 +286,10 @@ pub struct SceneEvaluator {
     sources: std::cell::RefCell<
         std::collections::HashMap<
             String,
-            std::collections::HashMap<String, std::sync::Arc<crate::sequence::sources::StreamSource>>,
+            std::collections::HashMap<
+                String,
+                std::sync::Arc<crate::sequence::sources::StreamSource>,
+            >,
         >,
     >,
     /// Pointer pictures by file, decoded once.
@@ -1111,9 +1114,9 @@ impl SceneEvaluator {
                 job.map(|(segment, time)| PictureJob::Segment(segment.clone(), time))
             }
             // A file moved or deleted since import shows nothing.
-            StreamSource::Video(path) => {
-                path.is_file().then(|| PictureJob::Video(path.clone(), local_us))
-            }
+            StreamSource::Video(path) => path
+                .is_file()
+                .then(|| PictureJob::Video(path.clone(), local_us)),
             StreamSource::Image(path) => {
                 if !path.is_file() {
                     return Ok(None);
@@ -3276,7 +3279,10 @@ mod tests {
             [frame.data[i], frame.data[i + 1], frame.data[i + 2]]
         };
         let (corner, centre) = (bgra(4, 4), bgra(32, 32));
-        assert!(corner[2] > 230 && corner[0] < 25 && corner[1] < 25, "corner {corner:?}");
+        assert!(
+            corner[2] > 230 && corner[0] < 25 && corner[1] < 25,
+            "corner {corner:?}"
+        );
         assert!(centre.iter().all(|&c| c > 230), "centre {centre:?}");
         crate::media::ffmpeg::release_decoders();
     }

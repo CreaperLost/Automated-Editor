@@ -82,7 +82,9 @@ pub fn parse_spans(
             }
             let limit = match kind {
                 TranscriptSuggestionKind::Filler => MAX_FILLER_WORDS,
-                TranscriptSuggestionKind::Retake | TranscriptSuggestionKind::Cut => MAX_RETAKE_WORDS,
+                TranscriptSuggestionKind::Retake | TranscriptSuggestionKind::Cut => {
+                    MAX_RETAKE_WORDS
+                }
             };
             if to - from + 1 > limit {
                 return None;

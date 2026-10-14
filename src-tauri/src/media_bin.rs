@@ -508,7 +508,10 @@ mod tests {
             plain_path(Path::new(r"\\?\UNC\server\share\clip.mp4")),
             r"\\server\share\clip.mp4"
         );
-        assert_eq!(plain_path(Path::new(r"\\?\C:\clips\a.mp4")), r"C:\clips\a.mp4");
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\clips\a.mp4")),
+            r"C:\clips\a.mp4"
+        );
         assert_eq!(plain_path(Path::new(r"C:\clips\a.mp4")), r"C:\clips\a.mp4");
         #[cfg(windows)]
         assert!(Path::new(&plain_path(Path::new(r"\\?\UNC\server\share\clip.mp4"))).is_absolute());

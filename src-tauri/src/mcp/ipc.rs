@@ -48,9 +48,7 @@ mod imp {
     use tokio::net::windows::named_pipe::{
         ClientOptions, NamedPipeClient, NamedPipeServer, PipeMode, ServerOptions,
     };
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, LocalFree, ERROR_PIPE_BUSY, HANDLE, HLOCAL,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, ERROR_PIPE_BUSY, HANDLE, HLOCAL};
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
         SDDL_REVISION_1,
@@ -339,10 +337,34 @@ mod tests {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{LocalFree, HLOCAL};
     use windows_sys::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-        SE_KERNEL_OBJECT,
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertStringSidToSidW,
+        GetSecurityInfo, SDDL_REVISION_1, SE_KERNEL_OBJECT,
     };
-    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+    use windows_sys::Win32::Security::{
+        EqualSid, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    };
+
+    /// Whether two SIDs in SDDL's text name the same account. SDDL writes some accounts by an
+    /// alias rather than as `S-1-5-...`: `LA` for the built-in Administrator, which CI runs as.
+    fn same_account(a: &str, b: &str) -> bool {
+        let sid = |text: &str| unsafe {
+            let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
+            let mut sid: PSID = std::ptr::null_mut();
+            assert_ne!(
+                ConvertStringSidToSidW(wide.as_ptr(), &mut sid),
+                0,
+                "not a SID: {text}"
+            );
+            sid
+        };
+        let (a, b) = (sid(a), sid(b));
+        unsafe {
+            let same = EqualSid(a, b) != 0;
+            LocalFree(a as HLOCAL);
+            LocalFree(b as HLOCAL);
+            same
+        }
+    }
 
     /// The pipe's access list as Windows holds it, in SDDL.
     fn dacl(handle: std::os::windows::io::RawHandle) -> String {
@@ -401,9 +423,18 @@ mod tests {
             // Protected (nothing inherited) and a single allow entry: this account.
             assert!(sddl.starts_with("D:P(A;;"), "{sddl}");
             assert_eq!(sddl.matches("(A;").count(), 1, "{sddl}");
-            assert!(sddl.ends_with(&format!(";;;{me})")), "{sddl}");
+            let account = sddl
+                .strip_suffix(')')
+                .and_then(|s| s.rsplit(";;;").next())
+                .unwrap_or_default();
+            assert!(same_account(account, &me), "{sddl} does not allow {me}");
+            // And the comparison does tell accounts apart.
+            assert!(!same_account("LA", "SY"));
 
-            assert!(Listener::bind(&endpoint).is_err(), "a second owner was allowed");
+            assert!(
+                Listener::bind(&endpoint).is_err(),
+                "a second owner was allowed"
+            );
         });
     }
 }

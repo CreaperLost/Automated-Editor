@@ -90,16 +90,16 @@ fn initialize_result(params: &Value) -> Value {
     result
 }
 
-async fn write_line(output: &mut (impl AsyncWrite + Unpin), message: &Value) -> std::io::Result<()> {
+async fn write_line(
+    output: &mut (impl AsyncWrite + Unpin),
+    message: &Value,
+) -> std::io::Result<()> {
     output.write_all(format!("{message}\n").as_bytes()).await?;
     output.flush().await
 }
 
 /// Connects to the app and does the handshake on the agent's behalf, under the agent's name.
-async fn connect<S: super::ipc::Stream>(
-    stream: S,
-    hello: &Value,
-) -> Result<App<S>, String> {
+async fn connect<S: super::ipc::Stream>(stream: S, hello: &Value) -> Result<App<S>, String> {
     let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
     let client_info = hello
@@ -114,7 +114,9 @@ async fn connect<S: super::ipc::Stream>(
             "clientInfo": client_info,
         }
     });
-    write_line(&mut write, &initialize).await.map_err(|e| e.to_string())?;
+    write_line(&mut write, &initialize)
+        .await
+        .map_err(|e| e.to_string())?;
     let answered = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
             if serde_json::from_str::<Value>(&line)
@@ -132,7 +134,9 @@ async fn connect<S: super::ipc::Stream>(
         Err(_) => return Err("AeroEdits did not answer. Is it busy? Try again.".into()),
     }
     let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    write_line(&mut write, &initialized).await.map_err(|e| e.to_string())?;
+    write_line(&mut write, &initialized)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(App {
         write,
         lines,

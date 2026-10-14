@@ -55,7 +55,10 @@ pub(crate) fn with_proposals<T>(
     Ok((out, view))
 }
 
-pub fn proposals_list_impl(state: &AppState, project_handle: String) -> Result<ProposalsView, String> {
+pub fn proposals_list_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<ProposalsView, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
@@ -140,7 +143,13 @@ mod tests {
                 .unwrap();
             proposals::save(reader.root(), &p).unwrap();
             let root = reader.root().to_path_buf();
-            (reader.summary.project_handle.clone(), revision, reader.document().duration_us(), root, id)
+            (
+                reader.summary.project_handle.clone(),
+                revision,
+                reader.document().duration_us(),
+                root,
+                id,
+            )
         };
         let file = root.join("agent").join("proposals.json");
         let writable = std::fs::metadata(&file).unwrap().permissions();
@@ -153,7 +162,11 @@ mod tests {
         let outcome = outcome.unwrap();
         let project = outcome.project.unwrap();
         assert_eq!(project.revision, revision + 1);
-        assert!(outcome.proposals.warning.unwrap().contains("could not be saved"));
+        assert!(outcome
+            .proposals
+            .warning
+            .unwrap()
+            .contains("could not be saved"));
         let opened = state.opened_project.lock();
         assert!(opened.as_ref().unwrap().document().duration_us() < length);
     }

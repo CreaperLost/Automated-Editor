@@ -108,7 +108,10 @@ pub struct CutItem {
 
 impl CutItem {
     fn words(&self) -> Option<(&str, &str)> {
-        Some((self.first_word_id.as_deref()?, self.last_word_id.as_deref()?))
+        Some((
+            self.first_word_id.as_deref()?,
+            self.last_word_id.as_deref()?,
+        ))
     }
 }
 
@@ -321,7 +324,10 @@ fn span_ids(transcript: &Transcript, first: &str, last: &str) -> Result<Vec<Stri
             "{first}..{last} is more than {MAX_SPAN_WORDS} words; split it into smaller cuts"
         ));
     }
-    Ok(transcript.words[a..=b].iter().map(|w| w.id.clone()).collect())
+    Ok(transcript.words[a..=b]
+        .iter()
+        .map(|w| w.id.clone())
+        .collect())
 }
 
 fn span_text(transcript: &Transcript, ids: &[String]) -> String {
@@ -492,8 +498,14 @@ pub fn propose_cuts(
                 ))
             }
         }
-        let cuts = item_cuts(document, transcript.as_ref(), stream, expected_revision, &item)?
-            .ok_or_else(|| format!("Cut {} ({}) is already cut", index + 1, item.text))?;
+        let cuts = item_cuts(
+            document,
+            transcript.as_ref(),
+            stream,
+            expected_revision,
+            &item,
+        )?
+        .ok_or_else(|| format!("Cut {} ({}) is already cut", index + 1, item.text))?;
         ranges.extend(cuts);
         items.push(item);
     }
@@ -530,7 +542,10 @@ fn edit_kind(edit: &SequenceEdit) -> String {
 }
 
 /// The edit with `edits` applied in order to a copy of it.
-pub fn apply_edits(document: &EditDocument, edits: &[SequenceEdit]) -> Result<EditDocument, String> {
+pub fn apply_edits(
+    document: &EditDocument,
+    edits: &[SequenceEdit],
+) -> Result<EditDocument, String> {
     let mut next = document.clone();
     for (index, edit) in edits.iter().enumerate() {
         let (sequence, _) = crate::sequence::edit::apply_reserving(
@@ -573,15 +588,29 @@ pub fn sequence_diff(before: &EditDocument, after: &EditDocument) -> Vec<String>
     let (old, new) = (place(before), place(after));
     let mut lines = Vec::new();
     let span = |c: &crate::sequence::Clip| format!("{}-{}", clock(c.start_us), clock(c.end_us()));
-    let mut added: Vec<_> = new.iter().filter(|(id, _)| !old.contains_key(*id)).collect();
+    let mut added: Vec<_> = new
+        .iter()
+        .filter(|(id, _)| !old.contains_key(*id))
+        .collect();
     added.sort_by_key(|(_, (_, c))| c.start_us);
     for (id, (track, clip)) in added {
-        lines.push(format!("+ {track} {id} {} {}", media(after, &clip.asset), span(clip)));
+        lines.push(format!(
+            "+ {track} {id} {} {}",
+            media(after, &clip.asset),
+            span(clip)
+        ));
     }
-    let mut removed: Vec<_> = old.iter().filter(|(id, _)| !new.contains_key(*id)).collect();
+    let mut removed: Vec<_> = old
+        .iter()
+        .filter(|(id, _)| !new.contains_key(*id))
+        .collect();
     removed.sort_by_key(|(_, (_, c))| c.start_us);
     for (id, (track, clip)) in removed {
-        lines.push(format!("- {track} {id} {} {}", media(before, &clip.asset), span(clip)));
+        lines.push(format!(
+            "- {track} {id} {} {}",
+            media(before, &clip.asset),
+            span(clip)
+        ));
     }
     let mut changed: Vec<_> = new
         .iter()
@@ -597,20 +626,36 @@ pub fn sequence_diff(before: &EditDocument, after: &EditDocument) -> Vec<String>
         .collect();
     changed.sort_by_key(|(_, _, c, _, _)| c.start_us);
     for (id, track, clip, was_track, was) in changed {
-        let fit = if was.fit != clip.fit { " (fit changed)" } else { "" };
+        let fit = if was.fit != clip.fit {
+            " (fit changed)"
+        } else {
+            ""
+        };
         lines.push(format!(
             "~ {track} {id} {} (was {was_track} {}){fit}",
             span(clip),
             span(was)
         ));
     }
-    let tracks = |d: &EditDocument| d.sequence.tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+    let tracks = |d: &EditDocument| {
+        d.sequence
+            .tracks
+            .iter()
+            .map(|t| t.id.clone())
+            .collect::<Vec<_>>()
+    };
     let (old_tracks, new_tracks) = (tracks(before), tracks(after));
     for id in new_tracks.iter().filter(|id| !old_tracks.contains(id)) {
-        lines.push(format!("+ track {}", after.sequence.number(id).unwrap_or_else(|| id.clone())));
+        lines.push(format!(
+            "+ track {}",
+            after.sequence.number(id).unwrap_or_else(|| id.clone())
+        ));
     }
     for id in old_tracks.iter().filter(|id| !new_tracks.contains(id)) {
-        lines.push(format!("- track {}", before.sequence.number(id).unwrap_or_else(|| id.clone())));
+        lines.push(format!(
+            "- track {}",
+            before.sequence.number(id).unwrap_or_else(|| id.clone())
+        ));
     }
     let total = lines.len();
     lines.truncate(MAX_SUMMARY_LINES);
@@ -724,9 +769,16 @@ pub fn accept(
                 ));
             }
             let next = apply_edits(document, edits)?;
-            (Some(reader.commit_document(expected_revision, next)?), Vec::new())
+            (
+                Some(reader.commit_document(expected_revision, next)?),
+                Vec::new(),
+            )
         }
-        Change::Cuts { stream, words, items } => {
+        Change::Cuts {
+            stream,
+            words,
+            items,
+        } => {
             let chosen: Vec<&CutItem> = items
                 .iter()
                 .filter(|i| i.state == ItemState::Pending)
@@ -766,7 +818,10 @@ pub fn accept(
             if ranges.is_empty() {
                 (None, chosen)
             } else {
-                (Some(reader.ripple_cuts(expected_revision, &ranges)?), chosen)
+                (
+                    Some(reader.ripple_cuts(expected_revision, &ranges)?),
+                    chosen,
+                )
             }
         }
     };
@@ -811,22 +866,18 @@ pub fn reject(
         return Err(format!("{id} was withdrawn"));
     }
     match &mut batch.change {
-        Change::Action { .. } => {
-            return Err(format!("{id} was already applied; undo it instead"))
-        }
-        Change::Edits { .. } => {
-            match (batch.status, rejected) {
-                (Status::Pending, true) => {
-                    batch.status = Status::Rejected;
-                    batch.decided_at = Some(now());
-                }
-                (Status::Rejected, false) => {
-                    batch.status = Status::Pending;
-                    batch.decided_at = None;
-                }
-                _ => return Err(format!("{id} is already decided")),
+        Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
+        Change::Edits { .. } => match (batch.status, rejected) {
+            (Status::Pending, true) => {
+                batch.status = Status::Rejected;
+                batch.decided_at = Some(now());
             }
-        }
+            (Status::Rejected, false) => {
+                batch.status = Status::Pending;
+                batch.decided_at = None;
+            }
+            _ => return Err(format!("{id} is already decided")),
+        },
         Change::Cuts { items, .. } => {
             let (from, to) = if rejected {
                 (ItemState::Pending, ItemState::Rejected)
@@ -1024,22 +1075,30 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                 }
                 Change::Edits { edits } => {
                     out.edits = Some(edits.clone());
-                    out.stale = batch.status == Status::Pending
-                        && batch.base_revision != document.revision;
+                    out.stale =
+                        batch.status == Status::Pending && batch.base_revision != document.revision;
                 }
-                Change::Cuts { stream, words, items } => {
+                Change::Cuts {
+                    stream,
+                    words,
+                    items,
+                } => {
                     out.kind = "cuts";
                     out.stream = Some(stream.clone());
-                    let (transcript, stamp) = transcripts.entry(stream.clone()).or_insert_with(|| {
-                        let transcript = store::load_transcript(reader.root(), stream).ok().flatten();
-                        let stamp = transcript.as_ref().and_then(words_stamp);
-                        (transcript, stamp)
-                    });
+                    let (transcript, stamp) =
+                        transcripts.entry(stream.clone()).or_insert_with(|| {
+                            let transcript =
+                                store::load_transcript(reader.root(), stream).ok().flatten();
+                            let stamp = transcript.as_ref().and_then(words_stamp);
+                            (transcript, stamp)
+                        });
                     // Word items of an older transcript go stale: its ids name other words now.
                     let transcript = transcript.as_ref().filter(|_| stamp == words);
                     out.items = items
                         .iter()
-                        .map(|item| item_view(document, transcript, stream, batch.base_revision, item))
+                        .map(|item| {
+                            item_view(document, transcript, stream, batch.base_revision, item)
+                        })
                         .collect();
                     let waiting: Vec<_> = out
                         .items
@@ -1082,7 +1141,10 @@ fn item_view(
         stale: false,
     };
     if let (Some((first, last)), Some(transcript)) = (item.words(), transcript) {
-        if let (Ok(ids), Ok(clock)) = (span_ids(transcript, first, last), document.transcript_clock(stream)) {
+        if let (Ok(ids), Ok(clock)) = (
+            span_ids(transcript, first, last),
+            document.transcript_clock(stream),
+        ) {
             view.word_ids = ids
                 .into_iter()
                 .filter(|id| {
@@ -1118,7 +1180,12 @@ pub fn transcript_suggestions(
     let stamp = words_stamp(transcript);
     let mut out = Vec::new();
     for batch in &proposals.batches {
-        let Change::Cuts { stream: s, words, items } = &batch.change else {
+        let Change::Cuts {
+            stream: s,
+            words,
+            items,
+        } = &batch.change
+        else {
             continue;
         };
         // A batch about an older transcript's words would mark other words now.
@@ -1129,7 +1196,13 @@ pub fn transcript_suggestions(
             if item.state == ItemState::Accepted || item.words().is_none() {
                 continue;
             }
-            let view = item_view(document, Some(transcript), stream, batch.base_revision, item);
+            let view = item_view(
+                document,
+                Some(transcript),
+                stream,
+                batch.base_revision,
+                item,
+            );
             let (Some(start), Some(end)) = (view.edited_start_us, view.edited_end_us) else {
                 continue;
             };
@@ -1191,7 +1264,11 @@ mod tests {
     fn project(dir: &Path) -> (AppState, String) {
         let wav = dir.join("voice.wav");
         let samples = vec![0i16; 48_000 * 2];
-        fs::write(&wav, crate::fixtures::generate_pcm16_wav(48_000, 1, &samples)).unwrap();
+        fs::write(
+            &wav,
+            crate::fixtures::generate_pcm16_wav(48_000, 1, &samples),
+        )
+        .unwrap();
         let folder = crate::project::folder::create_project_folder(dir, "Lesson", None).unwrap();
         let state = AppState::new();
         let opened = commands::open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
@@ -1281,7 +1358,10 @@ mod tests {
                 "claude-code",
                 revision,
                 &key,
-                vec![words("w-1", "w-1", "filler"), words("w-3", "w-4", "tangent")],
+                vec![
+                    words("w-1", "w-1", "filler"),
+                    words("w-3", "w-4", "tangent"),
+                ],
                 "Tighten the intro",
             )
             .unwrap();
@@ -1290,12 +1370,28 @@ mod tests {
             assert_eq!(revision_and_length(reader), (revision, length));
             let batch = proposals.get(&id).unwrap();
             assert_eq!(batch.status, Status::Pending);
-            assert!(batch.summary[0].starts_with("2 cuts"), "{:?}", batch.summary);
-            assert!(batch.summary[1].contains("c-1 w-1 \"um\""), "{:?}", batch.summary);
+            assert!(
+                batch.summary[0].starts_with("2 cuts"),
+                "{:?}",
+                batch.summary
+            );
+            assert!(
+                batch.summary[1].contains("c-1 w-1 \"um\""),
+                "{:?}",
+                batch.summary
+            );
 
             // A stale revision is refused with the current one named.
-            let error = propose_cuts(reader, proposals, "a", revision + 7, &key, vec![words("w-0", "w-0", "")], "")
-                .unwrap_err();
+            let error = propose_cuts(
+                reader,
+                proposals,
+                "a",
+                revision + 7,
+                &key,
+                vec![words("w-0", "w-0", "")],
+                "",
+            )
+            .unwrap_err();
             assert!(error.contains(&format!("revision {revision}")), "{error}");
 
             let summary = accept(reader, proposals, &id, revision, None, false, false)
@@ -1308,7 +1404,10 @@ mod tests {
             assert_eq!(batch.applied_revision, Some(revision + 1));
             let view = view(reader, proposals);
             assert!(view.batches[0].can_undo);
-            assert!(view.batches[0].items.iter().all(|i| i.state == ItemState::Accepted));
+            assert!(view.batches[0]
+                .items
+                .iter()
+                .all(|i| i.state == ItemState::Accepted));
 
             // One undo step: undoing the batch brings back the whole length.
             undo(reader, proposals, &id, revision + 1, None).unwrap();
@@ -1318,7 +1417,13 @@ mod tests {
             assert_eq!(batch.applied_revision, None);
         });
         // And it was saved beside the edit.
-        let root = state.opened_project.lock().as_ref().unwrap().root().to_path_buf();
+        let root = state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .root()
+            .to_path_buf();
         assert_eq!(load(&root).unwrap().batches.len(), 1);
     }
 
@@ -1331,10 +1436,20 @@ mod tests {
         let (state, key) = project(dir.path());
         with(&state, |reader, proposals| {
             let (revision, length) = revision_and_length(reader);
-            let id = propose_cuts(reader, proposals, "a", revision, &key, vec![words("w-1", "w-1", "")], "")
-                .unwrap();
+            let id = propose_cuts(
+                reader,
+                proposals,
+                "a",
+                revision,
+                &key,
+                vec![words("w-1", "w-1", "")],
+                "",
+            )
+            .unwrap();
             // Retranscribing gives the ids to other words: `w-1` is no longer "um".
-            let mut transcript = store::load_transcript(reader.root(), &key).unwrap().unwrap();
+            let mut transcript = store::load_transcript(reader.root(), &key)
+                .unwrap()
+                .unwrap();
             transcript.words[1].text = "Important".into();
             transcript.words[1].source_start_us = 320_000;
             transcript.words[1].source_end_us = 680_000;
@@ -1359,8 +1474,16 @@ mod tests {
         let (state, key) = project(dir.path());
         with(&state, |reader, proposals| {
             let revision = reader.document().revision;
-            let by_words = propose_cuts(reader, proposals, "a", revision, &key, vec![words("w-3", "w-3", "")], "")
-                .unwrap();
+            let by_words = propose_cuts(
+                reader,
+                proposals,
+                "a",
+                revision,
+                &key,
+                vec![words("w-3", "w-3", "")],
+                "",
+            )
+            .unwrap();
             let by_range = propose_cuts(
                 reader,
                 proposals,
@@ -1379,9 +1502,19 @@ mod tests {
             reader.ripple_cuts(revision, &[(350_000, 650_000)]).unwrap();
             let revision = reader.document().revision;
             // A span over the gap reads as what is left of it.
-            let across = propose_cuts(reader, proposals, "a", revision, &key, vec![words("w-0", "w-2", "")], "")
-                .unwrap();
-            let Change::Cuts { items, .. } = &proposals.get(&across).unwrap().change else { panic!() };
+            let across = propose_cuts(
+                reader,
+                proposals,
+                "a",
+                revision,
+                &key,
+                vec![words("w-0", "w-2", "")],
+                "",
+            )
+            .unwrap();
+            let Change::Cuts { items, .. } = &proposals.get(&across).unwrap().change else {
+                panic!()
+            };
             assert_eq!(items[0].text, "Hello there.");
             let view = view(reader, proposals);
             let range = view.batches.iter().find(|b| b.id == by_range).unwrap();
@@ -1392,9 +1525,11 @@ mod tests {
             // "So" (1.2 s in the recording) now plays 0.3 s earlier.
             assert!(word.items[0].edited_start_us.unwrap() < 1_100_000);
 
-            assert!(accept(reader, proposals, &by_range, revision, None, false, false)
-                .unwrap_err()
-                .contains("timeline range from revision"));
+            assert!(
+                accept(reader, proposals, &by_range, revision, None, false, false)
+                    .unwrap_err()
+                    .contains("timeline range from revision")
+            );
             let before = reader.document().duration_us();
             accept(reader, proposals, &by_words, revision, None, false, false).unwrap();
             assert!(reader.document().duration_us() < before);
@@ -1416,12 +1551,18 @@ mod tests {
                 "a",
                 revision,
                 &key,
-                vec![words("w-1", "w-1", ""), words("w-3", "w-3", ""), words("w-4", "w-4", "")],
+                vec![
+                    words("w-1", "w-1", ""),
+                    words("w-3", "w-3", ""),
+                    words("w-4", "w-4", ""),
+                ],
                 "",
             )
             .unwrap();
             reject(proposals, &id, Some(&["c-2".into()]), true).unwrap();
-            let transcript = store::load_transcript(reader.root(), &key).unwrap().unwrap();
+            let transcript = store::load_transcript(reader.root(), &key)
+                .unwrap()
+                .unwrap();
             let listed = transcript_suggestions(reader, proposals, &transcript, &key);
             assert_eq!(listed.len(), 3);
             assert_eq!(listed[0].source, SuggestionSource::Agent);
@@ -1430,21 +1571,50 @@ mod tests {
             assert_eq!(listed[0].proposal.as_ref().unwrap().batch_id, id);
 
             // The transcript list accepts one item; the batch keeps waiting for the rest.
-            accept(reader, proposals, &id, revision, Some(&["c-1".into()]), false, false).unwrap();
+            accept(
+                reader,
+                proposals,
+                &id,
+                revision,
+                Some(&["c-1".into()]),
+                false,
+                false,
+            )
+            .unwrap();
             assert_eq!(proposals.get(&id).unwrap().status, Status::Pending);
             // The panel accepts what is ticked and rejects the rest.
             let revision = reader.document().revision;
             reject(proposals, &id, Some(&["c-2".into()]), false).unwrap();
-            accept(reader, proposals, &id, revision, Some(&["c-3".into()]), true, false).unwrap();
+            accept(
+                reader,
+                proposals,
+                &id,
+                revision,
+                Some(&["c-3".into()]),
+                true,
+                false,
+            )
+            .unwrap();
             let batch = proposals.get(&id).unwrap();
             assert_eq!(batch.status, Status::Accepted);
-            let Change::Cuts { items, .. } = &batch.change else { panic!() };
+            let Change::Cuts { items, .. } = &batch.change else {
+                panic!()
+            };
             let states: Vec<ItemState> = items.iter().map(|i| i.state).collect();
-            assert_eq!(states, [ItemState::Accepted, ItemState::Rejected, ItemState::Accepted]);
+            assert_eq!(
+                states,
+                [
+                    ItemState::Accepted,
+                    ItemState::Rejected,
+                    ItemState::Accepted
+                ]
+            );
             // Undo only takes back the last accept.
             let revision = reader.document().revision;
             undo(reader, proposals, &id, revision, None).unwrap();
-            let Change::Cuts { items, .. } = &proposals.get(&id).unwrap().change else { panic!() };
+            let Change::Cuts { items, .. } = &proposals.get(&id).unwrap().change else {
+                panic!()
+            };
             assert_eq!(items[0].state, ItemState::Accepted);
             assert_eq!(items[2].state, ItemState::Pending);
         });
@@ -1465,10 +1635,20 @@ mod tests {
                 { "kind": "split", "atUs": 1_000_000 },
             ]))
             .unwrap();
-            let id = propose_edits(reader, proposals, "codex", revision, edits.clone(), "Split at the topic change")
-                .unwrap();
+            let id = propose_edits(
+                reader,
+                proposals,
+                "codex",
+                revision,
+                edits.clone(),
+                "Split at the topic change",
+            )
+            .unwrap();
             let summary = &proposals.get(&id).unwrap().summary;
-            assert!(summary.iter().any(|l| l.starts_with("+ track V")), "{summary:?}");
+            assert!(
+                summary.iter().any(|l| l.starts_with("+ track V")),
+                "{summary:?}"
+            );
             assert!(summary.iter().any(|l| l.starts_with("~ A1")), "{summary:?}");
             assert_eq!(reader.document().revision, revision);
 
@@ -1491,9 +1671,11 @@ mod tests {
             reader.ripple_cuts(revision, &[(0, 100_000)]).unwrap();
             assert!(view(reader, proposals).batches[0].stale);
             let revision = reader.document().revision;
-            assert!(accept(reader, proposals, &late, revision, None, false, false)
-                .unwrap_err()
-                .contains("propose it again"));
+            assert!(
+                accept(reader, proposals, &late, revision, None, false, false)
+                    .unwrap_err()
+                    .contains("propose it again")
+            );
         });
     }
 
@@ -1506,12 +1688,24 @@ mod tests {
         let (state, key) = project(dir.path());
         with(&state, |reader, proposals| {
             let revision = reader.document().revision;
-            let id = propose_cuts(reader, proposals, "claude-code", revision, &key, vec![words("w-1", "w-1", "")], "")
-                .unwrap();
-            assert!(withdraw(proposals, &id, "codex").unwrap_err().contains("claude-code"));
+            let id = propose_cuts(
+                reader,
+                proposals,
+                "claude-code",
+                revision,
+                &key,
+                vec![words("w-1", "w-1", "")],
+                "",
+            )
+            .unwrap();
+            assert!(withdraw(proposals, &id, "codex")
+                .unwrap_err()
+                .contains("claude-code"));
             accept(reader, proposals, &id, revision, None, false, true).unwrap();
             assert!(proposals.get(&id).unwrap().auto);
-            assert!(withdraw(proposals, &id, "claude-code").unwrap_err().contains("no longer waiting"));
+            assert!(withdraw(proposals, &id, "claude-code")
+                .unwrap_err()
+                .contains("no longer waiting"));
 
             // Something else changed the edit after it: it can't be undone alone.
             let after = reader.document().revision;

@@ -189,9 +189,9 @@ fn check_times(edit: &SequenceEdit) -> Result<(), String> {
     let fits = match edit {
         SequenceEdit::PlaceAsset { at_us, range, .. } => {
             *at_us <= MAX
-                && range
-                    .as_ref()
-                    .is_none_or(|r| r.start_us <= super::MAX_SAFE_US && r.end_us <= super::MAX_SAFE_US)
+                && range.as_ref().is_none_or(|r| {
+                    r.start_us <= super::MAX_SAFE_US && r.end_us <= super::MAX_SAFE_US
+                })
         }
         SequenceEdit::MoveClips { delta_us, .. } => delta_us.unsigned_abs() <= MAX,
         SequenceEdit::TrimClip { to_us, .. } => *to_us <= MAX,

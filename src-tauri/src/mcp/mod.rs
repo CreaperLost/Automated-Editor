@@ -217,7 +217,11 @@ pub fn set_autopilot(dir: &Path, autopilot: bool) -> Result<McpStatus, String> {
 }
 
 /// Adds AeroEdits to an agent app's settings, or takes it out.
-pub fn set_app_connected(dir: &Path, app: clients::App, connected: bool) -> Result<McpStatus, String> {
+pub fn set_app_connected(
+    dir: &Path,
+    app: clients::App,
+    connected: bool,
+) -> Result<McpStatus, String> {
     let exe = this_program().ok_or("Could not find this program's path")?;
     if connected {
         clients::connect(app, &exe)?;
@@ -228,7 +232,11 @@ pub fn set_app_connected(dir: &Path, app: clients::App, connected: bool) -> Resu
 }
 
 /// Installs the `aeroedits` skill for an agent that reads skills from disk, or takes it out.
-pub fn set_skill_installed(dir: &Path, home: skill::SkillHome, installed: bool) -> Result<McpStatus, String> {
+pub fn set_skill_installed(
+    dir: &Path,
+    home: skill::SkillHome,
+    installed: bool,
+) -> Result<McpStatus, String> {
     skill::set_installed(home, installed)?;
     Ok(status(dir))
 }
@@ -316,7 +324,10 @@ async fn session(stream: impl ipc::Stream, host: Arc<dyn Host>, stop: Cancellati
         server.connected.push((id, None));
         id
     };
-    let handler = Handler { host, connection: id };
+    let handler = Handler {
+        host,
+        connection: id,
+    };
     if let Ok(running) = handler.serve_with_ct(stream, stop).await {
         let _ = running.waiting().await;
     }
@@ -378,9 +389,13 @@ impl rmcp::ServerHandler for Handler {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetPromptResponse, rmcp::ErrorData> {
         self.note_client(&context);
-        skill::prompt_get(&self.host.config_dir(), &request.name, request.arguments.as_ref())
-            .map(Into::into)
-            .map_err(|error| rmcp::ErrorData::invalid_params(error, None))
+        skill::prompt_get(
+            &self.host.config_dir(),
+            &request.name,
+            request.arguments.as_ref(),
+        )
+        .map(Into::into)
+        .map_err(|error| rmcp::ErrorData::invalid_params(error, None))
     }
 
     async fn call_tool(
@@ -492,13 +507,20 @@ impl rmcp::ServerHandler for Handler {
 
 impl Handler {
     /// The agent's name from its handshake, kept for the connected list.
-    fn note_client(&self, context: &rmcp::service::RequestContext<rmcp::RoleServer>) -> Option<String> {
+    fn note_client(
+        &self,
+        context: &rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Option<String> {
         let name = context
             .peer
             .peer_info()
             .map(|info| info.client_info.name.clone())?;
         let mut server = SERVER.lock();
-        if let Some(entry) = server.connected.iter_mut().find(|(c, _)| *c == self.connection) {
+        if let Some(entry) = server
+            .connected
+            .iter_mut()
+            .find(|(c, _)| *c == self.connection)
+        {
             entry.1 = Some(name.clone());
         }
         Some(name)
@@ -509,9 +531,14 @@ impl Handler {
 /// is closed.
 pub(crate) fn server_info() -> rmcp::model::ServerConfig {
     use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
-    ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
-        .with_server_info(Implementation::new("aeroedits", env!("CARGO_PKG_VERSION")))
-        .with_instructions(INSTRUCTIONS)
+    ServerConfig::new(
+        ServerCapabilities::builder()
+            .enable_tools()
+            .enable_prompts()
+            .build(),
+    )
+    .with_server_info(Implementation::new("aeroedits", env!("CARGO_PKG_VERSION")))
+    .with_instructions(INSTRUCTIONS)
 }
 
 /// Every tool as `tools/list` lists it.
@@ -577,7 +604,11 @@ mod tests {
     fn project_with(dir: &Path, autopilot: bool) -> Arc<TestHost> {
         let wav = dir.join("voice.wav");
         let samples = vec![0i16; 48_000 * 2];
-        fs::write(&wav, crate::fixtures::generate_pcm16_wav(48_000, 1, &samples)).unwrap();
+        fs::write(
+            &wav,
+            crate::fixtures::generate_pcm16_wav(48_000, 1, &samples),
+        )
+        .unwrap();
         let folder = crate::project::folder::create_project_folder(dir, "Lesson", None).unwrap();
         let mut host = TestHost::new(AppState::new());
         host.1 = autopilot;
@@ -613,15 +644,17 @@ mod tests {
             words: words
                 .iter()
                 .enumerate()
-                .map(|(i, (text, start, end))| crate::transcript::TranscriptWord {
-                    id: format!("w-{i}"),
-                    text: (*text).into(),
-                    kind: crate::transcript::WordKind::Word,
-                    source_start_us: start * 1000,
-                    source_end_us: end * 1000,
-                    confidence: None,
-                    speaker: None,
-                })
+                .map(
+                    |(i, (text, start, end))| crate::transcript::TranscriptWord {
+                        id: format!("w-{i}"),
+                        text: (*text).into(),
+                        kind: crate::transcript::WordKind::Word,
+                        source_start_us: start * 1000,
+                        source_end_us: end * 1000,
+                        confidence: None,
+                        speaker: None,
+                    },
+                )
                 .collect(),
             dismissed_suggestions: Vec::new(),
             ai_suggestions: Vec::new(),
@@ -717,16 +750,25 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
         assert!(names.iter().any(|n| n == "project_info"), "{names:?}");
-        let text = by_id(3)["result"]["content"][0]["text"].as_str().unwrap().to_string();
+        let text = by_id(3)["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(text.contains("w-0..w-1 Hello there."), "{text}");
         assert_eq!(by_id(4)["result"]["isError"], true);
         assert_eq!(by_id(5)["result"]["prompts"][0]["name"], "tutorial");
         let prompt = by_id(6)["result"]["messages"][0]["content"]["text"].clone();
-        assert!(prompt.as_str().unwrap().starts_with("Edit the project open in AeroEdits"), "{prompt}");
+        assert!(
+            prompt
+                .as_str()
+                .unwrap()
+                .starts_with("Edit the project open in AeroEdits"),
+            "{prompt}"
+        );
         let activity = SERVER.lock().activity.clone();
-        assert!(activity
-            .iter()
-            .any(|a| a.tool == "transcript_get" && a.ok && a.client.as_deref() == Some("pipe-test")));
+        assert!(activity.iter().any(|a| a.tool == "transcript_get"
+            && a.ok
+            && a.client.as_deref() == Some("pipe-test")));
 
         running.stop.cancel();
     }
@@ -757,7 +799,13 @@ mod tests {
     }
 
     fn revision(host: &TestHost) -> u64 {
-        host.0.opened_project.lock().as_ref().unwrap().document().revision
+        host.0
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .document()
+            .revision
     }
 
     #[test]
@@ -776,33 +824,61 @@ mod tests {
         let start = revision(&host);
 
         let mut messages = handshake("claude-code");
-        messages.push(call(2, "propose_cuts", json!({
-            "expectedRevision": start,
-            "reason": "Remove the false start",
-            "cuts": [{ "fromWord": "w-0", "toWord": "w-1", "reason": "restarted" }],
-        })));
+        messages.push(call(
+            2,
+            "propose_cuts",
+            json!({
+                "expectedRevision": start,
+                "reason": "Remove the false start",
+                "cuts": [{ "fromWord": "w-0", "toWord": "w-1", "reason": "restarted" }],
+            }),
+        ));
         let replies = runtime.block_on(talk(&endpoint, &messages, 2));
         let proposed = reply_text(&replies, 2);
-        assert!(proposed.starts_with("Proposed b-1. It waits for the user"), "{proposed}");
-        assert!(proposed.contains("c-1 w-0..w-1 \"Hello there.\""), "{proposed}");
+        assert!(
+            proposed.starts_with("Proposed b-1. It waits for the user"),
+            "{proposed}"
+        );
+        assert!(
+            proposed.contains("c-1 w-0..w-1 \"Hello there.\""),
+            "{proposed}"
+        );
         assert_eq!(revision(&host), start, "proposing changes nothing");
 
         // Requests on one connection run side by side, so each step waits for the one before.
         let mut messages = handshake("claude-code");
         messages.push(call(3, "proposals_list", json!({ "pendingOnly": true })));
-        messages.push(call(4, "timeline_view", json!({ "fromUs": 0, "toUs": 2_000_000, "width": 800 })));
+        messages.push(call(
+            4,
+            "timeline_view",
+            json!({ "fromUs": 0, "toUs": 2_000_000, "width": 800 }),
+        ));
         messages.push(call(5, "telemetry_get", json!({})));
         let replies = runtime.block_on(talk(&endpoint, &messages, 4));
         let listed = reply_text(&replies, 3);
-        assert!(listed.contains("\"yours\": true") && listed.contains("\"status\": \"pending\""), "{listed}");
+        assert!(
+            listed.contains("\"yours\": true") && listed.contains("\"status\": \"pending\""),
+            "{listed}"
+        );
         let view = replies.iter().find(|r| r["id"] == 4).unwrap();
         assert_eq!(view["result"]["content"][0]["type"], "image", "{view}");
-        assert!(reply_text(&replies, 4).contains("1 pending cut shaded"), "{view}");
+        assert!(
+            reply_text(&replies, 4).contains("1 pending cut shaded"),
+            "{view}"
+        );
         assert!(reply_text(&replies, 5).contains("Zooms in the edit (0)"));
         assert!(host.2.load(std::sync::atomic::Ordering::SeqCst) >= 1);
 
         // The user accepts it in the Agent panel.
-        let handle = host.0.opened_project.lock().as_ref().unwrap().summary.project_handle.clone();
+        let handle = host
+            .0
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .summary
+            .project_handle
+            .clone();
         let outcome = commands::proposals::proposal_accept_impl(
             &host.0,
             handle,
@@ -820,12 +896,23 @@ mod tests {
         let replies = runtime.block_on(talk(&endpoint, &messages, 3));
         assert!(reply_text(&replies, 2).contains("\"status\": \"accepted\""));
         let transcript = reply_text(&replies, 3);
-        assert!(transcript.contains("2 cut out") && !transcript.contains("Hello"), "{transcript}");
+        assert!(
+            transcript.contains("2 cut out") && !transcript.contains("Hello"),
+            "{transcript}"
+        );
 
         let mut messages = handshake("claude-code");
-        messages.push(call(2, "undo_batch", json!({ "batchId": "b-1", "expectedRevision": start + 1 })));
+        messages.push(call(
+            2,
+            "undo_batch",
+            json!({ "batchId": "b-1", "expectedRevision": start + 1 }),
+        ));
         let replies = runtime.block_on(talk(&endpoint, &messages, 2));
-        assert!(reply_text(&replies, 2).starts_with("Undid b-1"), "{}", reply_text(&replies, 2));
+        assert!(
+            reply_text(&replies, 2).starts_with("Undid b-1"),
+            "{}",
+            reply_text(&replies, 2)
+        );
         assert_eq!(revision(&host), start + 2);
 
         running.stop.cancel();
@@ -846,16 +933,24 @@ mod tests {
             .unwrap();
         let start = revision(&host);
         let mut messages = handshake("codex");
-        messages.push(call(2, "propose_edit", json!({
-            "expectedRevision": start,
-            "reason": "A track for the lower third",
-            "edits": [{ "kind": "addTrack", "trackKind": "video" }],
-        })));
-        messages.push(call(3, "propose_edit", json!({
-            "expectedRevision": start,
-            "reason": "stale",
-            "edits": [{ "kind": "teleport" }],
-        })));
+        messages.push(call(
+            2,
+            "propose_edit",
+            json!({
+                "expectedRevision": start,
+                "reason": "A track for the lower third",
+                "edits": [{ "kind": "addTrack", "trackKind": "video" }],
+            }),
+        ));
+        messages.push(call(
+            3,
+            "propose_edit",
+            json!({
+                "expectedRevision": start,
+                "reason": "stale",
+                "edits": [{ "kind": "teleport" }],
+            }),
+        ));
         let replies = runtime.block_on(talk(&endpoint, &messages, 3));
         let accepted = reply_text(&replies, 2);
         assert!(accepted.contains("autopilot accepted it"), "{accepted}");
@@ -885,24 +980,58 @@ mod tests {
             let (mut out, mut err) = (Vec::new(), Vec::new());
             let code = runtime.block_on(async {
                 let stream = ipc::connect(&endpoint).await.unwrap();
-                cli::session(stream, cli::parse(&args).unwrap(), "cli-test", &mut out, &mut err).await
+                cli::session(
+                    stream,
+                    cli::parse(&args).unwrap(),
+                    "cli-test",
+                    &mut out,
+                    &mut err,
+                )
+                .await
             });
-            (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+            (
+                code,
+                String::from_utf8(out).unwrap(),
+                String::from_utf8(err).unwrap(),
+            )
         };
 
         let (code, out, _) = ask(&[]);
         assert_eq!(code, 0);
-        assert!(out.contains("  silence ") && out.contains("  transcript_get "), "{out}");
+        assert!(
+            out.contains("  silence ") && out.contains("  transcript_get "),
+            "{out}"
+        );
         let (code, out, _) = ask(&["silence", "--help"]);
         assert_eq!(code, 0);
-        assert!(out.contains("--preset <gentle|balanced|tight|aggressive>"), "{out}");
+        assert!(
+            out.contains("--preset <gentle|balanced|tight|aggressive>"),
+            "{out}"
+        );
 
-        let revision = host.state.opened_project.lock().as_ref().unwrap().document().revision;
+        let revision = host
+            .state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .document()
+            .revision;
         let (code, out, err) = ask(&["silence", "--preset", "tight"]);
         assert_eq!(code, 0, "{out}{err}");
         assert!(out.starts_with("Found 3 pauses"), "{out}");
-        assert!(err.contains("Finding silence in"), "progress goes to stderr: {err}");
-        let after = host.state.opened_project.lock().as_ref().unwrap().document().revision;
+        assert!(
+            err.contains("Finding silence in"),
+            "progress goes to stderr: {err}"
+        );
+        let after = host
+            .state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .document()
+            .revision;
         assert_eq!(after, revision + 1);
         assert!(SERVER
             .lock()
@@ -943,25 +1072,38 @@ mod tests {
                     .write_all(format!("{message}\n").as_bytes())
                     .await
                     .unwrap();
-                let line = tokio::time::timeout(std::time::Duration::from_secs(20), lines.next_line())
-                    .await
-                    .expect("a reply in time")
-                    .unwrap()
-                    .unwrap();
+                let line =
+                    tokio::time::timeout(std::time::Duration::from_secs(20), lines.next_line())
+                        .await
+                        .expect("a reply in time")
+                        .unwrap()
+                        .unwrap();
                 serde_json::from_str::<Value>(&line).unwrap()
             })
         };
-        let text = |reply: &Value| reply["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
-        let call = |id: u64| json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": {"name": "transcript_get", "arguments": {}}});
+        let text = |reply: &Value| {
+            reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        let call = |id: u64| {
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "transcript_get", "arguments": {}}})
+        };
 
         // The app is closed: the handshake and the tools still come, from the bridge.
-        let hello = ask(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        let hello = ask(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2025-06-18", "capabilities": {},
-            "clientInfo": {"name": "claude-ai", "version": "1"}}}));
+            "clientInfo": {"name": "claude-ai", "version": "1"}}}),
+        );
         assert_eq!(hello["result"]["serverInfo"]["name"], "aeroedits");
         assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
-        assert!(hello["result"]["instructions"].as_str().unwrap().contains("cleanup"));
+        assert!(hello["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("cleanup"));
         let tools = ask(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
         let names: Vec<&str> = tools["result"]["tools"]
             .as_array()
@@ -969,19 +1111,43 @@ mod tests {
             .iter()
             .filter_map(|t| t["name"].as_str())
             .collect();
-        assert!(names.contains(&"cleanup") && names.contains(&"transcript_get"), "{names:?}");
-        assert!(names.contains(&"template") && names.contains(&"scan"), "{names:?}");
-        assert!(hello["result"]["capabilities"]["prompts"].is_object(), "{hello}");
-        assert!(hello["result"]["instructions"].as_str().unwrap().contains("call `template` first"));
+        assert!(
+            names.contains(&"cleanup") && names.contains(&"transcript_get"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"template") && names.contains(&"scan"),
+            "{names:?}"
+        );
+        assert!(
+            hello["result"]["capabilities"]["prompts"].is_object(),
+            "{hello}"
+        );
+        assert!(hello["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("call `template` first"));
         // Templates need no app either.
         let prompts = ask(json!({"jsonrpc": "2.0", "id": 20, "method": "prompts/list"}));
-        assert_eq!(prompts["result"]["prompts"][0]["title"], "Tutorial edit", "{prompts}");
-        let prompt = ask(json!({"jsonrpc": "2.0", "id": 21, "method": "prompts/get", "params": {
-            "name": "tutorial", "arguments": {"recording": r"C:\Rec\Lesson.aero"}}}));
-        let message = prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap_or_default();
-        assert!(message.starts_with(r"Edit the recording C:\Rec\Lesson.aero in AeroEdits"), "{prompt}");
+        assert_eq!(
+            prompts["result"]["prompts"][0]["title"], "Tutorial edit",
+            "{prompts}"
+        );
+        let prompt = ask(
+            json!({"jsonrpc": "2.0", "id": 21, "method": "prompts/get", "params": {
+            "name": "tutorial", "arguments": {"recording": r"C:\Rec\Lesson.aero"}}}),
+        );
+        let message = prompt["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            message.starts_with(r"Edit the recording C:\Rec\Lesson.aero in AeroEdits"),
+            "{prompt}"
+        );
         assert!(message.contains("# Template: tutorial"), "{prompt}");
-        let missing = ask(json!({"jsonrpc": "2.0", "id": 22, "method": "prompts/get", "params": {"name": "vlog"}}));
+        let missing = ask(
+            json!({"jsonrpc": "2.0", "id": 22, "method": "prompts/get", "params": {"name": "vlog"}}),
+        );
         assert_eq!(missing["error"]["code"], -32602, "{missing}");
         let closed = ask(call(3));
         assert_eq!(closed["result"]["isError"], true);
@@ -990,7 +1156,10 @@ mod tests {
         // The app opens: the next call reaches it, under the agent's name.
         let running = serve(host.clone(), endpoint.clone()).unwrap();
         let answered = ask(call(4));
-        assert!(text(&answered).contains("w-0..w-1 Hello there."), "{answered}");
+        assert!(
+            text(&answered).contains("w-0..w-1 Hello there."),
+            "{answered}"
+        );
         assert!(SERVER
             .lock()
             .activity

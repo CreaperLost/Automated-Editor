@@ -147,11 +147,9 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: windows-test
-      - name: Install FFmpeg
-        run: choco install ffmpeg -y --no-progress
-      - run: cargo test
-        env:
-          AEROEDITS_REQUIRE_FFMPEG: "1"
+      # The tests use the FFmpeg the app ships (checksum-verified), named by path rather than
+      # found on PATH: Chocolatey's install once reported success while the tests found no
+      # FFmpeg.
       - name: Fetch the bundled FFmpeg and check its H.264 encoders
         shell: bash
         run: |
@@ -160,6 +158,11 @@ jobs:
           binaries/ffmpeg-x86_64-pc-windows-msvc.exe -hide_banner -encoders > encoders.txt
           grep -E ' libx264 ' encoders.txt
           grep -E ' h264_nvenc ' encoders.txt
+      - run: cargo test
+        env:
+          AEROEDITS_REQUIRE_FFMPEG: "1"
+          AEROEDITS_FFMPEG: ${{ github.workspace }}\src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe
+          AEROEDITS_FFPROBE: ${{ github.workspace }}\src-tauri\binaries\ffprobe-x86_64-pc-windows-msvc.exe
 
   # The Swift bridges for Mac preview/playback/export only build on macOS, so
   # this is the one place they are compiled and the Mac-only tests run.

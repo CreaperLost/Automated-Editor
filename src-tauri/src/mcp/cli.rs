@@ -114,7 +114,10 @@ fn resolve<'a>(root: &'a Value, schema: &'a Value) -> &'a Value {
 fn json_type(schema: &Value) -> Option<&str> {
     match schema.get("type")? {
         Value::String(kind) => Some(kind),
-        Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).find(|k| *k != "null"),
+        Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|k| *k != "null"),
         _ => None,
     }
 }
@@ -122,7 +125,10 @@ fn json_type(schema: &Value) -> Option<&str> {
 /// The values an enum property takes.
 fn choices(schema: &Value) -> Vec<String> {
     if let Some(values) = schema.get("enum").and_then(Value::as_array) {
-        return values.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        return values
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
     }
     schema
         .get("oneOf")
@@ -152,7 +158,9 @@ fn typed(root: &Value, property: Option<&Value>, raw: Option<&str>) -> Result<Va
     match kind {
         Some("string") => Ok(Value::String(raw.to_string())),
         Some("array") if !raw.trim_start().starts_with('[') => {
-            let items = schema.and_then(|s| s.get("items")).map(|i| resolve(root, i));
+            let items = schema
+                .and_then(|s| s.get("items"))
+                .map(|i| resolve(root, i));
             raw.split(',')
                 .map(|item| typed(root, items, Some(item.trim())))
                 .collect::<Result<Vec<_>, _>>()
@@ -160,7 +168,10 @@ fn typed(root: &Value, property: Option<&Value>, raw: Option<&str>) -> Result<Va
         }
         Some("object") | Some("array") => serde_json::from_str(raw)
             .map_err(|e| format!("Expected JSON for this value ({e}): {raw}")),
-        _ => Ok(serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_string()))),
+        _ => {
+            Ok(serde_json::from_str::<Value>(raw)
+                .unwrap_or_else(|_| Value::String(raw.to_string())))
+        }
     }
 }
 
@@ -193,11 +204,15 @@ pub fn arguments(
         ));
     }
     for (key, raw) in required.iter().zip(positional) {
-        out.insert(key.to_string(), typed(schema, properties.get(*key), Some(raw))?);
+        out.insert(
+            key.to_string(),
+            typed(schema, properties.get(*key), Some(raw))?,
+        );
     }
     for (key, raw) in named {
         if key == "json" {
-            let Some(Value::Object(extra)) = raw.as_deref().and_then(|r| serde_json::from_str(r).ok())
+            let Some(Value::Object(extra)) =
+                raw.as_deref().and_then(|r| serde_json::from_str(r).ok())
             else {
                 return Err("--json needs a JSON object".into());
             };
@@ -211,10 +226,17 @@ pub fn arguments(
                 .unwrap_or_default();
             return Err(format!(
                 "Unknown option --{key}. Options: {}",
-                if known.is_empty() { "none".into() } else { known.join(", ") }
+                if known.is_empty() {
+                    "none".into()
+                } else {
+                    known.join(", ")
+                }
             ));
         }
-        out.insert(key.clone(), typed(schema, properties.get(key), raw.as_deref())?);
+        out.insert(
+            key.clone(),
+            typed(schema, properties.get(key), raw.as_deref())?,
+        );
     }
     Ok(Value::Object(out))
 }
@@ -259,7 +281,11 @@ pub fn help(tool: &Value) -> String {
                 .collect();
             out.push_str(&format!(
                 "  --{flag} <{kind}>{}  {description}\n",
-                if required.contains(&key.as_str()) { " (required)" } else { "" }
+                if required.contains(&key.as_str()) {
+                    " (required)"
+                } else {
+                    ""
+                }
             ));
         }
     }
@@ -297,7 +323,10 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("aeroedits do: {error}");
@@ -375,7 +404,10 @@ pub async fn session(
             }
             match found {
                 Some(message) => match message.get("error") {
-                    Some(error) => Err(error["message"].as_str().unwrap_or("Request failed").to_string()),
+                    Some(error) => Err(error["message"]
+                        .as_str()
+                        .unwrap_or("Request failed")
+                        .to_string()),
                     None => Ok(message["result"].clone()),
                 },
                 None => Err("AeroEdits closed the connection".to_string()),
@@ -392,7 +424,8 @@ pub async fn session(
     if let Err(error) = reply!(1) {
         return fail(err, error);
     }
-    if let Err(error) = send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).await {
+    if let Err(error) = send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).await
+    {
         return fail(err, error);
     }
     if let Err(error) = send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await {
@@ -405,7 +438,10 @@ pub async fn session(
     let find = |name: &str| tools.iter().find(|t| t["name"] == name).cloned();
     let (tool, positional, named) = match request {
         Request::List => {
-            let _ = writeln!(out, "Actions and tools (aeroedits do <name> --help for options):");
+            let _ = writeln!(
+                out,
+                "Actions and tools (aeroedits do <name> --help for options):"
+            );
             for tool in &tools {
                 let _ = writeln!(
                     out,
@@ -432,7 +468,10 @@ pub async fn session(
         } => (tool, positional, named),
     };
     let Some(definition) = find(&tool) else {
-        return fail(err, format!("No action named {tool}; `aeroedits do` lists them."));
+        return fail(
+            err,
+            format!("No action named {tool}; `aeroedits do` lists them."),
+        );
     };
     let schema = definition.get("inputSchema").cloned().unwrap_or_default();
     let arguments = match arguments(&schema, &positional, &named) {
@@ -508,11 +547,24 @@ mod tests {
     #[test]
     fn command_lines_become_requests() {
         assert_eq!(parse(&[]).unwrap(), Request::List);
-        assert_eq!(parse(&strings(&["help", "mouth-noises"])).unwrap(), Request::Help("mouth_noises".into()));
-        assert_eq!(parse(&strings(&["silence", "--help"])).unwrap(), Request::Help("silence".into()));
         assert_eq!(
-            parse(&strings(&["silence", "--preset", "tight", "--min-duration-ms=150", "--no-apply", "--force"]))
-                .unwrap(),
+            parse(&strings(&["help", "mouth-noises"])).unwrap(),
+            Request::Help("mouth_noises".into())
+        );
+        assert_eq!(
+            parse(&strings(&["silence", "--help"])).unwrap(),
+            Request::Help("silence".into())
+        );
+        assert_eq!(
+            parse(&strings(&[
+                "silence",
+                "--preset",
+                "tight",
+                "--min-duration-ms=150",
+                "--no-apply",
+                "--force"
+            ]))
+            .unwrap(),
             Request::Call {
                 tool: "silence".into(),
                 positional: vec![],
@@ -528,7 +580,9 @@ mod tests {
 
     #[test]
     fn values_follow_the_schema() {
-        let schema = serde_json::to_value(schemars::schema_for!(super::super::actions::CleanupArgs)).unwrap();
+        let schema =
+            serde_json::to_value(schemars::schema_for!(super::super::actions::CleanupArgs))
+                .unwrap();
         let args = arguments(
             &schema,
             &[],
@@ -545,9 +599,14 @@ mod tests {
             json!({"preset": "tight", "steps": ["silence", "fillers"], "ai": true, "stream": "123"})
         );
         let error = arguments(&schema, &[], &[("presett".into(), Some("x".into()))]).unwrap_err();
-        assert!(error.contains("Unknown option --presett") && error.contains("preset"), "{error}");
+        assert!(
+            error.contains("Unknown option --presett") && error.contains("preset"),
+            "{error}"
+        );
 
-        let settings = serde_json::to_value(schemars::schema_for!(super::super::actions::SettingsArgs)).unwrap();
+        let settings =
+            serde_json::to_value(schemars::schema_for!(super::super::actions::SettingsArgs))
+                .unwrap();
         let args = arguments(
             &settings,
             &strings(&["captions"]),
@@ -557,9 +616,16 @@ mod tests {
         assert_eq!(args, json!({"area": "captions", "set": {"enabled": true}}));
 
         // A tool with one optional option takes it as a plain word: `do template tutorial`.
-        let template = serde_json::to_value(schemars::schema_for!(super::super::skill::TemplateArgs)).unwrap();
-        assert_eq!(arguments(&template, &strings(&["tutorial"]), &[]).unwrap(), json!({"name": "tutorial"}));
-        assert!(arguments(&schema, &strings(&["tight"]), &[]).is_err(), "cleanup has several");
+        let template =
+            serde_json::to_value(schemars::schema_for!(super::super::skill::TemplateArgs)).unwrap();
+        assert_eq!(
+            arguments(&template, &strings(&["tutorial"]), &[]).unwrap(),
+            json!({"name": "tutorial"})
+        );
+        assert!(
+            arguments(&schema, &strings(&["tight"]), &[]).is_err(),
+            "cleanup has several"
+        );
     }
 
     #[test]
@@ -570,7 +636,10 @@ mod tests {
             "inputSchema": serde_json::to_value(schemars::schema_for!(super::super::actions::SilenceArgs)).unwrap(),
         });
         let text = help(&tool);
-        assert!(text.contains("--preset <gentle|balanced|tight|aggressive>"), "{text}");
+        assert!(
+            text.contains("--preset <gentle|balanced|tight|aggressive>"),
+            "{text}"
+        );
         assert!(text.contains("--min-duration-ms <integer>"), "{text}");
     }
 }

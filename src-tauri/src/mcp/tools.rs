@@ -445,7 +445,11 @@ fn transcript_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .iter()
         .filter(|w| w.edited_start_us.is_some_and(|s| s >= from && s < to))
         .collect();
-    let cut = view.words.iter().filter(|w| w.edited_start_us.is_none()).count();
+    let cut = view
+        .words
+        .iter()
+        .filter(|w| w.edited_start_us.is_none())
+        .count();
     let mut out = format!(
         "Transcript of {key}, revision {}. {} words shown, {cut} cut out. \
          Lines: [start-end] first..last word id, text.\n",
@@ -467,7 +471,9 @@ fn pack_lines(words: &[&TranscriptViewWord]) -> String {
             .iter()
             .map(|w| match w.word.kind {
                 WordKind::Word => w.word.text.trim().to_string(),
-                WordKind::AudioEvent => format!("({})", w.word.text.trim().trim_matches(['(', ')'])),
+                WordKind::AudioEvent => {
+                    format!("({})", w.word.text.trim().trim_matches(['(', ')']))
+                }
             })
             .collect();
         out.push_str(&format!(
@@ -486,11 +492,7 @@ fn pack_lines(words: &[&TranscriptViewWord]) -> String {
                 .edited_start_us
                 .unwrap_or(0)
                 .saturating_sub(previous.edited_end_us.unwrap_or(0));
-            let sentence = previous
-                .word
-                .text
-                .trim_end()
-                .ends_with(['.', '?', '!']);
+            let sentence = previous.word.text.trim_end().ends_with(['.', '?', '!']);
             if gap >= LINE_PAUSE_US || sentence || line.len() >= LINE_MAX_WORDS {
                 flush(&mut line, &mut out);
                 if gap >= SHOWN_GAP_US {
@@ -627,7 +629,12 @@ fn layout_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         json!({ "x": s(l.x), "y": s(l.y), "width": s(l.width), "height": s(l.height) })
     };
     let of = |role: LayerRole| -> Vec<Value> {
-        scene.layers.iter().filter(|l| l.role == role).map(rect).collect()
+        scene
+            .layers
+            .iter()
+            .filter(|l| l.role == role)
+            .map(rect)
+            .collect()
     };
     pretty(&json!({
         "at": clock(at),

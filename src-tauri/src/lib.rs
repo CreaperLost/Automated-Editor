@@ -6,8 +6,8 @@ pub mod cursor;
 pub mod dsp;
 pub mod export;
 pub mod fixtures;
-pub mod media;
 pub mod mcp;
+pub mod media;
 pub mod media_bin;
 mod parity;
 mod perf;
@@ -1066,9 +1066,10 @@ impl mcp::Host for McpHost {
     fn transcript_changed(&self) {
         use tauri::Emitter;
         // The same event the windows send each other (front-end/src/lib/windowSync.ts).
-        let _ = self
-            .0
-            .emit("aeroedits-captions-changed", serde_json::json!({ "source": "agent" }));
+        let _ = self.0.emit(
+            "aeroedits-captions-changed",
+            serde_json::json!({ "source": "agent" }),
+        );
     }
 
     fn activity_changed(&self) {
@@ -1108,7 +1109,10 @@ fn mcp_app_connect(app: mcp::clients::App, connected: bool) -> Result<mcp::McpSt
 /// Installs the `aeroedits` skill for Claude Code or Codex, or takes it out.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn mcp_skill_install(home: mcp::skill::SkillHome, installed: bool) -> Result<mcp::McpStatus, String> {
+fn mcp_skill_install(
+    home: mcp::skill::SkillHome,
+    installed: bool,
+) -> Result<mcp::McpStatus, String> {
     mcp::set_skill_installed(&transcript::settings::config_dir(), home, installed)
 }
 
@@ -1638,10 +1642,7 @@ pub fn run() {
         .manage(commands::transcript::TranscriptState::default())
         .setup(|app| {
             playback::engine::start(app.handle().clone());
-            mcp::start_if_enabled(
-                &transcript::settings::config_dir(),
-                mcp_host(app.handle()),
-            );
+            mcp::start_if_enabled(&transcript::settings::config_dir(), mcp_host(app.handle()));
             Ok(())
         })
         .on_window_event(|window, event| {

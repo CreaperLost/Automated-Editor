@@ -3,8 +3,8 @@
 //! does). Proposing leaves the edit's revision as it was.
 use super::tools::{params, pretty, text, transcribed_stream, Ctx, Output};
 use crate::commands::proposals::with_proposals;
-use crate::proposals::{self, CutInput, Proposals, ProposalsView, Status};
 use crate::project::ProjectReader;
+use crate::proposals::{self, CutInput, Proposals, ProposalsView, Status};
 use crate::sequence::edit::SequenceEdit;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -118,12 +118,13 @@ pub fn propose_cuts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: CutsParams = params(args)?;
     let agent = ctx.agent.clone();
     propose(ctx, |reader, proposals| {
-        let stream = transcribed_stream(reader, args.stream)
-            .or_else(|e| match args.cuts.iter().all(|c| c.from_word.is_none()) {
+        let stream = transcribed_stream(reader, args.stream).or_else(|e| {
+            match args.cuts.iter().all(|c| c.from_word.is_none()) {
                 // Ranges alone need no transcript.
                 true => Ok(String::new()),
                 false => Err(e),
-            })?;
+            }
+        })?;
         proposals::propose_cuts(
             reader,
             proposals,

@@ -111,7 +111,13 @@ fn configured_command(app: App, text: &str) -> Option<String> {
         }
         App::Codex => {
             let doc: toml_edit::DocumentMut = text.parse().ok()?;
-            Some(doc.get("mcp_servers")?.get(NAME)?.get("command")?.as_str()?.to_string())
+            Some(
+                doc.get("mcp_servers")?
+                    .get(NAME)?
+                    .get("command")?
+                    .as_str()?
+                    .to_string(),
+            )
         }
     }
 }
@@ -150,7 +156,8 @@ fn change(app: App, path: &Path, exe: &Path, add: bool) -> Result<AppState, Stri
                 "{}.aeroedits-backup",
                 path.extension().and_then(|e| e.to_str()).unwrap_or("bak")
             ));
-            fs::write(&backup, before).map_err(|e| format!("Could not back up the settings: {e}"))?;
+            fs::write(&backup, before)
+                .map_err(|e| format!("Could not back up the settings: {e}"))?;
         }
         fs::write(path, &after).map_err(|e| format!("Could not save {}: {e}", path.display()))?;
     }
@@ -243,7 +250,10 @@ mod tests {
         let exe = Path::new(r"C:\Program Files\AeroEdits\aeroedits.exe");
         let start = "# my settings\nmodel = \"gpt-5\"\n\n[mcp_servers.docs]\nurl = \"https://x\"\n";
         let added = edit_toml(start, exe, true).unwrap();
-        assert!(added.starts_with("# my settings\nmodel = \"gpt-5\"\n"), "{added}");
+        assert!(
+            added.starts_with("# my settings\nmodel = \"gpt-5\"\n"),
+            "{added}"
+        );
         assert!(added.contains("[mcp_servers.docs]"), "{added}");
         assert!(added.contains("[mcp_servers.aeroedits]"), "{added}");
         assert_eq!(
@@ -251,7 +261,10 @@ mod tests {
             Some(r"C:\Program Files\AeroEdits\aeroedits.exe")
         );
         let doc: toml_edit::DocumentMut = added.parse().unwrap();
-        assert_eq!(doc["mcp_servers"]["aeroedits"]["args"][0].as_str(), Some("--mcp-stdio"));
+        assert_eq!(
+            doc["mcp_servers"]["aeroedits"]["args"][0].as_str(),
+            Some("--mcp-stdio")
+        );
         let removed = edit_toml(&added, exe, false).unwrap();
         assert_eq!(configured_command(App::Codex, &removed), None);
         assert!(removed.contains("[mcp_servers.docs]"));

@@ -388,9 +388,7 @@ fn tick(
     }
     // Parked at the end, the preview shows the last frame; an empty timeline shows the empty
     // canvas. Both must be drawn: in the window, nothing else paints under the page.
-    let position_us = status
-        .position_us
-        .min(status.duration_us.saturating_sub(1));
+    let position_us = status.position_us.min(status.duration_us.saturating_sub(1));
     // While playing, the preview shows whole frames at its rate. The clock moves every tick,
     // so without this the same source frame was composited and encoded again and again,
     // holding up the next real frame.

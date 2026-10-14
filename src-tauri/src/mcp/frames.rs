@@ -118,18 +118,33 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let (host, key) = crate::mcp::tests_support::lesson(dir.path());
-        let opened = host.state.opened_project.lock().as_ref().unwrap().summary.clone();
+        let opened = host
+            .state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .summary
+            .clone();
         let captions = crate::captions::CaptionSettings {
             enabled: true,
             ..Default::default()
         };
-        let opened =
-            commands::project_captions_update_impl(&host.state, opened.project_handle, opened.revision, captions)
-                .unwrap();
+        let opened = commands::project_captions_update_impl(
+            &host.state,
+            opened.project_handle,
+            opened.revision,
+            captions,
+        )
+        .unwrap();
         let ctx = Ctx::new(&host, "agent", false);
         let captions_at_start = || {
-            let output = (find("layout_get").unwrap().run)(&ctx, serde_json::json!({ "atUs": 100_000 })).unwrap();
-            let Output::Text(text) = &output[0] else { panic!("expected text") };
+            let output =
+                (find("layout_get").unwrap().run)(&ctx, serde_json::json!({ "atUs": 100_000 }))
+                    .unwrap();
+            let Output::Text(text) = &output[0] else {
+                panic!("expected text")
+            };
             let layout: serde_json::Value = serde_json::from_str(text).unwrap();
             layout["captions"].as_array().unwrap().len()
         };
@@ -147,7 +162,14 @@ mod tests {
         .unwrap();
         assert!(hidden.cues.is_empty());
         // Hiding words is not an edit step, yet the agent sees the captions gone.
-        let revision = host.state.opened_project.lock().as_ref().unwrap().document().revision;
+        let revision = host
+            .state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .document()
+            .revision;
         assert_eq!(revision, opened.revision);
         assert_eq!(captions_at_start(), 0);
     }

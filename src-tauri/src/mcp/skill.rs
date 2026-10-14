@@ -40,7 +40,11 @@ fn find(name: &str) -> Result<&'static Template, String> {
 }
 
 fn names() -> String {
-    TEMPLATES.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+    TEMPLATES
+        .iter()
+        .map(|t| t.name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The skill's text without its front matter and the install marker.
@@ -68,7 +72,10 @@ struct Saved {
 }
 
 fn answers_path(config: &Path, name: &str) -> PathBuf {
-    config.join("agents").join("answers").join(format!("{name}.json"))
+    config
+        .join("agents")
+        .join("answers")
+        .join(format!("{name}.json"))
 }
 
 fn load_answers(config: &Path, name: &str) -> Option<Saved> {
@@ -121,7 +128,8 @@ pub fn guide(config: &Path, name: &str) -> Result<String, String> {
 pub static TOOLS: [ToolDef; 2] = [
     ToolDef {
         name: "template",
-        description: "How to run a whole edit: the plan for a kind of video (the steps, what to ask \
+        description:
+            "How to run a whole edit: the plan for a kind of video (the steps, what to ask \
             the user, the defaults), the general rules, the export steps and the user's saved \
             answers. Call it first when the user asks for an edit. Without `name`, the list.",
         schema: schema::<TemplateArgs>,
@@ -160,7 +168,11 @@ fn template(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Some(name) => text(guide(&ctx.host.config_dir(), &name)?),
         None => {
             let mut lines = vec!["Templates (`template` with a name gives one):".to_string()];
-            lines.extend(TEMPLATES.iter().map(|t| format!("{}: {}", t.name, t.description)));
+            lines.extend(
+                TEMPLATES
+                    .iter()
+                    .map(|t| format!("{}: {}", t.name, t.description)),
+            );
             text(lines.join("\n"))
         }
     }
@@ -192,7 +204,9 @@ pub fn prompt_list() -> Vec<rmcp::model::Prompt> {
                 Some(t.description),
                 Some(vec![
                     PromptArgument::new("recording")
-                        .with_description("The recording to edit (a .aero folder). Empty: the open project.")
+                        .with_description(
+                            "The recording to edit (a .aero folder). Empty: the open project.",
+                        )
                         .with_required(false),
                     PromptArgument::new("name")
                         .with_description("A name for the new project.")
@@ -220,7 +234,9 @@ pub fn prompt_get(
     };
     let what = match (argument("recording"), argument("name")) {
         (Some(recording), Some(project)) => {
-            format!("Edit the recording {recording} in AeroEdits, as a new project named \"{project}\"")
+            format!(
+                "Edit the recording {recording} in AeroEdits, as a new project named \"{project}\""
+            )
         }
         (Some(recording), None) => {
             format!("Edit the recording {recording} in AeroEdits (ask me what to name the project)")
@@ -233,8 +249,10 @@ pub fn prompt_get(
         template.name,
         guide(config, template.name)?
     );
-    Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, message)])
-        .with_description(template.title))
+    Ok(
+        GetPromptResult::new(vec![PromptMessage::new_text(Role::User, message)])
+            .with_description(template.title),
+    )
 }
 
 // ---------------------------------------------------------------------------------------
@@ -270,8 +288,12 @@ fn env_dir(name: &str) -> Option<PathBuf> {
 /// The agent's settings folder.
 fn home_dir(home: SkillHome) -> Option<PathBuf> {
     match home {
-        SkillHome::ClaudeCode => env_dir("CLAUDE_CONFIG_DIR").or_else(|| Some(dirs::home_dir()?.join(".claude"))),
-        SkillHome::Codex => env_dir("CODEX_HOME").or_else(|| Some(dirs::home_dir()?.join(".codex"))),
+        SkillHome::ClaudeCode => {
+            env_dir("CLAUDE_CONFIG_DIR").or_else(|| Some(dirs::home_dir()?.join(".claude")))
+        }
+        SkillHome::Codex => {
+            env_dir("CODEX_HOME").or_else(|| Some(dirs::home_dir()?.join(".codex")))
+        }
     }
 }
 
@@ -285,11 +307,12 @@ fn files() -> Vec<(PathBuf, &'static str)> {
         (PathBuf::from("SKILL.md"), SKILL),
         (PathBuf::from("export.md"), EXPORT),
     ];
-    files.extend(
-        TEMPLATES
-            .iter()
-            .map(|t| (Path::new("templates").join(format!("{}.md", t.name)), t.text)),
-    );
+    files.extend(TEMPLATES.iter().map(|t| {
+        (
+            Path::new("templates").join(format!("{}.md", t.name)),
+            t.text,
+        )
+    }));
     files
 }
 
@@ -321,7 +344,8 @@ fn install_at(base: &Path) -> Result<(), String> {
     for (path, text) in files() {
         let path = dir.join(path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Could not make {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Could not make {}: {e}", parent.display()))?;
         }
         fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     }
@@ -334,7 +358,10 @@ fn uninstall_at(base: &Path) -> Result<(), String> {
     let dir = skill_dir(base);
     let skill = fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
     if !skill.is_empty() && !skill.contains("name: aeroedits") {
-        return Err(format!("{} holds another skill; left it alone", dir.display()));
+        return Err(format!(
+            "{} holds another skill; left it alone",
+            dir.display()
+        ));
     }
     for (path, _) in files() {
         let _ = fs::remove_file(dir.join(path));
@@ -387,7 +414,10 @@ mod tests {
     fn the_guide_has_the_rules_the_template_the_export_and_the_saved_answers() {
         let config = tempfile::tempdir().unwrap();
         let guide = guide(config.path(), "tutorial").unwrap();
-        assert!(!guide.starts_with("---") && !guide.contains(MARKER), "{guide}");
+        assert!(
+            !guide.starts_with("---") && !guide.contains(MARKER),
+            "{guide}"
+        );
         assert!(guide.starts_with("# Editing in AeroEdits"), "{guide}");
         let (rules, template, export) = (
             guide.find("## Saved answers\n\nWhen").unwrap(),
@@ -395,12 +425,25 @@ mod tests {
             guide.find("\n# Export").unwrap(),
         );
         assert!(rules < template && template < export, "{guide}");
-        assert!(guide.ends_with("save the answers with `template_save`."), "{guide}");
+        assert!(
+            guide.ends_with("save the answers with `template_save`."),
+            "{guide}"
+        );
 
-        save_answers(config.path(), "tutorial", serde_json::json!({ "transcriber": "parakeet" })).unwrap();
+        save_answers(
+            config.path(),
+            "tutorial",
+            serde_json::json!({ "transcriber": "parakeet" }),
+        )
+        .unwrap();
         let guide = super::guide(config.path(), "tutorial").unwrap();
-        assert!(guide.contains("\"transcriber\": \"parakeet\"") && guide.contains("Ask once"), "{guide}");
-        assert!(super::guide(config.path(), "vlog").unwrap_err().contains("Templates: tutorial"));
+        assert!(
+            guide.contains("\"transcriber\": \"parakeet\"") && guide.contains("Ask once"),
+            "{guide}"
+        );
+        assert!(super::guide(config.path(), "vlog")
+            .unwrap_err()
+            .contains("Templates: tutorial"));
     }
 
     #[test]
@@ -414,7 +457,10 @@ mod tests {
             })
         };
         let list = call("template", serde_json::json!({})).unwrap();
-        assert!(list.contains("\ntutorial: A screen-recorded tutorial"), "{list}");
+        assert!(
+            list.contains("\ntutorial: A screen-recorded tutorial"),
+            "{list}"
+        );
         let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
         assert!(guide.contains("None for tutorial yet"), "{guide}");
         let saved = call(
@@ -422,12 +468,23 @@ mod tests {
             serde_json::json!({ "name": "tutorial", "answers": { "transcriber": "elevenlabs" } }),
         )
         .unwrap();
-        assert!(saved.starts_with("Saved the answers for tutorial"), "{saved}");
+        assert!(
+            saved.starts_with("Saved the answers for tutorial"),
+            "{saved}"
+        );
         let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
         assert!(guide.contains("\"transcriber\": \"elevenlabs\""), "{guide}");
         assert!(answers_path(host.config.path(), "tutorial").is_file());
-        assert!(call("template_save", serde_json::json!({ "name": "tutorial", "answers": [1] })).is_err());
-        assert!(call("template_save", serde_json::json!({ "name": "vlog", "answers": {} })).is_err());
+        assert!(call(
+            "template_save",
+            serde_json::json!({ "name": "tutorial", "answers": [1] })
+        )
+        .is_err());
+        assert!(call(
+            "template_save",
+            serde_json::json!({ "name": "vlog", "answers": {} })
+        )
+        .is_err());
     }
 
     #[test]
@@ -444,11 +501,17 @@ mod tests {
             text.starts_with(r#"Edit the recording C:\Rec\Lesson.aero in AeroEdits, as a new project named "Lesson 1""#),
             "{text}"
         );
-        assert!(text.contains("# Template: tutorial") && text.contains("# Export"), "{text}");
+        assert!(
+            text.contains("# Template: tutorial") && text.contains("# Export"),
+            "{text}"
+        );
         assert_eq!(message["role"], "user");
         let open = prompt_get(config.path(), "tutorial", None).unwrap();
         let text = serde_json::to_value(&open.messages[0]).unwrap()["content"]["text"].clone();
-        assert!(text.as_str().unwrap().starts_with("Edit the project open in AeroEdits"));
+        assert!(text
+            .as_str()
+            .unwrap()
+            .starts_with("Edit the project open in AeroEdits"));
     }
 
     #[test]
@@ -458,7 +521,10 @@ mod tests {
         assert!(!state_at(SkillHome::Codex, base.path()).installed);
         install_at(base.path()).unwrap();
         let state = state_at(SkillHome::Codex, base.path());
-        assert!(state.installed && state.current && state.available, "{state:?}");
+        assert!(
+            state.installed && state.current && state.available,
+            "{state:?}"
+        );
         assert!(dir.join("templates").join("tutorial.md").is_file());
 
         // An older copy is brought up to date at launch...

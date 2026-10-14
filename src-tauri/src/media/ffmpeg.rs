@@ -2315,13 +2315,31 @@ mod tests {
 
     #[test]
     fn alpha_is_read_from_the_pixel_format_or_the_vp9_tag() {
-        assert_eq!(Alpha::of(Some("prores"), Some("yuva444p12le"), None), Alpha::InFormat);
-        assert_eq!(Alpha::of(Some("qtrle"), Some("argb"), None), Alpha::InFormat);
-        assert_eq!(Alpha::of(Some("png"), Some("rgba64be"), None), Alpha::InFormat);
-        assert_eq!(Alpha::of(Some("vp9"), Some("yuv420p"), Some("1")), Alpha::Vp9);
-        assert_eq!(Alpha::of(Some("vp9"), Some("yuv420p"), Some("0")), Alpha::None);
+        assert_eq!(
+            Alpha::of(Some("prores"), Some("yuva444p12le"), None),
+            Alpha::InFormat
+        );
+        assert_eq!(
+            Alpha::of(Some("qtrle"), Some("argb"), None),
+            Alpha::InFormat
+        );
+        assert_eq!(
+            Alpha::of(Some("png"), Some("rgba64be"), None),
+            Alpha::InFormat
+        );
+        assert_eq!(
+            Alpha::of(Some("vp9"), Some("yuv420p"), Some("1")),
+            Alpha::Vp9
+        );
+        assert_eq!(
+            Alpha::of(Some("vp9"), Some("yuv420p"), Some("0")),
+            Alpha::None
+        );
         assert_eq!(Alpha::of(Some("h264"), Some("yuv420p"), None), Alpha::None);
-        assert_eq!(Alpha::of(Some("h264"), Some("nv12"), Some("1")), Alpha::None);
+        assert_eq!(
+            Alpha::of(Some("h264"), Some("nv12"), Some("1")),
+            Alpha::None
+        );
     }
 
     /// Writes a 64x48, 1 s clip that is clear except an opaque white box at its centre.
@@ -2342,8 +2360,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let webm = dir.path().join("overlay.webm");
         let mov = dir.path().join("overlay.mov");
-        write_transparent(&webm, &["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "20"]);
-        write_transparent(&mov, &["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le"]);
+        write_transparent(
+            &webm,
+            &[
+                "-c:v",
+                "libvpx-vp9",
+                "-pix_fmt",
+                "yuva420p",
+                "-b:v",
+                "0",
+                "-crf",
+                "20",
+            ],
+        );
+        write_transparent(
+            &mov,
+            &[
+                "-c:v",
+                "prores_ks",
+                "-profile:v",
+                "4444",
+                "-pix_fmt",
+                "yuva444p10le",
+            ],
+        );
         let preview = DecodeLimit {
             max_width: 0,
             max_height: 0,
@@ -2352,12 +2392,27 @@ mod tests {
             yuv: true,
         };
         for (path, alpha) in [(&webm, Alpha::Vp9), (&mov, Alpha::InFormat)] {
-            assert_eq!(probe_video(path).unwrap().alpha, alpha, "{}", path.display());
+            assert_eq!(
+                probe_video(path).unwrap().alpha,
+                alpha,
+                "{}",
+                path.display()
+            );
             let frame = decode_bgra_limited(path, 500_000, preview).unwrap();
             assert_eq!(frame.format, PixelFormat::Bgra8888, "{}", path.display());
             let alpha_at = |x: u32, y: u32| frame.data[(y * frame.stride + x * 4 + 3) as usize];
-            assert!(alpha_at(2, 2) < 8, "{}: corner alpha {}", path.display(), alpha_at(2, 2));
-            assert!(alpha_at(32, 24) > 247, "{}: centre alpha {}", path.display(), alpha_at(32, 24));
+            assert!(
+                alpha_at(2, 2) < 8,
+                "{}: corner alpha {}",
+                path.display(),
+                alpha_at(2, 2)
+            );
+            assert!(
+                alpha_at(32, 24) > 247,
+                "{}: centre alpha {}",
+                path.display(),
+                alpha_at(32, 24)
+            );
         }
         // An opaque clip still comes as NV12.
         let opaque = dir.path().join("opaque.mp4");

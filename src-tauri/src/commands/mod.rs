@@ -446,7 +446,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (host, key) = crate::mcp::tests_support::lesson(dir.path());
         let state = &host.state;
-        let opened = state.opened_project.lock().as_ref().unwrap().summary.clone();
+        let opened = state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .summary
+            .clone();
         let captions = |track_id: &str| crate::captions::CaptionSettings {
             enabled: true,
             track_id: Some(track_id.into()),

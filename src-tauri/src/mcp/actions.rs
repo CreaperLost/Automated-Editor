@@ -217,7 +217,12 @@ fn opened(ctx: &Ctx) -> Result<Open, String> {
 
 /// The answer for an action that may have changed the edit: `lines`, then the length and the
 /// revision when it did, and the action listed in the Agent panel's history.
-fn applied(ctx: &Ctx, action: &str, before: &Open, mut lines: Vec<String>) -> Result<String, String> {
+fn applied(
+    ctx: &Ctx,
+    action: &str,
+    before: &Open,
+    mut lines: Vec<String>,
+) -> Result<String, String> {
     let after = current(ctx)?;
     if after.handle != before.handle {
         // The commands ran on `before`'s project; the one open now has nothing of them.
@@ -233,7 +238,10 @@ fn applied(ctx: &Ctx, action: &str, before: &Open, mut lines: Vec<String>) -> Re
                 clock(after.duration)
             ));
         }
-        lines.push(format!("Revision {}; `undo` takes it back.", after.revision));
+        lines.push(format!(
+            "Revision {}; `undo` takes it back.",
+            after.revision
+        ));
         let summary = lines.clone();
         let agent = ctx.agent.clone();
         // The edit is done; failing to list it must not hide that from the agent.
@@ -298,7 +306,10 @@ fn pick_sound(ctx: &Ctx, stream: Option<String>, want: Want) -> Result<String, S
             } else {
                 Err(format!(
                     "No sound {key}. Sounds: {}",
-                    all.iter().map(|s| s.key.as_str()).collect::<Vec<_>>().join(", ")
+                    all.iter()
+                        .map(|s| s.key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
             };
         }
@@ -311,10 +322,13 @@ fn pick_sound(ctx: &Ctx, stream: Option<String>, want: Want) -> Result<String, S
             .filter(|s| !matches!(want, Want::Transcribed) || s.transcribed)
             .collect();
         candidates.sort_by_key(|s| rank(s));
-        candidates.first().map(|s| s.key.clone()).ok_or_else(|| match want {
-            Want::Transcribed => "Nothing is transcribed yet: run `transcribe` first.".into(),
-            Want::Speech => "The project has no sound.".into(),
-        })
+        candidates
+            .first()
+            .map(|s| s.key.clone())
+            .ok_or_else(|| match want {
+                Want::Transcribed => "Nothing is transcribed yet: run `transcribe` first.".into(),
+                Want::Speech => "The project has no sound.".into(),
+            })
     })
 }
 
@@ -333,7 +347,11 @@ fn merge(base: &mut Value, patch: &Value) {
 /// `current` with `patch` merged in, checked by the settings' own types. A field the types do
 /// not have is refused, since serde would otherwise ignore it (a typo would do nothing); map
 /// keys, unset options and empty lists count as the fields they are.
-fn patched<T: Serialize + DeserializeOwned>(what: &str, current: &T, patch: &Value) -> Result<T, String> {
+fn patched<T: Serialize + DeserializeOwned>(
+    what: &str,
+    current: &T,
+    patch: &Value,
+) -> Result<T, String> {
     let known = serde_json::to_value(current).map_err(|e| e.to_string())?;
     let mut value = known.clone();
     merge(&mut value, patch);
@@ -377,51 +395,56 @@ fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 
 fn status_text(ctx: &Ctx) -> Result<String, String> {
     let open = opened(ctx)?;
-    let mut lines = with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        let summary = &reader.summary;
-        let recorded: u64 = reader.recordings().map(|a| a.duration_us).sum();
-        let (width, height) = document.layout.preview_dimensions()?;
-        let mut lines = vec![format!(
-            "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}.",
-            summary.name,
-            document.revision,
-            clock(document.duration_us()),
-            if recorded > 0 {
-                format!(" ({} recorded)", clock(recorded))
-            } else {
-                String::new()
-            },
-        )];
-        let mut sound_lines = Vec::new();
-        for sound in sounds(reader) {
-            let mut line = format!(
-                "{} ({}{})",
-                sound.key,
-                if sound.speech { "speech" } else { "background" },
-                if sound.placed { "" } else { ", not on the timeline" }
-            );
-            if let Some(transcript) = store::load_transcript(reader.root(), &sound.key)? {
-                let clock_of = document.transcript_clock(&sound.key)?;
-                let kept = transcript
-                    .words
-                    .iter()
-                    .filter(|w| crate::transcript::edit::kept(w, &clock_of))
-                    .count();
-                line.push_str(&format!(
-                    ": transcribed, {kept} of {} words kept",
-                    transcript.words.len()
-                ));
+    let mut lines =
+        with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let summary = &reader.summary;
+            let recorded: u64 = reader.recordings().map(|a| a.duration_us).sum();
+            let (width, height) = document.layout.preview_dimensions()?;
+            let mut lines = vec![format!(
+                "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}.",
+                summary.name,
+                document.revision,
+                clock(document.duration_us()),
+                if recorded > 0 {
+                    format!(" ({} recorded)", clock(recorded))
+                } else {
+                    String::new()
+                },
+            )];
+            let mut sound_lines = Vec::new();
+            for sound in sounds(reader) {
+                let mut line = format!(
+                    "{} ({}{})",
+                    sound.key,
+                    if sound.speech { "speech" } else { "background" },
+                    if sound.placed {
+                        ""
+                    } else {
+                        ", not on the timeline"
+                    }
+                );
+                if let Some(transcript) = store::load_transcript(reader.root(), &sound.key)? {
+                    let clock_of = document.transcript_clock(&sound.key)?;
+                    let kept = transcript
+                        .words
+                        .iter()
+                        .filter(|w| crate::transcript::edit::kept(w, &clock_of))
+                        .count();
+                    line.push_str(&format!(
+                        ": transcribed, {kept} of {} words kept",
+                        transcript.words.len()
+                    ));
+                }
+                let muted = document.noise_mutes.get(&sound.key).map_or(0, |r| r.len());
+                if muted > 0 {
+                    line.push_str(&format!(", {} muted", plural(muted, "noise")));
+                }
+                sound_lines.push(line);
             }
-            let muted = document.noise_mutes.get(&sound.key).map_or(0, |r| r.len());
-            if muted > 0 {
-                line.push_str(&format!(", {} muted", plural(muted, "noise")));
-            }
-            sound_lines.push(line);
-        }
-        lines.push(format!("Sounds: {}.", sound_lines.join("; ")));
-        let focus = &document.webcam_focus;
-        lines.push(format!(
+            lines.push(format!("Sounds: {}.", sound_lines.join("; ")));
+            let focus = &document.webcam_focus;
+            lines.push(format!(
             "Zooms: {} in the edit. Webcam focus: {}, {}. Captions: {}. Chapters: {}. Shorts: {}.",
             document.zooms.len(),
             if focus.enabled { "on" } else { "off" },
@@ -430,8 +453,8 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             document.chapters.len(),
             document.shorts.len(),
         ));
-        Ok(lines)
-    })?;
+            Ok(lines)
+        })?;
     if let Ok(generation) = commands::project_zoom_suggestions_impl(ctx.state, open.handle, None) {
         if !generation.suggestions.is_empty() {
             lines.push(format!(
@@ -458,75 +481,91 @@ pub struct ScanArgs {
 fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ScanArgs = params(args)?;
     let preset = args.preset.unwrap_or_default();
-    let (mut lines, transcribed, cameras, mouse) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        let all = sounds(reader);
-        let mut lines = vec![format!(
-            "Scan of \"{}\", {} long, measured with the {} preset; nothing was changed.",
-            reader.summary.name,
-            clock(document.duration_us()),
-            one_line(&preset).trim_matches('"'),
-        )];
-        let describe = |s: &Sound| {
-            let mut notes = vec![if s.transcribed { "transcribed" } else { "not transcribed" }];
-            if !s.placed {
-                notes.push("not on the timeline");
-            }
-            format!("{} ({})", s.key, notes.join(", "))
-        };
-        let mics: Vec<&Sound> = all.iter().filter(|s| s.speech).collect();
-        lines.push(match mics.len() {
-            0 => "Microphones: none, so nothing to transcribe or cut by speech.".to_string(),
-            1 => format!("Microphones: 1, {}.", describe(mics[0])),
-            n => format!(
+    let (mut lines, transcribed, cameras, mouse) =
+        with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let all = sounds(reader);
+            let mut lines = vec![format!(
+                "Scan of \"{}\", {} long, measured with the {} preset; nothing was changed.",
+                reader.summary.name,
+                clock(document.duration_us()),
+                one_line(&preset).trim_matches('"'),
+            )];
+            let describe = |s: &Sound| {
+                let mut notes = vec![if s.transcribed {
+                    "transcribed"
+                } else {
+                    "not transcribed"
+                }];
+                if !s.placed {
+                    notes.push("not on the timeline");
+                }
+                format!("{} ({})", s.key, notes.join(", "))
+            };
+            let mics: Vec<&Sound> = all.iter().filter(|s| s.speech).collect();
+            lines.push(match mics.len() {
+                0 => "Microphones: none, so nothing to transcribe or cut by speech.".to_string(),
+                1 => format!("Microphones: 1, {}.", describe(mics[0])),
+                n => format!(
                 "Microphones: {n}, {}. Silence can listen to all of them (`stream: speech`, cuts \
                  only where every one is quiet) or one.",
                 mics.iter().map(|s| describe(s)).collect::<Vec<_>>().join(", ")
             ),
-        });
-        let others: Vec<&str> = all.iter().filter(|s| !s.speech).map(|s| s.key.as_str()).collect();
-        if !others.is_empty() {
-            lines.push(format!(
-                "Other sound: {} (music, game or desktop; `protect` keeps it from being cut).",
-                others.join(", ")
-            ));
-        }
-        let cameras: Vec<String> = document
-            .assets
-            .iter()
-            .flat_map(|a| {
-                a.streams
-                    .iter()
-                    .filter(|s| s.role == Role::Webcam)
-                    .map(move |s| format!("{}.{}", a.id, s.id))
-            })
-            .collect();
-        lines.push(if cameras.is_empty() {
-            "Cameras: none, so no webcam questions.".to_string()
-        } else {
-            format!(
-                "Cameras: {} ({}), {}.",
-                cameras.len(),
-                cameras.join(", "),
-                if document.layout.webcam_enabled {
-                    "shown as a bubble"
-                } else {
-                    "hidden (layout webcamEnabled is false)"
-                }
-            )
-        });
-        let mouse: usize = reader
-            .recordings()
-            .filter_map(|a| crate::telemetry::reader::read_telemetry(std::path::Path::new(&a.path)).ok())
-            .map(|t| t.events.len())
-            .sum();
-        lines.push(if mouse == 0 {
-            "Mouse data: none, so no zooms or webcam focus from it.".to_string()
-        } else {
-            format!("Mouse data: {mouse} events.")
-        });
-        Ok((lines, all.iter().any(|s| s.transcribed), !cameras.is_empty(), mouse > 0))
-    })?;
+            });
+            let others: Vec<&str> = all
+                .iter()
+                .filter(|s| !s.speech)
+                .map(|s| s.key.as_str())
+                .collect();
+            if !others.is_empty() {
+                lines.push(format!(
+                    "Other sound: {} (music, game or desktop; `protect` keeps it from being cut).",
+                    others.join(", ")
+                ));
+            }
+            let cameras: Vec<String> = document
+                .assets
+                .iter()
+                .flat_map(|a| {
+                    a.streams
+                        .iter()
+                        .filter(|s| s.role == Role::Webcam)
+                        .map(move |s| format!("{}.{}", a.id, s.id))
+                })
+                .collect();
+            lines.push(if cameras.is_empty() {
+                "Cameras: none, so no webcam questions.".to_string()
+            } else {
+                format!(
+                    "Cameras: {} ({}), {}.",
+                    cameras.len(),
+                    cameras.join(", "),
+                    if document.layout.webcam_enabled {
+                        "shown as a bubble"
+                    } else {
+                        "hidden (layout webcamEnabled is false)"
+                    }
+                )
+            });
+            let mouse: usize = reader
+                .recordings()
+                .filter_map(|a| {
+                    crate::telemetry::reader::read_telemetry(std::path::Path::new(&a.path)).ok()
+                })
+                .map(|t| t.events.len())
+                .sum();
+            lines.push(if mouse == 0 {
+                "Mouse data: none, so no zooms or webcam focus from it.".to_string()
+            } else {
+                format!("Mouse data: {mouse} events.")
+            });
+            Ok((
+                lines,
+                all.iter().any(|s| s.transcribed),
+                !cameras.is_empty(),
+                mouse > 0,
+            ))
+        })?;
 
     let view = tc::transcript_settings_get_impl();
     let ready = |kind, name: &str, about: &str| match not_ready(&view, kind) {
@@ -535,8 +574,16 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     lines.push(format!(
         "Transcribers: {}; {}. Saved choice: {}.",
-        ready(crate::transcript::ProviderKind::Parakeet, "parakeet", "local, free"),
-        ready(crate::transcript::ProviderKind::ElevenLabs, "elevenlabs", "Scribe, cloud, the user's key"),
+        ready(
+            crate::transcript::ProviderKind::Parakeet,
+            "parakeet",
+            "local, free"
+        ),
+        ready(
+            crate::transcript::ProviderKind::ElevenLabs,
+            "elevenlabs",
+            "Scribe, cloud, the user's key"
+        ),
         one_line(&view.settings.provider).trim_matches('"'),
     ));
     let ai = tc::ai_settings_get_impl();
@@ -687,7 +734,10 @@ fn create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     commands::open_project_impl(ctx.state, path.clone())?;
     ctx.host.project_opened(&path);
     ctx.changed_proposals();
-    text(format!("Created {path} and opened it.\n{}", status_text(ctx)?))
+    text(format!(
+        "Created {path} and opened it.\n{}",
+        status_text(ctx)?
+    ))
 }
 
 fn undo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -751,7 +801,10 @@ impl Transcriber {
 }
 
 /// Why a transcriber can't run now, if it can't.
-fn not_ready(view: &crate::transcript::settings::TranscriptSettingsView, kind: crate::transcript::ProviderKind) -> Option<String> {
+fn not_ready(
+    view: &crate::transcript::settings::TranscriptSettingsView,
+    kind: crate::transcript::ProviderKind,
+) -> Option<String> {
     use crate::transcript::ProviderKind::*;
     match kind {
         Parakeet if !view.parakeet_available => Some("Parakeet is not part of this build".into()),
@@ -772,7 +825,9 @@ fn transcribe(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
     let open = opened(ctx)?;
     let key = pick_sound(ctx, args.stream, Want::Speech)?;
-    let existing = with_reader(ctx.state, |reader| store::load_transcript(reader.root(), &key))?;
+    let existing = with_reader(ctx.state, |reader| {
+        store::load_transcript(reader.root(), &key)
+    })?;
     if let (Some(transcript), false) = (&existing, args.force) {
         return Ok(format!(
             "{key} is already transcribed ({}); `force: true` transcribes it again.",
@@ -780,7 +835,9 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         ));
     }
     let view = tc::transcript_settings_get_impl();
-    let provider = args.provider.map_or(view.settings.provider, Transcriber::kind);
+    let provider = args
+        .provider
+        .map_or(view.settings.provider, Transcriber::kind);
     if let Some(reason) = not_ready(&view, provider) {
         return Err(format!("Can't transcribe with {provider:?}: {reason}."));
     }
@@ -797,7 +854,12 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         &mut |p| ctx.progress(p.fraction, &p.message),
     )?;
     ctx.host.transcript_changed();
-    let kept = result.view.words.iter().filter(|w| w.edited_start_us.is_some()).count();
+    let kept = result
+        .view
+        .words
+        .iter()
+        .filter(|w| w.edited_start_us.is_some())
+        .count();
     let mut line = format!(
         "Transcribed {key} with {provider:?}: {}, {kept} on the timeline.",
         plural(result.view.words.len(), "word")
@@ -847,7 +909,9 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
     )?;
     let mut kinds = std::collections::BTreeMap::<String, usize>::new();
     for noise in &scan.noises {
-        *kinds.entry(format!("{:?}", noise.kind).to_lowercase()).or_default() += 1;
+        *kinds
+            .entry(format!("{:?}", noise.kind).to_lowercase())
+            .or_default() += 1;
     }
     let found: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
     let already = scan.noises.iter().filter(|n| n.muted).count();
@@ -856,12 +920,24 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
         .iter()
         .filter(|n| !n.muted && (args.near_speech || !n.near_speech))
         .collect();
-    let near = scan.noises.iter().filter(|n| !n.muted && n.near_speech).count();
+    let near = scan
+        .noises
+        .iter()
+        .filter(|n| !n.muted && n.near_speech)
+        .count();
     let mut lines = vec![format!(
         "Found {} in {key}{}{}.",
         plural(scan.noises.len(), "mouth noise"),
-        if found.is_empty() { String::new() } else { format!(" ({})", found.join(", ")) },
-        if already > 0 { format!(", {already} already muted") } else { String::new() },
+        if found.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", found.join(", "))
+        },
+        if already > 0 {
+            format!(", {already} already muted")
+        } else {
+            String::new()
+        },
     )];
     if args.apply.unwrap_or(true) && !chosen.is_empty() {
         let ranges = chosen
@@ -1015,8 +1091,15 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
                 Some(key) if key == ALL_SPEECH => key,
                 Some(key) => pick_sound(ctx, Some(key), Want::Speech)?,
                 None => with_reader(ctx.state, |reader| {
-                    let speech = sounds(reader).into_iter().filter(|s| s.placed && s.speech).count();
-                    Ok(if speech >= 2 { Some(ALL_SPEECH.to_string()) } else { None })
+                    let speech = sounds(reader)
+                        .into_iter()
+                        .filter(|s| s.placed && s.speech)
+                        .count();
+                    Ok(if speech >= 2 {
+                        Some(ALL_SPEECH.to_string())
+                    } else {
+                        None
+                    })
                 })?
                 .map_or_else(|| pick_sound(ctx, None, Want::Speech), Ok)?,
             };
@@ -1025,7 +1108,9 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
                 key,
                 config
                     .auto_level
-                    .map_or(format!("{}", config.threshold_db), |l| format!("auto {l:.2}")),
+                    .map_or(format!("{}", config.threshold_db), |l| format!(
+                        "auto {l:.2}"
+                    )),
                 config.min_duration_ms as f64 / 1000.0,
                 config.padding_ms
             );
@@ -1037,7 +1122,9 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
                     vec![key, second],
                     config,
                 )?,
-                None => commands::detect_silence_impl(ctx.state, before.handle.clone(), key, config)?,
+                None => {
+                    commands::detect_silence_impl(ctx.state, before.handle.clone(), key, config)?
+                }
             };
             (result, described)
         }
@@ -1072,7 +1159,10 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
         }
     };
     let chosen: Vec<_> = result.suggestions.iter().filter(|s| s.selected).collect();
-    let total: u64 = chosen.iter().map(|s| s.end_us.saturating_sub(s.start_us)).sum();
+    let total: u64 = chosen
+        .iter()
+        .map(|s| s.end_us.saturating_sub(s.start_us))
+        .sum();
     let noun = match args.mode {
         SilenceMode::Silence => "pause",
         SilenceMode::Gaps => "gap",
@@ -1135,9 +1225,12 @@ fn fillers(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     let before = opened(ctx)?;
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
-    let kinds = args
-        .kinds
-        .unwrap_or_else(|| vec![TranscriptSuggestionKind::Filler, TranscriptSuggestionKind::Retake]);
+    let kinds = args.kinds.unwrap_or_else(|| {
+        vec![
+            TranscriptSuggestionKind::Filler,
+            TranscriptSuggestionKind::Retake,
+        ]
+    });
     let found = if args.ai {
         ctx.progress(0.1, "Asking the AI review for fillers and retakes");
         tc::transcript_ai_suggest_impl(
@@ -1160,12 +1253,19 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         count(TranscriptSuggestionKind::Filler),
         count(TranscriptSuggestionKind::Retake),
     );
-    let from_ai = chosen.iter().filter(|s| s.source == SuggestionSource::Ai).count();
+    let from_ai = chosen
+        .iter()
+        .filter(|s| s.source == SuggestionSource::Ai)
+        .count();
     let mut lines = vec![format!(
         "Found {} and {} in {key}{}.",
         plural(filler_count, "filler"),
         plural(retake_count, "retake"),
-        if args.ai { format!(" ({from_ai} from the AI review)") } else { String::new() },
+        if args.ai {
+            format!(" ({from_ai} from the AI review)")
+        } else {
+            String::new()
+        },
     )];
     let examples: Vec<String> = chosen
         .iter()
@@ -1214,17 +1314,33 @@ fn webcam_focus(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 /// "9 stretches, 1:10 in all" for source ranges.
 fn stretches(ranges: &[(u64, u64)]) -> String {
     let total: u64 = ranges.iter().map(|(a, b)| b.saturating_sub(*a)).sum();
-    format!("{}, {} in all", plural(ranges.len(), "stretch"), clock(total))
+    format!(
+        "{}, {} in all",
+        plural(ranges.len(), "stretch"),
+        clock(total)
+    )
 }
 
 fn run_webcam(ctx: &Ctx, args: WebcamArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let focus = with_reader(ctx.state, |reader| Ok(reader.document().webcam_focus.clone()))?;
+    let focus = with_reader(ctx.state, |reader| {
+        Ok(reader.document().webcam_focus.clone())
+    })?;
     if args.enabled == Some(false) {
         let mut off = focus;
         off.enabled = false;
-        commands::project_webcam_focus_update_impl(ctx.state, before.handle.clone(), before.revision, off)?;
-        return applied(ctx, "webcam_focus", &before, vec!["Webcam focus is off.".into()]);
+        commands::project_webcam_focus_update_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            off,
+        )?;
+        return applied(
+            ctx,
+            "webcam_focus",
+            &before,
+            vec!["Webcam focus is off.".into()],
+        );
     }
     let settings = match &args.settings {
         Some(patch) => patched("webcam focus", &focus.settings, patch)?,
@@ -1319,7 +1435,8 @@ fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
         if args.op != ZoomOp::Add || args.settings.is_some() {
             return Err("`apply: false` only reports the current suggestions: leave out `op` and `settings`".into());
         }
-        let generation = commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?;
+        let generation =
+            commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?;
         lines.push(if generation.suggestions.is_empty() {
             "No zoom suggestions to add.".to_string()
         } else {
@@ -1329,9 +1446,16 @@ fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
         return Ok(lines.join("\n"));
     }
     if let Some(patch) = &args.settings {
-        let current = with_reader(ctx.state, |reader| Ok(reader.document().zoom_settings.clone()))?;
+        let current = with_reader(ctx.state, |reader| {
+            Ok(reader.document().zoom_settings.clone())
+        })?;
         let next = patched("zoom", &current, patch)?;
-        commands::project_zoom_settings_set_impl(ctx.state, before.handle.clone(), before.revision, next)?;
+        commands::project_zoom_settings_set_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            next,
+        )?;
         lines.push("Changed the zoom settings.".into());
     }
     let revision = opened(ctx)?.revision;
@@ -1341,17 +1465,39 @@ fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
             lines.push("Found the recording's zooms again.".into());
         }
         ZoomOp::Add | ZoomOp::Dismiss => {
-            let generation = commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?;
-            let ids: Vec<String> = generation.suggestions.iter().map(|s| s.id.clone()).collect();
+            let generation =
+                commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?;
+            let ids: Vec<String> = generation
+                .suggestions
+                .iter()
+                .map(|s| s.id.clone())
+                .collect();
             if ids.is_empty() {
                 lines.push("No zoom suggestions left to add.".into());
                 lines.extend(generation.diagnostics);
             } else if args.op == ZoomOp::Add {
-                commands::project_zoom_accept_impl(ctx.state, before.handle.clone(), revision, ids.clone(), None)?;
-                lines.push(format!("Added {}.", describe_zooms(&generation.suggestions)));
+                commands::project_zoom_accept_impl(
+                    ctx.state,
+                    before.handle.clone(),
+                    revision,
+                    ids.clone(),
+                    None,
+                )?;
+                lines.push(format!(
+                    "Added {}.",
+                    describe_zooms(&generation.suggestions)
+                ));
             } else {
-                commands::project_zoom_dismiss_impl(ctx.state, before.handle.clone(), revision, ids.clone())?;
-                lines.push(format!("Dismissed {}.", plural(ids.len(), "zoom suggestion")));
+                commands::project_zoom_dismiss_impl(
+                    ctx.state,
+                    before.handle.clone(),
+                    revision,
+                    ids.clone(),
+                )?;
+                lines.push(format!(
+                    "Dismissed {}.",
+                    plural(ids.len(), "zoom suggestion")
+                ));
             }
         }
     }
@@ -1394,7 +1540,10 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
     let Some(patch) = args.set else {
-        return text(format!("{name}: {}", one_line(&current_settings(ctx, args.area)?)));
+        return text(format!(
+            "{name}: {}",
+            one_line(&current_settings(ctx, args.area)?)
+        ));
     };
     let before = opened(ctx);
     match args.area {
@@ -1442,7 +1591,12 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     let now = one_line(&current_settings(ctx, args.area)?);
     match before {
-        Ok(before) => text(applied(ctx, "settings", &before, vec![format!("{name} now: {now}")])?),
+        Ok(before) => text(applied(
+            ctx,
+            "settings",
+            &before,
+            vec![format!("{name} now: {now}")],
+        )?),
         Err(_) => text(format!("{name} now: {now}")),
     }
 }
@@ -1520,7 +1674,10 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         before.handle.clone(),
         key,
     )?;
-    let mut lines = vec![format!("Made {}:", plural(project.chapters.len(), "chapter"))];
+    let mut lines = vec![format!(
+        "Made {}:",
+        plural(project.chapters.len(), "chapter")
+    )];
     lines.extend(project.chapters.iter().map(|c| {
         format!(
             "{} {}",
@@ -1635,7 +1792,11 @@ fn export_failure(status: &crate::export::ExportStatus) -> String {
         .failure
         .as_ref()
         .and_then(|f| serde_json::to_value(f).ok())
-        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| format!("{:?}", status.state));
     format!("The export stopped: {message}")
 }
@@ -1722,7 +1883,10 @@ fn cleanup_steps(ctx: &Ctx, args: &CleanupArgs, start: &Open) -> Vec<String> {
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default();
-        ctx.progress(index as f64 / steps.len() as f64, &format!("Step {}: {name}", index + 1));
+        ctx.progress(
+            index as f64 / steps.len() as f64,
+            &format!("Step {}: {name}", index + 1),
+        );
         let stream = args.stream.clone();
         let outcome = match step {
             Step::Transcribe => run_transcribe(
@@ -1830,16 +1994,25 @@ mod tests {
         let (host, key) = lesson(dir.path());
         let ctx = Ctx::new(&host, "claude-code", false);
         let status = call(&ctx, "status", json!({})).unwrap();
-        assert!(status.contains(&format!("{key} (speech): transcribed, 7 of 7 words kept")), "{status}");
+        assert!(
+            status.contains(&format!("{key} (speech): transcribed, 7 of 7 words kept")),
+            "{status}"
+        );
 
         let dry = call(&ctx, "fillers", json!({ "apply": false })).unwrap();
-        assert!(dry.starts_with(&format!("Found 1 filler and 0 retakes in {key}")), "{dry}");
+        assert!(
+            dry.starts_with(&format!("Found 1 filler and 0 retakes in {key}")),
+            "{dry}"
+        );
         assert!(dry.contains("\"um\""), "{dry}");
         assert!(history(&ctx).is_empty(), "a dry run changes nothing");
 
         let before = length(&ctx);
         let done = call(&ctx, "fillers", json!({})).unwrap();
-        assert!(done.contains("Cut them all.") && done.contains("Length 0:04.00 →"), "{done}");
+        assert!(
+            done.contains("Cut them all.") && done.contains("Length 0:04.00 →"),
+            "{done}"
+        );
         assert!(length(&ctx) < before);
         assert!(ctx.project_was_changed() && ctx.proposals_were_changed());
         let listed = history(&ctx);
@@ -1865,11 +2038,17 @@ mod tests {
         // The click at 1.2 s splits the first pause in two...
         let dry = call(&ctx, "silence", json!({ "apply": false })).unwrap();
         assert!(dry.starts_with("Found 3 pauses"), "{dry}");
-        assert!(dry.contains("below -42 dB, at least 0.25 s, 40 ms room"), "{dry}");
+        assert!(
+            dry.contains("below -42 dB, at least 0.25 s, 40 ms room"),
+            "{dry}"
+        );
         assert_eq!(length(&ctx), before);
         // ...until it is muted, as the mouth-noise pass is meant to run first.
         let muted = call(&ctx, "mouth_noises", json!({})).unwrap();
-        assert!(muted.starts_with("Found 1 mouth noise in") && muted.contains("(1 click)"), "{muted}");
+        assert!(
+            muted.starts_with("Found 1 mouth noise in") && muted.contains("(1 click)"),
+            "{muted}"
+        );
         assert!(muted.contains("Muted 1."), "{muted}");
         assert_eq!(length(&ctx), before, "muting keeps the length");
         let dry = call(&ctx, "silence", json!({ "apply": false })).unwrap();
@@ -1885,7 +2064,10 @@ mod tests {
         assert!(after_silence + 1_000_000 < before, "{cut}");
 
         let gaps = call(&ctx, "silence", json!({ "mode": "gaps", "apply": false })).unwrap();
-        assert!(gaps.contains("gaps without words of at least 0.15 s"), "{gaps}");
+        assert!(
+            gaps.contains("gaps without words of at least 0.15 s"),
+            "{gaps}"
+        );
         assert!(call(&ctx, "silence", json!({ "preset": "fierce" }))
             .unwrap_err()
             .contains("Invalid arguments"));
@@ -1902,7 +2084,11 @@ mod tests {
         let start = opened(&ctx).unwrap();
         let report = call(&ctx, "scan", json!({})).unwrap();
         let has = |part: &str| assert!(report.contains(part), "{part} in:\n{report}");
-        assert!(report.starts_with("Scan of \"Lesson\", 0:04.00 long, measured with the balanced preset"), "{report}");
+        assert!(
+            report
+                .starts_with("Scan of \"Lesson\", 0:04.00 long, measured with the balanced preset"),
+            "{report}"
+        );
         has(&format!("Microphones: 1, {key} (transcribed)."));
         has("Cameras: none, so no webcam questions.");
         has("Mouse data: none");
@@ -1914,14 +2100,31 @@ mod tests {
         has("Silence from the audio: Found 3 pauses");
         has("Gaps from the transcript: Found ");
         has("Fillers and retakes: Found 1 filler and 0 retakes");
-        assert!(!report.contains("Webcam focus:") && !report.contains("Zooms:"), "{report}");
+        assert!(
+            !report.contains("Webcam focus:") && !report.contains("Zooms:"),
+            "{report}"
+        );
         let end = opened(&ctx).unwrap();
-        assert_eq!((end.revision, end.duration), (start.revision, start.duration));
-        assert!(history(&ctx).is_empty(), "a scan lists nothing in the panel");
+        assert_eq!(
+            (end.revision, end.duration),
+            (start.revision, start.duration)
+        );
+        assert!(
+            history(&ctx).is_empty(),
+            "a scan lists nothing in the panel"
+        );
 
         // Every microphone at once, which with one is that one.
-        let all = call(&ctx, "silence", json!({ "stream": "speech", "apply": false })).unwrap();
-        assert!(all.starts_with("Found 3 pauses (speech below -42 dB"), "{all}");
+        let all = call(
+            &ctx,
+            "silence",
+            json!({ "stream": "speech", "apply": false }),
+        )
+        .unwrap();
+        assert!(
+            all.starts_with("Found 3 pauses (speech below -42 dB"),
+            "{all}"
+        );
         let zooms = call(&ctx, "zooms", json!({ "apply": false })).unwrap();
         assert!(zooms.starts_with("No zoom suggestions to add."), "{zooms}");
         assert!(call(&ctx, "zooms", json!({ "apply": false, "op": "reload" })).is_err());
@@ -1936,14 +2139,36 @@ mod tests {
         let (host, _) = lesson(dir.path());
         let ctx = Ctx::new(&host, "agent", false);
         let captions = call(&ctx, "settings", json!({ "area": "captions" })).unwrap();
-        assert!(captions.starts_with("captions: {") && captions.contains("\"enabled\":false"), "{captions}");
+        assert!(
+            captions.starts_with("captions: {") && captions.contains("\"enabled\":false"),
+            "{captions}"
+        );
         let revision = opened(&ctx).unwrap().revision;
-        let set = call(&ctx, "settings", json!({ "area": "captions", "set": { "enabled": true } })).unwrap();
-        assert!(set.contains("\"enabled\":true") && set.contains(&format!("Revision {}", revision + 1)), "{set}");
-        let error = call(&ctx, "settings", json!({ "area": "captions", "set": { "enabeld": true } })).unwrap_err();
-        assert!(error.contains("Unknown captions setting enabeld") && error.contains("enabled"), "{error}");
+        let set = call(
+            &ctx,
+            "settings",
+            json!({ "area": "captions", "set": { "enabled": true } }),
+        )
+        .unwrap();
+        assert!(
+            set.contains("\"enabled\":true") && set.contains(&format!("Revision {}", revision + 1)),
+            "{set}"
+        );
+        let error = call(
+            &ctx,
+            "settings",
+            json!({ "area": "captions", "set": { "enabeld": true } }),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("Unknown captions setting enabeld") && error.contains("enabled"),
+            "{error}"
+        );
         let presets = call(&ctx, "settings", json!({ "area": "presets" })).unwrap();
-        assert!(presets.contains("\"preset\":\"tight\"") && presets.contains("\"thresholdDb\":-36.0"), "{presets}");
+        assert!(
+            presets.contains("\"preset\":\"tight\"") && presets.contains("\"thresholdDb\":-36.0"),
+            "{presets}"
+        );
         let export = call(&ctx, "settings", json!({ "area": "export" })).unwrap();
         assert!(export.contains("\"width\":1920"), "{export}");
         assert!(call(&ctx, "settings", json!({ "area": "presets", "set": {} })).is_err());
@@ -1968,15 +2193,26 @@ mod tests {
                 .clone())
         })
         .unwrap();
-        let mix = |mix: Value| json!({ "area": "audio", "set": { "tracks": { track.as_str(): mix } } });
+        let mix =
+            |mix: Value| json!({ "area": "audio", "set": { "tracks": { track.as_str(): mix } } });
         // No track has a mix of its own yet, so `tracks` is left out of the current settings.
         let audio = call(&ctx, "settings", json!({ "area": "audio" })).unwrap();
         assert!(!audio.contains("\"tracks\""), "{audio}");
         let set = call(&ctx, "settings", mix(json!({ "volumeDb": -6.0 }))).unwrap();
         assert!(set.contains("\"volumeDb\":-6.0"), "{set}");
         // An option set, then cleared back to unset.
-        call(&ctx, "settings", json!({ "area": "captions", "set": { "trackId": key } })).unwrap();
-        let cleared = call(&ctx, "settings", json!({ "area": "captions", "set": { "trackId": null } })).unwrap();
+        call(
+            &ctx,
+            "settings",
+            json!({ "area": "captions", "set": { "trackId": key } }),
+        )
+        .unwrap();
+        let cleared = call(
+            &ctx,
+            "settings",
+            json!({ "area": "captions", "set": { "trackId": null } }),
+        )
+        .unwrap();
         assert!(!cleared.contains("\"trackId\""), "{cleared}");
         // Typos are still caught, inside map entries too.
         let error = call(&ctx, "settings", mix(json!({ "volumDb": -3.0 }))).unwrap_err();
@@ -1999,15 +2235,24 @@ mod tests {
         )
         .unwrap();
         let lines: Vec<&str> = report.lines().collect();
-        assert!(lines[0].starts_with(&format!("transcribe: {key} is already transcribed")), "{report}");
-        assert!(lines[1].starts_with("mouth_noises: Found 1 mouth noise"), "{report}");
+        assert!(
+            lines[0].starts_with(&format!("transcribe: {key} is already transcribed")),
+            "{report}"
+        );
+        assert!(
+            lines[1].starts_with("mouth_noises: Found 1 mouth noise"),
+            "{report}"
+        );
         assert!(lines[1].contains("Muted 1."), "{report}");
         // The muted click no longer splits the pause.
         assert!(lines[2].starts_with("silence: Found 2 pauses"), "{report}");
         assert!(lines[3].starts_with("fillers: Found 1 filler"), "{report}");
         assert!(lines[4].starts_with("In all: 0:04.00 →"), "{report}");
         // Each step that changed the edit is its own entry in the panel, newest first.
-        let actions: Vec<String> = history(&ctx).iter().filter_map(|b| b.action.clone()).collect();
+        let actions: Vec<String> = history(&ctx)
+            .iter()
+            .filter_map(|b| b.action.clone())
+            .collect();
         assert_eq!(actions, ["fillers", "silence", "mouth_noises"]);
     }
 
@@ -2021,14 +2266,25 @@ mod tests {
         let (host, _) = lesson(dir_a.path());
         let folder_b = {
             let (other, _) = lesson(dir_b.path());
-            let root = other.state.opened_project.lock().as_ref().unwrap().root().to_path_buf();
+            let root = other
+                .state
+                .opened_project
+                .lock()
+                .as_ref()
+                .unwrap()
+                .root()
+                .to_path_buf();
             root
         };
-        let length_b = crate::project::ProjectReader::open(&folder_b).unwrap().document().duration_us();
+        let length_b = crate::project::ProjectReader::open(&folder_b)
+            .unwrap()
+            .document()
+            .duration_us();
         let switched = AtomicBool::new(false);
         let ctx = Ctx::new(&host, "agent", false).with_progress(Box::new(|_, message| {
             if message.starts_with("Step 2:") && !switched.swap(true, Ordering::SeqCst) {
-                commands::open_project_impl(&host.state, folder_b.to_string_lossy().into()).unwrap();
+                commands::open_project_impl(&host.state, folder_b.to_string_lossy().into())
+                    .unwrap();
             }
         }));
         // Both lessons say "um": a second pass carried over to B would cut B's.
@@ -2036,7 +2292,11 @@ mod tests {
         assert!(switched.load(Ordering::SeqCst));
         let lines: Vec<&str> = report.lines().collect();
         assert!(lines[0].starts_with("fillers: Found 1 filler"), "{report}");
-        assert_eq!(lines[1], format!("fillers: stopped here: {PROJECT_SWITCHED}"), "{report}");
+        assert_eq!(
+            lines[1],
+            format!("fillers: stopped here: {PROJECT_SWITCHED}"),
+            "{report}"
+        );
         assert_eq!(lines.len(), 2, "{report}");
         assert_eq!(length(&ctx), length_b, "B is untouched");
         assert!(history(&ctx).is_empty(), "nothing was listed in B's panel");
@@ -2058,12 +2318,19 @@ mod tests {
             json!({ "destination": out.to_string_lossy(), "settings": { "width": 640, "height": 360 } }),
         )
         .unwrap();
-        assert!(exported.starts_with("Exported 640x360 h264 to"), "{exported}");
+        assert!(
+            exported.starts_with("Exported 640x360 h264 to"),
+            "{exported}"
+        );
         assert!(out.metadata().unwrap().len() > 0);
-        assert!(call(&ctx, "export_status", json!({})).unwrap().contains("done"));
-        assert!(call(&ctx, "export", json!({ "settings": { "widht": 640 } }))
-            .unwrap_err()
-            .contains("Unknown export setting widht"));
+        assert!(call(&ctx, "export_status", json!({}))
+            .unwrap()
+            .contains("done"));
+        assert!(
+            call(&ctx, "export", json!({ "settings": { "widht": 640 } }))
+                .unwrap_err()
+                .contains("Unknown export setting widht")
+        );
 
         let made = call(
             &ctx,

@@ -324,8 +324,15 @@ mod tests {
             samples: vec![0.0; 1600],
         };
         let started = std::time::Instant::now();
-        assert_eq!(scribe.transcribe_chunk(&chunk).err().as_deref(), Some(CANCELLED));
-        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert_eq!(
+            scribe.transcribe_chunk(&chunk).err().as_deref(),
+            Some(CANCELLED)
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
     }

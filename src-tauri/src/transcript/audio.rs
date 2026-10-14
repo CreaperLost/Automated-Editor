@@ -313,7 +313,11 @@ mod tests {
                 .collect::<Vec<f32>>()
         };
         assert!(cancelling_mix(&interleave(&|s| -s), 2).is_some());
-        assert_eq!(cancelling_mix(&interleave(&|s| -0.5 * s), 2), Some(0), "the louder one");
+        assert_eq!(
+            cancelling_mix(&interleave(&|s| -0.5 * s), 2),
+            Some(0),
+            "the louder one"
+        );
         assert_eq!(cancelling_mix(&interleave(&|s| s), 2), None);
         assert_eq!(cancelling_mix(&interleave(&|_| 0.0), 2), None);
         assert_eq!(cancelling_mix(&[0.0; 200], 2), None);
