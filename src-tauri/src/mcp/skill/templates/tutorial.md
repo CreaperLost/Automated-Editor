@@ -4,6 +4,16 @@ A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, the w
 where they help, no captions, chapters at the end. Run the steps in order, with one line to the
 user after each action.
 
+Two ways to run it:
+
+- **Step by step (the default).** Before each cleanup pass, show its dry run and get the
+  user's OK.
+- **Automatic**, when the user says so ("do it automatically", "auto", "no questions",
+  "same as last time"), at the start or at any point. You then make each choice yourself: the
+  saved answers if there are any, otherwise the defaults below. You still run each pass's dry
+  run first, report one line per pass, and stop to ask when a result looks wrong (see step 4).
+  Export still waits for the user's go.
+
 ## 1. Project (automatic)
 
 - Given a recording (a `.aero` folder): `create` with the project name and `recording`.
@@ -12,8 +22,10 @@ user after each action.
 
 ## 2. Transcription (ask)
 
-- `scan` lists the transcribers that are ready and the microphones.
-- Ask which transcriber to use, offering only the ready ones:
+- `scan` gives an overview: the transcribers that are ready, the microphones, cameras and
+  mouse data. Tell the user what the recording has in a line or two.
+- Ask which transcriber to use, offering only the ready ones (automatic: the saved one, else
+  Parakeet):
   - Parakeet: runs on this computer, free. The default.
   - ElevenLabs Scribe: cloud, on the user's key. Better with names and jargon.
   If only one is ready, say which and go on without asking.
@@ -22,62 +34,69 @@ user after each action.
 - `transcribe` with `provider` (and `stream` for each microphone). It can take a few minutes,
   so tell the user.
 
-## 3. Cleanup questions (ask, one round)
+## 3. Cleanup, one pass at a time
 
-Run `scan` again (now that the transcript exists). It changes nothing. Then ask, in one
-message, with its numbers:
+The passes below, in this order: each changes what the next finds (muted noises count as
+silence; cut silence changes the gaps), so each is measured right before it runs. For every
+pass:
 
-1. Mouth noises: mute the clicks, pops and breaths found clear of words? Yes (default) / no.
-   Sensitivity: gentle / balanced (default) / tight.
-2. Silence:
-   - From the audio (default: cuts every quiet stretch), from the transcript (gaps between
-     words: keeps quiet speech, cuts breaths and noises too), or both.
-   - How hard: gentle / balanced (default) / tight / aggressive. Give the count and seconds
-     `scan` found for the preset it used; for another preset, `silence` with `apply: false`
-     reports what it would cut.
-   - Two or more microphones: listen to all of them (default; cuts only where every one is
-     quiet) or the presenter's only.
-3. Fillers and retakes: cut the fillers and retakes the app's rules found? Yes (default) / no.
-   Also the AI review (only with an AI key; the user's key, a few cents)? No (default) / yes.
-4. Webcam (only with a camera): `scan` says how many cameras there are.
-   - Keep the camera bubble? Yes (default) / no (hides it for the whole video).
-   - Webcam focus: the camera fills the frame where the speaker talks and the mouse rests
-     (`scan` gives the stretches and their total). Yes (default) / no.
-5. Zooms (only with mouse data): add the zooms found (`scan` gives the count, average length
-   and how far in)? Yes (default) / no / fewer and longer / shorter. "Fewer and longer" raises
-   `minHoldMs` and `mergeGapMs` (default 5000 each), "shorter" lowers them. How far in:
-   `clickScale` (1.6 default).
+1. Dry run: the action with `apply: false` and the default (or saved) settings.
+2. Ask one question with its numbers and choices, default first, for example: "Silence
+   (balanced): 112 pauses, 1:42 in all, 12:04 → 10:22. Cut? yes / gentler / tighter / skip".
+   Always offer "do the rest automatically". If the user picks other settings, dry-run those
+   and ask again in one line, unless they said to just do it.
+3. Run the pass with the chosen settings, then one line: what it did, length before → after.
 
-Then save the answers with `template_save` (`name: tutorial`), in this shape:
+Automatic: steps 1 and 3 only, with the saved answers or the defaults.
+
+The passes:
+
+1. **Mouth noises:** `mouth_noises` with `sensitivity` (gentle 0.35, balanced 0.5 default,
+   tight 0.6). Mutes the clicks, pops and breaths clear of words; the length stays. Choices:
+   yes / gentle / tight / skip.
+2. **Silence from the audio:** `silence` with `preset` (gentle / balanced default / tight /
+   aggressive). Two or more microphones: ask once whether to listen to all of them (default,
+   `stream: speech`: cuts only where every one is quiet) or the presenter's only (that
+   sound's key). Choices: yes / gentler / tighter / skip.
+3. **Gaps between words:** `silence` with `mode: gaps` and `preset`: cuts the breaths and
+   noises between transcribed words that the audio pass left. Choices: no (default) / yes /
+   gentler / tighter.
+4. **Fillers and retakes:** `fillers`. With an AI key the dry run includes the app's AI review
+   (the user's key, a few cents), which catches far more than the rules; give how many came
+   from it. Choices: yes / rules only / skip. Then run it with `ai: false`: the review's
+   finds from the dry run are kept, so it isn't paid for twice. Without a key, say only the
+   rules can run.
+5. **Webcam** (only with a camera; `scan` says how many): first, keep the camera bubble? Yes
+   (default) / no (`settings` `area: layout`, `set: {"webcamEnabled": false}`, and skip focus).
+   Then **webcam focus**: `webcam_focus` (the camera fills the frame where the speaker talks
+   and the mouse rests: stretches and their total). Choices: yes / skip (`webcam_focus` with
+   `enabled: false`).
+6. **Zooms** (only with mouse data): `zooms` (count, average length, how far in). Choices:
+   yes / fewer and longer / shorter / skip. "Fewer and longer" raises `minHoldMs` and
+   `mergeGapMs` (default 5000 each), "shorter" lowers them; how far in is `clickScale`
+   (1.6 default). Pass them as `settings`.
+
+After the passes, save the choices with `template_save` (`name: tutorial`), in this shape:
 
 ```json
 {
   "transcriber": "parakeet",
   "mouthNoises": { "apply": true, "preset": "balanced" },
-  "silence": { "source": "audio", "preset": "balanced", "microphones": "all" },
-  "fillers": { "apply": true, "ai": false },
+  "silence": { "apply": true, "preset": "balanced", "microphones": "all" },
+  "gaps": { "apply": false, "preset": "balanced" },
+  "fillers": { "apply": true, "ai": true },
   "webcam": { "keep": true, "focus": true },
   "zooms": { "apply": true, "settings": { "minHoldMs": 5000, "mergeGapMs": 5000, "clickScale": 1.6 } },
   "export": { "resolution": "1080p", "quality": "high" }
 }
 ```
 
-## 4. Apply (automatic)
+## 4. When a result looks wrong (also in automatic)
 
-In this order, one line to the user after each:
-
-1. `mouth_noises` with `sensitivity` (gentle 0.35, balanced 0.5, tight 0.6). It runs first,
-   because muted noises then count as silence.
-2. `silence`: `mode: silence` for the audio, `mode: gaps` for the transcript, or both (audio
-   first), with `preset`. Microphones "all": `stream: speech`; "presenter": that sound's key.
-3. `fillers` (with `ai: true` if the user wanted the AI review).
-4. Webcam: if not kept, `settings` `area: layout`, `set: {"webcamEnabled": false}`, and skip
-   focus. Otherwise `webcam_focus`, or `webcam_focus` with `enabled: false` if the user said
-   no to focus.
-5. `zooms` with `settings` from the answers, or skip it.
-
-If a result looks wrong (more than a third of the video cut, nothing found where `scan` found
-plenty), stop and tell the user before going on.
+Stop and ask before running a pass when its dry run:
+- would cut more than a quarter of the video, or the passes together more than a third;
+- finds nothing where `scan` found plenty, or far more than `scan` estimated;
+- reports an error or a warning.
 
 ## 5. Captions (automatic)
 

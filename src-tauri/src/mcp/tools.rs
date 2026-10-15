@@ -37,9 +37,6 @@ pub struct Ctx<'a> {
     progress: Option<Progress<'a>>,
     project_changed: std::cell::Cell<bool>,
     proposals_changed: std::cell::Cell<bool>,
-    /// The project a multi-step call works on, so its later steps stop rather than carry on
-    /// in a project opened meanwhile.
-    pinned: std::cell::RefCell<Option<String>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -52,17 +49,7 @@ impl<'a> Ctx<'a> {
             progress: None,
             project_changed: Default::default(),
             proposals_changed: Default::default(),
-            pinned: Default::default(),
         }
-    }
-
-    /// Keeps the following steps on project `handle` (`None` lets them go to whatever is open).
-    pub fn pin_project(&self, handle: Option<String>) {
-        self.pinned.replace(handle);
-    }
-
-    pub fn pinned_project(&self) -> Option<String> {
-        self.pinned.borrow().clone()
     }
 
     pub fn with_progress(mut self, progress: Progress<'a>) -> Self {

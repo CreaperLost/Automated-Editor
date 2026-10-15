@@ -581,27 +581,34 @@ mod tests {
     #[test]
     fn values_follow_the_schema() {
         let schema =
-            serde_json::to_value(schemars::schema_for!(super::super::actions::CleanupArgs))
+            serde_json::to_value(schemars::schema_for!(super::super::actions::FillerArgs))
                 .unwrap();
         let args = arguments(
             &schema,
             &[],
             &[
-                ("preset".into(), Some("tight".into())),
-                ("steps".into(), Some("silence,fillers".into())),
+                ("kinds".into(), Some("filler,retake".into())),
                 ("ai".into(), None),
                 ("stream".into(), Some("123".into())),
+                ("apply".into(), Some("false".into())),
             ],
         )
         .unwrap();
         assert_eq!(
             args,
-            json!({"preset": "tight", "steps": ["silence", "fillers"], "ai": true, "stream": "123"})
+            json!({"kinds": ["filler", "retake"], "ai": true, "stream": "123", "apply": false})
         );
-        let error = arguments(&schema, &[], &[("presett".into(), Some("x".into()))]).unwrap_err();
+        let error = arguments(&schema, &[], &[("kind".into(), Some("x".into()))]).unwrap_err();
         assert!(
-            error.contains("Unknown option --presett") && error.contains("preset"),
+            error.contains("Unknown option --kind") && error.contains("kinds"),
             "{error}"
+        );
+        let silence =
+            serde_json::to_value(schemars::schema_for!(super::super::actions::SilenceArgs))
+                .unwrap();
+        assert_eq!(
+            arguments(&silence, &[], &[("preset".into(), Some("tight".into()))]).unwrap(),
+            json!({"preset": "tight"})
         );
 
         let settings =
@@ -623,8 +630,8 @@ mod tests {
             json!({"name": "tutorial"})
         );
         assert!(
-            arguments(&schema, &strings(&["tight"]), &[]).is_err(),
-            "cleanup has several"
+            arguments(&silence, &strings(&["tight"]), &[]).is_err(),
+            "silence has several"
         );
     }
 

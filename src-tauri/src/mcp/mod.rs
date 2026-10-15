@@ -50,6 +50,10 @@ pub trait Host: Send + Sync + 'static {
     fn autopilot(&self) -> bool {
         false
     }
+    /// The app's AI review can run (a key is set): fillers use it unless told not to.
+    fn ai_review_ready(&self) -> bool {
+        actions::ai_key_ready()
+    }
     /// The app's settings folder; the user's answers to templates are kept in it.
     fn config_dir(&self) -> std::path::PathBuf {
         crate::transcript::settings::config_dir()
@@ -338,7 +342,9 @@ const INSTRUCTIONS: &str = "AeroEdits is a video editor for screen-recorded tuto
 You work on the project the user has open. When the user asks for an edit of a video (a \
 tutorial, a recording, a cleanup), call `template` first and follow the template it gives: \
 the steps, the questions to ask the user, how to report, and the export steps; never export \
-before the user says go. The routine work is the app's own actions, which run its built-in \
+before the user says go. Run the cleanup one pass at a time: a dry run (`apply: false`), the \
+user's OK with its numbers, then the pass, unless the user said to do it automatically. \
+Chapters are the last edit, right before export. The routine work is the app's own actions, which run its built-in \
 passes and cost you almost nothing: status, scan, transcribe, mouth_noises, silence, fillers, \
 webcam_focus, zooms, settings, chapters, shorts, export; each applies as one undo step and \
 answers in a line or two to pass on to the user. Times are microseconds on the edited \
@@ -585,6 +591,10 @@ mod tests {
 
         fn transcripts(&self) -> &crate::commands::transcript::TranscriptState {
             &self.3
+        }
+
+        fn ai_review_ready(&self) -> bool {
+            false
         }
 
         fn autopilot(&self) -> bool {
@@ -1103,7 +1113,7 @@ mod tests {
         assert!(hello["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("cleanup"));
+            .contains("one pass at a time"));
         let tools = ask(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
         let names: Vec<&str> = tools["result"]["tools"]
             .as_array()
@@ -1112,9 +1122,11 @@ mod tests {
             .filter_map(|t| t["name"].as_str())
             .collect();
         assert!(
-            names.contains(&"cleanup") && names.contains(&"transcript_get"),
+            names.contains(&"silence") && names.contains(&"transcript_get"),
             "{names:?}"
         );
+        // There is no one-call cleanup: agents run and report one pass at a time.
+        assert!(!names.contains(&"cleanup"), "{names:?}");
         assert!(
             names.contains(&"template") && names.contains(&"scan"),
             "{names:?}"

@@ -131,6 +131,11 @@ impl super::Host for BareHost {
         &self.transcripts
     }
 
+    /// Tests never spend the user's AI key.
+    fn ai_review_ready(&self) -> bool {
+        false
+    }
+
     fn config_dir(&self) -> std::path::PathBuf {
         self.config.path().to_path_buf()
     }

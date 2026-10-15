@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 18] = [
+pub static ACTIONS: [ToolDef; 17] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -27,10 +27,11 @@ pub static ACTIONS: [ToolDef; 18] = [
     },
     ToolDef {
         name: "scan",
-        description: "Everything the cleanup passes would do, found and changed nothing, to ask \
-            the user with: microphones, cameras, mouse data, the transcribers and AI key ready, \
-            and for a preset: mouth noises, silence from the audio, gaps from the transcript, \
-            fillers and retakes, webcam focus stretches, zooms (count, length, how far in).",
+        description: "An overview before an edit, changing nothing: microphones, cameras, mouse \
+            data, the transcribers and AI key ready, and a first estimate of each pass for a \
+            preset (mouth noises, silence, gaps, fillers and retakes, webcam focus, zooms). \
+            Each pass changes what the next finds, so before running one, ask with its own dry \
+            run (`apply: false`), not these numbers.",
         schema: schema::<ScanArgs>,
         read_only: true,
         run: scan,
@@ -97,9 +98,10 @@ pub static ACTIONS: [ToolDef; 18] = [
     },
     ToolDef {
         name: "fillers",
-        description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) found by \
-            the app's rules in the transcript, one undo step. `ai: true` also runs the app's \
-            OpenAI/OpenRouter review (the user's key, a small model). `apply: false` only lists.",
+        description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) in the \
+            transcript, one undo step: the app's rules plus its OpenAI/OpenRouter review (the \
+            user's key, a small model), which catches far more and is on by default whenever a \
+            key is set; `ai: false` uses the rules only. `apply: false` only lists.",
         schema: schema::<FillerArgs>,
         read_only: false,
         run: fillers,
@@ -138,7 +140,10 @@ pub static ACTIONS: [ToolDef; 18] = [
     ToolDef {
         name: "chapters",
         description: "Makes YouTube chapters from the transcript with the app's AI pass (the \
-            user's OpenAI/OpenRouter key) and saves them in the project.",
+            user's OpenAI/OpenRouter key) and saves them in the project. Run it last, after \
+            every cut and right before export: it reads the final edit's words, and cuts made \
+            after it can leave chapters titled for talk that is gone. `status` says when they \
+            are out of date.",
         schema: schema::<StreamArgs>,
         read_only: false,
         run: chapters,
@@ -166,16 +171,6 @@ pub static ACTIONS: [ToolDef; 18] = [
         schema: schema::<NoArgs>,
         read_only: true,
         run: export_status,
-    },
-    ToolDef {
-        name: "cleanup",
-        description: "The whole cleanup in one call, each step a separate undo step: transcribe \
-            (if needed), mouth noises, silence, gaps, fillers and retakes, webcam focus, zooms. \
-            `preset` sets how hard to cut; `steps` picks some; `ai` adds the AI filler review. \
-            Answers with a line per step.",
-        schema: schema::<CleanupArgs>,
-        read_only: false,
-        run: cleanup,
     },
 ];
 
@@ -206,13 +201,9 @@ fn current(ctx: &Ctx) -> Result<Open, String> {
     })
 }
 
-/// The project open now, refused when it is not the one a multi-step call is pinned to.
+/// The project open now.
 fn opened(ctx: &Ctx) -> Result<Open, String> {
-    let open = current(ctx)?;
-    match ctx.pinned_project() {
-        Some(pinned) if pinned != open.handle => Err(PROJECT_SWITCHED.into()),
-        _ => Ok(open),
-    }
+    current(ctx)
 }
 
 /// The answer for an action that may have changed the edit: `lines`, then the length and the
@@ -466,7 +457,38 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
     if let Some(running) = ctx.host.transcripts().running.lock().clone() {
         lines.push(format!("Busy: {running}."));
     }
+    lines.extend(chapters_stale(ctx));
     Ok(lines.join("\n"))
+}
+
+/// A warning when an agent made chapters and the edit changed after: chapters read the final
+/// edit's words, so they come last, right before export.
+fn chapters_stale(ctx: &Ctx) -> Option<String> {
+    with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        if document.chapters.is_empty() {
+            return Ok(None);
+        }
+        let proposals = crate::proposals::load(reader.root())?;
+        let made = proposals
+            .batches
+            .iter()
+            .rev()
+            .find(|b| {
+                b.status == crate::proposals::Status::Accepted
+                    && matches!(&b.change, crate::proposals::Change::Action { action } if action == "chapters")
+            })
+            .and_then(|b| b.applied_revision);
+        Ok(made.filter(|&r| r != document.revision).map(|r| {
+            format!(
+                "Chapters were made at revision {r} and the edit changed since (now {}): run \
+                 `chapters` again, as the last step before export.",
+                document.revision
+            )
+        }))
+    })
+    .ok()
+    .flatten()
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
@@ -645,11 +667,13 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         );
         pass(
             &mut lines,
-            "Fillers and retakes",
+            "Fillers and retakes (the rules; the AI review usually finds more)",
             run_fillers(
                 ctx,
                 FillerArgs {
                     apply: dry,
+                    // A dry run never spends the user's AI key.
+                    ai: Some(false),
                     ..Default::default()
                 },
             ),
@@ -1210,12 +1234,22 @@ pub struct FillerArgs {
     /// Which to cut: `filler`, `retake`. Default both.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
-    /// Also run the app's AI review (OpenAI or OpenRouter, the user's key).
+    /// Also run the app's AI review (OpenAI or OpenRouter, the user's key), which catches far
+    /// more than the rules alone. Default: on whenever an AI key is set.
     #[serde(default)]
-    pub ai: bool,
+    pub ai: Option<bool>,
     /// false: only list them. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+}
+
+/// An AI key is set for the AI provider chosen in the settings.
+pub(super) fn ai_key_ready() -> bool {
+    let ai = tc::ai_settings_get_impl();
+    match ai.settings.provider {
+        crate::ai::AiProvider::OpenAi => ai.openai_key_source.is_some(),
+        crate::ai::AiProvider::OpenRouter => ai.openrouter_key_source.is_some(),
+    }
 }
 
 fn fillers(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -1231,7 +1265,8 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             TranscriptSuggestionKind::Retake,
         ]
     });
-    let found = if args.ai {
+    let use_ai = args.ai.unwrap_or_else(|| ctx.host.ai_review_ready());
+    let found = if use_ai {
         ctx.progress(0.1, "Asking the AI review for fillers and retakes");
         tc::transcript_ai_suggest_impl(
             ctx.state,
@@ -1261,12 +1296,22 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         "Found {} and {} in {key}{}.",
         plural(filler_count, "filler"),
         plural(retake_count, "retake"),
-        if args.ai {
-            format!(" ({from_ai} from the AI review)")
+        if use_ai {
+            format!(" (rules and the AI review; {from_ai} from the AI review)")
+        } else if from_ai > 0 {
+            // The review's earlier finds are kept with the transcript.
+            format!(" (rules, and {from_ai} the AI review found before)")
         } else {
-            String::new()
+            " (the rules only)".to_string()
         },
     )];
+    if args.ai.is_none() && !use_ai && from_ai == 0 {
+        lines.push(
+            "No AI key is set, so the AI review (which finds far more) did not run; the user \
+             can add one under Transcription and AI settings."
+                .into(),
+        );
+    }
     let examples: Vec<String> = chosen
         .iter()
         .take(6)
@@ -1751,10 +1796,11 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     if args.destination.is_some() {
         settings.destination = args.destination;
     }
+    let stale = chapters_stale(ctx).map(|w| format!("\n{w}")).unwrap_or_default();
     let started = commands::export_start_impl(ctx.state, open.handle, settings)?;
     if args.wait == Some(false) {
         return text(format!(
-            "Export {} started at revision {}; check it with export_status.",
+            "Export {} started at revision {}; check it with export_status.{stale}",
             started.job_id, started.captured_revision
         ));
     }
@@ -1765,7 +1811,7 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         match status.state {
             Completed => {
                 return text(format!(
-                    "Exported {}x{} {} to {} in {:.0} s.",
+                    "Exported {}x{} {} to {} in {:.0} s.{stale}",
                     status.width,
                     status.height,
                     status.video_codec,
@@ -1820,140 +1866,6 @@ fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     })
 }
 
-// ---------------------------------------------------------------------------------------
-// The whole cleanup.
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum Step {
-    Transcribe,
-    MouthNoises,
-    Silence,
-    Gaps,
-    Fillers,
-    WebcamFocus,
-    Zooms,
-}
-
-const ALL_STEPS: [Step; 7] = [
-    Step::Transcribe,
-    Step::MouthNoises,
-    Step::Silence,
-    Step::Gaps,
-    Step::Fillers,
-    Step::WebcamFocus,
-    Step::Zooms,
-];
-
-#[derive(Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct CleanupArgs {
-    /// gentle, balanced (default), tight or aggressive: for noises, silence and gaps.
-    #[serde(default)]
-    pub preset: Option<Preset>,
-    /// Only these steps, in this order: transcribe, mouth_noises, silence, gaps, fillers,
-    /// webcam_focus, zooms. Default all.
-    #[serde(default)]
-    pub steps: Option<Vec<Step>>,
-    /// Also run the app's AI review for fillers and retakes (the user's key).
-    #[serde(default)]
-    pub ai: bool,
-    /// The speech to clean. Default: the speech on the timeline.
-    #[serde(default)]
-    pub stream: Option<String>,
-}
-
-fn cleanup(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: CleanupArgs = params(args)?;
-    let start = opened(ctx)?;
-    let pinned = ctx.pinned_project();
-    // Every step works on this project, or the cleanup stops.
-    ctx.pin_project(Some(start.handle.clone()));
-    let lines = cleanup_steps(ctx, &args, &start);
-    ctx.pin_project(pinned);
-    text(lines.join("\n"))
-}
-
-fn cleanup_steps(ctx: &Ctx, args: &CleanupArgs, start: &Open) -> Vec<String> {
-    let preset = args.preset.unwrap_or_default();
-    let steps = args.steps.clone().unwrap_or_else(|| ALL_STEPS.to_vec());
-    let mut lines = Vec::new();
-    for (index, step) in steps.iter().enumerate() {
-        let name = serde_json::to_value(step)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default();
-        ctx.progress(
-            index as f64 / steps.len() as f64,
-            &format!("Step {}: {name}", index + 1),
-        );
-        let stream = args.stream.clone();
-        let outcome = match step {
-            Step::Transcribe => run_transcribe(
-                ctx,
-                TranscribeArgs {
-                    stream,
-                    ..Default::default()
-                },
-            ),
-            Step::MouthNoises => run_noises(
-                ctx,
-                NoiseArgs {
-                    stream,
-                    sensitivity: Some(preset.noise_sensitivity()),
-                    ..Default::default()
-                },
-            ),
-            Step::Silence => run_silence(
-                ctx,
-                SilenceArgs {
-                    preset: Some(preset),
-                    stream,
-                    ..Default::default()
-                },
-            ),
-            Step::Gaps => run_silence(
-                ctx,
-                SilenceArgs {
-                    mode: SilenceMode::Gaps,
-                    preset: Some(preset),
-                    stream,
-                    ..Default::default()
-                },
-            ),
-            Step::Fillers => run_fillers(
-                ctx,
-                FillerArgs {
-                    stream,
-                    ai: args.ai,
-                    ..Default::default()
-                },
-            ),
-            Step::WebcamFocus => run_webcam(ctx, WebcamArgs::default()),
-            Step::Zooms => run_zooms(ctx, ZoomArgs::default()),
-        };
-        match outcome {
-            Ok(summary) => lines.push(format!("{name}: {}", summary.replace('\n', " "))),
-            Err(error) => {
-                lines.push(format!("{name}: stopped here: {error}"));
-                break;
-            }
-        }
-    }
-    match opened(ctx) {
-        Ok(end) => lines.push(format!(
-            "In all: {} → {}, revision {} → {}. Each step is its own undo step.",
-            clock(start.duration),
-            clock(end.duration),
-            start.revision,
-            end.revision
-        )),
-        Err(error) if !lines.iter().any(|l| l.contains(&error)) => lines.push(error),
-        Err(_) => {}
-    }
-    ctx.progress(1.0, "Cleanup done");
-    lines
-}
 
 #[cfg(test)]
 mod tests {
@@ -2005,6 +1917,10 @@ mod tests {
             "{dry}"
         );
         assert!(dry.contains("\"um\""), "{dry}");
+        // The AI review is the default, but there is no key here: the rules only, and why.
+        assert!(dry.contains("(the rules only)") && dry.contains("No AI key is set"), "{dry}");
+        let rules = call(&ctx, "fillers", json!({ "apply": false, "ai": false })).unwrap();
+        assert!(!rules.contains("No AI key"), "asked for the rules only: {rules}");
         assert!(history(&ctx).is_empty(), "a dry run changes nothing");
 
         let before = length(&ctx);
@@ -2099,7 +2015,9 @@ mod tests {
         // The click is not muted yet, so it splits the first pause.
         has("Silence from the audio: Found 3 pauses");
         has("Gaps from the transcript: Found ");
-        has("Fillers and retakes: Found 1 filler and 0 retakes");
+        // The scan's dry run never spends the AI key, and says the review finds more.
+        has("Fillers and retakes (the rules; the AI review usually finds more): Found 1 filler and 0 retakes");
+        has("(the rules only)");
         assert!(
             !report.contains("Webcam focus:") && !report.contains("Zooms:"),
             "{report}"
@@ -2221,86 +2139,39 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_runs_the_steps_in_order_and_reports_each() {
+    fn chapters_made_before_a_later_cut_are_reported_out_of_date() {
         if !crate::media::ffmpeg::available() {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let (host, key) = lesson(dir.path());
+        let (host, _) = lesson(dir.path());
         let ctx = Ctx::new(&host, "agent", false);
-        let report = call(
-            &ctx,
-            "cleanup",
-            json!({ "steps": ["transcribe", "mouth_noises", "silence", "fillers"] }),
+        // Chapters as the `chapters` action leaves them (its AI pass needs a key).
+        let before = opened(&ctx).unwrap();
+        commands::project_chapters_set_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            vec![crate::chapters::Chapter {
+                id: "c1".into(),
+                source_us: 0,
+                title: "Intro".into(),
+                media: None,
+                edited_us: None,
+            }],
         )
         .unwrap();
-        let lines: Vec<&str> = report.lines().collect();
-        assert!(
-            lines[0].starts_with(&format!("transcribe: {key} is already transcribed")),
-            "{report}"
-        );
-        assert!(
-            lines[1].starts_with("mouth_noises: Found 1 mouth noise"),
-            "{report}"
-        );
-        assert!(lines[1].contains("Muted 1."), "{report}");
-        // The muted click no longer splits the pause.
-        assert!(lines[2].starts_with("silence: Found 2 pauses"), "{report}");
-        assert!(lines[3].starts_with("fillers: Found 1 filler"), "{report}");
-        assert!(lines[4].starts_with("In all: 0:04.00 →"), "{report}");
-        // Each step that changed the edit is its own entry in the panel, newest first.
-        let actions: Vec<String> = history(&ctx)
-            .iter()
-            .filter_map(|b| b.action.clone())
-            .collect();
-        assert_eq!(actions, ["fillers", "silence", "mouth_noises"]);
-    }
+        applied(&ctx, "chapters", &before, vec!["Made 1 chapter.".into()]).unwrap();
+        let status = call(&ctx, "status", json!({})).unwrap();
+        assert!(!status.contains("Chapters were made"), "{status}");
 
-    #[test]
-    fn cleanup_stops_when_another_project_is_opened_between_steps() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        if !crate::media::ffmpeg::available() {
-            return;
-        }
-        let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let (host, _) = lesson(dir_a.path());
-        let folder_b = {
-            let (other, _) = lesson(dir_b.path());
-            let root = other
-                .state
-                .opened_project
-                .lock()
-                .as_ref()
-                .unwrap()
-                .root()
-                .to_path_buf();
-            root
-        };
-        let length_b = crate::project::ProjectReader::open(&folder_b)
-            .unwrap()
-            .document()
-            .duration_us();
-        let switched = AtomicBool::new(false);
-        let ctx = Ctx::new(&host, "agent", false).with_progress(Box::new(|_, message| {
-            if message.starts_with("Step 2:") && !switched.swap(true, Ordering::SeqCst) {
-                commands::open_project_impl(&host.state, folder_b.to_string_lossy().into())
-                    .unwrap();
-            }
-        }));
-        // Both lessons say "um": a second pass carried over to B would cut B's.
-        let report = call(&ctx, "cleanup", json!({ "steps": ["fillers", "fillers"] })).unwrap();
-        assert!(switched.load(Ordering::SeqCst));
-        let lines: Vec<&str> = report.lines().collect();
-        assert!(lines[0].starts_with("fillers: Found 1 filler"), "{report}");
-        assert_eq!(
-            lines[1],
-            format!("fillers: stopped here: {PROJECT_SWITCHED}"),
-            "{report}"
+        call(&ctx, "silence", json!({})).unwrap();
+        let status = call(&ctx, "status", json!({})).unwrap();
+        assert!(
+            status.contains("Chapters were made at revision")
+                && status.contains("run `chapters` again, as the last step before export"),
+            "{status}"
         );
-        assert_eq!(lines.len(), 2, "{report}");
-        assert_eq!(length(&ctx), length_b, "B is untouched");
-        assert!(history(&ctx).is_empty(), "nothing was listed in B's panel");
-        assert_eq!(ctx.pinned_project(), None);
     }
 
     #[test]
