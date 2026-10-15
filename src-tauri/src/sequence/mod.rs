@@ -29,6 +29,9 @@ pub const IMAGE_MAX_US: u64 = 3_600_000_000;
 /// Pieces shorter than this are dropped when a cut leaves them (well under a frame).
 pub const MIN_PIECE_US: u64 = 10_000;
 const MAX_SAFE_US: u64 = 9_007_199_254_740_991;
+/// Where the timeline ends at the latest: 48 hours. Mixing and analysis hold per-block state
+/// for the whole timeline (gaps too), so its length bounds their memory.
+pub const MAX_TIMELINE_US: u64 = 48 * 3_600_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,8 +181,11 @@ impl Asset {
         if self.is_still() {
             return in_us == 0 && duration_us <= self.duration_us;
         }
-        self.span_at(in_us)
-            .is_some_and(|span| in_us + duration_us <= span.end_us)
+        self.span_at(in_us).is_some_and(|span| {
+            in_us
+                .checked_add(duration_us)
+                .is_some_and(|end| end <= span.end_us)
+        })
     }
 
     /// The length a clip of this asset starts with on the timeline.
@@ -560,8 +566,16 @@ pub fn validate_sequence(sequence: &Sequence, assets: &[Asset]) -> Result<(), St
             if clip.link.as_deref().is_some_and(|l| !valid_id(l)) {
                 return Err("Invalid link id".into());
             }
-            if clip.duration_us == 0 || clip.end_us() > MAX_SAFE_US {
+            if clip.duration_us == 0 {
                 return Err("A clip must have a length".into());
+            }
+            // Checked before `end_us()`, whose sum would overflow on a malformed start.
+            if clip
+                .start_us
+                .checked_add(clip.duration_us)
+                .is_none_or(|end| end > MAX_TIMELINE_US)
+            {
+                return Err("The timeline can be at most 48 hours long".into());
             }
             if clip.start_us < end {
                 return Err("Clips on a track must not overlap".into());
@@ -736,5 +750,31 @@ pub(crate) mod tests {
         seq.tracks[0].clips[1].duration_us = 1_000_000;
         seq.tracks[0].clips[1].asset = "gone".into();
         assert!(validate_sequence(&seq, &assets).is_err(), "unknown media");
+        seq.tracks[0].clips[1].asset = "m1".into();
+
+        // A clip far out makes a timeline too long to mix; one whose end overflows is refused
+        // rather than wrapping (or panicking in a debug build).
+        seq.tracks[0].clips[1].start_us = MAX_TIMELINE_US;
+        assert!(validate_sequence(&seq, &assets).is_err(), "too long");
+        seq.tracks[0].clips[1].start_us = u64::MAX - 10;
+        assert!(validate_sequence(&seq, &assets).is_err(), "overflow");
+        seq.tracks[0].clips[1].start_us = MAX_TIMELINE_US - 1_000_000;
+        validate_sequence(&seq, &assets).unwrap();
+        assert!(!assets[0].holds(1, u64::MAX));
+    }
+
+    #[test]
+    fn edits_far_past_the_longest_timeline_are_refused_before_they_are_applied() {
+        let assets = vec![video("m1", 10_000_000)];
+        for at_us in [MAX_TIMELINE_US + 1, u64::MAX] {
+            let edit = edit::SequenceEdit::PlaceAsset {
+                asset_id: "m1".into(),
+                at_us,
+                track_id: None,
+                streams: Vec::new(),
+                range: None,
+            };
+            assert!(edit::apply(&Sequence::default(), &assets, &edit).is_err());
+        }
     }
 }

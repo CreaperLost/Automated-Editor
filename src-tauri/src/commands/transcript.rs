@@ -173,12 +173,15 @@ pub fn transcript_run_impl(
             let key = settings::api_key(&dir)
                 .map(|(k, _)| k)
                 .ok_or("Add your ElevenLabs API key in transcription settings first")?;
-            Box::new(ScribeTranscriber::new(
-                key,
-                Some(config.scribe_model.clone()),
-                language,
-                config.keyterms.clone(),
-            )?)
+            Box::new(
+                ScribeTranscriber::new(
+                    key,
+                    Some(config.scribe_model.clone()),
+                    language,
+                    config.keyterms.clone(),
+                )?
+                .with_cancel(transcripts.cancel.clone()),
+            )
         }
         ProviderKind::Parakeet => {
             progress(TranscriptionProgress {
@@ -197,6 +200,10 @@ pub fn transcript_run_impl(
         &transcripts.cancel,
         progress,
     )?;
+    // Cancel pressed while the last chunk finished keeps the transcript there was.
+    if transcripts.cancel.load(Ordering::SeqCst) {
+        return Err("Transcription cancelled".into());
+    }
     {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();
@@ -245,9 +252,15 @@ pub fn transcript_suggestions_impl(
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    Ok(edit::suggestions(
+    let found = edit::suggestions(
         &transcript,
         &reader.history().current.transcript_clock(&track_id)?,
+    );
+    Ok(crate::proposals::with_agent_suggestions(
+        reader,
+        &transcript,
+        &track_id,
+        found,
     ))
 }
 

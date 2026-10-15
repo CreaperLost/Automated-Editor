@@ -194,6 +194,38 @@ pub struct VideoInfo {
     pub height: u32,
     /// Frame rate as numerator/denominator.
     pub rate: (u32, u32),
+    pub alpha: Alpha,
+}
+
+/// How a video carries transparency, which decides how it has to be decoded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Alpha {
+    #[default]
+    None,
+    /// In the pixel format itself (ProRes 4444, QuickTime Animation, PNG, ...).
+    InFormat,
+    /// VP9 with its alpha in a side channel (`alpha_mode=1`, as WebM overlays are written).
+    /// FFmpeg's own VP9 decoder drops it; only libvpx-vp9 reads it.
+    Vp9,
+}
+
+impl Alpha {
+    fn of(codec: Option<&str>, pix_fmt: Option<&str>, alpha_mode: Option<&str>) -> Self {
+        let pix_fmt = pix_fmt.unwrap_or_default();
+        if codec == Some("vp9") && alpha_mode.is_some_and(|mode| mode.trim() == "1") {
+            Alpha::Vp9
+        } else if ["yuva", "gbrap", "ya8", "ya16"]
+            .iter()
+            .any(|prefix| pix_fmt.starts_with(prefix))
+            || ["rgba", "bgra", "argb", "abgr"]
+                .iter()
+                .any(|name| pix_fmt.contains(name))
+        {
+            Alpha::InFormat
+        } else {
+            Alpha::None
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -209,6 +241,8 @@ struct ProbeStream {
     height: Option<u32>,
     avg_frame_rate: Option<String>,
     r_frame_rate: Option<String>,
+    codec_name: Option<String>,
+    pix_fmt: Option<String>,
     #[serde(default)]
     tags: Option<ProbeTags>,
 }
@@ -217,6 +251,9 @@ struct ProbeStream {
 struct ProbeTags {
     title: Option<String>,
     handler_name: Option<String>,
+    /// Matroska writes it in capitals.
+    #[serde(alias = "ALPHA_MODE")]
+    alpha_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -248,7 +285,7 @@ pub fn probe_video(path: &Path) -> Result<VideoInfo, String> {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,avg_frame_rate,r_frame_rate",
+            "stream=width,height,avg_frame_rate,r_frame_rate,codec_name,pix_fmt:stream_tags=alpha_mode,ALPHA_MODE",
         ],
     )?;
     let stream = output
@@ -267,10 +304,16 @@ pub fn probe_video(path: &Path) -> Result<VideoInfo, String> {
     let rate = parse_rate(stream.avg_frame_rate.as_deref())
         .or_else(|| parse_rate(stream.r_frame_rate.as_deref()))
         .unwrap_or(FALLBACK_RATE);
+    let alpha = Alpha::of(
+        stream.codec_name.as_deref(),
+        stream.pix_fmt.as_deref(),
+        stream.tags.as_ref().and_then(|t| t.alpha_mode.as_deref()),
+    );
     Ok(VideoInfo {
         width,
         height,
         rate,
+        alpha,
     })
 }
 
@@ -458,7 +501,14 @@ impl DecodeLimit {
             width: fit(info.width),
             height: fit(info.height),
             rate,
+            alpha: info.alpha,
         }
+    }
+
+    /// Whether frames of `source` come as NV12. A source with transparency always comes as
+    /// BGRA, since NV12 has nowhere to keep it.
+    fn nv12_for(&self, source: &VideoInfo) -> bool {
+        self.yuv && source.alpha == Alpha::None
     }
 }
 
@@ -483,6 +533,10 @@ static HWACCEL_CHOSEN: OnceLock<Option<&'static str>> = OnceLock::new();
 /// every seek and every cut far into a clip starts one; at preview sizes the CPU also decodes
 /// faster. Sources larger than 1600p still use the GPU, as does anything when it is forced.
 fn hwaccel_for_stream(path: &Path, info: &VideoInfo, limit: DecodeLimit) -> Option<&'static str> {
+    if info.alpha != Alpha::None {
+        // GPU decoders hand back frames without their alpha.
+        return None;
+    }
     let forced = env::var(HWACCEL_ENV).is_ok_and(|v| !v.trim().is_empty());
     let pixels = info.width as u64 * info.height as u64;
     if cfg!(windows) && limit.interactive && !forced && pixels <= SOFTWARE_PREVIEW_MAX_PIXELS {
@@ -693,7 +747,10 @@ fn spawn_frame_reader(
 
 struct FrameStream {
     path: PathBuf,
+    /// The limit asked for, which decoders are matched by.
     limit: DecodeLimit,
+    /// Frames come as NV12 (else BGRA): `limit.yuv`, unless the source has transparency.
+    nv12: bool,
     child: Child,
     frames: mpsc::Receiver<Piped>,
     recycle: mpsc::SyncSender<Vec<u8>>,
@@ -727,10 +784,14 @@ impl FrameStream {
         hwaccel: Option<&'static str>,
     ) -> Result<Self, String> {
         let info = limit.apply(source);
+        let nv12 = limit.nv12_for(source);
         let (mut cmd, log) = command(ffmpeg_path()?)?;
         let (num, den) = info.rate;
         let (width, height) = (info.width, info.height);
         cmd.arg("-nostdin");
+        if source.alpha == Alpha::Vp9 {
+            cmd.args(["-c:v", "libvpx-vp9"]);
+        }
         if let Some(api) = hwaccel {
             // Frames come back to system memory, so the filters below work unchanged.
             cmd.args(["-hwaccel", api]);
@@ -746,7 +807,7 @@ impl FrameStream {
             .arg(file_arg(path))
             .args(["-map", "0:v:0", "-an", "-sn"])
             .arg("-vf")
-            .arg(if limit.yuv {
+            .arg(if nv12 {
                 // Limited range keeps the recording's own values (no range conversion).
                 format!(
                     "fps={num}/{den},scale={width}:{height}:flags=bilinear:in_color_matrix=auto:in_range=auto:out_color_matrix=bt709:out_range=tv,format=nv12"
@@ -765,7 +826,7 @@ impl FrameStream {
             .stdout
             .take()
             .ok_or("FFmpeg decoder has no output pipe")?;
-        let frame_len = if limit.yuv {
+        let frame_len = if nv12 {
             width as usize * height as usize * 3 / 2
         } else {
             width as usize * height as usize * 4
@@ -775,6 +836,7 @@ impl FrameStream {
         Ok(Self {
             path: path.to_path_buf(),
             limit,
+            nv12,
             child,
             frames,
             recycle,
@@ -799,7 +861,8 @@ impl FrameStream {
             return 0;
         }
         let info = limit.apply(source);
-        let frame_len = info.width as usize * info.height as usize * if limit.yuv { 3 } else { 8 };
+        let frame_len =
+            info.width as usize * info.height as usize * if limit.nv12_for(source) { 3 } else { 8 };
         // In half bytes, so NV12's 1.5 bytes a pixel stays whole.
         (HISTORY_BYTES * 2 / frame_len.max(1)) as u64
     }
@@ -850,7 +913,7 @@ impl FrameStream {
     }
 
     fn video_frame(&self, index: u64, data: crate::media::PixelBuffer) -> VideoFrame {
-        let (stride, format) = if self.limit.yuv {
+        let (stride, format) = if self.nv12 {
             (self.width, PixelFormat::Nv12)
         } else {
             (self.width * 4, PixelFormat::Bgra8888)
@@ -861,7 +924,7 @@ impl FrameStream {
             height: self.height,
             stride,
             format,
-            color: if self.limit.yuv {
+            color: if self.nv12 {
                 ColorInfo::rec709_limited()
             } else {
                 ColorInfo::rec709_full()
@@ -2148,6 +2211,7 @@ mod tests {
             width: 1920,
             height: 1080,
             rate: (60, 1),
+            alpha: Alpha::None,
         };
         let preview = DecodeLimit {
             max_width: 1280,
@@ -2195,6 +2259,7 @@ mod tests {
             width: 3840,
             height: 2160,
             rate: (60, 1),
+            alpha: Alpha::None,
         };
         let limit = DecodeLimit {
             max_width: 1280,
@@ -2208,7 +2273,8 @@ mod tests {
             VideoInfo {
                 width: 1280,
                 height: 720,
-                rate: (30, 1)
+                rate: (30, 1),
+                alpha: Alpha::None,
             }
         );
         assert_eq!(DecodeLimit::NONE.apply(&source), source);
@@ -2216,6 +2282,7 @@ mod tests {
             width: 640,
             height: 480,
             rate: (24000, 1001),
+            alpha: Alpha::None,
         };
         assert_eq!(limit.apply(&small), small);
     }
@@ -2243,6 +2310,115 @@ mod tests {
         assert_eq!(next.pts_us, 350_000);
         let full = decode_bgra(&path, 250_000).unwrap();
         assert_eq!((full.width, full.height), (128, 64));
+        release_decoders();
+    }
+
+    #[test]
+    fn alpha_is_read_from_the_pixel_format_or_the_vp9_tag() {
+        assert_eq!(
+            Alpha::of(Some("prores"), Some("yuva444p12le"), None),
+            Alpha::InFormat
+        );
+        assert_eq!(
+            Alpha::of(Some("qtrle"), Some("argb"), None),
+            Alpha::InFormat
+        );
+        assert_eq!(
+            Alpha::of(Some("png"), Some("rgba64be"), None),
+            Alpha::InFormat
+        );
+        assert_eq!(
+            Alpha::of(Some("vp9"), Some("yuv420p"), Some("1")),
+            Alpha::Vp9
+        );
+        assert_eq!(
+            Alpha::of(Some("vp9"), Some("yuv420p"), Some("0")),
+            Alpha::None
+        );
+        assert_eq!(Alpha::of(Some("h264"), Some("yuv420p"), None), Alpha::None);
+        assert_eq!(
+            Alpha::of(Some("h264"), Some("nv12"), Some("1")),
+            Alpha::None
+        );
+    }
+
+    /// Writes a 64x48, 1 s clip that is clear except an opaque white box at its centre.
+    fn write_transparent(path: &Path, codec: &[&str]) {
+        let (mut cmd, log) = command(ffmpeg_path().unwrap()).unwrap();
+        cmd.args(["-nostdin", "-y", "-f", "lavfi", "-i"])
+            .arg("color=c=black@0.0:s=64x48:r=10:d=1,format=rgba,drawbox=x=16:y=12:w=32:h=24:color=white:t=fill:replace=1")
+            .args(codec)
+            .arg(file_arg(path));
+        run(cmd, log, "writing a transparent clip failed").unwrap();
+    }
+
+    #[test]
+    fn transparent_clips_decode_with_their_alpha_even_when_nv12_is_asked_for() {
+        if !ffmpeg_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let webm = dir.path().join("overlay.webm");
+        let mov = dir.path().join("overlay.mov");
+        write_transparent(
+            &webm,
+            &[
+                "-c:v",
+                "libvpx-vp9",
+                "-pix_fmt",
+                "yuva420p",
+                "-b:v",
+                "0",
+                "-crf",
+                "20",
+            ],
+        );
+        write_transparent(
+            &mov,
+            &[
+                "-c:v",
+                "prores_ks",
+                "-profile:v",
+                "4444",
+                "-pix_fmt",
+                "yuva444p10le",
+            ],
+        );
+        let preview = DecodeLimit {
+            max_width: 0,
+            max_height: 0,
+            max_rate: 0,
+            interactive: true,
+            yuv: true,
+        };
+        for (path, alpha) in [(&webm, Alpha::Vp9), (&mov, Alpha::InFormat)] {
+            assert_eq!(
+                probe_video(path).unwrap().alpha,
+                alpha,
+                "{}",
+                path.display()
+            );
+            let frame = decode_bgra_limited(path, 500_000, preview).unwrap();
+            assert_eq!(frame.format, PixelFormat::Bgra8888, "{}", path.display());
+            let alpha_at = |x: u32, y: u32| frame.data[(y * frame.stride + x * 4 + 3) as usize];
+            assert!(
+                alpha_at(2, 2) < 8,
+                "{}: corner alpha {}",
+                path.display(),
+                alpha_at(2, 2)
+            );
+            assert!(
+                alpha_at(32, 24) > 247,
+                "{}: centre alpha {}",
+                path.display(),
+                alpha_at(32, 24)
+            );
+        }
+        // An opaque clip still comes as NV12.
+        let opaque = dir.path().join("opaque.mp4");
+        write_solid_mp4(&opaque, 64, 48, 0.1, 0.8, 0.1).unwrap();
+        let frame = decode_bgra_limited(&opaque, 500_000, preview).unwrap();
+        assert_eq!(frame.format, PixelFormat::Nv12);
         release_decoders();
     }
 

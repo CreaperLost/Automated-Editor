@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   DockviewDefaultTab,
   DockviewReact,
@@ -13,6 +13,8 @@ import { InspectorPanel } from "../inspector/InspectorPanel";
 import { MediaPanel } from "../media/MediaPanel";
 import { ZoomPanel } from "../zoom/ZoomPanel";
 import { ChaptersPanel } from "../chapters/ChaptersPanel";
+import { AgentPanel } from "../agent/AgentPanel";
+import { useAgentStore } from "../../stores/agentStore";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { TranscriptPanel } from "../transcript/TranscriptPanel";
 import { StagePanel } from "./StagePanel";
@@ -42,6 +44,7 @@ const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProp
   media: () => fill(<MediaPanel />),
   zoom: () => fill(<ZoomPanel />),
   chapters: () => fill(<ChaptersPanel />),
+  agent: () => fill(<AgentPanel />),
   timeline: () => fill(<TimelineStudio />),
 };
 
@@ -70,11 +73,19 @@ export const DockWorkspace: React.FC = () => {
     restoreLayout(api, workspace);
   }, [workspace]);
 
+  // The Agent tab says how many batches wait, so a new one is noticed without taking focus.
+  const waiting = useAgentStore((s) => s.proposals?.batches.filter((b) => b.status === "pending").length ?? 0);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    apiRef.current?.getPanel("agent")?.api.setTitle(waiting > 0 ? `Agent (${waiting})` : "Agent");
+  }, [waiting, ready, workspace]);
+
   const onReady = (event: DockviewReadyEvent) => {
     apiRef.current = event.api;
     setActiveWorkspace(shown.current);
     restoreLayout(event.api, shown.current);
     setActiveDockApi(event.api);
+    setReady(true);
     event.api.onDidLayoutChange(() => {
       window.clearTimeout(saveTimer.current);
       const target = shown.current;

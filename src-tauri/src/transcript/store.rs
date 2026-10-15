@@ -5,6 +5,7 @@ use crate::project::reader::{open_regular, safe_path};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const TRANSCRIPTS_DIR: &str = "transcripts";
 pub const MAX_TRANSCRIPT_BYTES: u64 = 64 * 1024 * 1024;
@@ -92,16 +93,28 @@ pub fn save_transcript(root: &Path, transcript: &Transcript) -> Result<(), Strin
     temp.write_all(&serialized).map_err(|e| e.to_string())?;
     temp.as_file().sync_all().map_err(|e| e.to_string())?;
     temp.persist(&path).map_err(|e| e.to_string())?;
+    CHANGES.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }
 
 pub fn delete_transcript(root: &Path, track_id: &str) -> Result<(), String> {
     let path = transcript_path(root, track_id)?;
-    match fs::remove_file(&path) {
+    let removed = match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
-    }
+    };
+    CHANGES.fetch_add(1, Ordering::Relaxed);
+    removed
+}
+
+/// Transcripts sit outside the edit history, so their changes do not move the edit revision.
+static CHANGES: AtomicU64 = AtomicU64::new(0);
+
+/// Goes up whenever any transcript is saved or deleted: what caches of drawn captions key on
+/// beside the edit revision.
+pub fn changes() -> u64 {
+    CHANGES.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

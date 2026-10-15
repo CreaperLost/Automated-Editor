@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Captions } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { soundSources } from "../../lib/sequence";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
@@ -48,17 +49,13 @@ export const CaptionsSection: React.FC = () => {
   const saved = { ...DEFAULT_CAPTION_SETTINGS, ...openedProject?.captions };
   const [draft, setDraft] = useState<CaptionSettings>(saved);
   const [error, setError] = useState<string>();
-  const timer = useRef<number>();
-  const openedRef = useRef(openedProject);
-  openedRef.current = openedProject;
+  const styleSave = useDebouncedSave(250);
 
   // Follow undo/redo and project switches while no edit is pending.
   const savedKey = JSON.stringify(saved);
   useEffect(() => {
-    if (timer.current === undefined) setDraft(saved);
+    if (!styleSave.isPending()) setDraft(saved);
   }, [savedKey]);
-
-  useEffect(() => () => window.clearTimeout(timer.current), []);
 
   if (!openedProject) return null;
 
@@ -67,11 +64,7 @@ export const CaptionsSection: React.FC = () => {
   const update = (patch: Partial<CaptionSettings>) => {
     const next = { ...draft, ...patch };
     setDraft(next);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      timer.current = undefined;
-      const opened = openedRef.current;
-      if (!opened) return;
+    styleSave.schedule((opened) => {
       void api
         .projectCaptionsUpdate(opened.projectHandle, opened.revision, next)
         .then((updated) => {
@@ -79,7 +72,7 @@ export const CaptionsSection: React.FC = () => {
           setError(undefined);
         })
         .catch((err) => setError(String(err)));
-    }, 250);
+    });
   };
 
   return (

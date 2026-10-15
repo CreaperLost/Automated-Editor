@@ -170,6 +170,33 @@ fn quietest_split(buffer: &[f32], from: usize, to: usize) -> usize {
 
 /// Streams `segments` as 16 kHz mono chunks into `sink`, in source-time order. `progress`
 /// receives the source time reached. Returns diagnostics for segments that were skipped.
+/// The loudest channel of interleaved `samples` when averaging the channels would cancel most
+/// of the sound (one in opposite phase), so the recognizer is not handed near-silence.
+fn cancelling_mix(samples: &[f32], channels: usize) -> Option<usize> {
+    if channels < 2 {
+        return None;
+    }
+    let mut energy = vec![0f64; channels];
+    let mut mixed = 0f64;
+    for frame in samples.chunks_exact(channels) {
+        let mut sum = 0f32;
+        for (e, &s) in energy.iter_mut().zip(frame) {
+            *e += (s * s) as f64;
+            sum += s;
+        }
+        let mono = sum / channels as f32;
+        mixed += (mono * mono) as f64;
+    }
+    let (loudest, &most) = energy
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))?;
+    // Matching channels mix at full energy, unrelated ones at 1/channels; under a tenth of the
+    // loudest channel's means they cancel. Silence (or near it) is left alone.
+    let frames = (samples.len() / channels).max(1) as f64;
+    (most / frames > 1e-8 && mixed < most * 0.1).then_some(loudest)
+}
+
 pub fn for_each_chunk<F, P>(
     root: &Path,
     segments: &[SegmentSummary],
@@ -254,8 +281,13 @@ where
                 }
             };
             out.clear();
-            for frame in interleaved[..frames * channels].chunks_exact(channels) {
-                let mono = frame.iter().sum::<f32>() / channels as f32;
+            let samples = &interleaved[..frames * channels];
+            let only = cancelling_mix(samples, channels);
+            for frame in samples.chunks_exact(channels) {
+                let mono = match only {
+                    Some(channel) => frame[channel],
+                    None => frame.iter().sum::<f32>() / channels as f32,
+                };
                 resampler.push(mono, &mut out);
             }
             chunker.extend(&out)?;
@@ -271,6 +303,26 @@ where
 mod tests {
     use super::*;
     use crate::fixtures::generate_pcm16_wav;
+
+    #[test]
+    fn opposite_phase_stereo_is_heard_through_one_channel() {
+        let tone = |i: usize| (i as f32 * 0.05).sin() * 0.5;
+        let interleave = |right: &dyn Fn(f32) -> f32| {
+            (0..4_800)
+                .flat_map(|i| [tone(i), right(tone(i))])
+                .collect::<Vec<f32>>()
+        };
+        assert!(cancelling_mix(&interleave(&|s| -s), 2).is_some());
+        assert_eq!(
+            cancelling_mix(&interleave(&|s| -0.5 * s), 2),
+            Some(0),
+            "the louder one"
+        );
+        assert_eq!(cancelling_mix(&interleave(&|s| s), 2), None);
+        assert_eq!(cancelling_mix(&interleave(&|_| 0.0), 2), None);
+        assert_eq!(cancelling_mix(&[0.0; 200], 2), None);
+        assert_eq!(cancelling_mix(&[0.3; 200], 1), None);
+    }
 
     fn segment(path: &str, start_us: u64, end_us: u64, size: u64) -> SegmentSummary {
         SegmentSummary {

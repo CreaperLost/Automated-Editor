@@ -8,6 +8,7 @@ export const DOCK_PANELS = {
   media: { title: "Media", minimumWidth: 220, minimumHeight: 110 },
   zoom: { title: "Zoom", minimumWidth: 220, minimumHeight: 160 },
   chapters: { title: "Chapters", minimumWidth: 220, minimumHeight: 110 },
+  agent: { title: "Agent", minimumWidth: 260, minimumHeight: 160 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -42,10 +43,16 @@ function panel(id: DockPanelId) {
   return { id, component: id, title, minimumWidth, minimumHeight };
 }
 
-/// The media bin and the zoom panel share the inspector's tab group, behind it.
+/// The media bin, the zoom panel and the agent's proposals share the inspector's tab group,
+/// behind it.
 function addMedia(api: DockviewApi) {
   api.addPanel({ ...panel("media"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
   addZoom(api);
+  addAgent(api);
+}
+
+function addAgent(api: DockviewApi) {
+  api.addPanel({ ...panel("agent"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
 /// Chapters sit behind the transcript they are made from.
@@ -108,6 +115,10 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
       if (!ids.has("zoom") && ids.has("inspector")) {
         addZoom(api);
         ids.add("zoom");
+      }
+      if (!ids.has("agent") && ids.has("inspector")) {
+        addAgent(api);
+        ids.add("agent");
       }
       if (!ids.has("chapters") && ids.has("transcript")) {
         addChapters(api);

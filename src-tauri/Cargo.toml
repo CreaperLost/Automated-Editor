@@ -21,7 +21,14 @@ thiserror = "1.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
-tokio = { version = "1.38", features = ["sync", "rt", "macros", "time"] }
+tokio = { version = "1.38", features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net", "io-std", "io-util"] }
+# The local MCP server that AI agents (Claude Code, Codex, ...) connect to.
+rmcp = { version = "3.5", default-features = false, features = ["server"] }
+schemars = "1.0"
+base64 = "0.23"
+tokio-util = "0.7"
+# Adds AeroEdits to Codex's config.toml without disturbing the rest of it.
+toml_edit = "0.22"
 libc = "0.2"
 tempfile = "3.10"
 bytemuck = { version = "1.21", features = ["derive"] }
@@ -39,6 +46,8 @@ parakeet-rs = { version = "0.3.8", optional = true }
 # Session::builder. Cargo.lock is not committed, so pin ort here until parakeet-rs catches up.
 ort = { version = "=2.0.0-rc.13", optional = true, default-features = false }
 fontdue = "0.9"
+# Names the fields of an agent's settings change that the settings do not have.
+serde_ignored = "0.1"
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
@@ -46,6 +55,9 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 # Audio output for playback on Windows (WASAPI). macOS uses the Swift bridge.
 [target.'cfg(windows)'.dependencies]
 cpal = "0.15"
+# The MCP pipe: only this Windows account may open it. FileSystem: exports to drives without
+# hard links (exFAT) publish with a move that never replaces.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_Console"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", optional = true , features = [] }

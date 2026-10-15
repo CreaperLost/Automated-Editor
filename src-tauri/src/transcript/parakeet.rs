@@ -75,13 +75,19 @@ pub fn download_model(
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // The blocking client's timeout bounds the wait for headers and each read on its own, not
+    // the whole download: a stalled server fails (and frees Cancel) within a minute.
     let client = reqwest::blocking::Client::builder()
-        .timeout(None)
+        .timeout(std::time::Duration::from_secs(60))
         .connect_timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
+    let cancelled = || cancel.load(Ordering::Relaxed);
     let mut sizes = Vec::new();
     for name in MODEL_FILES {
+        if cancelled() {
+            return Err("Download cancelled".into());
+        }
         let size = client
             .head(format!("{MODEL_REPO}/{name}"))
             .send()
@@ -99,6 +105,9 @@ pub fn download_model(
             progress(done, total);
             continue;
         }
+        if cancelled() {
+            return Err("Download cancelled".into());
+        }
         let mut response = client
             .get(format!("{MODEL_REPO}/{name}"))
             .send()
@@ -109,7 +118,7 @@ pub fn download_model(
         let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
         let mut buf = vec![0u8; 1 << 20];
         loop {
-            if cancel.load(Ordering::Relaxed) {
+            if cancelled() {
                 return Err("Download cancelled".into());
             }
             let n = response

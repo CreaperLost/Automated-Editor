@@ -1,6 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import React, { useEffect, useState } from "react";
-import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
+import { broadcastProjectSwitched, listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
+import { startAgentSync } from "./stores/agentStore";
 import { ChevronRight, Clock, FilePlus2, Film, Folder, FolderOpen, X } from "lucide-react";
 import { EditorTopBar } from "./components/navigation/EditorTopBar";
 import { StatusBar } from "./components/navigation/StatusBar";
@@ -10,8 +11,8 @@ import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
 import { DockWorkspace } from "./components/layout/DockWorkspace";
-import { api } from "./lib/ipc";
-import { ExportSettings, ExportStatus } from "./lib/types";
+import { api, isTauriEnvironment } from "./lib/ipc";
+import { ExportSettings, ExportStatus, OpenedProject } from "./lib/types";
 import { ExportDialog } from "./components/export/ExportDialog";
 import { NewProjectDialog } from "./components/project/NewProjectDialog";
 
@@ -86,6 +87,28 @@ export const App: React.FC = () => {
     [],
   );
   useEffect(() => listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true)), []);
+  // What connected agents propose, for the Agent panel and the transcript's review list.
+  useEffect(() => startAgentSync(), []);
+  // An agent opened or created a project: show it as if opened from the menu.
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<{ path: string; project: OpenedProject }>("aeroedits-agent-opened", (event) => {
+        useProjectStore.getState().loadOpenedProject(event.payload.project, event.payload.path);
+        broadcastProjectSwitched(event.payload.project);
+        setExportDestination("");
+      }).then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      }),
+    );
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running")) {
@@ -114,6 +137,7 @@ export const App: React.FC = () => {
     try {
       const opened = await api.openProject(targetPath);
       loadOpenedProject(opened, targetPath);
+      broadcastProjectSwitched(opened);
       setExportDestination("");
     } catch (err) {
       setError(String(err));
@@ -143,6 +167,7 @@ export const App: React.FC = () => {
     try {
       await api.closeProject(project.projectHandle);
       clearProject();
+      broadcastProjectSwitched(null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -248,6 +273,7 @@ export const App: React.FC = () => {
           onCreated={(opened) => {
             setNewProject(null);
             loadOpenedProject(opened, opened.projectPath ?? "");
+            broadcastProjectSwitched(opened);
             setExportDestination("");
           }}
         />

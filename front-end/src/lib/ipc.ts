@@ -38,6 +38,11 @@ import {
   ShortLayout,
   AiSettings,
   AiSettingsView,
+  McpApp,
+  McpSkillHome,
+  McpStatus,
+  ProposalOutcome,
+  ProposalsView,
   TranscriptRunResult,
   TranscriptSettings,
   TranscriptSettingsView,
@@ -304,6 +309,38 @@ export const api = {
   /** Sends the kept words to the chosen AI provider; progress arrives as `transcript-progress`. */
   transcriptAiSuggest: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId }),
+  mcpStatus: () => invokeTauri<McpStatus>("mcp_status"),
+  mcpSetEnabled: (enabled: boolean) => invokeTauri<McpStatus>("mcp_set_enabled", { enabled }),
+  /** Adds AeroEdits to (or removes it from) the Claude app's or Codex's MCP settings. */
+  mcpAppConnect: (app: McpApp, connected: boolean) =>
+    invokeTauri<McpStatus>("mcp_app_connect", { app, connected }),
+  /** Installs the `aeroedits` editing skill for Claude Code or Codex, or takes it out. */
+  mcpSkillInstall: (home: McpSkillHome, installed: boolean) =>
+    invokeTauri<McpStatus>("mcp_skill_install", { home, installed }),
+  mcpSetAutopilot: (autopilot: boolean) => invokeTauri<McpStatus>("mcp_set_autopilot", { autopilot }),
+  /** Agents' proposal batches, newest first, as they would land in the edit now. */
+  proposalsList: (projectHandle: string) => invokeTauri<ProposalsView>("proposals_list", { projectHandle }),
+  /** Accepts a batch (or only `itemIds` of a cut batch) as one undo step. */
+  proposalAccept: (
+    projectHandle: string,
+    expectedRevision: number,
+    batchId: string,
+    itemIds: string[] | null,
+    rejectRest: boolean,
+  ) =>
+    invokeTauri<ProposalOutcome>("proposal_accept", {
+      projectHandle,
+      expectedRevision,
+      batchId,
+      itemIds,
+      rejectRest,
+    }),
+  /** Rejects a batch (or some of its cuts); `rejected: false` puts rejected cuts back. */
+  proposalReject: (projectHandle: string, batchId: string, itemIds: string[] | null, rejected: boolean) =>
+    invokeTauri<ProposalsView>("proposal_reject", { projectHandle, batchId, itemIds, rejected }),
+  /** Undoes a batch's accept while it is still the latest change. */
+  proposalUndo: (projectHandle: string, expectedRevision: number, batchId: string) =>
+    invokeTauri<ProposalOutcome>("proposal_undo", { projectHandle, expectedRevision, batchId }),
   aiSettingsGet: () => invokeTauri<AiSettingsView>("ai_settings_get"),
   aiSettingsSet: (settings: AiSettings) => invokeTauri<AiSettingsView>("ai_settings_set", { settings }),
   aiSetApiKey: (provider: AiProvider, key: string) =>

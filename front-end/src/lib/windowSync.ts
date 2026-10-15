@@ -18,6 +18,40 @@ export function broadcastProject(project: OpenedProject) {
     .catch(() => undefined);
 }
 
+const SWITCH_EVENT = "aeroedits-project-switched";
+
+interface SwitchPayload {
+  source: string;
+  project: OpenedProject | null;
+}
+
+/** Tells the other windows the editor opened another project, or closed it (`null`). */
+export function broadcastProjectSwitched(project: OpenedProject | null) {
+  if (!isTauriEnvironment()) return;
+  void import("@tauri-apps/api/event")
+    .then(({ emit }) => emit(SWITCH_EVENT, { source: SOURCE, project } satisfies SwitchPayload))
+    .catch(() => undefined);
+}
+
+/** Calls `onSwitch` when another window opened or closed a project; returns the unsubscribe. */
+export function listenForProjectSwitches(onSwitch: (project: OpenedProject | null) => void): () => void {
+  if (!isTauriEnvironment()) return () => undefined;
+  let unlisten: (() => void) | undefined;
+  let disposed = false;
+  void import("@tauri-apps/api/event").then(({ listen }) =>
+    listen<SwitchPayload>(SWITCH_EVENT, (event) => {
+      if (event.payload.source !== SOURCE) onSwitch(event.payload.project);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }),
+  );
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
 const CAPTIONS_EVENT = "aeroedits-captions-changed";
 
 /** Tells the other windows a transcript or its captions changed. */

@@ -25,5 +25,16 @@ output/
 .idea/
 *.swp
 
+# Local agent sessions: personal settings and worktrees (launch.json is shared)
+.claude/settings.local.json
+.claude/worktrees/
+
+# Local working files: audit reports, logs, secrets
+audit/
+*.log
+.env
+.env.*
+*.tsbuildinfo
+
 # Bundled FFmpeg sidecars (fetched by src-tauri/scripts/fetch-ffmpeg.mjs)
 src-tauri/binaries/

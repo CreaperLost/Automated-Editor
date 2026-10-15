@@ -155,12 +155,15 @@ impl CaptionSettings {
         if !matches!(self.position.as_str(), "bottom" | "middle" | "top") {
             return Err("Caption position must be bottom, middle or top".into());
         }
+        // A sound's key, `<asset>.<stream>`; that it names a sound of the project is checked
+        // where the assets are known.
         if let Some(track) = &self.track_id {
-            if track.is_empty()
-                || track.len() > 64
+            if track.len() > 160
+                || track.contains("..")
+                || crate::sequence::StreamRef::parse(track).is_none()
                 || !track
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
             {
                 return Err("Invalid caption track id".into());
             }
@@ -320,7 +323,7 @@ pub fn active_word(cue: &CaptionCue, edited_us: u64) -> Option<usize> {
     cue.words.iter().rposition(|w| w.start_us <= edited_us)
 }
 
-fn font() -> &'static fontdue::Font {
+pub(crate) fn font() -> &'static fontdue::Font {
     static FONT: OnceLock<fontdue::Font> = OnceLock::new();
     FONT.get_or_init(|| {
         fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default())
@@ -741,11 +744,20 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.validate().is_err());
-        let bad = CaptionSettings {
-            track_id: Some("../x".into()),
+        for bad_key in ["../x", "a..b", "nodot", ".sound0", "a.", "a/b.sound0"] {
+            let bad = CaptionSettings {
+                track_id: Some(bad_key.into()),
+                ..Default::default()
+            };
+            assert!(bad.validate().is_err(), "{bad_key}");
+        }
+        // Sounds are named `<asset>.<stream>`, as the captions inspector sends them.
+        CaptionSettings {
+            track_id: Some("rec-1.mic_0".into()),
             ..Default::default()
-        };
-        assert!(bad.validate().is_err());
+        }
+        .validate()
+        .unwrap();
     }
 
     #[test]

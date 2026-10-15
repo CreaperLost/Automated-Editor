@@ -728,6 +728,17 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    /// A whole new document as one undo step (an accepted batch of several edits).
+    pub fn commit_document(
+        &mut self,
+        expected_revision: u64,
+        next: EditDocument,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .commit_next(expected_revision, &self.root, next)?;
+        Ok(self.done())
+    }
+
     pub fn undo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
         self.history.undo(expected_revision, &self.root)?;
         self.index_recordings_quietly();

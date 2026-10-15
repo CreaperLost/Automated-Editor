@@ -108,6 +108,10 @@ pub fn transcribe_segments(
             Ok(())
         },
     )?;
+    // Cancel pressed during the last chunk still cancels.
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Transcription cancelled".into());
+    }
     if words.len() > super::MAX_WORDS {
         return Err("Transcript has too many words".into());
     }

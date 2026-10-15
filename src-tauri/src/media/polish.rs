@@ -158,7 +158,8 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
     let mut filters = [KWeighting::new(rate), KWeighting::new(rate)];
     let mut block_db = Vec::new();
     let mut loudness = Vec::new();
-    let (mut voice_sum, mut voice_n) = (0f64, 0usize);
+    // Per channel, the louder one counting: a channel in opposite phase cancels in a mix.
+    let (mut voice_sum, mut voice_n) = ([0f64; 2], 0usize);
     let (mut loud_sum, mut loud_n) = (0f64, 0usize);
     let mut buf = vec![0f32; READ_FRAME_CHUNK * channels];
     loop {
@@ -168,12 +169,13 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
         }
         for frame in buf[..got * channels].chunks_exact(channels) {
             let stereo = fold_stereo(frame);
-            let mono = (stereo[0] + stereo[1]) * 0.5;
-            voice_sum += (mono * mono) as f64;
+            voice_sum[0] += (stereo[0] * stereo[0]) as f64;
+            voice_sum[1] += (stereo[1] * stereo[1]) as f64;
             voice_n += 1;
             if voice_n == voice_frames {
-                block_db.push(to_db((voice_sum / voice_n as f64).sqrt() as f32));
-                (voice_sum, voice_n) = (0.0, 0);
+                let energy = voice_sum[0].max(voice_sum[1]);
+                block_db.push(to_db((energy / voice_n as f64).sqrt() as f32));
+                (voice_sum, voice_n) = ([0.0; 2], 0);
             }
             let l = filters[0].process(stereo[0]);
             let r = filters[1].process(stereo[1]);
@@ -186,7 +188,8 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
         }
     }
     if voice_n > 0 {
-        block_db.push(to_db((voice_sum / voice_n as f64).sqrt() as f32));
+        let energy = voice_sum[0].max(voice_sum[1]);
+        block_db.push(to_db((energy / voice_n as f64).sqrt() as f32));
     }
     if loud_n > 0 {
         loudness.push(loud_sum / loud_n as f64);
