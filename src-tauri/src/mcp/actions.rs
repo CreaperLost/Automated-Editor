@@ -1796,7 +1796,9 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     if args.destination.is_some() {
         settings.destination = args.destination;
     }
-    let stale = chapters_stale(ctx).map(|w| format!("\n{w}")).unwrap_or_default();
+    let stale = chapters_stale(ctx)
+        .map(|w| format!("\n{w}"))
+        .unwrap_or_default();
     let started = commands::export_start_impl(ctx.state, open.handle, settings)?;
     if args.wait == Some(false) {
         return text(format!(
@@ -1866,7 +1868,6 @@ fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1918,9 +1919,15 @@ mod tests {
         );
         assert!(dry.contains("\"um\""), "{dry}");
         // The AI review is the default, but there is no key here: the rules only, and why.
-        assert!(dry.contains("(the rules only)") && dry.contains("No AI key is set"), "{dry}");
+        assert!(
+            dry.contains("(the rules only)") && dry.contains("No AI key is set"),
+            "{dry}"
+        );
         let rules = call(&ctx, "fillers", json!({ "apply": false, "ai": false })).unwrap();
-        assert!(!rules.contains("No AI key"), "asked for the rules only: {rules}");
+        assert!(
+            !rules.contains("No AI key"),
+            "asked for the rules only: {rules}"
+        );
         assert!(history(&ctx).is_empty(), "a dry run changes nothing");
 
         let before = length(&ctx);

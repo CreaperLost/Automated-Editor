@@ -581,8 +581,7 @@ mod tests {
     #[test]
     fn values_follow_the_schema() {
         let schema =
-            serde_json::to_value(schemars::schema_for!(super::super::actions::FillerArgs))
-                .unwrap();
+            serde_json::to_value(schemars::schema_for!(super::super::actions::FillerArgs)).unwrap();
         let args = arguments(
             &schema,
             &[],
