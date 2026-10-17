@@ -5,6 +5,7 @@ pub mod commands;
 pub mod cursor;
 pub mod dsp;
 pub mod export;
+pub mod face;
 pub mod fixtures;
 pub mod mcp;
 pub mod media;
@@ -180,6 +181,20 @@ async fn project_waveform_overview(
 ) -> Result<project::waveform::WaveformOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::project_waveform_overview_impl(&app.state::<AppState>(), project_handle, track_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_face_tracks(
+    app: tauri::AppHandle,
+    project_handle: String,
+    start: bool,
+) -> Result<Vec<face::FaceTrackStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::project_face_tracks_impl(&app.state::<AppState>(), project_handle, start)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1664,6 +1679,7 @@ pub fn run() {
             project_rename,
             project_segments,
             project_waveform_overview,
+            project_face_tracks,
             project_zoom_suggestions,
             project_zoom_accept,
             project_zoom_reload,

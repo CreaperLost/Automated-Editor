@@ -3,6 +3,7 @@ import {
   OpenedProject,
   SegmentPage,
   WaveformOverview,
+  FaceTrackStatus,
   PlaybackStatus,
   EditCut,
   PreviewQuality,
@@ -100,6 +101,9 @@ export const api = {
    *  each clip draws its part. */
   projectWaveformOverview: (projectHandle: string, trackId: string) =>
     invokeTauri<WaveformOverview>("project_waveform_overview", { projectHandle, trackId }),
+  /** Each camera's face track for framing shorts; `start` begins finding missing ones. */
+  projectFaceTracks: (projectHandle: string, start: boolean) =>
+    invokeTauri<FaceTrackStatus[]>("project_face_tracks", { projectHandle, start }),
   projectZoomSuggestions: (projectHandle: string, config?: ZoomConfig) =>
     invokeTauri<ZoomGeneration>(
       "project_zoom_suggestions",

@@ -851,11 +851,34 @@ pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject
     let summary = reader.summary.clone();
     let document = reader.history().current.clone();
     let mut owner = PlaybackOwner::open(summary.project_handle.clone(), &document)?;
+    // A project with shorts frames their camera on the face: find it in the background.
+    if !document.shorts.is_empty() {
+        crate::face::ensure(reader.root(), &document, false);
+    }
     *state.opened_project.lock() = Some(reader);
     owner.native_enabled = state.native_capture_enabled;
     *state.playback.lock() = owner;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
+}
+
+/// Where each camera stream's face track stands (shorts frame their camera on it); `start`
+/// begins finding the ones that are missing or failed.
+pub fn project_face_tracks_impl(
+    state: &AppState,
+    project_handle: String,
+    start: bool,
+) -> Result<Vec<crate::face::FaceTrackStatus>, String> {
+    let (root, document) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        (reader.root().to_path_buf(), reader.document().clone())
+    };
+    if start {
+        crate::face::ensure(&root, &document, true);
+    }
+    Ok(crate::face::status(&root, &document))
 }
 
 pub fn close_project_impl(state: &AppState, project_handle: String) -> Result<(), String> {

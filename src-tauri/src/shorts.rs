@@ -30,6 +30,17 @@ pub enum CaptionSpot {
     Camera,
 }
 
+/// How the camera part of a short is cut from the webcam picture.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraFraming {
+    /// Follows the speaker's face, found in the background; the offset nudges it.
+    #[default]
+    Auto,
+    /// Where the offset puts it, from the centre.
+    Manual,
+}
+
 pub const MIN_CAMERA_PCT: f32 = 20.0;
 pub const MAX_CAMERA_PCT: f32 = 70.0;
 pub const MAX_SCREEN_ZOOM: f32 = 3.0;
@@ -44,6 +55,11 @@ pub struct ShortLayout {
     pub camera_position: CameraPosition,
     /// Share of the frame height the camera takes.
     pub camera_pct: f32,
+    pub camera_framing: CameraFraming,
+    /// Moves the camera crop sideways and up or down, -1 to 1 each way: where it sits in
+    /// manual framing, a nudge on top of the face in auto. See `render::focus_uv`.
+    pub camera_offset_x: f32,
+    pub camera_offset_y: f32,
     /// Extra zoom on the screen part, on top of the project's zooms. 1 shows as much as fits.
     pub screen_zoom: f32,
     /// Move the screen view to where the project's zooms point.
@@ -73,6 +89,9 @@ impl Default for ShortLayout {
         Self {
             camera_position: CameraPosition::Top,
             camera_pct: 35.0,
+            camera_framing: CameraFraming::Auto,
+            camera_offset_x: 0.0,
+            camera_offset_y: 0.0,
             screen_zoom: 1.0,
             follow_zooms: true,
             screen_pan_x: 0.0,
@@ -116,6 +135,11 @@ impl ShortLayout {
         if !(-1.0..=1.0).contains(&self.screen_pan_x) || !(-1.0..=1.0).contains(&self.screen_pan_y)
         {
             return Err("The screen pans -1 to 1 each way".into());
+        }
+        if !(-1.0..=1.0).contains(&self.camera_offset_x)
+            || !(-1.0..=1.0).contains(&self.camera_offset_y)
+        {
+            return Err("The camera framing moves -1 to 1 each way".into());
         }
         if self.caption_max_words > crate::captions::MAX_WORDS_RANGE.1 {
             return Err("Too many words per caption".into());
@@ -196,6 +220,34 @@ pub fn screen_window(
     (x, y, uv_w, uv_h)
 }
 
+/// Where a short's camera crop looks at timeline time `edited_us` of `clip` (a camera clip):
+/// the smoothed face, in auto framing when the camera stream has a face track. `None` keeps
+/// the crop centred (manual framing, no track, or no face found). For the camera part of the
+/// split and for any scene that shows the camera alone.
+pub fn camera_focus(
+    root: &std::path::Path,
+    short: &ShortLayout,
+    clip: &crate::sequence::Clip,
+    edited_us: u64,
+) -> Option<crate::face::FocusPoint> {
+    if short.camera_framing != CameraFraming::Auto {
+        return None;
+    }
+    let path = crate::face::focus_path(root, &clip.asset, &clip.stream)?;
+    Some(path.at(clip.local_us(edited_us).unwrap_or(clip.in_us)))
+}
+
+/// The short's camera offset as `render::focus_uv` takes it. A mirrored camera is drawn
+/// flipped, so the offset is flipped too: it moves the picture the way it looks.
+pub fn camera_offset(short: &ShortLayout, mirrored: bool) -> (f32, f32) {
+    let x = if mirrored {
+        -short.camera_offset_x
+    } else {
+        short.camera_offset_x
+    };
+    (x, short.camera_offset_y)
+}
+
 /// The short's background as the project layout it is drawn from: the video's own, or the
 /// short's choice of colour, gradient, built-in or the project's image.
 pub fn background_layout(
@@ -241,7 +293,9 @@ pub fn screen_placement(
             // Bigger than the region: a window of it, panned, kept inside the crop.
             let window = rl as f32 / (frame.max(1) as f32 * scale);
             let middle = center + pan * cl / 2.0;
-            let start = (middle - window / 2.0).clamp(c0, c0 + cl - window);
+            // `max`: when the window is the crop's size, rounding can put the end a hair
+            // before the start, and `clamp` panics on that.
+            let start = (middle - window / 2.0).clamp(c0, (c0 + cl - window).max(c0));
             (r0, rl, start, window)
         } else {
             // Smaller: all of it, centred, and the pan slides it through the free space.
@@ -661,6 +715,12 @@ mod tests {
 
         assert!(ShortLayout {
             camera_pct: 10.0,
+            ..ShortLayout::default()
+        }
+        .validate()
+        .is_err());
+        assert!(ShortLayout {
+            camera_offset_x: -1.5,
             ..ShortLayout::default()
         }
         .validate()
