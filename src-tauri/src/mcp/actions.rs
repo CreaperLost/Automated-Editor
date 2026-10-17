@@ -471,7 +471,8 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
                     })
                     .collect();
                 lines.push(format!(
-                    "Camera framing in shorts (auto follows the face): {}.",
+                    "Camera framing in shorts (each camera clip centred on the face unless the \
+                     short's layout lists it in cameraClips): {}.",
                     each.join("; ")
                 ));
             }

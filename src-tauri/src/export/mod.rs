@@ -744,10 +744,9 @@ impl SceneEvaluator {
             layers.push(layer);
         }
         if let (Some((x, y, w, h)), Some(webcam)) = (rects.camera, webcam) {
-            let focus = shown
-                .webcam
-                .and_then(|clip| crate::shorts::camera_focus(&self.root, short, clip, edited_us));
-            let offset = crate::shorts::camera_offset(short, layout.webcam_mirror);
+            let (focus, offset) = shown.webcam.map_or((None, (0.0, 0.0)), |clip| {
+                crate::shorts::camera_framing(&self.root, short, clip, layout.webcam_mirror)
+            });
             let mut layer = Layer::placed(webcam, x, y, w, h)
                 .with_role(LayerRole::Webcam)
                 .focus_uv(focus, w, h, offset);
@@ -3570,6 +3569,25 @@ mod tests {
         (root, document)
     }
 
+    /// The document with its camera clips framed by hand, in the middle.
+    fn framed_by_hand(document: &EditDocument) -> EditDocument {
+        let mut manual = document.clone();
+        let cameras: Vec<String> = document
+            .sequence
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .filter(|c| c.stream == "webcam")
+            .map(|c| c.id.clone())
+            .collect();
+        assert!(!cameras.is_empty());
+        let layout = manual.short_layout.as_mut().unwrap();
+        for id in cameras {
+            layout.camera_clips.insert(id, Default::default());
+        }
+        manual
+    }
+
     fn camera_uv(scene: &Scene) -> (f32, f32, f32, f32) {
         let layer = scene
             .layers
@@ -3608,9 +3626,8 @@ mod tests {
         // face at 0.65 rather than on the middle.
         assert!((ew - 0.45).abs() < 0.01, "{ew}");
         assert!((ex + ew / 2.0 - 0.65).abs() < 1e-3, "{ex}");
-        // Manual framing, centred: the old centre crop.
-        let mut manual = document.clone();
-        manual.short_layout.as_mut().unwrap().camera_framing = crate::shorts::CameraFraming::Manual;
+        // That clip framed by hand, in the middle: the old centre crop.
+        let manual = framed_by_hand(&document);
         let (mx, ..) = camera_uv(&scenes(&root, manual, 1080, 1920).scene_at(at).unwrap());
         assert!((mx - (1.0 - ew) / 2.0).abs() < 1e-3, "{mx}");
         crate::media::release_decoders();
@@ -3662,8 +3679,7 @@ mod tests {
         ] {
             assert!(b > 180 && r < 80 && g < 80, "the face: b{b} g{g} r{r}");
         }
-        let mut manual = document;
-        manual.short_layout.as_mut().unwrap().camera_framing = crate::shorts::CameraFraming::Manual;
+        let manual = framed_by_hand(&document);
         let (b, _, r) = middle(manual, 1080, 1920, DecodeLimit::NONE);
         assert!(r > 180 && b < 80, "the centre crop misses it: b{b} r{r}");
         crate::media::release_decoders();

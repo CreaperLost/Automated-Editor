@@ -2,9 +2,20 @@ import React, { useEffect, useRef, useState } from "react";
 import { Loader2, ScanFace } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { useProjectStore } from "../../stores/projectStore";
-import type { FaceTrackStatus, ShortLayout } from "../../lib/types";
+import { clipAt, clipRole, videoTracks } from "../../lib/sequence";
+import type { Clip, FaceTrackStatus, OpenedProject, ShortLayout } from "../../lib/types";
 
-type FramingPatch = Partial<Pick<ShortLayout, "cameraFraming" | "cameraOffsetX" | "cameraOffsetY">>;
+type FramingPatch = Partial<Pick<ShortLayout, "cameraClips">>;
+
+/** The camera clip showing at timeline time `us`: the topmost one. */
+function cameraClipAt(project: OpenedProject, us: number): Clip | undefined {
+  for (const track of videoTracks(project.sequence).reverse()) {
+    if (track.hidden) continue;
+    const clip = clipAt(track, us);
+    if (clip && clipRole(project, track, clip) === "webcam") return clip;
+  }
+  return undefined;
+}
 
 const clamp = (v: number) => Math.max(-1, Math.min(1, v));
 
@@ -50,27 +61,31 @@ function trackLine(tracks: FaceTrackStatus[] | null): { text: string; busy?: boo
   if (ready.length === tracks.length) {
     const share = Math.round(100 * Math.min(...ready.map((t) => t.faceShare ?? 0)));
     return share > 0
-      ? { text: `Lined up with the face (seen in ${share}% of the camera).` }
+      ? { text: `Each clip lines up with the face (seen in ${share}% of the camera).` }
       : { text: "No face found in the camera; it stays centred.", retry: true };
   }
   return { text: "The face has not been looked for yet.", retry: true };
 }
 
 /**
- * A short's camera framing: Auto follows the speaker's face (found once, in the background),
- * Manual puts the crop where the pad says. The pad's dot is the offset: a nudge on top of the
- * face in Auto, the crop's place in Manual. Drag it; double-click to centre.
+ * A short's camera framing, clip by clip. Every camera clip is lined up with the speaker's face
+ * as it starts (found once, in the background) and holds for the whole clip. The clip under the
+ * playhead can be framed by hand instead: drag the dot to place its crop; double-click to centre.
  */
 export const CameraFramingControl: React.FC<{
-  projectHandle: string;
+  project: OpenedProject;
   layout: ShortLayout;
   onChange: (patch: FramingPatch) => void;
   segmented: (active: boolean) => string;
-}> = ({ projectHandle, layout, onChange, segmented }) => {
+}> = ({ project, layout, onChange, segmented }) => {
+  const projectHandle = project.projectHandle;
   const [tracks, setTracks] = useState<FaceTrackStatus[] | null>(null);
-  const auto = layout.cameraFraming !== "manual";
+  const currentUs = useProjectStore((s) => s.currentTimeUs);
+  const clip = cameraClipAt(project, currentUs);
+  const byHand = clip ? layout.cameraClips?.[clip.id] : undefined;
+  const handCount = Object.keys(layout.cameraClips ?? {}).length;
 
-  // Look for the face on first need (Auto), then follow the detection until it is done.
+  // Look for the face when the short opens, then follow the detection until it is done.
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -84,11 +99,19 @@ export const CameraFramingControl: React.FC<{
       .then((next) => alive.current && followDetection(projectHandle, next, setTracks, () => !alive.current))
       .catch(() => alive.current && setTracks([]));
   };
-  useEffect(() => look(auto), [projectHandle, auto]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => look(true), [projectHandle]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const retry = () => {
     setTracks(null);
     look(true);
+  };
+
+  const setClip = (framing: { offsetX: number; offsetY: number } | null) => {
+    if (!clip) return;
+    const next = { ...(layout.cameraClips ?? {}) };
+    if (framing) next[clip.id] = framing;
+    else delete next[clip.id];
+    onChange({ cameraClips: next });
   };
 
   const pad = useRef<HTMLDivElement | null>(null);
@@ -96,106 +119,120 @@ export const CameraFramingControl: React.FC<{
   const moveTo = (e: React.PointerEvent) => {
     const box = pad.current?.getBoundingClientRect();
     if (!box || box.width === 0 || box.height === 0) return;
-    onChange({
-      cameraOffsetX: Number(clamp(((e.clientX - box.left) / box.width) * 2 - 1).toFixed(2)),
-      cameraOffsetY: Number(clamp(((e.clientY - box.top) / box.height) * 2 - 1).toFixed(2)),
+    setClip({
+      offsetX: Number(clamp(((e.clientX - box.left) / box.width) * 2 - 1).toFixed(2)),
+      offsetY: Number(clamp(((e.clientY - box.top) / box.height) * 2 - 1).toFixed(2)),
     });
   };
-  const line = auto ? trackLine(tracks) : null;
-  const centred = layout.cameraOffsetX === 0 && layout.cameraOffsetY === 0;
+  const line = trackLine(tracks);
   const pct = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`;
 
   return (
     <div className="space-y-2">
-      <div className="flex justify-between items-center">
-        <span className="text-label text-studio-400">Camera framing</span>
-      </div>
-      <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
-        <button
-          type="button"
-          aria-pressed={auto}
-          onClick={() => onChange({ cameraFraming: "auto" })}
-          className={segmented(auto)}
-          title="Line the crop up with the speaker's face: it is checked every 30 seconds and moves only when the face has drifted from the middle"
-        >
-          <ScanFace className="inline w-3 h-3 mr-1" />
-          Auto
-        </button>
-        <button
-          type="button"
-          aria-pressed={!auto}
-          onClick={() => onChange({ cameraFraming: "manual" })}
-          className={segmented(!auto)}
-          title="Put the crop where you place it below"
-        >
-          Manual
-        </button>
-      </div>
-      {line && (
-        <p className="text-meta text-studio-500 flex items-center gap-1.5" aria-live="polite">
-          {line.busy && <Loader2 className="w-3 h-3 animate-spin shrink-0" />}
-          <span>{line.text}</span>
-          {line.retry && (
-            <button type="button" onClick={retry} className="ml-auto shrink-0 text-studio-300 hover:text-white">
-              Find face
+      <span className="block text-label text-studio-400">Camera framing</span>
+      <p className="text-meta text-studio-500 flex items-center gap-1.5" aria-live="polite">
+        {line.busy && <Loader2 className="w-3 h-3 animate-spin shrink-0" />}
+        <span>{line.text}</span>
+        {line.retry && (
+          <button type="button" onClick={retry} className="ml-auto shrink-0 text-studio-300 hover:text-white">
+            Find face
+          </button>
+        )}
+      </p>
+      {!clip ? (
+        <p className="text-meta text-studio-500">No camera clip at the playhead.</p>
+      ) : (
+        <>
+          <span className="block text-meta text-studio-400">Clip at the playhead</span>
+          <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
+            <button
+              type="button"
+              aria-pressed={!byHand}
+              onClick={() => setClip(null)}
+              className={segmented(!byHand)}
+              title="Line this clip up with the speaker's face as it starts, zooming in a little when the face is near an edge"
+            >
+              <ScanFace className="inline w-3 h-3 mr-1" />
+              Centre on face
             </button>
+            <button
+              type="button"
+              aria-pressed={!!byHand}
+              onClick={() => !byHand && setClip({ offsetX: 0, offsetY: 0 })}
+              className={segmented(!!byHand)}
+              title="Place this clip's crop yourself"
+            >
+              By hand
+            </button>
+          </div>
+          {byHand && (
+            <div className="space-y-1">
+              <div className="flex justify-between">
+                <span className="text-label text-studio-400">Position</span>
+                <button
+                  type="button"
+                  onClick={() => setClip({ offsetX: 0, offsetY: 0 })}
+                  className="font-mono text-meta tabular-nums text-studio-200 hover:text-white"
+                  title="Back to the centre"
+                >
+                  {byHand.offsetX === 0 && byHand.offsetY === 0 ? "centre" : `${pct(byHand.offsetX)} · ${pct(byHand.offsetY)}`}
+                </button>
+              </div>
+              <div
+                ref={pad}
+                role="slider"
+                tabIndex={0}
+                aria-label="Camera clip position"
+                aria-valuetext={`${pct(byHand.offsetX)} across, ${pct(byHand.offsetY)} down`}
+                title="Drag to place this clip's camera crop; double-click to centre. Arrow keys nudge it."
+                onPointerDown={(e) => {
+                  dragging.current = true;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  moveTo(e);
+                }}
+                onPointerMove={(e) => dragging.current && moveTo(e)}
+                onPointerUp={() => (dragging.current = false)}
+                onPointerCancel={() => (dragging.current = false)}
+                onDoubleClick={() => setClip({ offsetX: 0, offsetY: 0 })}
+                onKeyDown={(e) => {
+                  const step = e.shiftKey ? 0.2 : 0.05;
+                  const moves: Record<string, [number, number]> = {
+                    ArrowLeft: [-step, 0],
+                    ArrowRight: [step, 0],
+                    ArrowUp: [0, -step],
+                    ArrowDown: [0, step],
+                  };
+                  const move = moves[e.key];
+                  if (!move) return;
+                  e.preventDefault();
+                  setClip({
+                    offsetX: Number(clamp(byHand.offsetX + move[0]).toFixed(2)),
+                    offsetY: Number(clamp(byHand.offsetY + move[1]).toFixed(2)),
+                  });
+                }}
+                className="relative w-full aspect-video rounded-control border border-studio-700 bg-studio-900 cursor-crosshair touch-none focus:outline-none focus-visible:border-accent-hover"
+              >
+                <div className="absolute inset-x-0 top-1/2 h-px bg-studio-800" />
+                <div className="absolute inset-y-0 left-1/2 w-px bg-studio-800" />
+                <div
+                  className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full bg-accent-fg shadow-[0_0_0_2px_rgb(var(--accent-hover)/0.6)] pointer-events-none"
+                  style={{ left: `${((byHand.offsetX + 1) / 2) * 100}%`, top: `${((byHand.offsetY + 1) / 2) * 100}%` }}
+                />
+              </div>
+            </div>
           )}
-        </p>
+        </>
       )}
-      <div className="space-y-1">
-        <div className="flex justify-between">
-          <span className="text-label text-studio-400">{auto ? "Nudge" : "Position"}</span>
-          <button
-            type="button"
-            onClick={() => onChange({ cameraOffsetX: 0, cameraOffsetY: 0 })}
-            className="font-mono text-meta tabular-nums text-studio-200 hover:text-white"
-            title={auto ? "No nudge: just follow the face" : "Back to the centre"}
-          >
-            {centred ? (auto ? "on the face" : "centre") : `${pct(layout.cameraOffsetX)} · ${pct(layout.cameraOffsetY)}`}
+      {handCount > 0 && (
+        <div className="flex items-center text-meta text-studio-500">
+          <span>
+            {handCount} {handCount === 1 ? "clip" : "clips"} framed by hand
+          </span>
+          <button type="button" onClick={() => onChange({ cameraClips: {} })} className="ml-auto text-studio-300 hover:text-white">
+            Centre all on face
           </button>
         </div>
-        <div
-          ref={pad}
-          role="slider"
-          tabIndex={0}
-          aria-label={auto ? "Camera framing nudge" : "Camera framing position"}
-          aria-valuetext={`${pct(layout.cameraOffsetX)} across, ${pct(layout.cameraOffsetY)} down`}
-          title="Drag to move the camera crop; double-click to centre. Arrow keys nudge it."
-          onPointerDown={(e) => {
-            dragging.current = true;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            moveTo(e);
-          }}
-          onPointerMove={(e) => dragging.current && moveTo(e)}
-          onPointerUp={() => (dragging.current = false)}
-          onPointerCancel={() => (dragging.current = false)}
-          onDoubleClick={() => onChange({ cameraOffsetX: 0, cameraOffsetY: 0 })}
-          onKeyDown={(e) => {
-            const step = e.shiftKey ? 0.2 : 0.05;
-            const moves: Record<string, [number, number]> = {
-              ArrowLeft: [-step, 0],
-              ArrowRight: [step, 0],
-              ArrowUp: [0, -step],
-              ArrowDown: [0, step],
-            };
-            const move = moves[e.key];
-            if (!move) return;
-            e.preventDefault();
-            onChange({
-              cameraOffsetX: Number(clamp(layout.cameraOffsetX + move[0]).toFixed(2)),
-              cameraOffsetY: Number(clamp(layout.cameraOffsetY + move[1]).toFixed(2)),
-            });
-          }}
-          className="relative w-full aspect-video rounded-control border border-studio-700 bg-studio-900 cursor-crosshair touch-none focus:outline-none focus-visible:border-accent-hover"
-        >
-          <div className="absolute inset-x-0 top-1/2 h-px bg-studio-800" />
-          <div className="absolute inset-y-0 left-1/2 w-px bg-studio-800" />
-          <div
-            className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-full bg-accent-fg shadow-[0_0_0_2px_rgb(var(--accent-hover)/0.6)] pointer-events-none"
-            style={{ left: `${((layout.cameraOffsetX + 1) / 2) * 100}%`, top: `${((layout.cameraOffsetY + 1) / 2) * 100}%` }}
-          />
-        </div>
-      </div>
+      )}
     </div>
   );
 };

@@ -44,9 +44,7 @@ import { CameraFramingControl } from "./CameraFraming";
 const DEFAULT_LAYOUT: ShortLayout = {
   cameraPosition: "top",
   cameraPct: 35,
-  cameraFraming: "auto",
-  cameraOffsetX: 0,
-  cameraOffsetY: 0,
+  cameraClips: {},
   screenZoom: 1,
   followZooms: true,
   screenPanX: 0,
@@ -656,7 +654,7 @@ export const ShortsStudio: React.FC = () => {
                 </div>
                 <input type="range" aria-label="Camera height" min={20} max={70} step={1} value={layout.cameraPct} onChange={(e) => changeLayout({ cameraPct: Number(e.target.value) })} className="w-full" />
               </label>
-              <CameraFramingControl projectHandle={project.projectHandle} layout={layout} onChange={changeLayout} segmented={segmented} />
+              <CameraFramingControl project={project} layout={layout} onChange={changeLayout} segmented={segmented} />
             </InspectorSection>
 
             <InspectorSection id="short-screen" title="Screen" icon={Monitor}>

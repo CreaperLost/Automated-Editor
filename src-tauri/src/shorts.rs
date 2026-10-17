@@ -30,16 +30,17 @@ pub enum CaptionSpot {
     Camera,
 }
 
-/// How the camera part of a short is cut from the webcam picture.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum CameraFraming {
-    /// Follows the speaker's face, found in the background; the offset nudges it.
-    #[default]
-    Auto,
-    /// Where the offset puts it, from the centre.
-    Manual,
+/// A camera clip framed by hand instead of centred on the face: where its crop sits, -1 to 1
+/// each way from the centre (see `render::focus_uv`).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClipFraming {
+    pub offset_x: f32,
+    pub offset_y: f32,
 }
+
+/// More clips framed by hand than any short has.
+pub const MAX_FRAMED_CLIPS: usize = 500;
 
 pub const MIN_CAMERA_PCT: f32 = 20.0;
 pub const MAX_CAMERA_PCT: f32 = 70.0;
@@ -55,11 +56,9 @@ pub struct ShortLayout {
     pub camera_position: CameraPosition,
     /// Share of the frame height the camera takes.
     pub camera_pct: f32,
-    pub camera_framing: CameraFraming,
-    /// Moves the camera crop sideways and up or down, -1 to 1 each way: where it sits in
-    /// manual framing, a nudge on top of the face in auto. See `render::focus_uv`.
-    pub camera_offset_x: f32,
-    pub camera_offset_y: f32,
+    /// Camera clips (by clip id) framed by hand. Every other camera clip is lined up with the
+    /// face as it starts, zooming in a little when the face is near an edge.
+    pub camera_clips: std::collections::BTreeMap<String, ClipFraming>,
     /// Extra zoom on the screen part, on top of the project's zooms. 1 shows as much as fits.
     pub screen_zoom: f32,
     /// Move the screen view to where the project's zooms point.
@@ -89,9 +88,7 @@ impl Default for ShortLayout {
         Self {
             camera_position: CameraPosition::Top,
             camera_pct: 35.0,
-            camera_framing: CameraFraming::Auto,
-            camera_offset_x: 0.0,
-            camera_offset_y: 0.0,
+            camera_clips: Default::default(),
             screen_zoom: 1.0,
             follow_zooms: true,
             screen_pan_x: 0.0,
@@ -136,10 +133,18 @@ impl ShortLayout {
         {
             return Err("The screen pans -1 to 1 each way".into());
         }
-        if !(-1.0..=1.0).contains(&self.camera_offset_x)
-            || !(-1.0..=1.0).contains(&self.camera_offset_y)
-        {
-            return Err("The camera framing moves -1 to 1 each way".into());
+        if self.camera_clips.len() > MAX_FRAMED_CLIPS {
+            return Err("Too many camera clips framed by hand".into());
+        }
+        for (clip, framing) in &self.camera_clips {
+            if clip.is_empty() || clip.len() > 128 {
+                return Err("Unknown camera clip".into());
+            }
+            if !(-1.0..=1.0).contains(&framing.offset_x)
+                || !(-1.0..=1.0).contains(&framing.offset_y)
+            {
+                return Err("The camera framing moves -1 to 1 each way".into());
+            }
         }
         if self.caption_max_words > crate::captions::MAX_WORDS_RANGE.1 {
             return Err("Too many words per caption".into());
@@ -220,32 +225,29 @@ pub fn screen_window(
     (x, y, uv_w, uv_h)
 }
 
-/// Where a short's camera crop looks at timeline time `edited_us` of `clip` (a camera clip):
-/// the smoothed face, in auto framing when the camera stream has a face track. `None` keeps
-/// the crop centred (manual framing, no track, or no face found). For the camera part of the
+/// How a short frames camera clip `clip`, as `render::focus_uv` takes it: the face to centre
+/// on and an offset. A clip framed by hand has no face and its own offset (flipped for a
+/// mirrored camera, so it moves the picture the way it looks). Every other clip is lined up
+/// once with the typical face over the part of the camera it plays, and holds for the whole
+/// clip; no face track, or no face found, keeps the centre crop. For the camera part of the
 /// split and for any scene that shows the camera alone.
-pub fn camera_focus(
+pub fn camera_framing(
     root: &std::path::Path,
     short: &ShortLayout,
     clip: &crate::sequence::Clip,
-    edited_us: u64,
-) -> Option<crate::face::FocusPoint> {
-    if short.camera_framing != CameraFraming::Auto {
-        return None;
+    mirrored: bool,
+) -> (Option<crate::face::FocusPoint>, (f32, f32)) {
+    if let Some(framing) = short.camera_clips.get(&clip.id) {
+        let x = if mirrored {
+            -framing.offset_x
+        } else {
+            framing.offset_x
+        };
+        return (None, (x, framing.offset_y));
     }
-    let path = crate::face::focus_path(root, &clip.asset, &clip.stream)?;
-    Some(path.at(clip.local_us(edited_us).unwrap_or(clip.in_us)))
-}
-
-/// The short's camera offset as `render::focus_uv` takes it. A mirrored camera is drawn
-/// flipped, so the offset is flipped too: it moves the picture the way it looks.
-pub fn camera_offset(short: &ShortLayout, mirrored: bool) -> (f32, f32) {
-    let x = if mirrored {
-        -short.camera_offset_x
-    } else {
-        short.camera_offset_x
-    };
-    (x, short.camera_offset_y)
+    let focus = crate::face::cached_track(root, &clip.asset, &clip.stream)
+        .and_then(|track| crate::face::clip_focus(&track, clip.in_us, clip.out_us()));
+    (focus, (0.0, 0.0))
 }
 
 /// The short's background as the project layout it is drawn from: the video's own, or the
@@ -719,12 +721,17 @@ mod tests {
         }
         .validate()
         .is_err());
-        assert!(ShortLayout {
-            camera_offset_x: -1.5,
-            ..ShortLayout::default()
-        }
-        .validate()
-        .is_err());
+        let mut by_hand = ShortLayout::default();
+        by_hand.camera_clips.insert(
+            "c1".into(),
+            ClipFraming {
+                offset_x: -1.5,
+                offset_y: 0.0,
+            },
+        );
+        assert!(by_hand.validate().is_err());
+        by_hand.camera_clips.get_mut("c1").unwrap().offset_x = -0.5;
+        by_hand.validate().unwrap();
         assert!(ShortLayout {
             screen_zoom: 4.0,
             ..ShortLayout::default()

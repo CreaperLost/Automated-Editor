@@ -1788,11 +1788,16 @@ fn cover_uv(src_w: u32, src_h: u32, dest_w: u32, dest_h: u32) -> (f32, f32, f32,
 /// Where the eye line sits in a face-framed crop: a third of the way down, as in portraits.
 const EYE_LINE: f32 = 1.0 / 3.0;
 
+/// The most a face-framed crop zooms in to centre a face that sits near the picture's edge.
+pub const MAX_FACE_ZOOM: f32 = 1.5;
+
 /// The part of a `src_w` x `src_h` picture (as UV) that covers a `dest_w` x `dest_h` area, cut
 /// around a face: the face in the middle across, its eyes a third of the way down, kept inside
-/// the picture. Without a face it is the centre crop
-/// of [`cover_uv`]. `offset` (-1 to 1 each way) then moves the crop by up to half the room it
-/// has to move in that direction: with no face it spans the whole picture.
+/// the picture. A face too near the left or right edge to be centred that way is centred by
+/// zooming in (a smaller crop, up to [`MAX_FACE_ZOOM`]), rather than leaving empty room on the
+/// far side. Without a face it is the centre crop of [`cover_uv`]. `offset` (-1 to 1 each
+/// way) then moves the crop by up to half the room it has to move in that direction: with no
+/// face it spans the whole picture.
 pub fn focus_uv(
     focus: Option<crate::face::FocusPoint>,
     src_w: u32,
@@ -1801,7 +1806,16 @@ pub fn focus_uv(
     dest_h: u32,
     offset: (f32, f32),
 ) -> (f32, f32, f32, f32) {
-    let (cx, cy, w, h) = cover_uv(src_w, src_h, dest_w, dest_h);
+    let (cx, cy, mut w, mut h) = cover_uv(src_w, src_h, dest_w, dest_h);
+    if let Some(face) = focus {
+        // The widest crop centred on the face that stays inside the picture.
+        let room = 2.0 * face.x.min(1.0 - face.x);
+        if room < w {
+            let zoom = (w / room.max(1e-3)).min(MAX_FACE_ZOOM);
+            w /= zoom;
+            h /= zoom;
+        }
+    }
     let (slack_x, slack_y) = (1.0 - w, 1.0 - h);
     let (mut x, mut y) = match focus {
         None => (cx, cy),
@@ -2220,18 +2234,33 @@ mod tests {
         // Sitting right of centre: the window is centred on the face.
         let (x, y, ..) = focus_uv(face(0.7, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
         assert!((x + w / 2.0 - 0.7).abs() < 1e-6 && y == 0.0);
-        // Near the edges it stops at the picture's edge rather than showing past it.
-        let (x, ..) = focus_uv(face(0.95, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
-        assert!((x - (1.0 - w)).abs() < 1e-6);
+        // Too near the edge to centre with the whole height: it zooms in just enough, and the
+        // face is centred with no empty room beside it.
+        let (x, _, zw, zh) = focus_uv(face(0.12, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert!(
+            (zw - 0.24).abs() < 1e-5 && (zh - 0.24 / w).abs() < 1e-4,
+            "{zw} {zh}"
+        );
+        assert!(x.abs() < 1e-6 && (x + zw / 2.0 - 0.12).abs() < 1e-5);
+        assert!((zw / zh - w / h).abs() < 1e-4, "same shape");
+        // At most 1.5x: past that it stops at the picture's edge rather than showing past it.
+        let (x, _, zw, _) = focus_uv(face(0.95, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert!((zw - w / MAX_FACE_ZOOM).abs() < 1e-6 && (x - (1.0 - zw)).abs() < 1e-6);
         let (x, ..) = focus_uv(face(0.02, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
         assert_eq!(x, 0.0);
+        // Enough room either side: no zoom.
+        let (_, _, zw, _) = focus_uv(face(0.3, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert_eq!(zw, w);
         // A wide strip (the camera across the top of a short): eyes a third of the way down.
         let (_, _, sw, sh) = cover_uv(1920, 1080, 1080, 384);
-        let (sx, sy, ..) = focus_uv(face(0.3, 0.4), 1920, 1080, 1080, 384, (0.0, 0.0));
+        let (sx, sy, ..) = focus_uv(face(0.5, 0.4), 1920, 1080, 1080, 384, (0.0, 0.0));
         assert!((sw - 1.0).abs() < 1e-6 && sx == 0.0, "no room across");
         assert!((sy - (0.4 - sh / 3.0)).abs() < 1e-6, "{sy}");
-        let (_, sy, ..) = focus_uv(face(0.3, 0.95), 1920, 1080, 1080, 384, (0.0, 0.0));
+        let (_, sy, ..) = focus_uv(face(0.5, 0.95), 1920, 1080, 1080, 384, (0.0, 0.0));
         assert!((sy - (1.0 - sh)).abs() < 1e-6, "kept inside: {sy}");
+        // Off to the side in the strip, it zooms in to bring the face to the middle.
+        let (sx, _, zw, _) = focus_uv(face(0.35, 0.4), 1920, 1080, 1080, 384, (0.0, 0.0));
+        assert!((zw - 0.7).abs() < 1e-5 && sx.abs() < 1e-6);
         // Offsets: with no face they span the whole picture, and they nudge a face's framing
         // without ever leaving the picture.
         let (x, ..) = focus_uv(None, 1920, 1080, 1080, 1920, (-1.0, 0.0));
@@ -2240,11 +2269,11 @@ mod tests {
         assert!((x - (1.0 - w)).abs() < 1e-6);
         let (x, ..) = focus_uv(face(0.5, 0.4), 1920, 1080, 1080, 1920, (0.2, 0.0));
         assert!((x - (0.5 - w / 2.0 + 0.1 * (1.0 - w))).abs() < 1e-6);
-        let (x, ..) = focus_uv(face(0.9, 0.4), 1920, 1080, 1080, 1920, (5.0, 5.0));
-        assert!((x - (1.0 - w)).abs() < 1e-6);
-        // A square webcam in a square spot: nothing to move, whatever the face or offset.
+        let (x, _, zw, _) = focus_uv(face(0.9, 0.4), 1920, 1080, 1080, 1920, (5.0, 5.0));
+        assert!((x - (1.0 - zw)).abs() < 1e-6);
+        // A square webcam in a square spot, face in the middle: nothing to move.
         assert_eq!(
-            focus_uv(face(0.9, 0.9), 640, 640, 300, 300, (1.0, -1.0)),
+            focus_uv(face(0.5, 0.5), 640, 640, 300, 300, (1.0, -1.0)),
             (0.0, 0.0, 1.0, 1.0)
         );
     }

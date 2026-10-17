@@ -1121,12 +1121,10 @@ export interface ShortLayout {
   cameraPosition: "top" | "bottom";
   /** Share of the frame height the camera takes, 20 to 70. */
   cameraPct: number;
-  /** "auto" follows the speaker's face (once it is found); "manual" puts the crop where the
-   *  offset says. */
-  cameraFraming: "auto" | "manual";
-  /** Moves the camera crop, -1 to 1 each way: its place in manual, a nudge in auto. */
-  cameraOffsetX: number;
-  cameraOffsetY: number;
+  /** Camera clips (by clip id) framed by hand, each placed -1 to 1 each way from the centre.
+   *  Every other camera clip is lined up with the face as it starts (zooming in a little when
+   *  the face is near an edge). */
+  cameraClips: Record<string, { offsetX: number; offsetY: number }>;
   /** Zoom on the screen part, 0.3 to 3: 1 fills its part, below 1 shows all of it smaller. */
   screenZoom: number;
   followZooms: boolean;

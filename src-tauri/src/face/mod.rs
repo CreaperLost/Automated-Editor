@@ -3,10 +3,11 @@
 //! analysis results, not edits, so they sit outside the undo history. They are in the camera
 //! asset's own time, so they hold through any edit of the video or of a short.
 //!
-//! Shorts frame their camera on the face: [`smooth`] lines the crop up with it at most every
-//! 30 s, and `render::focus_uv` cuts the crop around that. Only streams whose role is the camera get a
-//! track: a recording without a camera (gaming footage, say) has none and keeps its framing.
-pub mod smooth;
+//! Shorts frame their camera on the face: [`align`] lines each clip up with it as the clip
+//! starts, and `render::focus_uv` cuts the crop around that. Only streams whose role is the
+//! camera get a track: a recording without a camera (gaming footage, say) has none and keeps
+//! its framing.
+pub mod align;
 pub mod yunet;
 
 use crate::project::revision::EditDocument;
@@ -20,13 +21,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-pub use smooth::{FocusPath, FocusPoint};
+pub use align::{clip_focus, FocusPoint};
 
 pub const FACES_DIR: &str = "faces";
 /// Bumped when detection changes enough that old tracks should be found again.
 pub const TRACK_VERSION: u32 = 2;
-/// The camera is looked at once every five seconds: framing re-centres at most every 30 s
-/// (see [`smooth`]), so a handful of looks per stretch is plenty.
+/// The camera is looked at once every five seconds: each clip is lined up once (see
+/// [`align`]), so a few looks per clip are plenty.
 pub const SAMPLE_US: u64 = 5_000_000;
 const SAMPLE_EVERY_S: u32 = 5;
 /// Pictures are scaled to this width for the detector: plenty for a face that fills a webcam.
@@ -163,27 +164,23 @@ pub fn camera_streams(document: &EditDocument) -> Vec<(String, String)> {
 }
 
 type Stamp = (u64, Option<std::time::SystemTime>);
-type PathCache = HashMap<PathBuf, (Stamp, Option<Arc<FocusPath>>)>;
-static PATHS: Mutex<Option<PathCache>> = Mutex::new(None);
+type TrackCache = HashMap<PathBuf, (Stamp, Option<Arc<FaceTrack>>)>;
+static TRACKS: Mutex<Option<TrackCache>> = Mutex::new(None);
 
-/// The smoothed framing for a camera stream, if a face track for it exists and found a face.
-/// Read once while the file stays the same, so each frame costs one file check.
-pub fn focus_path(root: &Path, asset: &str, stream: &str) -> Option<Arc<FocusPath>> {
+/// A camera stream's face track, if it has one. Read once while the file stays the same, so
+/// each frame costs one file check.
+pub fn cached_track(root: &Path, asset: &str, stream: &str) -> Option<Arc<FaceTrack>> {
     let path = track_path(root, asset, stream).ok()?;
     let meta = std::fs::metadata(&path).ok()?;
     let stamp = (meta.len(), meta.modified().ok());
-    let mut cache = PATHS.lock();
+    let mut cache = TRACKS.lock();
     let cache = cache.get_or_insert_with(Default::default);
     if let Some((seen, built)) = cache.get(&path) {
         if *seen == stamp {
             return built.clone();
         }
     }
-    let built = load_track(root, asset, stream)
-        .ok()
-        .flatten()
-        .and_then(|t| FocusPath::build(&t))
-        .map(Arc::new);
+    let built = load_track(root, asset, stream).ok().flatten().map(Arc::new);
     cache.insert(path, (stamp, built.clone()));
     built
 }
@@ -461,10 +458,11 @@ mod tests {
             mean(&|f| f.h),
             mean(&|f| f.score),
         );
-        if let Some(path) = FocusPath::build(&track) {
-            println!("The frame moves {} times", path.move_count());
-            for t in (0..duration_us).step_by(5_000_000) {
-                println!("  {:>5.1}s {:?}", t as f64 / 1e6, path.at(t));
+        if let Some(focus) = clip_focus(&track, 0, duration_us) {
+            println!("One clip of all of it lines up on {focus:?}");
+            for t in (0..duration_us).step_by(10_000_000) {
+                let clip = clip_focus(&track, t, t + 10_000_000);
+                println!("  a 10 s clip at {:>5.1}s: {clip:?}", t as f64 / 1e6);
             }
             // With `AEROEDITS_FACE_PROBE_OUT=<dir>`: the camera alone in a 9:16 frame at 1 s,
             // cut from the centre and around the face, as PNGs to look at.
@@ -491,7 +489,7 @@ mod tests {
                     image.save(out.join(name)).unwrap();
                 };
                 save("camera-only-centre.png", None);
-                save("camera-only-face.png", Some(path.at(t)));
+                save("camera-only-face.png", Some(focus));
             }
         }
         assert!(track.face_share() > 0.0);
@@ -531,8 +529,8 @@ mod tests {
             Some(track.clone())
         );
         assert_eq!(track.face_share(), 0.5);
-        let path = focus_path(dir.path(), "rec", "webcam").unwrap();
-        assert!((path.at(0).x - 0.7).abs() < 1e-6);
+        let cached = cached_track(dir.path(), "rec", "webcam").unwrap();
+        assert!((clip_focus(&cached, 0, SAMPLE_US).unwrap().x - 0.7).abs() < 1e-6);
         assert!(load_track(dir.path(), "rec", "other").unwrap().is_none());
         assert!(track_path(dir.path(), "../x", "webcam").is_err());
         assert!(track_path(dir.path(), "rec", "a.b").is_err());
