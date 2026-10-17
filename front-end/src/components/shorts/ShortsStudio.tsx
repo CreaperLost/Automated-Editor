@@ -17,7 +17,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { api, setEditTarget } from "../../lib/ipc";
-import { releaseShortPlayback, takeShortPlayback } from "../../lib/playbackControl";
+import { focusShortPlayback, releaseShortPlayback, takeShortPlayback } from "../../lib/playbackControl";
 import { useEngineFrames } from "../canvas/NativePreviewHost";
 import { PreviewBar } from "../layout/PreviewBar";
 import {
@@ -39,6 +39,11 @@ import { clipAt, soundSources } from "../../lib/sequence";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { Button, Notice, Switch } from "../ui";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { switchStage, switchStarted } from "../../lib/switchTiming";
+
+/** The timeline follows the store itself: the studio's own re-renders (another short picked,
+ *  the engine changing hands) need not redraw it. */
+const ShortTimeline = React.memo(TimelineStudio);
 
 const DEFAULT_LAYOUT: ShortLayout = {
   cameraPosition: "top",
@@ -231,8 +236,10 @@ export const ShortsStudio: React.FC = () => {
   // renders, since the preview reloads whenever the layout changes.
   const baseLayout = draft ?? selected?.layout;
   const layout = useMemo(() => ({ ...DEFAULT_LAYOUT, ...(baseLayout ?? {}) }), [baseLayout]);
-  // The store shows the selected short's own timeline once its view has arrived.
-  const viewing = !!selected && project?.shortView === selected.id;
+  // The store shows the selected short's own timeline once its view has arrived. Until then it
+  // still shows the last short's, so the preview and timeline stay up rather than blink out.
+  const [brokenView, setBrokenView] = useState<string>();
+  const viewing = !!selected && !!project?.shortView && brokenView !== selected.id;
   const lengthUs = viewing ? project!.durationUs : 0;
   const playable = viewing && lengthUs > 0;
   const ownEdit = !!selected?.edit;
@@ -247,21 +254,28 @@ export const ShortsStudio: React.FC = () => {
   useEffect(() => {
     if (!handle_) return;
     const shortId = selectedId_ ?? null;
+    if (shortId) switchStage("selection rendered", shortId);
     setEditTarget(shortId);
     useProjectStore.getState().setViewShort(shortId ?? undefined);
     if (shortId) {
       void api
         .projectShortView(handle_, shortId)
-        .then((view) => useProjectStore.getState().applyOpenedProject(view, { remote: true }))
-        .catch((err) => setError(errorMessage(err)));
+        .then((view) => {
+          switchStage("view arrived", shortId);
+          setBrokenView((broken) => (broken === shortId ? undefined : broken));
+          useProjectStore.getState().applyOpenedProject(view, { remote: true });
+          switchStage("view applied", shortId);
+          requestAnimationFrame(() => switchStage("view painted", shortId));
+        })
+        .catch((err) => {
+          setBrokenView(shortId);
+          setError(errorMessage(err));
+        });
     }
     // Switching shorts: the new one starts at 0, live in the preview while this window is active.
     useProjectStore.getState().setCurrentTimeUs(0);
-    if (shortId && document.hasFocus()) {
-      void api
-        .playbackFocusShort(handle_, shortId, 0, false)
-        .then(useProjectStore.getState().applyPlaybackStatus)
-        .catch(() => undefined);
+    if (shortId && document.hasFocus() && useProjectStore.getState().playbackShortId !== shortId) {
+      void focusShortPlayback(handle_, shortId, 0).then(() => switchStage("engine focused", shortId));
     }
   }, [selectedId_, handle_]);
   // Active, this window has the engine; the editor takes it back when it is clicked.
@@ -368,7 +382,9 @@ export const ShortsStudio: React.FC = () => {
   // The engine's frames while it has this short; the canvas keeps the last one otherwise.
   const playbackShortId = useProjectStore((s) => s.playbackShortId);
   const hasEngine = !!selected && playbackShortId === selected.id;
-  useEngineFrames(canvasRef, playable, selected?.id, () => {
+  // One pull for the window's life: a switch of short needs no new one (frames of the short
+  // left behind carry an older generation and are dropped).
+  useEngineFrames(canvasRef, playable, undefined, () => {
     const state = useProjectStore.getState();
     return !!state.viewShort && state.playbackShortId === state.viewShort;
   });
@@ -472,7 +488,17 @@ export const ShortsStudio: React.FC = () => {
             return (
               <div
                 key={s.id}
-                onClick={() => setSelectedId(s.id)}
+                onClick={() => {
+                  if (s.id !== selected?.id) {
+                    switchStarted(s.id);
+                    // The engine starts on the short now, while the list redraws; the
+                    // selection's effect below asks again only if this did not go out.
+                    void focusShortPlayback(project.projectHandle, s.id, 0).then(() =>
+                      switchStage("engine focused", s.id),
+                    );
+                  }
+                  setSelectedId(s.id);
+                }}
                 className={`group rounded-control border px-3 py-2.5 cursor-pointer transition-colors ${
                   s.id === selected?.id
                     ? "border-accent-hover/70 bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent-hover))]"
@@ -848,7 +874,7 @@ export const ShortsStudio: React.FC = () => {
             is); caption text is shared with the video's transcript.
           </div>
           <div className="flex-1 min-h-0">
-            <TimelineStudio />
+            <ShortTimeline />
           </div>
         </section>
       )}

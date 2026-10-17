@@ -90,6 +90,9 @@ export const setEditTarget = (shortId: string | null) => {
 };
 export const currentEditTarget = () => editTarget;
 
+/** Bytes before the JPEG in a `previewFrame`: its sequence number and playback generation. */
+export const PREVIEW_FRAME_HEADER = 16;
+
 // One wrapper per command registered in src-tauri/src/lib.rs.
 export const api = {
   openProject: (path: string) => invokeTauri<OpenedProject>("open_project", { path }),
@@ -259,8 +262,9 @@ export const api = {
     invokeTauri<PreviewStatus>("preview_present_fixture", { path, generation }),
   previewStatus: () => invokeTauri<PreviewStatus>("preview_status"),
   /**
-   * Latest webview preview frame after `after`: 8-byte LE sequence number + JPEG. Waits up to
-   * `waitMs` for one to arrive; empty when none did.
+   * Latest webview preview frame after `after`: 8-byte LE sequence number, 8-byte LE playback
+   * generation it was drawn for (0 for none), then the JPEG (see `PREVIEW_FRAME_HEADER`). Waits
+   * up to `waitMs` for one to arrive; empty when none did.
    */
   previewFrame: (after: number, waitMs = 0) =>
     invokeTauri<ArrayBuffer>("preview_frame", { after, waitMs }),

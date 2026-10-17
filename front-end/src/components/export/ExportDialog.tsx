@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { CheckCircle2, Download, Film, FolderOpen, X, XCircle } from "lucide-react";
-import { api } from "../../lib/ipc";
+import { api, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
 import { FILE_MANAGER } from "../../lib/projectActions";
 import { Button, IconButton, Segmented, cn } from "../ui";
 import type { ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
@@ -141,8 +141,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     void api
       .previewFrame(0, 0)
       .then((buffer) => {
-        if (buffer.byteLength <= 8) return;
-        url = URL.createObjectURL(new Blob([buffer.slice(8)], { type: "image/jpeg" }));
+        if (buffer.byteLength <= PREVIEW_FRAME_HEADER) return;
+        url = URL.createObjectURL(new Blob([buffer.slice(PREVIEW_FRAME_HEADER)], { type: "image/jpeg" }));
         setThumbnail(url);
       })
       .catch(() => undefined);

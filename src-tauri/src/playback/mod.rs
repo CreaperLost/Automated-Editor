@@ -18,6 +18,27 @@ fn next_generation() -> u64 {
     GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Set when something the media worker should act on changed while it waited.
+static WAKE: (std::sync::Mutex<bool>, std::sync::Condvar) =
+    (std::sync::Mutex::new(false), std::sync::Condvar::new());
+
+/// Has the media worker look again now (a seek, another short) rather than at its next poll.
+fn wake_engine() {
+    *WAKE.0.lock().unwrap() = true;
+    WAKE.1.notify_all();
+}
+
+/// The media worker's pause between polls: `timeout` at most, less if it is woken.
+#[cfg_attr(not(feature = "tauri-app"), allow(dead_code))]
+fn wait_for_wake(timeout: std::time::Duration) {
+    let woken = WAKE.0.lock().unwrap();
+    let (mut woken, _) = WAKE
+        .1
+        .wait_timeout_while(woken, timeout, |woken| !*woken)
+        .unwrap();
+    *woken = false;
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackState {
@@ -297,6 +318,7 @@ impl PlaybackOwner {
         } else {
             Some((Instant::now(), self.position_us))
         };
+        wake_engine();
         self.status()
     }
 
@@ -357,6 +379,7 @@ impl PlaybackOwner {
     fn bump_generation(&mut self) {
         self.preview_available = false;
         self.generation = next_generation();
+        wake_engine();
     }
 
     fn advance(&mut self) {
@@ -465,6 +488,16 @@ mod tests {
     fn document() -> EditDocument {
         EditDocument::from_recording(crate::sequence::tests::recording("rec", 10_000_000, &[]))
             .unwrap()
+    }
+
+    #[test]
+    fn a_seek_wakes_the_media_worker() {
+        let mut owner = PlaybackOwner::open("p".into(), &document()).unwrap();
+        let started = Instant::now();
+        owner.seek(1_000_000).unwrap();
+        // The worker would otherwise sleep its whole pause.
+        wait_for_wake(std::time::Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

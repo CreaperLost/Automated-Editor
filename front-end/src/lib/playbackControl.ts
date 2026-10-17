@@ -82,13 +82,28 @@ export function pausePlayback() {
  * its own playhead; the video's place is kept for when the editor takes the engine back.
  */
 export function takeShortPlayback() {
-  const { openedProject, viewShort, playbackShortId, currentTimeUs, applyPlaybackStatus } =
-    useProjectStore.getState();
-  if (!openedProject || !viewShort || playbackShortId === viewShort) return;
-  void api
-    .playbackFocusShort(openedProject.projectHandle, viewShort, currentTimeUs, false)
-    .then(applyPlaybackStatus)
-    .catch(() => undefined);
+  const { openedProject, viewShort, playbackShortId, currentTimeUs } = useProjectStore.getState();
+  if (!openedProject || !viewShort || playbackShortId === viewShort || focusing === viewShort) return;
+  void focusShortPlayback(openedProject.projectHandle, viewShort, currentTimeUs);
+}
+
+/** The short being handed the engine, while that is on its way. */
+let focusing: string | null = null;
+
+/**
+ * Gives the engine to short `shortId` from `startUs`, paused. Asking again for the short already
+ * on its way does nothing: a second focus would seek and throw away the frame being drawn.
+ */
+export function focusShortPlayback(projectHandle: string, shortId: string, startUs = 0) {
+  if (focusing === shortId) return Promise.resolve();
+  focusing = shortId;
+  return api
+    .playbackFocusShort(projectHandle, shortId, startUs, false)
+    .then((status) => useProjectStore.getState().applyPlaybackStatus(status))
+    .catch(() => undefined)
+    .finally(() => {
+      if (focusing === shortId) focusing = null;
+    });
 }
 
 /** Hands playback back to the video if a short has it. */
