@@ -3,8 +3,8 @@
 //! analysis results, not edits, so they sit outside the undo history. They are in the camera
 //! asset's own time, so they hold through any edit of the video or of a short.
 //!
-//! Shorts frame their camera on the face ([`smooth`] turns a track into a calm camera path,
-//! `render::focus_uv` cuts the crop around it). Only streams whose role is the camera get a
+//! Shorts frame their camera on the face: [`smooth`] lines the crop up with it at most every
+//! 30 s, and `render::focus_uv` cuts the crop around that. Only streams whose role is the camera get a
 //! track: a recording without a camera (gaming footage, say) has none and keeps its framing.
 pub mod smooth;
 pub mod yunet;
@@ -24,10 +24,11 @@ pub use smooth::{FocusPath, FocusPoint};
 
 pub const FACES_DIR: &str = "faces";
 /// Bumped when detection changes enough that old tracks should be found again.
-pub const TRACK_VERSION: u32 = 1;
-/// The camera is looked at four times a second.
-pub const SAMPLE_US: u64 = 250_000;
-const SAMPLE_FPS: u32 = 4;
+pub const TRACK_VERSION: u32 = 2;
+/// The camera is looked at once every five seconds: framing re-centres at most every 30 s
+/// (see [`smooth`]), so a handful of looks per stretch is plenty.
+pub const SAMPLE_US: u64 = 5_000_000;
+const SAMPLE_EVERY_S: u32 = 5;
 /// Pictures are scaled to this width for the detector: plenty for a face that fills a webcam.
 const DETECT_WIDTH: u32 = 640;
 const MAX_TRACK_BYTES: u64 = 32 * 1024 * 1024;
@@ -349,7 +350,7 @@ fn pieces(root: &Path, asset: &Asset, stream: &str) -> Result<Vec<(PathBuf, u64,
     )
 }
 
-/// Finds the main face four times a second through a camera stream.
+/// Finds the main face every few seconds through a camera stream.
 pub fn detect(
     root: &Path,
     asset: &Asset,
@@ -370,7 +371,7 @@ pub fn detect(
         let info = crate::media::ffmpeg::probe_video(path)?;
         let (w, h) = yunet::fit(info.width, info.height, DETECT_WIDTH);
         let mut failure = None;
-        crate::media::ffmpeg::sample_bgr(path, SAMPLE_FPS, w, h, &mut |index, bgr| {
+        crate::media::ffmpeg::sample_bgr(path, SAMPLE_EVERY_S, w, h, &mut |index, bgr| {
             let t_us = start_us + index as u64 * SAMPLE_US;
             if t_us >= *end_us || cancel.load(Ordering::Relaxed) {
                 return false;

@@ -387,26 +387,27 @@ pub fn extract_audio_wav(source: &Path, stream: usize, target: &Path) -> Result<
     run(cmd, log, "Extracting the audio failed").map(|_| ())
 }
 
-/// The video's pictures `fps` times a second from its start, scaled to `w` x `h` and packed
-/// BGR, handed to `each` in order (with their index) until it returns false. For analysis
-/// passes that look at a whole file, like face detection; one FFmpeg thread, so it can run
-/// beside playback.
+/// One picture of the video every `every_s` seconds from its start, scaled to `w` x `h` and
+/// packed BGR, handed to `each` in order (with their index) until it returns false. Only
+/// keyframes are decoded, the picture nearest each moment standing in for it: a whole file
+/// is read in a fraction of its length. For analysis passes that need a rough look, like
+/// face framing; one FFmpeg thread, so it can run beside playback.
 pub fn sample_bgr(
     path: &Path,
-    fps: u32,
+    every_s: u32,
     w: u32,
     h: u32,
     each: &mut dyn FnMut(usize, &[u8]) -> bool,
 ) -> Result<(), String> {
     validate_dim(w, h)?;
     let (mut cmd, mut log) = command(ffmpeg_path()?)?;
-    cmd.args(["-nostdin", "-threads", "1", "-i"])
+    cmd.args(["-nostdin", "-threads", "1", "-skip_frame", "nokey", "-i"])
         .arg(file_arg(path))
         .args([
             "-an",
             "-sn",
             "-vf",
-            &format!("fps={fps},scale={w}:{h}:flags=bilinear"),
+            &format!("fps=1/{},scale={w}:{h}:flags=bilinear", every_s.max(1)),
             "-pix_fmt",
             "bgr24",
             "-f",

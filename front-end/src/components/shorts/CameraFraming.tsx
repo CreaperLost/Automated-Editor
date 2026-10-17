@@ -50,7 +50,7 @@ function trackLine(tracks: FaceTrackStatus[] | null): { text: string; busy?: boo
   if (ready.length === tracks.length) {
     const share = Math.round(100 * Math.min(...ready.map((t) => t.faceShare ?? 0)));
     return share > 0
-      ? { text: `Following the face (seen in ${share}% of the camera).` }
+      ? { text: `Lined up with the face (seen in ${share}% of the camera).` }
       : { text: "No face found in the camera; it stays centred.", retry: true };
   }
   return { text: "The face has not been looked for yet.", retry: true };
@@ -116,7 +116,7 @@ export const CameraFramingControl: React.FC<{
           aria-pressed={auto}
           onClick={() => onChange({ cameraFraming: "auto" })}
           className={segmented(auto)}
-          title="Follow the speaker's face: the crop holds still while the face stays near the middle and eases over when it moves"
+          title="Line the crop up with the speaker's face: it is checked every 30 seconds and moves only when the face has drifted from the middle"
         >
           <ScanFace className="inline w-3 h-3 mr-1" />
           Auto
