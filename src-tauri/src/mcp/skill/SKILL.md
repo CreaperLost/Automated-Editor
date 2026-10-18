@@ -24,6 +24,12 @@ new take for, with footage from the video: `take-shorts`). If none fits, say so 
 is closest. Then follow its
 steps in order. The user's own instructions win over the template.
 
+"Make a short from my take" (or "from this recording", "from these files") is `take-shorts`,
+whatever the files are: a camera video, a microphone file or a .aero recording folder. They go
+into the project that is open with `media_import`; never `open` them or `create` a project
+from them. Anything else the user says about the take (what it is about, a link) is the
+short's `idea` and helps pick its footage and graphics.
+
 ## Saved answers
 
 When `template` shows saved answers, ask once: "Same settings as last time?" and list them in a

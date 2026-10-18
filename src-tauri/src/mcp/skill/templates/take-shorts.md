@@ -20,12 +20,15 @@ the defaults below, report in one message and go on. Export still waits for the 
 
 ## 2. The take (ask only if unclear)
 
-- If the user gave file paths, `media_import` them (all the take's files at once).
+- If the user gave file paths, `media_import` them (all the take's files at once) into the
+  project that is open. A .aero recording folder is a take too (its camera and microphone come
+  in together): import it, never `open` it or `create` a project from it.
   Otherwise the take is already in Media: `project_info` lists the media; the take is what
   the user names, else the newest imported files.
 - `short_from_take` with a `title` (under 60 characters, also the file name), `media` (the
   take's file ids: the app tells the camera from the microphone; a separate microphone wins
-  over the camera's own) and `idea` (one line). Pass on what it says about lining the camera
+  over the camera's own) and `idea` (one line: what the user said the take is about). With no
+  title given, make one from that. Pass on what it says about lining the camera
   up with the voice; if the match was weak, tell the user to check the lip sync.
 
 ## 3. Transcribe and clean the take (automatic)

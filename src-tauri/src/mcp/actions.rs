@@ -39,8 +39,10 @@ pub static ACTIONS: [ToolDef; 36] = [
     },
     ToolDef {
         name: "open",
-        description: "Opens a project folder or a .aero recording folder in the editor window, \
-            replacing the one open.",
+        description: "Opens an AeroEdits project folder in the editor window, replacing the one \
+            open. A .aero recording folder is not a project: a take recorded for a short goes \
+            into the open project with `media_import` (then `short_from_take`); a recording to \
+            edit as the video gets a new project with `create` and `recording`.",
         schema: schema::<OpenArgs>,
         read_only: false,
         run: open,
@@ -213,10 +215,12 @@ pub static ACTIONS: [ToolDef; 36] = [
     },
     ToolDef {
         name: "media_import",
-        description: "Imports files (videos, sounds, pictures, or AeroEdits recordings) into \
-            the project's Media, as the Media panel's Import does. Use it for a take the user \
-            recorded for a short: a camera video (often with its own microphone) and, if they \
-            used one, a separate microphone file. Answers each new media id and its streams.",
+        description: "Imports files (videos, sounds, pictures, or .aero recording folders) into \
+            the open project's Media, as the Media panel's Import does. Use it for a take the \
+            user recorded for a short, whatever its form: a camera video (often with its own \
+            microphone) and, if they used one, a separate microphone file, or a .aero \
+            recording (its camera and microphone together). Never `open` a take. Answers each \
+            new media id and its streams.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -985,7 +989,17 @@ pub struct OpenArgs {
 
 fn open(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: OpenArgs = params(args)?;
-    commands::open_project_impl(ctx.state, args.path.clone())?;
+    commands::open_project_impl(ctx.state, args.path.clone()).map_err(|e| {
+        if e.starts_with("That folder is a recording") {
+            "That folder is a recording, not a project, so it can't be opened. If it is a take \
+             for a short, import it into the open project with `media_import` and make the \
+             short with `short_from_take`. To edit it as the video, make a new project from it \
+             with `create` and `recording`."
+                .to_string()
+        } else {
+            e
+        }
+    })?;
     ctx.host.project_opened(&args.path);
     ctx.changed_proposals();
     text(format!("Opened.\n{}", status_text(ctx)?))
