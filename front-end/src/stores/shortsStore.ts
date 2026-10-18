@@ -311,7 +311,7 @@ export async function newShortFromTake(camera: string | null, voice: string | nu
 
 /**
  * Cleans a take on its short's own timeline, as Cleanup does for the video: cuts the gaps
- * between its words (the balanced jump cuts) and mutes the mouth noises clear of speech.
+ * between its words (the tight jump cuts) and mutes the mouth noises clear of speech.
  * Each is one undo step. Needs the take's transcript.
  */
 export async function cleanTake(shortId: string, voice: string, before = "") {
@@ -320,7 +320,8 @@ export async function cleanTake(shortId: string, voice: string, before = "") {
   const handle = start.projectHandle;
   set({ busy: "Cleaning the take", error: undefined, notice: `${before}Cleaning the take…` });
   try {
-    const gaps = await api.detectNonSpeechGaps(handle, "speech", GAP_PRESETS.balanced.config, undefined, shortId);
+    // Tight: a short keeps no pause at its cuts (Balanced leaves one you hear at each).
+    const gaps = await api.detectNonSpeechGaps(handle, "speech", GAP_PRESETS.tight.config, undefined, shortId);
     const ranges = gaps.suggestions.map(({ startUs, endUs }) => ({ startUs, endUs }));
     const cutUs = ranges.reduce((sum, r) => sum + (r.endUs - r.startUs), 0);
     let revision = useProjectStore.getState().openedProject?.revision ?? start.revision;

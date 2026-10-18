@@ -1031,4 +1031,55 @@ mod tests {
             .unwrap();
         assert!(peak < 100, "aliased signal peak={peak}");
     }
+
+    /// Mixes a short's sound as playback does and lists its quiet stretches. Run on a copy of a
+    /// project (its project.json, aeroedits.json and transcripts), never the original.
+    #[test]
+    #[ignore = "set AEROEDITS_SHORT_PROBE to a copied project folder"]
+    fn short_sound_probe() {
+        let root = std::path::PathBuf::from(std::env::var("AEROEDITS_SHORT_PROBE").unwrap());
+        let reader = crate::project::ProjectReader::open(&root).unwrap();
+        let base = reader.document();
+        let short = base.shorts.iter().find(|s| s.take.is_some()).unwrap();
+        let doc = crate::shorts::short_document(base, short, true).unwrap();
+        println!("PROBE short {} length {:.2}s", short.id, doc.duration_us() as f64 / 1e6);
+        for track in &doc.sequence.tracks {
+            println!("PROBE track {} {:?} clips {}", track.id, track.kind, track.clips.len());
+        }
+        let mixer = AudioMixer::new(reader.root(), &doc).unwrap();
+        let mut frames = Vec::new();
+        let mut at = 0u64;
+        while at < mixer.total_frames {
+            let chunk = mixer.read_frames(at, 4_800).unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            at += (chunk.len() / 2) as u64;
+            frames.extend(chunk);
+        }
+        let window = (SAMPLE_RATE / 100) as usize;
+        let mut quiet_from: Option<usize> = None;
+        let level = |w: &[i16]| {
+            let sum: f64 = w.iter().map(|&x| (x as f64 / 32768.0).powi(2)).sum();
+            10.0 * (sum / w.len().max(1) as f64).log10()
+        };
+        let chunks: Vec<f64> = frames.chunks(window * 2).map(level).collect();
+        let mut stretches = Vec::new();
+        for (i, db) in chunks.iter().enumerate() {
+            match (quiet_from, *db < -35.0) {
+                (None, true) => quiet_from = Some(i),
+                (Some(from), false) => {
+                    if i - from >= 4 {
+                        stretches.push((from, i));
+                    }
+                    quiet_from = None;
+                }
+                _ => {}
+            }
+        }
+        for (a, b) in &stretches {
+            println!("PROBE quiet {:.2}-{:.2} ({} ms)", *a as f64 / 100.0, *b as f64 / 100.0, (b - a) * 10);
+        }
+        println!("PROBE quiet stretches over 120 ms: {}", stretches.len());
+    }
 }

@@ -37,8 +37,9 @@ The same passes as the long video's cleanup, on the take short's own timeline:
 
 - `transcribe` with the take's voice as `stream`.
 - `mouth_noises` with that `stream`.
-- `silence` with `short` (the short's id) and `mode: gaps` (balanced): the pauses between
-  the take's words.
+- `silence` with `short` (the short's id), `mode: gaps` and `preset: tight`: the pauses
+  between the take's words. A short is cut tighter than a long video: Balanced leaves a
+  pause you hear at every cut.
 - `fillers` with that `stream` (after `fillers_review` if the user wants a careful pass).
 
 Report one line per pass. The user can review each in the Shorts tab (Transcript, Jump cuts,
