@@ -1,6 +1,8 @@
 import React from "react";
 import { Check, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles } from "lucide-react";
 import { api } from "../../lib/ipc";
+import { focusShortPlayback } from "../../lib/playbackControl";
+import { switchStage, switchStarted } from "../../lib/switchTiming";
 import { soundSources } from "../../lib/sequence";
 import { useProjectStore } from "../../stores/projectStore";
 import {
@@ -86,7 +88,14 @@ export const ShortsListPanel: React.FC = () => {
             <div
               key={s.id}
               role="listitem"
-              onClick={() => selectShort(s.id)}
+              onClick={() => {
+                if (s.id !== selected?.id) {
+                  switchStarted(s.id);
+                  // The engine starts on the short now, while the panels redraw.
+                  void focusShortPlayback(project.projectHandle, s.id, 0).then(() => switchStage("engine focused", s.id));
+                }
+                selectShort(s.id);
+              }}
               className={`group rounded-control border px-3 py-2.5 cursor-pointer transition-colors ${
                 s.id === selected?.id
                   ? "border-accent-hover/70 bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent-hover))]"

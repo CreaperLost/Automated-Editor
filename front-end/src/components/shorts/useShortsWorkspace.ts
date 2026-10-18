@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { api, setEditTarget } from "../../lib/ipc";
-import { releaseShortPlayback } from "../../lib/playbackControl";
+import { focusShortPlayback, releaseShortPlayback } from "../../lib/playbackControl";
+import { switchStage } from "../../lib/switchTiming";
 import { useProjectStore } from "../../stores/projectStore";
 import { pickShort, resetShorts, setShortsError, useShortsStore } from "../../stores/shortsStore";
 
@@ -33,16 +34,20 @@ export function useShortsWorkspace(active: boolean) {
     setEditTarget(target ?? null);
     state.setViewShort(target);
     if (target) {
+      switchStage("selection rendered", target);
       void api
         .projectShortView(handle, target)
-        .then((view) => useProjectStore.getState().applyOpenedProject(view, { remote: true }))
+        .then((view) => {
+          switchStage("view arrived", target);
+          return useProjectStore.getState().applyOpenedProject(view, { remote: true });
+        })
+        .then(() => requestAnimationFrame(() => switchStage("view painted", target)))
         .catch(setShortsError);
-      // A short starts at 0, live in the preview.
+      // A short starts at 0, live in the preview. The list's click usually sent this already.
       state.setCurrentTimeUs(0);
-      void api
-        .playbackFocusShort(handle, target, 0, false)
-        .then(useProjectStore.getState().applyPlaybackStatus)
-        .catch(() => undefined);
+      if (state.playbackShortId !== target) {
+        void focusShortPlayback(handle, target, 0).then(() => switchStage("engine focused", target));
+      }
     } else if (state.openedProject?.shortView) {
       // The video first, so its playhead isn't held to the short's length.
       void api

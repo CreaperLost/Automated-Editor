@@ -275,9 +275,7 @@ pub struct SceneEvaluator {
     /// The last cue drawn and its colored frame for the active word.
     caption_cache: std::cell::RefCell<CaptionCache>,
     /// Recorded pointers by recording, looked up once per evaluator.
-    cursors: std::cell::RefCell<
-        std::collections::HashMap<String, Option<std::sync::Arc<crate::cursor::CursorTrack>>>,
-    >,
+    cursors: std::cell::RefCell<Cursors>,
     /// Clip edges whose decoders have been started ahead (see [`SceneEvaluator::prefetch`]),
     /// and where that last looked from.
     prefetched: std::cell::RefCell<(u64, std::collections::BTreeSet<u64>)>,
@@ -285,17 +283,9 @@ pub struct SceneEvaluator {
     zooms: std::cell::RefCell<std::collections::HashMap<String, Zooms>>,
     /// What plays each stream, by asset and stream, looked up once: a lookup checks the
     /// recording's files on disk, too slow to repeat for every layer of every frame.
-    sources: std::cell::RefCell<
-        std::collections::HashMap<
-            String,
-            std::collections::HashMap<
-                String,
-                std::sync::Arc<crate::sequence::sources::StreamSource>,
-            >,
-        >,
-    >,
+    sources: std::cell::RefCell<Sources>,
     /// Pointer pictures by file, decoded once.
-    cursor_images: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<VideoFrame>>>,
+    cursor_images: std::cell::RefCell<CursorImages>,
     /// What stands in for a graphic still rendering, by its name and size.
     graphic_placeholders:
         std::cell::RefCell<std::collections::HashMap<(String, u32, u32), VideoFrame>>,
@@ -309,6 +299,30 @@ pub struct SceneEvaluator {
     bubble_hidden: std::cell::OnceCell<Vec<(u64, u64)>>,
 }
 
+type Cursors =
+    std::collections::HashMap<String, Option<std::sync::Arc<crate::cursor::CursorTrack>>>;
+type Sources = std::collections::HashMap<
+    String,
+    std::collections::HashMap<String, std::sync::Arc<crate::sequence::sources::StreamSource>>,
+>;
+type CursorImages = std::collections::HashMap<PathBuf, Option<VideoFrame>>;
+
+/// What an evaluator looked up about the project's media alone (its folder and assets), not
+/// its edit: still right for a rebuild after an edit or for another short of the same media.
+struct MediaLookups {
+    root: PathBuf,
+    assets: Vec<Asset>,
+    sources: Sources,
+    cursors: Cursors,
+    cursor_images: CursorImages,
+}
+
+impl MediaLookups {
+    fn fits(&self, root: &Path, document: &EditDocument) -> bool {
+        self.root == root && self.assets == document.assets
+    }
+}
+
 #[derive(Default)]
 struct CaptionCache {
     raster: Option<(usize, Option<crate::captions::CueRaster>)>,
@@ -316,10 +330,44 @@ struct CaptionCache {
 }
 
 /// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
-/// edit: the GPU device (slow to create) and the background, if the layout kept it.
+/// edit: the GPU device (slow to create), the background if the layout kept it, and the
+/// media lookups if the media did not change.
 pub struct EvaluatorReuse {
     compositor: Compositor,
     background: Option<(String, Option<VideoFrame>)>,
+    media: MediaLookups,
+}
+
+/// Starts decoders for other documents (other shorts of the project) as an evaluator would
+/// decode them, from any thread (see [`SceneEvaluator::decoder_warmer`]).
+pub struct DecoderWarmer {
+    root: PathBuf,
+    width: u32,
+    height: u32,
+    decode_limit: DecodeLimit,
+    yuv: bool,
+    assets: Vec<Asset>,
+    sources: Sources,
+}
+
+impl DecoderWarmer {
+    /// Starts decoders for the first frame of `document`, so changing to it shows that frame
+    /// without waiting for FFmpeg to start. False when one was turned away (too many starting).
+    pub fn prefetch_start_of(&self, document: EditDocument) -> bool {
+        let other = SceneEvaluator::with_parts(
+            self.root.clone(),
+            document,
+            None,
+            self.width,
+            self.height,
+            std::cell::OnceCell::new(),
+        )
+        .with_decode_limit(self.decode_limit);
+        if other.document.assets == self.assets {
+            *other.sources.borrow_mut() = self.sources.clone();
+        }
+        other.prefetch_shown(0, &[], self.yuv)
+    }
 }
 
 /// The background a document draws: the project's, or the short's own choice.
@@ -444,19 +492,54 @@ impl SceneEvaluator {
     ) -> Result<Self, String> {
         let key = background_key(&root, &background_layout(&document), width, height);
         let wallpaper = std::cell::OnceCell::new();
+        let mut media = None;
         let compositor = match reuse {
             Some(reuse) => {
                 if let Some((_, frame)) = reuse.background.filter(|(k, _)| *k == key) {
                     let _ = wallpaper.set(frame);
                 }
+                media = Some(reuse.media).filter(|media| media.fits(&root, &document));
                 reuse.compositor
             }
             None => Compositor::new()?,
         };
-        Ok(Self {
+        let evaluator =
+            Self::with_parts(root, document, Some(compositor), width, height, wallpaper);
+        if let Some(media) = media {
+            evaluator.take_lookups(media);
+        }
+        Ok(evaluator)
+    }
+
+    /// What this evaluator has looked up about the project's media so far.
+    fn lookups(&self) -> MediaLookups {
+        MediaLookups {
+            root: self.root.clone(),
+            assets: self.document.assets.clone(),
+            sources: self.sources.borrow().clone(),
+            cursors: self.cursors.borrow().clone(),
+            cursor_images: self.cursor_images.borrow().clone(),
+        }
+    }
+
+    fn take_lookups(&self, media: MediaLookups) {
+        *self.sources.borrow_mut() = media.sources;
+        *self.cursors.borrow_mut() = media.cursors;
+        *self.cursor_images.borrow_mut() = media.cursor_images;
+    }
+
+    fn with_parts(
+        root: PathBuf,
+        document: EditDocument,
+        compositor: Option<Compositor>,
+        width: u32,
+        height: u32,
+        wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
+    ) -> Self {
+        Self {
             root,
             document,
-            compositor: Some(compositor),
+            compositor,
             width,
             height,
             decode_limit: DecodeLimit::NONE,
@@ -475,7 +558,7 @@ impl SceneEvaluator {
             shortcut_badge: Default::default(),
             window_crops: Default::default(),
             bubble_hidden: std::cell::OnceCell::new(),
-        })
+        }
     }
 
     /// Gives up the parts a replacement evaluator can reuse.
@@ -486,10 +569,12 @@ impl SceneEvaluator {
             self.width,
             self.height,
         );
+        let media = self.lookups();
         let background = self.wallpaper.into_inner().map(|frame| (key, frame));
         self.compositor.map(|compositor| EvaluatorReuse {
             compositor,
             background,
+            media,
         })
     }
 
@@ -1044,56 +1129,76 @@ impl SceneEvaluator {
                 .into_iter()
                 .filter_map(|clip| Some((clip, clip.local_us(edge - 1)?)))
                 .collect();
-            let mut accepted = true;
-            for clip in self.shown(edge).pictures(webcam) {
-                let local = clip.local_us(edge).unwrap_or(clip.in_us);
-                // A short jump on in the file already playing: its decoder reads on to it.
-                let reads_on = before.iter().any(|(was, at)| {
-                    was.asset == clip.asset
-                        && was.stream == clip.stream
-                        && local >= *at
-                        && local - at <= READ_ON_US
-                        && self.segment_file(was, *at) == self.segment_file(clip, local)
-                });
-                if reads_on {
-                    continue;
-                }
-                let Some(asset) = self.document.asset(&clip.asset) else {
-                    continue;
-                };
-                use crate::sequence::sources::StreamSource;
-                let Ok(source) = self.stream_source(asset, &clip.stream) else {
-                    continue;
-                };
-                match &*source {
-                    StreamSource::Segments(segments) => {
-                        let Some(segment) = segments
-                            .iter()
-                            .find(|s| s.available && s.start_us <= local && local < s.end_us)
-                        else {
-                            continue;
-                        };
-                        if let Ok(path) = safe_path(&self.root, &segment.relative_path) {
-                            accepted &= crate::media::prefetch_video(
-                                &path,
-                                local - segment.start_us,
-                                DecodeLimit {
-                                    yuv: self.yuv(),
-                                    ..self.decode_limit
-                                },
-                            );
-                        }
-                    }
-                    StreamSource::Video(path) => {
-                        accepted &= crate::media::prefetch_video(path, local, self.decode_limit)
-                    }
-                    _ => {}
-                }
-            }
             // Turned away for now (too many decoders starting): try this edge again later.
-            if !accepted {
+            if !self.prefetch_shown(edge, &before, self.yuv()) {
                 done.remove(&edge);
             }
+        }
+    }
+
+    /// Starts decoders for the pictures shown at `edge`, other than those a decoder already
+    /// playing (`before`, with where it is) reads on to. False when one was turned away.
+    fn prefetch_shown(&self, edge: u64, before: &[(&Clip, u64)], yuv: bool) -> bool {
+        let webcam = self.document.layout.webcam_enabled;
+        let mut accepted = true;
+        for clip in self.shown(edge).pictures(webcam) {
+            let local = clip.local_us(edge).unwrap_or(clip.in_us);
+            // A short jump on in the file already playing: its decoder reads on to it.
+            let reads_on = before.iter().any(|(was, at)| {
+                was.asset == clip.asset
+                    && was.stream == clip.stream
+                    && local >= *at
+                    && local - at <= READ_ON_US
+                    && self.segment_file(was, *at) == self.segment_file(clip, local)
+            });
+            if reads_on {
+                continue;
+            }
+            let Some(asset) = self.document.asset(&clip.asset) else {
+                continue;
+            };
+            use crate::sequence::sources::StreamSource;
+            let Ok(source) = self.stream_source(asset, &clip.stream) else {
+                continue;
+            };
+            match &*source {
+                StreamSource::Segments(segments) => {
+                    let Some(segment) = segments
+                        .iter()
+                        .find(|s| s.available && s.start_us <= local && local < s.end_us)
+                    else {
+                        continue;
+                    };
+                    if let Ok(path) = safe_path(&self.root, &segment.relative_path) {
+                        accepted &= crate::media::prefetch_video(
+                            &path,
+                            local - segment.start_us,
+                            DecodeLimit {
+                                yuv,
+                                ..self.decode_limit
+                            },
+                        );
+                    }
+                }
+                StreamSource::Video(path) => {
+                    accepted &= crate::media::prefetch_video(path, local, self.decode_limit)
+                }
+                _ => {}
+            }
+        }
+        accepted
+    }
+
+    /// What another thread needs to start decoders the way this evaluator decodes.
+    pub fn decoder_warmer(&self) -> DecoderWarmer {
+        DecoderWarmer {
+            root: self.root.clone(),
+            width: self.width,
+            height: self.height,
+            decode_limit: self.decode_limit,
+            yuv: self.yuv(),
+            assets: self.document.assets.clone(),
+            sources: self.sources.borrow().clone(),
         }
     }
 

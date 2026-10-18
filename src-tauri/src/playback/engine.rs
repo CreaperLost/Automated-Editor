@@ -2,7 +2,7 @@
 use super::{audio::AudioOutput, PlaybackState, PreviewQuality};
 use crate::{
     commands::AppState,
-    export::SceneEvaluator,
+    export::{DecoderWarmer, SceneEvaluator},
     media::audio::{AudioMixer, CHUNK_FRAMES, SAMPLE_RATE},
 };
 use std::{
@@ -35,6 +35,68 @@ struct Runtime {
     evaluator: SceneEvaluator,
     mixer: AudioMixer,
     _lease: std::fs::File,
+    /// The shorts either side of the one in focus have been sent to warm up.
+    warmed: bool,
+}
+
+/// Times the decoders of the neighbouring shorts are asked for, a little apart (the decoder
+/// cache turns warm-ups away while it is full of ones not used yet).
+const WARM_TRIES: u8 = 8;
+const WARM_RETRY: Duration = Duration::from_millis(250);
+
+/// On a thread of its own, once the short in focus has its first frame out: starts decoders
+/// for the first frames of the shorts either side of it in the list, so moving to one in the
+/// Shorts Studio shows it without waiting for FFmpeg to start. Gives up once something else
+/// plays.
+fn warm_neighbour_shorts(app: &tauri::AppHandle, warmer: DecoderWarmer, short_id: String) {
+    let app = app.clone();
+    let content = app.state::<AppState>().playback.lock().content_generation();
+    let _ = thread::Builder::new()
+        .name("aeroedits-warm-shorts".into())
+        .spawn(move || {
+            let state = app.state::<AppState>();
+            // Starting decoders takes the CPU: not while the frame is still being encoded.
+            let deadline = std::time::Instant::now() + Duration::from_millis(300);
+            thread::sleep(Duration::from_millis(20));
+            while ENCODING.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            for _ in 0..WARM_TRIES {
+                if state.playback.lock().content_generation() != content {
+                    return;
+                }
+                let started = std::time::Instant::now();
+                let done = warm_neighbours_once(&state, &warmer, &short_id);
+                crate::media::profile("warm neighbouring shorts", started);
+                if done {
+                    return;
+                }
+                thread::sleep(WARM_RETRY);
+            }
+        });
+}
+
+/// False when a decoder was turned away, to be asked again.
+fn warm_neighbours_once(state: &AppState, warmer: &DecoderWarmer, short_id: &str) -> bool {
+    let neighbours: Vec<_> = {
+        let opened = state.opened_project.lock();
+        let Some(reader) = opened.as_ref() else {
+            return true;
+        };
+        let document = &reader.history().current;
+        let Some(index) = document.shorts.iter().position(|s| s.id == short_id) else {
+            return true;
+        };
+        [index.checked_sub(1), Some(index + 1)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| document.shorts.get(i))
+            .filter_map(|short| crate::shorts::short_document(document, short, true).ok())
+            .collect()
+    };
+    neighbours.into_iter().fold(true, |all, document| {
+        warmer.prefetch_start_of(document) && all
+    })
 }
 
 /// Drawing the preview straight into the window (Windows): the swapchain, kept across edits
@@ -157,9 +219,12 @@ fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> 
                 && current.generation == job.surface_generation
                 && (current.visible || job.for_short)
             {
-                match surface.present_encoded(jpeg, job.surface_generation) {
+                match surface.present_encoded(jpeg, job.surface_generation, job.generation) {
                     Ok(()) => {
                         owner.mark_presented(job.generation);
+                        if job.for_short {
+                            crate::media::switch_stage("frame ready for the studio", true);
+                        }
                         presented += 1;
                         state.preview_frame_ready.notify_waiters();
                     }
@@ -215,9 +280,10 @@ pub fn start(app: tauri::AppHandle) {
                 });
             }
             // Right after a frame, go straight on to the next one. While playing, check often
-            // enough to catch every frame at 60 fps; when paused, poll gently.
+            // enough to catch every frame at 60 fps; when paused, poll gently (a seek or another
+            // short wakes it at once).
             let rendered = last_frame.is_some() && last_frame != before;
-            thread::sleep(Duration::from_millis(if rendered {
+            super::wait_for_wake(Duration::from_millis(if rendered {
                 1
             } else if playing {
                 3
@@ -276,7 +342,9 @@ fn tick(
             .playable_document(&document)
             .map_err(error)?;
         let lease = crate::project::reader::acquire_read_lease(&root).map_err(error)?;
+        crate::media::profile("rebuild: document", rebuild_started);
         let mixer = AudioMixer::new(&root, &document).map_err(error)?;
+        crate::media::profile("rebuild: mixer", rebuild_started);
         let (width, height) = document.layout.preview_dimensions().map_err(error)?;
         let (width, height) = quality.canvas(width, height);
         // Keep the GPU device and background across seeks; recreating them dominated seek time.
@@ -291,9 +359,11 @@ fn tick(
             evaluator,
             mixer,
             _lease: lease,
+            warmed: false,
         });
         *last_frame = None;
         crate::media::profile("rebuild after edit", rebuild_started);
+        crate::media::switch_stage("engine rebuilt", false);
     }
     let runtime = runtime.as_mut().unwrap();
     if status.state == PlaybackState::Playing && !runtime.mixer.has_audio() {
@@ -460,6 +530,7 @@ fn tick(
         return Ok(playing);
     }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
+    crate::media::switch_stage("frame composited", false);
     if status.state == PlaybackState::Playing {
         runtime.evaluator.prefetch(render_us, horizon);
     }
@@ -483,7 +554,17 @@ fn tick(
             surface_generation: preview.generation,
             for_short,
         }) {
-            Ok(()) => *last_frame = Some(key),
+            Ok(()) => {
+                *last_frame = Some(key);
+                // Paused on a short with its frame out: get its neighbours' first frames ready.
+                if let (Some(short_id), false) = (&status.short_id, playing) {
+                    if !runtime.warmed {
+                        runtime.warmed = true;
+                        let warmer = runtime.evaluator.decoder_warmer();
+                        warm_neighbour_shorts(app, warmer, short_id.clone());
+                    }
+                }
+            }
             // Taken up a moment ago: this frame is dropped and drawn again next tick.
             Err(mpsc::TrySendError::Full(_)) => {}
             Err(mpsc::TrySendError::Disconnected(_)) => {

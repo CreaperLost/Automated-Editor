@@ -1932,7 +1932,16 @@ pub fn project_short_view_impl(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    reader.short_view(&short_id)
+    let started = std::time::Instant::now();
+    let view = reader.short_view(&short_id)?;
+    if crate::media::profiling() {
+        let bytes = serde_json::to_vec(&view).map(|v| v.len()).unwrap_or(0);
+        eprintln!(
+            "[profile] short view: {:.1} ms, {bytes} bytes",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    Ok(view)
 }
 
 pub fn project_short_resync_impl(
@@ -1965,8 +1974,13 @@ pub fn playback_focus_short_impl(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
+    let started = std::time::Instant::now();
+    if short_id.is_some() {
+        crate::media::switch_started();
+    }
     let mut playback = state.playback.lock();
     playback.focus_short(short_id, &reader.history().current, start_us)?;
+    crate::media::profile("focus short", started);
     if play {
         playback.play()
     } else {

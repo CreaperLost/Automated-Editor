@@ -75,6 +75,25 @@ export function pausePlayback() {
   if (useProjectStore.getState().isPlaying) togglePlayback();
 }
 
+/** The short being handed the engine, while that is on its way. */
+let focusing: string | null = null;
+
+/**
+ * Gives the engine to short `shortId` from `startUs`, paused. Asking again for the short already
+ * on its way does nothing: a second focus would seek and throw away the frame being drawn.
+ */
+export function focusShortPlayback(projectHandle: string, shortId: string, startUs = 0) {
+  if (focusing === shortId) return Promise.resolve();
+  focusing = shortId;
+  return api
+    .playbackFocusShort(projectHandle, shortId, startUs, false)
+    .then((status) => useProjectStore.getState().applyPlaybackStatus(status))
+    .catch(() => undefined)
+    .finally(() => {
+      if (focusing === shortId) focusing = null;
+    });
+}
+
 /** Hands playback back to the video if a short has it. */
 export function releaseShortPlayback() {
   const { openedProject, playbackShortId, applyPlaybackStatus } = useProjectStore.getState();
