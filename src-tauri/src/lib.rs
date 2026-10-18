@@ -140,7 +140,12 @@ async fn project_create(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_recording_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    pick_directory_dialog(app, "Choose a Recording", commands::default_projects_dir()).await
+    // AeroShoot saves its recordings in Documents\AeroShootRec.
+    let recordings = dirs::document_dir()
+        .map(|docs| docs.join("AeroShootRec"))
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(commands::default_projects_dir);
+    pick_directory_dialog(app, "Choose a Recording", recordings).await
 }
 
 #[cfg(feature = "tauri-app")]

@@ -61,10 +61,11 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     sounds.find((s) => s.asset.id === cameraAsset && s.role === "mic") ?? sounds.find((s) => s.asset.id === cameraAsset);
   const voiceKey = voice ?? separate?.key ?? ownSound?.key ?? newest(sounds)?.key ?? "";
 
-  const importFiles = async () => {
+  /** Imports what `pick` chooses (files, or a .aero recording folder) and makes it the take. */
+  const importTake = async (pick: () => Promise<string[]>) => {
     setImporting(true);
     try {
-      const paths = await api.pickMediaFiles();
+      const paths = await pick();
       if (paths.length === 0) return;
       const before = new Set(project.assets.map((a) => a.id));
       const current = useProjectStore.getState().openedProject ?? project;
@@ -106,9 +107,35 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       <p className="text-studio-300 leading-relaxed">
         A take you recorded for this short: the camera and your voice. Footage from the video plays under it.
       </p>
-      <Button size="sm" variant="ghost" icon={FolderOpen} className="w-full" disabled={importing || !!busy} onClick={() => void importFiles()}>
-        {importing ? "Importing…" : "Import the take…"}
-      </Button>
+      <div className="flex gap-1.5">
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={FolderOpen}
+          className="flex-1"
+          disabled={importing || !!busy}
+          onClick={() => void importTake(() => api.pickMediaFiles())}
+          title="A camera video, and a separate microphone file if you used one"
+        >
+          {importing ? "Importing…" : "Import files…"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={Video}
+          className="flex-1"
+          disabled={importing || !!busy}
+          onClick={() =>
+            void importTake(async () => {
+              const folder = await api.pickRecordingFolder();
+              return folder ? [folder] : [];
+            })
+          }
+          title="An AeroShoot recording (.aero folder): its camera and microphone together"
+        >
+          Import a recording…
+        </Button>
+      </div>
       <label className="block space-y-1">
         <span className="text-studio-400">Camera</span>
         {select(cameraKey, setCamera, cameras, "Take camera", "No camera (voice only)")}
