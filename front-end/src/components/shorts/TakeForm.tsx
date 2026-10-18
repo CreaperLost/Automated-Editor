@@ -35,18 +35,31 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const [importing, setImporting] = useState(false);
   const cameras = useMemo(() => (project ? streams(project, "picture") : []), [project]);
   const sounds = useMemo(() => (project ? streams(project, "sound") : []), [project]);
-  // Unset: the newest camera, and its own sound (or the newest sound when it has none).
+  // Unset: worked out (see below).
   const [camera, setCamera] = useState<string>();
   const [voice, setVoice] = useState<string>();
   const [title, setTitle] = useState("");
+  const [clean, setClean] = useState(true);
   if (!project) return null;
 
   // A recording's camera, or a video file (its picture comes in as a screen until it is a take).
   const takeCameras = cameras.filter((c) => c.asset.kind !== "recording" || c.role === "webcam");
   const cameraKey = camera ?? newest(takeCameras)?.key ?? "";
   const cameraAsset = cameraKey.split(".")[0];
-  const ownSound = sounds.find((s) => s.asset.id === cameraAsset);
-  const voiceKey = voice ?? ownSound?.key ?? newest(sounds)?.key ?? "";
+  // The voice, as the app tells a take's files apart: a sound-only file imported with or after
+  // the camera (a separate microphone records better), else a recording's microphone, else the
+  // camera's own sound.
+  const cameraIndex = project.assets.findIndex((a) => a.id === cameraAsset);
+  const separate = newest(
+    sounds.filter(
+      (s) =>
+        !s.asset.streams.some((x) => x.kind === "picture") &&
+        project.assets.findIndex((a) => a.id === s.asset.id) > cameraIndex,
+    ),
+  );
+  const ownSound =
+    sounds.find((s) => s.asset.id === cameraAsset && s.role === "mic") ?? sounds.find((s) => s.asset.id === cameraAsset);
+  const voiceKey = voice ?? separate?.key ?? ownSound?.key ?? newest(sounds)?.key ?? "";
 
   const importFiles = async () => {
     setImporting(true);
@@ -60,10 +73,12 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       // What was just imported becomes the take.
       const added = next.assets.filter((a) => !before.has(a.id));
       const video = added.find((a) => a.streams.some((s) => s.kind === "picture"));
-      const audio = added.find((a) => a !== video && a.streams.some((s) => s.kind === "sound"));
-      if (video) setCamera(`${video.id}.${video.streams.find((s) => s.kind === "picture")!.id}`);
+      const audio = added.find((a) => !a.streams.some((s) => s.kind === "picture") && a.streams.some((s) => s.kind === "sound"));
+      // A recording's camera is its webcam; a video file's its picture.
+      const picture = video?.streams.find((s) => s.role === "webcam") ?? video?.streams.find((s) => s.kind === "picture");
+      if (video && picture) setCamera(`${video.id}.${picture.id}`);
       if (audio) setVoice(`${audio.id}.${audio.streams.find((s) => s.kind === "sound")!.id}`);
-      else if (video) setVoice(undefined);
+      else setVoice(undefined);
     } catch (err) {
       setShortsError(err);
     } finally {
@@ -72,7 +87,7 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   };
 
   const make = async () => {
-    if (await newShortFromTake(cameraKey || null, voiceKey || null, title.trim())) onDone();
+    if (await newShortFromTake(cameraKey || null, voiceKey || null, title.trim(), clean)) onDone();
   };
 
   const select = (value: string, onChange: (v: string) => void, options: Option[], label: string, none?: string) => (
@@ -106,6 +121,10 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
             ? "A separate microphone: lined up with the camera's own sound."
             : "The camera's own sound."}
         </span>
+      </label>
+      <label className="flex items-start gap-2 text-studio-300">
+        <input type="checkbox" checked={clean} onChange={(e) => setClean(e.target.checked)} className="mt-0.5 w-4 h-4" />
+        <span>Clean it after transcribing: cut the pauses between words and mute mouth noises (undoable)</span>
       </label>
       <input
         aria-label="Short title (also the file name)"

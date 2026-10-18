@@ -16,8 +16,20 @@ pub fn detect_transcript_pauses_impl(
     track_ids: Option<Vec<String>>,
     config: SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
+    detect_transcript_pauses_for(state, project_handle, track_id, track_ids, config, None)
+}
+
+/// [`detect_transcript_pauses_impl`] on the project's timeline, or on short `short`'s own.
+pub fn detect_transcript_pauses_for(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+    track_ids: Option<Vec<String>>,
+    config: SilenceConfig,
+    short: Option<&str>,
+) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
-    detect_non_speech_gaps_impl(
+    detect_non_speech_gaps_for(
         state,
         project_handle,
         track_id,
@@ -29,6 +41,7 @@ pub fn detect_transcript_pauses_impl(
             edge_threshold_db: -42.0,
             keep_sound_events: false,
         },
+        short,
     )
 }
 
@@ -38,6 +51,18 @@ pub fn detect_non_speech_gaps_impl(
     track_id: String,
     track_ids: Option<Vec<String>>,
     config: pauses::TranscriptGapConfig,
+) -> Result<SilenceDetectionResult, String> {
+    detect_non_speech_gaps_for(state, project_handle, track_id, track_ids, config, None)
+}
+
+/// [`detect_non_speech_gaps_impl`] on the project's timeline, or on short `short`'s own.
+pub fn detect_non_speech_gaps_for(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+    track_ids: Option<Vec<String>>,
+    config: pauses::TranscriptGapConfig,
+    short: Option<&str>,
 ) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
     let guard_secondary = track_ids.is_some();
@@ -53,14 +78,14 @@ pub fn detect_non_speech_gaps_impl(
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
+        let document = super::target_document(reader, short)?;
         let chosen = if track_ids.is_none() && track_id == ALL_SPEECH {
-            speech_on_timeline(reader.document())
+            speech_on_timeline(&document)
         } else {
             let ids = track_ids.unwrap_or_else(|| vec![track_id.clone()]);
             ids.into_iter()
                 .map(|key| {
-                    let clips = reader
-                        .document()
+                    let clips = document
                         .sequence
                         .tracks
                         .iter()
@@ -86,7 +111,7 @@ pub fn detect_non_speech_gaps_impl(
                 }
             }
             Ok((ctx, clips, transcript))
-        }).collect::<Result<Vec<_>, String>>().map(|sounds| (sounds, reader.document().revision))?
+        }).collect::<Result<Vec<_>, String>>().map(|sounds| (sounds, document.revision))?
     };
     let found = std::thread::scope(|scope| {
         let jobs: Vec<_> = sounds
@@ -331,6 +356,18 @@ pub fn apply_jump_cuts_impl(
     ranges: Vec<crate::zoom::EditedRange>,
     dependencies: Vec<crate::transcript::TranscriptDependency>,
 ) -> Result<crate::project::OpenedProject, String> {
+    apply_jump_cuts_for(state, handle, revision, ranges, dependencies, None)
+}
+
+/// [`apply_jump_cuts_impl`] on the project's timeline, or on short `short`'s own.
+pub fn apply_jump_cuts_for(
+    state: &AppState,
+    handle: String,
+    revision: u64,
+    ranges: Vec<crate::zoom::EditedRange>,
+    dependencies: Vec<crate::transcript::TranscriptDependency>,
+    short: Option<&str>,
+) -> Result<crate::project::OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
@@ -344,7 +381,7 @@ pub fn apply_jump_cuts_impl(
             ranges,
             ripple: Some(true),
         },
-        None,
+        short,
     )
 }
 

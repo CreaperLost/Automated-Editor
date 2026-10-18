@@ -1560,13 +1560,14 @@ export interface TakeShortMade {
   sync: TakeSync;
 }
 
-/** A stretch of footage to play under a take, on the short's own timeline. */
+/** A stretch of the video (as edited: only what it keeps) to play under a take, on the
+ *  short's own timeline from `atUs` to `toUs`. */
 export interface Footage {
   atUs: number;
   toUs: number;
-  media: string;
-  sourceStartUs: number;
-  stream?: string | null;
+  /** Where it starts on the video's timeline. */
+  videoUs: number;
+  /** Its game or desktop sound, ducked under the voice; default on. */
   sound?: boolean;
 }
 

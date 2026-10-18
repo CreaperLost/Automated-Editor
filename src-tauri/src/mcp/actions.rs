@@ -105,7 +105,8 @@ pub static ACTIONS: [ToolDef; 36] = [
             `mode: silence` listens to the audio; `mode: gaps` uses the transcript to cut gaps \
             without words, breaths and noises included. Presets gentle, balanced (default), \
             tight, aggressive; any setting can be given on its own. `stream: speech` listens to \
-            every microphone and cuts only where all are quiet. `apply: false` only reports.",
+            every microphone and cuts only where all are quiet. `short` cleans a take short's \
+            own timeline instead of the video's. `apply: false` only reports.",
         schema: schema::<SilenceArgs>,
         read_only: false,
         run: silence,
@@ -223,9 +224,10 @@ pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "short_from_take",
         description: "Makes a vertical short from a take: a new recording made for the short \
-            (the user retelling one part of the video to camera). `camera` names the camera \
-            video (media id or `<id>.<stream>`), `voice` a separate microphone; without \
-            `voice` the camera's own sound is the voice. A separate voice is lined up with \
+            (the user retelling one part of the video to camera). `media` lists the take's \
+            files and the app tells them apart (the picture is the camera; a sound-only file \
+            is the voice, else a recording's microphone, else the camera's own sound); or name \
+            them with `camera` and `voice`. A separate voice is lined up with \
             the camera's sound automatically. The short plays the take's camera and voice \
             with captions from the take's words; footage from the video goes under it with \
             `short_footage`. Transcribe the voice next (`transcribe` with its stream).",
@@ -238,9 +240,10 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "Footage under a short made from a take: what plays in the screen part \
             while the take talks. `op: add` places `items`: each under the take's words \
             `fromWord`..`toWord` (ids from `transcript_get` with the take's voice as `stream`) \
-            or seconds `atS`..`toS` on the short, showing the video from its word \
-            `sourceWord` (ids from the video's transcript) or `media` at `sourceS`; `sound` \
-            also plays that footage's game or desktop sound, ducked under the voice. Where no \
+            or seconds `atS`..`toS` on the short, showing the video as edited (only what it \
+            keeps, its cuts included) from its word `sourceWord` (an id from the video's \
+            transcript) or from `videoS` seconds on its timeline; the footage's game or \
+            desktop sound plays ducked under the voice (`sound: false` mutes it). Where no \
             footage plays, the camera fills the frame. `op: remove` takes it off \
             `fromS`..`toS` (all without them); `op: list` (default) lists it.",
         schema: schema::<ShortFootageArgs>,
@@ -1385,6 +1388,10 @@ pub struct SilenceArgs {
     /// false: only report what was found. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// A short made from a take (its id): clean its own timeline, the take, instead of the
+    /// video's. Its speech is listened to unless `stream` says otherwise.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 fn silence(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -1397,6 +1404,12 @@ const ALL_SPEECH: &str = "speech";
 fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
     let before = opened(ctx)?;
     let preset = args.preset.unwrap_or_default();
+    let short = args
+        .short
+        .as_deref()
+        .map(|s| take_short_id(ctx, s))
+        .transpose()?;
+    let short = short.as_deref();
     let (result, described) = match args.mode {
         SilenceMode::Silence => {
             let (threshold, min, padding) = preset.silence();
@@ -1412,6 +1425,7 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
             let key = match args.stream {
                 Some(key) if key == ALL_SPEECH => key,
                 Some(key) => pick_sound(ctx, Some(key), Want::Speech)?,
+                None if short.is_some() => ALL_SPEECH.to_string(),
                 None => with_reader(ctx.state, |reader| {
                     let speech = sounds(reader)
                         .into_iter()
@@ -1438,15 +1452,20 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
             );
             ctx.progress(0.1, &format!("Finding silence in {key}"));
             let result = match args.protect {
-                Some(second) => commands::detect_silence_sources_impl(
+                Some(second) => commands::detect_silence_sources_for(
                     ctx.state,
                     before.handle.clone(),
                     vec![key, second],
                     config,
+                    short,
                 )?,
-                None => {
-                    commands::detect_silence_impl(ctx.state, before.handle.clone(), key, config)?
-                }
+                None => commands::detect_silence_for(
+                    ctx.state,
+                    before.handle.clone(),
+                    key,
+                    config,
+                    short,
+                )?,
             };
             (result, described)
         }
@@ -1462,6 +1481,7 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
             // Every microphone: each needs its transcript, which the pass checks.
             let key = match args.stream {
                 Some(key) if key == ALL_SPEECH => key,
+                None if short.is_some() => ALL_SPEECH.to_string(),
                 stream => pick_sound(ctx, stream, Want::Transcribed)?,
             };
             let described = format!(
@@ -1471,12 +1491,13 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
             );
             ctx.progress(0.1, &format!("Finding gaps without words in {key}"));
             let ids = args.protect.map(|second| vec![key.clone(), second]);
-            let result = commands::transcript_pauses::detect_non_speech_gaps_impl(
+            let result = commands::transcript_pauses::detect_non_speech_gaps_for(
                 ctx.state,
                 before.handle.clone(),
                 key,
                 ids,
                 config,
+                short,
             )?;
             (result, described)
         }
@@ -1509,14 +1530,18 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
                 end_us: s.end_us,
             })
             .collect();
-        commands::transcript_pauses::apply_jump_cuts_impl(
+        commands::transcript_pauses::apply_jump_cuts_for(
             ctx.state,
             before.handle.clone(),
             before.revision,
             ranges,
             result.transcript_dependencies.clone(),
+            short,
         )?;
-        lines.push("Cut them from every track.".into());
+        lines.push(match short {
+            Some(id) => format!("Cut them from every track of short {id}."),
+            None => "Cut them from every track.".into(),
+        });
     }
     lines.extend(result.diagnostics);
     applied(
@@ -2448,6 +2473,10 @@ fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct ShortFromTakeArgs {
     pub title: String,
+    /// The take's files (media ids); the app tells the camera from the microphone. Or name
+    /// them with `camera` and `voice`.
+    #[serde(default)]
+    pub media: Vec<String>,
     /// The take's camera: a media id (its camera, else its picture) or `<id>.<stream>`.
     #[serde(default)]
     pub camera: Option<String>,
@@ -2470,6 +2499,7 @@ fn short_from_take(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         args.title,
         args.camera,
         args.voice,
+        args.media,
         args.idea,
     )?;
     let short = made
@@ -2538,21 +2568,17 @@ pub struct FootageItemArgs {
     pub at_s: Option<f64>,
     #[serde(default)]
     pub to_s: Option<f64>,
-    /// What shows: the video from this word (an id from the video's transcript)...
+    /// What shows: the edited video from this word on (an id from the video's transcript; it
+    /// must be one the video keeps)...
     #[serde(default)]
     pub source_word: Option<String>,
     /// The sound whose transcript `sourceWord` is from; default the video's speech.
     #[serde(default)]
     pub source_stream: Option<String>,
-    /// ...or media `media` from `sourceS` seconds into it.
+    /// ...or from `videoS` seconds on the video's timeline (the times `transcript_get` shows).
     #[serde(default)]
-    pub media: Option<String>,
-    #[serde(default)]
-    pub source_s: Option<f64>,
-    /// Its picture stream; default its screen.
-    #[serde(default)]
-    pub picture: Option<String>,
-    /// Also play the footage's game or desktop sound, ducked under the voice.
+    pub video_s: Option<f64>,
+    /// Play the footage's game or desktop sound, ducked under the voice. Default true.
     #[serde(default)]
     pub sound: Option<bool>,
 }
@@ -2603,7 +2629,9 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ));
     }
     let list = |short: &crate::shorts::Short| -> Result<Vec<String>, String> {
-        let placed = crate::take_short::placed(short)?;
+        let placed = with_reader(ctx.state, |reader| {
+            crate::take_short::placed(reader.document(), short)
+        })?;
         if placed.is_empty() {
             return Ok(vec![format!(
                 "No footage under {} yet: the camera fills the frame.",
@@ -2613,13 +2641,14 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Ok(placed
             .iter()
             .map(|f| {
+                let from = f
+                    .video_us
+                    .map(|v| format!("the video at {}", clock(v)))
+                    .unwrap_or_else(|| "a part of the video cut since".into());
                 format!(
-                    "{}-{}: {}.{} from {}{}",
+                    "{}-{}: {from}{}",
                     clock(f.at_us),
                     clock(f.to_us),
-                    f.media,
-                    f.stream,
-                    clock(f.source_start_us),
                     if f.sound { ", with its sound" } else { "" }
                 )
             })
@@ -2652,7 +2681,7 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                             return Err("Each item needs `fromWord`/`toWord` or `atS`/`toS`".into())
                         }
                     };
-                    let (media, source_start_us) = match (&item.source_word, &item.media) {
+                    let video_us = match (&item.source_word, item.video_s) {
                         (Some(word), _) => {
                             let key = match &item.source_stream {
                                 Some(key) => key.clone(),
@@ -2660,25 +2689,28 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                             };
                             let transcript = store::load_transcript(reader.root(), &key)?
                                 .ok_or_else(|| format!("{key} is not transcribed"))?;
-                            let range =
-                                crate::take_short::source_of_words(&transcript, word, None)?;
-                            let asset = crate::sequence::StreamRef::parse(&key)
-                                .ok_or("Not a sound key")?
-                                .asset;
-                            (asset, range.start_us)
+                            let source = transcript
+                                .words
+                                .iter()
+                                .find(|w| &w.id == word)
+                                .ok_or_else(|| format!("No word {word} in {key}"))?;
+                            // Only what the video keeps: the word must be on its timeline.
+                            reader
+                                .document()
+                                .transcript_clock(&key)?
+                                .source_to_edited_us(source.source_start_us)
+                                .ok_or_else(|| {
+                                    format!("Word {word} was cut from the video; pick one it keeps")
+                                })?
                         }
-                        (None, Some(media)) => {
-                            (media.clone(), to_us(item.source_s.unwrap_or(0.0))?)
-                        }
-                        _ => return Err("Each item needs `sourceWord` or `media`".into()),
+                        (None, Some(seconds)) => to_us(seconds)?,
+                        _ => return Err("Each item needs `sourceWord` or `videoS`".into()),
                     };
                     out.push(crate::take_short::Footage {
                         at_us,
                         to_us: to,
-                        media,
-                        source_start_us,
-                        stream: item.picture.clone(),
-                        sound: item.sound.unwrap_or(false),
+                        video_us,
+                        sound: item.sound.unwrap_or(true),
                     });
                 }
                 Ok(out)
@@ -2701,6 +2733,29 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let mut lines = vec![format!("Footage under {} now:", short.id)];
     lines.extend(list(after)?);
     text(applied(ctx, "short_footage", &before, lines)?)
+}
+
+/// The id of the take short `wanted` names (its id or title).
+fn take_short_id(ctx: &Ctx, wanted: &str) -> Result<String, String> {
+    with_reader(ctx.state, |reader| {
+        let shorts = &reader.document().shorts;
+        let short = shorts
+            .iter()
+            .find(|s| s.id == wanted)
+            .or_else(|| {
+                shorts
+                    .iter()
+                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
+            })
+            .ok_or_else(|| format!("No short {wanted}"))?;
+        if short.take.is_none() {
+            return Err(format!(
+                "{} is cut from the video: clean the video itself, and the short follows",
+                short.id
+            ));
+        }
+        Ok(short.id.clone())
+    })
 }
 
 /// The video's transcribed speech: the first transcribed sound on the main timeline that is

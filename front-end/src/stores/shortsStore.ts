@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "../lib/ipc";
+import { GAP_PRESETS } from "../lib/jumpCutConfig";
 import { clipAt, soundSources } from "../lib/sequence";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
@@ -246,7 +247,7 @@ export function findShorts() {
  * microphone (`voice`); media ids or stream keys. Its voice is transcribed next, for captions
  * and for the agent to find footage by.
  */
-export async function newShortFromTake(camera: string | null, voice: string | null, title: string) {
+export async function newShortFromTake(camera: string | null, voice: string | null, title: string, clean = true) {
   const current = useProjectStore.getState().openedProject;
   if (!current || useShortsStore.getState().busy) return false;
   set({ busy: "Making the short", error: undefined, notice: undefined });
@@ -279,12 +280,56 @@ export async function newShortFromTake(camera: string | null, voice: string | nu
   set({ notice: `${synced}Transcribing the take for its captions…` });
   void api
     .transcriptRun(handle, voiceKey)
-    .then(() => {
+    .then(async () => {
       useProjectStore.getState().bumpCaptions();
-      set({ notice: `${synced}Transcribed. Ask the agent to pick footage from the video for it.` });
+      if (clean) {
+        await cleanTake(made.shortId, voiceKey, synced);
+      } else {
+        set({ notice: `${synced}Transcribed. Ask the agent to pick footage from the video for it.` });
+      }
     })
     .catch((err) => set({ notice: undefined, error: `Couldn't transcribe the take: ${errorMessage(err)}` }));
   return true;
+}
+
+/**
+ * Cleans a take on its short's own timeline, as Cleanup does for the video: cuts the gaps
+ * between its words (the balanced jump cuts) and mutes the mouth noises clear of speech.
+ * Each is one undo step. Needs the take's transcript.
+ */
+export async function cleanTake(shortId: string, voice: string, before = "") {
+  const start = useProjectStore.getState().openedProject;
+  if (!start || useShortsStore.getState().busy) return;
+  const handle = start.projectHandle;
+  set({ busy: "Cleaning the take", error: undefined, notice: `${before}Cleaning the take…` });
+  try {
+    const gaps = await api.detectNonSpeechGaps(handle, "speech", GAP_PRESETS.balanced.config, undefined, shortId);
+    const ranges = gaps.suggestions.map(({ startUs, endUs }) => ({ startUs, endUs }));
+    const cutUs = ranges.reduce((sum, r) => sum + (r.endUs - r.startUs), 0);
+    let revision = useProjectStore.getState().openedProject?.revision ?? start.revision;
+    if (ranges.length > 0) {
+      const cut = await api.applyJumpCuts(handle, revision, ranges, gaps.transcriptDependencies, shortId);
+      await useProjectStore.getState().applyOpenedProject(cut);
+      revision = cut.revision;
+    }
+    const scan = await api.detectMouthNoises(handle, voice, 0.5, 20);
+    const noises = scan.noises.filter((n) => !n.nearSpeech && !n.muted && n.kind !== null);
+    if (noises.length > 0) {
+      const muted = await api.projectNoiseMutes(handle, revision, voice, noises.flatMap((n) => n.parts));
+      await useProjectStore.getState().applyOpenedProject(muted);
+    }
+    set({
+      notice:
+        `${before}Cleaned the take: cut ${ranges.length} pause${ranges.length === 1 ? "" : "s"} ` +
+        `(${(cutUs / 1e6).toFixed(1)} s) and muted ${noises.length} mouth noise${noises.length === 1 ? "" : "s"}; ` +
+        "Undo takes either back. Next: ask the agent to pick footage from the video.",
+    });
+  } catch (err) {
+    setShortsError(`Couldn't clean the take: ${errorMessage(err)}`);
+    set({ notice: undefined });
+  } finally {
+    set({ busy: null });
+  }
 }
 
 /** Takes the footage off `[fromUs, toUs)` of a take short's timeline. */

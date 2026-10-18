@@ -305,9 +305,10 @@ export const api = {
     invokeTauri<ExportStatus>("export_status", { jobId: jobId ?? null }),
   exportCancel: (jobId: string) => invokeTauri<ExportStatus>("export_cancel", { jobId }),
   detectSilence: (projectHandle: string, trackId: string, config: SilenceConfig, trackIds?: string[], transcriptAssisted = false) =>
-    invokeTauri<SilenceDetectionResult>("detect_silence", { projectHandle, trackId, config, trackIds, transcriptAssisted }),
-  detectNonSpeechGaps: (projectHandle: string, trackId: string, config: TranscriptGapConfig, trackIds?: string[]) =>
-    invokeTauri<SilenceDetectionResult>("detect_non_speech_gaps", { projectHandle, trackId, config, trackIds }),
+    invokeTauri<SilenceDetectionResult>("detect_silence", { projectHandle, trackId, config, trackIds, transcriptAssisted, shortId: editTarget }),
+  /** `shortId`: a short's own timeline instead of the edit target's. */
+  detectNonSpeechGaps: (projectHandle: string, trackId: string, config: TranscriptGapConfig, trackIds?: string[], shortId: string | null = editTarget) =>
+    invokeTauri<SilenceDetectionResult>("detect_non_speech_gaps", { projectHandle, trackId, config, trackIds, shortId }),
   /**
    * Clicks, smacks, knocks and breaths in sound `key`, found in its audio; `sensitivity` 0 to 1,
    * `paddingMs` the room muted either side of each (never into speech).
@@ -319,8 +320,8 @@ export const api = {
   /** Mutes (or unmutes) moments of sound `key`'s own time: one undoable edit. */
   projectNoiseMutes: (projectHandle: string, expectedRevision: number, key: string, ranges: SourceSpan[], unmute = false) =>
     invokeTauri<OpenedProject>("project_noise_mutes", { projectHandle, expectedRevision, key, ranges, unmute }),
-  applyJumpCuts: (projectHandle: string, expectedRevision: number, ranges: {startUs: number; endUs: number}[], transcriptDependencies: TranscriptDependency[]) =>
-    invokeTauri<OpenedProject>("apply_jump_cuts", { projectHandle, expectedRevision, ranges, transcriptDependencies }),
+  applyJumpCuts: (projectHandle: string, expectedRevision: number, ranges: {startUs: number; endUs: number}[], transcriptDependencies: TranscriptDependency[], shortId: string | null = editTarget) =>
+    invokeTauri<OpenedProject>("apply_jump_cuts", { projectHandle, expectedRevision, ranges, transcriptDependencies, shortId }),
   transcriptSettingsGet: () => invokeTauri<TranscriptSettingsView>("transcript_settings_get"),
   transcriptSettingsSet: (settings: TranscriptSettings) =>
     invokeTauri<TranscriptSettingsView>("transcript_settings_set", { settings }),
@@ -537,6 +538,7 @@ export const api = {
       title,
       camera,
       voice,
+      media: null,
       reason: null,
     }),
   projectShortFootage: (projectHandle: string, expectedRevision: number, shortId: string, change: FootageChange) =>

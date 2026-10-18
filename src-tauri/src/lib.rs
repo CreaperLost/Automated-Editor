@@ -761,29 +761,34 @@ async fn detect_silence(
     config: dsp::SilenceConfig,
     track_ids: Option<Vec<String>>,
     transcript_assisted: Option<bool>,
+    short_id: Option<String>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let short = short_id.as_deref();
         if transcript_assisted.unwrap_or(false) {
-            return commands::transcript_pauses::detect_transcript_pauses_impl(
+            return commands::transcript_pauses::detect_transcript_pauses_for(
                 &app.state::<AppState>(),
                 project_handle,
                 track_id,
                 track_ids,
                 config,
+                short,
             );
         }
         match track_ids {
-            Some(ids) => commands::detect_silence_sources_impl(
+            Some(ids) => commands::detect_silence_sources_for(
                 &app.state::<AppState>(),
                 project_handle,
                 ids,
                 config,
+                short,
             ),
-            None => commands::detect_silence_impl(
+            None => commands::detect_silence_for(
                 &app.state::<AppState>(),
                 project_handle,
                 track_id,
                 config,
+                short,
             ),
         }
     })
@@ -805,14 +810,16 @@ async fn detect_non_speech_gaps(
     track_id: String,
     track_ids: Option<Vec<String>>,
     config: transcript::pauses::TranscriptGapConfig,
+    short_id: Option<String>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::transcript_pauses::detect_non_speech_gaps_impl(
+        commands::transcript_pauses::detect_non_speech_gaps_for(
             &app.state::<AppState>(),
             project_handle,
             track_id,
             track_ids,
             config,
+            short_id.as_deref(),
         )
     })
     .await
@@ -885,13 +892,15 @@ fn apply_jump_cuts(
     expected_revision: u64,
     ranges: Vec<zoom::EditedRange>,
     transcript_dependencies: Vec<transcript::TranscriptDependency>,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::transcript_pauses::apply_jump_cuts_impl(
+    commands::transcript_pauses::apply_jump_cuts_for(
         &state,
         project_handle,
         expected_revision,
         ranges,
         transcript_dependencies,
+        short_id.as_deref(),
     )
 }
 
@@ -981,6 +990,7 @@ async fn project_short_from_take(
     title: String,
     camera: Option<String>,
     voice: Option<String>,
+    media: Option<Vec<String>>,
     reason: Option<String>,
 ) -> Result<commands::TakeShortMade, String> {
     commands::project_short_from_take_impl(
@@ -990,6 +1000,7 @@ async fn project_short_from_take(
         title,
         camera,
         voice,
+        media.unwrap_or_default(),
         reason,
     )
 }

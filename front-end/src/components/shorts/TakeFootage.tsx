@@ -1,10 +1,11 @@
 import React from "react";
-import { Film, Trash2 } from "lucide-react";
+import { Film, Sparkles, Trash2 } from "lucide-react";
 import { seekPlayback } from "../../lib/playbackControl";
 import { assetById } from "../../lib/sequence";
 import type { OpenedProject, Short } from "../../lib/types";
-import { removeFootage, useShortsStore } from "../../stores/shortsStore";
+import { cleanTake, removeFootage, useShortsStore } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { Button } from "../ui";
 
 function formatTime(us: number): string {
   const total = Math.max(0, us) / 1_000_000;
@@ -47,6 +48,22 @@ export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewi
         <dt className="text-studio-500">Voice</dt>
         <dd className="truncate text-studio-200">{streamName(project, take.voice)}</dd>
       </dl>
+      <ol className="list-decimal pl-4 space-y-0.5 text-meta text-studio-400">
+        <li>Transcribe the take (Transcript, beside Shorts).</li>
+        <li>Clean it: pauses and mouth noises, or by hand in Jump cuts and Mouth noises.</li>
+        <li>Footage: the agent picks it from the video for each sentence.</li>
+      </ol>
+      <Button
+        size="sm"
+        variant="secondary"
+        icon={Sparkles}
+        className="w-full"
+        disabled={!!busy || !viewing}
+        onClick={() => void cleanTake(short.id, take.voice)}
+        title="Cut the pauses between the take's words and mute its mouth noises (balanced settings; undoable). Needs the take's transcript."
+      >
+        {busy === "Cleaning the take" ? "Cleaning…" : "Clean the take"}
+      </Button>
       {footage.length === 0 ? (
         <p className="text-meta text-studio-500 leading-relaxed">
           No footage yet: the camera fills the frame. Ask the agent to pick footage from the video for each sentence

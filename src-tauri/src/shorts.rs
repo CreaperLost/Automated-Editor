@@ -490,6 +490,22 @@ pub fn slice_sequence(
     out
 }
 
+/// The short a sound is the take of, when it plays only there (not on the video's timeline):
+/// its words and cuts are then on that short's timeline.
+pub fn take_short_of<'a>(document: &'a EditDocument, key: &str) -> Option<&'a Short> {
+    let on_video = document
+        .sequence
+        .clips()
+        .any(|(_, c)| format!("{}.{}", c.asset, c.stream) == key);
+    if on_video {
+        return None;
+    }
+    document
+        .shorts
+        .iter()
+        .find(|s| s.take.as_ref().is_some_and(|t| t.voice == key))
+}
+
 /// The short as a timeline of its own, in the short's time: its own edit when it has one,
 /// else its stretch of the video (every track).
 pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument, String> {

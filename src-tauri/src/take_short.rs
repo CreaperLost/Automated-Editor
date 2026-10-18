@@ -10,7 +10,7 @@
 
 use crate::project::revision::EditDocument;
 use crate::sequence::{
-    clock, Asset, Clip, Role, Sequence, SourceRange, StreamKind, StreamRef, Track, TrackKind,
+    clock, Asset, Clip, Role, Sequence, StreamKind, StreamRef, Track, TrackKind,
 };
 use crate::short_scenes::{Scene, SceneMode};
 use crate::shorts::{Short, ShortEdit, ShortLayout, ShortTake};
@@ -42,6 +42,57 @@ pub struct TakeSync {
     /// How well the camera's own sound matched the voice (0 to 1); `None` when nothing was
     /// compared (one file, or a camera without sound).
     pub score: Option<f32>,
+}
+
+/// Works out what each of a take's files is: the one with a picture is the camera (a
+/// recording's camera); the voice is a sound-only file when there is one (a separate
+/// microphone records better than a camera's), else a recording's microphone, else the
+/// camera's own sound.
+pub fn guess(document: &EditDocument, media: &[String]) -> Result<TakeSources, String> {
+    let assets = media
+        .iter()
+        .map(|id| {
+            document
+                .asset(id)
+                .filter(|a| !a.is_still())
+                .ok_or_else(|| format!("No recording or file {id} in the project"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let picture = |a: &Asset| {
+        a.streams
+            .iter()
+            .find(|s| s.kind == StreamKind::Picture && s.role == Role::Webcam)
+            .or_else(|| {
+                (!a.is_recording())
+                    .then(|| a.streams.iter().find(|s| s.kind == StreamKind::Picture))
+                    .flatten()
+            })
+            .map(|s| StreamRef::new(&a.id, &s.id))
+    };
+    let first_sound = |a: &Asset, role: Option<Role>| {
+        a.streams
+            .iter()
+            .find(|s| s.kind == StreamKind::Sound && role.is_none_or(|r| s.role == r))
+            .map(|s| StreamRef::new(&a.id, &s.id))
+    };
+    let camera = assets.iter().find_map(|a| picture(a));
+    let separate = assets
+        .iter()
+        .filter(|a| !a.streams.iter().any(|s| s.kind == StreamKind::Picture))
+        .find_map(|a| first_sound(a, None));
+    let recorded = assets
+        .iter()
+        .filter(|a| a.is_recording())
+        .find_map(|a| first_sound(a, Some(Role::Mic)));
+    let own = camera
+        .as_ref()
+        .and_then(|c| document.asset(&c.asset))
+        .and_then(|a| first_sound(a, None));
+    let voice = separate
+        .or(recorded)
+        .or(own)
+        .ok_or("None of these has sound: add the microphone file too")?;
+    Ok(TakeSources { camera, voice })
 }
 
 /// The streams of `document` a take uses, from what the caller named: stream keys, or asset
@@ -339,22 +390,23 @@ pub fn new_short(
     Ok(short)
 }
 
-/// A stretch of footage to play under a take.
+/// A stretch of footage to play under a take: a stretch of the video as it is edited, so only
+/// what the video keeps (its cuts included).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Footage {
     /// Where it plays on the short's own timeline.
     pub at_us: u64,
     pub to_us: u64,
-    /// The media it comes from, and where in its time it starts.
-    pub media: String,
-    pub source_start_us: u64,
-    /// Its picture; default its screen.
-    #[serde(default)]
-    pub stream: Option<String>,
-    /// Also play its own background sound (game, desktop), ducked under the voice.
-    #[serde(default)]
+    /// Where it starts on the video's timeline.
+    pub video_us: u64,
+    /// Also play the footage's own background sound (game, desktop), ducked under the voice.
+    #[serde(default = "yes")]
     pub sound: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// What footage a take short plays, in order.
@@ -366,7 +418,8 @@ pub struct PlacedFootage {
     pub to_us: u64,
     pub media: String,
     pub stream: String,
-    pub source_start_us: u64,
+    /// Where it is on the video's timeline now; `None` once the video cut it.
+    pub video_us: Option<u64>,
     pub sound: bool,
 }
 
@@ -457,25 +510,32 @@ fn length(sequence: &Sequence) -> u64 {
         .unwrap_or(0)
 }
 
-/// The picture of `asset` footage shows: `stream`, else its screen, else its first picture.
-fn footage_picture(asset: &Asset, stream: Option<&str>) -> Result<String, String> {
-    let found = match stream {
-        Some(id) => asset.stream(id).filter(|s| s.kind == StreamKind::Picture),
-        None => asset
-            .streams
-            .iter()
-            .find(|s| s.kind == StreamKind::Picture && s.role == Role::Screen)
-            .or_else(|| {
-                asset
-                    .streams
-                    .iter()
-                    .find(|s| s.kind == StreamKind::Picture && s.role != Role::Webcam)
-            })
-            .or_else(|| asset.streams.iter().find(|s| s.kind == StreamKind::Picture)),
-    };
-    found
-        .map(|s| s.id.clone())
-        .ok_or_else(|| format!("{} has no picture to show", asset.name))
+/// What `[from, to)` of the video's timeline plays, by role, from 0: its screen pictures
+/// (lower tracks first, so a higher one wins) and its background sounds.
+fn video_stretch(document: &EditDocument, from: u64, to: u64) -> (Vec<Clip>, Vec<Clip>) {
+    let slice = crate::shorts::slice_sequence(&document.sequence, &document.assets, from, to);
+    let mut pictures = Vec::new();
+    let mut sounds = Vec::new();
+    for track in &slice.tracks {
+        let skip = match track.kind {
+            TrackKind::Video => track.hidden,
+            TrackKind::Audio => track.muted,
+        };
+        if skip {
+            continue;
+        }
+        for clip in &track.clips {
+            if document.asset(&clip.asset).is_some_and(|a| a.is_graphic()) {
+                continue;
+            }
+            match crate::sequence::clip_role(&document.assets, track, clip) {
+                Some(Role::Screen) => pictures.push(clip.clone()),
+                Some(Role::Background) => sounds.push(clip.clone()),
+                _ => {}
+            }
+        }
+    }
+    (pictures, sounds)
 }
 
 /// Plays `footage` under the take, over whatever footage was there.
@@ -492,17 +552,21 @@ pub fn place(document: &EditDocument, short: &mut Short, footage: &Footage) -> R
             end as f64 / 1e6
         ));
     }
-    let asset = document
-        .asset(&footage.media)
-        .ok_or_else(|| format!("No media {} in the project", footage.media))?;
-    let picture = footage_picture(asset, footage.stream.as_deref())?;
     let duration = to - at;
-    if !asset.holds(footage.source_start_us, duration) {
+    let video_end = document.duration_us();
+    if footage.video_us + duration > video_end {
         return Err(format!(
-            "{} has no {:.1} s from {:.1} s",
-            asset.name,
+            "The video has no {:.1} s from {:.1} s (it is {:.1} s long)",
             duration as f64 / 1e6,
-            footage.source_start_us as f64 / 1e6
+            footage.video_us as f64 / 1e6,
+            video_end as f64 / 1e6
+        ));
+    }
+    let (pictures, sounds) = video_stretch(document, footage.video_us, footage.video_us + duration);
+    if pictures.is_empty() {
+        return Err(format!(
+            "No screen plays at {:.1} s of the video",
+            footage.video_us as f64 / 1e6
         ));
     }
     let mut next_clip = next_number('c', sequence.clips().map(|(_, c)| c.id.as_str()));
@@ -510,47 +574,27 @@ pub fn place(document: &EditDocument, short: &mut Short, footage: &Footage) -> R
         "l{}",
         next_number('l', sequence.clips().filter_map(|(_, c)| c.link.as_deref()))
     );
-    let sound = footage
-        .sound
-        .then(|| {
-            asset
-                .streams
-                .iter()
-                .find(|s| s.kind == StreamKind::Sound && s.role == Role::Background)
-                .map(|s| s.id.clone())
-        })
-        .flatten();
-    // Any sound of the footage there before goes with its picture.
-    let index = role_track(sequence, TrackKind::Audio, Role::Background, &mut taken);
-    clear_range(&mut sequence.tracks[index], at, to, &mut next_clip);
-    let mut place_on = |sequence: &mut Sequence, kind, role, stream: &str, linked: bool| {
+    let mut lay = |sequence: &mut Sequence, kind, role, clips: &[Clip]| {
         let index = role_track(sequence, kind, role, &mut taken);
         let track = &mut sequence.tracks[index];
+        // Any footage there before goes, picture and sound.
         clear_range(track, at, to, &mut next_clip);
-        let id = format!("c{next_clip}");
-        next_clip += 1;
-        track.clips.push(Clip {
-            id,
-            asset: asset.id.clone(),
-            stream: stream.into(),
-            start_us: at,
-            in_us: footage.source_start_us,
-            duration_us: duration,
-            link: linked.then(|| link.clone()),
-            fit: Default::default(),
-        });
-        track.clips.sort_by_key(|c| c.start_us);
+        for clip in clips {
+            let start = at + clip.start_us;
+            clear_range(track, start, start + clip.duration_us, &mut next_clip);
+            track.clips.push(Clip {
+                id: format!("c{next_clip}"),
+                start_us: start,
+                link: Some(link.clone()),
+                ..clip.clone()
+            });
+            next_clip += 1;
+            track.clips.sort_by_key(|c| c.start_us);
+        }
     };
-    place_on(
-        sequence,
-        TrackKind::Video,
-        Role::Screen,
-        &picture,
-        sound.is_some(),
-    );
-    if let Some(sound) = &sound {
-        place_on(sequence, TrackKind::Audio, Role::Background, sound, true);
-    }
+    lay(sequence, TrackKind::Video, Role::Screen, &pictures);
+    let sounds = if footage.sound { sounds } else { Vec::new() };
+    lay(sequence, TrackKind::Audio, Role::Background, &sounds);
     crate::sequence::validate_sequence(sequence, &document.assets)?;
     short.layout.scenes = camera_scenes(short)?;
     Ok(())
@@ -575,8 +619,8 @@ pub fn remove(
     Ok(())
 }
 
-/// The footage the short plays, in order.
-pub fn placed(short: &Short) -> Result<Vec<PlacedFootage>, String> {
+/// The footage the short plays, in order, and where each piece is on the video now.
+pub fn placed(document: &EditDocument, short: &Short) -> Result<Vec<PlacedFootage>, String> {
     let sequence = own(short)?;
     let sounds: Vec<&Clip> = sequence
         .tracks
@@ -595,11 +639,10 @@ pub fn placed(short: &Short) -> Result<Vec<PlacedFootage>, String> {
             to_us: c.end_us(),
             media: c.asset.clone(),
             stream: c.stream.clone(),
-            source_start_us: c.in_us,
-            sound: c.link.is_some()
-                && sounds
-                    .iter()
-                    .any(|s| s.link == c.link && s.asset == c.asset),
+            video_us: document
+                .picture_clock(&c.asset)
+                .source_to_edited_us(c.in_us),
+            sound: c.link.is_some() && sounds.iter().any(|s| s.link == c.link),
         })
         .collect();
     out.sort_by_key(|f| f.at_us);
@@ -692,30 +735,6 @@ pub fn words_at(
     Ok((start, end))
 }
 
-/// The range of `asset` a stretch of the video's words covers, on that asset's clock.
-pub fn source_of_words(
-    transcript: &crate::transcript::Transcript,
-    from: &str,
-    to: Option<&str>,
-) -> Result<SourceRange, String> {
-    let word = |id: &str| {
-        transcript
-            .words
-            .iter()
-            .find(|w| w.id == id)
-            .ok_or_else(|| format!("No word {id} in the video's transcript"))
-    };
-    let first = word(from)?;
-    let end = match to {
-        Some(to) => word(to)?.source_end_us,
-        None => first.source_end_us,
-    };
-    Ok(SourceRange {
-        start_us: first.source_start_us,
-        end_us: end.max(first.source_start_us + 1),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +803,28 @@ mod tests {
     }
 
     #[test]
+    fn a_takes_files_are_told_apart() {
+        let document = document();
+        // A camera with its own sound and a microphone file: the microphone is the voice.
+        let both = guess(&document, &["mic".into(), "cam".into()]).unwrap();
+        assert_eq!(both.camera, Some(StreamRef::new("cam", "picture")));
+        assert_eq!(both.voice, StreamRef::new("mic", "sound0"));
+        // The camera alone: its own sound.
+        let camera = guess(&document, &["cam".into()]).unwrap();
+        assert_eq!(camera.voice, StreamRef::new("cam", "sound0"));
+        // A recording: its camera and its microphone.
+        let recording = guess(&document, &["rec".into()]).unwrap();
+        assert_eq!(recording.camera, Some(StreamRef::new("rec", "webcam")));
+        assert_eq!(recording.voice, StreamRef::new("rec", "mic"));
+        // A microphone alone: a voice-only take.
+        let voice = guess(&document, &["mic".into()]).unwrap();
+        assert_eq!(
+            (voice.camera, voice.voice),
+            (None, StreamRef::new("mic", "sound0"))
+        );
+    }
+
+    #[test]
     fn a_separate_microphone_is_the_voice_and_the_camera_is_lined_up_with_it() {
         let document = document();
         let sources = resolve(&document, Some("cam"), Some("mic")).unwrap();
@@ -810,6 +851,20 @@ mod tests {
     #[test]
     fn footage_plays_under_the_take_and_the_camera_fills_the_gaps() {
         let mut document = document();
+        // The video cut 20-25 s: footage from 18 s plays 18-20 s, then 25 s on.
+        document.sequence = crate::sequence::edit::apply(
+            &document.sequence,
+            &document.assets,
+            &crate::sequence::edit::SequenceEdit::DeleteRange {
+                ranges: vec![crate::zoom::EditedRange {
+                    start_us: 20 * S,
+                    end_us: 25 * S,
+                }],
+                ripple: Some(true),
+            },
+        )
+        .unwrap()
+        .0;
         let sources = resolve(&document, Some("cam"), None).unwrap();
         let sync = TakeSync {
             offset_us: 0,
@@ -820,54 +875,86 @@ mod tests {
         let footage = Footage {
             at_us: 5 * S,
             to_us: 10 * S,
-            media: "rec".into(),
-            source_start_us: 20 * S,
-            stream: None,
+            video_us: 18 * S,
             sound: true,
         };
         place(&document, &mut short, &footage).unwrap();
-        let placed_now = placed(&short).unwrap();
-        assert_eq!(placed_now.len(), 1);
+        let sequence = &short.edit.as_ref().unwrap().sequence;
+        let on = |role: Role| -> Vec<(String, u64, u64, u64)> {
+            sequence
+                .tracks
+                .iter()
+                .filter(|t| t.role == Some(role))
+                .flat_map(|t| t.clips.iter())
+                .map(|c| (c.stream.clone(), c.start_us, c.in_us, c.duration_us))
+                .collect()
+        };
+        // Only what the video keeps: the cut 5 s are skipped, and the game sound comes along.
         assert_eq!(
-            (
-                placed_now[0].stream.as_str(),
-                placed_now[0].source_start_us,
-                placed_now[0].sound
-            ),
-            ("screen", 20 * S, true)
+            on(Role::Screen),
+            vec![
+                ("screen".into(), 5 * S, 18 * S, 2 * S),
+                ("screen".into(), 7 * S, 25 * S, 3 * S)
+            ]
+        );
+        assert_eq!(
+            on(Role::Background),
+            vec![
+                ("system".into(), 5 * S, 18 * S, 2 * S),
+                ("system".into(), 7 * S, 25 * S, 3 * S)
+            ]
+        );
+        let listed = placed(&document, &short).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|f| (f.video_us, f.sound))
+                .collect::<Vec<_>>(),
+            vec![(Some(18 * S), true), (Some(20 * S), true)]
         );
         assert_eq!(scenes(&short), vec![(0, 5 * S), (10 * S, 40 * S)]);
-        // Taking a second out of the middle splits it in two; the camera fills that second.
+        // Taking a second out of the middle; the camera fills that second.
         remove(&document, &mut short, Some((7 * S, 8 * S))).unwrap();
-        let spans: Vec<_> = placed(&short)
-            .unwrap()
-            .iter()
-            .map(|f| (f.at_us, f.to_us, f.source_start_us))
-            .collect();
-        assert_eq!(spans, vec![(5 * S, 7 * S, 20 * S), (8 * S, 10 * S, 23 * S)]);
         assert_eq!(
             scenes(&short),
             vec![(0, 5 * S), (7 * S, 8 * S), (10 * S, 40 * S)]
         );
-        // Footage past the end of the take is cut to it; outside it, refused.
+        // Without its sound, the footage plays silent.
+        let quiet = Footage {
+            at_us: 12 * S,
+            to_us: 14 * S,
+            video_us: 30 * S,
+            sound: false,
+        };
+        place(&document, &mut short, &quiet).unwrap();
+        assert!(!placed(&document, &short).unwrap().last().unwrap().sound);
+        // Past the end of the take it is cut to it; outside it, or past the video, refused.
         let late = Footage {
             at_us: 38 * S,
             to_us: 45 * S,
             ..footage.clone()
         };
         place(&document, &mut short, &late).unwrap();
-        assert_eq!(placed(&short).unwrap().last().unwrap().to_us, 40 * S);
+        assert_eq!(
+            placed(&document, &short).unwrap().last().unwrap().to_us,
+            40 * S
+        );
         let outside = Footage {
             at_us: 41 * S,
             to_us: 45 * S,
-            ..footage
+            ..footage.clone()
         };
         assert!(place(&document, &mut short, &outside).is_err());
+        let past_the_video = Footage {
+            video_us: 54 * S,
+            ..footage
+        };
+        assert!(place(&document, &mut short, &past_the_video).is_err());
         let sequence = &short.edit.as_ref().unwrap().sequence;
         crate::sequence::validate_sequence(sequence, &document.assets).unwrap();
         // Everything off: the camera throughout again.
         remove(&document, &mut short, None).unwrap();
-        assert!(placed(&short).unwrap().is_empty());
+        assert!(placed(&document, &short).unwrap().is_empty());
         assert_eq!(scenes(&short), vec![(0, 40 * S)]);
     }
 

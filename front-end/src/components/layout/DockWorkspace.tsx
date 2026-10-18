@@ -46,17 +46,33 @@ const fill = (node: React.ReactNode) => <div className="h-full w-full min-h-0 mi
 
 const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
   preview: () => fill(<StagePanel />),
-  transcript: () => fill(<TranscriptPanel />),
+  transcript: () => fill(<OnTake what="transcript"><TranscriptPanel /></OnTake>),
   inspector: () => fill(<InspectorPanel />),
   media: () => fill(<MediaPanel />),
   zoom: () => fill(<ZoomPanel />),
   chapters: () => fill(<ChaptersPanel />),
   agent: () => fill(<AgentPanel />),
-  jumpCuts: () => fill(<JumpCutsPanel />),
-  noises: () => fill(<NoisesPanel />),
+  jumpCuts: () => fill(<OnTake what="jump cuts"><JumpCutsPanel /></OnTake>),
+  noises: () => fill(<OnTake what="mouth noises"><NoisesPanel /></OnTake>),
   timeline: () => fill(<Timeline />),
   shorts: () => fill(<ShortsListPanel />),
   shortLook: () => fill(<ShortLookPanel />),
+};
+
+/// A panel that works on a short's own timeline only for a short made from a take: a short cut
+/// from the video follows the video, so the video is what gets cleaned.
+const OnTake: React.FC<{ what: string; children: React.ReactNode }> = ({ what, children }) => {
+  const cutFromVideo = useProjectStore((s) => {
+    const view = s.openedProject?.shortView;
+    return !!view && !s.openedProject?.shorts?.find((short) => short.id === view)?.take;
+  });
+  if (!cutFromVideo) return <>{children}</>;
+  return (
+    <p className="p-4 text-label text-studio-500 leading-relaxed">
+      This short is cut from the video and follows it: work on its {what} in Edit or Cleanup, and the short keeps
+      what the video keeps. Shorts made from a take have their own.
+    </p>
+  );
 };
 
 /// The timeline, saying so when it is a short's own.

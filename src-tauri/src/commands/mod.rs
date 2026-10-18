@@ -155,12 +155,41 @@ pub fn show_in_finder_impl(path: String) -> Result<(), String> {
 /// What a sound stream's waveform, pauses and speech are read from: `key` is
 /// `<asset>.<stream>`. On the timeline, its time maps through the clips that play it;
 /// otherwise the asset's own time is the timeline (a waveform drawn per clip).
+/// The document a command works on: the project's, or with `short` that short's own timeline
+/// (in the short's time, at the project's revision).
+pub(crate) fn target_document<'a>(
+    reader: &'a ProjectReader,
+    short: Option<&str>,
+) -> Result<std::borrow::Cow<'a, crate::project::revision::EditDocument>, String> {
+    let base = reader.document();
+    let Some(id) = short else {
+        return Ok(std::borrow::Cow::Borrowed(base));
+    };
+    let short = base
+        .shorts
+        .iter()
+        .find(|s| s.id == id)
+        .ok_or("That short no longer exists")?;
+    Ok(std::borrow::Cow::Owned(crate::shorts::short_timeline(
+        base, short,
+    )?))
+}
+
 pub(crate) fn sound_context(
     reader: &ProjectReader,
     key: &str,
     on_timeline: bool,
 ) -> Result<WaveformTrackContext, String> {
-    let document = reader.document();
+    sound_context_in(reader, reader.document(), key, on_timeline)
+}
+
+/// [`sound_context`] placed on `document`'s timeline (a short's own, say).
+pub(crate) fn sound_context_in(
+    reader: &ProjectReader,
+    document: &crate::project::revision::EditDocument,
+    key: &str,
+    on_timeline: bool,
+) -> Result<WaveformTrackContext, String> {
     let source = document.stream_ref(key)?;
     let asset = document.asset(&source.asset).ok_or("Unknown sound")?;
     let stream = asset.stream(&source.stream).ok_or("Unknown sound")?;
@@ -209,16 +238,28 @@ pub fn detect_silence_impl(
     track_id: String,
     config: SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
+    detect_silence_for(state, project_handle, track_id, config, None)
+}
+
+/// [`detect_silence_impl`] on the project's timeline, or on short `short`'s own.
+pub fn detect_silence_for(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+    config: SilenceConfig,
+    short: Option<&str>,
+) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
     if track_id == ALL_SPEECH {
-        return detect_speech_silence(state, &project_handle, &config);
+        return detect_combined_silence(state, &project_handle, &config, None, short);
     }
     let (ctx, transcript, revision) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
+        let document = target_document(reader, short)?;
         (
-            sound_context(reader, &track_id, true)?,
+            sound_context_in(reader, &document, &track_id, true)?,
             crate::transcript::store::load_transcript(reader.root(), &track_id)?,
             reader.document().revision,
         )
@@ -264,14 +305,6 @@ fn speech_on_timeline(
     speech
 }
 
-fn detect_speech_silence(
-    state: &AppState,
-    project_handle: &str,
-    config: &SilenceConfig,
-) -> Result<SilenceDetectionResult, String> {
-    detect_combined_silence(state, project_handle, config, None)
-}
-
 /// Explicit sources may include desktop/voice-mode audio regardless of their speech role.
 /// Existing callers keep selecting one stream or ALL_SPEECH through detect_silence_impl.
 pub fn detect_silence_sources_impl(
@@ -280,11 +313,22 @@ pub fn detect_silence_sources_impl(
     track_ids: Vec<String>,
     config: SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
+    detect_silence_sources_for(state, project_handle, track_ids, config, None)
+}
+
+/// [`detect_silence_sources_impl`] on the project's timeline, or on short `short`'s own.
+pub fn detect_silence_sources_for(
+    state: &AppState,
+    project_handle: String,
+    track_ids: Vec<String>,
+    config: SilenceConfig,
+    short: Option<&str>,
+) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
     if track_ids.len() != 2 || track_ids[0] == track_ids[1] {
         return Err("Choose two different sound sources".into());
     }
-    detect_combined_silence(state, &project_handle, &config, Some(&track_ids))
+    detect_combined_silence(state, &project_handle, &config, Some(&track_ids), short)
 }
 
 fn detect_combined_silence(
@@ -292,16 +336,17 @@ fn detect_combined_silence(
     project_handle: &str,
     config: &SilenceConfig,
     track_ids: Option<&[String]>,
+    short: Option<&str>,
 ) -> Result<SilenceDetectionResult, String> {
     let (sounds, revision) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, project_handle)?;
+        let document = target_document(reader, short)?;
         let selected = if let Some(keys) = track_ids {
             keys.iter()
                 .map(|key| {
-                    let plays = reader
-                        .document()
+                    let plays = document
                         .sequence
                         .tracks
                         .iter()
@@ -321,7 +366,7 @@ fn detect_combined_silence(
                 })
                 .collect::<Result<Vec<_>, String>>()?
         } else {
-            speech_on_timeline(reader.document())
+            speech_on_timeline(&document)
         };
         selected
             .into_iter()
@@ -335,7 +380,7 @@ fn detect_combined_silence(
                 ))
             })
             .collect::<Result<Vec<_>, String>>()
-            .map(|sounds| (sounds, reader.document().revision))?
+            .map(|sounds| (sounds, document.revision))?
     };
     if sounds.is_empty() {
         return Err("Nothing on the timeline is marked as speech: choose a sound to scan".into());
@@ -1551,6 +1596,7 @@ pub fn project_short_from_take_impl(
     title: String,
     camera: Option<String>,
     voice: Option<String>,
+    media: Vec<String>,
     reason: Option<String>,
 ) -> Result<TakeShortMade, String> {
     // Lining the sounds up reads them: done without holding the project.
@@ -1560,7 +1606,12 @@ pub fn project_short_from_take_impl(
         require_handle(reader, &project_handle)?;
         (reader.root().to_path_buf(), reader.document().clone())
     };
-    let sources = crate::take_short::resolve(&document, camera.as_deref(), voice.as_deref())?;
+    // Named streams win; otherwise the take's files are told apart.
+    let sources = if camera.is_none() && voice.is_none() && !media.is_empty() {
+        crate::take_short::guess(&document, &media)?
+    } else {
+        crate::take_short::resolve(&document, camera.as_deref(), voice.as_deref())?
+    };
     let sync = crate::take_short::sync(&root, &document, &sources);
     let base = format!("take-{}", sources.voice.asset);
     let id = (1..)

@@ -1,10 +1,11 @@
 # Template: shorts from a take
 
 A vertical short (9:16) told again for shorts: the user recorded a new take, a camera video
-(often with its own microphone) and maybe a separate microphone, retelling one part of the
-long video (one myth, one tip, one step). The take is the short's camera, voice and captions;
-you pick the footage from the long video that shows what each sentence talks about, so the
-action comes from the video while the take does the talking. Then dress it with graphics.
+(often with its own microphone), maybe a separate microphone file, or an AeroEdits recording,
+retelling one part of the long video (one myth, one tip, one step). The take is the short's
+camera, voice and captions. It goes through the same process as any recording (transcribe,
+clean), then you pick the footage from the long video that shows what each sentence talks
+about, so the action comes from the video while the take does the talking. Then graphics.
 
 Step by step by default; automatic when the user says so ("auto", "no questions"): then use
 the defaults below, report in one message and go on. Export still waits for the user's go.
@@ -13,27 +14,41 @@ the defaults below, report in one message and go on. Export still waits for the 
 
 - `status`. The long video needs a transcript (that is how you find its footage): if it has
   none, ask which transcriber (as in the tutorial template; automatic: the saved one, else
-  Parakeet) and `transcribe` it.
-- Short ids and titles: `short_scenes` without `short` lists the shorts already made.
+  Parakeet) and `transcribe` it. The long video should be edited first: footage only comes
+  from what its edit keeps.
+- `short_scenes` without `short` lists the shorts already made.
 
 ## 2. The take (ask only if unclear)
 
-- If the user gave file paths, `media_import` them. Otherwise the take is already in Media:
-  `project_info` lists the media; the take is the camera video and microphone file the user
-  names, else the newest imported ones.
-- `short_from_take` with a `title` (under 60 characters, also the file name), `camera`, and
-  `voice` when there is a separate microphone (else the camera's own sound is the voice) and
-  `idea` (one line). Pass on what it says about lining the camera up with the voice; if the
-  match was weak, tell the user to check the lip sync.
-- `transcribe` with the take's voice as `stream` (the line it answers says which).
+- If the user gave file paths, `media_import` them (all the take's files at once).
+  Otherwise the take is already in Media: `project_info` lists the media; the take is what
+  the user names, else the newest imported files.
+- `short_from_take` with a `title` (under 60 characters, also the file name), `media` (the
+  take's file ids: the app tells the camera from the microphone; a separate microphone wins
+  over the camera's own) and `idea` (one line). Pass on what it says about lining the camera
+  up with the voice; if the match was weak, tell the user to check the lip sync.
 
-## 3. Read (automatic)
+## 3. Transcribe and clean the take (automatic)
 
-- `transcript_get` with the take's voice as `stream`: the take's words with ids.
+The same passes as the long video's cleanup, on the take short's own timeline:
+
+- `transcribe` with the take's voice as `stream`.
+- `mouth_noises` with that `stream`.
+- `silence` with `short` (the short's id) and `mode: gaps` (balanced): the pauses between
+  the take's words.
+- `fillers` with that `stream` (after `fillers_review` if the user wants a careful pass).
+
+Report one line per pass. The user can review each in the Shorts tab (Transcript, Jump cuts,
+Mouth noises) and undo.
+
+## 4. Read (automatic)
+
+- `transcript_get` with the take's voice as `stream`: the take's words with ids, at their
+  times on the short.
 - `transcript_get` for the long video, and `chapters` if it has them, to find where it
-  talks about the same thing.
+  talks about the same thing. Its times are the video's timeline (what `videoS` means).
 
-## 4. Pick the footage (ask)
+## 5. Pick the footage (ask)
 
 Split the take into beats: the hook, each claim or step, the verdict or payoff. For each beat
 find the stretch of the long video that **shows** it:
@@ -51,22 +66,22 @@ find the stretch of the long video that **shows** it:
 Show the plan as a list: the take's words (a few), the video time picked and what it shows.
 Ask for an OK or changes (automatic: go).
 
-## 5. Place (automatic)
+## 6. Place (automatic)
 
 `short_footage` with `op: add` and all the items at once: `fromWord`/`toWord` from the take,
-`sourceWord` (a word id from the video's transcript where the footage starts) or `media` and
-`sourceS`. Add `sound: true` for game footage whose sound helps (explosions, engines), never
-for footage where the video's own voice talks. Report the list it answers. Fix a piece with
-`op: remove` (`fromS`/`toS`) and add again.
+and `sourceWord` (a word id from the video's transcript where the footage starts; it must be
+one the video keeps) or `videoS`. The footage's game or desktop sound plays ducked under the
+voice; `sound: false` for footage where it distracts. Report the list it answers. Fix a piece
+with `op: remove` (`fromS`/`toS`) and add again.
 
-## 6. Dress (ask)
+## 7. Dress (ask)
 
 Graphics go on the take's words, through HyperFrames, as in the shorts template: a title card
 on the hook, a label per beat ("MYTH #1", "TRUE"/"FALSE" stamp, a name), in the screen's part
 (`graphic_set` with `short` and `slot: screen`) or over the whole frame. Then `storyboard`
 with `short` to look at the frames, and fix what reads badly.
 
-## 7. Export (ask)
+## 8. Export (ask)
 
 Ask "Export the short now?". On the go: `export` with `short` (its id). It is written next to
 the project as "<project> - <title>.mp4", 1080x1920. Answer with the path.

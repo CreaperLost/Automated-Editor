@@ -92,12 +92,24 @@ fn current_view(
     let Some(transcript) = store::load_transcript(reader.root(), track_id)? else {
         return Ok(None);
     };
-    let document = &reader.history().current;
     Ok(Some(edit::view(
         &transcript,
-        &document.transcript_clock(track_id)?,
-        document.revision,
+        &transcript_clock(reader, track_id)?,
+        reader.history().current.revision,
     )))
+}
+
+/// Where a sound's words play: the video's timeline, or for a take's voice (which plays
+/// only in its short) that short's own timeline.
+fn transcript_clock(
+    reader: &crate::project::ProjectReader,
+    key: &str,
+) -> Result<crate::timeline::TimelineMapper, String> {
+    let document = &reader.history().current;
+    match crate::shorts::take_short_of(document, key) {
+        Some(short) => crate::shorts::short_timeline(document, short)?.transcript_clock(key),
+        None => document.transcript_clock(key),
+    }
 }
 
 /// Playback keeps its own copy of the captions; rebuild it after the transcript changes.
@@ -319,10 +331,7 @@ pub fn transcript_suggestions_impl(
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    let found = edit::suggestions(
-        &transcript,
-        &reader.history().current.transcript_clock(&track_id)?,
-    );
+    let found = edit::suggestions(&transcript, &transcript_clock(reader, &track_id)?);
     Ok(crate::proposals::with_agent_suggestions(
         reader,
         &transcript,
@@ -419,9 +428,11 @@ pub fn transcript_cut_words_checked_impl(
         edit::word_cuts(
             &transcript,
             &word_ids,
-            &document.transcript_clock(&track_id)?,
+            &transcript_clock(reader, &track_id)?,
         )?
     };
+    // A take's words are cut from its short's timeline.
+    let short = crate::shorts::take_short_of(reader.document(), &track_id).map(|s| s.id.clone());
     // Nothing is selected in the transcript sense: every track loses the same time, so
     // pictures and sound elsewhere stay in step with the words.
     let ranges = cuts
@@ -436,7 +447,7 @@ pub fn transcript_cut_words_checked_impl(
             ranges,
             ripple: Some(true),
         },
-        None,
+        short.as_deref(),
     )
 }
 
@@ -577,7 +588,7 @@ pub fn transcript_ai_suggest_impl(
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        let mapper = reader.history().current.transcript_clock(&track_id)?;
+        let mapper = transcript_clock(reader, &track_id)?;
         let words: Vec<crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
@@ -648,7 +659,7 @@ fn kept_words(
     super::require_handle(reader, project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = reader.history().current.transcript_clock(track_id)?;
+    let mapper = transcript_clock(reader, track_id)?;
     let words = transcript
         .words
         .iter()
@@ -739,7 +750,7 @@ pub fn transcript_review_candidates_impl(
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = reader.history().current.transcript_clock(&track_id)?;
+    let mapper = transcript_clock(reader, &track_id)?;
     let words: Vec<&crate::transcript::TranscriptWord> = transcript
         .words
         .iter()

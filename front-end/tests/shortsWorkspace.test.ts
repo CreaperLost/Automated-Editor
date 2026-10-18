@@ -17,7 +17,9 @@ const project = (revision: number, shorts: Short[], shortView?: string): OpenedP
 test("Shorts has its own panels and the editor's workspaces don't show them", () => {
   const shorts = workspacePanels("shorts");
   assert.ok(shorts.includes("shorts") && shorts.includes("shortLook") && shorts.includes("preview") && shorts.includes("timeline"));
-  assert.ok(!shorts.includes("jumpCuts") && !shorts.includes("transcript"));
+  // A take short is cleaned in Shorts: its transcript and the cleanup passes are there too.
+  assert.ok(shorts.includes("jumpCuts") && shorts.includes("noises") && shorts.includes("transcript"));
+  assert.ok(!shorts.includes("zoom") && !shorts.includes("chapters"));
   for (const workspace of ["edit", "cleanup"] as const) {
     const panels = workspacePanels(workspace);
     assert.ok(!panels.includes("shorts") && !panels.includes("shortLook"));

@@ -40,7 +40,17 @@ export type Workspace = keyof typeof WORKSPACES;
 
 /** The panels only Shorts has, and the editor's panels Shorts has too. */
 const SHORTS_ONLY: readonly DockPanelId[] = ["shorts", "shortLook"];
-const SHORTS_PANELS: readonly DockPanelId[] = [...SHORTS_ONLY, "preview", "timeline", "inspector", "media", "agent"];
+const SHORTS_PANELS: readonly DockPanelId[] = [
+  ...SHORTS_ONLY,
+  "preview",
+  "timeline",
+  "transcript",
+  "jumpCuts",
+  "noises",
+  "inspector",
+  "media",
+  "agent",
+];
 
 /** The panels `workspace` shows. */
 export function workspacePanels(workspace: Workspace): DockPanelId[] {
@@ -87,17 +97,20 @@ function addZoom(api: DockviewApi) {
   api.addPanel({ ...panel("zoom"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
-/// Shorts: the list on the left, the preview, the look on the right (inspector, media and the
-/// agent behind it), the short's timeline below.
+/// Shorts: the list on the left with the short's transcript behind it, the preview, the look
+/// on the right (a take's cleanup passes, the inspector, media and the agent behind it), the
+/// short's timeline below.
 function applyShortsLayout(api: DockviewApi) {
   api.clear();
   api.addPanel(panel("preview"));
   api.addPanel({ ...panel("shorts"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 260 });
+  api.addPanel({ ...panel("transcript"), position: { referencePanel: "shorts", direction: "within" }, inactive: true });
   api.addPanel({ ...panel("shortLook"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
-  for (const id of ["inspector", "media", "agent"] as const) {
+  for (const id of ["jumpCuts", "noises", "inspector", "media", "agent"] as const) {
     api.addPanel({ ...panel(id), position: { referencePanel: "shortLook", direction: "within" }, inactive: true });
   }
   api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
+  api.getPanel("shorts")?.api.setActive();
   api.getPanel("shortLook")?.api.setActive();
   api.getPanel("preview")?.api.setActive();
 }
@@ -223,17 +236,17 @@ export function applyPresetToWorkspace(preset: LayoutPreset) {
 /// A panel to bring to the front once the workspace switching to shows (see `requestPanel`).
 let pendingPanel: DockPanelId | null = null;
 
-/// Brings panel `id` to the front: the Jump cuts and Mouth noises panels in Cleanup, a panel
-/// Shorts lacks in Edit, any other where it is.
+/// Brings panel `id` to the front where it is; a panel this workspace lacks in the one made
+/// for it (cleanup in Cleanup, shorts in Shorts, the rest in Edit).
 export function requestPanel(id: DockPanelId) {
-  const target: Workspace =
-    id === "jumpCuts" || id === "noises"
+  // Where it is, else the workspace made for it.
+  const target: Workspace = workspacePanels(activeWorkspace).includes(id)
+    ? activeWorkspace
+    : id === "jumpCuts" || id === "noises"
       ? "cleanup"
-      : workspacePanels(activeWorkspace).includes(id)
-        ? activeWorkspace
-        : SHORTS_ONLY.includes(id)
-          ? "shorts"
-          : "edit";
+      : SHORTS_ONLY.includes(id)
+        ? "shorts"
+        : "edit";
   if (target !== activeWorkspace) {
     pendingPanel = id;
     switchWorkspace?.(target);
