@@ -331,14 +331,14 @@ export const api = {
   transcriptSetApiKey: (key: string) =>
     invokeTauri<TranscriptSettingsView>("transcript_set_api_key", { key }),
   transcriptGet: (projectHandle: string, trackId: string) =>
-    invokeTauri<TranscriptView | null>("transcript_get", { projectHandle, trackId }),
+    invokeTauri<TranscriptView | null>("transcript_get", { projectHandle, trackId, shortId: editTarget }),
   transcriptRun: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptRunResult>("transcript_run", { projectHandle, trackId }),
   transcriptCancel: () => invokeTauri<void>("transcript_cancel"),
   transcriptDelete: (projectHandle: string, trackId: string) =>
     invokeTauri<void>("transcript_delete", { projectHandle, trackId }),
   transcriptSuggestions: (projectHandle: string, trackId: string) =>
-    invokeTauri<TranscriptCutSuggestion[]>("transcript_suggestions", { projectHandle, trackId }),
+    invokeTauri<TranscriptCutSuggestion[]>("transcript_suggestions", { projectHandle, trackId, shortId: editTarget }),
   /** Sends the kept words to the chosen AI provider; progress arrives as `transcript-progress`. */
   transcriptAiSuggest: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId }),
@@ -391,6 +391,7 @@ export const api = {
       trackId,
       wordIds,
       expectedWordStamp,
+      shortId: editTarget,
     }),
   projectCaptionCues: (projectHandle: string) =>
     invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle, shortId: editTarget }),
@@ -400,16 +401,17 @@ export const api = {
   transcriptCaptionEdit: (projectHandle: string, trackId: string, edit: CaptionEdit) =>
     invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit, shortId: editTarget }),
   transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
-    invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text }),
+    invokeTauri<TranscriptView>("transcript_set_word_text", { projectHandle, trackId, wordId, text, shortId: editTarget }),
   /** Takes . , ! ? and the like off every word (apostrophes, hyphens and numbers stay). */
   transcriptStripPunctuation: (projectHandle: string, trackId: string) =>
-    invokeTauri<TranscriptView>("transcript_strip_punctuation", { projectHandle, trackId }),
+    invokeTauri<TranscriptView>("transcript_strip_punctuation", { projectHandle, trackId, shortId: editTarget }),
   transcriptDismissSuggestions: (projectHandle: string, trackId: string, ids: string[], dismissed: boolean) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_dismiss_suggestions", {
       projectHandle,
       trackId,
       ids,
       dismissed,
+      shortId: editTarget,
     }),
   /** Downloads the Parakeet model, or with `"aligner"` the word alignment model. */
   transcriptDownloadModel: (model: "parakeet" | "aligner" = "parakeet") =>

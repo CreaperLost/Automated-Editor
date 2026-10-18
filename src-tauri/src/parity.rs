@@ -113,10 +113,10 @@ fn parity_imported_media() {
     let before =
         commands::detect_silence_impl(&state, handle.clone(), key.clone(), balanced()).unwrap();
     let words_before =
-        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone()).unwrap();
+        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone(), None).unwrap();
     probe_cut(&state, &handle, (5_000_000, 7_000_000));
     let words_after =
-        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone()).unwrap();
+        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone(), None).unwrap();
     let after = commands::detect_silence_impl(&state, handle, key, balanced()).unwrap();
     println!(
         "PARITY imported {}",
@@ -160,11 +160,11 @@ fn parity_recording() {
     let before =
         commands::detect_silence_impl(&state, handle.clone(), key.clone(), balanced()).unwrap();
     let words_before =
-        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone()).unwrap();
+        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone(), None).unwrap();
     let zooms = commands::project_zoom_suggestions_impl(&state, handle.clone(), None).unwrap();
     probe_cut(&state, &handle, (5_000_000, 7_000_000));
     let words_after =
-        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone()).unwrap();
+        commands::transcript::transcript_get_impl(&state, handle.clone(), key.clone(), None).unwrap();
     let after = commands::detect_silence_impl(&state, handle, key, balanced()).unwrap();
     println!(
         "PARITY recording {}",

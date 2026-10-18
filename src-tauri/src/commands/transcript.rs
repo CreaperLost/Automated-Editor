@@ -85,6 +85,7 @@ fn current_view(
     state: &AppState,
     project_handle: &str,
     track_id: &str,
+    short: Option<&str>,
 ) -> Result<Option<TranscriptView>, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
@@ -94,19 +95,32 @@ fn current_view(
     };
     Ok(Some(edit::view(
         &transcript,
-        &transcript_clock(reader, track_id)?,
+        &transcript_clock(reader, track_id, short)?,
         reader.history().current.revision,
     )))
 }
 
-/// Where a sound's words play: the video's timeline, or for a take's voice (which plays
-/// only in its short) that short's own timeline.
+/// The short whose own timeline a sound's words are placed on and cut from: `short` when it
+/// names one, else the take short the sound is the voice of (it plays only there), else none.
+fn target_short<'a>(
+    document: &'a crate::project::revision::EditDocument,
+    key: &str,
+    short: Option<&str>,
+) -> Option<&'a crate::shorts::Short> {
+    short
+        .and_then(|id| document.shorts.iter().find(|s| s.id == id))
+        .or_else(|| crate::shorts::take_short_of(document, key))
+}
+
+/// Where a sound's words play: a short's own timeline (see [`target_short`]), else the
+/// video's.
 fn transcript_clock(
     reader: &crate::project::ProjectReader,
     key: &str,
+    short: Option<&str>,
 ) -> Result<crate::timeline::TimelineMapper, String> {
     let document = &reader.history().current;
-    match crate::shorts::take_short_of(document, key) {
+    match target_short(document, key, short) {
         Some(short) => crate::shorts::short_timeline(document, short)?.transcript_clock(key),
         None => document.transcript_clock(key),
     }
@@ -161,12 +175,14 @@ pub fn transcript_set_api_key_impl(key: String) -> Result<TranscriptSettingsView
     Ok(settings::settings_view(&dir))
 }
 
+/// The words of `track_id` where they play: in `short`'s own timeline when one is named.
 pub fn transcript_get_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<String>,
 ) -> Result<Option<TranscriptView>, String> {
-    current_view(state, &project_handle, &track_id)
+    current_view(state, &project_handle, &track_id, short.as_deref())
 }
 
 pub fn transcript_run_impl(
@@ -242,7 +258,7 @@ pub fn transcript_run_impl(
         store::save_transcript(reader.root(), &output.transcript)?;
     }
     refresh_playback(state);
-    let view = current_view(state, &project_handle, &track_id)?
+    let view = current_view(state, &project_handle, &track_id, None)?
         .ok_or("The transcript was saved but could not be read back")?;
     Ok(TranscriptRunResult {
         view,
@@ -291,7 +307,7 @@ pub fn transcript_align_impl(
         store::save_transcript(reader.root(), &transcript)?;
     }
     refresh_playback(state);
-    let view = current_view(state, &project_handle, &track_id)?
+    let view = current_view(state, &project_handle, &track_id, None)?
         .ok_or("The transcript was saved but could not be read back")?;
     Ok(TranscriptRunResult {
         view,
@@ -325,13 +341,17 @@ pub fn transcript_suggestions_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<String>,
 ) -> Result<Vec<TranscriptCutSuggestion>, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    let found = edit::suggestions(&transcript, &transcript_clock(reader, &track_id)?);
+    let found = edit::suggestions(
+        &transcript,
+        &transcript_clock(reader, &track_id, short.as_deref())?,
+    );
     Ok(crate::proposals::with_agent_suggestions(
         reader,
         &transcript,
@@ -346,12 +366,14 @@ pub fn transcript_set_word_text_impl(
     track_id: String,
     word_id: String,
     text: String,
+    short: Option<String>,
 ) -> Result<TranscriptView, String> {
     modify_transcript(state, &project_handle, &track_id, |t| {
         t.set_word_text(&word_id, &text)
     })?;
     refresh_playback(state);
-    current_view(state, &project_handle, &track_id)?.ok_or_else(|| "Transcript disappeared".into())
+    current_view(state, &project_handle, &track_id, short.as_deref())?
+        .ok_or_else(|| "Transcript disappeared".into())
 }
 
 /// Takes the punctuation off every word of the transcript (captions follow).
@@ -359,6 +381,7 @@ pub fn transcript_strip_punctuation_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<String>,
 ) -> Result<TranscriptView, String> {
     modify_transcript(state, &project_handle, &track_id, |t| {
         if t.strip_punctuation() == 0 {
@@ -367,7 +390,8 @@ pub fn transcript_strip_punctuation_impl(
         Ok(())
     })?;
     refresh_playback(state);
-    current_view(state, &project_handle, &track_id)?.ok_or_else(|| "Transcript disappeared".into())
+    current_view(state, &project_handle, &track_id, short.as_deref())?
+        .ok_or_else(|| "Transcript disappeared".into())
 }
 
 pub fn transcript_dismiss_suggestions_impl(
@@ -376,11 +400,12 @@ pub fn transcript_dismiss_suggestions_impl(
     track_id: String,
     ids: Vec<String>,
     dismissed: bool,
+    short: Option<String>,
 ) -> Result<Vec<TranscriptCutSuggestion>, String> {
     modify_transcript(state, &project_handle, &track_id, |t| {
         t.set_dismissed(&ids, dismissed)
     })?;
-    transcript_suggestions_impl(state, project_handle, track_id)
+    transcript_suggestions_impl(state, project_handle, track_id, short)
 }
 
 pub fn transcript_cut_words_impl(
@@ -397,6 +422,7 @@ pub fn transcript_cut_words_impl(
         track_id,
         word_ids,
         None,
+        None,
     )
 }
 
@@ -407,6 +433,7 @@ pub fn transcript_cut_words_checked_impl(
     track_id: String,
     word_ids: Vec<String>,
     expected_word_stamp: Option<String>,
+    short: Option<String>,
 ) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
@@ -428,11 +455,11 @@ pub fn transcript_cut_words_checked_impl(
         edit::word_cuts(
             &transcript,
             &word_ids,
-            &transcript_clock(reader, &track_id)?,
+            &transcript_clock(reader, &track_id, short.as_deref())?,
         )?
     };
-    // A take's words are cut from its short's timeline.
-    let short = crate::shorts::take_short_of(reader.document(), &track_id).map(|s| s.id.clone());
+    // A short's words (a take's too) are cut from its own timeline.
+    let short = target_short(reader.document(), &track_id, short.as_deref()).map(|s| s.id.clone());
     // Nothing is selected in the transcript sense: every track loses the same time, so
     // pictures and sound elsewhere stay in step with the words.
     let ranges = cuts
@@ -588,7 +615,7 @@ pub fn transcript_ai_suggest_impl(
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        let mapper = transcript_clock(reader, &track_id)?;
+        let mapper = transcript_clock(reader, &track_id, None)?;
         let words: Vec<crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
@@ -622,7 +649,7 @@ pub fn transcript_ai_suggest_impl(
         t.ai_model = Some(model);
         Ok(())
     })?;
-    transcript_suggestions_impl(state, project_handle, track_id)
+    transcript_suggestions_impl(state, project_handle, track_id, None)
 }
 
 /// The model name an in-house review is stored under (the connected agent's own name follows).
@@ -659,7 +686,7 @@ fn kept_words(
     super::require_handle(reader, project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = transcript_clock(reader, track_id)?;
+    let mapper = transcript_clock(reader, track_id, None)?;
     let words = transcript
         .words
         .iter()
@@ -750,7 +777,7 @@ pub fn transcript_review_candidates_impl(
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = transcript_clock(reader, &track_id)?;
+    let mapper = transcript_clock(reader, &track_id, None)?;
     let words: Vec<&crate::transcript::TranscriptWord> = transcript
         .words
         .iter()
@@ -860,7 +887,7 @@ pub fn transcript_review_save_impl(
     })?;
     Ok((
         kept,
-        transcript_suggestions_impl(state, project_handle, track_id)?,
+        transcript_suggestions_impl(state, project_handle, track_id, None)?,
     ))
 }
 

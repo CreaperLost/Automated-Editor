@@ -1114,6 +1114,7 @@ mod tests {
                             mic_key.clone(),
                             vec![id],
                             transcript.dependency().word_stamp,
+                            None,
                         )
                         .unwrap(),
                     )

@@ -1451,6 +1451,7 @@ async fn transcript_get(
     app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
+    short_id: Option<String>,
 ) -> Result<Option<transcript::TranscriptView>, String> {
     // A long transcript takes a while to read and place: not on the window's thread.
     tauri::async_runtime::spawn_blocking(move || {
@@ -1458,6 +1459,7 @@ async fn transcript_get(
             &app.state::<AppState>(),
             project_handle,
             track_id,
+            short_id,
         )
     })
     .await
@@ -1534,12 +1536,14 @@ async fn transcript_suggestions(
     app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
+    short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::transcript::transcript_suggestions_impl(
             &app.state::<AppState>(),
             project_handle,
             track_id,
+            short_id,
         )
     })
     .await
@@ -1605,8 +1609,9 @@ fn transcript_strip_punctuation(
     state: State<'_, AppState>,
     project_handle: String,
     track_id: String,
+    short_id: Option<String>,
 ) -> Result<transcript::TranscriptView, String> {
-    commands::transcript::transcript_strip_punctuation_impl(&state, project_handle, track_id)
+    commands::transcript::transcript_strip_punctuation_impl(&state, project_handle, track_id, short_id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1617,6 +1622,7 @@ fn transcript_set_word_text(
     track_id: String,
     word_id: String,
     text: String,
+    short_id: Option<String>,
 ) -> Result<transcript::TranscriptView, String> {
     commands::transcript::transcript_set_word_text_impl(
         &state,
@@ -1624,6 +1630,7 @@ fn transcript_set_word_text(
         track_id,
         word_id,
         text,
+        short_id,
     )
 }
 
@@ -1635,6 +1642,7 @@ fn transcript_dismiss_suggestions(
     track_id: String,
     ids: Vec<String>,
     dismissed: bool,
+    short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     commands::transcript::transcript_dismiss_suggestions_impl(
         &state,
@@ -1642,6 +1650,7 @@ fn transcript_dismiss_suggestions(
         track_id,
         ids,
         dismissed,
+        short_id,
     )
 }
 
@@ -1654,6 +1663,7 @@ fn transcript_cut_words(
     track_id: String,
     word_ids: Vec<String>,
     expected_word_stamp: Option<String>,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
     commands::transcript::transcript_cut_words_checked_impl(
         &state,
@@ -1662,6 +1672,7 @@ fn transcript_cut_words(
         track_id,
         word_ids,
         expected_word_stamp,
+        short_id,
     )
 }
 

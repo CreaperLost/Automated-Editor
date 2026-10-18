@@ -14,9 +14,12 @@ import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
 import { soundSources } from "../../lib/sequence";
 import { Badge, Button, IconButton, Notice, Segmented, cn } from "../ui";
 
-/** Every sound in the project, speech first, as `{ id, label, placed }`. */
+/** Every sound in the project, speech first, as `{ id, label, placed }`; in a short, only the
+ *  sounds its own timeline plays. */
 function audioTracks(project: OpenedProject | null) {
-  return soundSources(project).map((sound) => ({ ...sound, id: sound.key }));
+  return soundSources(project)
+    .filter((sound) => !project?.shortView || sound.placed)
+    .map((sound) => ({ ...sound, id: sound.key }));
 }
 
 function formatTime(us: number): string {
@@ -234,10 +237,12 @@ export const TranscriptPanel: React.FC = () => {
   const captionsVersion = useProjectStore((s) => s.captionsVersion);
   const bumpCaptions = useProjectStore((s) => s.bumpCaptions);
 
+  // Another project, or another short (or back to the video): its own speech.
+  const shortView = openedProject?.shortView;
   useEffect(() => {
     setTrackId(audioTracks(openedProject)[0]?.id ?? "");
     setSelection(null);
-  }, [handle]);
+  }, [handle, shortView]);
   // Sound added after opening (media imported into an empty project), or the chosen sound
   // removed: pick the first one there is.
   const trackIds = tracks.map((t) => t.id).join("|");
@@ -357,10 +362,17 @@ export const TranscriptPanel: React.FC = () => {
   }, []);
 
   const words = view?.words ?? [];
-  const visible = useMemo(
-    () => words.map((w, i) => ({ w, i })).filter(({ w }) => showCut || w.editedStartUs !== null),
-    [words, showCut],
-  );
+  const inShort = !!openedProject?.shortView;
+  const visible = useMemo(() => {
+    // A short's cut words are those between its first and last kept word, not the rest of
+    // the video.
+    const first = inShort ? words.findIndex((w) => w.editedStartUs !== null) : 0;
+    let last = words.length - 1;
+    while (inShort && last >= 0 && words[last].editedStartUs === null) last--;
+    return words
+      .map((w, i) => ({ w, i }))
+      .filter(({ w, i }) => (showCut && i >= first && i <= last) || w.editedStartUs !== null);
+  }, [words, showCut, inShort]);
   const lines = useMemo(() => transcriptLines(visible), [visible]);
   const pending = useMemo(() => suggestions.filter((s) => !s.dismissed), [suggestions]);
   const suggestionKind = useMemo(() => {

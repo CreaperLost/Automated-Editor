@@ -1794,7 +1794,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             &mut |p| ctx.progress(p.fraction, &p.message),
         )?
     } else {
-        tc::transcript_suggestions_impl(ctx.state, before.handle.clone(), key.clone())?
+        tc::transcript_suggestions_impl(ctx.state, before.handle.clone(), key.clone(), None)?
     };
     // Rejected ones stay rejected, and agents' own proposals are decided in the Agent panel.
     let chosen: Vec<_> = found
@@ -1863,6 +1863,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             before.revision,
             key,
             ids,
+            None,
             None,
         )?;
         lines.push("Cut them all.".into());
