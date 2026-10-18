@@ -147,10 +147,10 @@ impl Default for ShortLayout {
             follow_zooms: true,
             screen_pan_x: 0.0,
             screen_pan_y: 0.0,
-            captions: true,
+            captions: false,
             caption_spot: CaptionSpot::Seam,
             caption_max_words: 0,
-            caption_lines: 2,
+            caption_lines: 1,
             caption_size_pct: 0.0,
             background_type: "project".into(),
             background_color_start: "#000000".into(),
@@ -871,7 +871,9 @@ mod tests {
             },
         );
         // From 6 s into the recording to 25 s: crosses the file's clip.
-        let s = short(6 * S, 25 * S);
+        let mut s = short(6 * S, 25 * S);
+        // Captions are off in a new short; this one has them on.
+        s.layout.captions = true;
         assert_eq!(edited_range_in(&s, &base), Some((6 * S, 19 * S)));
         let doc = short_document(&base, &s, true).unwrap();
         let v1: Vec<_> = doc.sequence.tracks[0]

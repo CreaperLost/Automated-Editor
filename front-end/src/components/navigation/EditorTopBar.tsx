@@ -36,6 +36,7 @@ import {
 import { AgentsDialog } from "../settings/AgentsDialog";
 import { useAgentStore } from "../../stores/agentStore";
 import { HotkeysDialog } from "../settings/HotkeysDialog";
+import { TemplatesMenu } from "./TemplatesMenu";
 import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
 
 interface EditorTopBarProps {
@@ -152,6 +153,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             </MenuButton>
           )}
         />
+        <TemplatesMenu onError={onError} />
       </div>
 
       {project && (

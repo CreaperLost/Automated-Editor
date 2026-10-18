@@ -94,7 +94,7 @@ export interface ZoomSettings {
 export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
   clickScale: 1.6,
   hoverScale: 1.4,
-  transitionMs: 700,
+  transitionMs: 0,
   minHoldMs: 5000,
   mergeGapMs: 5000,
   maxZooms: 20,
@@ -294,6 +294,7 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
   backgroundOpacity: 0.55,
   uppercase: false,
   maxWords: 6,
+  maxLines: 1,
 };
 
 export interface EditLayout {
@@ -878,6 +879,19 @@ export type SequenceEdit =
   | { kind: "setClip"; clipId: string; fit: Fit }
   /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
   | { kind: "restoreCuts"; clipIds: string[] };
+
+/** Saved settings any project can take on (src-tauri/src/templates.rs). */
+export interface Template {
+  id: string;
+  name: string;
+  layout: EditLayout;
+  captions: CaptionSettings;
+  zoomSettings: ZoomSettings;
+  webcamFocus: WebcamFocusSettings;
+  graphicsBrand?: string;
+  /** A short's look; absent when saved without a short. */
+  shortLook?: ShortLayout;
+}
 
 /** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
 export interface OpenedProject {

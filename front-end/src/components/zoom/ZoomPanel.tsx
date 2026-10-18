@@ -242,10 +242,10 @@ export const ZoomPanel: React.FC = () => {
         <Slider
           label="Transition"
           value={settings.transitionMs}
-          min={100}
+          min={0}
           max={3000}
           step={50}
-          format={(v) => `${v} ms`}
+          format={(v) => (v ? `${v} ms` : "cut")}
           onChange={(transitionMs) => setSettings({ transitionMs })}
         />
         <Slider

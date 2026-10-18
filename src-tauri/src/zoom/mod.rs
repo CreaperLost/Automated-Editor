@@ -91,7 +91,7 @@ pub struct ZoomSettings {
     pub click_scale: f64,
     /// How far a zoom where the mouse rests goes in; 1 switches hover zooms off.
     pub hover_scale: f64,
-    /// Time to zoom in, and to zoom out.
+    /// Time to zoom in, and to zoom out; 0 cuts straight in and out.
     pub transition_ms: u32,
     /// The shortest zoom.
     pub min_hold_ms: u32,
@@ -110,7 +110,8 @@ impl Default for ZoomSettings {
         Self {
             click_scale: 1.6,
             hover_scale: 1.4,
-            transition_ms: 700,
+            // A cut: no ease in or out.
+            transition_ms: 0,
             min_hold_ms: 5_000,
             merge_gap_ms: 5_000,
             max_zooms: 20,
@@ -133,7 +134,7 @@ impl ZoomSettings {
         {
             return Err("Zoom amounts are out of range".into());
         }
-        if !(100..=3_000).contains(&self.transition_ms)
+        if self.transition_ms > 3_000
             || !(500..=20_000).contains(&self.min_hold_ms)
             || !(0..=10_000).contains(&self.merge_gap_ms)
             || !(1..=200).contains(&self.max_zooms)
@@ -152,7 +153,8 @@ impl ZoomSettings {
             click_scale: self.click_scale,
             dwell_scale: if hover { self.hover_scale } else { 1.0 },
             max_scale: self.click_scale.max(self.hover_scale).clamp(1.0, 8.0),
-            transition_us: self.transition_ms as u64 * 1_000,
+            // 0 is a cut; a zoom keeps a 1 µs transition, which plays as one.
+            transition_us: (self.transition_ms as u64 * 1_000).max(1),
             min_hold_us: self.min_hold_ms as u64 * 1_000,
             // Hover off: a rest no one reaches.
             min_dwell_us: if hover {

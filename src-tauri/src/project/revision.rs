@@ -921,17 +921,47 @@ impl EditHistory {
     ) -> Result<&EditDocument, String> {
         settings.validate()?;
         let mut next = self.current.clone();
-        let transition = settings.transition_ms as u64 * 1_000;
-        for zoom in next
-            .zooms
-            .iter_mut()
-            .filter(|z| z.source == ZoomSource::Generated)
-        {
-            zoom.scale = settings.scale_for(zoom.origin);
-            let length = zoom.source_end_us - zoom.source_start_us;
-            zoom.transition_us = transition.min(length.saturating_sub(1) / 2).max(1);
+        with_zoom_settings(&mut next, settings);
+        if next == self.current {
+            return Ok(&self.current);
         }
-        next.zoom_settings = settings;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Takes on a saved template's settings, and its short look on `short` when one is named,
+    /// in one step. What belongs to this project (see [`crate::templates`]) stays.
+    pub fn apply_template(
+        &mut self,
+        expected_revision: u64,
+        template: &crate::templates::Template,
+        short: Option<&str>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        use crate::templates::{captions_onto, layout_onto, short_look_onto};
+        self.check(expected_revision)?;
+        let mut next = self.current.clone();
+        next.layout = layout_onto(&template.layout, &self.current.layout);
+        validate_layout(&next.layout)?;
+        next.captions = captions_onto(&template.captions, &self.current.captions);
+        next.captions.validate()?;
+        template.zoom_settings.validate()?;
+        with_zoom_settings(&mut next, template.zoom_settings.clone());
+        next.webcam_focus.settings = template.webcam_focus.clone();
+        next.webcam_focus.validate()?;
+        next.graphics_brand = template.graphics_brand.clone();
+        if let Some(id) = short {
+            let look = template
+                .short_look
+                .as_ref()
+                .ok_or("This template was saved without a short look")?;
+            let own = next
+                .shorts
+                .iter_mut()
+                .find(|s| s.id == id)
+                .ok_or("That short is gone")?;
+            own.layout = short_look_onto(look, &own.layout);
+            crate::shorts::validate(&next.shorts)?;
+        }
         if next == self.current {
             return Ok(&self.current);
         }
@@ -1259,6 +1289,21 @@ impl EditHistory {
         self.current = next;
         Ok(&self.current)
     }
+}
+
+/// New auto-zoom settings on `document`: automatic zooms take the new amounts and transition.
+fn with_zoom_settings(document: &mut EditDocument, settings: crate::zoom::ZoomSettings) {
+    let transition = settings.transition_ms as u64 * 1_000;
+    for zoom in document
+        .zooms
+        .iter_mut()
+        .filter(|z| z.source == ZoomSource::Generated)
+    {
+        zoom.scale = settings.scale_for(zoom.origin);
+        let length = zoom.source_end_us - zoom.source_start_us;
+        zoom.transition_us = transition.min(length.saturating_sub(1) / 2).max(1);
+    }
+    document.zoom_settings = settings;
 }
 
 fn sort_zooms(zooms: &mut [ZoomKeyframe]) {

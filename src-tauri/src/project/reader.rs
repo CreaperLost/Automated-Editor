@@ -943,6 +943,17 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    pub fn apply_template(
+        &mut self,
+        expected_revision: u64,
+        template: &crate::templates::Template,
+        short: Option<&str>,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .apply_template(expected_revision, template, short, &self.root)?;
+        Ok(self.done())
+    }
+
     pub fn update_captions(
         &mut self,
         expected_revision: u64,

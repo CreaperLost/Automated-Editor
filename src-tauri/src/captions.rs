@@ -97,8 +97,9 @@ pub struct CaptionSettings {
     pub max_lines: u32,
 }
 
+/// One line: easier to read, and what a caption turned on starts with.
 fn default_max_lines() -> u32 {
-    MAX_LINES as u32
+    1
 }
 
 impl Default for CaptionSettings {
@@ -969,6 +970,7 @@ mod tests {
         let settings = CaptionSettings {
             max_words: 10,
             font_size_pct: 10.0,
+            max_lines: 3,
             ..Default::default()
         };
         let cues = build_cues(&t, &mapper(&[(0, 2000)]), &settings);

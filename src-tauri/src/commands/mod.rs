@@ -1577,6 +1577,36 @@ pub fn project_shorts_set_impl(
     })
 }
 
+/// Saves the open project's settings (and `short`'s look) as a template for every project.
+pub fn template_save_impl(
+    state: &AppState,
+    project_handle: String,
+    name: String,
+    short: Option<String>,
+) -> Result<Vec<crate::templates::Template>, String> {
+    let template = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        crate::templates::capture(&reader.history().current, &name, short.as_deref())?
+    };
+    crate::templates::save(&crate::templates::dir(), template)
+}
+
+/// Gives the open project a saved template's settings, and `short` its short look.
+pub fn template_apply_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    template_id: String,
+    short: Option<String>,
+) -> Result<OpenedProject, String> {
+    let template = crate::templates::find(&crate::templates::dir(), &template_id)?;
+    mutate_opened(state, project_handle, |reader| {
+        reader.apply_template(expected_revision, &template, short.as_deref())
+    })
+}
+
 /// A short made from a take, and how its camera was lined up with its voice.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -524,6 +524,18 @@ fn tick(
         return Ok(playing);
     }
     if *last_frame == Some(key) {
+        // A short's frame in the window: draw it again where the preview moved to.
+        if in_window && preview.visible && underlay.layout_revision != preview.layout_revision {
+            if let Some((window, placement)) = state.preview.lock().underlay() {
+                match runtime
+                    .evaluator
+                    .present_again(&mut underlay.presenter, &window, &placement)
+                {
+                    Ok(_) => underlay.layout_revision = preview.layout_revision,
+                    Err(e) => fall_back_to_webview(app, state, underlay, e),
+                }
+            }
+        }
         return Ok(playing);
     }
     if preview.surface == "webview" && ENCODING.load(Ordering::Acquire) {
@@ -537,12 +549,12 @@ fn tick(
     if in_window && preview.visible {
         // The short's frame (sent to the Shorts Studio below) shows in the editor too.
         if let Some((window, placement)) = state.preview.lock().underlay() {
-            if let Err(e) =
-                runtime
-                    .evaluator
-                    .present_again(&mut underlay.presenter, &window, &placement)
+            match runtime
+                .evaluator
+                .present_again(&mut underlay.presenter, &window, &placement)
             {
-                fall_back_to_webview(app, state, underlay, e);
+                Ok(_) => underlay.layout_revision = preview.layout_revision,
+                Err(e) => fall_back_to_webview(app, state, underlay, e),
             }
         }
     }

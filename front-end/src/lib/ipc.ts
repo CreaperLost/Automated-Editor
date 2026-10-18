@@ -1,6 +1,7 @@
 import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
   CheckReport,
+  Template,
   Storyboard,
   OpenedProject,
   SegmentPage,
@@ -565,6 +566,14 @@ export const api = {
   storyboardRender: (projectHandle: string, shortId?: string, maxTiles?: number) =>
     invokeTauri<Storyboard>("storyboard_render", { projectHandle, shortId: shortId ?? null, maxTiles: maxTiles ?? null }),
   projectCurrent: () => invokeTauri<OpenedProject | null>("project_current"),
+  templatesList: () => invokeTauri<Template[]>("templates_list"),
+  /** Saves the project's settings (and the short's look, given one) under `name`; the same name replaces. */
+  templateSave: (projectHandle: string, name: string, shortId: string | null) =>
+    invokeTauri<Template[]>("template_save", { projectHandle, name, shortId }),
+  templateDelete: (templateId: string) => invokeTauri<Template[]>("template_delete", { templateId }),
+  /** One undo step: the template's settings, and its short look on `shortId`. */
+  templateApply: (projectHandle: string, expectedRevision: number, templateId: string, shortId: string | null) =>
+    invokeTauri<OpenedProject>("template_apply", { projectHandle, expectedRevision, templateId, shortId }),
   projectShortsSet: (projectHandle: string, expectedRevision: number, shorts: Short[]) =>
     invokeTauri<OpenedProject>("project_shorts_set", {
       projectHandle,

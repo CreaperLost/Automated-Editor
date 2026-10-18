@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Check, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Video } from "lucide-react";
+import { Check, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Trash2, Video } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { focusShortPlayback } from "../../lib/playbackControl";
 import { switchStage, switchStarted } from "../../lib/switchTiming";
@@ -9,6 +9,7 @@ import {
   exportShorts,
   findShorts,
   newShort,
+  removeShort,
   renameShort,
   selectShort,
   setShortsError,
@@ -181,6 +182,19 @@ export const ShortsListPanel: React.FC = () => {
                       className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-control text-studio-500 hover:text-studio-100 hover:bg-studio-700 opacity-0 group-hover:opacity-100 focus:opacity-100"
                     >
                       <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${s.title}`}
+                      title="Delete this short (Undo brings it back)"
+                      disabled={!!busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeShort(s.id);
+                      }}
+                      className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-control text-studio-500 hover:text-danger-fg hover:bg-danger/15 opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-40"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </>
                 )}

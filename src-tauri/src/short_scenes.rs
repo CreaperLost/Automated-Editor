@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_SCENES: usize = 100;
 pub const MAX_TRANSITION_MS: u32 = 2_000;
-pub const DEFAULT_TRANSITION_MS: u32 = 350;
+/// A cut: no ease in or out.
+pub const DEFAULT_TRANSITION_MS: u32 = 0;
 /// Scenes shorter than this flicker.
 pub const MIN_SCENE_US: u64 = 1_500_000;
 /// The opening line of a short shows the speaker this long, before the screen takes over.

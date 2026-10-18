@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api } from "../lib/ipc";
 import { GAP_PRESETS } from "../lib/jumpCutConfig";
-import { clipAt, soundSources } from "../lib/sequence";
+import { clipEnd, soundSources } from "../lib/sequence";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 
@@ -13,17 +13,17 @@ export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   followZooms: true,
   screenPanX: 0,
   screenPanY: 0,
-  captions: true,
+  captions: false,
   captionSpot: "seam",
   captionMaxWords: 0,
-  captionLines: 2,
+  captionLines: 1,
   captionSizePct: 0,
   backgroundType: "project",
   backgroundColorStart: "#000000",
   backgroundColorEnd: "#1e1b4b",
   backgroundPreset: "aurora",
   scenes: [],
-  sceneTransitionMs: 350,
+  sceneTransitionMs: 0,
 };
 /** How long a new short lasts. */
 const NEW_SHORT_US = 30_000_000;
@@ -199,37 +199,54 @@ export function sceneOp(label: string, work: (p: OpenedProject) => Promise<Opene
   saveQueue = saveQueue.then(() => runShorts(label, work));
 }
 
-/** Which asset's clock timeline time `editedUs` plays on (its top picture, else any clip) and
- *  where on it; `null` where nothing plays. */
-function clockAt(project: OpenedProject, editedUs: number): { media: string; us: number } | null {
+/**
+ * Where a new short goes: from the start of the video for up to `limitUs`, on the clock of a
+ * recording or file playing at the start. Both ends must be on one asset's clock, so it ends
+ * where that asset last plays within the limit (the time between keeps every clip). Of the
+ * assets playing at the start, the one reaching furthest wins; the top picture on a tie.
+ */
+function newShortRange(project: OpenedProject, limitUs: number): { media: string; startUs: number; endUs: number } | null {
   const tracks = project.sequence.tracks.filter((t) => t.kind === "video").reverse()
     .concat(project.sequence.tracks.filter((t) => t.kind === "audio"));
-  for (const track of tracks) {
-    const clip = clipAt(track, editedUs);
-    if (clip) return { media: clip.asset, us: clip.inUs + (editedUs - clip.startUs) };
+  const moving = (asset: string) => {
+    const kind = project.assets.find((a) => a.id === asset)?.kind;
+    return kind !== "image" && kind !== "graphic";
+  };
+  const clips = tracks.flatMap((t) => t.clips).filter((c) => moving(c.asset));
+  if (clips.length === 0) return null;
+  const firstUs = Math.min(...clips.map((c) => c.startUs));
+  let best: { media: string; startUs: number; endUs: number; reachUs: number } | null = null;
+  for (const opening of clips.filter((c) => c.startUs <= firstUs && firstUs < clipEnd(c))) {
+    const startUs = opening.inUs + (firstUs - opening.startUs);
+    let reachUs = 0;
+    let endUs = 0;
+    for (const clip of clips.filter((c) => c.asset === opening.asset && c.startUs < firstUs + limitUs)) {
+      const until = Math.min(clipEnd(clip), firstUs + limitUs);
+      const sourceEnd = clip.inUs + (until - clip.startUs);
+      if (until > reachUs && sourceEnd > startUs) {
+        reachUs = until;
+        endUs = sourceEnd;
+      }
+    }
+    if (reachUs > (best?.reachUs ?? firstUs)) best = { media: opening.asset, startUs, endUs, reachUs };
   }
-  return null;
+  return best && { media: best.media, startUs: best.startUs, endUs: best.endUs };
 }
 
 /** A short of the video's first 30 seconds, shaped on its timeline afterwards. */
 export function newShort() {
   const { main } = useShortsStore.getState();
   if (!main) return;
-  const start = clockAt(main, 0);
-  const end = clockAt(main, Math.min(main.durationUs, NEW_SHORT_US) - 1);
-  if (!start || !end) {
-    setShortsError("A short starts and ends on a clip; nothing plays there.");
-    return;
-  }
-  if (start.media !== end.media) {
-    setShortsError("A short starts and ends on the same recording or file; trim it so both ends are on one.");
+  const range = newShortRange(main, NEW_SHORT_US);
+  if (!range) {
+    setShortsError("Nothing plays on the video's timeline to make a short from.");
     return;
   }
   const id = `short-${Date.now().toString(36)}`;
   selectShort(id);
   void saveShorts((list) => [
     ...list,
-    { id, title: `Short ${list.length + 1}`, layout: DEFAULT_SHORT_LAYOUT, media: start.media, sourceStartUs: start.us, sourceEndUs: end.us + 1 },
+    { id, title: `Short ${list.length + 1}`, layout: DEFAULT_SHORT_LAYOUT, media: range.media, sourceStartUs: range.startUs, sourceEndUs: range.endUs },
   ]);
 }
 

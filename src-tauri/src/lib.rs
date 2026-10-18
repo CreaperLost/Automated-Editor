@@ -26,6 +26,7 @@ pub mod shorts;
 pub mod sound_effects;
 pub mod take_short;
 pub mod telemetry;
+pub mod templates;
 pub mod timeline;
 pub mod transcript;
 pub mod webcam_focus;
@@ -977,6 +978,41 @@ fn project_shorts_set(
     shorts: Vec<shorts::Short>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn templates_list() -> Vec<templates::Template> {
+    templates::list(&templates::dir())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn template_save(
+    state: State<'_, AppState>,
+    project_handle: String,
+    name: String,
+    short_id: Option<String>,
+) -> Result<Vec<templates::Template>, String> {
+    commands::template_save_impl(&state, project_handle, name, short_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn template_delete(template_id: String) -> Result<Vec<templates::Template>, String> {
+    templates::remove(&templates::dir(), &template_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn template_apply(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    template_id: String,
+    short_id: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::template_apply_impl(&state, project_handle, expected_revision, template_id, short_id)
 }
 
 /// Async: lining up the take's sounds reads them, which must not hold the main thread.
@@ -2265,6 +2301,10 @@ pub fn run() {
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,
+            templates_list,
+            template_save,
+            template_delete,
+            template_apply,
             project_short_from_take,
             project_short_footage,
             project_short_scenes_pick,
