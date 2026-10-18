@@ -74,6 +74,19 @@ pub fn download_model(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
+    let files: Vec<(&str, &str)> = MODEL_FILES.iter().map(|name| (*name, *name)).collect();
+    download_files(dir, MODEL_REPO, &files, cancel, progress)
+}
+
+/// Downloads `files` (path under `repo`, name in `dir`) into `dir`, skipping files already
+/// there, reporting `(bytes_done, bytes_total)` when known.
+pub fn download_files(
+    dir: &Path,
+    repo: &str,
+    files: &[(&str, &str)],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     // The blocking client's timeout bounds the wait for headers and each read on its own, not
     // the whole download: a stalled server fails (and frees Cancel) within a minute.
@@ -84,12 +97,12 @@ pub fn download_model(
         .map_err(|e| e.to_string())?;
     let cancelled = || cancel.load(Ordering::Relaxed);
     let mut sizes = Vec::new();
-    for name in MODEL_FILES {
+    for (remote, _) in files {
         if cancelled() {
             return Err("Download cancelled".into());
         }
         let size = client
-            .head(format!("{MODEL_REPO}/{name}"))
+            .head(format!("{repo}/{remote}"))
             .send()
             .ok()
             .filter(|r| r.status().is_success())
@@ -98,7 +111,7 @@ pub fn download_model(
     }
     let total = sizes.iter().copied().sum::<Option<u64>>();
     let mut done = 0u64;
-    for name in MODEL_FILES {
+    for (remote, name) in files {
         let target = dir.join(name);
         if target.is_file() {
             done += std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
@@ -109,7 +122,7 @@ pub fn download_model(
             return Err("Download cancelled".into());
         }
         let mut response = client
-            .get(format!("{MODEL_REPO}/{name}"))
+            .get(format!("{repo}/{remote}"))
             .send()
             .map_err(|e| format!("Could not download {name}: {e}"))?;
         if !response.status().is_success() {
@@ -188,7 +201,8 @@ mod engine {
     /// Loading the model takes seconds, so the last one loaded is kept for the next run.
     static LOADED: Mutex<Option<(PathBuf, ParakeetTDT)>> = Mutex::new(None);
 
-    fn execution_config() -> ExecutionConfig {
+    /// The execution provider this build asks for; the word aligner runs on it too.
+    pub(crate) fn execution_config() -> ExecutionConfig {
         #[allow(unused_mut)]
         let mut config = ExecutionConfig::new();
         #[cfg(feature = "parakeet-cuda")]
@@ -291,6 +305,8 @@ mod engine {
     }
 }
 
+#[cfg(feature = "parakeet")]
+pub(crate) use engine::execution_config;
 #[cfg(feature = "parakeet")]
 pub use engine::ParakeetTranscriber;
 

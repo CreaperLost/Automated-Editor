@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
+import { AudioLines, AudioWaveform, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
@@ -450,7 +450,7 @@ export const TranscriptPanel: React.FC = () => {
       if (!source) {
         setError(null);
         setNotice(
-          `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under AI review, then press Find with AI again.`,
+          `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under OpenRouter review, then press Find with OpenRouter again. Or ask your connected agent to review them in-house.`,
         );
         setSettingsOpen(true);
         return;
@@ -470,7 +470,7 @@ export const TranscriptPanel: React.FC = () => {
       // Another track, or the words moved (a cut, undo) while the AI read them: its answer is
       // about words no longer shown as they were.
       if (!stillShowing(handle, trackId) || generation !== refreshGeneration.current) {
-        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Find with AI again.");
+        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Find with OpenRouter again.");
         return;
       }
       setSuggestions(next);
@@ -512,6 +512,32 @@ export const TranscriptPanel: React.FC = () => {
     const index = selectedIds.length === 1 ? wordIndex.get(selectedIds[0]) : undefined;
     if (index === undefined) return;
     setEditing({ index, text: words[index].text });
+  };
+
+  /** Times every word against the audio; text and cuts already made stay. */
+  const alignWords = async () => {
+    if (!handle || !trackId) return;
+    setRunning(true);
+    setError(null);
+    setNotice(null);
+    setProgress(null);
+    try {
+      const result = await api.transcriptAlign(handle, trackId);
+      bumpCaptions();
+      if (!stillShowing(handle, trackId)) return;
+      setView(result.view);
+      const nextSuggestions = await api.transcriptSuggestions(handle, trackId);
+      if (!stillShowing(handle, trackId)) return;
+      setSuggestions(nextSuggestions);
+      setNotice(result.diagnostics.join(" · "));
+    } catch (err) {
+      const message = errorMessage(err);
+      setError(message);
+      if (message.includes("transcription settings")) setSettingsOpen(true);
+    } finally {
+      setRunning(false);
+      setProgress(null);
+    }
   };
 
   /** Takes the punctuation off every word; captions follow. */
@@ -641,6 +667,16 @@ export const TranscriptPanel: React.FC = () => {
             >
               .,?<span className="sr-only"> Remove punctuation</span>
             </Button>
+          )}
+          {view && !view.alignment && (
+            <IconButton
+              size="sm"
+              icon={AudioWaveform}
+              label="Align words to the audio"
+              title="Time every word against the audio (to 20 ms), so cuts at word edges keep whole words and drop the pauses beside them. Text and cuts already made stay."
+              disabled={running}
+              onClick={() => void alignWords()}
+            />
           )}
           {view && (
             <IconButton
@@ -806,10 +842,14 @@ export const TranscriptPanel: React.FC = () => {
               className="w-full"
               disabled={running}
               onClick={() => void runAiReview()}
-              title="Ask the AI provider from Transcription and AI settings to find filler words and retakes in context. Sends the transcript text."
+              title="Ask OpenRouter or OpenAI (Transcription and AI settings, your key) to find filler words and retakes in context. Sends the transcript text."
             >
-              Find with AI
+              Find with OpenRouter
             </Button>
+            <p className="text-meta text-studio-500">
+              Or in-house: ask your connected agent to review the fillers and retakes. It reads the transcript itself
+              (fillers_review), so nothing goes to OpenRouter; its finds show here marked In-house.
+            </p>
           </div>
           <ul className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
             {reviewed.length === 0 && (
@@ -825,7 +865,14 @@ export const TranscriptPanel: React.FC = () => {
                   <Badge tone={s.kind === "filler" ? "suggest" : s.kind === "cut" ? "danger" : "neutral"}>
                     {s.kind === "filler" ? "Filler" : s.kind === "retake" ? "Retake" : "Cut"}
                   </Badge>
-                  {s.source === "ai" && <Badge title="Found by the AI review">AI</Badge>}
+                  {s.source === "ai" &&
+                    (s.reviewer?.startsWith("in-house") ? (
+                      <Badge tone="accent" title={`Found by the in-house review: ${s.reviewer}`}>
+                        In-house
+                      </Badge>
+                    ) : (
+                      <Badge title={`Found by the OpenRouter review${s.reviewer ? `: ${s.reviewer}` : ""}`}>AI</Badge>
+                    ))}
                   {s.source === "agent" && s.proposal && (
                     <Badge tone="accent" title={`Proposed by ${s.proposal.agent} in ${s.proposal.batchId}; also in the Agent panel`}>
                       {s.proposal.agent}

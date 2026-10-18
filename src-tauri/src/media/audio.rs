@@ -97,6 +97,8 @@ pub struct AudioMixer {
     /// overlap, so a chunk finds the few it needs by binary search.
     lanes: Vec<Vec<Span>>,
     polish: Option<PolishPlan>,
+    /// Clicks and whooshes on their own lane, when it makes any sound.
+    effects: Option<crate::sound_effects::SoundEffectsLane>,
     clean_files: super::declick::CleanFiles,
     /// Open sound files, so sequential chunks do not open and parse them again.
     readers: std::sync::Mutex<Vec<(PathBuf, PcmReader)>>,
@@ -190,9 +192,27 @@ fn ceil_frame(us: u64) -> u64 {
 impl AudioMixer {
     pub fn new(root: &Path, document: &EditDocument) -> Result<Self, String> {
         let duration = document.duration_us();
-        let lanes = lanes(root, document);
+        let mut lanes = lanes(root, document);
         let clean_files = super::declick::prepare(root, &document.audio, &lanes)?;
-        let polish = PolishPlan::build(root, &document.audio, &lanes, duration);
+        // The sound effects lane ducks under speech like background sound.
+        let effects = crate::sound_effects::SoundEffectsLane::new(document);
+        let mut audio = std::borrow::Cow::Borrowed(&document.audio);
+        if effects.is_some() {
+            use crate::sound_effects::{DUCK_DB, LANE_ID};
+            audio
+                .to_mut()
+                .tracks
+                .entry(LANE_ID.into())
+                .or_default()
+                .duck_db = Some(DUCK_DB);
+            lanes.push(Lane {
+                id: LANE_ID.into(),
+                speech: false,
+                gain: 1.0,
+                clips: Vec::new(),
+            });
+        }
+        let polish = PolishPlan::build(root, &audio, &lanes, duration);
         let mut by_lane = Vec::new();
         for lane in &lanes {
             let mut spans = Vec::new();
@@ -225,16 +245,19 @@ impl AudioMixer {
             root: root.into(),
             lanes: by_lane,
             polish,
+            effects,
             clean_files,
             readers: std::sync::Mutex::new(Vec::new()),
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
         })
     }
     pub fn has_audio(&self) -> bool {
-        self.lanes
-            .iter()
-            .flatten()
-            .any(|s| s.segments.iter().any(|segment| segment.available))
+        self.effects.is_some()
+            || self
+                .lanes
+                .iter()
+                .flatten()
+                .any(|s| s.segments.iter().any(|segment| segment.available))
     }
 
     /// Runs `read` on an open reader of `path`, opening it once.
@@ -271,6 +294,12 @@ impl AudioMixer {
             {
                 self.mix_span(span, start, end, &mut out)?;
             }
+        }
+        if let Some(effects) = &self.effects {
+            effects.mix(start, &mut out, |t| match &self.polish {
+                Some(plan) => plan.lane_duck_gain(crate::sound_effects::LANE_ID, t),
+                None => 1.0,
+            });
         }
         Ok(out
             .into_iter()

@@ -15,10 +15,16 @@ export const GAP_PRESETS = {
 } satisfies Record<string, { label: string; hint: string; config: TranscriptGapConfig }>;
 
 export type JumpCutPreset = keyof typeof SILENCE_PRESETS;
-export type JumpCutSettings = SilenceConfig & Pick<TranscriptGapConfig, "refineWordEdges" | "edgeThresholdDb">;
+export type JumpCutSettings = SilenceConfig & Pick<TranscriptGapConfig, "refineWordEdges" | "edgeThresholdDb" | "keepSoundEvents">;
 
 export function gapSettings(settings: JumpCutSettings): TranscriptGapConfig {
-  return { minDurationMs: settings.minDurationMs, paddingMs: settings.paddingMs, refineWordEdges: settings.refineWordEdges, edgeThresholdDb: settings.edgeThresholdDb };
+  return {
+    minDurationMs: settings.minDurationMs,
+    paddingMs: settings.paddingMs,
+    refineWordEdges: settings.refineWordEdges,
+    edgeThresholdDb: settings.edgeThresholdDb,
+    keepSoundEvents: settings.keepSoundEvents ?? false,
+  };
 }
 
 export function presetOf(config: JumpCutSettings, gaps: boolean): JumpCutPreset | "custom" {

@@ -42,7 +42,8 @@ struct LayerParams {
     pass_kind: u32,
     /// 0: BGRA; 1: NV12 (limited-range BT.709), converted to RGB in the shader.
     format: u32,
-    _pad: [u32; 2],
+    opacity: f32,
+    _pad: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -88,6 +89,8 @@ pub struct Layer {
     /// Set when the pixels are the same on every frame (the background); the compositor then
     /// keeps the uploaded texture instead of uploading it again.
     pub cache_key: Option<u64>,
+    /// How opaque the layer and its shadow are drawn, 0 to 1.
+    pub opacity: f32,
 }
 
 impl Layer {
@@ -109,6 +112,7 @@ impl Layer {
             shadow_opacity: 0.0,
             shadow_offset: [0.0, 0.0],
             cache_key: None,
+            opacity: 1.0,
         }
     }
 
@@ -299,25 +303,8 @@ impl Scene {
         }
         if let Some(screen) = screen {
             let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
-            let scale = layout.screen_scale_pct.clamp(1.0, 100.0) / 100.0;
-            let area_w = width - padding * 2;
-            let area_h = height - padding * 2;
-            let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
-            let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
-            // The kept region keeps the scale of the uncropped screen (re-fitting it would
-            // enlarge it, so cropping one side looked like cropping both) and is centred
-            // in the content area at its new size.
-            let (_, _, full_w, full_h) =
-                fit_inside(screen.width, screen.height, 0, 0, box_w, box_h);
-            let span = |size: u32, start: f32, length: f32| {
-                let a = (size as f32 * start).round() as u32;
-                let b = (size as f32 * (start + length)).round() as u32;
-                b.saturating_sub(a).clamp(1, size.max(1))
-            };
-            let w = span(full_w, crop_x, crop_w);
-            let h = span(full_h, crop_y, crop_h);
-            let x = padding + (area_w - w) / 2;
-            let y = padding + (area_h - h) / 2;
+            let (x, y, w, h) =
+                screen_layer_rect(width, height, layout, screen.width, screen.height, unit);
             let radius = layout.corner_radius_px as f32 * unit;
             let clip = if radius > 0.0 {
                 ClipMode::RoundedRect
@@ -512,6 +499,30 @@ impl Scene {
         self.layers.insert(at, layer);
     }
 
+    /// A graphic in its slot `rect` (x, y, w, h: the whole canvas, or a part of a short's
+    /// split), above every layer pushed so far.
+    pub fn push_graphic(
+        &mut self,
+        frame: VideoFrame,
+        rect: (u32, u32, u32, u32),
+        cache_key: Option<u64>,
+    ) {
+        let (x, y, w, h) = rect;
+        if self.layers.len() >= MAX_LAYERS
+            || frame.width == 0
+            || frame.height == 0
+            || w == 0
+            || h == 0
+        {
+            return;
+        }
+        let mut layer = Layer::placed(frame, x, y, w, h)
+            .cover_uv(w, h)
+            .with_role(LayerRole::Overlay);
+        layer.cache_key = cache_key;
+        self.layers.push(layer);
+    }
+
     pub fn apply_screen_uv(&mut self, uv_x: f32, uv_y: f32, uv_w: f32, uv_h: f32) {
         if let Some(layer) = self
             .layers
@@ -522,6 +533,30 @@ impl Scene {
             layer.uv_y = uv_y;
             layer.uv_w = uv_w;
             layer.uv_h = uv_h;
+        }
+    }
+
+    /// Fades the webcam bubble (camera, border and shadow) to `opacity`; at 0 it is left out.
+    pub fn fade_webcam(&mut self, opacity: f32) {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if opacity >= 1.0 {
+            return;
+        }
+        let webcam = |l: &Layer| matches!(l.role, LayerRole::Webcam | LayerRole::WebcamBorder);
+        if opacity <= 0.0 {
+            self.layers.retain(|l| !webcam(l));
+            return;
+        }
+        for layer in self.layers.iter_mut().filter(|l| webcam(l)) {
+            // The ring sits under the whole camera: faded faster, it hardly shows through.
+            layer.opacity *= match layer.role {
+                LayerRole::WebcamBorder => opacity * opacity,
+                _ => opacity,
+            };
         }
     }
 
@@ -1547,6 +1582,67 @@ fn webcam_bubble_size(
     (w, h)
 }
 
+/// Where the screen sits on the canvas, (x, y, width, height), for a screen picture of
+/// `src_w` x `src_h` under `layout` (pixel values times `unit`).
+pub fn screen_layer_rect(
+    width: u32,
+    height: u32,
+    layout: &EditLayout,
+    src_w: u32,
+    src_h: u32,
+    unit: f32,
+) -> (u32, u32, u32, u32) {
+    let padding = (layout.padding_px as f32 * unit).round() as u32;
+    let padding = padding
+        .min(width.saturating_sub(1) / 2)
+        .min(height.saturating_sub(1) / 2);
+    let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
+    let scale = layout.screen_scale_pct.clamp(1.0, 100.0) / 100.0;
+    let area_w = width - padding * 2;
+    let area_h = height - padding * 2;
+    let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
+    let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
+    // The kept region keeps the scale of the uncropped screen (re-fitting it would
+    // enlarge it, so cropping one side looked like cropping both) and is centred
+    // in the content area at its new size.
+    let (_, _, full_w, full_h) = fit_inside(src_w, src_h, 0, 0, box_w, box_h);
+    let span = |size: u32, start: f32, length: f32| {
+        let a = (size as f32 * start).round() as u32;
+        let b = (size as f32 * (start + length)).round() as u32;
+        b.saturating_sub(a).clamp(1, size.max(1))
+    };
+    let w = span(full_w, crop_x, crop_w);
+    let h = span(full_h, crop_y, crop_h);
+    (padding + (area_w - w) / 2, padding + (area_h - h) / 2, w, h)
+}
+
+/// The canvas rectangle the webcam bubble covers, border included, as (x, y, width, height)
+/// for a camera picture of `src_w` x `src_h`.
+pub fn webcam_bubble_rect(
+    canvas_w: u32,
+    canvas_h: u32,
+    src_w: u32,
+    src_h: u32,
+    layout: &EditLayout,
+) -> (u32, u32, u32, u32) {
+    let unit = layout_px_unit(canvas_w, canvas_h);
+    let (w, h) = webcam_bubble_size(canvas_w, canvas_h, src_w, src_h, layout);
+    let (x, y) = webcam_origin(canvas_w, canvas_h, w, h, layout, unit);
+    let inset = if layout.webcam_border_width > 0 {
+        ((layout.webcam_border_width as f32 * unit).round() as u32).max(1)
+    } else {
+        0
+    };
+    let bx = x.saturating_sub(inset);
+    let by = y.saturating_sub(inset);
+    (
+        bx,
+        by,
+        (w + inset * 2).min(canvas_w.saturating_sub(bx)),
+        (h + inset * 2).min(canvas_h.saturating_sub(by)),
+    )
+}
+
 fn webcam_origin(
     canvas_w: u32,
     canvas_h: u32,
@@ -1829,7 +1925,8 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
             PixelFormat::Bgra8888 => 0,
             PixelFormat::Nv12 => 1,
         },
-        _pad: [0, 0],
+        opacity: layer.opacity.clamp(0.0, 1.0),
+        _pad: 0,
     }
 }
 
@@ -1928,7 +2025,9 @@ fn blit_shadow(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             let local_x = (x as f32 + 0.5 - layer.x as f32) / layer.width as f32;
             let local_y = (y as f32 + 0.5 - layer.y as f32) / layer.height as f32;
             let sdf = layer_sdf(layer, local_x, local_y, true);
-            let alpha = layer.shadow_opacity * shadow_coverage(sdf, layer.shadow_blur_px);
+            let alpha = layer.shadow_opacity
+                * layer.opacity.clamp(0.0, 1.0)
+                * shadow_coverage(sdf, layer.shadow_blur_px);
             if alpha <= 0.0 {
                 continue;
             }
@@ -1986,6 +2085,16 @@ fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             let u = layer.uv_x + layer.uv_w * local_x;
             let src = sample_bilinear(&layer.frame, u, v);
             let di = (y * dest.stride + x * 4) as usize;
+            let opacity = layer.opacity.clamp(0.0, 1.0);
+            if opacity < 1.0 {
+                // A fading layer: its picture is opaque except where it carries alpha.
+                let straight = matches!(layer.role, LayerRole::Caption | LayerRole::Overlay);
+                let alpha = if straight { src[3] as f32 / 255.0 } else { 1.0 } * opacity;
+                for (dst, s) in dest.data[di..di + 3].iter_mut().zip(src) {
+                    *dst = (s as f32 * alpha + *dst as f32 * (1.0 - alpha)).round() as u8;
+                }
+                continue;
+            }
             if matches!(layer.role, LayerRole::Caption | LayerRole::Overlay) {
                 // Same blend as the GPU pipeline: source over, straight alpha.
                 let alpha = src[3] as u32;

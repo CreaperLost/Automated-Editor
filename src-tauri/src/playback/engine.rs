@@ -15,6 +15,9 @@ use std::{
 };
 use tauri::Manager;
 
+/// What a drawn frame showed: playback generation, time, preview generation, graphics.
+type FrameKey = (u64, u64, u64, u64);
+
 /// Audio queued ahead of the play position, in mixer chunks. The cpal queue (Windows) can
 /// take a deep lead, so a slow preview frame does not starve the audio clock.
 const AUDIO_LEAD_CHUNKS: u64 = if cfg!(windows) { 10 } else { 3 };
@@ -174,7 +177,7 @@ pub fn start(app: tauri::AppHandle) {
         let mut runtime: Option<Runtime> = None;
         let mut underlay = Underlay::default();
         let pending = Arc::new(AtomicBool::new(false));
-        let mut last_frame: Option<(u64, u64, u64)> = None;
+        let mut last_frame: Option<FrameKey> = None;
         while !app
             .state::<AppState>()
             .playback_shutdown
@@ -233,7 +236,7 @@ fn tick(
     runtime: &mut Option<Runtime>,
     underlay: &mut Underlay,
     pending: &Arc<AtomicBool>,
-    last_frame: &mut Option<(u64, u64, u64)>,
+    last_frame: &mut Option<FrameKey>,
 ) -> Result<bool, (u64, String)> {
     let status = state.playback.lock().status().map_err(|e| (0, e))?;
     if matches!(status.state, PlaybackState::Closed | PlaybackState::Error) {
@@ -403,7 +406,13 @@ fn tick(
     } else {
         position_us
     };
-    let key = (generation, render_us, preview.generation);
+    // A graphic that finished rendering changes the frame without an edit.
+    let key = (
+        generation,
+        render_us,
+        preview.generation,
+        crate::graphics::render::generation(),
+    );
     // Decoders start the same real time ahead at any speed.
     let horizon = (PREFETCH_US as f64 * status.speed.max(1.0)) as u64;
     if in_window && !for_short {

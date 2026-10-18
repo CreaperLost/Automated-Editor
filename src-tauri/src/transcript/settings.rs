@@ -1,7 +1,7 @@
 //! App-wide transcription settings. The ElevenLabs key never goes in a project or in the
 //! settings file: it lives in the OS credential store (Windows Credential Manager, macOS
 //! Keychain), or in an owner-only file on other platforms. `ELEVENLABS_API_KEY` overrides it.
-use super::{parakeet, ProviderKind};
+use super::{align, parakeet, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +20,8 @@ pub struct TranscriptSettings {
     pub keyterms: Vec<String>,
     /// Folder holding the Parakeet ONNX files; empty uses the app data folder.
     pub parakeet_model_dir: String,
+    /// Align word times to the audio after transcribing, when the model is downloaded.
+    pub align_words: bool,
 }
 
 impl Default for TranscriptSettings {
@@ -30,6 +32,7 @@ impl Default for TranscriptSettings {
             scribe_model: String::new(),
             keyterms: Vec::new(),
             parakeet_model_dir: String::new(),
+            align_words: true,
         }
     }
 }
@@ -75,6 +78,12 @@ pub struct TranscriptSettingsView {
     pub parakeet_accelerator: String,
     pub parakeet_model_dir: String,
     pub parakeet_model_present: bool,
+    /// Word alignment runs in this build (it shares Parakeet's ONNX Runtime).
+    pub aligner_available: bool,
+    pub aligner_model_present: bool,
+    pub aligner_model_dir: String,
+    /// Download size of the alignment model, in bytes.
+    pub aligner_model_bytes: u64,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -111,6 +120,10 @@ pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
         parakeet_accelerator: parakeet::accelerator().into(),
         parakeet_model_present: parakeet::model_present(&model_dir),
         parakeet_model_dir: model_dir.to_string_lossy().into_owned(),
+        aligner_available: align::compiled_in(),
+        aligner_model_present: align::model_present(&align::default_model_dir()),
+        aligner_model_dir: align::default_model_dir().to_string_lossy().into_owned(),
+        aligner_model_bytes: align::MODEL_BYTES,
         settings,
     }
 }

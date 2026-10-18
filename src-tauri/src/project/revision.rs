@@ -72,6 +72,9 @@ pub struct EditDocument {
     /// Auto-zoom settings: how far zooms go, how many, how the camera follows.
     #[serde(default, skip_serializing_if = "crate::zoom::ZoomSettings::is_default")]
     pub zoom_settings: crate::zoom::ZoomSettings,
+    /// The brand kit graphics use unless they pick another (see `graphics::brands`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphics_brand: Option<String>,
 }
 
 impl Default for EditDocument {
@@ -92,6 +95,7 @@ impl Default for EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             zoom_settings: Default::default(),
+            graphics_brand: None,
         }
     }
 }
@@ -280,6 +284,9 @@ impl EditDocument {
         crate::chapters::validate(&self.chapters)?;
         crate::shorts::validate(&self.shorts)?;
         crate::shorts::validate_edits(self)?;
+        if let Some(brand) = &self.graphics_brand {
+            crate::graphics::brands::check_name(brand)?;
+        }
         Ok(())
     }
 }

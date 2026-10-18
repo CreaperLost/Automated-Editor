@@ -118,7 +118,7 @@ pub struct Noise {
     pub(crate) core_us: (u64, u64),
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoiseConfig {
     /// 0 finds only the most obvious noises, 1 also faint ones.

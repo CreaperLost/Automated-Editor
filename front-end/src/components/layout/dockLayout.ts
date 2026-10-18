@@ -1,6 +1,6 @@
 import type { DockviewApi } from "dockview-react";
 
-/// The editor's dockable panels. Every one is always open somewhere in the layout.
+/// The editor's dockable panels. Every one a workspace uses is always open somewhere in it.
 export const DOCK_PANELS = {
   preview: { title: "Preview", minimumWidth: 360, minimumHeight: 220 },
   transcript: { title: "Transcript", minimumWidth: 260, minimumHeight: 110 },
@@ -9,6 +9,10 @@ export const DOCK_PANELS = {
   zoom: { title: "Zoom", minimumWidth: 220, minimumHeight: 160 },
   chapters: { title: "Chapters", minimumWidth: 220, minimumHeight: 110 },
   agent: { title: "Agent", minimumWidth: 260, minimumHeight: 160 },
+  jumpCuts: { title: "Jump cuts", minimumWidth: 260, minimumHeight: 200 },
+  noises: { title: "Mouth noises", minimumWidth: 260, minimumHeight: 200 },
+  shorts: { title: "Shorts", minimumWidth: 220, minimumHeight: 120 },
+  shortLook: { title: "Look", minimumWidth: 240, minimumHeight: 160 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -24,14 +28,25 @@ export type LayoutPreset = keyof typeof LAYOUT_PRESETS;
 
 /**
  * Workspaces in the editor window. Each keeps its own panel arrangement; switching swaps
- * them. (Shorts is its own window.)
+ * them. In Shorts the shared panels (preview, timeline, inspector) show the selected short.
  */
 export const WORKSPACES = {
   edit: { label: "Edit", preset: "editing" as LayoutPreset },
   cleanup: { label: "Cleanup", preset: "transcript" as LayoutPreset },
+  shorts: { label: "Shorts", preset: null },
 } as const;
 
 export type Workspace = keyof typeof WORKSPACES;
+
+/** The panels only Shorts has, and the editor's panels Shorts has too. */
+const SHORTS_ONLY: readonly DockPanelId[] = ["shorts", "shortLook"];
+const SHORTS_PANELS: readonly DockPanelId[] = [...SHORTS_ONLY, "preview", "timeline", "inspector", "media", "agent"];
+
+/** The panels `workspace` shows. */
+export function workspacePanels(workspace: Workspace): DockPanelId[] {
+  const all = Object.keys(DOCK_PANELS) as DockPanelId[];
+  return workspace === "shorts" ? [...SHORTS_PANELS] : all.filter((id) => !SHORTS_ONLY.includes(id));
+}
 
 /** Edit keeps the key layouts were always saved under. */
 function storageKey(workspace: Workspace) {
@@ -55,6 +70,14 @@ function addAgent(api: DockviewApi) {
   api.addPanel({ ...panel("agent"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
+/// The cleanup passes share the inspector's tab group too. In Cleanup they are its first tabs
+/// (never hidden in the tab overflow) and Jump cuts is in front.
+function addCleanup(api: DockviewApi, inFront = false) {
+  const at = (index: number) => (inFront ? { index } : {});
+  api.addPanel({ ...panel("jumpCuts"), position: { referencePanel: "inspector", direction: "within", ...at(0) }, inactive: !inFront });
+  api.addPanel({ ...panel("noises"), position: { referencePanel: "inspector", direction: "within", ...at(1) }, inactive: true });
+}
+
 /// Chapters sit behind the transcript they are made from.
 function addChapters(api: DockviewApi) {
   api.addPanel({ ...panel("chapters"), position: { referencePanel: "transcript", direction: "within" }, inactive: true });
@@ -62,6 +85,28 @@ function addChapters(api: DockviewApi) {
 
 function addZoom(api: DockviewApi) {
   api.addPanel({ ...panel("zoom"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+}
+
+/// Shorts: the list on the left, the preview, the look on the right (inspector, media and the
+/// agent behind it), the short's timeline below.
+function applyShortsLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel(panel("preview"));
+  api.addPanel({ ...panel("shorts"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 260 });
+  api.addPanel({ ...panel("shortLook"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+  for (const id of ["inspector", "media", "agent"] as const) {
+    api.addPanel({ ...panel(id), position: { referencePanel: "shortLook", direction: "within" }, inactive: true });
+  }
+  api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
+  api.getPanel("shortLook")?.api.setActive();
+  api.getPanel("preview")?.api.setActive();
+}
+
+/// Puts `workspace` in its own default arrangement.
+function applyWorkspaceDefault(api: DockviewApi, workspace: Workspace) {
+  const { preset } = WORKSPACES[workspace];
+  if (preset) applyPreset(api, preset);
+  else applyShortsLayout(api);
 }
 
 /// Replaces the current layout with `preset`.
@@ -72,8 +117,9 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 420 });
       addChapters(api);
-      api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+      api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 340 });
       addMedia(api);
+      addCleanup(api, true);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
       break;
     }
@@ -83,6 +129,7 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
       addChapters(api);
       addMedia(api);
+      addCleanup(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 220 });
       break;
     }
@@ -90,6 +137,7 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
       api.addPanel(panel("preview"));
       api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
       addMedia(api);
+      addCleanup(api);
       api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
       api.addPanel({ ...panel("transcript"), position: { referencePanel: "preview", direction: "below" }, initialHeight: 180 });
       addChapters(api);
@@ -106,6 +154,11 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
     if (stored) {
       api.fromJSON(JSON.parse(stored));
       const ids = new Set(api.panels.map((p) => p.id));
+      const wanted = workspacePanels(workspace);
+      if (workspace === "shorts") {
+        if (wanted.every((id) => ids.has(id)) && ids.size === wanted.length) return;
+        throw new Error("Shorts layout without its panels");
+      }
       // Layouts saved before the media bin existed keep their arrangement and gain it.
       if (!ids.has("media") && ids.has("inspector")) {
         addMedia(api);
@@ -124,12 +177,18 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
         addChapters(api);
         ids.add("chapters");
       }
-      if ((Object.keys(DOCK_PANELS) as DockPanelId[]).every((id) => ids.has(id))) return;
+      // Layouts from before Jump cuts and Mouth noises were panels (they were a dialog).
+      if (!ids.has("jumpCuts") && !ids.has("noises") && ids.has("inspector")) {
+        addCleanup(api, workspace === "cleanup");
+        ids.add("jumpCuts");
+        ids.add("noises");
+      }
+      if (wanted.every((id) => ids.has(id)) && !SHORTS_ONLY.some((id) => ids.has(id))) return;
     }
   } catch {
     // Unreadable storage or an old layout format: start from the default.
   }
-  applyPreset(api, WORKSPACES[workspace].preset);
+  applyWorkspaceDefault(api, workspace);
 }
 
 export function saveLayout(api: DockviewApi, workspace: Workspace = activeWorkspace) {
@@ -156,12 +215,50 @@ export function setActiveDockApi(api: DockviewApi | null) {
 }
 
 export function applyPresetToWorkspace(preset: LayoutPreset) {
-  if (!activeApi) return;
+  if (!activeApi || activeWorkspace === "shorts") return;
   applyPreset(activeApi, preset);
   saveLayout(activeApi);
 }
 
+/// A panel to bring to the front once the workspace switching to shows (see `requestPanel`).
+let pendingPanel: DockPanelId | null = null;
+
+/// Brings panel `id` to the front: the Jump cuts and Mouth noises panels in Cleanup, a panel
+/// Shorts lacks in Edit, any other where it is.
+export function requestPanel(id: DockPanelId) {
+  const target: Workspace =
+    id === "jumpCuts" || id === "noises"
+      ? "cleanup"
+      : workspacePanels(activeWorkspace).includes(id)
+        ? activeWorkspace
+        : SHORTS_ONLY.includes(id)
+          ? "shorts"
+          : "edit";
+  if (target !== activeWorkspace) {
+    pendingPanel = id;
+    switchWorkspace?.(target);
+    return;
+  }
+  activeApi?.getPanel(id)?.api.setActive();
+}
+
+/// The panel asked for while the workspace switched, once (`DockWorkspace` shows it).
+export function takePendingPanel(): DockPanelId | null {
+  const id = pendingPanel;
+  pendingPanel = null;
+  return id;
+}
+
+/// How `requestPanel` switches workspace (the workspace store registers it, so this file needs
+/// no store).
+let switchWorkspace: ((workspace: Workspace) => void) | null = null;
+export function setWorkspaceSwitcher(switcher: (workspace: Workspace) => void) {
+  switchWorkspace = switcher;
+}
+
 /// Puts the current workspace back to its own default arrangement.
 export function resetWorkspaceLayout() {
-  applyPresetToWorkspace(WORKSPACES[activeWorkspace].preset);
+  if (!activeApi) return;
+  applyWorkspaceDefault(activeApi, activeWorkspace);
+  saveLayout(activeApi);
 }

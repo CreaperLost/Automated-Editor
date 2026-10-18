@@ -1,76 +1,17 @@
 import { isTauriEnvironment } from "./ipc";
 import type { OpenedProject } from "./types";
 
-/// Keeps the editor and the Shorts Studio windows on the same project revision. Each window
-/// broadcasts the project after its own edits and applies the other window's.
+/// What the backend tells the editor about agent edits (MCP): the project after an agent's
+/// change, and that a transcript or its captions changed.
 const EVENT = "aeroedits-project-updated";
-const SOURCE = Math.random().toString(36).slice(2);
-
-interface Payload {
-  source: string;
-  project: OpenedProject;
-}
-
-export function broadcastProject(project: OpenedProject) {
-  if (!isTauriEnvironment()) return;
-  void import("@tauri-apps/api/event")
-    .then(({ emit }) => emit(EVENT, { source: SOURCE, project } satisfies Payload))
-    .catch(() => undefined);
-}
-
-const SWITCH_EVENT = "aeroedits-project-switched";
-
-interface SwitchPayload {
-  source: string;
-  project: OpenedProject | null;
-}
-
-/** Tells the other windows the editor opened another project, or closed it (`null`). */
-export function broadcastProjectSwitched(project: OpenedProject | null) {
-  if (!isTauriEnvironment()) return;
-  void import("@tauri-apps/api/event")
-    .then(({ emit }) => emit(SWITCH_EVENT, { source: SOURCE, project } satisfies SwitchPayload))
-    .catch(() => undefined);
-}
-
-/** Calls `onSwitch` when another window opened or closed a project; returns the unsubscribe. */
-export function listenForProjectSwitches(onSwitch: (project: OpenedProject | null) => void): () => void {
-  if (!isTauriEnvironment()) return () => undefined;
-  let unlisten: (() => void) | undefined;
-  let disposed = false;
-  void import("@tauri-apps/api/event").then(({ listen }) =>
-    listen<SwitchPayload>(SWITCH_EVENT, (event) => {
-      if (event.payload.source !== SOURCE) onSwitch(event.payload.project);
-    }).then((fn) => {
-      if (disposed) fn();
-      else unlisten = fn;
-    }),
-  );
-  return () => {
-    disposed = true;
-    unlisten?.();
-  };
-}
-
 const CAPTIONS_EVENT = "aeroedits-captions-changed";
 
-/** Tells the other windows a transcript or its captions changed. */
-export function broadcastCaptionsChanged() {
-  if (!isTauriEnvironment()) return;
-  void import("@tauri-apps/api/event")
-    .then(({ emit }) => emit(CAPTIONS_EVENT, { source: SOURCE }))
-    .catch(() => undefined);
-}
-
-/** Calls `onChange` when another window changed a transcript; returns the unsubscribe. */
-export function listenForCaptionChanges(onChange: () => void): () => void {
+function listenTo<T>(event: string, handler: (payload: T) => void): () => void {
   if (!isTauriEnvironment()) return () => undefined;
   let unlisten: (() => void) | undefined;
   let disposed = false;
   void import("@tauri-apps/api/event").then(({ listen }) =>
-    listen<{ source: string }>(CAPTIONS_EVENT, (event) => {
-      if (event.payload.source !== SOURCE) onChange();
-    }).then((fn) => {
+    listen<T>(event, (e) => handler(e.payload)).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
     }),
@@ -81,21 +22,12 @@ export function listenForCaptionChanges(onChange: () => void): () => void {
   };
 }
 
-/** Calls `onProject` with projects other windows broadcast; returns the unsubscribe. */
+/** Calls `onProject` with the project an agent's edit left; returns the unsubscribe. */
 export function listenForProjects(onProject: (project: OpenedProject) => void): () => void {
-  if (!isTauriEnvironment()) return () => undefined;
-  let unlisten: (() => void) | undefined;
-  let disposed = false;
-  void import("@tauri-apps/api/event").then(({ listen }) =>
-    listen<Payload>(EVENT, (event) => {
-      if (event.payload.source !== SOURCE) onProject(event.payload.project);
-    }).then((fn) => {
-      if (disposed) fn();
-      else unlisten = fn;
-    }),
-  );
-  return () => {
-    disposed = true;
-    unlisten?.();
-  };
+  return listenTo<{ project: OpenedProject }>(EVENT, (payload) => onProject(payload.project));
+}
+
+/** Calls `onChange` when an agent changed a transcript; returns the unsubscribe. */
+export function listenForCaptionChanges(onChange: () => void): () => void {
+  return listenTo(CAPTIONS_EVENT, onChange);
 }

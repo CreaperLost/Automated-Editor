@@ -1,0 +1,161 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"title","type":"string","label":"Title","default":"Thanks for watching"},
+    {"id":"call","type":"string","label":"Call to action","default":"Subscribe for the next part"},
+    {"id":"handle","type":"string","label":"Channel or link","default":"@yourchannel"},
+    {"id":"next","type":"string","label":"Up next (optional)","default":""},
+    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
+    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
+    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>End card</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #f8fafc);
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        background: var(--background, #0f172a);
+      }
+      .ring {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 120vmin;
+        height: 120vmin;
+        margin: -60vmin 0 0 -60vmin;
+        border-radius: 50%;
+        border: 0.5vmin solid var(--accent, #facc15);
+        opacity: 0.18;
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3vmin;
+        padding: 0 8vw;
+        text-align: center;
+      }
+      h1 {
+        margin: 0;
+        font-size: 10vmin;
+        font-weight: 800;
+        line-height: 1.05;
+      }
+      .call {
+        font-size: 4.6vmin;
+        opacity: 0.8;
+      }
+      .handle {
+        margin-top: 1.5vmin;
+        padding: 1.6vmin 4vmin;
+        border-radius: 99vmin;
+        background: var(--accent, #facc15);
+        color: var(--background, #0f172a);
+        font-size: 4.2vmin;
+        font-weight: 800;
+      }
+      .next {
+        margin-top: 3vmin;
+        font-size: 3.4vmin;
+        opacity: 0.65;
+      }
+      .next:empty,
+      .handle:empty {
+        display: none;
+      }
+      @media (orientation: portrait) {
+        h1 {
+          font-size: 13vw;
+        }
+        .call {
+          font-size: 6vw;
+        }
+        .handle {
+          font-size: 5.6vw;
+          padding: 2.4vw 6vw;
+        }
+        .next {
+          font-size: 4.6vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-no-timeline
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6"
+      data-holds-end
+    >
+      <div id="card-back"><div class="ring" id="ring"></div></div>
+      <div class="layout" id="layout">
+        <h1 id="title" data-var-text="title">Thanks for watching</h1>
+        <div class="call" id="call" data-var-text="call">Subscribe for the next part</div>
+        <div class="handle" id="handle" data-var-text="handle">@yourchannel</div>
+        <div class="next" id="next" data-var-text="next"></div>
+      </div>
+    </div>
+    <script>
+      const vars = window.__hyperframes.getVariables();
+      if (vars.next) {
+        document.getElementById("next").textContent = `Up next: ${vars.next}`;
+      }
+      const root = document.getElementById("root");
+      const length = (parseFloat(root.dataset.duration) || 6) * 1000;
+      const ease = "cubic-bezier(0.2, 0, 0, 1)";
+      // The end card holds to the end of the video: it fades in, never out.
+      function play(id, frames, delay, duration, easing = ease) {
+        document
+          .getElementById(id)
+          .animate(frames, { duration, delay, easing, fill: "both", iterations: 1 })
+          .pause();
+      }
+      play("card-back", [{ opacity: 0 }, { opacity: 1 }], 0, 400, "linear");
+      play("ring", [
+        { transform: "scale(0.6)", opacity: 0 },
+        { transform: "scale(1)", opacity: 0.18 },
+      ], 0, Math.min(length, 2400));
+      const rise = [
+        { transform: "translateY(4vmin)", opacity: 0 },
+        { transform: "translateY(0)", opacity: 1 },
+      ];
+      play("title", rise, 200, 700);
+      play("call", [
+        { transform: "translateY(4vmin)", opacity: 0 },
+        { transform: "translateY(0)", opacity: 0.8 },
+      ], 420, 700);
+      play("handle", [
+        { transform: "scale(0.7)", opacity: 0 },
+        { transform: "scale(1.05)", opacity: 1, offset: 0.7 },
+        { transform: "scale(1)", opacity: 1 },
+      ], 650, 600);
+      play("next", [{ opacity: 0 }, { opacity: 0.65 }], 1000, 600);
+    </script>
+  </body>
+</html>

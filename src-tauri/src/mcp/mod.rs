@@ -10,10 +10,11 @@ mod actions;
 pub mod bridge;
 pub mod cli;
 pub mod clients;
-mod frames;
+pub(crate) mod frames;
 pub mod ipc;
 mod propose;
 pub mod skill;
+pub mod storyboard;
 #[cfg(test)]
 pub(crate) mod tests_support;
 pub mod tools;
@@ -351,8 +352,12 @@ answers in a line or two to pass on to the user. Times are microseconds on the e
 timeline (after every cut). Read transcripts (transcript_get) and frames (frame_render) only \
 for judgment calls or when a step fails; then propose_cuts and propose_edit store a batch with \
 your reason for the user to accept in the Agent panel. Prefer cuts by word id, which stay \
-valid while the user edits; check proposals_list for what they decided. Keep graphics clear \
-of the webcam and captions (layout_get) unless asked otherwise.";
+valid while the user edits; check proposals_list for what they decided. Graphics (graphics, \
+graphic_add) play full screen over everything and cuts never go through them: add them after \
+the cuts, from the user's library first (each item says when to use it) or the templates, \
+before chapters; brand_kits are the user's colours and font. When the user likes a graphic you \
+wrote, offer to keep it: graphic_templatize, rewrite, graphic_check until it passes, then \
+library_save with their yes.";
 
 #[derive(Clone)]
 struct Handler {
@@ -670,6 +675,7 @@ mod tests {
             ai_suggestions: Vec::new(),
             ai_model: None,
             caption_marks: Default::default(),
+            alignment: None,
         };
         crate::transcript::store::save_transcript(&folder, &transcript).unwrap();
         host

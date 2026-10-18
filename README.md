@@ -28,15 +28,43 @@ exporting an MP4.
   protection keeps at least 80 ms regardless of the preset, including beyond trimmed
   or moved PC clip boundaries on the timeline. Optional word-edge refinement
   uses 5 ms audio windows to trim up to 200 ms of measured quiet at either word boundary,
-  without changing saved transcript or caption timings. Leading/trailing audio and
-  recognized audio events stay protected. Suggestions
+  without changing saved transcript or caption timings. Leading/trailing audio stays
+  protected. Sounds the transcriber tagged between words (`[keyboard clacking]`, `[laughs]`)
+  are cut with the gap unless **Keep tagged sounds** is on. Suggestions
   start unchecked: transcription can miss words and tutorial clicks can be intentional.
   Noises inside recognized words are kept. **Transcript** editing removes selected words,
   fillers, and retakes. Each pass has its own settings and review and can run independently,
   in any order. All cuts share timeline mapping and undo; timeline or transcript changes
   invalidate stale suggestions, including analyses still running.
+- **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
+  `telemetry/keys.jsonl` ([format](docs/keyboard-telemetry.md)): typing stretches with a key
+  count (never the text) and shortcuts pressed. Typing counts as screen activity, so the
+  auto webcam stays in its bubble and short scenes keep the screen while you type with a
+  resting mouse. Long typing gets a zoom on the text caret (or the click into the field), and
+  the zoom follows the caret. Shortcuts show as a badge ("Ctrl + S") in a corner of the screen,
+  switched by **Show shortcut badges** in the canvas settings (`shortcutBadges` for agents),
+  and `telemetry_get` lists both. Recordings without the file behave as before.
 - **Layout:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows
   and a styled webcam bubble.
+- **Bubble out of the way:** when a click, drag, scroll, resting pointer or the typing caret
+  lands where the webcam bubble sits (after layout, window crop and zoom), the bubble fades
+  out for that stretch and back in afterwards; it never jumps to another corner. Activity near
+  it keeps it hidden, and minimum hidden and shown times stop it flickering. On by default:
+  **Hide while you work under it** in the Camera settings (`webcamAutoHide` for agents). Only
+  where the bubble sits over the screen, not in a short's split.
+- **Crop to the active window:** recordings from AeroShoot with window recording on carry
+  `telemetry/windows.jsonl` ([format](docs/window-telemetry.md)). When the window in front is
+  clearly smaller than the recorded display, the screen shows just that window with room
+  around it and glides to the next one when you switch; quick switches, menus, popups and
+  tiny windows never move it. Zooms work inside the crop and keep their targets, in shorts
+  too. **Crop to the active window** in the canvas settings switches it for the video, and the
+  Clip page switches it for one clip (`windowCrop`, `windowCropPaddingPct`, `windowCropOff`).
+- **Sound effects:** a quiet lane of soft clicks on recorded mouse clicks and a light whoosh
+  when a zoom goes in or out or the layout switches, with its own mute and volume on the
+  Audio page and lowered under speech. Never busy: at most one click per 180 ms, a double
+  click clicks once, no whoosh on small zooms or back-to-back moves, nothing inside a graphic
+  or for a click a cut removed. The sounds are synthesized by the app, so there are no sound
+  files to license (`soundEffects` in the audio settings for agents).
 - **Mouth-click cleanup:** Audio → Reduce mouth clicks repairs short impulses on tracks
   marked Speech using FFmpeg's `adeclick`. Strength is adjustable; switch it off to hear
   the original. Playback and export share timing-preserving repaired audio, with undo/redo
@@ -45,6 +73,46 @@ exporting an MP4.
   Requires FFmpeg with `adeclick`, including on macOS. Strong settings can soften consonants;
   this is general click repair, not a classifier for every mouth noise.
 - **Export:** H.264 video with AAC stereo audio at 720p, 1080p or 4K.
+- **Shorts scenes:** in the Shorts Studio a short is split (camera above or below the screen)
+  by default, and scenes switch it to only the camera or only the screen, easing between
+  them (or a hard cut). Pick scenes fills them in from the recording, no AI: the camera for
+  the opening line and while the mouse rests as you talk, the screen while clicks and scrolls
+  come thick and fast; scenes you add or change yourself stay when picking again. Scenes are
+  anchored in the recording's time, so they follow the video's cuts and the short's own edits.
+  Agents use the `short_create` (a short from two word ids), `short_scenes` and `export`
+  `short` actions, and a `shorts` template where they pick the moments themselves.
+- **Check before export:** the export dialog lists what a viewer would notice, read from the
+  edit itself (nothing is decoded): missing files, black frames, no sound, blips left between
+  two cuts, words cut partway (beyond what word-edge refinement trims), many cuts close
+  together, zooms that flash by or jump because a cut took their easing, captions over the
+  webcam bubble, chapters that were cut or that YouTube would drop (fewer than 3, or one under
+  10 s), loudness not normalized to YouTube's -14 LUFS, and agent proposals still waiting.
+  Each finding jumps to its moment; safe ones have a Fix (cut the blip, close the gap, delete
+  a zoom that flashes, move a zoom so its easing plays, move the captions clear, remove the
+  chapter, normalize), each its own undo step.
+  Agents run the same check with the `check` action.
+- **Storyboard:** one small picture of the whole edit, a tile per scene: a finished frame
+  (layout, webcam, zoom and graphics as exported) over its time, what it shows, the zoom, a
+  graphic or chapter and a line of what is said. Scenes split where the camera or a short's
+  scene, a zoom, a graphic, a chapter or a long silence starts; short stretches merge, and the
+  sheet stays under 48 tiles and 2048 px. The export dialog shows it, and clicking a tile jumps
+  there. Agents get the same sheet, with a JSON line per tile, from the `storyboard` action
+  (`short` for a short's 9:16 one), instead of grabbing many frames.
+- **Motion graphics:** the Media panel's Graphics page adds full-screen graphics from
+  templates made for tutorials (section title, step card, keyboard shortcut, key point, recap
+  checklist, end card) at the playhead, on a Graphics track. A graphic plays over everything
+  (screen, camera, captions) with its card fading in and out, and cuts never go through one:
+  silence, filler and other passes skip the time it covers, a cut wholly inside it is refused,
+  and cuts before it move it along. Its text and colours are edited in the Inspector. Each
+  graphic is a [HyperFrames](https://github.com/heygen-com/hyperframes) composition kept as
+  source in `graphics/<id>/` (`index.html` and `graphic.json`) and rendered by the app in the
+  background for the canvas it plays on, so the same graphic fits a 16:9 video and a 9:16
+  short; renders are cached in `assets/graphics/` and export waits for them. The renderer
+  (HyperFrames 0.8.162 with its own Node 22 and chrome-headless-shell, each pinned and checked
+  by hash; npm packages installed with `npm ci` from the shipped lock file) is a 200 MB
+  download on first use into the app's data folder; nothing on `PATH` is used or changed.
+  Agents use the `graphics`, `graphic_add` (at a time or a transcript word), `graphic_set`,
+  `graphic_write_file`, `graphic_render` and `graphics_install` actions.
 
 ## Platform status
 
@@ -183,6 +251,19 @@ drop abandoned retakes. Two providers are supported, chosen in transcription set
 
 Transcripts are saved per audio track in `<project>.aero/transcripts/<track id>.json`, with
 word times in source time, so they stay valid across cuts and undo.
+
+**Word alignment:** transcribers time words loosely. Parakeet uses an 80 ms grid and stretches
+words over the pauses beside them; ElevenLabs sometimes runs a word over seconds of pause or
+noise. After transcribing (either provider), AeroEdits re-times every word against the audio
+with [wav2vec2-base-960h](https://huggingface.co/facebook/wav2vec2-base-960h) (Apache-2.0,
+English, 20 ms frames, about 378 MB, downloaded from transcription settings). It runs on
+Parakeet's ONNX Runtime, so it needs a `parakeet` build. Each stretch of speech is
+force-aligned letter by letter, then each word's edges are snapped to where its sound starts
+and stops. Guardrails keep it safe: a word moves at most 120 ms past where the transcriber put
+it, words and stretches the model is unsure of keep their old times, and text, word ids and cuts
+already made never change. **Align words** in the transcript panel (`align` for agents) aligns
+transcripts made before. It is switched by **Align words to the audio** in transcription
+settings.
 Parakeet groups raw tokens into words without extending their speech span through
 separately timed punctuation or whitespace, and keeps consecutive repeated words.
 Its native token timestamp grid remains 80 ms; quiet-edge refinement helps existing

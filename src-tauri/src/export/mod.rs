@@ -268,6 +268,8 @@ pub struct SceneEvaluator {
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
     /// Enabled webcam focus segments on the timeline, merged.
     webcam_focus: std::cell::OnceCell<Vec<(u64, u64)>>,
+    /// A short's scenes on its timeline.
+    short_scenes: std::cell::OnceCell<Vec<(u64, u64, crate::short_scenes::SceneMode)>>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The last cue drawn and its colored frame for the active word.
@@ -294,6 +296,17 @@ pub struct SceneEvaluator {
     >,
     /// Pointer pictures by file, decoded once.
     cursor_images: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<VideoFrame>>>,
+    /// What stands in for a graphic still rendering, by its name and size.
+    graphic_placeholders:
+        std::cell::RefCell<std::collections::HashMap<(String, u32, u32), VideoFrame>>,
+    /// The last shortcut badge drawn, by recording and shortcut.
+    shortcut_badge: std::cell::RefCell<Option<((String, usize), Option<VideoFrame>)>>,
+    /// The crop to the active window by recording, worked out once (`None`: no crop).
+    window_crops: std::cell::RefCell<
+        std::collections::HashMap<String, Option<std::sync::Arc<crate::window_crop::CropPlan>>>,
+    >,
+    /// When the webcam bubble hides because the work is under it, on the timeline.
+    bubble_hidden: std::cell::OnceCell<Vec<(u64, u64)>>,
 }
 
 #[derive(Default)]
@@ -332,6 +345,26 @@ fn background_key(
         layout.color_start,
         layout.color_end
     )
+}
+
+/// The size of a recording's camera picture, from its manifest (16:9 when it says nothing).
+fn camera_size(folder: &Path) -> (u32, u32) {
+    let size = std::fs::read(folder.join("manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|manifest| {
+            let track = manifest["tracks"]
+                .as_array()?
+                .iter()
+                .find(|t| t["id"] == "webcam" || t["trackType"] == "webcam")?
+                .clone();
+            Some((
+                track["width"].as_u64()? as u32,
+                track["height"].as_u64()? as u32,
+            ))
+        });
+    size.filter(|(w, h)| *w > 0 && *h > 0)
+        .unwrap_or((1280, 720))
 }
 
 /// A picture to decode, with nothing borrowed, so screen and camera decode side by side.
@@ -375,6 +408,8 @@ struct Shown<'a> {
     webcam: Option<&'a Clip>,
     /// Overlay clips, bottom track first, with their track index and fit.
     overlays: Vec<(usize, &'a Clip)>,
+    /// Graphics, bottom track first: drawn over everything else.
+    graphics: Vec<&'a Clip>,
 }
 
 impl<'a> Shown<'a> {
@@ -428,6 +463,7 @@ impl SceneEvaluator {
             nv12_output: false,
             wallpaper,
             webcam_focus: std::cell::OnceCell::new(),
+            short_scenes: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -435,6 +471,10 @@ impl SceneEvaluator {
             zooms: Default::default(),
             sources: Default::default(),
             cursor_images: Default::default(),
+            graphic_placeholders: Default::default(),
+            shortcut_badge: Default::default(),
+            window_crops: Default::default(),
+            bubble_hidden: std::cell::OnceCell::new(),
         })
     }
 
@@ -588,6 +628,10 @@ impl SceneEvaluator {
             let Some(clip) = track.clip_at(edited_us) else {
                 continue;
             };
+            if document.asset(&clip.asset).is_some_and(|a| a.is_graphic()) {
+                shown.graphics.push(clip);
+                continue;
+            }
             match crate::sequence::clip_role(&document.assets, track, clip) {
                 // A higher track's screen or camera takes over from a lower one's.
                 Some(Role::Screen) => shown.screen = Some((index, clip)),
@@ -659,14 +703,8 @@ impl SceneEvaluator {
         };
         if let (Some((_, clip)), true) = (shown.screen, has_screen) {
             let local = at(clip);
-            let zooms = self.zooms_for(&clip.asset);
-            if !zooms.is_empty() {
-                let config = crate::zoom::eval_config_for(&self.document.zooms);
-                let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
-                let crop = self.document.layout.screen_crop_uv();
-                let (x, y, w, h) = crate::render::zoom_within_crop(crop, camera.uv_rect());
-                scene.apply_screen_uv(x, y, w, h);
-            }
+            let (x, y, w, h) = self.screen_view(&clip.asset, local);
+            scene.apply_screen_uv(x, y, w, h);
             self.push_cursor(&mut scene, &clip.asset, local)?;
         }
         if has_webcam {
@@ -685,12 +723,21 @@ impl SceneEvaluator {
                 weight,
                 unit,
             );
+            // Out of the way of work under it (not while it fills the frame on purpose).
+            let hidden = crate::bubble_hide::hidden_weight(self.bubble_hidden(), edited_us);
+            if hidden > 0.0 {
+                scene.fade_webcam(1.0 - hidden * (1.0 - weight));
+            }
         }
         self.push_overlays(&mut scene, &shown, edited_us)?;
-        // Captions go over everything.
+        if let (Some((_, clip)), true) = (shown.screen, has_screen) {
+            self.push_shortcut_badge(&mut scene, &clip.asset, at(clip));
+        }
+        // Captions go over the video, and graphics over everything.
         if let Some((frame, x, y)) = self.caption_at(edited_us) {
             scene.push_caption(frame, x, y);
         }
+        self.push_graphics(&mut scene, &shown, edited_us, false)?;
         Ok(scene)
     }
 
@@ -707,12 +754,31 @@ impl SceneEvaluator {
         use crate::render::{Layer, LayerRole};
         let layout = &self.document.layout;
         let webcam = webcam.filter(|_| layout.webcam_enabled);
-        let rects = crate::shorts::split_rects(self.width, self.height, short, webcam.is_some());
+        let has_camera = webcam.is_some();
+        // Scenes move the seam: all the way down or up for a camera or screen scene.
+        let scenes = self.short_scenes.get_or_init(|| {
+            crate::short_scenes::edited_ranges(&short.scenes, |media| {
+                self.document
+                    .clock_asset(media)
+                    .map(|asset| self.document.asset_clock(asset))
+            })
+        });
+        let base = short.camera_pct / 100.0;
+        let (share, toward_full) = crate::short_scenes::camera_share(
+            scenes,
+            base,
+            short.scene_transition_ms as u64 * 1_000,
+            edited_us,
+        );
+        let rects =
+            crate::shorts::split_rects_at(self.width, self.height, short, has_camera, share);
         let mut layers = Vec::new();
         let screen_clip = shown.screen.map(|(_, clip)| clip);
         let local = screen_clip.map(|clip| clip.local_us(edited_us).unwrap_or(clip.in_us));
+        // A camera scene leaves the screen no room.
+        let screen = screen.filter(|_| rects.screen.3 > 0);
         if let (Some(screen), Some(clip), Some(local)) = (screen, screen_clip, local) {
-            let crop = layout.screen_crop_uv();
+            let crop = self.screen_crop_at(&clip.asset, local);
             let (center, zoom) = if short.follow_zooms {
                 let zooms = self.zooms_for(&clip.asset);
                 let config = crate::zoom::eval_config_for(&self.document.zooms);
@@ -772,10 +838,23 @@ impl SceneEvaluator {
             self.push_cursor(&mut scene, &clip.asset, local)?;
         }
         self.push_overlays(&mut scene, shown, edited_us)?;
-        if let Some((frame, x, _)) = self.caption_at(edited_us) {
-            let y = crate::shorts::caption_y(short.caption_spot, &rects, frame.height, self.height);
-            scene.push_caption(frame, x, y);
+        if let (Some(clip), Some(local)) = (screen_clip, local) {
+            self.push_shortcut_badge(&mut scene, &clip.asset, local);
         }
+        // Graphics over the screen go under the captions; the others over everything.
+        self.push_graphics(&mut scene, shown, edited_us, true)?;
+        if let Some((frame, x, _)) = self.caption_at(edited_us) {
+            // Where the split puts them, moving to a fixed spot as a scene fills the frame.
+            let split = crate::shorts::split_rects(self.width, self.height, short, has_camera);
+            let at_split =
+                crate::shorts::caption_y(short.caption_spot, &split, frame.height, self.height);
+            let full = (self.height as f32 * crate::short_scenes::FULL_FRAME_CAPTION_AT
+                - frame.height as f32 / 2.0)
+                .clamp(0.0, self.height.saturating_sub(frame.height) as f32);
+            let y = at_split as f32 + (full - at_split as f32) * toward_full;
+            scene.push_caption(frame, x, y.round() as u32);
+        }
+        self.push_graphics(&mut scene, shown, edited_us, false)?;
         Ok(scene)
     }
 
@@ -811,6 +890,100 @@ impl SceneEvaluator {
             }
         }
         Ok(())
+    }
+
+    /// Graphics in their slots: each one's render for its slot and length, an older render while
+    /// a new one is made, or a placeholder until there is one. `over_screen` picks the pass: the
+    /// graphics a short shows over its screen (pushed before the captions), or the rest (over
+    /// everything: the whole canvas, or a part of a short's split).
+    fn push_graphics(
+        &self,
+        scene: &mut Scene,
+        shown: &Shown<'_>,
+        edited_us: u64,
+        over_screen: bool,
+    ) -> Result<(), String> {
+        use crate::shorts::GraphicSlot;
+        for clip in &shown.graphics {
+            let rect = match &self.document.short_layout {
+                Some(short) => {
+                    let slot = crate::shorts::graphic_slot(short, &clip.id);
+                    if (slot == GraphicSlot::OverScreen) != over_screen {
+                        continue;
+                    }
+                    crate::shorts::graphic_rect(short, &clip.id, self.width, self.height)
+                }
+                None if over_screen => continue,
+                None => (0, 0, self.width, self.height),
+            };
+            let local = clip.local_us(edited_us).unwrap_or(clip.in_us);
+            let Some(job) = self.picture_job(clip, local)? else {
+                continue;
+            };
+            let key = match &job {
+                PictureJob::Ready(frame) => Some({
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    (
+                        "graphic placeholder",
+                        &clip.asset,
+                        frame.width,
+                        frame.height,
+                    )
+                        .hash(&mut hasher);
+                    hasher.finish()
+                }),
+                _ => None,
+            };
+            let mut frame = match job.run(&self.root, self.decode_limit, false) {
+                Ok(frame) => frame,
+                // A render that will not decode shows nothing rather than stopping playback.
+                Err(_) => continue,
+            };
+            frame.pts_us = edited_us;
+            scene.push_graphic(frame, rect, key);
+        }
+        Ok(())
+    }
+
+    /// The picture job for a graphic clip at `local_us` into it.
+    fn graphic_job(&self, clip: &Clip, local_us: u64) -> Option<PictureJob> {
+        use crate::graphics::render::{self, Lookup};
+        let asset = self.document.asset(&clip.asset)?;
+        let spec = render::Spec::for_clip(
+            &self.root,
+            &self.document,
+            asset,
+            clip,
+            (self.width, self.height),
+        );
+        // Never past a render's last frame.
+        let last_frame = 1_000_000 / render::RENDER_FPS as u64;
+        match render::lookup(&spec) {
+            Lookup::Ready(path) => Some(PictureJob::Video(
+                path,
+                local_us.min(spec.length_us.saturating_sub(last_frame)),
+            )),
+            Lookup::Stale(path, length) => Some(PictureJob::Video(
+                path,
+                local_us.min(length.saturating_sub(last_frame)),
+            )),
+            Lookup::Pending => {
+                let mut placeholders = self.graphic_placeholders.borrow_mut();
+                // The slot's shape: the whole canvas, or a part of a short's split.
+                let frame = placeholders
+                    .entry((asset.name.clone(), spec.width, spec.height))
+                    .or_insert_with(|| {
+                        crate::graphics::placeholder_frame(
+                            spec.width,
+                            spec.height,
+                            &format!("{} (rendering)", asset.name),
+                        )
+                    })
+                    .clone();
+                Some(PictureJob::Ready(frame))
+            }
+        }
     }
 
     /// While playing: starts decoders for what the video tracks show at each clip edge in the
@@ -1024,6 +1197,145 @@ impl SceneEvaluator {
         zooms
     }
 
+    /// The crop to the active window over recording `asset`, worked out once: `None` when it
+    /// is off, or the recording has no window telemetry or never needs a crop.
+    fn window_crop(&self, asset: &str) -> Option<std::sync::Arc<crate::window_crop::CropPlan>> {
+        if let Some(plan) = self.window_crops.borrow().get(asset) {
+            return plan.clone();
+        }
+        let layout = &self.document.layout;
+        let base = layout.screen_crop_uv();
+        let plan = self
+            .document
+            .asset(asset)
+            .filter(|a| layout.window_crop && a.is_recording())
+            .and_then(|recording| {
+                let windows =
+                    crate::telemetry::windows::recording_windows(Path::new(&recording.path));
+                let windows = windows.as_ref().as_ref()?;
+                let off: Vec<(u64, u64)> = layout
+                    .window_crop_off
+                    .iter()
+                    .filter(|r| self.document.clock_asset(r.media.as_deref()) == Some(asset))
+                    .map(|r| (r.source_start_us, r.source_end_us))
+                    .collect();
+                let aspect = match (recording.width, recording.height) {
+                    (w, h) if w > 0 && h > 0 => w as f32 / h as f32,
+                    _ => 16.0 / 9.0,
+                };
+                let plan = crate::window_crop::CropPlan::plan(
+                    windows,
+                    &off,
+                    base,
+                    aspect,
+                    layout.window_crop_padding_pct,
+                );
+                plan.crops(base).then(|| std::sync::Arc::new(plan))
+            });
+        self.window_crops
+            .borrow_mut()
+            .insert(asset.to_string(), plan.clone());
+        plan
+    }
+
+    /// The part of recording `asset`'s screen kept at `local` on its clock: the layout's crop,
+    /// or the active window's.
+    fn screen_crop_at(&self, asset: &str, local: u64) -> (f32, f32, f32, f32) {
+        match self.window_crop(asset) {
+            Some(plan) => plan.rect_at(local),
+            None => self.document.layout.screen_crop_uv(),
+        }
+    }
+
+    /// What of recording `asset`'s screen shows at `local` (UV of the full picture): the crop
+    /// with any zoom inside it.
+    fn screen_view(&self, asset: &str, local: u64) -> (f32, f32, f32, f32) {
+        let crop = self.screen_crop_at(asset, local);
+        let zooms = self.zooms_for(asset);
+        if zooms.is_empty() {
+            return crop;
+        }
+        let config = crate::zoom::eval_config_for(&self.document.zooms);
+        let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
+        crate::window_crop::zoom_inside(
+            self.document.layout.screen_crop_uv(),
+            crop,
+            camera.uv_rect(),
+        )
+    }
+
+    /// When the webcam bubble hides, worked out once per edit.
+    fn bubble_hidden(&self) -> &[(u64, u64)] {
+        self.bubble_hidden.get_or_init(|| self.find_bubble_hidden())
+    }
+
+    /// Timeline stretches where clicks, drags, scrolls, a resting pointer or the caret land on
+    /// the webcam bubble, found on the layout's own canvas size (not this evaluator's), so the
+    /// preview and every export size hide it at the same moments.
+    fn find_bubble_hidden(&self) -> Vec<(u64, u64)> {
+        use crate::bubble_hide::{hide_ranges, hits, on_bubble, probes, ENTER_MARGIN, STAY_MARGIN};
+        let layout = &self.document.layout;
+        // Only over the screen: a short's split puts the camera beside it.
+        if !layout.webcam_auto_hide
+            || !layout.webcam_enabled
+            || self.document.short_layout.is_some()
+        {
+            return Vec::new();
+        }
+        let Ok((width, height)) = layout.preview_dimensions() else {
+            return Vec::new();
+        };
+        let unit = crate::render::layout_px_unit(width, height);
+        let short_side = width.min(height) as f32;
+        let (mut enter, mut stay) = (Vec::new(), Vec::new());
+        for asset in self.document.assets.iter().filter(|a| a.is_recording()) {
+            let clock = self.document.picture_clock(&asset.id);
+            if clock.intervals().is_empty() {
+                continue;
+            }
+            let (source_w, source_h) = match (asset.width, asset.height) {
+                (w, h) if w > 0 && h > 0 => (w, h),
+                _ => (1920, 1080),
+            };
+            let screen =
+                crate::render::screen_layer_rect(width, height, layout, source_w, source_h, unit);
+            let (camera_w, camera_h) = camera_size(Path::new(&asset.path));
+            let bubble =
+                crate::render::webcam_bubble_rect(width, height, camera_w, camera_h, layout);
+            let activity = crate::telemetry::activity::recording_activity(Path::new(&asset.path));
+            // Only what plays.
+            let probes: Vec<_> = probes(&activity)
+                .into_iter()
+                .filter(|&(a, b, _, _)| !clock.source_range_to_edited(a, b + 1).is_empty())
+                .collect();
+            if probes.is_empty() {
+                continue;
+            }
+            // Where a point of the source lands on the canvas, if it shows at all.
+            let canvas_point = |t: u64, x: f64, y: f64| {
+                let (ux, uy, uw, uh) = self.screen_view(&asset.id, t);
+                let (u, v) = (
+                    (x as f32 - ux) / uw.max(1e-6),
+                    (y as f32 - uy) / uh.max(1e-6),
+                );
+                ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((
+                    screen.0 as f32 + u * screen.2 as f32,
+                    screen.1 as f32 + v * screen.3 as f32,
+                ))
+            };
+            for (margin, out) in [(ENTER_MARGIN, &mut enter), (STAY_MARGIN, &mut stay)] {
+                let found = hits(&probes, |t, x, y| {
+                    canvas_point(t, x, y)
+                        .is_some_and(|(px, py)| on_bubble(bubble, margin * short_side, px, py))
+                });
+                for (a, b) in found {
+                    out.extend(clock.source_range_to_edited(a, b + 1));
+                }
+            }
+        }
+        hide_ranges(&enter, &stay)
+    }
+
     /// A recording's recorded pointer, read once.
     fn cursor_track(&self, asset: &str) -> Option<std::sync::Arc<crate::cursor::CursorTrack>> {
         if let Some(track) = self.cursors.borrow().get(asset) {
@@ -1042,6 +1354,69 @@ impl SceneEvaluator {
     }
 
     /// Draws a recording's pointer at `source_us` on its clock over the screen.
+    /// The keyboard shortcut pressed just before `source_us` of a recording, as a badge in a
+    /// corner of the screen: bottom right, or top right when the captions or the camera are
+    /// down there. Nothing when the recorder did not record the keyboard.
+    fn push_shortcut_badge(&self, scene: &mut Scene, asset: &str, source_us: u64) {
+        use crate::telemetry::keys::{badge_keys, recording_keys, BADGE_US};
+        let layout = &self.document.layout;
+        if !layout.shortcut_badges {
+            return;
+        }
+        let Some(screen) = scene
+            .layers
+            .iter()
+            .find(|layer| layer.role == crate::render::LayerRole::Screen)
+        else {
+            return;
+        };
+        let (sx, sy, sw, sh) = (screen.x, screen.y, screen.width, screen.height);
+        let Some(recording) = self.document.asset(asset).filter(|a| a.is_recording()) else {
+            return;
+        };
+        let keys = recording_keys(Path::new(&recording.path));
+        let Some(keys) = keys.as_ref() else {
+            return;
+        };
+        let Some((index, shortcut)) = keys.badge_at(source_us) else {
+            return;
+        };
+        let key = (asset.to_string(), index);
+        let frame = {
+            let mut cache = self.shortcut_badge.borrow_mut();
+            if cache.as_ref().map(|(k, _)| k) != Some(&key) {
+                let text = badge_keys(shortcut, keys.platform.as_deref());
+                let frame = crate::captions::rasterize_badge(&text, self.width, self.height);
+                *cache = Some((key, frame));
+            }
+            cache.as_ref().and_then(|(_, frame)| frame.clone())
+        };
+        let Some(mut frame) = frame else {
+            return;
+        };
+        // In quickly, out a little slower.
+        let age = source_us - shortcut.t_us;
+        let alpha = (age as f32 / 100_000.0)
+            .min((BADGE_US - age) as f32 / 250_000.0)
+            .clamp(0.0, 1.0);
+        if alpha < 1.0 {
+            for px in frame.data.chunks_exact_mut(4) {
+                px[3] = (px[3] as f32 * alpha).round() as u8;
+            }
+        }
+        let margin = (self.width.min(self.height) as f32 * 0.025).round() as u32;
+        let x = (sx + sw).saturating_sub(frame.width + margin).max(sx);
+        let captions = &self.document.captions;
+        let below_taken = (captions.enabled && captions.position == "bottom")
+            || (layout.webcam_enabled && layout.webcam_position == "bottom-right");
+        let y = if below_taken {
+            sy + margin
+        } else {
+            (sy + sh).saturating_sub(frame.height + margin).max(sy)
+        };
+        scene.push_caption(frame, x, y);
+    }
+
     fn push_cursor(&self, scene: &mut Scene, asset: &str, source_us: u64) -> Result<(), String> {
         let layout = &self.document.layout;
         if !layout.cursor_visible {
@@ -1117,6 +1492,7 @@ impl SceneEvaluator {
             StreamSource::Video(path) => path
                 .is_file()
                 .then(|| PictureJob::Video(path.clone(), local_us)),
+            StreamSource::Graphic(_) => self.graphic_job(clip, local_us),
             StreamSource::Image(path) => {
                 if !path.is_file() {
                     return Ok(None);
@@ -1805,6 +2181,20 @@ fn export_to_temp(
     };
     let duration_us = captured.document.duration_us();
     let frames = frame_count(duration_us, captured.settings.fps)?;
+    // Every graphic's render must be there before the first frame.
+    let graphics = crate::graphics::render::specs_for(
+        &captured.root,
+        &captured.document,
+        (captured.settings.width, captured.settings.height),
+    );
+    crate::graphics::render::ensure(&graphics, cancel, &mut |_, _| on_progress(0, frames))
+        .map_err(|message| {
+            if cancel.load(Ordering::SeqCst) {
+                ExportFailure::Cancelled { message }
+            } else {
+                ExportFailure::Native { message }
+            }
+        })?;
     let mixer = AudioMixer::new(&captured.root, &captured.document)
         .map_err(|message| ExportFailure::Io { message })?;
     let (sample_rate, channels) = if mixer.has_audio() {
@@ -3112,6 +3502,7 @@ mod tests {
             nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
+            short_scenes: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -3119,6 +3510,10 @@ mod tests {
             zooms: Default::default(),
             sources: Default::default(),
             cursor_images: Default::default(),
+            graphic_placeholders: Default::default(),
+            shortcut_badge: Default::default(),
+            window_crops: Default::default(),
+            bubble_hidden: std::cell::OnceCell::new(),
         };
         let (_, _, y) = evaluator.caption_at(100_000).unwrap();
         assert!(y > 90, "caption sits in the lower half, y {y}");
@@ -3166,6 +3561,7 @@ mod tests {
             nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
+            short_scenes: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -3173,6 +3569,10 @@ mod tests {
             zooms: Default::default(),
             sources: Default::default(),
             cursor_images: Default::default(),
+            graphic_placeholders: Default::default(),
+            shortcut_badge: Default::default(),
+            window_crops: Default::default(),
+            bubble_hidden: std::cell::OnceCell::new(),
         }
     }
 
@@ -3230,6 +3630,75 @@ mod tests {
             .layers
             .iter()
             .any(|l| l.role == crate::render::LayerRole::Caption));
+    }
+
+    #[test]
+    fn a_shortcut_shows_as_a_badge_in_a_corner_of_the_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let recording = dir.path().join("take.aero");
+        std::fs::create_dir_all(recording.join("telemetry")).unwrap();
+        std::fs::write(
+            recording.join("telemetry/keys.jsonl"),
+            concat!(
+                r#"{"version":1,"seq":0,"t_us":0,"kind":"capture","platform":"windows"}"#,
+                "\n",
+                r#"{"version":1,"seq":1,"t_us":2000000,"kind":"shortcut","modifiers":["ctrl"],"code":"KeyS","label":"S"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let mut document = EditDocument::default();
+        document.assets = vec![serde_json::from_value(serde_json::json!({
+            "id": "rec", "name": "Take", "kind": "recording", "path": recording,
+            "durationUs": 10_000_000, "streams": []
+        }))
+        .unwrap()];
+        document.layout.webcam_enabled = false;
+        let evaluator = scenes(dir.path(), document, 640, 360);
+        let screen = || {
+            let mut scene = Scene {
+                width: 640,
+                height: 360,
+                background: [0.0; 4],
+                layers: Vec::new(),
+            };
+            let frame = VideoFrame::solid(64, 36, 0, 0, 0, 0).unwrap();
+            scene
+                .layers
+                .push(crate::render::Layer::placed(frame, 20, 10, 600, 340));
+            scene
+        };
+        // Each badge's place, size and the opacity at its middle.
+        let badges = |scene: &Scene| {
+            scene
+                .layers
+                .iter()
+                .filter(|l| l.role == crate::render::LayerRole::Caption)
+                .map(|l| {
+                    let (w, h) = (l.frame.width as usize, l.frame.height as usize);
+                    let alpha = l.frame.data[(h / 2 * w + w / 2) * 4 + 3];
+                    (l.x, l.y, l.width, l.height, alpha)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Before the press, and long after it, nothing.
+        let mut scene = screen();
+        evaluator.push_shortcut_badge(&mut scene, "rec", 1_000_000);
+        evaluator.push_shortcut_badge(&mut scene, "rec", 9_000_000);
+        assert!(badges(&scene).is_empty());
+        // Just after: bottom right of the screen, fully shown.
+        let mut scene = screen();
+        evaluator.push_shortcut_badge(&mut scene, "rec", 2_500_000);
+        let shown = badges(&scene);
+        assert_eq!(shown.len(), 1);
+        let (x, y, w, h, alpha) = shown[0];
+        assert_eq!(x + w, 620 - 9);
+        assert_eq!(y + h, 350 - 9);
+        assert!(alpha > 200, "{alpha}");
+        // Fading in at the very start.
+        let mut scene = screen();
+        evaluator.push_shortcut_badge(&mut scene, "rec", 2_020_000);
+        assert!(badges(&scene)[0].4 < alpha);
     }
 
     /// A transparent WebM over a red picture: red shows through where the clip is clear.
@@ -3314,6 +3783,66 @@ mod tests {
         layout.background_type = "gradient".into();
         layout.background_color_start = "#0000FF".into();
         assert_ne!(key(&short_document), before);
+    }
+
+    #[test]
+    fn a_short_draws_each_graphic_in_its_slot() {
+        use crate::shorts::GraphicSlot;
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let graphic =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let mut track =
+            crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
+        track.clips.push(Clip {
+            id: "g1".into(),
+            asset: graphic.id.clone(),
+            stream: "picture".into(),
+            start_us: 0,
+            in_us: 0,
+            duration_us: 3_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+        });
+        document.assets.push(graphic);
+        document.sequence.tracks.push(track);
+        document.validate().unwrap();
+        let short: crate::shorts::Short = serde_json::from_value(serde_json::json!({
+            "id": "s1", "title": "Short", "media": "logo",
+            "sourceStartUs": 0, "sourceEndUs": 5_000_000
+        }))
+        .unwrap();
+        let base = crate::shorts::short_document(&document, &short, false).unwrap();
+        // The camera takes the top 35%: 56 of 160 rows.
+        for (slot, rect) in [
+            (GraphicSlot::Full, (0, 0, 90, 160)),
+            (GraphicSlot::Camera, (0, 0, 90, 56)),
+            (GraphicSlot::Screen, (0, 56, 90, 104)),
+            (GraphicSlot::OverScreen, (0, 56, 90, 104)),
+        ] {
+            let mut short_document = base.clone();
+            let layout = short_document.short_layout.as_mut().unwrap();
+            layout.graphic_slots.insert("g1".into(), slot);
+            let evaluator = scenes(dir.path(), short_document.clone(), 90, 160);
+            let scene = evaluator.scene_at(1_000_000).unwrap();
+            let last = scene.layers.last().unwrap();
+            assert_eq!((last.x, last.y, last.width, last.height), rect, "{slot:?}");
+            // It renders for that space, at the render scale (1080 wide).
+            let spec = crate::graphics::render::specs_for(dir.path(), &short_document, (90, 160));
+            assert_eq!(spec.len(), 1);
+            let expected_h = (rect.3 as f64 * 1920.0 / 160.0).round() as u32 & !1;
+            assert_eq!(
+                (spec[0].width, spec[0].height),
+                (1080, expected_h),
+                "{slot:?}"
+            );
+        }
+        // In the 16:9 video it is the whole canvas.
+        let scene = scenes(dir.path(), document, 160, 90)
+            .scene_at(1_000_000)
+            .unwrap();
+        let last = scene.layers.last().unwrap();
+        assert_eq!((last.x, last.y, last.width, last.height), (0, 0, 160, 90));
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the
@@ -3501,6 +4030,204 @@ mod tests {
         for plane in [luma, cb, cr] {
             assert!(plane.0 <= 1 && plane.1 < 0.05, "differs: {plane:?}");
         }
+    }
+
+    /// A recording with screen and camera, opened as a project, with `telemetry` files
+    /// (name, lines) written into it.
+    fn telemetry_project(dir: &Path, telemetry: &[(&str, &[&str])]) -> (PathBuf, EditDocument) {
+        let recording = project_with_tracks(dir, true);
+        std::fs::create_dir_all(recording.join("telemetry")).unwrap();
+        for (name, lines) in telemetry {
+            let mut text = lines.join("\n");
+            text.push('\n');
+            std::fs::write(recording.join("telemetry").join(name), text).unwrap();
+        }
+        let (folder, reader) = opened(&recording);
+        let mut document = reader.document().clone();
+        document.zooms.clear();
+        (folder, document)
+    }
+
+    fn screen_uv(scene: &Scene) -> (f32, f32, f32, f32) {
+        let screen = scene
+            .layers
+            .iter()
+            .find(|l| l.role == crate::render::LayerRole::Screen)
+            .unwrap();
+        (screen.uv_x, screen.uv_y, screen.uv_w, screen.uv_h)
+    }
+
+    const ONE_WINDOW: &str = r#"{"version":1,"seq":1,"t_us":0,"kind":"front","window":"0x1","role":"window","bounds":{"norm_x":0.0,"norm_y":0.0,"norm_w":0.5,"norm_h":0.5}}"#;
+
+    #[test]
+    fn the_screen_crops_to_the_active_window_and_zooms_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (folder, mut document) =
+            telemetry_project(dir.path(), &[("windows.jsonl", &[ONE_WINDOW])]);
+        let base = document.layout.screen_crop_uv();
+        let cropped = screen_uv(
+            &scenes(&folder, document.clone(), 320, 180)
+                .scene_at(500_000)
+                .unwrap(),
+        );
+        // The window's top-left quarter, padded, in the screen's own shape.
+        assert!(
+            cropped.2 < 0.6 && cropped.0 == 0.0 && cropped.1 == 0.0,
+            "{cropped:?}"
+        );
+        assert!((cropped.2 / cropped.3 - base.2 / base.3).abs() < 1e-3);
+        // A 2x zoom on the window's middle works inside the crop and stays on its target.
+        let recording = document.assets[0].id.clone();
+        let zoom = crate::zoom::ZoomKeyframe {
+            id: "z".into(),
+            source_start_us: 0,
+            source_end_us: 2_000_000,
+            center_x: 0.25,
+            center_y: 0.25,
+            scale: 2.0,
+            transition_us: 0,
+            origin: crate::zoom::ZoomOrigin::Click,
+            contributing_event_seqs: Vec::new(),
+            source: crate::zoom::ZoomSource::Manual,
+            edited_ranges: Vec::new(),
+            media: Some(recording.clone()),
+            fixed: true,
+        };
+        document.zooms = vec![zoom];
+        let zoomed = screen_uv(
+            &scenes(&folder, document.clone(), 320, 180)
+                .scene_at(500_000)
+                .unwrap(),
+        );
+        assert!((zoomed.2 - cropped.2 / 2.0).abs() < 1e-4, "{zoomed:?}");
+        assert!((zoomed.0 + zoomed.2 / 2.0 - 0.25).abs() < 1e-4);
+        // Off for the whole video, or for this stretch: the layout's own crop.
+        document.zooms.clear();
+        document.layout.window_crop = false;
+        let off = screen_uv(
+            &scenes(&folder, document.clone(), 320, 180)
+                .scene_at(500_000)
+                .unwrap(),
+        );
+        assert_eq!(off, base);
+        document.layout.window_crop = true;
+        document.layout.window_crop_off = vec![crate::window_crop::CropOffRange {
+            media: Some(recording),
+            source_start_us: 0,
+            source_end_us: 2_000_000,
+        }];
+        let stretch = screen_uv(
+            &scenes(&folder, document, 320, 180)
+                .scene_at(500_000)
+                .unwrap(),
+        );
+        assert_eq!(stretch, base);
+    }
+
+    /// A click at (x, y) of the source at `t_us`, as an old recorder wrote it.
+    fn click_line(seq: u32, t_us: u64, x: f64, y: f64) -> String {
+        format!(
+            r#"{{"version":1,"seq":{seq},"t_us":{t_us},"geometry_id":"g1","kind":"click","norm_x":{x},"norm_y":{y},"inside_source":true,"visible":true}}"#
+        )
+    }
+
+    const GEOMETRY: &str = r#"{"geometry_id":"g1","t_us":0,"physical_width":64,"physical_height":64,"scale_factor":1,"crop_x":0,"crop_y":0,"crop_width":64,"crop_height":64}"#;
+
+    #[test]
+    fn the_bubble_fades_out_while_clicks_land_under_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // The default bubble sits bottom left; (0.08, 0.7) of the screen is under it.
+        let under = click_line(0, 1_000_000, 0.08, 0.7);
+        let (folder, mut document) = telemetry_project(
+            dir.path(),
+            &[
+                ("geometry.jsonl", &[GEOMETRY]),
+                ("events.jsonl", &[under.as_str()]),
+            ],
+        );
+        let webcam_layers = |document: &EditDocument, t: u64| {
+            scenes(&folder, document.clone(), 320, 180)
+                .scene_at(t)
+                .unwrap()
+                .layers
+                .iter()
+                .filter(|l| l.role == crate::render::LayerRole::Webcam)
+                .map(|l| l.opacity)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(webcam_layers(&document, 200_000), vec![1.0]);
+        assert!(
+            webcam_layers(&document, 1_000_000).is_empty(),
+            "hidden at the click"
+        );
+        // Fading in between.
+        let fading = webcam_layers(&document, 700_000);
+        assert!(
+            fading.len() == 1 && fading[0] > 0.0 && fading[0] < 1.0,
+            "{fading:?}"
+        );
+        // A click elsewhere leaves it alone; so does switching it off.
+        document.layout.webcam_auto_hide = false;
+        assert_eq!(webcam_layers(&document, 1_000_000), vec![1.0]);
+        let elsewhere = click_line(0, 1_000_000, 0.9, 0.2);
+        std::fs::create_dir_all(dir.path().join("b")).unwrap();
+        let (folder, document) = telemetry_project(
+            &dir.path().join("b"),
+            &[
+                ("geometry.jsonl", &[GEOMETRY]),
+                ("events.jsonl", &[elsewhere.as_str()]),
+            ],
+        );
+        let scene = scenes(&folder, document, 320, 180)
+            .scene_at(1_000_000)
+            .unwrap();
+        assert!(scene
+            .layers
+            .iter()
+            .any(|l| l.role == crate::render::LayerRole::Webcam));
+    }
+
+    #[test]
+    fn clicks_sound_on_their_own_quiet_lane_that_mutes() {
+        let dir = tempfile::tempdir().unwrap();
+        let lines = [
+            click_line(0, 1_000_000, 0.9, 0.2),
+            click_line(1, 1_050_000, 0.5, 0.5),
+        ];
+        let (folder, mut document) = telemetry_project(
+            dir.path(),
+            &[
+                ("geometry.jsonl", &[GEOMETRY]),
+                ("events.jsonl", &[lines[0].as_str(), lines[1].as_str()]),
+            ],
+        );
+        let effects = crate::sound_effects::plan(&document);
+        // Two presses 50 ms apart: one click sound.
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        assert_eq!(effects[0].at_us, 1_000_000);
+        let read = |document: &EditDocument| {
+            let mixer = AudioMixer::new(&folder, document).unwrap();
+            let start = 48_000 - 2_400;
+            let mut samples = Vec::new();
+            for chunk in 0..2 {
+                samples.extend(mixer.read_frames(start + chunk * 4_800, 4_800).unwrap());
+            }
+            samples
+        };
+        let with = read(&document);
+        document.audio.sound_effects.muted = true;
+        assert!(crate::sound_effects::plan(&document).is_empty());
+        let without = read(&document);
+        let differences: Vec<i32> = with
+            .iter()
+            .zip(&without)
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .collect();
+        // Silent before the click, a click just after it, and quiet.
+        assert!(differences[..4_800].iter().all(|&d| d == 0));
+        let loudest = *differences.iter().max().unwrap();
+        assert!(loudest > 300, "{loudest}");
+        assert!(loudest < (0.13 * 32_767.0) as i32, "{loudest}");
     }
 
     #[test]

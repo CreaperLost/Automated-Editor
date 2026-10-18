@@ -2,9 +2,13 @@ import React, { useState } from "react";
 import { Layers, Trash2 } from "lucide-react";
 import { InspectorSection } from "./InspectorSection";
 import { useProjectStore } from "../../stores/projectStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import { api } from "../../lib/ipc";
 import { assetById, clipName, clipRole, findClip, streamOf, trackNumber } from "../../lib/sequence";
+import { layoutFromSettings } from "../../lib/types";
 import type { Fit, OpenedProject, Role, SequenceEdit } from "../../lib/types";
+import { cropOffFor, setCropFor } from "../../lib/windowCrop";
+import { Switch } from "../ui";
 
 const FITS: { value: Fit; label: string }[] = [
   { value: "contain", label: "Fit inside the frame" },
@@ -30,8 +34,10 @@ export const TrackClipSection: React.FC = () => {
   const setSelectedIds = useProjectStore((s) => s.setSelectedClipIds);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const canvas = useSettingsStore((s) => s.canvas);
+  const cameraBubble = useSettingsStore((s) => s.cameraBubble);
 
-  const found = openedProject && selectedIds[0] ? findClip(openedProject.sequence, selectedIds[0]) : undefined;
+  const found =openedProject && selectedIds[0] ? findClip(openedProject.sequence, selectedIds[0]) : undefined;
   if (!openedProject || !found) return null;
   const { track, clip } = found;
   const asset = assetById(openedProject, clip.asset);
@@ -68,6 +74,17 @@ export const TrackClipSection: React.FC = () => {
   };
   const roles = stream?.kind === "sound" ? SOUND_ROLES : PICTURE_ROLES;
 
+  // The window crop for this clip's stretch of the recording.
+  const firstRecording = openedProject.assets.find((a) => a.kind === "recording")?.id;
+  const cropsHere = role === "screen" && asset?.kind === "recording" && canvas.windowCrop;
+  const [clipFrom, clipTo] = [clip.inUs, clip.inUs + clip.durationUs];
+  const cropOff = cropOffFor(canvas.windowCropOff, clip.asset, clipFrom, clipTo, firstRecording);
+  const setClipCrop = (on: boolean) => {
+    const windowCropOff = setCropFor(canvas.windowCropOff, clip.asset, clipFrom, clipTo, on, firstRecording);
+    const layout = layoutFromSettings({ ...canvas, windowCropOff }, cameraBubble, openedProject.layout?.wallpaperAsset);
+    void run(() => api.projectLayoutUpdate(openedProject.projectHandle, openedProject.revision, layout));
+  };
+
   return (
     <InspectorSection id="track-clip" title={`Clip · ${trackNumber(openedProject.sequence, track.id)}`} icon={Layers}>
       <div className="text-label text-studio-200 truncate" title={asset?.path}>
@@ -102,6 +119,15 @@ export const TrackClipSection: React.FC = () => {
             </span>
           )}
         </label>
+      )}
+      {cropsHere && (
+        <Switch
+          checked={!cropOff}
+          disabled={busy}
+          onChange={setClipCrop}
+          label="Crop to the active window"
+          title="Off shows the whole screen for this clip, whatever window is in front. The switch for the whole video is on the Video page."
+        />
       )}
       {track.kind === "video" && role === "overlay" && (
         <label className="block text-label text-studio-300 space-y-1">

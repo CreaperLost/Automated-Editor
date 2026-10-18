@@ -1,5 +1,7 @@
 import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
+  CheckReport,
+  Storyboard,
   OpenedProject,
   SegmentPage,
   WaveformOverview,
@@ -36,6 +38,7 @@ import {
   Chapter,
   Short,
   ShortLayout,
+  ShortScene,
   AiSettings,
   AiSettingsView,
   McpApp,
@@ -50,6 +53,20 @@ import {
   Role,
   CaptionEdit,
   CaptionTrackView,
+  SoundEffect,
+  GraphicCreated,
+  GraphicListed,
+  GraphicsRuntimeStatus,
+  GraphicTemplate,
+  GraphicUpdated,
+  GraphicView,
+  BrandKit,
+  BrandKitInput,
+  BrandsView,
+  GraphicLibraryItem,
+  GraphicLibrarySave,
+  GraphicLibrarySaved,
+  GateReport,
 } from "./types";
 
 declare global {
@@ -83,7 +100,7 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
   }
 }
 
-/** The short whose own timeline this window edits (the Shorts Studio), or none: the video. */
+/** The short whose own timeline is edited (the Shorts workspace), or none: the video. */
 let editTarget: string | null = null;
 export const setEditTarget = (shortId: string | null) => {
   editTarget = shortId;
@@ -287,6 +304,8 @@ export const api = {
    */
   detectMouthNoises: (projectHandle: string, key: string, sensitivity: number, paddingMs: number) =>
     invokeTauri<NoiseScan>("detect_mouth_noises", { projectHandle, key, config: { sensitivity, paddingMs } }),
+  /** The last scan of sound `key` (kept with the project) and its muted moments, without listening again. */
+  noiseReview: (projectHandle: string, key: string) => invokeTauri<NoiseScan>("noise_review", { projectHandle, key }),
   /** Mutes (or unmutes) moments of sound `key`'s own time: one undoable edit. */
   projectNoiseMutes: (projectHandle: string, expectedRevision: number, key: string, ranges: SourceSpan[], unmute = false) =>
     invokeTauri<OpenedProject>("project_noise_mutes", { projectHandle, expectedRevision, key, ranges, unmute }),
@@ -361,6 +380,9 @@ export const api = {
     }),
   projectCaptionCues: (projectHandle: string) =>
     invokeTauri<CaptionTrackView>("project_caption_cues", { projectHandle, shortId: editTarget }),
+  /** The sound effects lane's clicks and whooshes in edited time. */
+  projectSoundEffects: (projectHandle: string) =>
+    invokeTauri<SoundEffect[]>("project_sound_effects", { projectHandle, shortId: editTarget }),
   transcriptCaptionEdit: (projectHandle: string, trackId: string, edit: CaptionEdit) =>
     invokeTauri<CaptionTrackView>("transcript_caption_edit", { projectHandle, trackId, edit, shortId: editTarget }),
   transcriptSetWordText: (projectHandle: string, trackId: string, wordId: string, text: string) =>
@@ -375,8 +397,12 @@ export const api = {
       ids,
       dismissed,
     }),
-  transcriptDownloadModel: () =>
-    invokeTauri<TranscriptSettingsView>("transcript_download_model"),
+  /** Downloads the Parakeet model, or with `"aligner"` the word alignment model. */
+  transcriptDownloadModel: (model: "parakeet" | "aligner" = "parakeet") =>
+    invokeTauri<TranscriptSettingsView>("transcript_download_model", { model }),
+  /** Aligns an existing transcript's word times to the audio. */
+  transcriptAlign: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptRunResult>("transcript_align", { projectHandle, trackId }),
   getDefaultProjectsDir: () => invokeTauri<string>("get_default_projects_dir"),
   pickProjectFolder: () => invokeTauri<string | null>("pick_project_folder"),
   pickRecordingFolder: () => invokeTauri<string | null>("pick_recording_folder"),
@@ -406,6 +432,87 @@ export const api = {
       assetId,
       roles,
     }),
+  graphicsRuntimeStatus: () => invokeTauri<GraphicsRuntimeStatus>("graphics_runtime_status"),
+  /** Downloads the renderer; progress comes as "graphics-runtime-progress" events. */
+  graphicsRuntimeInstall: () => invokeTauri<GraphicsRuntimeStatus>("graphics_runtime_install"),
+  graphicsRuntimeCancel: () => invokeTauri<void>("graphics_runtime_cancel"),
+  graphicsRuntimeRemove: () => invokeTauri<GraphicsRuntimeStatus>("graphics_runtime_remove"),
+  graphicsTemplates: () => invokeTauri<GraphicTemplate[]>("graphics_templates"),
+  /** Looks at the graphics' files again and retries failed renders. */
+  graphicsRenderAgain: () => invokeTauri<void>("graphics_render_again"),
+  /** Makes a graphic from a template and places it at `atUs`, one undo step. */
+  projectGraphicCreate: (
+    projectHandle: string,
+    expectedRevision: number,
+    template: string,
+    atUs: number,
+    options: { name?: string; variables?: Record<string, unknown>; lengthUs?: number } = {},
+  ) =>
+    invokeTauri<GraphicCreated>("project_graphic_create", {
+      projectHandle,
+      expectedRevision,
+      template,
+      name: options.name ?? null,
+      variables: options.variables ?? {},
+      atUs: Math.max(0, Math.round(atUs)),
+      lengthUs: options.lengthUs ?? null,
+    }),
+  projectGraphicGet: (projectHandle: string, assetId: string) =>
+    invokeTauri<GraphicView>("project_graphic_get", { projectHandle, assetId }),
+  projectGraphicsList: (projectHandle: string) =>
+    invokeTauri<GraphicListed[]>("project_graphics_list", { projectHandle }),
+  /** The timeline at `atUs` as it plays, as a small PNG data URL (a graphic's thumbnail). */
+  projectFrameThumbnail: (projectHandle: string, atUs: number, width: number) =>
+    invokeTauri<string>("project_frame_thumbnail", { projectHandle, atUs, width }),
+  /**
+   * Sets variables (`null` puts one back to its default) and, optionally, the name and the
+   * brand kit ("default" follows the project's, "none" is no kit).
+   */
+  projectGraphicSet: (
+    projectHandle: string,
+    expectedRevision: number,
+    assetId: string,
+    variables: Record<string, unknown>,
+    name?: string,
+    brand?: string,
+  ) =>
+    invokeTauri<GraphicUpdated>("project_graphic_set", {
+      projectHandle,
+      expectedRevision,
+      assetId,
+      variables,
+      name: name ?? null,
+      brand: brand ?? null,
+    }),
+  /** The app's brand kits and, with a project, its default kit. */
+  graphicsBrands: (projectHandle?: string) =>
+    invokeTauri<BrandsView>("graphics_brands", { projectHandle: projectHandle ?? null }),
+  graphicsBrandSave: (kit: BrandKitInput) => invokeTauri<BrandKit>("graphics_brand_save", { kit }),
+  graphicsBrandRemove: (name: string) => invokeTauri<void>("graphics_brand_remove", { name }),
+  /** Picks a logo or font file for a brand kit; null when cancelled. */
+  pickBrandFile: (kind: "logo" | "font") => invokeTauri<string | null>("pick_brand_file", { kind }),
+  /** Sets the project's default brand kit (null for none), one undo step. */
+  projectGraphicsBrandSet: (projectHandle: string, expectedRevision: number, brand: string | null) =>
+    invokeTauri<OpenedProject>("project_graphics_brand_set", { projectHandle, expectedRevision, brand }),
+  graphicsLibrary: () => invokeTauri<GraphicLibraryItem[]>("graphics_library"),
+  graphicsLibraryRemove: (id: string) => invokeTauri<void>("graphics_library_remove", { id }),
+  /** A library item's contact sheet from the gate, as a data URL. */
+  graphicsLibrarySheet: (id: string) => invokeTauri<string | null>("graphics_library_sheet", { id }),
+  /** Runs the library's gate on a project graphic; progress comes as "graphics-check-progress". */
+  projectGraphicCheck: (projectHandle: string, assetId: string) =>
+    invokeTauri<GateReport>("project_graphic_check", { projectHandle, assetId }),
+  /** Runs the gate and, if it passes (or `asIs`), saves the graphic to the app's library. */
+  projectGraphicLibrarySave: (projectHandle: string, request: GraphicLibrarySave) =>
+    invokeTauri<GraphicLibrarySaved>("project_graphic_library_save", { projectHandle, request }),
+  /** Copies a library graphic into the project and places it at `atUs`, one undo step. */
+  projectGraphicFromLibrary: (projectHandle: string, expectedRevision: number, libraryId: string, atUs: number) =>
+    invokeTauri<GraphicCreated>("project_graphic_from_library", {
+      projectHandle,
+      expectedRevision,
+      libraryId,
+      atUs: Math.max(0, Math.round(atUs)),
+      lengthUs: null,
+    }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
@@ -419,13 +526,40 @@ export const api = {
   /** Asks the AI provider for chapters from a track's transcript. */
   projectChaptersGenerate: (projectHandle: string, trackId: string) =>
     invokeTauri<OpenedProject>("project_chapters_generate", { projectHandle, trackId }),
+  /** The check before export, of the edit as it is now. */
+  projectCheck: (projectHandle: string) => invokeTauri<CheckReport>("project_check", { projectHandle }),
+  /** Applies the fixes of these findings (or `["all"]`), each as its own undo step. */
+  projectCheckFix: (projectHandle: string, expectedRevision: number, ids: string[]) =>
+    invokeTauri<OpenedProject>("project_check_fix", { projectHandle, expectedRevision, ids }),
+  /** A contact sheet of the edit (or a short), a tile per scene: what agents get from `storyboard`. */
+  storyboardRender: (projectHandle: string, shortId?: string, maxTiles?: number) =>
+    invokeTauri<Storyboard>("storyboard_render", { projectHandle, shortId: shortId ?? null, maxTiles: maxTiles ?? null }),
   projectCurrent: () => invokeTauri<OpenedProject | null>("project_current"),
-  openShortsWindow: () => invokeTauri<void>("open_shorts_window"),
   projectShortsSet: (projectHandle: string, expectedRevision: number, shorts: Short[]) =>
     invokeTauri<OpenedProject>("project_shorts_set", {
       projectHandle,
       expectedRevision,
       shorts: shorts.map(({ editedStartUs: _s, editedEndUs: _e, ...short }) => short),
+    }),
+  /** Picks a short's scenes from its recording; scenes set by hand stay. */
+  projectShortScenesPick: (projectHandle: string, expectedRevision: number, shortId: string) =>
+    invokeTauri<OpenedProject>("project_short_scenes_pick", { projectHandle, expectedRevision, shortId }),
+  /** Adds a scene over `[startUs, endUs)` of the short's own timeline. */
+  projectShortSceneAdd: (
+    projectHandle: string,
+    expectedRevision: number,
+    shortId: string,
+    startUs: number,
+    endUs: number,
+    mode: ShortScene["mode"],
+  ) =>
+    invokeTauri<OpenedProject>("project_short_scene_add", {
+      projectHandle,
+      expectedRevision,
+      shortId,
+      startUs,
+      endUs,
+      mode,
     }),
   /** Asks the AI provider for moments that work as shorts; replaces the shorts list. */
   projectShortsGenerate: (projectHandle: string, trackId: string) =>

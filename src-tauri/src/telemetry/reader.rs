@@ -28,6 +28,8 @@ pub struct TelemetryStream {
     pub events: Vec<CanonicalEvent>,
     pub geometries: BTreeMap<String, CanonicalGeometry>,
     pub diagnostics: Vec<String>,
+    /// The keyboard, when the recorder recorded it (`telemetry/keys.jsonl`).
+    pub keys: Option<super::keys::KeyStream>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,9 +109,11 @@ pub fn read_telemetry(root: &Path) -> Result<TelemetryStream, String> {
         events: Vec::new(),
         geometries: BTreeMap::new(),
         diagnostics: Vec::new(),
+        keys: None,
     };
     read_geometry_file(root, &mut stream)?;
     read_events_file(root, &mut stream)?;
+    stream.keys = super::keys::read_keys(root, &mut stream.diagnostics)?;
     Ok(stream)
 }
 

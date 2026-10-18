@@ -587,7 +587,7 @@ mod tests {
             &[],
             &[
                 ("kinds".into(), Some("filler,retake".into())),
-                ("ai".into(), None),
+                ("review".into(), Some("openrouter".into())),
                 ("stream".into(), Some("123".into())),
                 ("apply".into(), Some("false".into())),
             ],
@@ -595,7 +595,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             args,
-            json!({"kinds": ["filler", "retake"], "ai": true, "stream": "123", "apply": false})
+            json!({"kinds": ["filler", "retake"], "review": "openrouter", "stream": "123", "apply": false})
         );
         let error = arguments(&schema, &[], &[("kind".into(), Some("x".into()))]).unwrap_err();
         assert!(

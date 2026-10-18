@@ -439,6 +439,12 @@ pub fn detect_focus_ranges(
             busy.push((t.saturating_sub(lead), t.saturating_add(idle)));
         }
     }
+    // Typing with the mouse at rest is still working on the screen.
+    if let Some(keys) = &telemetry.keys {
+        for (start, end) in keys.activity() {
+            busy.push((start.saturating_sub(lead), end.saturating_add(idle)));
+        }
+    }
     let min_focus = settings.min_focus_ms as u64 * 1_000;
     subtract_ranges(&merge_ranges(speech.to_vec()), &merge_ranges(busy))
         .into_iter()
@@ -542,6 +548,7 @@ mod tests {
                 .collect(),
             geometries: BTreeMap::new(),
             diagnostics: Vec::new(),
+            keys: None,
         }
     }
 
@@ -586,6 +593,29 @@ mod tests {
         let lead = settings.transition_us() + ACTIVITY_LEAD_US;
         let idle = settings.idle_ms as u64 * 1_000;
         assert_eq!(ranges, vec![(0, 10 * S - lead), (10 * S + idle, 30 * S)]);
+    }
+
+    #[test]
+    fn typing_with_a_resting_mouse_keeps_the_bubble() {
+        use crate::telemetry::keys::{KeyStream, TypingRun};
+        let settings = quick();
+        let mut typing = stream(vec![]);
+        typing.keys = Some(KeyStream {
+            typing: vec![TypingRun {
+                start_us: 10 * S,
+                end_us: 14 * S,
+                keys: 30,
+                caret_start: None,
+                caret_end: None,
+            }],
+            ..Default::default()
+        });
+        let lead = settings.transition_us() + ACTIVITY_LEAD_US;
+        let idle = settings.idle_ms as u64 * 1_000;
+        assert_eq!(
+            detect_focus_ranges(&[(0, 30 * S)], &typing, &settings),
+            vec![(0, 10 * S - lead), (14 * S + idle, 30 * S)]
+        );
     }
 
     #[test]

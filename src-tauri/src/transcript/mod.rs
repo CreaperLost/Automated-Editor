@@ -4,6 +4,7 @@
 //! Word times are source microseconds, like zoom keyframes, so a transcript stays valid
 //! across every cut and undo. Edited-time positions are derived from the current
 //! retained intervals whenever a transcript is shown or turned into cuts.
+pub mod align;
 pub mod audio;
 pub mod edit;
 pub mod elevenlabs;
@@ -82,6 +83,9 @@ pub struct Transcript {
     /// Caption edits made on the timeline's caption track, by word id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub caption_marks: std::collections::BTreeMap<String, CaptionMark>,
+    /// Set once the word times were aligned to the audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<align::AlignmentInfo>,
 }
 
 /// How a word sits in the captions, when the user changed it.
@@ -164,6 +168,7 @@ impl Transcript {
             ai_suggestions: Vec::new(),
             ai_model: None,
             caption_marks: Default::default(),
+            alignment: None,
         }
     }
 

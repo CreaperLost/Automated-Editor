@@ -1,7 +1,6 @@
 import { api } from "../lib/ipc";
 import { create } from "zustand";
 import { ZoomKeyframe, OpenedProject, WaveformOverview, PlaybackStatus, ZoomGeneration, ZoomSuggestion, ProjectZoom } from "../lib/types";
-import { broadcastProject, broadcastCaptionsChanged } from "../lib/windowSync";
 import { shareSequence } from "../lib/sequence";
 import { useSettingsStore } from "./settingsStore";
 
@@ -98,23 +97,22 @@ interface ProjectStore {
   selectedZoomId?: string;
   /** The clips selected on the timeline (linked partners included); the Inspector shows the first. */
   selectedClipIds: string[];
-  /** The short this window shows as its timeline (the Shorts Studio), if any. */
+  /** The short shown as the timeline (the Shorts workspace), if any. */
   viewShort?: string;
   setViewShort: (shortId: string | undefined) => void;
-  /** The short playing instead of the video (set by the Shorts Studio). */
+  /** The short playing instead of the video (set by the Shorts workspace). */
   playbackShortId?: string;
   /** How fast playback goes (1, 1.25, 1.5 or 2), as the engine reports it. */
   playbackSpeed: number;
   /** Bumped whenever a transcript changes, so captions and the transcript panel reload. */
   captionsVersion: number;
-  /** Marks transcripts changed here (and tells the other windows) or in another window. */
-  bumpCaptions: (fromOtherWindow?: boolean) => void;
+  /** Marks transcripts changed, so captions and the transcript panel reload. */
+  bumpCaptions: () => void;
   /** The timeline's selection, shared so other panels can act on it. */
   timelineSelection: { startUs: number; endUs: number } | null;
   currentTimeUs: number;
   durationUs: number;
   isPlaying: boolean;
-  isSilenceModalOpen: boolean;
 
   // Actions
   setProjectPath: (path: string | null) => void;
@@ -128,10 +126,10 @@ interface ProjectStore {
   setSelectedZoomId: (id?: string) => void;
   setSelectedClipIds: (ids: string[]) => void;
   setTimelineSelection: (selection: { startUs: number; endUs: number } | null) => void;
-  setIsSilenceModalOpen: (open: boolean) => void;
-  /** Applies an edit's result. `remote` marks one broadcast by another window: it is applied
-   *  only if newer, and not broadcast again. */
-  applyOpenedProject: (project: OpenedProject, options?: { remote?: boolean }) => void;
+  /** Applies an edit's result. `remote` marks one not asked for here (an agent's edit, or a
+   *  short's view): it is applied only if newer. Settles once applied (while showing a short,
+   *  once the short's view of it is in). */
+  applyOpenedProject: (project: OpenedProject, options?: { remote?: boolean }) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -162,8 +160,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
   applyPlaybackStatus: (status) => set((state) => {
     if (state.openedProject?.projectHandle !== status.projectHandle || status.generation < state.playbackGeneration) return state;
-    // The engine plays something this window does not show (a short in the editor, or the
-    // video in the Shorts Studio): note it, but keep this window's own playhead.
+    // The engine plays something not on show (a short while editing the video, or the video
+    // in Shorts): note it, but keep the playhead of what is shown.
     const next: Partial<ProjectStore> =
       (status.shortId ?? undefined) !== state.viewShort
         ? { playbackShortId: status.shortId, isPlaying: false, playbackGeneration: status.generation, playbackSpeed: status.speed ?? 1 }
@@ -192,6 +190,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       openedProject: project,
       projectPath: resolvedPath ?? null,
       playbackGeneration: 0, playbackError: null, previewAvailable: false,
+      // A short of the project before has no place in this one (Shorts picks one again).
+      viewShort: undefined,
+      playbackShortId: undefined,
       durationUs: project.durationUs,
       waveforms: {},
       selectedClipIds: [],
@@ -200,7 +201,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       pendingZoomSuggestions: [],
       zoomKeyframes: mergeZoomBars(project.zooms, []),
       zoomDiagnostics: [],
-      isSilenceModalOpen: false,
     });
   },
   clearProject: () => {
@@ -210,6 +210,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       projectPath: null,
       playbackError: null,
       previewAvailable: false,
+      viewShort: undefined,
+      playbackShortId: undefined,
       waveforms: {},
       selectedClipIds: [],
       durationUs: 0,
@@ -218,7 +220,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       zoomKeyframes: [],
       pendingZoomSuggestions: [],
       zoomDiagnostics: [],
-      isSilenceModalOpen: false,
     });
   },
   waveforms: {},
@@ -232,15 +233,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   viewShort: undefined,
   setViewShort: (viewShort) => set({ viewShort }),
   playbackShortId: undefined,
-  bumpCaptions: (fromOtherWindow?: boolean) => {
-    set((state) => ({ captionsVersion: state.captionsVersion + 1 }));
-    if (!fromOtherWindow) broadcastCaptionsChanged();
-  },
+  bumpCaptions: () => set((state) => ({ captionsVersion: state.captionsVersion + 1 })),
   timelineSelection: null,
   currentTimeUs: 0,
   durationUs: 0,
   isPlaying: false,
-  isSilenceModalOpen: false,
 
   setCurrentTimeUs: (timeUs) => {
     const { durationUs } = get();
@@ -263,23 +260,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       zoomKeyframes: mergeZoomBars(state.openedProject?.zooms, generation.suggestions),
     })),
 
-  setIsSilenceModalOpen: (open) => set({ isSilenceModalOpen: open }),
 
-  applyOpenedProject: (project, options) => {
+  applyOpenedProject: async (project, options) => {
     const current = get().openedProject;
     // A window showing a short turns every project it is handed into that short's view.
     const viewShort = get().viewShort;
-    if (viewShort && project.shortView !== viewShort) {
-      void api
+    // A short removed by this revision has no view: the project as it is shows the list without it.
+    const removed =
+      !!viewShort &&
+      project.projectHandle === current?.projectHandle &&
+      project.revision >= current.revision &&
+      !(project.shorts ?? []).some((short) => short.id === viewShort);
+    if (removed) set({ viewShort: undefined });
+    if (viewShort && !removed && project.shortView !== viewShort) {
+      // Done once the view is in, so the next save goes out on this revision.
+      return api
         .projectShortView(project.projectHandle, viewShort)
         .then((view) => get().applyOpenedProject(view, options))
         .catch(() => undefined);
-      if (!options?.remote) broadcastProject(project);
-      return;
     }
-    // An older revision is stale, whether it came from another window or is this window's own
-    // late reply; from another window the same revision is too. A different view of it (a
-    // short's) is not.
+    // An older revision is stale, whether an agent's or a late reply to an edit here; an
+    // agent's same revision is too. A different view of it (a short's) is not.
     if (
       current &&
       project.projectHandle === current.projectHandle &&
@@ -288,7 +289,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     ) {
       return;
     }
-    if (!options?.remote && current?.projectHandle === project.projectHandle) broadcastProject(project);
     set((state) => {
       if (state.openedProject?.projectHandle !== project.projectHandle) return state;
       const taken = new Set([

@@ -29,6 +29,7 @@ import {
   LAYOUT_PRESETS,
   WORKSPACES,
   applyPresetToWorkspace,
+  requestPanel,
   resetWorkspaceLayout,
   type LayoutPreset,
 } from "../layout/dockLayout";
@@ -67,12 +68,11 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   onShowInFinder,
   onError,
 }) => {
-  const { project, projectPath, recentProjects, setIsSilenceModalOpen } = useProjectStore(
+  const { project, projectPath, recentProjects } = useProjectStore(
     useShallow((s) => ({
       project: s.openedProject,
       projectPath: s.projectPath,
       recentProjects: s.recentProjects,
-      setIsSilenceModalOpen: s.setIsSilenceModalOpen,
     })),
   );
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -117,7 +117,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     { label: "Close project", icon: X, onSelect: onCloseProject, disabled: !project || busy },
     { kind: "separator" },
     { kind: "heading", label: `Layout · ${WORKSPACES[workspace].label}` },
-    ...(Object.keys(LAYOUT_PRESETS) as LayoutPreset[]).map(
+    // Shorts has one arrangement of its own: only Reset applies there.
+    ...(workspace === "shorts" ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
       (preset): MenuEntry => ({
         label: LAYOUT_PRESETS[preset].label,
         icon: LayoutGrid,
@@ -183,17 +184,11 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             label="Workspace"
             className="self-stretch"
             value={workspace}
-            onChange={(next) => {
-              if (next === "shorts") {
-                run(() => api.openShortsWindow());
-                return;
-              }
-              setWorkspace(next);
-            }}
+            onChange={setWorkspace}
             items={[
               { value: "edit", label: "Edit", title: "Edit the video on the timeline" },
-              { value: "cleanup", label: "Cleanup", title: "Edit by text: a tall transcript, the preview and the timeline" },
-              { value: "shorts", label: "Shorts", title: "Open the Shorts Studio: vertical clips from this video, in their own window" },
+              { value: "cleanup", label: "Cleanup", title: "Clean up: jump cuts, mouth noises and the transcript beside the preview and the timeline" },
+              { value: "shorts", label: "Shorts", title: "Shorts: vertical clips from this video, each with its own timeline and look" },
             ]}
           />
         )}
@@ -206,8 +201,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             <Button
               variant="secondary"
               icon={Scissors}
-              onClick={() => setIsSilenceModalOpen(true)}
-              title="Find the silent pauses and cut them out (jump cuts)"
+              onClick={() => requestPanel("jumpCuts")}
+              title="Find the silent pauses and cut them out (jump cuts), in Cleanup beside the preview and timeline"
             >
               <span className="hidden xl:inline">Jump Cuts</span>
             </Button>

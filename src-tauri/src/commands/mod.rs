@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub mod graphics;
 pub mod noises;
 pub mod proposals;
 pub mod transcript;
@@ -1301,8 +1302,135 @@ pub fn project_chapters_set_impl(
     })
 }
 
+/// The check before export, of the edit as it is now.
+pub fn project_check_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<crate::check::CheckReport, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let missing: Vec<&str> = reader
+        .summary
+        .assets
+        .iter()
+        .filter(|a| a.missing)
+        .map(|a| a.id.as_str())
+        .collect();
+    Ok(crate::check::run(
+        reader.root(),
+        reader.document(),
+        &missing,
+    ))
+}
+
+/// Applies the fixes of the findings `ids` of the check at `expected_revision`, each as its
+/// own undo step. Later moments go first, so a cut never moves a finding still to fix.
+pub fn project_check_fix_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    ids: Vec<String>,
+) -> Result<OpenedProject, String> {
+    let report = project_check_impl(state, project_handle.clone())?;
+    if report.revision != expected_revision {
+        return Err("The edit changed since the check; check again".into());
+    }
+    let all = ids.iter().any(|id| id == "all");
+    let mut fixes = Vec::new();
+    for finding in report.findings {
+        if !(all || ids.contains(&finding.id)) {
+            continue;
+        }
+        match finding.fix {
+            Some(fix) => fixes.push((finding.start_us, fix)),
+            None if all => {}
+            None => return Err(format!("{} has no fix to apply", finding.id)),
+        }
+    }
+    if !all && fixes.len() < ids.len() {
+        return Err("Some of those findings are not in the check any more; check again".into());
+    }
+    if fixes.is_empty() {
+        return Err("Nothing to fix".into());
+    }
+    fixes.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut revision = expected_revision;
+    let mut summary = None;
+    for (_, fix) in fixes {
+        let next = apply_check_fix(state, &project_handle, revision, fix)?;
+        revision = next.revision;
+        summary = Some(next);
+    }
+    summary.ok_or_else(|| "Nothing to fix".into())
+}
+
+fn apply_check_fix(
+    state: &AppState,
+    project_handle: &str,
+    revision: u64,
+    fix: crate::check::Fix,
+) -> Result<OpenedProject, String> {
+    use crate::check::Fix;
+    let handle = project_handle.to_string();
+    let current = || -> Result<crate::project::revision::EditDocument, String> {
+        let opened = state.opened_project.lock();
+        Ok(opened
+            .as_ref()
+            .ok_or("No opened project")?
+            .document()
+            .clone())
+    };
+    match fix {
+        Fix::Cut { start_us, end_us } => project_sequence_edit_impl(
+            state,
+            handle,
+            revision,
+            SequenceEdit::DeleteRange {
+                ranges: vec![crate::zoom::EditedRange { start_us, end_us }],
+                ripple: Some(true),
+            },
+            None,
+        ),
+        Fix::DeleteZoom { id } => project_zoom_delete_impl(state, handle, revision, id),
+        Fix::ZoomEase {
+            id,
+            source_start_us,
+            source_end_us,
+        } => {
+            let mut zoom = current()?
+                .zooms
+                .into_iter()
+                .find(|z| z.id == id)
+                .ok_or("That zoom is gone")?;
+            zoom.source_start_us = source_start_us;
+            zoom.source_end_us = source_end_us;
+            project_zoom_update_impl(state, handle, revision, zoom)
+        }
+        Fix::CaptionOffset { offset_pct } => {
+            let mut captions = current()?.captions;
+            captions.offset_pct = offset_pct;
+            project_captions_update_impl(state, handle, revision, captions)
+        }
+        Fix::RemoveChapter { id } => {
+            let chapters = current()?
+                .chapters
+                .into_iter()
+                .filter(|c| c.id != id)
+                .collect();
+            project_chapters_set_impl(state, handle, revision, chapters)
+        }
+        Fix::Normalize { target_lufs } => {
+            let mut audio = current()?.audio;
+            audio.normalize = true;
+            audio.target_lufs = target_lufs;
+            project_audio_update_impl(state, handle, revision, audio)
+        }
+    }
+}
+
 /// Whether some speech has a transcript to caption from.
-fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
+pub(crate) fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
     let has = |id: &str| {
         crate::transcript::store::load_transcript(reader.root(), id)
             .ok()
@@ -1379,6 +1507,112 @@ pub fn project_shorts_set_impl(
     mutate_opened(state, project_handle, |reader| {
         reader.set_shorts(expected_revision, shorts)
     })
+}
+
+/// Picks a short's scenes from its recording (see [`crate::short_scenes::suggest`]) and saves
+/// them in place of its earlier automatic ones; scenes set by hand stay.
+pub fn project_short_scenes_pick_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+) -> Result<OpenedProject, String> {
+    let (shorts, path, input) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let document = reader.document();
+        let short = document
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let asset = document
+            .clock_asset(short.media.as_deref())
+            .and_then(|id| document.asset(id))
+            .filter(|a| a.is_recording())
+            .ok_or("Scenes are picked from a recording's mouse data; this short is on a file")?;
+        if !document.layout.webcam_enabled || !asset.streams.iter().any(|s| s.role == Role::Webcam)
+        {
+            return Err("This short has no camera, so it shows the screen throughout".into());
+        }
+        let (start, end) = (short.source_start_us, short.source_end_us);
+        let words: Vec<(u64, u64)> = asset
+            .streams
+            .iter()
+            .filter(|s| s.role == Role::Mic)
+            .filter_map(|s| {
+                let key = crate::sequence::StreamRef::new(&asset.id, &s.id).key();
+                crate::transcript::store::load_transcript(reader.root(), &key)
+                    .ok()
+                    .flatten()
+            })
+            .next()
+            .map(|t| {
+                t.words
+                    .iter()
+                    .filter(|w| w.kind == crate::transcript::WordKind::Word)
+                    .filter(|w| w.source_end_us > start && w.source_start_us < end)
+                    .map(|w| (w.source_start_us, w.source_end_us))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (
+            document.shorts.clone(),
+            std::path::PathBuf::from(&asset.path),
+            (start, end, short.media.clone(), words),
+        )
+    };
+    let telemetry = crate::telemetry::reader::read_telemetry(&path)?;
+    let (start_us, end_us, media, words) = input;
+    let picked = crate::short_scenes::suggest(&crate::short_scenes::SuggestInput {
+        start_us,
+        end_us,
+        media,
+        telemetry: &telemetry,
+        words: &words,
+    });
+    let shorts = shorts
+        .into_iter()
+        .map(|mut short| {
+            if short.id == short_id {
+                short.layout.scenes =
+                    crate::short_scenes::replace_auto(&short.layout.scenes, picked.clone());
+            }
+            short
+        })
+        .collect();
+    project_shorts_set_impl(state, project_handle, expected_revision, shorts)
+}
+
+/// Adds a scene over `[start_us, end_us)` of a short's own timeline; it takes that time from
+/// the scenes it overlaps.
+pub fn project_short_scene_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    start_us: u64,
+    end_us: u64,
+    mode: crate::short_scenes::SceneMode,
+) -> Result<OpenedProject, String> {
+    if end_us <= start_us {
+        return Err("A scene must end after it starts".into());
+    }
+    let shorts = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        let short = shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        short.layout.scenes = crate::shorts::with_scene(document, short, start_us, end_us, mode)?;
+        shorts
+    };
+    project_shorts_set_impl(state, project_handle, expected_revision, shorts)
 }
 
 /// Exports one short as a 9:16 video next to the project (or to `settings.destination`),
@@ -1471,11 +1705,37 @@ pub struct EditCut {
     pub end_us: u64,
 }
 
-fn require_handle(reader: &ProjectReader, project_handle: &str) -> Result<(), String> {
+pub(crate) fn require_handle(reader: &ProjectReader, project_handle: &str) -> Result<(), String> {
     if reader.summary.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
     Ok(())
+}
+
+/// The sound effects lane's sounds on the timeline, for drawing it (a short's own when
+/// `short_id` is set).
+pub fn project_sound_effects_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<Vec<crate::sound_effects::Effect>, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let base = &reader.history().current;
+    let document = match short_id.as_deref() {
+        Some(id) => {
+            let short = base
+                .shorts
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("That short no longer exists")?;
+            crate::shorts::short_document(base, short, false)
+                .or_else(|_| crate::shorts::short_timeline(base, short))?
+        }
+        None => base.clone(),
+    };
+    Ok(crate::sound_effects::plan(&document))
 }
 
 pub fn project_ripple_cuts_impl(

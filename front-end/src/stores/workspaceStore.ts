@@ -1,19 +1,19 @@
 import { create } from "zustand";
-import type { Workspace } from "../components/layout/dockLayout";
+import { setWorkspaceSwitcher, type Workspace } from "../components/layout/dockLayout";
 
 const STORAGE_KEY = "aeroedits.workspace.v1";
 
 function load(): Workspace {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored === "edit" || stored === "cleanup") return stored;
+    if (stored === "edit" || stored === "cleanup" || stored === "shorts") return stored;
   } catch {
     // Storage unavailable: start in Edit.
   }
   return "edit";
 }
 
-/** The editor window's workspace (Edit or Cleanup), remembered between sessions. */
+/** The editor window's workspace (Edit, Cleanup or Shorts), remembered between sessions. */
 export const useWorkspaceStore = create<{ workspace: Workspace; setWorkspace: (workspace: Workspace) => void }>(
   (set) => ({
     workspace: load(),
@@ -27,3 +27,5 @@ export const useWorkspaceStore = create<{ workspace: Workspace; setWorkspace: (w
     },
   }),
 );
+
+setWorkspaceSwitcher((workspace) => useWorkspaceStore.getState().setWorkspace(workspace));

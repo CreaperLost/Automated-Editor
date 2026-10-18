@@ -1221,6 +1221,7 @@ pub fn transcript_suggestions(
                     item.reason.clone()
                 })
                 .filter(|r| !r.is_empty()),
+                reviewer: None,
                 proposal: Some(ProposalRef {
                     batch_id: batch.id.clone(),
                     item_id: item.id.clone(),

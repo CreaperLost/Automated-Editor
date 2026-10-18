@@ -112,7 +112,7 @@ pub fn find(name: &str) -> Option<&'static ToolDef> {
     all().iter().find(|tool| tool.name == name)
 }
 
-static TOOLS: [ToolDef; 13] = [
+static TOOLS: [ToolDef; 14] = [
     ToolDef {
         name: "project_info",
         description: "The open project: name, revision, length, canvas size, tracks (V1 is the \
@@ -169,10 +169,12 @@ static TOOLS: [ToolDef; 13] = [
     },
     ToolDef {
         name: "telemetry_get",
-        description: "What the mouse did, on the edited timeline: clicks and scrolls with their \
-            positions on the recorded screen (0-1, x right, y down), and the zooms in the \
-            edit. Clicks show where the tutorial's action is; use them to place callouts and \
-            to judge cuts.",
+        description: "What the mouse and keyboard did, on the edited timeline: clicks and \
+            scrolls with their positions on the recorded screen (0-1, x right, y down), typing \
+            stretches (key count and caret position, never the text) and shortcuts pressed, \
+            when the recorder recorded the keyboard, and the zooms in the edit. Clicks and \
+            typing show where the tutorial's action is; use them to place callouts and to \
+            judge cuts. Shortcut badges are the layout setting `shortcutBadges`.",
         schema: schema::<RangeParams>,
         read_only: true,
         run: super::views::telemetry_get,
@@ -186,6 +188,18 @@ static TOOLS: [ToolDef; 13] = [
         schema: schema::<super::views::ViewParams>,
         read_only: true,
         run: super::views::timeline_view,
+    },
+    ToolDef {
+        name: "storyboard",
+        description: "One small PNG contact sheet of the whole edit (or `fromUs`-`toUs`, or a \
+            short with `short`): a tile per scene, split where the camera or a short's scene, \
+            a zoom, a graphic, a chapter or a long silence starts, short stretches merged. \
+            Each tile is a finished frame with its time, what it shows, zoom, graphic, chapter \
+            and words; the JSON lists the same per tile number. Use it to check an edit after \
+            your passes and before export, instead of many frame_render calls.",
+        schema: schema::<super::storyboard::StoryboardArgs>,
+        read_only: true,
+        run: super::storyboard::storyboard,
     },
     ToolDef {
         name: "propose_cuts",
@@ -703,8 +717,18 @@ mod tests {
                 "proposal_withdraw" => json!({ "batchId": "b-1" }),
                 "undo_batch" => json!({ "batchId": "b-1", "expectedRevision": 0 }),
                 "settings" => json!({ "area": "captions" }),
-                // These work without a project open.
-                "open" | "create" | "export_status" | "template" | "template_save" => continue,
+                "short_create" => json!({ "title": "t", "fromWord": "w-0", "toWord": "w-1" }),
+                "graphic_add" => json!({ "template": "title", "atUs": 0 }),
+                "graphic_set" => json!({ "graphic": "g", "name": "n" }),
+                "brand_pick" => json!({ "brand": "none" }),
+                "graphic_templatize" | "graphic_check" => json!({ "graphic": "g" }),
+                "library_save" => json!({ "graphic": "g", "useWhen": "always" }),
+                "graphic_write_file" => {
+                    json!({ "graphic": "g", "path": "index.html", "contents": "" })
+                }
+                // These work without a project open (and installing would download).
+                "open" | "create" | "export_status" | "template" | "template_save" | "graphics"
+                | "graphics_install" | "brand_kits" => continue,
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();

@@ -27,6 +27,7 @@ pub fn detect_transcript_pauses_impl(
             padding_ms: config.padding_ms,
             refine_word_edges: false,
             edge_threshold_db: -42.0,
+            keep_sound_events: false,
         },
     )
 }
@@ -119,7 +120,17 @@ pub fn detect_non_speech_gaps_impl(
                     } else {
                         let saved = transcript.as_ref().unwrap();
                         let refined;
-                        let words = if config.refine_word_edges {
+                        // Parakeet's words swallow the pauses next to them: without this
+                        // the gaps hide inside words and are kept.
+                        let words = if saved.provider == crate::transcript::ProviderKind::Parakeet {
+                            refined = pauses::tighten_loose_words(
+                                saved,
+                                &scan.source_ranges,
+                                &scan.covered,
+                                false,
+                            );
+                            &refined
+                        } else if config.refine_word_edges {
                             refined = pauses::refine_quiet_edges(
                                 saved,
                                 &scan.source_ranges,
@@ -178,7 +189,13 @@ pub fn detect_non_speech_gaps_impl(
         common_pauses(&lists, min_us)
     };
     let mut diagnostics = vec!["Gaps can contain missed words or useful tutorial sounds. Listen before selecting cuts. Noises inside recognized words are kept.".into()];
-    if config.refine_word_edges {
+    let parakeet = sounds
+        .first()
+        .and_then(|(_, _, t)| t.as_ref())
+        .is_some_and(|t| t.provider == crate::transcript::ProviderKind::Parakeet);
+    if parakeet {
+        diagnostics.push("Parakeet's word timings cover the pauses next to them, so each word is tightened to its own sound for this review (quieter than the word edge threshold is a pause). Saved transcript timings stay unchanged. Listen for soft word endings.".into());
+    } else if config.refine_word_edges {
         diagnostics.push("Quiet word edges are refined from audio for this review. Saved transcript timings stay unchanged. Listen for soft word endings.".into());
     }
     if config.padding_ms < 40 {
@@ -478,6 +495,7 @@ mod tests {
                         padding_ms: pad,
                         refine_word_edges: refine,
                         edge_threshold_db: -42.0,
+                        keep_sound_events: false,
                     },
                 )
                 .unwrap();
@@ -491,6 +509,70 @@ mod tests {
                         .sum::<u64>() as f64
                         / 1e6
                 );
+                // With exact word timings of the same recording: how much speech the cuts take.
+                if let (false, Ok(truth)) = (two, std::env::var("AEROEDITS_CLEANUP_TRUTH")) {
+                    let truth: Transcript =
+                        serde_json::from_slice(&fs::read(truth).unwrap()).unwrap();
+                    let opened = state.opened_project.lock();
+                    let doc = opened.as_ref().unwrap().document();
+                    let source = StreamRef::parse(&keys[0]).unwrap();
+                    let clips: Vec<_> = doc
+                        .sequence
+                        .clips()
+                        .map(|(_, c)| c)
+                        .filter(|c| c.asset == source.asset && c.stream == source.stream)
+                        .collect();
+                    let (mut hits, mut hit_us) = (0, 0u64);
+                    for cut in &result.suggestions {
+                        for clip in &clips {
+                            let (a, b) = (
+                                cut.start_us.max(clip.start_us),
+                                cut.end_us.min(clip.end_us()),
+                            );
+                            if b <= a {
+                                continue;
+                            }
+                            let (sa, sb) = (
+                                clip.in_us + a - clip.start_us,
+                                clip.in_us + b - clip.start_us,
+                            );
+                            let over: u64 = truth
+                                .words
+                                .iter()
+                                .filter(|w| w.kind == crate::transcript::WordKind::Word)
+                                .map(|w| {
+                                    w.source_end_us
+                                        .min(sb)
+                                        .saturating_sub(w.source_start_us.max(sa))
+                                })
+                                .sum();
+                            if over > 0 {
+                                hits += 1;
+                                hit_us += over;
+                                if over > 60_000 && std::env::var("AEROEDITS_CLEANUP_LIST").is_ok()
+                                {
+                                    let said: Vec<&str> = truth
+                                        .words
+                                        .iter()
+                                        .filter(|w| w.source_end_us > sa && w.source_start_us < sb)
+                                        .map(|w| w.text.as_str())
+                                        .collect();
+                                    println!(
+                                        "  {:9.3}-{:9.3} takes {} ms of {}",
+                                        sa as f64 / 1e6,
+                                        sb as f64 / 1e6,
+                                        over / 1000,
+                                        said.join(" ")
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    println!(
+                        "PROBE   {hits} cuts reach into exact words, {} ms in all",
+                        hit_us / 1000
+                    );
+                }
             }
         }
     }
@@ -753,6 +835,7 @@ mod tests {
                 padding_ms: 0,
                 refine_word_edges: true,
                 edge_threshold_db: -42.0,
+                keep_sound_events: false,
             },
         )
         .unwrap();
@@ -1106,6 +1189,7 @@ mod tests {
                     padding_ms,
                     refine_word_edges: true,
                     edge_threshold_db: -42.0,
+                    keep_sound_events: false,
                 },
             )
             .unwrap()

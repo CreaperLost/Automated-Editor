@@ -66,6 +66,60 @@ pub struct ShortLayout {
     pub background_color_start: String,
     pub background_color_end: String,
     pub background_preset: String,
+    /// Stretches that show only the camera or only the screen; the rest is split.
+    pub scenes: Vec<crate::short_scenes::Scene>,
+    /// How long the frame takes to change into and out of a scene; 0 is a hard cut.
+    pub scene_transition_ms: u32,
+    /// Where each graphic plays in this short, by its clip id; a graphic not listed plays
+    /// full screen.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub graphic_slots: std::collections::BTreeMap<String, GraphicSlot>,
+}
+
+/// The part of a short's frame a graphic plays in (and is rendered for).
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphicSlot {
+    /// The whole frame, over everything.
+    #[default]
+    Full,
+    /// The camera's part of the split (at the short's own share), over everything there.
+    Camera,
+    /// The screen's part of the split, over everything there.
+    Screen,
+    /// Over the screen's part, under the captions; the graphic's see-through parts show the
+    /// screen.
+    OverScreen,
+}
+
+/// At most this many graphics have a slot in one short.
+pub const MAX_GRAPHIC_SLOTS: usize = 200;
+
+/// The slot graphic clip `clip_id` plays in.
+pub fn graphic_slot(layout: &ShortLayout, clip_id: &str) -> GraphicSlot {
+    layout
+        .graphic_slots
+        .get(clip_id)
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Where graphic clip `clip_id` plays in a `width` x `height` short: the whole frame, or a
+/// part of the split at the short's own share (scenes do not move it), as with a camera.
+pub fn graphic_rect(
+    layout: &ShortLayout,
+    clip_id: &str,
+    width: u32,
+    height: u32,
+) -> (u32, u32, u32, u32) {
+    let rects = split_rects(width, height, layout, true);
+    match graphic_slot(layout, clip_id) {
+        GraphicSlot::Full => (0, 0, width, height),
+        GraphicSlot::Camera => rects.camera.unwrap_or((0, 0, width, height)),
+        GraphicSlot::Screen | GraphicSlot::OverScreen => rects.screen,
+    }
 }
 
 impl Default for ShortLayout {
@@ -86,6 +140,9 @@ impl Default for ShortLayout {
             background_color_start: "#000000".into(),
             background_color_end: "#1e1b4b".into(),
             background_preset: "aurora".into(),
+            scenes: Vec::new(),
+            scene_transition_ms: crate::short_scenes::DEFAULT_TRANSITION_MS,
+            graphic_slots: Default::default(),
         }
     }
 }
@@ -129,7 +186,15 @@ impl ShortLayout {
         {
             return Err("Caption size is out of range".into());
         }
-        Ok(())
+        if self.graphic_slots.len() > MAX_GRAPHIC_SLOTS
+            || self
+                .graphic_slots
+                .keys()
+                .any(|id| id.is_empty() || id.len() > 64)
+        {
+            return Err("Too many graphic slots, or a bad clip id".into());
+        }
+        crate::short_scenes::validate(&self.scenes, self.scene_transition_ms)
     }
 }
 
@@ -142,14 +207,26 @@ pub struct SplitRects {
 
 /// Where camera and screen go. Without a camera the screen takes the whole frame.
 pub fn split_rects(width: u32, height: u32, layout: &ShortLayout, has_camera: bool) -> SplitRects {
-    if !has_camera {
+    split_rects_at(width, height, layout, has_camera, layout.camera_pct / 100.0)
+}
+
+/// [`split_rects`] with the camera taking `share` of the height: 0 leaves only the screen, 1
+/// only the camera (the screen's part is then empty).
+pub fn split_rects_at(
+    width: u32,
+    height: u32,
+    layout: &ShortLayout,
+    has_camera: bool,
+    share: f32,
+) -> SplitRects {
+    let camera_h = (height as f32 * share.clamp(0.0, 1.0)).round() as u32;
+    if !has_camera || camera_h == 0 {
         return SplitRects {
             camera: None,
             screen: (0, 0, width, height),
         };
     }
-    let camera_h =
-        ((height as f32 * layout.camera_pct / 100.0).round() as u32).clamp(1, height - 1);
+    let camera_h = camera_h.min(height);
     let screen_h = height - camera_h;
     match layout.camera_position {
         CameraPosition::Top => SplitRects {
@@ -241,7 +318,8 @@ pub fn screen_placement(
             // Bigger than the region: a window of it, panned, kept inside the crop.
             let window = rl as f32 / (frame.max(1) as f32 * scale);
             let middle = center + pan * cl / 2.0;
-            let start = (middle - window / 2.0).clamp(c0, c0 + cl - window);
+            // Float rounding can leave the window a hair wider than the crop.
+            let start = (middle - window / 2.0).clamp(c0, (c0 + cl - window).max(c0));
             (r0, rl, start, window)
         } else {
             // Smaller: all of it, centred, and the pan slides it through the free space.
@@ -360,6 +438,78 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
     Ok(timeline)
 }
 
+/// Scenes for stretches of `short`'s own timeline, as (start, end, mode) in the short's time,
+/// anchored in its recording's time. A stretch over a cut becomes one scene per piece.
+pub fn scenes_at(
+    base: &EditDocument,
+    short: &Short,
+    ranges: &[(u64, u64, crate::short_scenes::SceneMode)],
+) -> Result<Vec<crate::short_scenes::Scene>, String> {
+    let timeline = short_timeline(base, short)?;
+    let asset = timeline
+        .clock_asset(short.media.as_deref())
+        .ok_or("This short plays no recording")?;
+    let clock = timeline.asset_clock(asset);
+    let mut scenes = Vec::new();
+    for &(start, end, mode) in ranges {
+        for (a, b) in clock.edited_range_to_source(start, end) {
+            scenes.push(crate::short_scenes::Scene {
+                media: short.media.clone(),
+                ..crate::short_scenes::Scene::new(format!("scene-{}", a / 1000), a, b, mode)
+            });
+        }
+    }
+    Ok(scenes)
+}
+
+/// `short`'s scenes with a new one over `[start, end)` of its own timeline; the new one takes
+/// that time from any it overlaps.
+pub fn with_scene(
+    base: &EditDocument,
+    short: &Short,
+    start: u64,
+    end: u64,
+    mode: crate::short_scenes::SceneMode,
+) -> Result<Vec<crate::short_scenes::Scene>, String> {
+    let added = scenes_at(base, short, &[(start, end, mode)])?;
+    if added.is_empty() {
+        return Err("Nothing of the recording plays there".into());
+    }
+    let mut out = Vec::new();
+    for scene in &short.layout.scenes {
+        let mut pieces = vec![(scene.source_start_us, scene.source_end_us)];
+        for new in added.iter().filter(|n| n.media == scene.media) {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|(a, b)| {
+                    let mut left = Vec::new();
+                    if a < new.source_start_us {
+                        left.push((a, b.min(new.source_start_us)));
+                    }
+                    if b > new.source_end_us {
+                        left.push((a.max(new.source_end_us), b));
+                    }
+                    left
+                })
+                .collect();
+        }
+        for (i, (a, b)) in pieces.into_iter().enumerate() {
+            out.push(crate::short_scenes::Scene {
+                id: if i == 0 {
+                    scene.id.clone()
+                } else {
+                    format!("{}-{i}", scene.id)
+                },
+                source_start_us: a,
+                source_end_us: b,
+                ..scene.clone()
+            });
+        }
+    }
+    out.extend(added);
+    Ok(crate::short_scenes::normalized(out))
+}
+
 /// Checks each short's own timeline the way the project's is checked.
 pub fn validate_edits(base: &EditDocument) -> Result<(), String> {
     for own in base.shorts.iter().filter_map(|s| s.edit.as_ref()) {
@@ -395,6 +545,8 @@ pub fn validate(shorts: &[Short]) -> Result<(), String> {
 pub fn normalized(mut shorts: Vec<Short>) -> Vec<Short> {
     for short in &mut shorts {
         short.title = short.title.trim().to_string();
+        short.layout.scenes =
+            crate::short_scenes::normalized(std::mem::take(&mut short.layout.scenes));
         short.edited_start_us = None;
         short.edited_end_us = None;
         short.length_us = None;
@@ -434,6 +586,17 @@ pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
             short.length_us = Some(own.sequence.duration_us());
             short.edited_start_us = None;
             short.edited_end_us = None;
+            let length = own.sequence.duration_us();
+            for scene in &mut short.layout.scenes {
+                let shown = document
+                    .clock_asset(scene.media.as_deref())
+                    .and_then(|asset| {
+                        let clock = crate::sequence::clock::asset_clock(&own.sequence, asset);
+                        shown_in(&clock, scene, 0, length)
+                    });
+                scene.shown_start_us = shown.map(|s| s.0);
+                scene.shown_end_us = shown.map(|s| s.1);
+            }
             continue;
         }
         let range = document
@@ -449,7 +612,36 @@ pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
         });
         short.edited_start_us = range.map(|r| r.0);
         short.edited_end_us = range.map(|r| r.1);
+        for scene in &mut short.layout.scenes {
+            let shown = range.and_then(|(start, end)| {
+                let asset = document.clock_asset(scene.media.as_deref())?;
+                let clock = clocks
+                    .entry(asset.to_string())
+                    .or_insert_with(|| document.asset_clock(asset));
+                shown_in(clock, scene, start, end)
+            });
+            scene.shown_start_us = shown.map(|s| s.0);
+            scene.shown_end_us = shown.map(|s| s.1);
+        }
     }
+}
+
+/// Where `scene` plays within `[start, end)` of `clock`'s timeline, from `start`.
+fn shown_in(
+    clock: &TimelineMapper,
+    scene: &crate::short_scenes::Scene,
+    start: u64,
+    end: u64,
+) -> Option<(u64, u64)> {
+    let pieces: Vec<(u64, u64)> = clock
+        .source_range_to_edited(scene.source_start_us, scene.source_end_us)
+        .into_iter()
+        .map(|(a, b)| (a.max(start), b.min(end)))
+        .filter(|(a, b)| a < b)
+        .collect();
+    let first = pieces.iter().map(|p| p.0).min()?;
+    let last = pieces.iter().map(|p| p.1).max()?;
+    Some((first - start, last - start))
 }
 
 /// The document a short exports from: the short's stretch of the edit on a 9:16 canvas, with
@@ -521,6 +713,50 @@ mod tests {
             edited_start_us: None,
             edited_end_us: None,
         }
+    }
+
+    #[test]
+    fn scenes_follow_the_short_through_cuts() {
+        use crate::short_scenes::SceneMode;
+        // A short of 10-40 s of the recording; the video then loses 15-20 s.
+        let mut document = doc(60 * S);
+        let mut s = short(10 * S, 40 * S);
+        cut(&mut document, 15 * S, 20 * S);
+        // 2-8 s of the short spans the cut: 12-15 s and 20-23 s of the recording.
+        s.layout.scenes = with_scene(&document, &s, 2 * S, 8 * S, SceneMode::Camera).unwrap();
+        let spans: Vec<(u64, u64)> = s
+            .layout
+            .scenes
+            .iter()
+            .map(|sc| (sc.source_start_us, sc.source_end_us))
+            .collect();
+        assert_eq!(spans, vec![(12 * S, 15 * S), (20 * S, 23 * S)]);
+        // A screen scene over 6-10 s takes its time from the camera one.
+        s.layout.scenes = with_scene(&document, &s, 6 * S, 10 * S, SceneMode::Screen).unwrap();
+        validate(std::slice::from_ref(&s)).unwrap();
+        let mut shown = vec![s.clone()];
+        attach_edited(&mut shown, &document);
+        let placed: Vec<(Option<u64>, Option<u64>, SceneMode)> = shown[0]
+            .layout
+            .scenes
+            .iter()
+            .map(|sc| (sc.shown_start_us, sc.shown_end_us, sc.mode))
+            .collect();
+        assert_eq!(
+            placed,
+            vec![
+                (Some(2 * S), Some(5 * S), SceneMode::Camera),
+                (Some(5 * S), Some(6 * S), SceneMode::Camera),
+                (Some(6 * S), Some(10 * S), SceneMode::Screen),
+            ]
+        );
+        // Storing drops the UI's positions.
+        let stored = normalized(shown);
+        assert!(stored[0]
+            .layout
+            .scenes
+            .iter()
+            .all(|sc| sc.shown_start_us.is_none()));
     }
 
     #[test]
@@ -602,9 +838,47 @@ mod tests {
         let rects_b = split_rects(1080, 1920, &bottom, true);
         assert_eq!(rects_b.camera, Some((0, 960, 1080, 960)));
         assert_eq!(rects_b.screen, (0, 0, 1080, 960));
+        // Scenes: a screen scene gives the screen the frame, a camera scene the camera.
+        let screen_only = split_rects_at(1080, 1920, &layout, true, 0.0);
+        assert_eq!(screen_only.camera, None);
+        assert_eq!(screen_only.screen, (0, 0, 1080, 1920));
+        let camera_only = split_rects_at(1080, 1920, &layout, true, 1.0);
+        assert_eq!(camera_only.camera, Some((0, 0, 1080, 1920)));
+        assert_eq!(camera_only.screen.3, 0);
         assert_eq!(
             split_rects(1080, 1920, &layout, false).screen,
             (0, 0, 1080, 1920)
+        );
+
+        // Graphics: full frame unless given a part of the split (at the short's own share).
+        let mut slotted = bottom.clone();
+        slotted
+            .graphic_slots
+            .insert("g-cam".into(), GraphicSlot::Camera);
+        slotted
+            .graphic_slots
+            .insert("g-over".into(), GraphicSlot::OverScreen);
+        assert_eq!(
+            graphic_rect(&slotted, "g-other", 1080, 1920),
+            (0, 0, 1080, 1920)
+        );
+        assert_eq!(
+            graphic_rect(&slotted, "g-cam", 1080, 1920),
+            (0, 960, 1080, 960)
+        );
+        assert_eq!(
+            graphic_rect(&slotted, "g-over", 1080, 1920),
+            (0, 0, 1080, 960)
+        );
+        let json = serde_json::to_value(&slotted).unwrap();
+        assert_eq!(json["graphicSlots"]["g-over"], "overScreen");
+        assert!(serde_json::to_value(&layout)
+            .unwrap()
+            .get("graphicSlots")
+            .is_none());
+        assert_eq!(
+            serde_json::from_value::<ShortLayout>(json).unwrap(),
+            slotted
         );
 
         // A 1920x1080 screen in a 1080x1248 region: full height, a centred slice of the width.
@@ -797,6 +1071,27 @@ mod tests {
         let (_, (uv_x, _, _, _)) =
             screen_placement(1600, 900, full, region, 1.0, (0.5, 0.5), (-1.0, 0.0));
         assert!(uv_x.abs() < 1e-4);
+    }
+
+    #[test]
+    fn screen_placement_survives_a_window_rounded_past_the_crop() {
+        // Small frames (a storyboard's tiles) fill a region exactly, where rounding can make
+        // the window a hair wider than the crop.
+        let crop = (0.1, 0.0, 0.8, 1.0);
+        for height in 100..400 {
+            for width in [176, 177, 320, 1080] {
+                let (_, (uv_x, _, uv_w, _)) = screen_placement(
+                    1920,
+                    1080,
+                    crop,
+                    (0, 0, width, height),
+                    1.0,
+                    (0.5, 0.5),
+                    (0.0, 0.0),
+                );
+                assert!(uv_x >= 0.1 - 1e-4 && uv_w <= 0.8 + 1e-4);
+            }
+        }
     }
 
     #[test]

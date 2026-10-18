@@ -103,6 +103,55 @@ pub fn telemetry_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             }
         }
         flush_scroll(&mut scroll, &mut out);
+        match &stream.keys {
+            None => out.push_str("  keyboard: not recorded\n"),
+            Some(keys) => {
+                out.push_str("  keyboard (typed text is never recorded):\n");
+                let mut keyboard: Vec<(u64, String)> = Vec::new();
+                for run in &keys.typing {
+                    let (Some(a), Some(b)) = (
+                        clock_of.source_to_edited_us(run.start_us),
+                        clock_of.source_to_edited_us(run.end_us),
+                    ) else {
+                        continue;
+                    };
+                    if b < from || a >= to {
+                        continue;
+                    }
+                    let at = run
+                        .caret_start
+                        .map(|c| format!(" at {:.3},{:.3}", c.norm_x, c.norm_y))
+                        .unwrap_or_default();
+                    keyboard.push((
+                        a,
+                        format!(
+                            "  [{}-{}] typing, {} keys{at}\n",
+                            clock(a),
+                            clock(b),
+                            run.keys
+                        ),
+                    ));
+                }
+                for shortcut in &keys.shortcuts {
+                    let Some(at) = clock_of.source_to_edited_us(shortcut.t_us) else {
+                        continue;
+                    };
+                    if at < from || at >= to {
+                        continue;
+                    }
+                    let text = crate::telemetry::keys::badge_keys(shortcut, None).join(" + ");
+                    keyboard.push((at, format!("  [{}] shortcut {text}\n", clock(at))));
+                }
+                keyboard.sort_by_key(|(at, _)| *at);
+                for (_, line) in keyboard {
+                    if lines >= MAX_TELEMETRY_LINES {
+                        break;
+                    }
+                    out.push_str(&line);
+                    lines += 1;
+                }
+            }
+        }
     }
     let zooms: Vec<String> = document
         .zooms
@@ -402,7 +451,7 @@ fn tick_step(span_us: f64, width: u32) -> u64 {
 }
 
 /// Blends `colour` over the rectangle `[x0, x1) x [y0, y1)`, clipped to the image.
-fn fill(image: &mut RgbaImage, x0: i64, y0: i64, x1: i64, y1: i64, colour: Rgba<u8>) {
+pub(super) fn fill(image: &mut RgbaImage, x0: i64, y0: i64, x1: i64, y1: i64, colour: Rgba<u8>) {
     let (w, h) = (image.width() as i64, image.height() as i64);
     for y in y0.max(0)..y1.min(h) {
         for x in x0.max(0)..x1.min(w) {
@@ -418,7 +467,7 @@ fn blend(pixel: &mut Rgba<u8>, colour: Rgba<u8>, alpha: u8) {
     }
 }
 
-fn text_width(text: &str, px: f32) -> f32 {
+pub(super) fn text_width(text: &str, px: f32) -> f32 {
     let font = crate::captions::font();
     text.chars()
         .map(|ch| font.metrics(ch, px).advance_width)
@@ -426,7 +475,14 @@ fn text_width(text: &str, px: f32) -> f32 {
 }
 
 /// Draws `text` with its top at `y`.
-fn draw_text(image: &mut RgbaImage, x: i64, y: i64, text: &str, px: f32, colour: Rgba<u8>) {
+pub(super) fn draw_text(
+    image: &mut RgbaImage,
+    x: i64,
+    y: i64,
+    text: &str,
+    px: f32,
+    colour: Rgba<u8>,
+) {
     let font = crate::captions::font();
     let ascent = font
         .horizontal_line_metrics(px)
@@ -453,7 +509,7 @@ fn draw_text(image: &mut RgbaImage, x: i64, y: i64, text: &str, px: f32, colour:
     }
 }
 
-fn blit_bgra(image: &mut RgbaImage, frame: &crate::media::VideoFrame, x: i64, y: i64) {
+pub(super) fn blit_bgra(image: &mut RgbaImage, frame: &crate::media::VideoFrame, x: i64, y: i64) {
     for row in 0..frame.height as i64 {
         let start = row as usize * frame.stride as usize;
         let Some(line) = frame.data.get(start..start + frame.width as usize * 4) else {

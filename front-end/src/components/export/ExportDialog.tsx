@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { CheckCircle2, Download, Film, FolderOpen, X, XCircle } from "lucide-react";
 import { api } from "../../lib/ipc";
+import { seekPlayback } from "../../lib/playbackControl";
 import { FILE_MANAGER } from "../../lib/projectActions";
+import { CheckPanel } from "./CheckPanel";
+import { StoryboardPanel } from "./StoryboardPanel";
 import { Button, IconButton, Segmented, cn } from "../ui";
 import type { ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
 
@@ -277,6 +280,26 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 </div>,
               )}
             </fieldset>
+          </div>
+
+          <div className="px-6 pb-6">
+            <CheckPanel
+              disabled={exporting}
+              onShow={(timeUs) => {
+                seekPlayback(timeUs);
+                onClose();
+              }}
+            />
+          </div>
+
+          <div className="px-6 pb-6">
+            <StoryboardPanel
+              disabled={exporting}
+              onShow={(timeUs) => {
+                seekPlayback(timeUs);
+                onClose();
+              }}
+            />
           </div>
 
           {exportJob && exportJob.state !== "idle" && (

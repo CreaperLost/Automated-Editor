@@ -15,6 +15,10 @@ pub struct TranscriptGapConfig {
     pub refine_word_edges: bool,
     #[serde(default = "default_edge_threshold")]
     pub edge_threshold_db: f32,
+    /// Keep the sounds the transcriber tagged between words ("[keyboard clacking]",
+    /// "[laughs]"). Off by default: a gap without words is cut, typing and all.
+    #[serde(default)]
+    pub keep_sound_events: bool,
 }
 
 fn default_edge_threshold() -> f32 {
@@ -35,7 +39,8 @@ impl TranscriptGapConfig {
 }
 
 /// Source-time candidates only. Never infer a cut before the first word or after the
-/// last one: those regions may not have been transcribed. Audio events also stay intact.
+/// last one: those regions may not have been transcribed. Tagged sounds between words are
+/// cut with the gap unless `keep_sound_events`; then they stay intact.
 pub(crate) fn gap_ranges(
     transcript: &Transcript,
     covered: &[(u64, u64)],
@@ -45,6 +50,9 @@ pub(crate) fn gap_ranges(
     // outer word as a gap. Zero-length tokens are still protected.
     let mut spans: Vec<(u64, u64, bool)> = Vec::new();
     for word in &transcript.words {
+        if word.kind == WordKind::AudioEvent && !config.keep_sound_events {
+            continue;
+        }
         let anchor = word.kind == WordKind::Word
             && word.source_end_us > word.source_start_us
             && word.confidence.is_none_or(|confidence| confidence >= 0.5);
@@ -176,6 +184,67 @@ pub(crate) fn refine_quiet_edges(
     refined
 }
 
+/// Quiet this long inside a word is a pause the word swallowed, not a stop consonant.
+const SWALLOWED_PAUSE_US: u64 = 150_000;
+/// Sound a swallowed pause cuts off from a word is still the word when at least this share of
+/// the word's longest sound.
+const DETACHED_SHARE: f64 = 0.4;
+
+/// Parakeet times words in 80 ms steps and stretches each one over the pause next to it, so its
+/// words touch and the pauses hide inside them. This tightens such words to their own sound:
+/// quiet at either edge goes whatever its length. With `drop_detached`, so does sound a
+/// swallowed pause cuts off from the word (a click or breath in that pause) when it is much
+/// shorter than the word's own sound; only the mouth-noise pass asks for that, as it hears for
+/// itself whether such a sound is a voice (a misplaced short word would be). A wholly quiet
+/// word, an uncertain one and one without read audio stay as they are.
+pub(crate) fn tighten_loose_words(
+    transcript: &Transcript,
+    quiet: &[(u64, u64)],
+    covered: &[(u64, u64)],
+    drop_detached: bool,
+) -> Transcript {
+    let mut tightened = transcript.clone();
+    let quiet = merge_ranges(quiet.to_vec());
+    let covered = merge_ranges(covered.to_vec());
+    for word in &mut tightened.words {
+        if word.kind != WordKind::Word || word.confidence.is_some_and(|c| c < 0.5) {
+            continue;
+        }
+        let (start, end) = (word.source_start_us, word.source_end_us);
+        let at = covered.partition_point(|&(_, b)| b <= start);
+        if end <= start
+            || !covered
+                .get(at)
+                .is_some_and(|&(a, b)| a <= start && b >= end)
+        {
+            continue;
+        }
+        let first = quiet.partition_point(|&(_, b)| b <= start);
+        let gaps: Vec<(u64, u64)> = quiet[first..]
+            .iter()
+            .take_while(|&&(a, _)| a < end)
+            .map(|&(a, b)| (a.max(start), b.min(end)))
+            .filter(|&(a, b)| {
+                a == start || b == end || (drop_detached && b - a >= SWALLOWED_PAUSE_US)
+            })
+            .collect();
+        let pieces = subtract_ranges(&[(start, end)], &gaps);
+        let Some(longest) = pieces.iter().map(|&(a, b)| b - a).max() else {
+            continue;
+        };
+        let kept: Vec<&(u64, u64)> = pieces
+            .iter()
+            .filter(|&&(a, b)| (b - a) as f64 >= longest as f64 * DETACHED_SHARE)
+            .collect();
+        let (a, b) = (kept[0].0, kept[kept.len() - 1].1);
+        if b - a >= 40_000 {
+            word.source_start_us = a;
+            word.source_end_us = b;
+        }
+    }
+    tightened
+}
+
 pub(crate) fn merge_ranges(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     ranges.retain(|&(a, b)| b > a);
     ranges.sort_unstable();
@@ -229,6 +298,7 @@ mod tests {
             padding_ms: 120,
             refine_word_edges: false,
             edge_threshold_db: -42.0,
+            keep_sound_events: false,
         }
     }
     #[test]
@@ -250,6 +320,28 @@ mod tests {
             vec![(1_000_000, 2_000_000)]
         );
     }
+    #[test]
+    fn tagged_sounds_between_words_are_cut_unless_kept() {
+        let mut typing = test_word("[keyboard clacking]", 1100, 9000);
+        typing.kind = WordKind::AudioEvent;
+        let t = transcript(vec![
+            test_word("hello", 200, 1000),
+            typing,
+            test_word("world", 9500, 10_000),
+        ]);
+        let covered = [(0, 11_000_000)];
+        assert_eq!(
+            gap_ranges(&t, &covered, &config()),
+            vec![(1_120_000, 9_380_000)],
+            "the typing goes with the gap"
+        );
+        let keep = TranscriptGapConfig {
+            keep_sound_events: true,
+            ..config()
+        };
+        assert!(gap_ranges(&t, &covered, &keep).is_empty());
+    }
+
     #[test]
     fn uncertain_anchors_are_kept() {
         let mut t = transcript(vec![
@@ -334,7 +426,62 @@ mod tests {
         assert_eq!(t.words, refined.words);
     }
     #[test]
-    fn missing_pcm_and_audio_events_are_kept() {
+    fn loose_words_give_back_the_pauses_they_swallowed() {
+        // "these" sounds 0.0-0.3 s, then a pause with a click at 0.5-0.56 s, all timed as one
+        // word up to 0.8 s where "six" starts; "six" sounds 0.9-1.2 s.
+        let t = transcript(vec![
+            test_word("these", 0, 800),
+            test_word("six", 800, 1200),
+        ]);
+        let quiet = [(300_000, 500_000), (560_000, 900_000)];
+        let spans = |t: &Transcript| {
+            t.words
+                .iter()
+                .map(|w| (w.source_start_us, w.source_end_us))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            spans(&tighten_loose_words(&t, &quiet, &[(0, 2_000_000)], false)),
+            vec![(0, 560_000), (900_000, 1_200_000)],
+            "the quiet after the click goes; the click may be a misplaced word"
+        );
+        let tight = tighten_loose_words(&t, &quiet, &[(0, 2_000_000)], true);
+        assert_eq!(
+            spans(&tight),
+            vec![(0, 300_000), (900_000, 1_200_000)],
+            "for the noise pass, the click cut off by the pause goes with the pause"
+        );
+        // The gaps pass: the pause after the click is cut (muting the click first cuts it all).
+        let gaps = gap_ranges(
+            &tighten_loose_words(&t, &quiet, &[(0, 2_000_000)], false),
+            &[(0, 2_000_000)],
+            &TranscriptGapConfig {
+                min_duration_ms: 150,
+                padding_ms: 40,
+                ..config()
+            },
+        );
+        assert_eq!(gaps, vec![(600_000, 860_000)]);
+        assert!(tight.words[0].source_end_us == 300_000);
+        // A stop consonant's short closure stays inside the word, and so does a quiet word.
+        let t = transcript(vec![
+            test_word("compact", 0, 600),
+            test_word("hm", 1000, 1200),
+        ]);
+        let quiet = [(250_000, 330_000), (1_000_000, 1_200_000)];
+        let tight = tighten_loose_words(&t, &quiet, &[(0, 2_000_000)], true);
+        assert_eq!(
+            (tight.words[0].source_start_us, tight.words[0].source_end_us),
+            (0, 600_000)
+        );
+        assert_eq!(
+            (tight.words[1].source_start_us, tight.words[1].source_end_us),
+            (1_000_000, 1_200_000)
+        );
+    }
+
+    #[test]
+    fn missing_pcm_is_kept_and_audio_events_only_when_asked() {
         let mut t = transcript(vec![
             test_word("hello", 200, 1000),
             test_word("world", 2000, 2800),
@@ -344,7 +491,15 @@ mod tests {
         let mut event = test_word("(laughter)", 1400, 1600);
         event.kind = WordKind::AudioEvent;
         t.words.insert(1, event);
-        assert!(gap_ranges(&t, &[(0, 4_000_000)], &config()).is_empty());
+        let keep = TranscriptGapConfig {
+            keep_sound_events: true,
+            ..config()
+        };
+        assert!(gap_ranges(&t, &[(0, 4_000_000)], &keep).is_empty());
+        assert_eq!(
+            gap_ranges(&t, &[(0, 4_000_000)], &config()),
+            vec![(1_120_000, 1_880_000)]
+        );
     }
     #[test]
     fn overlapping_and_short_words_stay_protected() {

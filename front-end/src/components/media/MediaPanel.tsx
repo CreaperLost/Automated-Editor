@@ -1,9 +1,22 @@
 import React, { useState } from "react";
-import { AlertTriangle, Clapperboard, Film, FolderInput, Image as ImageIcon, Music, Plus, Search, Trash2, Upload } from "lucide-react";
-import { Badge, Button, IconButton, Notice, Segmented } from "../ui";
+import {
+  AlertTriangle,
+  Clapperboard,
+  Film,
+  FolderInput,
+  Image as ImageIcon,
+  Music,
+  Plus,
+  Search,
+  Sparkles,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import { Badge, Button, IconButton, Notice, Segmented, Tabs } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import type { Asset } from "../../lib/types";
+import { GraphicsPanel } from "../graphics/GraphicsPanel";
 
 /** dataTransfer type for dragging a media bin item onto the timeline. */
 export const MEDIA_DRAG_TYPE = "application/x-aeroedits-media";
@@ -16,16 +29,38 @@ const soundCount = (asset: Asset) => asset.streams.filter((s) => s.kind === "sou
 
 function formatLength(asset: Asset): string {
   if (asset.kind === "image") return "still image";
+  if (asset.kind === "graphic") return "graphic";
   const seconds = asset.durationUs / 1e6;
   const minutes = Math.floor(seconds / 60);
   return minutes > 0 ? `${minutes}:${String(Math.floor(seconds % 60)).padStart(2, "0")}` : `${seconds.toFixed(1)}s`;
 }
 
-const KIND_ICON = { recording: Clapperboard, video: Film, image: ImageIcon, audio: Music } as const;
+const KIND_ICON = { recording: Clapperboard, video: Film, image: ImageIcon, audio: Music, graphic: Sparkles } as const;
+
+/// The Media panel: imported media, and a Graphics page for motion graphics.
+export const MediaPanel: React.FC = () => {
+  const [page, setPage] = useState<"media" | "graphics">("media");
+  return (
+    <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label select-none">
+      <Tabs<"media" | "graphics">
+        label="Media pages"
+        size="sm"
+        className="shrink-0 h-8 px-1 border-b border-studio-800"
+        value={page}
+        onChange={setPage}
+        items={[
+          { value: "media", label: "Media", icon: Film },
+          { value: "graphics", label: "Graphics", icon: Sparkles },
+        ]}
+      />
+      {page === "media" ? <MediaList /> : <GraphicsPanel />}
+    </div>
+  );
+};
 
 /// The project's media: recordings, videos, images and audio. Drag one onto a track (or add it
 /// at the playhead) to put its picture and sound on the timeline as linked clips.
-export const MediaPanel: React.FC = () => {
+const MediaList: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const [busy, setBusy] = useState<string | null>(null);
@@ -101,7 +136,7 @@ export const MediaPanel: React.FC = () => {
   );
 
   return (
-    <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label select-none">
+    <div className="flex-1 flex flex-col min-h-0">
       <div className="shrink-0 space-y-2 p-3 border-b border-studio-800">
         <div className="flex items-center gap-2">
           <Button
