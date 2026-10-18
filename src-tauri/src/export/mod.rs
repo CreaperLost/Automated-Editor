@@ -895,9 +895,12 @@ impl SceneEvaluator {
             layers.push(layer);
         }
         if let (Some((x, y, w, h)), Some(webcam)) = (rects.camera, webcam) {
+            let (focus, offset) = shown.webcam.map_or((None, (0.0, 0.0)), |clip| {
+                crate::shorts::camera_framing(&self.root, short, clip, layout.webcam_mirror)
+            });
             let mut layer = Layer::placed(webcam, x, y, w, h)
                 .with_role(LayerRole::Webcam)
-                .cover_uv(w, h);
+                .focus_uv(focus, w, h, offset);
             if layout.webcam_mirror {
                 layer = layer.mirrored();
             }
@@ -2723,6 +2726,16 @@ mod tests {
 
     /// The screen (grey ramp) and mic recording, plus a solid red webcam when `webcam` is set.
     fn project_with_tracks(dir: &Path, webcam: bool) -> PathBuf {
+        let red = || {
+            (0..20)
+                .map(|_| VideoFrame::solid(64, 64, 0, 0, 255, 0).unwrap())
+                .collect()
+        };
+        project_with_camera(dir, webcam.then(red))
+    }
+
+    /// A 2 s recording of a screen, a microphone and, given its pictures (10 fps), a camera.
+    fn project_with_camera(dir: &Path, webcam: Option<Vec<VideoFrame>>) -> PathBuf {
         use crate::fixtures::{generate_pcm16_wav, TestProject};
         use crate::project::manifest::{TrackDescriptor, TrackType};
         use crate::project::JournalRecord;
@@ -2742,13 +2755,10 @@ mod tests {
             "media/screen/000001.mp4",
             10,
         )];
-        if webcam {
-            let red: Vec<VideoFrame> = (0..20)
-                .map(|_| VideoFrame::solid(64, 64, 0, 0, 255, 0).unwrap())
-                .collect();
+        if let Some(pictures) = webcam {
             let path = root.join("media/webcam/000001.mp4");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            crate::media::ffmpeg::encode_bgra_mp4(&path, &red, 10).unwrap();
+            crate::media::ffmpeg::encode_bgra_mp4(&path, &pictures, 10).unwrap();
             tracks.push((
                 "webcam",
                 TrackType::Webcam,
@@ -4333,6 +4343,178 @@ mod tests {
         let loudest = *differences.iter().max().unwrap();
         assert!(loudest > 300, "{loudest}");
         assert!(loudest < (0.13 * 32_767.0) as i32, "{loudest}");
+    }
+
+    /// A short of a recording whose 16:9 camera (160x90, red) has the speaker right of centre
+    /// (blue, columns 88-120, a face track saying so), with the camera taking 70% of the frame.
+    fn off_centre_face_short(dir: &Path) -> (PathBuf, EditDocument) {
+        use crate::face::{FaceBox, FaceSample, FaceTrack};
+        let frames: Vec<VideoFrame> = (0..20)
+            .map(|_| {
+                let mut frame = VideoFrame::solid(160, 90, 0, 0, 255, 0).unwrap();
+                for y in 0..90u32 {
+                    for x in 88..120u32 {
+                        let i = (y * frame.stride + x * 4) as usize;
+                        frame.data[i..i + 3].copy_from_slice(&[255, 0, 0]);
+                    }
+                }
+                frame
+            })
+            .collect();
+        let (root, reader) = opened(&project_with_camera(dir, Some(frames)));
+        let base = reader.history().current.clone();
+        let (asset, stream) = crate::face::camera_streams(&base).remove(0);
+        let face = FaceBox {
+            x: 0.55,
+            y: 0.2,
+            w: 0.2,
+            h: 0.5,
+            eye_y: 0.4,
+            score: 0.9,
+        };
+        crate::face::save_track(
+            &root,
+            &FaceTrack {
+                version: crate::face::TRACK_VERSION,
+                asset,
+                stream,
+                source: String::new(),
+                model: "test".into(),
+                sample_us: crate::face::SAMPLE_US,
+                samples: (0..8)
+                    .map(|i| FaceSample {
+                        t_us: i * crate::face::SAMPLE_US,
+                        face: Some(face),
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap();
+        let mut document = base.clone();
+        document.sequence =
+            crate::shorts::slice_sequence(&base.sequence, &base.assets, 300_000, 1_200_000);
+        document.layout.aspect_ratio = "9:16".into();
+        document.short_layout = Some(crate::shorts::ShortLayout {
+            camera_pct: 70.0,
+            ..Default::default()
+        });
+        (root, document)
+    }
+
+    /// The document with its camera clips framed by hand, in the middle.
+    fn framed_by_hand(document: &EditDocument) -> EditDocument {
+        let mut manual = document.clone();
+        let cameras: Vec<String> = document
+            .sequence
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .filter(|c| c.stream == "webcam")
+            .map(|c| c.id.clone())
+            .collect();
+        assert!(!cameras.is_empty());
+        let layout = manual.short_layout.as_mut().unwrap();
+        for id in cameras {
+            layout.camera_clips.insert(id, Default::default());
+        }
+        manual
+    }
+
+    fn camera_uv(scene: &Scene) -> (f32, f32, f32, f32) {
+        let layer = scene
+            .layers
+            .iter()
+            .find(|l| l.role == crate::render::LayerRole::Webcam)
+            .expect("a camera layer");
+        // The camera is mirrored by default: the window is the same, read right to left.
+        if layer.uv_w < 0.0 {
+            (layer.uv_x + layer.uv_w, layer.uv_y, -layer.uv_w, layer.uv_h)
+        } else {
+            (layer.uv_x, layer.uv_y, layer.uv_w, layer.uv_h)
+        }
+    }
+
+    /// The preview (smaller, decoding the camera at half size) and export cut a short's camera
+    /// around the face identically; manual framing keeps the centre crop.
+    #[test]
+    fn a_shorts_camera_is_framed_on_an_off_centre_face_in_preview_and_export_alike() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, document) = off_centre_face_short(dir.path());
+        let preview = scenes(&root, document.clone(), 360, 640).with_decode_limit(DecodeLimit {
+            max_width: 80,
+            max_height: 45,
+            max_rate: 0,
+            interactive: true,
+            yuv: false,
+        });
+        let export = scenes(&root, document.clone(), 1080, 1920);
+        let at = 400_000;
+        let (px, py, pw, ph) = camera_uv(&preview.scene_at(at).unwrap());
+        let (ex, ey, ew, eh) = camera_uv(&export.scene_at(at).unwrap());
+        for (a, b) in [(px, ex), (py, ey), (pw, ew), (ph, eh)] {
+            assert!((a - b).abs() < 1e-3, "preview {a} vs export {b}");
+        }
+        // The camera spot is 1080x1344: a window 0.45 of the camera's width, centred on the
+        // face at 0.65 rather than on the middle.
+        assert!((ew - 0.45).abs() < 0.01, "{ew}");
+        assert!((ex + ew / 2.0 - 0.65).abs() < 1e-3, "{ex}");
+        // That clip framed by hand, in the middle: the old centre crop.
+        let manual = framed_by_hand(&document);
+        let (mx, ..) = camera_uv(&scenes(&root, manual, 1080, 1920).scene_at(at).unwrap());
+        assert!((mx - (1.0 - ew) / 2.0).abs() < 1e-3, "{mx}");
+        crate::media::release_decoders();
+    }
+
+    /// Footage without a camera (gaming, say) has no face track to find and nothing changes.
+    #[test]
+    fn a_recording_without_a_camera_has_no_face_track() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, reader) = opened(&project_with_tracks(dir.path(), false));
+        let document = reader.history().current.clone();
+        assert!(crate::face::camera_streams(&document).is_empty());
+        assert!(crate::face::status(&root, &document).is_empty());
+        crate::face::ensure(&root, &document, true);
+        assert!(!root.join(crate::face::FACES_DIR).exists());
+    }
+
+    /// The same, drawn: the middle of the camera band is the face (blue) in preview and
+    /// export, where the centre crop shows the red beside it.
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter and FFmpeg; run with --ignored on a machine that has them"
+    )]
+    fn gpu_a_shorts_camera_shows_the_off_centre_face_in_preview_and_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, document) = off_centre_face_short(dir.path());
+        let compositor = Compositor::new().unwrap();
+        let middle = |document: EditDocument, w: u32, h: u32, limit: DecodeLimit| {
+            let scene = scenes(&root, document, w, h)
+                .with_decode_limit(limit)
+                .scene_at(400_000)
+                .unwrap();
+            let frame = compositor.composite(&scene).unwrap();
+            // The middle of the camera band (the top 70%).
+            let i = ((h * 35 / 100) * frame.stride + (w / 2) * 4) as usize;
+            (frame.data[i], frame.data[i + 1], frame.data[i + 2])
+        };
+        let small = DecodeLimit {
+            max_width: 80,
+            max_height: 45,
+            max_rate: 0,
+            interactive: true,
+            yuv: false,
+        };
+        for (b, g, r) in [
+            middle(document.clone(), 360, 640, small),
+            middle(document.clone(), 1080, 1920, DecodeLimit::NONE),
+        ] {
+            assert!(b > 180 && r < 80 && g < 80, "the face: b{b} g{g} r{r}");
+        }
+        let manual = framed_by_hand(&document);
+        let (b, _, r) = middle(manual, 1080, 1920, DecodeLimit::NONE);
+        assert!(r > 180 && b < 80, "the centre crop misses it: b{b} r{r}");
+        crate::media::release_decoders();
     }
 
     #[test]

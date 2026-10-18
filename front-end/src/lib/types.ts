@@ -1462,6 +1462,10 @@ export interface ShortLayout {
   cameraPosition: "top" | "bottom";
   /** Share of the frame height the camera takes, 20 to 70. */
   cameraPct: number;
+  /** Camera clips (by clip id) framed by hand, each placed -1 to 1 each way from the centre.
+   *  Every other camera clip is lined up with the face as it starts (zooming in a little when
+   *  the face is near an edge). */
+  cameraClips: Record<string, { offsetX: number; offsetY: number }>;
   /** Zoom on the screen part, 0.3 to 3: 1 fills its part, below 1 shows all of it smaller. */
   screenZoom: number;
   followZooms: boolean;
@@ -1501,6 +1505,19 @@ export interface ShortScene {
   /** Where it plays on the short's own timeline; absent when cut. Filled in by the backend. */
   shownStartUs?: number;
   shownEndUs?: number;
+}
+
+/** Where a camera stream's face track stands; shorts frame their camera on it. */
+export interface FaceTrackStatus {
+  asset: string;
+  stream: string;
+  assetName: string;
+  state: "ready" | "detecting" | "missing" | "failed" | "unavailable";
+  /** 0 to 1 while detecting. */
+  progress: number;
+  /** The share of the camera where a face was found, once ready. */
+  faceShare?: number;
+  error?: string;
 }
 
 /** A vertical clip of the video, anchored in source time at its first and last word. */

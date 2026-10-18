@@ -7,6 +7,7 @@ import { useProjectStore } from "./projectStore";
 export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   cameraPosition: "top",
   cameraPct: 35,
+  cameraClips: {},
   screenZoom: 1,
   followZooms: true,
   screenPanX: 0,

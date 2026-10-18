@@ -30,6 +30,18 @@ pub enum CaptionSpot {
     Camera,
 }
 
+/// A camera clip framed by hand instead of centred on the face: where its crop sits, -1 to 1
+/// each way from the centre (see `render::focus_uv`).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClipFraming {
+    pub offset_x: f32,
+    pub offset_y: f32,
+}
+
+/// More clips framed by hand than any short has.
+pub const MAX_FRAMED_CLIPS: usize = 500;
+
 pub const MIN_CAMERA_PCT: f32 = 20.0;
 pub const MAX_CAMERA_PCT: f32 = 70.0;
 pub const MAX_SCREEN_ZOOM: f32 = 3.0;
@@ -44,6 +56,9 @@ pub struct ShortLayout {
     pub camera_position: CameraPosition,
     /// Share of the frame height the camera takes.
     pub camera_pct: f32,
+    /// Camera clips (by clip id) framed by hand. Every other camera clip is lined up with the
+    /// face as it starts, zooming in a little when the face is near an edge.
+    pub camera_clips: std::collections::BTreeMap<String, ClipFraming>,
     /// Extra zoom on the screen part, on top of the project's zooms. 1 shows as much as fits.
     pub screen_zoom: f32,
     /// Move the screen view to where the project's zooms point.
@@ -127,6 +142,7 @@ impl Default for ShortLayout {
         Self {
             camera_position: CameraPosition::Top,
             camera_pct: 35.0,
+            camera_clips: Default::default(),
             screen_zoom: 1.0,
             follow_zooms: true,
             screen_pan_x: 0.0,
@@ -173,6 +189,19 @@ impl ShortLayout {
         if !(-1.0..=1.0).contains(&self.screen_pan_x) || !(-1.0..=1.0).contains(&self.screen_pan_y)
         {
             return Err("The screen pans -1 to 1 each way".into());
+        }
+        if self.camera_clips.len() > MAX_FRAMED_CLIPS {
+            return Err("Too many camera clips framed by hand".into());
+        }
+        for (clip, framing) in &self.camera_clips {
+            if clip.is_empty() || clip.len() > 128 {
+                return Err("Unknown camera clip".into());
+            }
+            if !(-1.0..=1.0).contains(&framing.offset_x)
+                || !(-1.0..=1.0).contains(&framing.offset_y)
+            {
+                return Err("The camera framing moves -1 to 1 each way".into());
+            }
         }
         if self.caption_max_words > crate::captions::MAX_WORDS_RANGE.1 {
             return Err("Too many words per caption".into());
@@ -273,6 +302,31 @@ pub fn screen_window(
     (x, y, uv_w, uv_h)
 }
 
+/// How a short frames camera clip `clip`, as `render::focus_uv` takes it: the face to centre
+/// on and an offset. A clip framed by hand has no face and its own offset (flipped for a
+/// mirrored camera, so it moves the picture the way it looks). Every other clip is lined up
+/// once with the typical face over the part of the camera it plays, and holds for the whole
+/// clip; no face track, or no face found, keeps the centre crop. For the camera part of the
+/// split and for any scene that shows the camera alone.
+pub fn camera_framing(
+    root: &std::path::Path,
+    short: &ShortLayout,
+    clip: &crate::sequence::Clip,
+    mirrored: bool,
+) -> (Option<crate::face::FocusPoint>, (f32, f32)) {
+    if let Some(framing) = short.camera_clips.get(&clip.id) {
+        let x = if mirrored {
+            -framing.offset_x
+        } else {
+            framing.offset_x
+        };
+        return (None, (x, framing.offset_y));
+    }
+    let focus = crate::face::cached_track(root, &clip.asset, &clip.stream)
+        .and_then(|track| crate::face::clip_focus(&track, clip.in_us, clip.out_us()));
+    (focus, (0.0, 0.0))
+}
+
 /// The short's background as the project layout it is drawn from: the video's own, or the
 /// short's choice of colour, gradient, built-in or the project's image.
 pub fn background_layout(
@@ -318,7 +372,8 @@ pub fn screen_placement(
             // Bigger than the region: a window of it, panned, kept inside the crop.
             let window = rl as f32 / (frame.max(1) as f32 * scale);
             let middle = center + pan * cl / 2.0;
-            // Float rounding can leave the window a hair wider than the crop.
+            // `max`: when the window is the crop's size, rounding can put the end a hair
+            // before the start, and `clamp` panics on that.
             let start = (middle - window / 2.0).clamp(c0, (c0 + cl - window).max(c0));
             (r0, rl, start, window)
         } else {
@@ -939,6 +994,17 @@ mod tests {
         }
         .validate()
         .is_err());
+        let mut by_hand = ShortLayout::default();
+        by_hand.camera_clips.insert(
+            "c1".into(),
+            ClipFraming {
+                offset_x: -1.5,
+                offset_y: 0.0,
+            },
+        );
+        assert!(by_hand.validate().is_err());
+        by_hand.camera_clips.get_mut("c1").unwrap().offset_x = -0.5;
+        by_hand.validate().unwrap();
         assert!(ShortLayout {
             screen_zoom: 4.0,
             ..ShortLayout::default()

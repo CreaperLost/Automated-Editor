@@ -28,6 +28,7 @@ import {
   useShortsStore,
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { CameraFramingControl } from "./CameraFraming";
 import { Button, Switch } from "../ui";
 
 /** How long a scene added at the playhead lasts. */
@@ -132,6 +133,7 @@ export const ShortLookPanel: React.FC = () => {
               </div>
               <input type="range" aria-label="Camera height" min={20} max={70} step={1} value={layout.cameraPct} onChange={(e) => changeLayout({ cameraPct: Number(e.target.value) })} className="w-full" />
             </label>
+            <CameraFramingControl project={project} layout={layout} onChange={changeLayout} segmented={segmented} />
           </InspectorSection>
 
           <InspectorSection id="short-scenes" title="Scenes" icon={Clapperboard}>

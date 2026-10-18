@@ -20,7 +20,8 @@ pub static ACTIONS: [ToolDef; 33] = [
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
             they are transcribed, mouth noises muted, zooms, webcam focus, captions, chapters, \
-            shorts, and anything running. Call it first and after a cleanup.",
+            shorts, whether each camera has a face track for framing shorts, and anything \
+            running. Call it first and after a cleanup.",
         schema: schema::<NoArgs>,
         read_only: true,
         run: status,
@@ -633,6 +634,37 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             document.chapters.len(),
             document.shorts.len(),
         ));
+            let faces = crate::face::status(reader.root(), document);
+            if !faces.is_empty() {
+                let each: Vec<String> = faces
+                    .iter()
+                    .map(|f| {
+                        let key = format!("{}.{}", f.asset, f.stream);
+                        match (f.state.as_str(), f.face_share) {
+                            ("ready", Some(share)) => format!(
+                                "{key} has a face track (a face in {:.0}% of it)",
+                                share * 100.0
+                            ),
+                            ("detecting", _) => {
+                                format!("{key} is being looked at ({:.0}%)", f.progress * 100.0)
+                            }
+                            ("failed", _) => format!(
+                                "{key} has no face track: {}",
+                                f.error.as_deref().unwrap_or("detection failed")
+                            ),
+                            ("unavailable", _) => {
+                                format!("{key} has no face track (not in this build)")
+                            }
+                            _ => format!("{key} has no face track yet"),
+                        }
+                    })
+                    .collect();
+                lines.push(format!(
+                    "Camera framing in shorts (each camera clip centred on the face unless the \
+                     short's layout lists it in cameraClips): {}.",
+                    each.join("; ")
+                ));
+            }
             Ok(lines)
         })?;
     if let Ok(generation) = commands::project_zoom_suggestions_impl(ctx.state, open.handle, None) {
