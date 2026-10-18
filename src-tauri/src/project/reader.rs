@@ -937,9 +937,10 @@ impl ProjectReader {
         key: &str,
         ranges: &[crate::sequence::SourceRange],
         unmute: bool,
+        short: Option<&str>,
     ) -> Result<OpenedProject, String> {
         self.history
-            .update_noise_mutes(expected_revision, key, ranges, unmute, &self.root)?;
+            .update_noise_mutes(expected_revision, key, ranges, unmute, short, &self.root)?;
         Ok(self.done())
     }
 
@@ -1044,6 +1045,7 @@ impl ProjectReader {
         view.sequence = timeline.sequence.clone();
         // A take short's captions read the take.
         view.captions = timeline.captions.clone();
+        view.noise_mutes = timeline.noise_mutes.clone();
         view.duration_us = timeline.duration_us();
         view.zooms = timeline.zooms_with_ranges();
         let mut focus = timeline.webcam_focus.clone();

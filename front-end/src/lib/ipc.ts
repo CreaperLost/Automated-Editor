@@ -314,13 +314,15 @@ export const api = {
    * Clicks, smacks, knocks and breaths in sound `key`, found in its audio; `sensitivity` 0 to 1,
    * `paddingMs` the room muted either side of each (never into speech).
    */
-  detectMouthNoises: (projectHandle: string, key: string, sensitivity: number, paddingMs: number) =>
-    invokeTauri<NoiseScan>("detect_mouth_noises", { projectHandle, key, config: { sensitivity, paddingMs } }),
+  detectMouthNoises: (projectHandle: string, key: string, sensitivity: number, paddingMs: number, shortId: string | null = editTarget) =>
+    invokeTauri<NoiseScan>("detect_mouth_noises", { projectHandle, key, config: { sensitivity, paddingMs }, shortId }),
   /** The last scan of sound `key` (kept with the project) and its muted moments, without listening again. */
-  noiseReview: (projectHandle: string, key: string) => invokeTauri<NoiseScan>("noise_review", { projectHandle, key }),
-  /** Mutes (or unmutes) moments of sound `key`'s own time: one undoable edit. */
-  projectNoiseMutes: (projectHandle: string, expectedRevision: number, key: string, ranges: SourceSpan[], unmute = false) =>
-    invokeTauri<OpenedProject>("project_noise_mutes", { projectHandle, expectedRevision, key, ranges, unmute }),
+  noiseReview: (projectHandle: string, key: string, shortId: string | null = editTarget) =>
+    invokeTauri<NoiseScan>("noise_review", { projectHandle, key, shortId }),
+  /** Mutes (or unmutes) moments of sound `key`'s own time: one undoable edit. In a short (the
+   *  edit target, or `shortId`) the mutes are the short's own. */
+  projectNoiseMutes: (projectHandle: string, expectedRevision: number, key: string, ranges: SourceSpan[], unmute = false, shortId: string | null = editTarget) =>
+    invokeTauri<OpenedProject>("project_noise_mutes", { projectHandle, expectedRevision, key, ranges, unmute, shortId }),
   applyJumpCuts: (projectHandle: string, expectedRevision: number, ranges: {startUs: number; endUs: number}[], transcriptDependencies: TranscriptDependency[], shortId: string | null = editTarget) =>
     invokeTauri<OpenedProject>("apply_jump_cuts", { projectHandle, expectedRevision, ranges, transcriptDependencies, shortId }),
   transcriptSettingsGet: () => invokeTauri<TranscriptSettingsView>("transcript_settings_get"),

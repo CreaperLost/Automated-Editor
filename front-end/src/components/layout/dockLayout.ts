@@ -47,7 +47,6 @@ const SHORTS_PANELS: readonly DockPanelId[] = [
   "transcript",
   "jumpCuts",
   "noises",
-  "inspector",
   "media",
   "agent",
 ];
@@ -98,15 +97,15 @@ function addZoom(api: DockviewApi) {
 }
 
 /// Shorts: the list on the left with the short's transcript behind it, the preview, the look
-/// on the right (a take's cleanup passes, the inspector, media and the agent behind it), the
-/// short's timeline below.
+/// on the right (the short's cleanup passes, media and the agent behind it), the short's
+/// timeline below. Only settings of shorts: the video's own (the Inspector) stay in Edit.
 function applyShortsLayout(api: DockviewApi) {
   api.clear();
   api.addPanel(panel("preview"));
   api.addPanel({ ...panel("shorts"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 260 });
   api.addPanel({ ...panel("transcript"), position: { referencePanel: "shorts", direction: "within" }, inactive: true });
   api.addPanel({ ...panel("shortLook"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
-  for (const id of ["jumpCuts", "noises", "inspector", "media", "agent"] as const) {
+  for (const id of ["jumpCuts", "noises", "media", "agent"] as const) {
     api.addPanel({ ...panel(id), position: { referencePanel: "shortLook", direction: "within" }, inactive: true });
   }
   api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });

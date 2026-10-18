@@ -202,7 +202,9 @@ export const ShortsListPanel: React.FC = () => {
               <div className="mt-1 pl-6 text-meta tabular-nums text-studio-500">
                 {s.take
                   ? `From a take · ${((s.lengthUs ?? 0) / 1e6).toFixed(1)}s`
-                  : ok
+                  : s.edit
+                    ? `Own timeline · ${((s.lengthUs ?? 0) / 1e6).toFixed(1)}s`
+                    : ok
                     ? `${formatTime(s.editedStartUs!)} · ${((s.editedEndUs! - s.editedStartUs!) / 1e6).toFixed(1)}s`
                     : "Part of it was cut; adjust it on its timeline"}
               </div>

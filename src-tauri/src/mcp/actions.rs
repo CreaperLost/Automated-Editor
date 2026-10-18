@@ -1224,6 +1224,10 @@ pub struct NoiseArgs {
     /// false: only report what was found. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// A short (id or title): its own timeline and muted noises. Default: the take short the
+    /// sound is the voice of, else the video.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 fn mouth_noises(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -1242,6 +1246,7 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
             sensitivity: args.sensitivity.unwrap_or(0.5),
             padding_ms: args.padding_ms.unwrap_or(20),
         },
+        args.short.clone(),
     )?;
     // Places the scan found; muted moments it does not list (kind None) are not new finds.
     let places: Vec<_> = scan.noises.iter().filter(|n| n.kind.is_some()).collect();
@@ -1289,6 +1294,7 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
             key,
             ranges,
             false,
+            args.short.clone(),
         )?;
         lines.push(format!(
             "Muted {}{}.",

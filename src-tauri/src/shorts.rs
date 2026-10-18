@@ -449,11 +449,39 @@ pub struct ShortTake {
     pub voice: String,
 }
 
-/// A short's own timeline, once it is edited on its own, in the short's time.
+/// A short's own timeline, in the short's time, and its own muted mouth noises.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortEdit {
     pub sequence: Sequence,
+    /// Muted moments by sound, in that sound's own time, as the project keeps them for the
+    /// video; they play in this short only.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub noise_mutes: crate::project::revision::NoiseMutes,
+}
+
+/// Gives every short that has none a timeline of its own: its stretch of the video as edited
+/// now, with the video's muted mouth noises. From then on its cuts and mutes are its own and
+/// the video's later edits leave it alone. A short whose ends were cut stays without one.
+pub fn give_own_timelines(document: &mut EditDocument) {
+    let mut owned = Vec::new();
+    for (i, short) in document.shorts.iter().enumerate() {
+        if short.edit.is_some() {
+            continue;
+        }
+        if let Some((start, end)) = edited_range_in(short, document) {
+            owned.push((
+                i,
+                ShortEdit {
+                    sequence: slice_sequence(&document.sequence, &document.assets, start, end),
+                    noise_mutes: document.noise_mutes.clone(),
+                },
+            ));
+        }
+    }
+    for (i, edit) in owned {
+        document.shorts[i].edit = Some(edit);
+    }
 }
 
 /// The sequence's clips within timeline `[start, end)`, moved to start at 0 and cut to fit.
@@ -518,7 +546,10 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
         timeline.captions.track_id = Some(take.voice.clone());
     }
     timeline.sequence = match &short.edit {
-        Some(own) => own.sequence.clone(),
+        Some(own) => {
+            timeline.noise_mutes = own.noise_mutes.clone();
+            own.sequence.clone()
+        }
         None => {
             let (start, end) = edited_range_in(short, base)
                 .ok_or("Part of this short was cut from the video; adjust it first")?;
@@ -1101,6 +1132,9 @@ mod tests {
         history
             .set_shorts(0, vec![short(10 * S, 30 * S)], dir.path())
             .unwrap();
+        // Its own timeline from the start: its stretch of the video.
+        let made = history.current.shorts[0].edit.clone().unwrap();
+        assert_eq!(made.sequence.duration_us(), 20 * S);
         history
             .edit_short_sequence(
                 1,
@@ -1122,10 +1156,59 @@ mod tests {
         history.ripple_cuts(2, &[(0, 20 * S)], dir.path()).unwrap();
         let after = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
         assert_eq!(after.duration_us(), 18 * S);
-        history.resync_short(3, "s1", dir.path()).unwrap();
-        assert!(history.current.shorts[0].edit.is_none());
-        // Following the video now, whose first 20 s were cut: the short's start is gone.
-        assert!(short_timeline(&history.current, &history.current.shorts[0]).is_err());
+        // Taking the video's cuts again: its first 20 s were cut, so the short's start is gone
+        // and it keeps its own timeline.
+        assert!(history.resync_short(3, "s1", dir.path()).is_err());
+        assert_eq!(after.duration_us(), 18 * S);
+        // A cut that leaves its ends: it takes the video's timeline as it is now.
+        history.undo(3, dir.path()).unwrap();
+        history.ripple_cuts(4, &[(15 * S, 17 * S)], dir.path()).unwrap();
+        history.resync_short(5, "s1", dir.path()).unwrap();
+        let synced = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
+        assert_eq!(synced.duration_us(), 18 * S);
+    }
+
+    #[test]
+    fn a_shorts_muted_noises_are_its_own() {
+        use crate::project::revision::EditHistory;
+        use crate::sequence::SourceRange;
+        let dir = tempfile::tempdir().unwrap();
+        let mut history = EditHistory::new(doc(60 * S));
+        let key = history.current.sequence.tracks[0].clips[0].clone();
+        let sound = history
+            .current
+            .assets
+            .iter()
+            .find(|a| a.id == key.asset)
+            .unwrap()
+            .streams
+            .iter()
+            .find(|s| s.kind == crate::sequence::StreamKind::Sound)
+            .map(|s| format!("{}.{}", key.asset, s.id))
+            .expect("the recording has a sound");
+        history
+            .set_shorts(0, vec![short(10 * S, 30 * S)], dir.path())
+            .unwrap();
+        let moment = [SourceRange {
+            start_us: 12 * S,
+            end_us: 12 * S + 100_000,
+        }];
+        history
+            .update_noise_mutes(1, &sound, &moment, false, Some("s1"), dir.path())
+            .unwrap();
+        assert!(history.current.noise_mutes.is_empty());
+        let timeline = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
+        assert_eq!(timeline.noise_mutes.get(&sound).map(Vec::len), Some(1));
+        // The video's mutes stay out of a short made before them.
+        history
+            .update_noise_mutes(2, &sound, &moment, false, None, dir.path())
+            .unwrap();
+        history
+            .update_noise_mutes(3, &sound, &moment, true, Some("s1"), dir.path())
+            .unwrap();
+        let timeline = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
+        assert!(timeline.noise_mutes.is_empty());
+        assert_eq!(history.current.noise_mutes.get(&sound).map(Vec::len), Some(1));
     }
 
     #[test]
@@ -1136,6 +1219,7 @@ mod tests {
         own.id = "own".into();
         own.edit = Some(ShortEdit {
             sequence: slice_sequence(&base.sequence, &base.assets, 0, 7 * S),
+            ..Default::default()
         });
         let mut gone = short(21 * S, 40 * S);
         gone.id = "gone".into();

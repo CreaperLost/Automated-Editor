@@ -46,33 +46,17 @@ const fill = (node: React.ReactNode) => <div className="h-full w-full min-h-0 mi
 
 const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
   preview: () => fill(<StagePanel />),
-  transcript: () => fill(<OnTake what="transcript"><TranscriptPanel /></OnTake>),
+  transcript: () => fill(<TranscriptPanel />),
   inspector: () => fill(<InspectorPanel />),
   media: () => fill(<MediaPanel />),
   zoom: () => fill(<ZoomPanel />),
   chapters: () => fill(<ChaptersPanel />),
   agent: () => fill(<AgentPanel />),
-  jumpCuts: () => fill(<OnTake what="jump cuts"><JumpCutsPanel /></OnTake>),
-  noises: () => fill(<OnTake what="mouth noises"><NoisesPanel /></OnTake>),
+  jumpCuts: () => fill(<JumpCutsPanel />),
+  noises: () => fill(<NoisesPanel />),
   timeline: () => fill(<Timeline />),
   shorts: () => fill(<ShortsListPanel />),
   shortLook: () => fill(<ShortLookPanel />),
-};
-
-/// A panel that works on a short's own timeline only for a short made from a take: a short cut
-/// from the video follows the video, so the video is what gets cleaned.
-const OnTake: React.FC<{ what: string; children: React.ReactNode }> = ({ what, children }) => {
-  const cutFromVideo = useProjectStore((s) => {
-    const view = s.openedProject?.shortView;
-    return !!view && !s.openedProject?.shorts?.find((short) => short.id === view)?.take;
-  });
-  if (!cutFromVideo) return <>{children}</>;
-  return (
-    <p className="p-4 text-label text-studio-500 leading-relaxed">
-      This short is cut from the video and follows it: work on its {what} in Edit or Cleanup, and the short keeps
-      what the video keeps. Shorts made from a take have their own.
-    </p>
-  );
 };
 
 /// The timeline, saying so when it is a short's own.
@@ -82,8 +66,8 @@ function Timeline() {
   return (
     <section className="h-full flex flex-col min-h-0" aria-label="Short timeline">
       <div className="shrink-0 px-3 py-1.5 text-meta text-studio-400 border-b border-studio-800 bg-accent/5">
-        This short's timeline. Cuts, splits, moves and clips here change only the short (the video stays as it is);
-        caption text is shared with the video's transcript.
+        This short's own timeline. Cuts, deleted words, muted noises, splits and clips here change only the short
+        (the video stays as it is); fixing a word's spelling fixes it in the video too.
       </div>
       <div className="flex-1 min-h-0">
         <TimelineStudio />

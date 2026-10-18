@@ -834,6 +834,7 @@ async fn detect_mouth_noises(
     project_handle: String,
     key: String,
     config: dsp::noises::NoiseConfig,
+    short_id: Option<String>,
 ) -> Result<commands::noises::NoiseScan, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::noises::detect_mouth_noises_impl(
@@ -841,6 +842,7 @@ async fn detect_mouth_noises(
             project_handle,
             key,
             config,
+            short_id,
         )
     })
     .await
@@ -853,9 +855,10 @@ async fn noise_review(
     app: tauri::AppHandle,
     project_handle: String,
     key: String,
+    short_id: Option<String>,
 ) -> Result<commands::noises::NoiseScan, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::noises::noise_review_impl(&app.state::<AppState>(), project_handle, key)
+        commands::noises::noise_review_impl(&app.state::<AppState>(), project_handle, key, short_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -870,6 +873,7 @@ async fn project_noise_mutes(
     key: String,
     ranges: Vec<sequence::SourceRange>,
     unmute: bool,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::noises::project_noise_mutes_impl(
@@ -879,6 +883,7 @@ async fn project_noise_mutes(
             key,
             ranges,
             unmute,
+            short_id,
         )
     })
     .await

@@ -329,10 +329,10 @@ export async function cleanTake(shortId: string, voice: string, before = "") {
       await useProjectStore.getState().applyOpenedProject(cut);
       revision = cut.revision;
     }
-    const scan = await api.detectMouthNoises(handle, voice, 0.5, 20);
+    const scan = await api.detectMouthNoises(handle, voice, 0.5, 20, shortId);
     const noises = scan.noises.filter((n) => !n.nearSpeech && !n.muted && n.kind !== null);
     if (noises.length > 0) {
-      const muted = await api.projectNoiseMutes(handle, revision, voice, noises.flatMap((n) => n.parts));
+      const muted = await api.projectNoiseMutes(handle, revision, voice, noises.flatMap((n) => n.parts), false, shortId);
       await useProjectStore.getState().applyOpenedProject(muted);
     }
     set({

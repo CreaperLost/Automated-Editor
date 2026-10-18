@@ -100,7 +100,8 @@ export const ShortLookPanel: React.FC = () => {
             <div className="p-4 border-b border-studio-800">
               <div className="space-y-2 rounded-control border border-suggest/40 bg-suggest/10 p-3">
                 <p className="text-meta text-suggest-fg">
-                  Edited on its own: cuts and clips on its timeline below change only this short.
+                  Its own timeline: cuts, deleted words and muted noises here change only this short. Later edits of
+                  the video don't reach it.
                 </p>
                 <button
                   type="button"
@@ -109,9 +110,9 @@ export const ShortLookPanel: React.FC = () => {
                     void runShorts("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
                   }
                   className="h-7 px-2.5 rounded-control border border-suggest/50 text-suggest-fg hover:bg-suggest/15 disabled:opacity-40"
-                  title="Drop this short's own edits so it follows the video again"
+                  title="Replace this short's timeline with its stretch of the video as edited now; its muted noises stay"
                 >
-                  Follow the video again
+                  Take the video's cuts again
                 </button>
               </div>
             </div>

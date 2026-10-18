@@ -377,7 +377,10 @@ pub fn new_short(
         reason: reason.trim().to_string(),
         layout,
         media: Some(voice.id.clone()),
-        edit: Some(ShortEdit { sequence }),
+        edit: Some(ShortEdit {
+            sequence,
+            ..Default::default()
+        }),
         take: Some(ShortTake {
             camera: sources.camera.as_ref().map(StreamRef::key),
             voice: sources.voice.key(),

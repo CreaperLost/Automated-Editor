@@ -477,6 +477,7 @@ impl EditHistory {
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
         next.schema_version = EDIT_SCHEMA_VERSION;
+        crate::shorts::give_own_timelines(&mut next);
         next.validate()?;
         if next.short_layout.is_some() {
             return Err("A project's own edit cannot use a short's split layout".into());
@@ -732,6 +733,7 @@ impl EditHistory {
         key: &str,
         ranges: &[SourceRange],
         unmute: bool,
+        short: Option<&str>,
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
@@ -752,9 +754,23 @@ impl EditHistory {
         {
             return Err("A muted moment must lie inside its sound".into());
         }
-        let current: Vec<(u64, u64)> = self
-            .current
-            .noise_mutes
+        // A short's mutes are its own; without one, the video's.
+        let own_mutes = |document: &EditDocument| -> Result<NoiseMutes, String> {
+            match short {
+                None => Ok(document.noise_mutes.clone()),
+                Some(id) => document
+                    .shorts
+                    .iter()
+                    .find(|s| s.id == id)
+                    .ok_or("That short no longer exists")?
+                    .edit
+                    .as_ref()
+                    .map(|e| e.noise_mutes.clone())
+                    .ok_or_else(|| "Part of this short was cut from the video; adjust it first".into()),
+            }
+        };
+        let mut mutes = own_mutes(&self.current)?;
+        let current: Vec<(u64, u64)> = mutes
             .get(key)
             .map(|ranges| ranges.iter().map(|r| (r.start_us, r.end_us)).collect())
             .unwrap_or_default();
@@ -767,11 +783,11 @@ impl EditHistory {
         if next_ranges.len() > MAX_NOISE_MUTES {
             return Err(format!("Mute at most {MAX_NOISE_MUTES} moments of a sound"));
         }
-        let mut next = self.current.clone();
+        let before = mutes.clone();
         if next_ranges.is_empty() {
-            next.noise_mutes.remove(key);
+            mutes.remove(key);
         } else {
-            next.noise_mutes.insert(
+            mutes.insert(
                 key.to_string(),
                 next_ranges
                     .into_iter()
@@ -779,12 +795,26 @@ impl EditHistory {
                     .collect(),
             );
         }
-        if next.noise_mutes == self.current.noise_mutes {
+        if mutes == before {
             return Err(if unmute {
                 "Those moments are not muted".into()
             } else {
                 "Those moments are already muted".into()
             });
+        }
+        let mut next = self.current.clone();
+        match short {
+            None => next.noise_mutes = mutes,
+            Some(id) => {
+                if let Some(edit) = next
+                    .shorts
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                    .and_then(|s| s.edit.as_mut())
+                {
+                    edit.noise_mutes = mutes;
+                }
+            }
         }
         self.commit_next(expected_revision, persist_root, next)
     }
@@ -1222,7 +1252,11 @@ impl EditHistory {
             .iter_mut()
             .find(|s| s.id == short_id)
             .ok_or("That short no longer exists")?;
-        own.edit = Some(crate::shorts::ShortEdit { sequence });
+        let noise_mutes = own.edit.take().map(|e| e.noise_mutes).unwrap_or_default();
+        own.edit = Some(crate::shorts::ShortEdit {
+            sequence,
+            noise_mutes,
+        });
         self.commit_next(expected_revision, persist_root, next)?;
         Ok(outcome)
     }
@@ -1246,9 +1280,19 @@ impl EditHistory {
                 "This short is made from a take: it has no stretch of the video to follow".into(),
             );
         }
-        if short.edit.take().is_none() {
-            return Err("This short already follows the video".into());
-        }
+        // Its stretch of the video as edited now; its own muted noises stay.
+        let noise_mutes = short.edit.take().map(|e| e.noise_mutes).unwrap_or_default();
+        let (start, end) = crate::shorts::edited_range_in(short, &self.current)
+            .ok_or("Part of this short was cut from the video; adjust it first")?;
+        short.edit = Some(crate::shorts::ShortEdit {
+            sequence: crate::shorts::slice_sequence(
+                &self.current.sequence,
+                &self.current.assets,
+                start,
+                end,
+            ),
+            noise_mutes,
+        });
         self.commit_next(expected_revision, persist_root, next)
     }
 

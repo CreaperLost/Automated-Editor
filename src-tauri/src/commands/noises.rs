@@ -102,6 +102,7 @@ pub fn detect_mouth_noises_impl(
     project_handle: String,
     key: String,
     config: NoiseConfig,
+    short: Option<String>,
 ) -> Result<NoiseScan, String> {
     config.validate()?;
     let (root, segments, transcript, sound) = {
@@ -185,12 +186,31 @@ pub fn detect_mouth_noises_impl(
         diagnostics,
     };
     if let Err(error) = save_scan(&root, &saved) {
-        let mut scan = review(state, &project_handle, &key, Some(saved))?;
+        let mut scan = review(state, &project_handle, &key, Some(saved), short)?;
         scan.diagnostics
             .push(format!("This scan could not be kept for later: {error}"));
         return Ok(scan);
     }
-    review(state, &project_handle, &key, Some(saved))
+    review(state, &project_handle, &key, Some(saved), short)
+}
+
+/// The short whose timeline (and muted noises) sound `key` is worked on in: `short` (its id or
+/// title) when given, else the take short the sound is the voice of, else none (the video).
+pub fn target_short(
+    document: &crate::project::revision::EditDocument,
+    key: &str,
+    short: Option<&str>,
+) -> Result<Option<String>, String> {
+    match short.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(wanted) => document
+            .shorts
+            .iter()
+            .find(|s| s.id == wanted)
+            .or_else(|| document.shorts.iter().find(|s| s.title.eq_ignore_ascii_case(wanted)))
+            .map(|s| Some(s.id.clone()))
+            .ok_or_else(|| format!("No short {wanted}")),
+        None => Ok(crate::shorts::take_short_of(document, key).map(|s| s.id.clone())),
+    }
 }
 
 /// The last scan of sound `key` where the timeline plays it now, with every muted moment of
@@ -199,6 +219,7 @@ pub fn noise_review_impl(
     state: &AppState,
     project_handle: String,
     key: String,
+    short: Option<String>,
 ) -> Result<NoiseScan, String> {
     let root = {
         let opened = state.opened_project.lock();
@@ -207,19 +228,31 @@ pub fn noise_review_impl(
         reader.root().to_path_buf()
     };
     let saved = load_scan(&root, &key);
-    review(state, &project_handle, &key, saved)
+    review(state, &project_handle, &key, saved, short)
 }
 
+/// Where the timeline plays the scan's noises and which are muted: the short's own timeline
+/// and mutes when there is one (see [`target_short`]), else the video's.
 fn review(
     state: &AppState,
     project_handle: &str,
     key: &str,
     saved: Option<SavedScan>,
+    short: Option<String>,
 ) -> Result<NoiseScan, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, project_handle)?;
-    let document = reader.document();
+    let base = reader.document();
+    let own;
+    let document = match target_short(base, key, short.as_deref())? {
+        Some(id) => {
+            let short = base.shorts.iter().find(|s| s.id == id).ok_or("That short no longer exists")?;
+            own = crate::shorts::short_timeline(base, short)?;
+            &own
+        }
+        None => base,
+    };
     let source = document.stream_ref(key)?;
     let clock =
         crate::sequence::clock::stream_clock(&document.sequence, &source.asset, &source.stream);
@@ -451,12 +484,14 @@ pub fn project_noise_mutes_impl(
     key: String,
     ranges: Vec<SourceRange>,
     unmute: bool,
+    short: Option<String>,
 ) -> Result<OpenedProject, String> {
     if ranges.is_empty() {
         return Err("Choose what to mute".into());
     }
     mutate_opened(state, project_handle, |reader| {
-        reader.update_noise_mutes(expected_revision, &key, &ranges, unmute)
+        let short = target_short(reader.document(), &key, short.as_deref())?;
+        reader.update_noise_mutes(expected_revision, &key, &ranges, unmute, short.as_deref())
     })
 }
 
@@ -566,7 +601,7 @@ mod tests {
             sensitivity,
             ..Default::default()
         };
-        let scan = detect_mouth_noises_impl(&state, handle, key, config).unwrap();
+        let scan = detect_mouth_noises_impl(&state, handle, key, config, None).unwrap();
         let places: Vec<_> = scan.noises.iter().filter(|n| n.kind.is_some()).collect();
         let chosen: Vec<_> = places.iter().filter(|n| !n.near_speech).collect();
         let muted_us: u64 = chosen
