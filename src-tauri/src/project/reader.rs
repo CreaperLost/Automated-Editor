@@ -899,6 +899,17 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    pub fn add_take_short(
+        &mut self,
+        expected_revision: u64,
+        short: crate::shorts::Short,
+        roles: &[(String, String, crate::sequence::Role)],
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .add_take_short(expected_revision, short, roles, &self.root)?;
+        Ok(self.done())
+    }
+
     pub fn set_shorts(
         &mut self,
         expected_revision: u64,
@@ -1020,6 +1031,8 @@ impl ProjectReader {
         let mut view = self.summary.clone();
         view.short_view = Some(short_id.to_string());
         view.sequence = timeline.sequence.clone();
+        // A take short's captions read the take.
+        view.captions = timeline.captions.clone();
         view.duration_us = timeline.duration_us();
         view.zooms = timeline.zooms_with_ranges();
         let mut focus = timeline.webcam_focus.clone();

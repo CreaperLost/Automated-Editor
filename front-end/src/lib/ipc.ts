@@ -68,6 +68,8 @@ import {
   GraphicLibrarySave,
   GraphicLibrarySaved,
   GateReport,
+  TakeShortMade,
+  FootageChange,
 } from "./types";
 
 declare global {
@@ -521,6 +523,24 @@ export const api = {
       atUs: Math.max(0, Math.round(atUs)),
       lengthUs: null,
     }),
+  /** A short from a take: `camera` and `voice` are media ids or stream keys. */
+  projectShortFromTake: (
+    projectHandle: string,
+    expectedRevision: number,
+    title: string,
+    camera: string | null,
+    voice: string | null,
+  ) =>
+    invokeTauri<TakeShortMade>("project_short_from_take", {
+      projectHandle,
+      expectedRevision,
+      title,
+      camera,
+      voice,
+      reason: null,
+    }),
+  projectShortFootage: (projectHandle: string, expectedRevision: number, shortId: string, change: FootageChange) =>
+    invokeTauri<OpenedProject>("project_short_footage", { projectHandle, expectedRevision, shortId, change }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>

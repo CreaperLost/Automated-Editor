@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 33] = [
+pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -209,6 +209,43 @@ pub static ACTIONS: [ToolDef; 33] = [
         schema: schema::<ShortScenesArgs>,
         read_only: false,
         run: short_scenes,
+    },
+    ToolDef {
+        name: "media_import",
+        description: "Imports files (videos, sounds, pictures, or AeroEdits recordings) into \
+            the project's Media, as the Media panel's Import does. Use it for a take the user \
+            recorded for a short: a camera video (often with its own microphone) and, if they \
+            used one, a separate microphone file. Answers each new media id and its streams.",
+        schema: schema::<MediaImportArgs>,
+        read_only: false,
+        run: media_import,
+    },
+    ToolDef {
+        name: "short_from_take",
+        description: "Makes a vertical short from a take: a new recording made for the short \
+            (the user retelling one part of the video to camera). `camera` names the camera \
+            video (media id or `<id>.<stream>`), `voice` a separate microphone; without \
+            `voice` the camera's own sound is the voice. A separate voice is lined up with \
+            the camera's sound automatically. The short plays the take's camera and voice \
+            with captions from the take's words; footage from the video goes under it with \
+            `short_footage`. Transcribe the voice next (`transcribe` with its stream).",
+        schema: schema::<ShortFromTakeArgs>,
+        read_only: false,
+        run: short_from_take,
+    },
+    ToolDef {
+        name: "short_footage",
+        description: "Footage under a short made from a take: what plays in the screen part \
+            while the take talks. `op: add` places `items`: each under the take's words \
+            `fromWord`..`toWord` (ids from `transcript_get` with the take's voice as `stream`) \
+            or seconds `atS`..`toS` on the short, showing the video from its word \
+            `sourceWord` (ids from the video's transcript) or `media` at `sourceS`; `sound` \
+            also plays that footage's game or desktop sound, ducked under the voice. Where no \
+            footage plays, the camera fills the frame. `op: remove` takes it off \
+            `fromS`..`toS` (all without them); `op: list` (default) lists it.",
+        schema: schema::<ShortFootageArgs>,
+        read_only: false,
+        run: short_footage,
     },
     ToolDef {
         name: "check",
@@ -2276,6 +2313,7 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             layout,
             media: Some(source.asset),
             edit: None,
+            take: None,
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,
@@ -2363,6 +2401,319 @@ pub struct ShortScenesArgs {
 }
 
 /// A short's scenes as lines, in seconds on its own timeline.
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaImportArgs {
+    /// Full paths of the files (or recording folders) to import.
+    pub paths: Vec<String>,
+}
+
+fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: MediaImportArgs = params(args)?;
+    let before = opened(ctx)?;
+    let known: std::collections::HashSet<String> = with_reader(ctx.state, |reader| {
+        Ok(reader
+            .document()
+            .assets
+            .iter()
+            .map(|a| a.id.clone())
+            .collect())
+    })?;
+    ctx.progress(0.1, "Importing");
+    let project = commands::project_media_import_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        args.paths,
+    )?;
+    let mut lines = Vec::new();
+    for asset in project.assets.iter().filter(|a| !known.contains(&a.id)) {
+        let streams: Vec<String> = asset
+            .streams
+            .iter()
+            .map(|s| format!("{}.{} ({:?}, {:?})", asset.id, s.id, s.kind, s.role))
+            .collect();
+        lines.push(format!(
+            "Imported {} as {} ({}): {}.",
+            asset.name,
+            asset.id,
+            clock(asset.duration_us),
+            streams.join(", ")
+        ));
+    }
+    text(applied(ctx, "media_import", &before, lines)?)
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortFromTakeArgs {
+    pub title: String,
+    /// The take's camera: a media id (its camera, else its picture) or `<id>.<stream>`.
+    #[serde(default)]
+    pub camera: Option<String>,
+    /// A separate microphone: a media id or `<id>.<stream>`. Default: the camera's own sound.
+    #[serde(default)]
+    pub voice: Option<String>,
+    /// What the short is about, in a sentence (shown in the Shorts list).
+    #[serde(default)]
+    pub idea: Option<String>,
+}
+
+fn short_from_take(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: ShortFromTakeArgs = params(args)?;
+    let before = opened(ctx)?;
+    ctx.progress(0.1, "Lining up the take");
+    let made = commands::project_short_from_take_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        args.title,
+        args.camera,
+        args.voice,
+        args.idea,
+    )?;
+    let short = made
+        .project
+        .shorts
+        .iter()
+        .find(|s| s.id == made.short_id)
+        .ok_or("The short was not saved")?;
+    let take = short.take.as_ref().ok_or("The short has no take")?;
+    let mut lines = vec![format!(
+        "Made short {} \"{}\" from the take: {} long, voice {}{}.",
+        short.id,
+        short.title,
+        clock(short.length_us.unwrap_or(0)),
+        take.voice,
+        take.camera
+            .as_ref()
+            .map(|c| format!(", camera {c}"))
+            .unwrap_or_default()
+    )];
+    match made.sync.score {
+        Some(score) if made.sync.offset_us != 0 => lines.push(format!(
+            "Lined the camera up with the voice: the camera started {:.2} s {} (match {:.2}).",
+            (made.sync.offset_us.unsigned_abs()) as f64 / 1e6,
+            if made.sync.offset_us > 0 { "earlier" } else { "later" },
+            score
+        )),
+        Some(score) => lines.push(format!(
+            "The camera's sound did not clearly match the voice (match {score:.2}), so both start together; check the lip sync in the preview."
+        )),
+        None => {}
+    }
+    let transcribed = with_reader(ctx.state, |reader| {
+        Ok(store::load_transcript(reader.root(), &take.voice)?.is_some())
+    })?;
+    lines.push(if transcribed {
+        format!(
+            "Its voice is transcribed: `transcript_get` with stream {}.",
+            take.voice
+        )
+    } else {
+        format!("Next: `transcribe` with stream {}.", take.voice)
+    });
+    text(applied(ctx, "short_from_take", &before, lines)?)
+}
+
+#[derive(Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FootageOp {
+    #[default]
+    List,
+    Add,
+    Remove,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FootageItemArgs {
+    /// Under the take's words `fromWord`..`toWord` (ids from the take's transcript)...
+    #[serde(default)]
+    pub from_word: Option<String>,
+    #[serde(default)]
+    pub to_word: Option<String>,
+    /// ...or seconds `atS`..`toS` on the short.
+    #[serde(default)]
+    pub at_s: Option<f64>,
+    #[serde(default)]
+    pub to_s: Option<f64>,
+    /// What shows: the video from this word (an id from the video's transcript)...
+    #[serde(default)]
+    pub source_word: Option<String>,
+    /// The sound whose transcript `sourceWord` is from; default the video's speech.
+    #[serde(default)]
+    pub source_stream: Option<String>,
+    /// ...or media `media` from `sourceS` seconds into it.
+    #[serde(default)]
+    pub media: Option<String>,
+    #[serde(default)]
+    pub source_s: Option<f64>,
+    /// Its picture stream; default its screen.
+    #[serde(default)]
+    pub picture: Option<String>,
+    /// Also play the footage's game or desktop sound, ducked under the voice.
+    #[serde(default)]
+    pub sound: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortFootageArgs {
+    /// The short's id (or title).
+    pub short: String,
+    #[serde(default)]
+    pub op: Option<FootageOp>,
+    #[serde(default)]
+    pub items: Vec<FootageItemArgs>,
+    /// For `remove`: seconds on the short; without them, all footage.
+    #[serde(default)]
+    pub from_s: Option<f64>,
+    #[serde(default)]
+    pub to_s: Option<f64>,
+}
+
+fn to_us(seconds: f64) -> Result<u64, String> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(format!("{seconds} is not a time in seconds"));
+    }
+    Ok((seconds * 1e6).round() as u64)
+}
+
+fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: ShortFootageArgs = params(args)?;
+    let before = opened(ctx)?;
+    let short = with_reader(ctx.state, |reader| {
+        let shorts = &reader.document().shorts;
+        shorts
+            .iter()
+            .find(|s| s.id == args.short)
+            .or_else(|| {
+                shorts
+                    .iter()
+                    .find(|s| s.title.eq_ignore_ascii_case(args.short.trim()))
+            })
+            .cloned()
+            .ok_or_else(|| format!("No short {}", args.short))
+    })?;
+    if short.take.is_none() {
+        return Err(format!(
+            "{} is cut from the video; footage goes under shorts made from a take (`short_from_take`)",
+            short.id
+        ));
+    }
+    let list = |short: &crate::shorts::Short| -> Result<Vec<String>, String> {
+        let placed = crate::take_short::placed(short)?;
+        if placed.is_empty() {
+            return Ok(vec![format!(
+                "No footage under {} yet: the camera fills the frame.",
+                short.id
+            )]);
+        }
+        Ok(placed
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}-{}: {}.{} from {}{}",
+                    clock(f.at_us),
+                    clock(f.to_us),
+                    f.media,
+                    f.stream,
+                    clock(f.source_start_us),
+                    if f.sound { ", with its sound" } else { "" }
+                )
+            })
+            .collect())
+    };
+    let change = match args.op.unwrap_or_default() {
+        FootageOp::List => return text(list(&short)?.join("\n")),
+        FootageOp::Remove => commands::FootageChange::Remove {
+            from_us: args.from_s.map(to_us).transpose()?,
+            to_us: args.to_s.map(to_us).transpose()?,
+        },
+        FootageOp::Add => {
+            let items = with_reader(ctx.state, |reader| {
+                let take = short.take.as_ref().ok_or("No take")?;
+                let take_words = store::load_transcript(reader.root(), &take.voice)?;
+                let mut out = Vec::new();
+                for item in &args.items {
+                    let (at_us, to) = match (&item.from_word, &item.to_word, item.at_s, item.to_s) {
+                        (Some(from), Some(to), _, _) => {
+                            let transcript = take_words.as_ref().ok_or_else(|| {
+                                format!(
+                                    "The take is not transcribed: `transcribe` with stream {}",
+                                    take.voice
+                                )
+                            })?;
+                            crate::take_short::words_at(&short, transcript, from, to)?
+                        }
+                        (_, _, Some(a), Some(b)) => (to_us(a)?, to_us(b)?),
+                        _ => {
+                            return Err("Each item needs `fromWord`/`toWord` or `atS`/`toS`".into())
+                        }
+                    };
+                    let (media, source_start_us) = match (&item.source_word, &item.media) {
+                        (Some(word), _) => {
+                            let key = match &item.source_stream {
+                                Some(key) => key.clone(),
+                                None => video_speech(reader, &take.voice)?,
+                            };
+                            let transcript = store::load_transcript(reader.root(), &key)?
+                                .ok_or_else(|| format!("{key} is not transcribed"))?;
+                            let range =
+                                crate::take_short::source_of_words(&transcript, word, None)?;
+                            let asset = crate::sequence::StreamRef::parse(&key)
+                                .ok_or("Not a sound key")?
+                                .asset;
+                            (asset, range.start_us)
+                        }
+                        (None, Some(media)) => {
+                            (media.clone(), to_us(item.source_s.unwrap_or(0.0))?)
+                        }
+                        _ => return Err("Each item needs `sourceWord` or `media`".into()),
+                    };
+                    out.push(crate::take_short::Footage {
+                        at_us,
+                        to_us: to,
+                        media,
+                        source_start_us,
+                        stream: item.picture.clone(),
+                        sound: item.sound.unwrap_or(false),
+                    });
+                }
+                Ok(out)
+            })?;
+            commands::FootageChange::Add { items }
+        }
+    };
+    let project = commands::project_short_footage_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        short.id.clone(),
+        change,
+    )?;
+    let after = project
+        .shorts
+        .iter()
+        .find(|s| s.id == short.id)
+        .ok_or("The short was removed")?;
+    let mut lines = vec![format!("Footage under {} now:", short.id)];
+    lines.extend(list(after)?);
+    text(applied(ctx, "short_footage", &before, lines)?)
+}
+
+/// The video's transcribed speech: the first transcribed sound on the main timeline that is
+/// not the take's voice.
+fn video_speech(reader: &ProjectReader, take_voice: &str) -> Result<String, String> {
+    sounds(reader)
+        .into_iter()
+        .filter(|s| s.key != take_voice && s.transcribed)
+        .min_by_key(|s| (!s.placed, !s.speech))
+        .map(|s| s.key)
+        .ok_or_else(|| "The video is not transcribed: `transcribe` it first".into())
+}
+
 fn scene_lines(
     document: &crate::project::revision::EditDocument,
     short: &crate::shorts::Short,

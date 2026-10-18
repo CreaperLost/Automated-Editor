@@ -29,6 +29,7 @@ import {
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
 import { CameraFramingControl } from "./CameraFraming";
+import { TakeFootage } from "./TakeFootage";
 import { Button, Switch } from "../ui";
 
 /** How long a scene added at the playhead lasts. */
@@ -71,7 +72,8 @@ export const ShortLookPanel: React.FC = () => {
   const viewing = !!selected && project.shortView === selected.id;
   const lengthUs = viewing ? project.durationUs : 0;
   const playable = viewing && lengthUs > 0;
-  const ownEdit = !!selected?.edit;
+  // A take short always has its own timeline; it has no stretch of the video to follow.
+  const ownEdit = !!selected?.edit && !selected?.take;
   const scenes = [...(layout.scenes ?? [])]
     .filter((scene) => scene.shownStartUs !== undefined && scene.shownEndUs !== undefined)
     .sort((a, b) => a.shownStartUs! - b.shownStartUs!);
@@ -115,6 +117,8 @@ export const ShortLookPanel: React.FC = () => {
             </div>
           )}
 
+          {selected.take && <TakeFootage project={project} short={selected} viewing={viewing} />}
+
           <InspectorSection id="short-camera" title="Camera" icon={Camera}>
             <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
               <button type="button" aria-pressed={layout.cameraPosition === "top"} onClick={() => changeLayout({ cameraPosition: "top" })} className={segmented(layout.cameraPosition === "top")}>
@@ -138,8 +142,11 @@ export const ShortLookPanel: React.FC = () => {
 
           <InspectorSection id="short-scenes" title="Scenes" icon={Clapperboard}>
             <p className="text-meta text-studio-500">
-              Split by default. A scene shows only the camera or only the screen, easing in and out.
+              {selected.take
+                ? "Split where footage plays, the camera alone where none does. A scene shows only the camera or only the screen, easing in and out."
+                : "Split by default. A scene shows only the camera or only the screen, easing in and out."}
             </p>
+            {!selected.take && (
             <Button
               size="sm"
               variant="secondary"
@@ -153,6 +160,7 @@ export const ShortLookPanel: React.FC = () => {
             >
               {busy === "Picking scenes" ? "Picking…" : "Pick scenes"}
             </Button>
+            )}
             <div className="flex gap-1.5">
               {(
                 [

@@ -3374,6 +3374,7 @@ mod tests {
             layout: ShortLayout::default(),
             media: None,
             edit: None,
+            take: None,
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,

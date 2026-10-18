@@ -24,6 +24,7 @@ pub mod sequence;
 pub mod short_scenes;
 pub mod shorts;
 pub mod sound_effects;
+pub mod take_short;
 pub mod telemetry;
 pub mod timeline;
 pub mod transcript;
@@ -967,6 +968,48 @@ fn project_shorts_set(
     shorts: Vec<shorts::Short>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
+}
+
+/// Async: lining up the take's sounds reads them, which must not hold the main thread.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn project_short_from_take(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    title: String,
+    camera: Option<String>,
+    voice: Option<String>,
+    reason: Option<String>,
+) -> Result<commands::TakeShortMade, String> {
+    commands::project_short_from_take_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        title,
+        camera,
+        voice,
+        reason,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_footage(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    change: commands::FootageChange,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_footage_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        short_id,
+        change,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2211,6 +2254,8 @@ pub fn run() {
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,
+            project_short_from_take,
+            project_short_footage,
             project_short_scenes_pick,
             project_short_scene_add,
             project_shorts_generate,

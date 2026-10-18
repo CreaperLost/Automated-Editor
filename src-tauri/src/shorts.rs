@@ -423,6 +423,10 @@ pub struct Short {
     /// of the video and follows the video's edits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit: Option<ShortEdit>,
+    /// A short made from a take recorded for it (see [`crate::take_short`]): its own timeline
+    /// plays the take's camera and voice, with footage from the video under it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub take: Option<ShortTake>,
     /// How long the short plays now. Filled in for the UI and cleared before storing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_us: Option<u64>,
@@ -432,6 +436,17 @@ pub struct Short {
     pub edited_start_us: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_end_us: Option<u64>,
+}
+
+/// The take a short was made from, as stream keys (`<asset>.<stream>`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortTake {
+    /// The camera's picture; none for a voice-only take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<String>,
+    /// The voice: the camera file's own sound, a separate microphone's, or a recording's.
+    pub voice: String,
 }
 
 /// A short's own timeline, once it is edited on its own, in the short's time.
@@ -482,6 +497,10 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
     timeline.shorts.clear();
     timeline.chapters.clear();
     timeline.short_layout = None;
+    // A take's captions read the take's own words.
+    if let Some(take) = &short.take {
+        timeline.captions.track_id = Some(take.voice.clone());
+    }
     timeline.sequence = match &short.edit {
         Some(own) => own.sequence.clone(),
         None => {
@@ -588,6 +607,9 @@ pub fn validate(shorts: &[Short]) -> Result<(), String> {
         }
         if short.source_end_us <= short.source_start_us {
             return Err("A short must end after it starts".into());
+        }
+        if short.take.is_some() && short.edit.is_none() {
+            return Err("A short made from a take keeps its own timeline".into());
         }
         if short.reason.chars().count() > 300 {
             return Err("A short's note is too long".into());
@@ -764,6 +786,7 @@ mod tests {
             layout: ShortLayout::default(),
             media: None,
             edit: None,
+            take: None,
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,

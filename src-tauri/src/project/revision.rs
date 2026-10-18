@@ -623,6 +623,33 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
+    /// Adds a short made from a take, giving the take's streams their roles (camera, speech)
+    /// in the same step.
+    pub fn add_take_short(
+        &mut self,
+        expected_revision: u64,
+        short: crate::shorts::Short,
+        roles: &[(String, String, Role)],
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        self.check(expected_revision)?;
+        let mut next = self.current.clone();
+        for (asset, stream, role) in roles {
+            let stream = next
+                .assets
+                .iter_mut()
+                .find(|a| &a.id == asset)
+                .and_then(|a| a.streams.iter_mut().find(|s| &s.id == stream))
+                .ok_or("The take's media is no longer in the project")?;
+            stream.role = *role;
+        }
+        let mut shorts = next.shorts.clone();
+        shorts.push(short);
+        crate::shorts::validate(&shorts)?;
+        next.shorts = crate::shorts::normalized(shorts);
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
     /// The recording webcam focus is on, and the source ranges of its camera that a timeline
     /// range covers. Focus stays on one recording; the first edit picks the camera under it.
     fn focus_pieces(&self, start_us: u64, end_us: u64) -> (Option<String>, Vec<(u64, u64)>) {
@@ -1184,6 +1211,11 @@ impl EditHistory {
             .iter_mut()
             .find(|s| s.id == short_id)
             .ok_or("That short no longer exists")?;
+        if short.take.is_some() {
+            return Err(
+                "This short is made from a take: it has no stretch of the video to follow".into(),
+            );
+        }
         if short.edit.take().is_none() {
             return Err("This short already follows the video".into());
         }

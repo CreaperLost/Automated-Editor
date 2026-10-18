@@ -38,6 +38,8 @@ interface ShortsState {
   main: OpenedProject | null;
   busy: string | null;
   error?: string;
+  /** A line about what just happened (a take lined up, its words being transcribed). */
+  notice?: string;
   /** Shorts ticked for export; none ticked exports all. */
   checked: Set<string>;
   exports: Record<string, ExportRow>;
@@ -51,6 +53,7 @@ const INITIAL: ShortsState = {
   main: null,
   busy: null,
   error: undefined,
+  notice: undefined,
   checked: new Set(),
   exports: {},
   renaming: null,
@@ -236,6 +239,59 @@ export function findShorts() {
   const speech = soundSources(project).find((sound) => sound.placed) ?? soundSources(project)[0];
   if (!speech) return;
   void runShorts("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speech.key));
+}
+
+/**
+ * A short from a take: the camera video (`camera`) and, when it was recorded apart, the
+ * microphone (`voice`); media ids or stream keys. Its voice is transcribed next, for captions
+ * and for the agent to find footage by.
+ */
+export async function newShortFromTake(camera: string | null, voice: string | null, title: string) {
+  const current = useProjectStore.getState().openedProject;
+  if (!current || useShortsStore.getState().busy) return false;
+  set({ busy: "Making the short", error: undefined, notice: undefined });
+  let made;
+  try {
+    made = await api.projectShortFromTake(current.projectHandle, current.revision, title, camera, voice);
+    await useProjectStore.getState().applyOpenedProject(made.project);
+    selectShort(made.shortId);
+  } catch (err) {
+    setShortsError(err);
+    return false;
+  } finally {
+    set({ busy: null });
+  }
+  const { offsetUs, score } = made.sync;
+  const synced =
+    score == null
+      ? ""
+      : offsetUs !== 0
+        ? `Lined the camera up with the microphone (${(Math.abs(offsetUs) / 1e6).toFixed(2)} s). `
+        : "The camera's sound didn't clearly match the microphone, so both start together: check the lip sync. ";
+  const voiceKey = made.project.shorts?.find((s) => s.id === made.shortId)?.take?.voice;
+  if (!voiceKey) return true;
+  const handle = made.project.projectHandle;
+  const transcribed = await api.transcriptGet(handle, voiceKey).catch(() => null);
+  if (transcribed) {
+    set({ notice: `${synced}Ask the agent to pick footage from the video for it.` });
+    return true;
+  }
+  set({ notice: `${synced}Transcribing the take for its captions…` });
+  void api
+    .transcriptRun(handle, voiceKey)
+    .then(() => {
+      useProjectStore.getState().bumpCaptions();
+      set({ notice: `${synced}Transcribed. Ask the agent to pick footage from the video for it.` });
+    })
+    .catch((err) => set({ notice: undefined, error: `Couldn't transcribe the take: ${errorMessage(err)}` }));
+  return true;
+}
+
+/** Takes the footage off `[fromUs, toUs)` of a take short's timeline. */
+export function removeFootage(shortId: string, fromUs: number, toUs: number) {
+  void runShorts("Removing footage", (p) =>
+    api.projectShortFootage(p.projectHandle, p.revision, shortId, { op: "remove", fromUs, toUs }),
+  );
 }
 
 export function removeShort(id: string) {

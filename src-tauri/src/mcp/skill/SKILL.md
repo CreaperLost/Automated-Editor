@@ -19,7 +19,9 @@ The actions are MCP tools (`aeroedits` server) and shell commands:
 A template is the plan for one kind of video: the steps, what to ask, and the defaults.
 `template` lists them; `template` with a name returns that template and the user's saved
 answers. Pick the template that fits what the user said (a tutorial, a screen recording, a
-course lesson: `tutorial`). If none fits, say so and ask which is closest. Then follow its
+course lesson: `tutorial`; shorts cut from the video: `shorts`; a short the user recorded a
+new take for, with footage from the video: `take-shorts`). If none fits, say so and ask which
+is closest. Then follow its
 steps in order. The user's own instructions win over the template.
 
 ## Saved answers

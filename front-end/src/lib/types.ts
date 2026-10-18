@@ -1532,12 +1532,47 @@ export interface Short {
   media?: string;
   /** Present once the short was edited on its own; it then no longer follows the video. */
   edit?: unknown;
+  /** A short made from a take recorded for it: its camera and voice (stream keys). */
+  take?: ShortTake;
   /** How long it plays now. */
   lengthUs?: number;
   /** Absent when an end was cut from the video. Filled in by the backend. */
   editedStartUs?: number;
   editedEndUs?: number;
 }
+
+export interface ShortTake {
+  camera?: string;
+  voice: string;
+}
+
+/** How a take's camera was lined up with a separate voice. */
+export interface TakeSync {
+  /** Camera time minus voice time. */
+  offsetUs: number;
+  /** How well the camera's own sound matched the voice (0-1); absent when nothing was compared. */
+  score?: number | null;
+}
+
+export interface TakeShortMade {
+  project: OpenedProject;
+  shortId: string;
+  sync: TakeSync;
+}
+
+/** A stretch of footage to play under a take, on the short's own timeline. */
+export interface Footage {
+  atUs: number;
+  toUs: number;
+  media: string;
+  sourceStartUs: number;
+  stream?: string | null;
+  sound?: boolean;
+}
+
+export type FootageChange =
+  | { op: "add"; items: Footage[] }
+  | { op: "remove"; fromUs?: number | null; toUs?: number | null };
 
 export type AiProvider = "openAi" | "openRouter";
 

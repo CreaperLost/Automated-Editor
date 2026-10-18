@@ -385,6 +385,10 @@ pub struct TranscriptParams {
     /// Only words before this (edited microseconds).
     #[serde(default)]
     pub to_us: Option<u64>,
+    /// Times on this short's own timeline instead of the video's. A take's voice is read on
+    /// its short's timeline without it.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 /// A new line starts after a sentence end, a pause this long, or this many words.
@@ -427,17 +431,33 @@ pub(super) fn transcribed_stream(
 fn transcript_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let state = ctx.state;
     let args: TranscriptParams = params(args)?;
-    let (key, view) = with_reader(state, |reader| {
+    let (key, view, on_short) = with_reader(state, |reader| {
         let document = &reader.history().current;
         let key = transcribed_stream(reader, args.stream)?;
         let transcript = store::load_transcript(reader.root(), &key)?
             .ok_or_else(|| format!("{key} has no transcript"))?;
-        let view = crate::transcript::edit::view(
-            &transcript,
-            &document.transcript_clock(&key)?,
-            document.revision,
-        );
-        Ok((key, view))
+        // A short's timeline: the one named, else the take short this is the voice of.
+        let short = match &args.short {
+            Some(id) => Some(
+                document
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or_else(|| format!("No short {id}"))?,
+            ),
+            None => document
+                .shorts
+                .iter()
+                .find(|s| s.take.as_ref().is_some_and(|t| t.voice == key)),
+        };
+        let clock = match short {
+            Some(short) => {
+                crate::shorts::short_timeline(document, short)?.transcript_clock(&key)?
+            }
+            None => document.transcript_clock(&key)?,
+        };
+        let view = crate::transcript::edit::view(&transcript, &clock, document.revision);
+        Ok((key, view, short.map(|s| s.id.clone())))
     })?;
     let from = args.from_us.unwrap_or(0);
     let to = args.to_us.unwrap_or(u64::MAX);
@@ -452,8 +472,11 @@ fn transcript_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .filter(|w| w.edited_start_us.is_none())
         .count();
     let mut out = format!(
-        "Transcript of {key}, revision {}. {} words shown, {cut} cut out. \
+        "Transcript of {key}{}, revision {}. {} words shown, {cut} cut out. \
          Lines: [start-end] first..last word id, text.\n",
+        on_short
+            .map(|id| format!(" on short {id}'s timeline"))
+            .unwrap_or_default(),
         view.revision,
         words.len()
     );
@@ -718,6 +741,9 @@ mod tests {
                 "undo_batch" => json!({ "batchId": "b-1", "expectedRevision": 0 }),
                 "settings" => json!({ "area": "captions" }),
                 "short_create" => json!({ "title": "t", "fromWord": "w-0", "toWord": "w-1" }),
+                "media_import" => json!({ "paths": ["a.mp4"] }),
+                "short_from_take" => json!({ "title": "t", "camera": "m1" }),
+                "short_footage" => json!({ "short": "s1" }),
                 "graphic_add" => json!({ "template": "title", "atUs": 0 }),
                 "graphic_set" => json!({ "graphic": "g", "name": "n" }),
                 "brand_pick" => json!({ "brand": "none" }),

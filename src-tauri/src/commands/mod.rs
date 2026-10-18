@@ -1532,6 +1532,124 @@ pub fn project_shorts_set_impl(
     })
 }
 
+/// A short made from a take, and how its camera was lined up with its voice.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakeShortMade {
+    pub project: OpenedProject,
+    pub short_id: String,
+    pub sync: crate::take_short::TakeSync,
+}
+
+/// A new short made from a take: `camera` and `voice` name streams (`<asset>.<stream>`) or
+/// assets already imported. A separate voice is lined up with the camera's own sound.
+#[allow(clippy::too_many_arguments)]
+pub fn project_short_from_take_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    title: String,
+    camera: Option<String>,
+    voice: Option<String>,
+    reason: Option<String>,
+) -> Result<TakeShortMade, String> {
+    // Lining the sounds up reads them: done without holding the project.
+    let (root, document) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        (reader.root().to_path_buf(), reader.document().clone())
+    };
+    let sources = crate::take_short::resolve(&document, camera.as_deref(), voice.as_deref())?;
+    let sync = crate::take_short::sync(&root, &document, &sources);
+    let base = format!("take-{}", sources.voice.asset);
+    let id = (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find(|id| !document.shorts.iter().any(|s| &s.id == id))
+        .unwrap_or(base);
+    let title = if title.trim().is_empty() {
+        format!("Short {}", document.shorts.len() + 1)
+    } else {
+        title
+    };
+    let short = crate::take_short::new_short(
+        &document,
+        id.clone(),
+        &title,
+        reason.as_deref().unwrap_or_default(),
+        &sources,
+        &sync,
+    )?;
+    let roles = crate::take_short::roles(&document, &sources);
+    let project = mutate_opened(state, project_handle, |reader| {
+        reader.add_take_short(expected_revision, short, &roles)
+    })?;
+    Ok(TakeShortMade {
+        project,
+        short_id: id,
+        sync,
+    })
+}
+
+/// A change to the footage under a take short.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum FootageChange {
+    /// Plays each stretch under the take, in turn, over any footage there.
+    Add {
+        items: Vec<crate::take_short::Footage>,
+    },
+    /// Takes footage off `[fromUs, toUs)`; without them, all of it.
+    Remove {
+        #[serde(default)]
+        from_us: Option<u64>,
+        #[serde(default)]
+        to_us: Option<u64>,
+    },
+}
+
+pub fn project_short_footage_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    change: FootageChange,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        let document = reader.document().clone();
+        let mut shorts = document.shorts.clone();
+        let short = shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        match &change {
+            FootageChange::Add { items } => {
+                if items.is_empty() {
+                    return Err("Name some footage to add".into());
+                }
+                for item in items {
+                    crate::take_short::place(&document, short, item)?;
+                }
+            }
+            FootageChange::Remove { from_us, to_us } => {
+                let range = match (from_us, to_us) {
+                    (Some(a), Some(b)) if b > a => Some((*a, *b)),
+                    (None, None) => None,
+                    _ => return Err("Give both `fromUs` and `toUs`, or neither".into()),
+                };
+                crate::take_short::remove(&document, short, range)?;
+            }
+        }
+        reader.set_shorts(expected_revision, shorts)
+    })
+}
+
 /// Picks a short's scenes from its recording (see [`crate::short_scenes::suggest`]) and saves
 /// them in place of its earlier automatic ones; scenes set by hand stay.
 pub fn project_short_scenes_pick_impl(

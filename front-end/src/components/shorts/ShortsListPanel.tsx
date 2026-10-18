@@ -1,5 +1,5 @@
-import React from "react";
-import { Check, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles } from "lucide-react";
+import React, { useState } from "react";
+import { Check, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Video } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { focusShortPlayback } from "../../lib/playbackControl";
 import { switchStage, switchStarted } from "../../lib/switchTiming";
@@ -16,6 +16,7 @@ import {
   useShortsStore,
 } from "../../stores/shortsStore";
 import { Button, Notice } from "../ui";
+import { TakeForm } from "./TakeForm";
 
 function formatTime(us: number): string {
   const total = Math.max(0, us) / 1_000_000;
@@ -29,8 +30,9 @@ function formatTime(us: number): string {
 export const ShortsListPanel: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
   const selected = useSelectedShort();
-  const { busy, error, checked, exports, renaming } = useShortsStore();
+  const { busy, error, notice, checked, exports, renaming } = useShortsStore();
   const hasMain = useShortsStore((s) => !!s.main);
+  const [takeOpen, setTakeOpen] = useState(false);
   if (!project) return null;
 
   const shorts = project.shorts ?? [];
@@ -58,6 +60,23 @@ export const ShortsListPanel: React.FC = () => {
         </Button>
         <Button
           size="sm"
+          variant="secondary"
+          icon={Video}
+          className="w-full"
+          disabled={!!busy}
+          aria-expanded={takeOpen}
+          onClick={() => setTakeOpen((open) => !open)}
+          title="A short you recorded again: your camera and voice, with footage from this video under it"
+        >
+          From a take…
+        </Button>
+        {takeOpen && (
+          <div className="w-full">
+            <TakeForm onDone={() => setTakeOpen(false)} />
+          </div>
+        )}
+        <Button
+          size="sm"
           variant="primary"
           icon={Download}
           className="w-full"
@@ -71,6 +90,11 @@ export const ShortsListPanel: React.FC = () => {
       {error && (
         <Notice tone="danger" onDismiss={() => setShortsError(undefined)}>
           {error}
+        </Notice>
+      )}
+      {notice && (
+        <Notice tone="accent" onDismiss={() => useShortsStore.setState({ notice: undefined })}>
+          {notice}
         </Notice>
       )}
 
@@ -162,9 +186,11 @@ export const ShortsListPanel: React.FC = () => {
                 )}
               </div>
               <div className="mt-1 pl-6 text-meta tabular-nums text-studio-500">
-                {ok
-                  ? `${formatTime(s.editedStartUs!)} · ${((s.editedEndUs! - s.editedStartUs!) / 1e6).toFixed(1)}s`
-                  : "Part of it was cut; adjust it on its timeline"}
+                {s.take
+                  ? `From a take · ${((s.lengthUs ?? 0) / 1e6).toFixed(1)}s`
+                  : ok
+                    ? `${formatTime(s.editedStartUs!)} · ${((s.editedEndUs! - s.editedStartUs!) / 1e6).toFixed(1)}s`
+                    : "Part of it was cut; adjust it on its timeline"}
               </div>
               {row && (
                 <div className="mt-1 pl-6 flex items-center gap-1 text-meta">
