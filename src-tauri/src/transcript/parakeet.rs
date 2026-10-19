@@ -445,7 +445,10 @@ mod tests {
                     })
                     .unwrap();
                 for w in result.words {
-                    words.push((w.source_start_us + offset as u64 * 1_000_000 / 16_000, w.text));
+                    words.push((
+                        w.source_start_us + offset as u64 * 1_000_000 / 16_000,
+                        w.text,
+                    ));
                 }
             }
             println!("--- {chunk_s} s chunks: {} words", words.len());

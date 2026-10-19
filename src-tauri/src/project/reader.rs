@@ -939,8 +939,14 @@ impl ProjectReader {
         unmute: bool,
         short: Option<&str>,
     ) -> Result<OpenedProject, String> {
-        self.history
-            .update_noise_mutes(expected_revision, key, ranges, unmute, short, &self.root)?;
+        self.history.update_noise_mutes(
+            expected_revision,
+            key,
+            ranges,
+            unmute,
+            short,
+            &self.root,
+        )?;
         Ok(self.done())
     }
 

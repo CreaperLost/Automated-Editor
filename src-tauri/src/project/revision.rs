@@ -766,7 +766,9 @@ impl EditHistory {
                     .edit
                     .as_ref()
                     .map(|e| e.noise_mutes.clone())
-                    .ok_or_else(|| "Part of this short was cut from the video; adjust it first".into()),
+                    .ok_or_else(|| {
+                        "Part of this short was cut from the video; adjust it first".into()
+                    }),
             }
         };
         let mut mutes = own_mutes(&self.current)?;

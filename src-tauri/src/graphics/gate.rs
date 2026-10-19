@@ -1756,6 +1756,10 @@ mod tests {
         assert_eq!(shape(&run(&lower_third()), true).status, Status::Pass);
         let unmarked = shape(&run(&lower_third()), false);
         assert_eq!(unmarked.status, Status::Warn);
-        assert!(unmarked.reason.contains("data-overlay"), "{}", unmarked.reason);
+        assert!(
+            unmarked.reason.contains("data-overlay"),
+            "{}",
+            unmarked.reason
+        );
     }
 }

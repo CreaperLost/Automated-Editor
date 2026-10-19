@@ -544,9 +544,7 @@ pub fn full_camera_ranges(document: &crate::project::revision::EditDocument) -> 
         .filter(|r| r.2 == crate::short_scenes::SceneMode::Camera)
         .map(|r| (r.0, r.1))
         .collect(),
-        None => document
-            .webcam_focus
-            .edited_ranges(&document.focus_clock()),
+        None => document.webcam_focus.edited_ranges(&document.focus_clock()),
     };
     let mut ranges: Vec<(u64, u64)> = ranges.into_iter().filter(|r| r.1 > r.0).collect();
     ranges.sort();
@@ -739,7 +737,13 @@ mod tests {
         assert!(sized.contains("data-entrance=\"cut\""));
         assert!(sized.contains("content=\"width=1080, height=1920\""));
         // A root without the attributes gets them.
-        let bare = size_composition("<div data-composition-id=\"g\">", 640, 360, 2.0, Entrance::Ease);
+        let bare = size_composition(
+            "<div data-composition-id=\"g\">",
+            640,
+            360,
+            2.0,
+            Entrance::Ease,
+        );
         assert!(bare.contains("data-width=\"640\"") && bare.contains("data-duration=\"2.000\""));
         assert!(bare.contains("data-entrance=\"ease\""), "{bare}");
         // Rendering again replaces it rather than adding a second one.
@@ -809,13 +813,21 @@ mod tests {
         assert!(is_overlay(
             "<div id=\"root\" data-composition-id=\"g\" data-overlay data-duration=\"3\">"
         ));
-        assert!(is_overlay("<div\n  data-composition-id=\"g\"\n  data-overlay\n>"));
+        assert!(is_overlay(
+            "<div\n  data-composition-id=\"g\"\n  data-overlay\n>"
+        ));
         assert!(!is_overlay(
             "<div data-composition-id=\"g\"></div><div data-overlay></div>"
         ));
-        assert!(!is_overlay("<div data-composition-id=\"g\" data-overlay-ish>"));
+        assert!(!is_overlay(
+            "<div data-composition-id=\"g\" data-overlay-ish>"
+        ));
         for template in templates::all() {
-            assert!(!is_overlay(template.html()), "{} fills the frame", template.name);
+            assert!(
+                !is_overlay(template.html()),
+                "{} fills the frame",
+                template.name
+            );
         }
     }
 

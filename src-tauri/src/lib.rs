@@ -1022,7 +1022,13 @@ fn template_apply(
     template_id: String,
     short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::template_apply_impl(&state, project_handle, expected_revision, template_id, short_id)
+    commands::template_apply_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        template_id,
+        short_id,
+    )
 }
 
 /// Async: lining up the take's sounds reads them, which must not hold the main thread.
@@ -1616,7 +1622,12 @@ fn transcript_strip_punctuation(
     track_id: String,
     short_id: Option<String>,
 ) -> Result<transcript::TranscriptView, String> {
-    commands::transcript::transcript_strip_punctuation_impl(&state, project_handle, track_id, short_id)
+    commands::transcript::transcript_strip_punctuation_impl(
+        &state,
+        project_handle,
+        track_id,
+        short_id,
+    )
 }
 
 #[cfg(feature = "tauri-app")]

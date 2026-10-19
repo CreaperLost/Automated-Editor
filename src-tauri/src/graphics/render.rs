@@ -11,7 +11,7 @@
 use super::runtime;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -100,9 +100,8 @@ impl Spec {
         }
         // A graphic in a slot of a short covers part of the frame; on the whole frame it fills
         // it unless its composition says it is an overlay.
-        spec.entrance = super::entrance_for(full_camera, clip, || {
-            whole_frame && !overlay_of(&spec.dir)
-        });
+        spec.entrance =
+            super::entrance_for(full_camera, clip, || whole_frame && !overlay_of(&spec.dir));
         spec.default_brand = document.graphics_brand.clone();
         spec
     }
@@ -233,6 +232,8 @@ struct Queue {
     failed: HashMap<String, String>,
     /// The latest error by asset, for the editor.
     errors: HashMap<String, String>,
+    /// Renders [`ensure`] is making on its own thread, by target; the worker leaves them alone.
+    elsewhere: HashSet<PathBuf>,
     worker: bool,
 }
 
@@ -371,6 +372,7 @@ fn request(spec: &Spec, hash: &str) {
     let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
     // Two graphics from the same template and values share a name, but each has its own cache.
     if queue.failed.contains_key(&name)
+        || queue.elsewhere.contains(&spec.cache.join(&name))
         || queue
             .running
             .as_ref()
@@ -407,6 +409,11 @@ fn work() {
             let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
             loop {
                 if let Some(job) = queue.waiting.pop_front() {
+                    // Made (or being made) by an export or graphic_render since it was asked for.
+                    let target = job.spec.cache.join(job.spec.file_name(&job.hash));
+                    if queue.elsewhere.contains(&target) || target.is_file() {
+                        continue;
+                    }
                     queue.running = Some((
                         job.spec.asset_id.clone(),
                         job.spec.file_name(&job.hash),
@@ -515,9 +522,10 @@ pub fn ensure(
         }
         let label = format!("Rendering graphic \"{}\"", spec.name);
         progress(index as f64 / count as f64, &label);
-        // Wait for the queue's render of it if it is running now, else make it here.
-        wait_for_running(&name, cancel);
+        // Wait for the queue's render of it if it is running now, else make it here, with the
+        // worker kept off it until this one is done.
         let target = spec.cache.join(&name);
+        let _claim = claim(&name, &target, cancel);
         if target.is_file() {
             continue;
         }
@@ -561,10 +569,29 @@ fn copy_render(from: &Path, spec: &Spec, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn wait_for_running(name: &str, cancel: &AtomicBool) {
+/// `ensure`'s hold on `target` while it makes it: the worker neither starts it nor is asked for
+/// it, so two renders never share it.
+struct Claim(PathBuf);
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let r = renderer();
+        r.queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .elsewhere
+            .remove(&self.0);
+        r.wake.notify_all();
+    }
+}
+
+/// Waits for the worker's render of `name` if it is running, then claims `target`, in one hold
+/// of the lock so the worker can't start it in between.
+fn claim(name: &str, target: &Path, cancel: &AtomicBool) -> Claim {
     let r = renderer();
     let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
-    while queue.running.as_ref().is_some_and(|(_, n, _)| n == name)
+    while (queue.running.as_ref().is_some_and(|(_, n, _)| n == name)
+        || queue.elsewhere.contains(target))
         && !cancel.load(Ordering::Relaxed)
     {
         queue = r
@@ -573,6 +600,8 @@ fn wait_for_running(name: &str, cancel: &AtomicBool) {
             .unwrap_or_else(|e| e.into_inner())
             .0;
     }
+    queue.elsewhere.insert(target.to_path_buf());
+    Claim(target.to_path_buf())
 }
 
 /// Renders `spec` into its cache as `name`, now, on this thread.
@@ -596,7 +625,17 @@ fn render_now(
         .chars()
         .take(12)
         .collect();
-    let work = runtime::runtime_dir().join("work").join(&id);
+    // Its own folder per render, never one named by the graphic alone: a second render of the
+    // same graphic (this app's or another instance's) clearing that folder took the first's
+    // output from under HyperFrames as it assembled.
+    static RENDERS: AtomicU64 = AtomicU64::new(0);
+    let works = runtime::runtime_dir().join("work");
+    sweep_stale_work(&works);
+    let work = works.join(format!(
+        "{id}-{}-{}",
+        std::process::id(),
+        RENDERS.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&work);
     let stage = work.join("s");
     copy_dir(&spec.dir, &stage)?;
@@ -635,7 +674,10 @@ fn render_now(
         )?;
         // Into the project under a temporary name first, so a render is whole or absent.
         let target = spec.cache.join(name);
-        let landing = spec.cache.join(format!(".landing-{id}.webm"));
+        let landing = spec.cache.join(format!(
+            ".landing-{}.webm",
+            work.file_name().unwrap_or_default().to_string_lossy()
+        ));
         if std::fs::rename(&part, &landing).is_err() {
             // Another drive: copy instead.
             std::fs::copy(&part, &landing).map_err(|e| format!("{}: {e}", landing.display()))?;
@@ -646,6 +688,29 @@ fn render_now(
     })();
     let _ = std::fs::remove_dir_all(&work);
     result
+}
+
+/// Removes render folders left by a crash or a killed app: none takes a day. The gate's own
+/// folders are its to clear.
+fn sweep_stale_work(works: &Path) {
+    let Ok(entries) = std::fs::read_dir(works) else {
+        return;
+    };
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with("gate-") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > day);
+        if old {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Renders of other lengths kept per canvas: a graphic used at several lengths (in the video and
@@ -1018,6 +1083,36 @@ mod tests {
         std::fs::write(&made, b"webm").unwrap();
         copy_render(&made, &b, &todo[1].1).unwrap();
         assert!(missing(&[a, b]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_worker_is_not_asked_for_a_render_graphic_render_is_making() {
+        let root = tempfile::tempdir().unwrap();
+        let mut a = spec(
+            &graphic_folder(root.path(), "claimed"),
+            &root.path().join("cache"),
+            4_000_000,
+        );
+        a.asset_id = "claimed".into();
+        let hash = a.hash().unwrap();
+        let target = a.cache.join(a.file_name(&hash));
+        let queued = || {
+            renderer()
+                .queue
+                .lock()
+                .unwrap()
+                .waiting
+                .iter()
+                .any(|j| j.spec.asset_id == "claimed")
+        };
+        let held = claim(&a.file_name(&hash), &target, &AtomicBool::new(false));
+        request(&a, &hash);
+        assert!(
+            !queued(),
+            "the preview's ask waits for graphic_render's render"
+        );
+        drop(held);
+        assert!(!renderer().queue.lock().unwrap().elsewhere.contains(&target));
     }
 
     #[test]

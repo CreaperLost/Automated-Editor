@@ -1162,7 +1162,9 @@ mod tests {
         assert_eq!(after.duration_us(), 18 * S);
         // A cut that leaves its ends: it takes the video's timeline as it is now.
         history.undo(3, dir.path()).unwrap();
-        history.ripple_cuts(4, &[(15 * S, 17 * S)], dir.path()).unwrap();
+        history
+            .ripple_cuts(4, &[(15 * S, 17 * S)], dir.path())
+            .unwrap();
         history.resync_short(5, "s1", dir.path()).unwrap();
         let synced = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
         assert_eq!(synced.duration_us(), 18 * S);
@@ -1208,7 +1210,10 @@ mod tests {
             .unwrap();
         let timeline = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
         assert!(timeline.noise_mutes.is_empty());
-        assert_eq!(history.current.noise_mutes.get(&sound).map(Vec::len), Some(1));
+        assert_eq!(
+            history.current.noise_mutes.get(&sound).map(Vec::len),
+            Some(1)
+        );
     }
 
     #[test]

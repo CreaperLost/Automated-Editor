@@ -1042,9 +1042,18 @@ mod tests {
         let base = reader.document();
         let short = base.shorts.iter().find(|s| s.take.is_some()).unwrap();
         let doc = crate::shorts::short_document(base, short, true).unwrap();
-        println!("PROBE short {} length {:.2}s", short.id, doc.duration_us() as f64 / 1e6);
+        println!(
+            "PROBE short {} length {:.2}s",
+            short.id,
+            doc.duration_us() as f64 / 1e6
+        );
         for track in &doc.sequence.tracks {
-            println!("PROBE track {} {:?} clips {}", track.id, track.kind, track.clips.len());
+            println!(
+                "PROBE track {} {:?} clips {}",
+                track.id,
+                track.kind,
+                track.clips.len()
+            );
         }
         let mixer = AudioMixer::new(reader.root(), &doc).unwrap();
         let mut frames = Vec::new();
@@ -1078,7 +1087,12 @@ mod tests {
             }
         }
         for (a, b) in &stretches {
-            println!("PROBE quiet {:.2}-{:.2} ({} ms)", *a as f64 / 100.0, *b as f64 / 100.0, (b - a) * 10);
+            println!(
+                "PROBE quiet {:.2}-{:.2} ({} ms)",
+                *a as f64 / 100.0,
+                *b as f64 / 100.0,
+                (b - a) * 10
+            );
         }
         println!("PROBE quiet stretches over 120 ms: {}", stretches.len());
     }

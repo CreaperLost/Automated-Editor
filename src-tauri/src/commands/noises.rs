@@ -206,7 +206,12 @@ pub fn target_short(
             .shorts
             .iter()
             .find(|s| s.id == wanted)
-            .or_else(|| document.shorts.iter().find(|s| s.title.eq_ignore_ascii_case(wanted)))
+            .or_else(|| {
+                document
+                    .shorts
+                    .iter()
+                    .find(|s| s.title.eq_ignore_ascii_case(wanted))
+            })
             .map(|s| Some(s.id.clone()))
             .ok_or_else(|| format!("No short {wanted}")),
         None => Ok(crate::shorts::take_short_of(document, key).map(|s| s.id.clone())),
@@ -247,7 +252,11 @@ fn review(
     let own;
     let document = match target_short(base, key, short.as_deref())? {
         Some(id) => {
-            let short = base.shorts.iter().find(|s| s.id == id).ok_or("That short no longer exists")?;
+            let short = base
+                .shorts
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("That short no longer exists")?;
             own = crate::shorts::short_timeline(base, short)?;
             &own
         }

@@ -3984,7 +3984,11 @@ mod tests {
         let html = std::fs::read_to_string(&html_path).unwrap();
         std::fs::write(
             &html_path,
-            html.replacen("data-composition-id=\"graphic\"", "data-composition-id=\"graphic\" data-overlay", 1),
+            html.replacen(
+                "data-composition-id=\"graphic\"",
+                "data-composition-id=\"graphic\" data-overlay",
+                1,
+            ),
         )
         .unwrap();
         crate::graphics::render::sources_changed();
@@ -4014,14 +4018,20 @@ mod tests {
             .entrance
         };
         // The 16:9 video: the full-screen card cuts, over the camera or not.
-        assert_eq!(entrance(&document, &card, &card_clip, &camera), Entrance::Cut);
+        assert_eq!(
+            entrance(&document, &card, &card_clip, &camera),
+            Entrance::Cut
+        );
         assert_eq!(entrance(&document, &card, &card_clip, &[]), Entrance::Cut);
         // The lower third eases over the full-screen camera, and cuts over the screen.
         assert_eq!(
             entrance(&document, &lower_third, &lower_clip, &camera),
             Entrance::Ease
         );
-        assert_eq!(entrance(&document, &lower_third, &lower_clip, &[]), Entrance::Cut);
+        assert_eq!(
+            entrance(&document, &lower_third, &lower_clip, &[]),
+            Entrance::Cut
+        );
         // A short: the card on the whole frame still cuts; in the camera's part of the split it
         // covers only part of the frame, so over a camera scene it eases.
         let short: crate::shorts::Short = serde_json::from_value(serde_json::json!({
@@ -4035,12 +4045,17 @@ mod tests {
             Entrance::Cut
         );
         let layout = short_document.short_layout.as_mut().unwrap();
-        layout.graphic_slots.insert("g1".into(), GraphicSlot::Camera);
+        layout
+            .graphic_slots
+            .insert("g1".into(), GraphicSlot::Camera);
         assert_eq!(
             entrance(&short_document, &card, &card_clip, &camera),
             Entrance::Ease
         );
-        assert_eq!(entrance(&short_document, &card, &card_clip, &[]), Entrance::Cut);
+        assert_eq!(
+            entrance(&short_document, &card, &card_clip, &[]),
+            Entrance::Cut
+        );
         // Without a camera nothing fills the frame with it.
         let mut no_camera = document.clone();
         no_camera.layout.webcam_enabled = false;
