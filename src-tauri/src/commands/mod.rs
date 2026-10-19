@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub mod graphics;
 pub mod noises;
 pub mod proposals;
 pub mod transcript;
@@ -154,12 +155,41 @@ pub fn show_in_finder_impl(path: String) -> Result<(), String> {
 /// What a sound stream's waveform, pauses and speech are read from: `key` is
 /// `<asset>.<stream>`. On the timeline, its time maps through the clips that play it;
 /// otherwise the asset's own time is the timeline (a waveform drawn per clip).
+/// The document a command works on: the project's, or with `short` that short's own timeline
+/// (in the short's time, at the project's revision).
+pub(crate) fn target_document<'a>(
+    reader: &'a ProjectReader,
+    short: Option<&str>,
+) -> Result<std::borrow::Cow<'a, crate::project::revision::EditDocument>, String> {
+    let base = reader.document();
+    let Some(id) = short else {
+        return Ok(std::borrow::Cow::Borrowed(base));
+    };
+    let short = base
+        .shorts
+        .iter()
+        .find(|s| s.id == id)
+        .ok_or("That short no longer exists")?;
+    Ok(std::borrow::Cow::Owned(crate::shorts::short_timeline(
+        base, short,
+    )?))
+}
+
 pub(crate) fn sound_context(
     reader: &ProjectReader,
     key: &str,
     on_timeline: bool,
 ) -> Result<WaveformTrackContext, String> {
-    let document = reader.document();
+    sound_context_in(reader, reader.document(), key, on_timeline)
+}
+
+/// [`sound_context`] placed on `document`'s timeline (a short's own, say).
+pub(crate) fn sound_context_in(
+    reader: &ProjectReader,
+    document: &crate::project::revision::EditDocument,
+    key: &str,
+    on_timeline: bool,
+) -> Result<WaveformTrackContext, String> {
     let source = document.stream_ref(key)?;
     let asset = document.asset(&source.asset).ok_or("Unknown sound")?;
     let stream = asset.stream(&source.stream).ok_or("Unknown sound")?;
@@ -208,16 +238,28 @@ pub fn detect_silence_impl(
     track_id: String,
     config: SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
+    detect_silence_for(state, project_handle, track_id, config, None)
+}
+
+/// [`detect_silence_impl`] on the project's timeline, or on short `short`'s own.
+pub fn detect_silence_for(
+    state: &AppState,
+    project_handle: String,
+    track_id: String,
+    config: SilenceConfig,
+    short: Option<&str>,
+) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
     if track_id == ALL_SPEECH {
-        return detect_speech_silence(state, &project_handle, &config);
+        return detect_combined_silence(state, &project_handle, &config, None, short);
     }
     let (ctx, transcript, revision) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
+        let document = target_document(reader, short)?;
         (
-            sound_context(reader, &track_id, true)?,
+            sound_context_in(reader, &document, &track_id, true)?,
             crate::transcript::store::load_transcript(reader.root(), &track_id)?,
             reader.document().revision,
         )
@@ -263,14 +305,6 @@ fn speech_on_timeline(
     speech
 }
 
-fn detect_speech_silence(
-    state: &AppState,
-    project_handle: &str,
-    config: &SilenceConfig,
-) -> Result<SilenceDetectionResult, String> {
-    detect_combined_silence(state, project_handle, config, None)
-}
-
 /// Explicit sources may include desktop/voice-mode audio regardless of their speech role.
 /// Existing callers keep selecting one stream or ALL_SPEECH through detect_silence_impl.
 pub fn detect_silence_sources_impl(
@@ -279,11 +313,22 @@ pub fn detect_silence_sources_impl(
     track_ids: Vec<String>,
     config: SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
+    detect_silence_sources_for(state, project_handle, track_ids, config, None)
+}
+
+/// [`detect_silence_sources_impl`] on the project's timeline, or on short `short`'s own.
+pub fn detect_silence_sources_for(
+    state: &AppState,
+    project_handle: String,
+    track_ids: Vec<String>,
+    config: SilenceConfig,
+    short: Option<&str>,
+) -> Result<SilenceDetectionResult, String> {
     config.validate()?;
     if track_ids.len() != 2 || track_ids[0] == track_ids[1] {
         return Err("Choose two different sound sources".into());
     }
-    detect_combined_silence(state, &project_handle, &config, Some(&track_ids))
+    detect_combined_silence(state, &project_handle, &config, Some(&track_ids), short)
 }
 
 fn detect_combined_silence(
@@ -291,16 +336,17 @@ fn detect_combined_silence(
     project_handle: &str,
     config: &SilenceConfig,
     track_ids: Option<&[String]>,
+    short: Option<&str>,
 ) -> Result<SilenceDetectionResult, String> {
     let (sounds, revision) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, project_handle)?;
+        let document = target_document(reader, short)?;
         let selected = if let Some(keys) = track_ids {
             keys.iter()
                 .map(|key| {
-                    let plays = reader
-                        .document()
+                    let plays = document
                         .sequence
                         .tracks
                         .iter()
@@ -320,7 +366,7 @@ fn detect_combined_silence(
                 })
                 .collect::<Result<Vec<_>, String>>()?
         } else {
-            speech_on_timeline(reader.document())
+            speech_on_timeline(&document)
         };
         selected
             .into_iter()
@@ -334,7 +380,7 @@ fn detect_combined_silence(
                 ))
             })
             .collect::<Result<Vec<_>, String>>()
-            .map(|sounds| (sounds, reader.document().revision))?
+            .map(|sounds| (sounds, document.revision))?
     };
     if sounds.is_empty() {
         return Err("Nothing on the timeline is marked as speech: choose a sound to scan".into());
@@ -851,11 +897,34 @@ pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject
     let summary = reader.summary.clone();
     let document = reader.history().current.clone();
     let mut owner = PlaybackOwner::open(summary.project_handle.clone(), &document)?;
+    // A project with shorts frames their camera on the face: find it in the background.
+    if !document.shorts.is_empty() {
+        crate::face::ensure(reader.root(), &document, false);
+    }
     *state.opened_project.lock() = Some(reader);
     owner.native_enabled = state.native_capture_enabled;
     *state.playback.lock() = owner;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
     Ok(summary)
+}
+
+/// Where each camera stream's face track stands (shorts frame their camera on it); `start`
+/// begins finding the ones that are missing or failed.
+pub fn project_face_tracks_impl(
+    state: &AppState,
+    project_handle: String,
+    start: bool,
+) -> Result<Vec<crate::face::FaceTrackStatus>, String> {
+    let (root, document) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        (reader.root().to_path_buf(), reader.document().clone())
+    };
+    if start {
+        crate::face::ensure(&root, &document, true);
+    }
+    Ok(crate::face::status(&root, &document))
 }
 
 pub fn close_project_impl(state: &AppState, project_handle: String) -> Result<(), String> {
@@ -1301,8 +1370,135 @@ pub fn project_chapters_set_impl(
     })
 }
 
+/// The check before export, of the edit as it is now.
+pub fn project_check_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<crate::check::CheckReport, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let missing: Vec<&str> = reader
+        .summary
+        .assets
+        .iter()
+        .filter(|a| a.missing)
+        .map(|a| a.id.as_str())
+        .collect();
+    Ok(crate::check::run(
+        reader.root(),
+        reader.document(),
+        &missing,
+    ))
+}
+
+/// Applies the fixes of the findings `ids` of the check at `expected_revision`, each as its
+/// own undo step. Later moments go first, so a cut never moves a finding still to fix.
+pub fn project_check_fix_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    ids: Vec<String>,
+) -> Result<OpenedProject, String> {
+    let report = project_check_impl(state, project_handle.clone())?;
+    if report.revision != expected_revision {
+        return Err("The edit changed since the check; check again".into());
+    }
+    let all = ids.iter().any(|id| id == "all");
+    let mut fixes = Vec::new();
+    for finding in report.findings {
+        if !(all || ids.contains(&finding.id)) {
+            continue;
+        }
+        match finding.fix {
+            Some(fix) => fixes.push((finding.start_us, fix)),
+            None if all => {}
+            None => return Err(format!("{} has no fix to apply", finding.id)),
+        }
+    }
+    if !all && fixes.len() < ids.len() {
+        return Err("Some of those findings are not in the check any more; check again".into());
+    }
+    if fixes.is_empty() {
+        return Err("Nothing to fix".into());
+    }
+    fixes.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut revision = expected_revision;
+    let mut summary = None;
+    for (_, fix) in fixes {
+        let next = apply_check_fix(state, &project_handle, revision, fix)?;
+        revision = next.revision;
+        summary = Some(next);
+    }
+    summary.ok_or_else(|| "Nothing to fix".into())
+}
+
+fn apply_check_fix(
+    state: &AppState,
+    project_handle: &str,
+    revision: u64,
+    fix: crate::check::Fix,
+) -> Result<OpenedProject, String> {
+    use crate::check::Fix;
+    let handle = project_handle.to_string();
+    let current = || -> Result<crate::project::revision::EditDocument, String> {
+        let opened = state.opened_project.lock();
+        Ok(opened
+            .as_ref()
+            .ok_or("No opened project")?
+            .document()
+            .clone())
+    };
+    match fix {
+        Fix::Cut { start_us, end_us } => project_sequence_edit_impl(
+            state,
+            handle,
+            revision,
+            SequenceEdit::DeleteRange {
+                ranges: vec![crate::zoom::EditedRange { start_us, end_us }],
+                ripple: Some(true),
+            },
+            None,
+        ),
+        Fix::DeleteZoom { id } => project_zoom_delete_impl(state, handle, revision, id),
+        Fix::ZoomEase {
+            id,
+            source_start_us,
+            source_end_us,
+        } => {
+            let mut zoom = current()?
+                .zooms
+                .into_iter()
+                .find(|z| z.id == id)
+                .ok_or("That zoom is gone")?;
+            zoom.source_start_us = source_start_us;
+            zoom.source_end_us = source_end_us;
+            project_zoom_update_impl(state, handle, revision, zoom)
+        }
+        Fix::CaptionOffset { offset_pct } => {
+            let mut captions = current()?.captions;
+            captions.offset_pct = offset_pct;
+            project_captions_update_impl(state, handle, revision, captions)
+        }
+        Fix::RemoveChapter { id } => {
+            let chapters = current()?
+                .chapters
+                .into_iter()
+                .filter(|c| c.id != id)
+                .collect();
+            project_chapters_set_impl(state, handle, revision, chapters)
+        }
+        Fix::Normalize { target_lufs } => {
+            let mut audio = current()?.audio;
+            audio.normalize = true;
+            audio.target_lufs = target_lufs;
+            project_audio_update_impl(state, handle, revision, audio)
+        }
+    }
+}
+
 /// Whether some speech has a transcript to caption from.
-fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
+pub(crate) fn has_speech_transcript(reader: &crate::project::ProjectReader) -> bool {
     let has = |id: &str| {
         crate::transcript::store::load_transcript(reader.root(), id)
             .ok()
@@ -1379,6 +1575,266 @@ pub fn project_shorts_set_impl(
     mutate_opened(state, project_handle, |reader| {
         reader.set_shorts(expected_revision, shorts)
     })
+}
+
+/// Saves the open project's settings (and `short`'s look) as a template for every project.
+pub fn template_save_impl(
+    state: &AppState,
+    project_handle: String,
+    name: String,
+    short: Option<String>,
+) -> Result<Vec<crate::templates::Template>, String> {
+    let template = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        crate::templates::capture(&reader.history().current, &name, short.as_deref())?
+    };
+    crate::templates::save(&crate::templates::dir(), template)
+}
+
+/// Gives the open project a saved template's settings, and `short` its short look.
+pub fn template_apply_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    template_id: String,
+    short: Option<String>,
+) -> Result<OpenedProject, String> {
+    let template = crate::templates::find(&crate::templates::dir(), &template_id)?;
+    mutate_opened(state, project_handle, |reader| {
+        reader.apply_template(expected_revision, &template, short.as_deref())
+    })
+}
+
+/// A short made from a take, and how its camera was lined up with its voice.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakeShortMade {
+    pub project: OpenedProject,
+    pub short_id: String,
+    pub sync: crate::take_short::TakeSync,
+}
+
+/// A new short made from a take: `camera` and `voice` name streams (`<asset>.<stream>`) or
+/// assets already imported. A separate voice is lined up with the camera's own sound.
+#[allow(clippy::too_many_arguments)]
+pub fn project_short_from_take_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    title: String,
+    camera: Option<String>,
+    voice: Option<String>,
+    media: Vec<String>,
+    reason: Option<String>,
+) -> Result<TakeShortMade, String> {
+    // Lining the sounds up reads them: done without holding the project.
+    let (root, document) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        (reader.root().to_path_buf(), reader.document().clone())
+    };
+    // Named streams win; otherwise the take's files are told apart.
+    let sources = if camera.is_none() && voice.is_none() && !media.is_empty() {
+        crate::take_short::guess(&document, &media)?
+    } else {
+        crate::take_short::resolve(&document, camera.as_deref(), voice.as_deref())?
+    };
+    let sync = crate::take_short::sync(&root, &document, &sources);
+    let base = format!("take-{}", sources.voice.asset);
+    let id = (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find(|id| !document.shorts.iter().any(|s| &s.id == id))
+        .unwrap_or(base);
+    let title = if title.trim().is_empty() {
+        format!("Short {}", document.shorts.len() + 1)
+    } else {
+        title
+    };
+    let short = crate::take_short::new_short(
+        &document,
+        id.clone(),
+        &title,
+        reason.as_deref().unwrap_or_default(),
+        &sources,
+        &sync,
+    )?;
+    let roles = crate::take_short::roles(&document, &sources);
+    let project = mutate_opened(state, project_handle, |reader| {
+        reader.add_take_short(expected_revision, short, &roles)
+    })?;
+    Ok(TakeShortMade {
+        project,
+        short_id: id,
+        sync,
+    })
+}
+
+/// A change to the footage under a take short.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum FootageChange {
+    /// Plays each stretch under the take, in turn, over any footage there.
+    Add {
+        items: Vec<crate::take_short::Footage>,
+    },
+    /// Takes footage off `[fromUs, toUs)`; without them, all of it.
+    Remove {
+        #[serde(default)]
+        from_us: Option<u64>,
+        #[serde(default)]
+        to_us: Option<u64>,
+    },
+}
+
+pub fn project_short_footage_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    change: FootageChange,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        let document = reader.document().clone();
+        let mut shorts = document.shorts.clone();
+        let short = shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        match &change {
+            FootageChange::Add { items } => {
+                if items.is_empty() {
+                    return Err("Name some footage to add".into());
+                }
+                for item in items {
+                    crate::take_short::place(&document, short, item)?;
+                }
+            }
+            FootageChange::Remove { from_us, to_us } => {
+                let range = match (from_us, to_us) {
+                    (Some(a), Some(b)) if b > a => Some((*a, *b)),
+                    (None, None) => None,
+                    _ => return Err("Give both `fromUs` and `toUs`, or neither".into()),
+                };
+                crate::take_short::remove(&document, short, range)?;
+            }
+        }
+        reader.set_shorts(expected_revision, shorts)
+    })
+}
+
+/// Picks a short's scenes from its recording (see [`crate::short_scenes::suggest`]) and saves
+/// them in place of its earlier automatic ones; scenes set by hand stay.
+pub fn project_short_scenes_pick_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+) -> Result<OpenedProject, String> {
+    let (shorts, path, input) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let document = reader.document();
+        let short = document
+            .shorts
+            .iter()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let asset = document
+            .clock_asset(short.media.as_deref())
+            .and_then(|id| document.asset(id))
+            .filter(|a| a.is_recording())
+            .ok_or("Scenes are picked from a recording's mouse data; this short is on a file")?;
+        if !document.layout.webcam_enabled || !asset.streams.iter().any(|s| s.role == Role::Webcam)
+        {
+            return Err("This short has no camera, so it shows the screen throughout".into());
+        }
+        let (start, end) = (short.source_start_us, short.source_end_us);
+        let words: Vec<(u64, u64)> = asset
+            .streams
+            .iter()
+            .filter(|s| s.role == Role::Mic)
+            .filter_map(|s| {
+                let key = crate::sequence::StreamRef::new(&asset.id, &s.id).key();
+                crate::transcript::store::load_transcript(reader.root(), &key)
+                    .ok()
+                    .flatten()
+            })
+            .next()
+            .map(|t| {
+                t.words
+                    .iter()
+                    .filter(|w| w.kind == crate::transcript::WordKind::Word)
+                    .filter(|w| w.source_end_us > start && w.source_start_us < end)
+                    .map(|w| (w.source_start_us, w.source_end_us))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (
+            document.shorts.clone(),
+            std::path::PathBuf::from(&asset.path),
+            (start, end, short.media.clone(), words),
+        )
+    };
+    let telemetry = crate::telemetry::reader::read_telemetry(&path)?;
+    let (start_us, end_us, media, words) = input;
+    let picked = crate::short_scenes::suggest(&crate::short_scenes::SuggestInput {
+        start_us,
+        end_us,
+        media,
+        telemetry: &telemetry,
+        words: &words,
+    });
+    let shorts = shorts
+        .into_iter()
+        .map(|mut short| {
+            if short.id == short_id {
+                short.layout.scenes =
+                    crate::short_scenes::replace_auto(&short.layout.scenes, picked.clone());
+            }
+            short
+        })
+        .collect();
+    project_shorts_set_impl(state, project_handle, expected_revision, shorts)
+}
+
+/// Adds a scene over `[start_us, end_us)` of a short's own timeline; it takes that time from
+/// the scenes it overlaps.
+pub fn project_short_scene_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    start_us: u64,
+    end_us: u64,
+    mode: crate::short_scenes::SceneMode,
+) -> Result<OpenedProject, String> {
+    if end_us <= start_us {
+        return Err("A scene must end after it starts".into());
+    }
+    let shorts = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        let short = shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        short.layout.scenes = crate::shorts::with_scene(document, short, start_us, end_us, mode)?;
+        shorts
+    };
+    project_shorts_set_impl(state, project_handle, expected_revision, shorts)
 }
 
 /// Exports one short as a 9:16 video next to the project (or to `settings.destination`),
@@ -1471,11 +1927,37 @@ pub struct EditCut {
     pub end_us: u64,
 }
 
-fn require_handle(reader: &ProjectReader, project_handle: &str) -> Result<(), String> {
+pub(crate) fn require_handle(reader: &ProjectReader, project_handle: &str) -> Result<(), String> {
     if reader.summary.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
     Ok(())
+}
+
+/// The sound effects lane's sounds on the timeline, for drawing it (a short's own when
+/// `short_id` is set).
+pub fn project_sound_effects_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<Vec<crate::sound_effects::Effect>, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let base = &reader.history().current;
+    let document = match short_id.as_deref() {
+        Some(id) => {
+            let short = base
+                .shorts
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("That short no longer exists")?;
+            crate::shorts::short_document(base, short, false)
+                .or_else(|_| crate::shorts::short_timeline(base, short))?
+        }
+        None => base.clone(),
+    };
+    Ok(crate::sound_effects::plan(&document))
 }
 
 pub fn project_ripple_cuts_impl(
@@ -1672,7 +2154,16 @@ pub fn project_short_view_impl(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    reader.short_view(&short_id)
+    let started = std::time::Instant::now();
+    let view = reader.short_view(&short_id)?;
+    if crate::media::profiling() {
+        let bytes = serde_json::to_vec(&view).map(|v| v.len()).unwrap_or(0);
+        eprintln!(
+            "[profile] short view: {:.1} ms, {bytes} bytes",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    Ok(view)
 }
 
 pub fn project_short_resync_impl(
@@ -1705,8 +2196,13 @@ pub fn playback_focus_short_impl(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
+    let started = std::time::Instant::now();
+    if short_id.is_some() {
+        crate::media::switch_started();
+    }
     let mut playback = state.playback.lock();
     playback.focus_short(short_id, &reader.history().current, start_us)?;
+    crate::media::profile("focus short", started);
     if play {
         playback.play()
     } else {

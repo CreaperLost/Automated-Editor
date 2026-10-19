@@ -1,12 +1,11 @@
 import { useShallow } from "zustand/react/shallow";
 import React, { useEffect, useState } from "react";
-import { broadcastProjectSwitched, listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
+import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
 import { startAgentSync } from "./stores/agentStore";
 import { ChevronRight, Clock, FilePlus2, Film, Folder, FolderOpen, X } from "lucide-react";
 import { EditorTopBar } from "./components/navigation/EditorTopBar";
 import { StatusBar } from "./components/navigation/StatusBar";
 import { Button, Notice } from "./components/ui";
-import { SilenceModal } from "./components/silence-modal/SilenceModal";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
@@ -70,23 +69,12 @@ export const App: React.FC = () => {
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
 
-  // Edits made in the Shorts Studio window.
+  // Edits made by connected agents (in Shorts, the store turns them into the short's view).
   useEffect(
-    () =>
-      listenForProjects((next) => {
-        // The Shorts Studio may send a short's view: the editor shows the whole project.
-        if (next.shortView) {
-          void api
-            .projectCurrent()
-            .then((project) => project && useProjectStore.getState().applyOpenedProject(project, { remote: true }))
-            .catch(() => undefined);
-          return;
-        }
-        useProjectStore.getState().applyOpenedProject(next, { remote: true });
-      }),
+    () => listenForProjects((next) => void useProjectStore.getState().applyOpenedProject(next, { remote: true })),
     [],
   );
-  useEffect(() => listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions(true)), []);
+  useEffect(() => listenForCaptionChanges(() => useProjectStore.getState().bumpCaptions()), []);
   // What connected agents propose, for the Agent panel and the transcript's review list.
   useEffect(() => startAgentSync(), []);
   // An agent opened or created a project: show it as if opened from the menu.
@@ -97,7 +85,6 @@ export const App: React.FC = () => {
     void import("@tauri-apps/api/event").then(({ listen }) =>
       listen<{ path: string; project: OpenedProject }>("aeroedits-agent-opened", (event) => {
         useProjectStore.getState().loadOpenedProject(event.payload.project, event.payload.path);
-        broadcastProjectSwitched(event.payload.project);
         setExportDestination("");
       }).then((fn) => {
         if (disposed) fn();
@@ -137,7 +124,6 @@ export const App: React.FC = () => {
     try {
       const opened = await api.openProject(targetPath);
       loadOpenedProject(opened, targetPath);
-      broadcastProjectSwitched(opened);
       setExportDestination("");
     } catch (err) {
       setError(String(err));
@@ -167,7 +153,6 @@ export const App: React.FC = () => {
     try {
       await api.closeProject(project.projectHandle);
       clearProject();
-      broadcastProjectSwitched(null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -273,14 +258,11 @@ export const App: React.FC = () => {
           onCreated={(opened) => {
             setNewProject(null);
             loadOpenedProject(opened, opened.projectPath ?? "");
-            broadcastProjectSwitched(opened);
             setExportDestination("");
           }}
         />
       )}
 
-      {/* Jump Cuts */}
-      <SilenceModal />
 
       {project && exportOpen && (
         <ExportDialog

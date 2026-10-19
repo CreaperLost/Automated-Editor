@@ -197,7 +197,8 @@ export function snapStart(startUs: number, durationUs: number, points: number[],
 }
 
 /** How long a clip of this asset starts out (images show for 5 s). */
-export const defaultClipUs = (asset: Asset) => (asset.kind === "image" ? Math.min(5_000_000, asset.durationUs) : asset.durationUs);
+export const defaultClipUs = (asset: Asset) =>
+  asset.kind === "image" || asset.kind === "graphic" ? Math.min(5_000_000, asset.durationUs) : asset.durationUs;
 
 /** The kinds of track an asset's streams go on. */
 export const assetKinds = (asset: Asset | undefined) => ({

@@ -3,6 +3,8 @@
 0. Chapters come right before export, never earlier: they read the final edit's words. Run
    `status`; if chapters were never made (and the user wants them) or it says they are out of
    date, run `chapters` now and show them to the user.
+   Then run `check` (it reads the final edit too). Tell the user about any error or warning
+   and fix it with their go (`check` with `fix`); an error stops the export.
 1. When the edit is done, ask first: "Export now?" with the choices, default first:
    - Resolution: 1080p (default), 720p, 1440p, 4K. The canvas shape in `status` sets the
      orientation: 1080p is 1920x1080 for 16:9, 1080x1920 for 9:16, 1080x1080 for 1:1,

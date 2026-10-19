@@ -8,6 +8,10 @@
 //!
 //! Linked clips (one moment of an asset: a recording's screen, camera and sound) move, trim
 //! and get deleted together; clips on locked tracks never change.
+//!
+//! Graphics are never cut into: time cut out skips the stretches a graphic plays over (a cut
+//! wholly inside one is refused), splits pass them by, and an edit that would still shorten,
+//! split or drop one it was not about is refused. Cuts before a graphic move it along.
 use super::{
     validate_sequence, Asset, Clip, Fit, Role, Sequence, SourceRange, StreamKind, Track, TrackKind,
     IMAGE_CLIP_US, MAX_TRACKS, MIN_PIECE_US,
@@ -168,6 +172,8 @@ pub fn apply_reserving<'t>(
     taken: impl IntoIterator<Item = &'t str>,
 ) -> Result<(Sequence, EditOutcome), String> {
     check_times(edit)?;
+    let protected = around_graphics(sequence, assets, edit)?;
+    let edit = protected.as_ref().unwrap_or(edit);
     let mut editor = Editor::new(sequence.clone(), assets);
     for id in taken {
         editor.next_track = editor.next_track.max(number_after('t', id) + 1);
@@ -179,7 +185,102 @@ pub fn apply_reserving<'t>(
     if next == *sequence {
         return Err(unchanged(edit).into());
     }
+    graphics_kept(sequence, &next, assets, edit)?;
     Ok((next, outcome))
+}
+
+pub const GRAPHIC_IN_THE_WAY: &str = "A graphic plays here: move or remove it first";
+
+/// Where graphics play on the timeline, merged.
+pub fn graphic_spans(sequence: &Sequence, assets: &[Asset]) -> Vec<(u64, u64)> {
+    let graphic = |id: &str| assets.iter().any(|a| a.id == id && a.is_graphic());
+    merge(
+        sequence
+            .clips()
+            .filter(|(_, c)| graphic(&c.asset))
+            .map(|(_, c)| (c.start_us, c.end_us()))
+            .collect(),
+    )
+}
+
+/// `ranges` less the time `spans` (sorted, disjoint) cover.
+pub fn outside(ranges: &[(u64, u64)], spans: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    for &(a, b) in ranges {
+        let mut from = a;
+        for &(s, e) in spans {
+            if e <= from || s >= b {
+                continue;
+            }
+            if s > from {
+                out.push((from, s));
+            }
+            from = from.max(e);
+        }
+        if from < b {
+            out.push((from, b));
+        }
+    }
+    out
+}
+
+/// A cut that reaches into a graphic keeps only what lies outside every graphic.
+fn around_graphics(
+    sequence: &Sequence,
+    assets: &[Asset],
+    edit: &SequenceEdit,
+) -> Result<Option<SequenceEdit>, String> {
+    let SequenceEdit::DeleteRange { ranges, ripple } = edit else {
+        return Ok(None);
+    };
+    let spans = graphic_spans(sequence, assets);
+    let asked: Vec<(u64, u64)> = ranges.iter().map(|r| (r.start_us, r.end_us)).collect();
+    let kept = outside(&asked, &spans);
+    if kept == asked {
+        return Ok(None);
+    }
+    let kept: Vec<EditedRange> = kept
+        .into_iter()
+        .filter(|(a, b)| b - a >= super::MIN_PIECE_US)
+        .map(|(start_us, end_us)| EditedRange { start_us, end_us })
+        .collect();
+    if kept.is_empty() {
+        return Err(GRAPHIC_IN_THE_WAY.into());
+    }
+    Ok(Some(SequenceEdit::DeleteRange {
+        ranges: kept,
+        ripple: *ripple,
+    }))
+}
+
+/// Refuses an edit that split, shortened, lengthened or dropped a graphic it was not about.
+fn graphics_kept(
+    before: &Sequence,
+    after: &Sequence,
+    assets: &[Asset],
+    edit: &SequenceEdit,
+) -> Result<(), String> {
+    let graphic = |id: &str| assets.iter().any(|a| a.id == id && a.is_graphic());
+    let named = |id: &str| match edit {
+        SequenceEdit::TrimClip { clip_id, .. } => clip_id == id,
+        SequenceEdit::Delete { clip_ids, .. } => clip_ids.iter().any(|c| c == id),
+        SequenceEdit::RemoveTrack { track_id } => before
+            .track(track_id)
+            .is_some_and(|t| t.clips.iter().any(|c| c.id == id)),
+        _ => false,
+    };
+    for (_, clip) in before.clips().filter(|(_, c)| graphic(&c.asset)) {
+        if named(&clip.id) {
+            continue;
+        }
+        let same = after
+            .clip(&clip.id)
+            .is_some_and(|(_, c)| c.duration_us == clip.duration_us && c.in_us == clip.in_us);
+        if !same {
+            return Err(GRAPHIC_IN_THE_WAY.into());
+        }
+    }
+    Ok(())
 }
 
 /// Rejects times past the longest timeline before the editor adds them to anything: the sums
@@ -320,6 +421,10 @@ impl<'a> Editor<'a> {
 
     fn is_still(&self, asset: &str) -> bool {
         self.assets.iter().any(|a| a.id == asset && a.is_still())
+    }
+
+    fn is_graphic(&self, asset: &str) -> bool {
+        self.assets.iter().any(|a| a.id == asset && a.is_graphic())
     }
 
     fn track_index(&self, id: &str) -> Result<usize, String> {
@@ -1226,13 +1331,27 @@ impl<'a> Editor<'a> {
 
     fn split(&mut self, at: u64, clip_ids: &[String]) -> Result<(), String> {
         let tracks: Vec<usize> = if clip_ids.is_empty() {
+            // Graphics are never split; the other tracks are.
             self.unlocked()
+                .into_iter()
+                .filter(|&t| {
+                    !self.seq.tracks[t]
+                        .clip_at(at)
+                        .is_some_and(|c| self.is_graphic(&c.asset))
+                })
+                .collect()
         } else {
             let ids = self.with_partners(clip_ids)?;
             let mut tracks: Vec<usize> = ids
                 .iter()
                 .map(|id| self.find(id).map(|(t, _)| t))
                 .collect::<Result<_, _>>()?;
+            if ids.iter().any(|id| {
+                self.find(id)
+                    .is_ok_and(|(t, c)| self.is_graphic(&self.seq.tracks[t].clips[c].asset))
+            }) {
+                return Err("A graphic can't be split: change its length instead".into());
+            }
             tracks.sort_unstable();
             tracks.dedup();
             // Only the chosen clips: a track's other clip at `at` is one of them or none.
@@ -1354,6 +1473,127 @@ mod tests {
                 .collect(),
             ripple: None,
         }
+    }
+
+    /// A 10 s recording with a graphic on a track above it from 4 s to 6 s.
+    fn with_graphic() -> (Vec<Asset>, Sequence, String) {
+        let (mut assets, seq) = rec_project();
+        let mut graphic = image("g");
+        graphic.kind = crate::sequence::AssetKind::Graphic;
+        assets.push(graphic);
+        let seq = run(
+            &seq,
+            &assets,
+            SequenceEdit::AddTrack {
+                track_kind: TrackKind::Video,
+            },
+        );
+        let top = seq.video_tracks().last().unwrap().id.clone();
+        let seq = run(
+            &seq,
+            &assets,
+            SequenceEdit::PlaceAsset {
+                asset_id: "g".into(),
+                at_us: 4 * S,
+                track_id: Some(top.clone()),
+                streams: Vec::new(),
+                range: Some(SourceRange {
+                    start_us: 0,
+                    end_us: 2 * S,
+                }),
+            },
+        );
+        let id = clip_on(&seq, "V3", 5 * S);
+        (assets, seq, id)
+    }
+
+    #[test]
+    fn cuts_skip_the_time_a_graphic_plays_over() {
+        let (assets, seq, graphic) = with_graphic();
+        // Wholly inside: refused.
+        let inside = apply(&seq, &assets, &cut(&[(4 * S + 200_000, 5 * S)])).unwrap_err();
+        assert_eq!(inside, GRAPHIC_IN_THE_WAY);
+        // Across both edges: only the parts outside go.
+        let seq = run(&seq, &assets, cut(&[(3 * S, 7 * S)]));
+        assert_eq!(seq.duration_us(), 8 * S);
+        let (_, clip) = seq.clip(&graphic).unwrap();
+        assert_eq!((clip.start_us, clip.duration_us), (3 * S, 2 * S));
+        // What plays under it is the same moment of the recording as before.
+        let screen = seq.tracks[0].clip_at(3 * S).unwrap();
+        assert_eq!(screen.local_us(3 * S), Some(4 * S));
+    }
+
+    #[test]
+    fn cuts_before_a_graphic_move_it_along() {
+        let (assets, seq, graphic) = with_graphic();
+        let seq = run(&seq, &assets, cut(&[(S, 2 * S)]));
+        let (_, clip) = seq.clip(&graphic).unwrap();
+        assert_eq!((clip.start_us, clip.duration_us), (3 * S, 2 * S));
+    }
+
+    #[test]
+    fn graphics_are_never_split_or_trimmed_away_by_other_edits() {
+        let (assets, seq, graphic) = with_graphic();
+        // Splitting everything at 5 s passes the graphic by.
+        let split = run(
+            &seq,
+            &assets,
+            SequenceEdit::Split {
+                at_us: 5 * S,
+                clip_ids: Vec::new(),
+            },
+        );
+        assert_eq!(split.clip(&graphic).unwrap().1.duration_us, 2 * S);
+        // Asking to split the graphic itself is refused.
+        assert!(apply(
+            &seq,
+            &assets,
+            &SequenceEdit::Split {
+                at_us: 5 * S,
+                clip_ids: vec![graphic.clone()],
+            }
+        )
+        .is_err());
+        // A ripple trim that would cut into it is refused.
+        let split = run(
+            &seq,
+            &assets,
+            SequenceEdit::Split {
+                at_us: 5 * S,
+                clip_ids: vec![clip_on(&seq, "V1", 5 * S)],
+            },
+        );
+        let trim = apply(
+            &split,
+            &assets,
+            &SequenceEdit::RippleTrim {
+                at_us: 4 * S + 500_000,
+                side: TrimSide::Next,
+            },
+        );
+        assert_eq!(trim.unwrap_err(), GRAPHIC_IN_THE_WAY);
+        // Its own length still changes when asked.
+        let longer = run(
+            &seq,
+            &assets,
+            SequenceEdit::TrimClip {
+                clip_id: graphic.clone(),
+                edge: Edge::End,
+                to_us: 7 * S,
+                ripple: None,
+            },
+        );
+        assert_eq!(longer.clip(&graphic).unwrap().1.duration_us, 3 * S);
+    }
+
+    #[test]
+    fn outside_keeps_what_no_span_covers() {
+        assert_eq!(
+            outside(&[(0, 10)], &[(2, 4), (6, 7)]),
+            vec![(0, 2), (4, 6), (7, 10)]
+        );
+        assert_eq!(outside(&[(3, 4)], &[(2, 5)]), vec![]);
+        assert_eq!(outside(&[(0, 2)], &[(5, 6)]), vec![(0, 2)]);
     }
 
     #[test]

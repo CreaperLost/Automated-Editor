@@ -1,0 +1,108 @@
+<!doctype html>
+<!--
+  A blank AeroEdits graphic: a HyperFrames composition.
+  - It plays full screen over the video (16:9, or a short's 9:16), so lay it out in the
+    viewport with vw/vh/vmin and an @media (orientation: portrait) block; AeroEdits sets the
+    root's data-width, data-height and data-duration to the canvas and clip when it renders.
+  - Keep the page transparent and draw your own background (#card-back below).
+  - In and out: a graphic that fills the frame never eases in or out; it cuts. Only a graphic
+    laid over the full-screen camera eases. AeroEdits decides which from where the graphic
+    plays and sets data-entrance on the root to "cut" or "ease": show the card whole from the
+    first frame to the last unless root.dataset.entrance is "ease", and only then fade or
+    slide it in and out. A graphic that covers only part of the frame (a lower third, a
+    callout) says so with data-overlay on the root; without it AeroEdits treats the graphic
+    as full screen and always cuts it. Motion inside the card (text rising, a bar growing) is
+    fine either way.
+  - A graphic that holds to the end of its clip (an end card) says so with data-holds-end on
+    the root and, when it eases, fades in only.
+  - No network: no CDN scripts or web fonts. Use the Web Animations API (element.animate,
+    finite, fill "both", paused) or CSS; put any images next to this file.
+  - Declare what should be editable in data-composition-variables on <html>; read values with
+    data-var-text / var(--id) or window.__hyperframes.getVariables().
+-->
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"title","type":"string","label":"Title","default":"Your title"},
+    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
+    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
+    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Graphic</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #f8fafc);
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #0f172a);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+      }
+      h1 {
+        margin: 0;
+        font-size: 10vmin;
+        font-weight: 800;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-no-timeline
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="4"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <h1 id="title" data-var-text="title">Your title</h1>
+      </div>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const length = (parseFloat(root.dataset.duration) || 4) * 1000;
+      const outAt = Math.max(1200, length - 450);
+      // Full screen: cut in and out unless AeroEdits asks for an ease (see the note above).
+      const eases = root.dataset.entrance === "ease";
+      const fade = (id, delay) =>
+        document
+          .getElementById(id)
+          .animate(
+            [
+              { opacity: 0 },
+              { opacity: 1, offset: 300 / length },
+              { opacity: 1, offset: outAt / length },
+              { opacity: 0 },
+            ],
+            { duration: length, delay, fill: "both", iterations: 1 },
+          )
+          .pause();
+      if (eases) {
+        fade("card-back", 0);
+        fade("layout", 0);
+      }
+    </script>
+  </body>
+</html>

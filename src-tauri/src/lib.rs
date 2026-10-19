@@ -1,11 +1,15 @@
 pub mod ai;
+pub mod bubble_hide;
 pub mod captions;
 pub mod chapters;
+pub mod check;
 pub mod commands;
 pub mod cursor;
 pub mod dsp;
 pub mod export;
+pub mod face;
 pub mod fixtures;
+pub mod graphics;
 pub mod mcp;
 pub mod media;
 pub mod media_bin;
@@ -17,11 +21,16 @@ pub mod proposals;
 pub mod render;
 pub mod secrets;
 pub mod sequence;
+pub mod short_scenes;
 pub mod shorts;
+pub mod sound_effects;
+pub mod take_short;
 pub mod telemetry;
+pub mod templates;
 pub mod timeline;
 pub mod transcript;
 pub mod webcam_focus;
+pub mod window_crop;
 pub mod zoom;
 
 #[cfg(feature = "tauri-app")]
@@ -131,7 +140,12 @@ async fn project_create(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_recording_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    pick_directory_dialog(app, "Choose a Recording", commands::default_projects_dir()).await
+    // AeroShoot saves its recordings in Documents\AeroShootRec.
+    let recordings = dirs::document_dir()
+        .map(|docs| docs.join("AeroShootRec"))
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(commands::default_projects_dir);
+    pick_directory_dialog(app, "Choose a Recording", recordings).await
 }
 
 #[cfg(feature = "tauri-app")]
@@ -180,6 +194,20 @@ async fn project_waveform_overview(
 ) -> Result<project::waveform::WaveformOverview, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::project_waveform_overview_impl(&app.state::<AppState>(), project_handle, track_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_face_tracks(
+    app: tauri::AppHandle,
+    project_handle: String,
+    start: bool,
+) -> Result<Vec<face::FaceTrackStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::project_face_tracks_impl(&app.state::<AppState>(), project_handle, start)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -739,29 +767,34 @@ async fn detect_silence(
     config: dsp::SilenceConfig,
     track_ids: Option<Vec<String>>,
     transcript_assisted: Option<bool>,
+    short_id: Option<String>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let short = short_id.as_deref();
         if transcript_assisted.unwrap_or(false) {
-            return commands::transcript_pauses::detect_transcript_pauses_impl(
+            return commands::transcript_pauses::detect_transcript_pauses_for(
                 &app.state::<AppState>(),
                 project_handle,
                 track_id,
                 track_ids,
                 config,
+                short,
             );
         }
         match track_ids {
-            Some(ids) => commands::detect_silence_sources_impl(
+            Some(ids) => commands::detect_silence_sources_for(
                 &app.state::<AppState>(),
                 project_handle,
                 ids,
                 config,
+                short,
             ),
-            None => commands::detect_silence_impl(
+            None => commands::detect_silence_for(
                 &app.state::<AppState>(),
                 project_handle,
                 track_id,
                 config,
+                short,
             ),
         }
     })
@@ -783,14 +816,16 @@ async fn detect_non_speech_gaps(
     track_id: String,
     track_ids: Option<Vec<String>>,
     config: transcript::pauses::TranscriptGapConfig,
+    short_id: Option<String>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::transcript_pauses::detect_non_speech_gaps_impl(
+        commands::transcript_pauses::detect_non_speech_gaps_for(
             &app.state::<AppState>(),
             project_handle,
             track_id,
             track_ids,
             config,
+            short_id.as_deref(),
         )
     })
     .await
@@ -804,6 +839,7 @@ async fn detect_mouth_noises(
     project_handle: String,
     key: String,
     config: dsp::noises::NoiseConfig,
+    short_id: Option<String>,
 ) -> Result<commands::noises::NoiseScan, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::noises::detect_mouth_noises_impl(
@@ -811,7 +847,23 @@ async fn detect_mouth_noises(
             project_handle,
             key,
             config,
+            short_id,
         )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn noise_review(
+    app: tauri::AppHandle,
+    project_handle: String,
+    key: String,
+    short_id: Option<String>,
+) -> Result<commands::noises::NoiseScan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::noises::noise_review_impl(&app.state::<AppState>(), project_handle, key, short_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -826,6 +878,7 @@ async fn project_noise_mutes(
     key: String,
     ranges: Vec<sequence::SourceRange>,
     unmute: bool,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::noises::project_noise_mutes_impl(
@@ -835,6 +888,7 @@ async fn project_noise_mutes(
             key,
             ranges,
             unmute,
+            short_id,
         )
     })
     .await
@@ -849,13 +903,15 @@ fn apply_jump_cuts(
     expected_revision: u64,
     ranges: Vec<zoom::EditedRange>,
     transcript_dependencies: Vec<transcript::TranscriptDependency>,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    commands::transcript_pauses::apply_jump_cuts_impl(
+    commands::transcript_pauses::apply_jump_cuts_for(
         &state,
         project_handle,
         expected_revision,
         ranges,
         transcript_dependencies,
+        short_id.as_deref(),
     )
 }
 
@@ -886,6 +942,26 @@ fn project_chapters_set(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_check(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<check::CheckReport, String> {
+    commands::project_check_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_check_fix(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    ids: Vec<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_check_fix_impl(&state, project_handle, expected_revision, ids)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 async fn project_chapters_generate(
     app: tauri::AppHandle,
     project_handle: String,
@@ -912,6 +988,134 @@ fn project_shorts_set(
     shorts: Vec<shorts::Short>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn templates_list() -> Vec<templates::Template> {
+    templates::list(&templates::dir())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn template_save(
+    state: State<'_, AppState>,
+    project_handle: String,
+    name: String,
+    short_id: Option<String>,
+) -> Result<Vec<templates::Template>, String> {
+    commands::template_save_impl(&state, project_handle, name, short_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn template_delete(template_id: String) -> Result<Vec<templates::Template>, String> {
+    templates::remove(&templates::dir(), &template_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn template_apply(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    template_id: String,
+    short_id: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::template_apply_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        template_id,
+        short_id,
+    )
+}
+
+/// Async: lining up the take's sounds reads them, which must not hold the main thread.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn project_short_from_take(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    title: String,
+    camera: Option<String>,
+    voice: Option<String>,
+    media: Option<Vec<String>>,
+    reason: Option<String>,
+) -> Result<commands::TakeShortMade, String> {
+    commands::project_short_from_take_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        title,
+        camera,
+        voice,
+        media.unwrap_or_default(),
+        reason,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_short_footage(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    change: commands::FootageChange,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_footage_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        short_id,
+        change,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn project_short_scene_add(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    start_us: u64,
+    end_us: u64,
+    mode: short_scenes::SceneMode,
+) -> Result<project::OpenedProject, String> {
+    commands::project_short_scene_add_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        short_id,
+        start_us,
+        end_us,
+        mode,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_short_scenes_pick(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::project_short_scenes_pick_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            short_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -967,6 +1171,45 @@ async fn short_preview_frame(
     .map_err(|e| e.to_string())?
 }
 
+/// The storyboard of the open edit (or a short): the sheet as a PNG data URL, with where
+/// each tile sits on it.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn storyboard_render(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: Option<String>,
+    max_tiles: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let open = state
+            .opened_project
+            .lock()
+            .as_ref()
+            .map(|reader| reader.summary.project_handle.clone());
+        if open.as_deref() != Some(project_handle.as_str()) {
+            return Err("That project is no longer open".to_string());
+        }
+        let args = mcp::storyboard::StoryboardArgs {
+            short: short_id,
+            max_tiles,
+            ..Default::default()
+        };
+        let board = mcp::storyboard::build(&state, &args, &|_, _| {})?;
+        use base64::Engine;
+        let mut value = serde_json::to_value(&board).map_err(|e| e.to_string())?;
+        value["image"] = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&board.png)
+        )
+        .into();
+        Ok(value)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The project open in the editor, for windows that open after it (the Shorts Studio).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -976,36 +1219,6 @@ fn project_current(state: State<'_, AppState>) -> Option<project::OpenedProject>
         .lock()
         .as_ref()
         .map(|reader| reader.summary.clone())
-}
-
-/// Opens the Shorts Studio window, or brings it to the front if it is already open.
-///
-/// Async on purpose: Tauri runs synchronous commands on the main thread, and creating a
-/// window there deadlocks WebView2 on Windows (the window stays white).
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn open_shorts_window(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    if let Some(window) = app.get_webview_window(SHORTS_WINDOW) {
-        let _ = window.unminimize();
-        return window.set_focus().map_err(|e| e.to_string());
-    }
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        SHORTS_WINDOW,
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    // Tells the page which app to render before any script runs; a URL query is not
-    // carried reliably by every platform's asset protocol.
-    .initialization_script("window.__AEROEDITS_WINDOW__ = 'shorts';")
-    .title("AeroEdits Shorts Studio")
-    .inner_size(1280.0, 860.0)
-    .min_inner_size(960.0, 640.0)
-    // HTML5 drag and drop needs the native file-drop handler off, as in the main window.
-    .disable_drag_drop_handler()
-    .build()
-    .map(|_| ())
-    .map_err(|e| e.to_string())
 }
 
 /// The app as the MCP server sees it: its state, and the windows to tell about agent edits.
@@ -1249,6 +1462,7 @@ async fn transcript_get(
     app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
+    short_id: Option<String>,
 ) -> Result<Option<transcript::TranscriptView>, String> {
     // A long transcript takes a while to read and place: not on the window's thread.
     tauri::async_runtime::spawn_blocking(move || {
@@ -1256,6 +1470,7 @@ async fn transcript_get(
             &app.state::<AppState>(),
             project_handle,
             track_id,
+            short_id,
         )
     })
     .await
@@ -1273,6 +1488,30 @@ async fn transcript_run(
     tauri::async_runtime::spawn_blocking(move || {
         let emitter = app.clone();
         commands::transcript::transcript_run_impl(
+            &app.state::<AppState>(),
+            &app.state::<commands::transcript::TranscriptState>(),
+            project_handle,
+            track_id,
+            &mut |progress| {
+                let _ = emitter.emit("transcript-progress", progress);
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn transcript_align(
+    app: tauri::AppHandle,
+    project_handle: String,
+    track_id: String,
+) -> Result<commands::transcript::TranscriptRunResult, String> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn_blocking(move || {
+        let emitter = app.clone();
+        commands::transcript::transcript_align_impl(
             &app.state::<AppState>(),
             &app.state::<commands::transcript::TranscriptState>(),
             project_handle,
@@ -1308,12 +1547,14 @@ async fn transcript_suggestions(
     app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
+    short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::transcript::transcript_suggestions_impl(
             &app.state::<AppState>(),
             project_handle,
             track_id,
+            short_id,
         )
     })
     .await
@@ -1334,6 +1575,21 @@ async fn project_caption_cues(
             project_handle,
             short_id,
         )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The sound effects lane: its clicks and whooshes in edited time.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_sound_effects(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<Vec<sound_effects::Effect>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::project_sound_effects_impl(&app.state::<AppState>(), project_handle, short_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1364,8 +1620,14 @@ fn transcript_strip_punctuation(
     state: State<'_, AppState>,
     project_handle: String,
     track_id: String,
+    short_id: Option<String>,
 ) -> Result<transcript::TranscriptView, String> {
-    commands::transcript::transcript_strip_punctuation_impl(&state, project_handle, track_id)
+    commands::transcript::transcript_strip_punctuation_impl(
+        &state,
+        project_handle,
+        track_id,
+        short_id,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1376,6 +1638,7 @@ fn transcript_set_word_text(
     track_id: String,
     word_id: String,
     text: String,
+    short_id: Option<String>,
 ) -> Result<transcript::TranscriptView, String> {
     commands::transcript::transcript_set_word_text_impl(
         &state,
@@ -1383,6 +1646,7 @@ fn transcript_set_word_text(
         track_id,
         word_id,
         text,
+        short_id,
     )
 }
 
@@ -1394,6 +1658,7 @@ fn transcript_dismiss_suggestions(
     track_id: String,
     ids: Vec<String>,
     dismissed: bool,
+    short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     commands::transcript::transcript_dismiss_suggestions_impl(
         &state,
@@ -1401,6 +1666,7 @@ fn transcript_dismiss_suggestions(
         track_id,
         ids,
         dismissed,
+        short_id,
     )
 }
 
@@ -1413,6 +1679,7 @@ fn transcript_cut_words(
     track_id: String,
     word_ids: Vec<String>,
     expected_word_stamp: Option<String>,
+    short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
     commands::transcript::transcript_cut_words_checked_impl(
         &state,
@@ -1421,6 +1688,7 @@ fn transcript_cut_words(
         track_id,
         word_ids,
         expected_word_stamp,
+        short_id,
     )
 }
 
@@ -1428,15 +1696,318 @@ fn transcript_cut_words(
 #[tauri::command]
 async fn transcript_download_model(
     app: tauri::AppHandle,
+    model: Option<String>,
 ) -> Result<transcript::TranscriptSettingsView, String> {
     use tauri::Emitter;
     tauri::async_runtime::spawn_blocking(move || {
         let emitter = app.clone();
         commands::transcript::transcript_download_model_impl(
             &app.state::<commands::transcript::TranscriptState>(),
+            model.as_deref(),
             &mut |progress| {
                 let _ = emitter.emit("transcript-model-progress", progress);
             },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_runtime_status() -> graphics::runtime::RuntimeStatus {
+    commands::graphics::graphics_runtime_status_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn graphics_runtime_install(
+    app: tauri::AppHandle,
+) -> Result<graphics::runtime::RuntimeStatus, String> {
+    use tauri::Emitter;
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::graphics_runtime_install_impl(&mut |progress| {
+            let _ = app.emit("graphics-runtime-progress", progress);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_runtime_cancel() {
+    commands::graphics::graphics_runtime_cancel_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn graphics_runtime_remove() -> Result<graphics::runtime::RuntimeStatus, String> {
+    tauri::async_runtime::spawn_blocking(commands::graphics::graphics_runtime_remove_impl)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_templates() -> Vec<graphics::templates::TemplateView> {
+    commands::graphics::graphics_templates_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_render_again() {
+    commands::graphics::graphics_render_again_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn project_graphic_create(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    template: String,
+    name: Option<String>,
+    variables: serde_json::Map<String, serde_json::Value>,
+    at_us: u64,
+    length_us: Option<u64>,
+) -> Result<commands::graphics::GraphicCreated, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_graphic_create_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            template,
+            name,
+            variables,
+            at_us,
+            length_us,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphic_get(
+    state: State<'_, AppState>,
+    project_handle: String,
+    asset_id: String,
+) -> Result<graphics::GraphicView, String> {
+    commands::graphics::project_graphic_get_impl(&state, project_handle, asset_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphics_list(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<Vec<commands::graphics::GraphicListed>, String> {
+    commands::graphics::project_graphics_list_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_frame_thumbnail(
+    app: tauri::AppHandle,
+    project_handle: String,
+    at_us: u64,
+    width: u32,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_frame_thumbnail_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            at_us,
+            width,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphic_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    variables: serde_json::Map<String, serde_json::Value>,
+    name: Option<String>,
+    brand: Option<String>,
+) -> Result<commands::graphics::GraphicUpdated, String> {
+    commands::graphics::project_graphic_set_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        variables,
+        name,
+        brand,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_brands(
+    state: State<'_, AppState>,
+    project_handle: Option<String>,
+) -> Result<commands::graphics::BrandsView, String> {
+    commands::graphics::graphics_brands_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_brand_save(
+    kit: graphics::brands::BrandKitInput,
+) -> Result<graphics::brands::BrandKitView, String> {
+    commands::graphics::graphics_brand_save_impl(kit)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_brand_remove(name: String) -> Result<(), String> {
+    commands::graphics::graphics_brand_remove_impl(name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphics_brand_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    brand: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::graphics::project_graphics_brand_set_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        brand,
+    )
+}
+
+/// A logo or font file for a brand kit.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn pick_brand_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let (title, label, extensions): (&str, &str, &[&str]) = if kind == "font" {
+                (
+                    "Choose a font file",
+                    "Fonts",
+                    &["woff2", "woff", "ttf", "otf"],
+                )
+            } else {
+                (
+                    "Choose a logo",
+                    "Images",
+                    &["png", "svg", "jpg", "jpeg", "webp"],
+                )
+            };
+            let picked = rfd::FileDialog::new()
+                .set_title(title)
+                .add_filter(label, extensions)
+                .pick_file()
+                .map(|path| path.to_string_lossy().into_owned());
+            let _ = tx.send(picked);
+        })
+        .map_err(|error| error.to_string())?;
+        rx.recv().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_library() -> Vec<graphics::library::LibraryView> {
+    commands::graphics::graphics_library_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_library_remove(id: String) -> Result<(), String> {
+    commands::graphics::graphics_library_remove_impl(id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_library_sheet(id: String) -> Result<Option<String>, String> {
+    commands::graphics::graphics_library_sheet_impl(id)
+}
+
+/// How a gate run is going, for the page: `{fraction, message}`.
+#[cfg(feature = "tauri-app")]
+fn emit_check_progress(app: &tauri::AppHandle, fraction: f64, message: &str) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "graphics-check-progress",
+        serde_json::json!({ "fraction": fraction, "message": message }),
+    );
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_graphic_check(
+    app: tauri::AppHandle,
+    project_handle: String,
+    asset_id: String,
+) -> Result<commands::graphics::GateView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_graphic_check_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            asset_id,
+            &mut |fraction, message| emit_check_progress(&app, fraction, message),
+        )
+        .map(Into::into)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_graphic_library_save(
+    app: tauri::AppHandle,
+    project_handle: String,
+    request: commands::graphics::LibrarySave,
+) -> Result<commands::graphics::LibrarySaved, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_graphic_library_save_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            request,
+            &mut |fraction, message| emit_check_progress(&app, fraction, message),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_graphic_from_library(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    library_id: String,
+    at_us: u64,
+    length_us: Option<u64>,
+) -> Result<commands::graphics::GraphicCreated, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_graphic_from_library_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            library_id,
+            at_us,
+            length_us,
         )
     })
     .await
@@ -1633,15 +2204,18 @@ fn show_in_finder(path: String) -> Result<(), String> {
 }
 
 #[cfg(feature = "tauri-app")]
-const SHORTS_WINDOW: &str = "shorts";
-
-#[cfg(feature = "tauri-app")]
 pub fn run() {
     tauri::Builder::default()
         .manage(commands::AppState::default())
         .manage(commands::transcript::TranscriptState::default())
         .setup(|app| {
             playback::engine::start(app.handle().clone());
+            // Renders finishing (or failing, or moving along) change what the page shows.
+            let handle = app.handle().clone();
+            graphics::render::set_listener(std::sync::Arc::new(move || {
+                use tauri::Emitter;
+                let _ = handle.emit("aeroedits-graphics-updated", ());
+            }));
             mcp::start_if_enabled(&transcript::settings::config_dir(), mcp_host(app.handle()));
             Ok(())
         })
@@ -1651,19 +2225,37 @@ pub fn run() {
                     &window.state::<AppState>(),
                     window.label().to_string(),
                 );
-                // The Shorts Studio only works alongside the editor: closing the editor
-                // closes the app, rather than leaving the studio on torn-down state.
-                if window.label() == "main" {
-                    window.app_handle().exit(0);
-                }
             }
         })
         .invoke_handler(tauri::generate_handler![
             open_project,
+            graphics_runtime_status,
+            graphics_runtime_install,
+            graphics_runtime_cancel,
+            graphics_runtime_remove,
+            graphics_templates,
+            graphics_render_again,
+            project_graphic_create,
+            project_graphic_get,
+            project_graphics_list,
+            project_frame_thumbnail,
+            project_graphic_set,
+            graphics_brands,
+            graphics_brand_save,
+            graphics_brand_remove,
+            project_graphics_brand_set,
+            pick_brand_file,
+            graphics_library,
+            graphics_library_remove,
+            graphics_library_sheet,
+            project_graphic_check,
+            project_graphic_library_save,
+            project_graphic_from_library,
             close_project,
             project_rename,
             project_segments,
             project_waveform_overview,
+            project_face_tracks,
             project_zoom_suggestions,
             project_zoom_accept,
             project_zoom_reload,
@@ -1684,6 +2276,7 @@ pub fn run() {
             project_media_import,
             project_media_roles,
             project_caption_cues,
+            project_sound_effects,
             transcript_caption_edit,
             project_short_view,
             project_short_resync,
@@ -1716,6 +2309,7 @@ pub fn run() {
             detect_silence,
             detect_non_speech_gaps,
             detect_mouth_noises,
+            noise_review,
             project_noise_mutes,
             apply_jump_cuts,
             transcript_settings_get,
@@ -1735,15 +2329,26 @@ pub fn run() {
             ai_set_api_key,
             transcript_ai_suggest,
             project_chapters_set,
+            project_check,
+            project_check_fix,
             project_chapters_generate,
             project_shorts_set,
+            templates_list,
+            template_save,
+            template_delete,
+            template_apply,
+            project_short_from_take,
+            project_short_footage,
+            project_short_scenes_pick,
+            project_short_scene_add,
             project_shorts_generate,
             project_short_export,
             short_preview_frame,
-            open_shorts_window,
+            storyboard_render,
             project_current,
             transcript_get,
             transcript_run,
+            transcript_align,
             transcript_cancel,
             transcript_delete,
             transcript_suggestions,

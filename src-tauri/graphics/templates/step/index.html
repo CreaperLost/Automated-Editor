@@ -1,0 +1,169 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"step","type":"number","label":"Step","default":3,"min":1,"max":99,"step":1},
+    {"id":"total","type":"number","label":"Steps in all (0 to leave out)","default":5,"min":0,"max":99,"step":1},
+    {"id":"title","type":"string","label":"Title","default":"Connect your account"},
+    {"id":"detail","type":"string","label":"Detail","default":"Settings → Accounts → Add"},
+    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
+    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
+    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Step card</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #f8fafc);
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #0f172a);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        gap: 6vmin;
+        padding: 0 10vw;
+      }
+      .badge {
+        flex: none;
+        width: 30vmin;
+        height: 30vmin;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: var(--accent, #facc15);
+        color: var(--background, #0f172a);
+        font-size: 17vmin;
+        font-weight: 800;
+      }
+      .words {
+        display: flex;
+        flex-direction: column;
+        gap: 2vmin;
+        min-width: 0;
+      }
+      .count {
+        font-size: 3.4vmin;
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: var(--accent, #facc15);
+      }
+      h1 {
+        margin: 0;
+        font-size: 8.5vmin;
+        line-height: 1.05;
+        font-weight: 800;
+      }
+      .detail {
+        font-size: 4vmin;
+        opacity: 0.72;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          flex-direction: column;
+          align-items: flex-start;
+          justify-content: center;
+          padding: 0 9vw;
+          gap: 6vw;
+        }
+        .badge {
+          width: 34vw;
+          height: 34vw;
+          font-size: 20vw;
+        }
+        .count {
+          font-size: 4.6vw;
+        }
+        h1 {
+          font-size: 11.5vw;
+        }
+        .detail {
+          font-size: 5.4vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-no-timeline
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="4"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <div class="badge" id="badge"><span id="number">3</span></div>
+        <div class="words">
+          <div class="count" id="count">Step 3 of 5</div>
+          <h1 id="title" data-var-text="title">Connect your account</h1>
+          <div class="detail" id="detail" data-var-text="detail">Settings → Accounts → Add</div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const vars = window.__hyperframes.getVariables();
+      const step = Math.round(Number(vars.step) || 1);
+      const total = Math.round(Number(vars.total) || 0);
+      document.getElementById("number").textContent = String(step);
+      document.getElementById("count").textContent =
+        total > 0 ? `Step ${step} of ${total}` : `Step ${step}`;
+
+      const root = document.getElementById("root");
+      const length = (parseFloat(root.dataset.duration) || 4) * 1000;
+      const ease = "cubic-bezier(0.2, 0, 0, 1)";
+      const outAt = Math.max(1200, length - 450);
+      function play(id, frames, delay, duration, easing = ease) {
+        document
+          .getElementById(id)
+          .animate(frames, { duration, delay, easing, fill: "both", iterations: 1 })
+          .pause();
+      }
+      const rise = [
+        { transform: "translateY(4vmin)", opacity: 0 },
+        { transform: "translateY(0)", opacity: 1 },
+      ];
+      // The card fills the frame, so it cuts in and out. Only when AeroEdits asks for an ease
+      // (in a short's slot over the full-screen camera) does it fade in and out.
+      const eases = root.dataset.entrance === "ease";
+      if (eases) {
+        play("card-back", [
+          { opacity: 0 },
+          { opacity: 1, offset: 300 / length },
+          { opacity: 1, offset: outAt / length },
+          { opacity: 0 },
+        ], 0, length, "linear");
+      }
+      play("badge", [
+        { transform: "scale(0.4) rotate(-20deg)", opacity: 0 },
+        { transform: "scale(1.06) rotate(0deg)", opacity: 1, offset: 0.7 },
+        { transform: "scale(1) rotate(0deg)", opacity: 1 },
+      ], 120, 700);
+      play("count", rise, 300, 600);
+      play("title", rise, 420, 700);
+      play("detail", rise, 600, 700);
+      if (eases) play("layout", [{ opacity: 1 }, { opacity: 0 }], outAt, 350);
+    </script>
+  </body>
+</html>

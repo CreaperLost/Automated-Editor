@@ -332,7 +332,8 @@ pub struct PreviewOwner {
     presented_bytes: u64,
     hit_mode: PreviewHitMode,
     supported: bool,
-    /// Latest webview frame: an 8-byte little-endian sequence number, then JPEG bytes.
+    /// Latest webview frame: an 8-byte little-endian sequence number, the playback generation
+    /// it was drawn for (8 bytes, 0 for none), then JPEG bytes.
     web_frame: Option<Arc<Vec<u8>>>,
     web_seq: u64,
     presented_fps: Option<f64>,
@@ -484,7 +485,7 @@ impl PreviewOwner {
         } else {
             let to_u8 = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
             let frame = crate::media::VideoFrame::solid(16, 16, to_u8(b), to_u8(g), to_u8(r), 0)?;
-            self.store_web_frame(encode_webview_frame(&frame)?);
+            self.store_web_frame(encode_webview_frame(&frame)?, 0);
         }
         self.presented_kind = "fixed".into();
         self.copies = self.copies.saturating_add(1);
@@ -520,7 +521,7 @@ impl PreviewOwner {
         self.ensure_generation(generation)?;
         match self.native {
             Some(native) => super::native::present_frame(native, frame, generation)?,
-            None => self.store_web_frame(encode_webview_frame(frame)?),
+            None => self.store_web_frame(encode_webview_frame(frame)?, 0),
         }
         self.presented_kind = "project".into();
         self.copies += 1;
@@ -529,24 +530,31 @@ impl PreviewOwner {
     }
 
     /// Presents a frame already encoded by [`encode_webview_frame`], so the caller can keep
-    /// encoding off the UI thread.
-    pub fn present_encoded(&mut self, jpeg: Vec<u8>, generation: u64) -> Result<(), String> {
+    /// encoding off the UI thread. `playback_generation` goes with it, so the page can tell a
+    /// frame drawn before a seek or a switch of short from the ones after.
+    pub fn present_encoded(
+        &mut self,
+        jpeg: Vec<u8>,
+        generation: u64,
+        playback_generation: u64,
+    ) -> Result<(), String> {
         self.ensure_open()?;
         self.ensure_generation(generation)?;
         if self.native.is_some() {
             return Err("Encoded frames are only for the webview preview".into());
         }
         self.presented_bytes = jpeg.len() as u64;
-        self.store_web_frame(jpeg);
+        self.store_web_frame(jpeg, playback_generation);
         self.presented_kind = "project".into();
         self.copies += 1;
         Ok(())
     }
 
-    fn store_web_frame(&mut self, jpeg: Vec<u8>) {
+    fn store_web_frame(&mut self, jpeg: Vec<u8>, playback_generation: u64) {
         self.web_seq += 1;
-        let mut payload = Vec::with_capacity(8 + jpeg.len());
+        let mut payload = Vec::with_capacity(16 + jpeg.len());
         payload.extend_from_slice(&self.web_seq.to_le_bytes());
+        payload.extend_from_slice(&playback_generation.to_le_bytes());
         payload.extend_from_slice(&jpeg);
         self.web_frame = Some(Arc::new(payload));
     }
@@ -791,7 +799,8 @@ mod tests {
             .contains("Native preview view"));
         let fixed = owner.web_frame_after(0).expect("fixed colour frame");
         assert_eq!(&fixed[..8], &1u64.to_le_bytes());
-        assert_eq!(&fixed[8..10], &[0xFF, 0xD8], "payload is a JPEG");
+        assert_eq!(&fixed[8..16], &0u64.to_le_bytes(), "no playback generation");
+        assert_eq!(&fixed[16..18], &[0xFF, 0xD8], "payload is a JPEG");
         assert!(owner.web_frame_after(1).is_none());
         owner.detach();
         assert!(owner.web_frame_after(0).is_none());

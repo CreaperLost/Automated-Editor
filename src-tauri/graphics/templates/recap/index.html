@@ -1,0 +1,180 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"title","type":"string","label":"Title","default":"Recap"},
+    {"id":"items","type":"string","label":"Items (one per line, up to 6)","default":"Install the tools\nCreate the project\nRun it locally\nDeploy it"},
+    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
+    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
+    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Recap checklist</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #f8fafc);
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #0f172a);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 4vmin;
+        padding: 0 12vw;
+      }
+      h1 {
+        margin: 0;
+        font-size: 7.5vmin;
+        font-weight: 800;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2.4vmin;
+      }
+      li {
+        display: flex;
+        align-items: center;
+        gap: 3vmin;
+        font-size: 4.6vmin;
+        font-weight: 600;
+      }
+      .tick {
+        flex: none;
+        width: 6vmin;
+        height: 6vmin;
+        border-radius: 1.4vmin;
+        border: 0.6vmin solid var(--accent, #facc15);
+        display: grid;
+        place-items: center;
+        box-sizing: border-box;
+      }
+      .tick svg {
+        width: 70%;
+        height: 70%;
+      }
+      .tick path {
+        fill: none;
+        stroke: var(--accent, #facc15);
+        stroke-width: 4;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 30;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding: 0 9vw;
+          gap: 6vw;
+        }
+        h1 {
+          font-size: 11vw;
+        }
+        ul {
+          gap: 4vw;
+        }
+        li {
+          font-size: 6.4vw;
+          gap: 4vw;
+        }
+        .tick {
+          width: 9vw;
+          height: 9vw;
+          border-width: 0.9vw;
+          border-radius: 2vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-no-timeline
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <h1 id="title" data-var-text="title">Recap</h1>
+        <ul id="items"></ul>
+      </div>
+    </div>
+    <script>
+      const vars = window.__hyperframes.getVariables();
+      const items = String(vars.items || "")
+        .split(/\r?\n|\|/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 6);
+      const list = document.getElementById("items");
+      items.forEach((text, i) => {
+        const li = document.createElement("li");
+        li.id = `item-${i}`;
+        li.innerHTML =
+          `<span class="tick"><svg viewBox="0 0 24 24"><path id="tick-${i}" d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>` +
+          `<span></span>`;
+        li.lastChild.textContent = text;
+        list.appendChild(li);
+      });
+
+      const root = document.getElementById("root");
+      const length = (parseFloat(root.dataset.duration) || 6) * 1000;
+      const ease = "cubic-bezier(0.2, 0, 0, 1)";
+      const outAt = Math.max(1600, length - 450);
+      function play(el, frames, delay, duration, easing = ease) {
+        el.animate(frames, { duration, delay, easing, fill: "both", iterations: 1 }).pause();
+      }
+      const byId = (id) => document.getElementById(id);
+      // The card fills the frame, so it cuts in and out. Only when AeroEdits asks for an ease
+      // (in a short's slot over the full-screen camera) does it fade in and out.
+      const eases = root.dataset.entrance === "ease";
+      if (eases) {
+        play(byId("card-back"), [
+          { opacity: 0 },
+          { opacity: 1, offset: 300 / length },
+          { opacity: 1, offset: outAt / length },
+          { opacity: 0 },
+        ], 0, length, "linear");
+      }
+      play(byId("title"), [
+        { transform: "translateY(3vmin)", opacity: 0 },
+        { transform: "translateY(0)", opacity: 1 },
+      ], 150, 600);
+      // Items arrive one after another across the first half, each ticked as it lands.
+      const gap = Math.min(450, Math.max(180, (length * 0.5 - 600) / Math.max(1, items.length)));
+      items.forEach((_, i) => {
+        const at = 450 + i * gap;
+        play(byId(`item-${i}`), [
+          { transform: "translateX(-3vmin)", opacity: 0 },
+          { transform: "translateX(0)", opacity: 1 },
+        ], at, 500);
+        play(byId(`tick-${i}`), [{ strokeDashoffset: 30 }, { strokeDashoffset: 0 }], at + 250, 400);
+      });
+      if (eases) play(byId("layout"), [{ opacity: 1 }, { opacity: 0 }], outAt, 350);
+    </script>
+  </body>
+</html>

@@ -52,6 +52,9 @@ pub struct AudioSettings {
     /// Mute and volume per audio track id. Tracks without an entry play at full volume.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tracks: BTreeMap<String, TrackMix>,
+    /// The sound effects lane: clicks and whooshes from the recording's telemetry.
+    #[serde(default)]
+    pub sound_effects: crate::sound_effects::SoundEffects,
 }
 
 /// One audio track's mix, kept under the track's id. Muting is the track's own switch.
@@ -89,6 +92,7 @@ impl Default for AudioSettings {
             duck_system_audio: false,
             duck_db: DEFAULT_DUCK_DB,
             tracks: BTreeMap::new(),
+            sound_effects: Default::default(),
         }
     }
 }
@@ -156,7 +160,7 @@ impl AudioSettings {
                 check("Ducking amount", db, DUCK_DB_RANGE)?;
             }
         }
-        Ok(())
+        self.sound_effects.validate()
     }
 }
 

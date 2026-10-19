@@ -1,7 +1,7 @@
 //! App-wide transcription settings. The ElevenLabs key never goes in a project or in the
 //! settings file: it lives in the OS credential store (Windows Credential Manager, macOS
 //! Keychain), or in an owner-only file on other platforms. `ELEVENLABS_API_KEY` overrides it.
-use super::{parakeet, ProviderKind};
+use super::{align, parakeet, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +20,8 @@ pub struct TranscriptSettings {
     pub keyterms: Vec<String>,
     /// Folder holding the Parakeet ONNX files; empty uses the app data folder.
     pub parakeet_model_dir: String,
+    /// Align word times to the audio after transcribing, when the model is downloaded.
+    pub align_words: bool,
 }
 
 impl Default for TranscriptSettings {
@@ -30,6 +32,7 @@ impl Default for TranscriptSettings {
             scribe_model: String::new(),
             keyterms: Vec::new(),
             parakeet_model_dir: String::new(),
+            align_words: false,
         }
     }
 }
@@ -71,10 +74,18 @@ pub struct TranscriptSettingsView {
     pub settings: TranscriptSettings,
     /// Where the ElevenLabs key comes from: `keychain`, `file`, `environment`, or none.
     pub elevenlabs_key_source: Option<String>,
+    /// Where the OpenRouter key comes from (shared with AI review), or none.
+    pub openrouter_key_source: Option<String>,
     pub parakeet_available: bool,
     pub parakeet_accelerator: String,
     pub parakeet_model_dir: String,
     pub parakeet_model_present: bool,
+    /// Word alignment runs in this build (it shares Parakeet's ONNX Runtime).
+    pub aligner_available: bool,
+    pub aligner_model_present: bool,
+    pub aligner_model_dir: String,
+    /// Download size of the alignment model, in bytes.
+    pub aligner_model_bytes: u64,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -107,10 +118,15 @@ pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
     let model_dir = settings.parakeet_dir();
     TranscriptSettingsView {
         elevenlabs_key_source: api_key(dir).map(|(_, source)| source.to_string()),
+        openrouter_key_source: openrouter_key(dir).map(|(_, source)| source.to_string()),
         parakeet_available: parakeet::compiled_in(),
         parakeet_accelerator: parakeet::accelerator().into(),
         parakeet_model_present: parakeet::model_present(&model_dir),
         parakeet_model_dir: model_dir.to_string_lossy().into_owned(),
+        aligner_available: align::compiled_in(),
+        aligner_model_present: align::model_present(&align::default_model_dir()),
+        aligner_model_dir: align::default_model_dir().to_string_lossy().into_owned(),
+        aligner_model_bytes: align::MODEL_BYTES,
         settings,
     }
 }
@@ -123,6 +139,11 @@ pub const ELEVENLABS_KEY: crate::secrets::KeySpec = crate::secrets::KeySpec {
 /// The ElevenLabs key and where it came from.
 pub fn api_key(dir: &Path) -> Option<(String, &'static str)> {
     crate::secrets::get(dir, ELEVENLABS_KEY)
+}
+
+/// The OpenRouter key Scribe-via-OpenRouter runs on: the same one AI review uses.
+pub fn openrouter_key(dir: &Path) -> Option<(String, &'static str)> {
+    crate::secrets::get(dir, crate::ai::AiProvider::OpenRouter.key_spec())
 }
 
 /// Stores `key`, or removes the stored key when `key` is empty.

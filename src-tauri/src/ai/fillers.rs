@@ -17,13 +17,28 @@ const MAX_RETAKE_WORDS: usize = 60;
 /// Upper bound on requests per run (about 75 000 words).
 pub const MAX_CHUNKS: usize = 300;
 
-pub const SYSTEM_PROMPT: &str = "You edit spoken-word video transcripts (tutorials, gaming, talks). \
+/// What to cut and how the words are written: the same for the OpenRouter review and for an
+/// in-house review by the connected agent.
+macro_rules! criteria {
+    () => {
+        "You edit spoken-word video transcripts (tutorials, gaming, talks). \
 Find words that should be cut:\n\
 - \"filler\": filler words or sounds that add nothing in context, such as um, uh, \"like\", \"you know\", \"I mean\", \"so\", \"basically\", \"kind of\". Only mark a word as filler when removing it leaves the sentence correct and meaning unchanged; keep \"like\" or \"so\" when they carry meaning.\n\
 - \"retake\": a false start or abandoned attempt that the speaker restarts, such as a sentence cut off and said again. Mark the abandoned attempt only, never the take that follows it, and never content that is said only once.\n\
-Words are written as [index]word. A marker like (pause 1.2s) is a silence between words.\n\
-Answer with a JSON object only: {\"cuts\":[{\"type\":\"filler\"|\"retake\",\"from\":<first index>,\"to\":<last index>,\"why\":\"<a few words>\"}]}. \
-Indexes are inclusive. Use {\"cuts\":[]} when nothing should be cut. Be conservative: a wrong cut is worse than a missed one.";
+Words are written as [index]word. A marker like (pause 1.2s) is a silence between words.\n"
+    };
+}
+
+pub const CRITERIA: &str = concat!(
+    criteria!(),
+    "A filler is at most 4 words, a retake at most 60. Be conservative: a wrong cut is worse than a missed one."
+);
+
+pub const SYSTEM_PROMPT: &str = concat!(
+    criteria!(),
+    "Answer with a JSON object only: {\"cuts\":[{\"type\":\"filler\"|\"retake\",\"from\":<first index>,\"to\":<last index>,\"why\":\"<a few words>\"}]}. \
+Indexes are inclusive. Use {\"cuts\":[]} when nothing should be cut. Be conservative: a wrong cut is worse than a missed one."
+);
 
 /// The user message for words `words[range]`, numbered by their position in `words`.
 pub fn chunk_prompt(words: &[&TranscriptWord], range: std::ops::Range<usize>) -> String {

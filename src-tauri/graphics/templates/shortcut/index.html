@@ -1,0 +1,192 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"keys","type":"string","label":"Keys (joined with +)","default":"Ctrl+Shift+P"},
+    {"id":"action","type":"string","label":"What it does","default":"Open the command palette"},
+    {"id":"label","type":"string","label":"Label","default":"Shortcut"},
+    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
+    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
+    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Keyboard shortcut</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #f8fafc);
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #0f172a);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 5vmin;
+        padding: 0 6vw;
+        text-align: center;
+      }
+      .label {
+        font-size: 3.4vmin;
+        font-weight: 700;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--accent, #facc15);
+      }
+      .keys {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 2.4vmin;
+      }
+      .key {
+        min-width: 14vmin;
+        padding: 2.6vmin 4vmin 3.4vmin;
+        border-radius: 2.4vmin;
+        background: #f8fafc;
+        color: #0f172a;
+        font-size: 7.5vmin;
+        font-weight: 700;
+        line-height: 1;
+        box-shadow:
+          0 1.4vmin 0 #94a3b8,
+          0 2.4vmin 4vmin rgba(0, 0, 0, 0.45);
+      }
+      .plus {
+        font-size: 6vmin;
+        font-weight: 700;
+        opacity: 0.6;
+      }
+      .action {
+        font-size: 5.2vmin;
+        font-weight: 600;
+        max-width: 80vw;
+      }
+      @media (orientation: portrait) {
+        .label {
+          font-size: 4.6vw;
+        }
+        .keys {
+          gap: 2.4vw;
+        }
+        .key {
+          min-width: 13vw;
+          font-size: 7.6vw;
+          padding: 3vw 3.6vw 3.8vw;
+          border-radius: 2.6vw;
+        }
+        .plus {
+          font-size: 6vw;
+        }
+        .action {
+          font-size: 7vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-no-timeline
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="4"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <div class="label" id="label" data-var-text="label">Shortcut</div>
+        <div class="keys" id="keys"></div>
+        <div class="action" id="action" data-var-text="action">Open the command palette</div>
+      </div>
+    </div>
+    <script>
+      const vars = window.__hyperframes.getVariables();
+      const names = String(vars.keys || "")
+        .split("+")
+        .map((k) => k.trim())
+        .filter(Boolean)
+        .slice(0, 6);
+      const keys = document.getElementById("keys");
+      names.forEach((name, i) => {
+        if (i > 0) {
+          const plus = document.createElement("span");
+          plus.className = "plus";
+          plus.id = `plus-${i}`;
+          plus.textContent = "+";
+          keys.appendChild(plus);
+        }
+        const key = document.createElement("span");
+        key.className = "key";
+        key.id = `key-${i}`;
+        key.textContent = name;
+        keys.appendChild(key);
+      });
+
+      const root = document.getElementById("root");
+      const length = (parseFloat(root.dataset.duration) || 4) * 1000;
+      const ease = "cubic-bezier(0.2, 0, 0, 1)";
+      const outAt = Math.max(1200, length - 450);
+      function play(el, frames, delay, duration, easing = ease) {
+        el.animate(frames, { duration, delay, easing, fill: "both", iterations: 1 }).pause();
+      }
+      const byId = (id) => document.getElementById(id);
+      // The card fills the frame, so it cuts in and out. Only when AeroEdits asks for an ease
+      // (in a short's slot over the full-screen camera) does it fade in and out.
+      const eases = root.dataset.entrance === "ease";
+      if (eases) {
+        play(byId("card-back"), [
+          { opacity: 0 },
+          { opacity: 1, offset: 300 / length },
+          { opacity: 1, offset: outAt / length },
+          { opacity: 0 },
+        ], 0, length, "linear");
+      }
+      play(byId("label"), [{ opacity: 0 }, { opacity: 1 }], 150, 500);
+      // Each key drops in, then all of them press down together.
+      names.forEach((_, i) => {
+        play(byId(`key-${i}`), [
+          { transform: "translateY(-6vmin) scale(0.8)", opacity: 0 },
+          { transform: "translateY(0) scale(1)", opacity: 1 },
+        ], 250 + i * 140, 450);
+        if (i > 0) {
+          play(byId(`plus-${i}`), [{ opacity: 0 }, { opacity: 0.6 }], 200 + i * 140, 300);
+        }
+      });
+      const pressAt = 300 + names.length * 140 + 350;
+      byId("keys").animate(
+        [
+          { transform: "translateY(0)" },
+          { transform: "translateY(1.2vmin)", offset: 0.4 },
+          { transform: "translateY(0)" },
+        ],
+        { duration: 420, delay: pressAt, easing: "ease-out", fill: "both", iterations: 1 },
+      ).pause();
+      play(byId("action"), [
+        { transform: "translateY(3vmin)", opacity: 0 },
+        { transform: "translateY(0)", opacity: 1 },
+      ], pressAt, 600);
+      if (eases) play(byId("layout"), [{ opacity: 1 }, { opacity: 0 }], outAt, 350);
+    </script>
+  </body>
+</html>

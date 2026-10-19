@@ -381,6 +381,33 @@ pub(crate) fn profile(stage: &str, started: std::time::Instant) {
     }
 }
 
+/// When the Shorts Studio last switched shorts, while its first frame is on its way.
+static SWITCH_STARTED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// With `AEROEDITS_PROFILE` set, starts timing a switch between shorts.
+pub(crate) fn switch_started() {
+    if profiling() {
+        *SWITCH_STARTED.lock().unwrap() = Some(std::time::Instant::now());
+    }
+}
+
+/// Logs how long after the switch `stage` came; `last` ends the switch.
+pub(crate) fn switch_stage(stage: &str, last: bool) {
+    if !profiling() {
+        return;
+    }
+    let mut started = SWITCH_STARTED.lock().unwrap();
+    if let Some(at) = *started {
+        eprintln!(
+            "[profile] short switch: {stage} at {:.1} ms",
+            at.elapsed().as_secs_f64() * 1000.0
+        );
+        if last {
+            *started = None;
+        }
+    }
+}
+
 /// Selects the FFmpeg backend on macOS instead of the Swift bridge.
 pub const MEDIA_BACKEND_ENV: &str = "AEROEDITS_MEDIA_BACKEND";
 

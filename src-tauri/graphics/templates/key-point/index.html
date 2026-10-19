@@ -1,0 +1,162 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"label","type":"string","label":"Label","default":"Key point"},
+    {"id":"statement","type":"string","label":"Statement","default":"Save before you switch branches, or your changes come with you."},
+    {"id":"detail","type":"string","label":"Detail (optional)","default":""},
+    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
+    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
+    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Key point</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #f8fafc);
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #0f172a);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        padding: 0 11vw;
+      }
+      .quote {
+        position: relative;
+        padding-left: 5vmin;
+        display: flex;
+        flex-direction: column;
+        gap: 2.6vmin;
+      }
+      .rule {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 1.2vmin;
+        border-radius: 1vmin;
+        background: var(--accent, #facc15);
+        transform-origin: top center;
+      }
+      .label {
+        font-size: 3.2vmin;
+        font-weight: 700;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--accent, #facc15);
+      }
+      .statement {
+        font-size: 7.4vmin;
+        line-height: 1.15;
+        font-weight: 700;
+        max-width: 74vw;
+      }
+      .detail {
+        font-size: 3.8vmin;
+        opacity: 0.7;
+        max-width: 70vw;
+      }
+      .detail:empty {
+        display: none;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding: 0 9vw;
+        }
+        .quote {
+          padding-left: 6vw;
+        }
+        .rule {
+          width: 1.6vw;
+        }
+        .label {
+          font-size: 4.4vw;
+        }
+        .statement {
+          font-size: 9.4vw;
+          max-width: none;
+        }
+        .detail {
+          font-size: 5.2vw;
+          max-width: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-no-timeline
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="5"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <div class="quote">
+          <div class="rule" id="rule"></div>
+          <div class="label" id="label" data-var-text="label">Key point</div>
+          <div class="statement" id="statement" data-var-text="statement">
+            Save before you switch branches, or your changes come with you.
+          </div>
+          <div class="detail" id="detail" data-var-text="detail"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const length = (parseFloat(root.dataset.duration) || 5) * 1000;
+      const ease = "cubic-bezier(0.2, 0, 0, 1)";
+      const outAt = Math.max(1400, length - 450);
+      function play(id, frames, delay, duration, easing = ease) {
+        document
+          .getElementById(id)
+          .animate(frames, { duration, delay, easing, fill: "both", iterations: 1 })
+          .pause();
+      }
+      // The card fills the frame, so it cuts in and out. Only when AeroEdits asks for an ease
+      // (in a short's slot over the full-screen camera) does it fade in and out.
+      const eases = root.dataset.entrance === "ease";
+      if (eases) {
+        play("card-back", [
+          { opacity: 0 },
+          { opacity: 1, offset: 300 / length },
+          { opacity: 1, offset: outAt / length },
+          { opacity: 0 },
+        ], 0, length, "linear");
+      }
+      play("rule", [{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }], 150, 700);
+      play("label", [{ opacity: 0 }, { opacity: 1 }], 250, 500);
+      play("statement", [
+        { transform: "translateX(-3vmin)", opacity: 0, filter: "blur(6px)" },
+        { transform: "translateX(0)", opacity: 1, filter: "blur(0)" },
+      ], 380, 800);
+      play("detail", [
+        { transform: "translateY(2vmin)", opacity: 0 },
+        { transform: "translateY(0)", opacity: 0.7 },
+      ], 800, 600);
+      if (eases) play("layout", [{ opacity: 1 }, { opacity: 0 }], outAt, 350);
+    </script>
+  </body>
+</html>

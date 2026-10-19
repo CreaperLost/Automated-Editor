@@ -19,8 +19,16 @@ The actions are MCP tools (`aeroedits` server) and shell commands:
 A template is the plan for one kind of video: the steps, what to ask, and the defaults.
 `template` lists them; `template` with a name returns that template and the user's saved
 answers. Pick the template that fits what the user said (a tutorial, a screen recording, a
-course lesson: `tutorial`). If none fits, say so and ask which is closest. Then follow its
+course lesson: `tutorial`; shorts cut from the video: `shorts`; a short the user recorded a
+new take for, with footage from the video: `take-shorts`). If none fits, say so and ask which
+is closest. Then follow its
 steps in order. The user's own instructions win over the template.
+
+"Make a short from my take" (or "from this recording", "from these files") is `take-shorts`,
+whatever the files are: a camera video, a microphone file or a .aero recording folder. They go
+into the project that is open with `media_import`; never `open` them or `create` a project
+from them. Anything else the user says about the take (what it is about, a link) is the
+short's `idea` and helps pick its footage and graphics.
 
 ## Saved answers
 
@@ -74,6 +82,72 @@ undo it. `undo` takes back the latest change.
 Chapters are the last edit, right before export, after every cut: they read the final edit's
 words. Never run `chapters` earlier; if the user asks for them sooner, say why they come last.
 If anything is cut after them, run `chapters` again before exporting.
+
+## Graphics
+
+Motion graphics are HyperFrames compositions the app renders and plays full screen over
+everything (screen, camera, captions); in a 9:16 short the same graphic renders at 9:16. Cuts
+never go through a graphic, so add them after the cuts are done and checked, before chapters.
+
+A graphic that fills the whole screen never eases in or out: it appears and disappears with a
+hard cut. The only graphics that ease in and out are those laid over the full-screen camera (a
+lower third or callout during webcam focus, or a short's camera scene). The app decides this
+from where each graphic plays and sets `data-entrance` (`cut` or `ease`) on its root when it
+renders; `graphic_render` says which each one got. Never add your own fade to a full-screen
+graphic. In a composition you write, show the card whole from the first frame to the last and
+fade or slide it only when `root.dataset.entrance === "ease"`; mark one that covers only part
+of the frame with `data-overlay` on the root (without it the app treats it as full screen and
+always cuts it).
+Look first at what exists: `graphics` lists the bundled templates and the user's library, each
+library item with a `useWhen` line; pick one whose `useWhen` fits and fill in its variables.
+Write a composition of your own (`graphic_add` with `blank`, then `graphic_write_file` or the
+folder directly) only when nothing there does the job. Ask before `graphics_install`. After
+adding, `graphic_render`, then look with `frame_render`.
+
+When the user likes a graphic you wrote, offer to keep it for later projects. If they say yes:
+`graphic_templatize` (its source and the rules: text as variables, brand kit colours, timing
+from `data-duration`, a portrait block, a cut unless `data-entrance` is `ease`, no network),
+rewrite the files, then
+`graphic_check` until it passes (fix what it names; it is the app's own check, no model). Then
+`library_save` with a `label`, a one-line `useWhen` and `lengthUs`. If it answers with a close
+library item or template, ask whether to update that item (`update`, its next version) or keep
+both (`asNew`). Never save without the user's yes, and save a failing graphic as is (`asIs`)
+only at their word.
+
+Brand kits (`brand_kits`) are the user's colours, font and logo. The project has a default kit
+(`brand_pick`) and a graphic may pick another (`graphic_set` `brand`). A kit fills the
+`background`, `text` and `accent` variables a graphic has not set, so with a kit leave those
+unset; a composition of your own can use `var(--brand-accent)`, `var(--brand-background)`,
+`var(--brand-text)`, `var(--brand-font)` and `var(--brand-logo)` (a CSS `url()`). The user's
+library (in `graphics`) holds graphics saved from other projects: `graphic_add` with `library`
+(its id or name) copies one in. Items marked "as is" were kept although they fail the check:
+look at one with `frame_render` before relying on it.
+
+In a short, a graphic plays over the whole frame unless it is given a slot there
+(`graphic_set` with `short` and `slot`): `camera` or `screen` (that part of the split), or
+`overScreen` (over the screen part, under the captions; its see-through parts show the
+screen). It renders for that space, so the templates fit any slot.
+
+## Telemetry polish
+
+Three touches come from the recording's telemetry, on by default and subtle; leave them on
+unless the user asks. In `settings` `area: layout`: `webcamAutoHide` fades the bubble out while
+clicks, drags, scrolling, a resting pointer or typing are under it (it never moves); `windowCrop`
+crops the screen to the front window when it is clearly smaller than the display (needs a
+recording with window telemetry), `windowCropPaddingPct` is the room around it, and
+`windowCropOff` lists recording stretches (`{media, sourceStartUs, sourceEndUs}`) shown whole,
+for a part the user wants uncropped. In `area: audio`, `soundEffects` (`clicks`, `whooshes`,
+`muted`, `volumeDb`) is a quiet lane of click sounds and a few whooshes on zooms and layout
+switches; when the user wants silence or no clicks, switch it there.
+
+## Looking at the edit
+
+After your passes and before export, call `storyboard` once (with `short` for a short): one
+small image of the whole edit, a tile per scene, with a JSON line per tile (time, what the
+frame shows, zoom, graphic, chapter, words). Look for a wrong layout, a zoom on nothing, a
+graphic over the wrong moment, a stretch that should have been cut; refer to tiles by number.
+It replaces grabbing many frames: use `frame_render` only for a moment the storyboard leaves
+in doubt, and `fromUs`/`toUs` for a closer look at one stretch.
 
 ## Export
 

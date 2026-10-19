@@ -72,6 +72,9 @@ pub struct EditDocument {
     /// Auto-zoom settings: how far zooms go, how many, how the camera follows.
     #[serde(default, skip_serializing_if = "crate::zoom::ZoomSettings::is_default")]
     pub zoom_settings: crate::zoom::ZoomSettings,
+    /// The brand kit graphics use unless they pick another (see `graphics::brands`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphics_brand: Option<String>,
 }
 
 impl Default for EditDocument {
@@ -92,6 +95,7 @@ impl Default for EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             zoom_settings: Default::default(),
+            graphics_brand: None,
         }
     }
 }
@@ -280,6 +284,9 @@ impl EditDocument {
         crate::chapters::validate(&self.chapters)?;
         crate::shorts::validate(&self.shorts)?;
         crate::shorts::validate_edits(self)?;
+        if let Some(brand) = &self.graphics_brand {
+            crate::graphics::brands::check_name(brand)?;
+        }
         Ok(())
     }
 }
@@ -470,6 +477,7 @@ impl EditHistory {
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
         next.schema_version = EDIT_SCHEMA_VERSION;
+        crate::shorts::give_own_timelines(&mut next);
         next.validate()?;
         if next.short_layout.is_some() {
             return Err("A project's own edit cannot use a short's split layout".into());
@@ -616,6 +624,33 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
+    /// Adds a short made from a take, giving the take's streams their roles (camera, speech)
+    /// in the same step.
+    pub fn add_take_short(
+        &mut self,
+        expected_revision: u64,
+        short: crate::shorts::Short,
+        roles: &[(String, String, Role)],
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        self.check(expected_revision)?;
+        let mut next = self.current.clone();
+        for (asset, stream, role) in roles {
+            let stream = next
+                .assets
+                .iter_mut()
+                .find(|a| &a.id == asset)
+                .and_then(|a| a.streams.iter_mut().find(|s| &s.id == stream))
+                .ok_or("The take's media is no longer in the project")?;
+            stream.role = *role;
+        }
+        let mut shorts = next.shorts.clone();
+        shorts.push(short);
+        crate::shorts::validate(&shorts)?;
+        next.shorts = crate::shorts::normalized(shorts);
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
     /// The recording webcam focus is on, and the source ranges of its camera that a timeline
     /// range covers. Focus stays on one recording; the first edit picks the camera under it.
     fn focus_pieces(&self, start_us: u64, end_us: u64) -> (Option<String>, Vec<(u64, u64)>) {
@@ -698,6 +733,7 @@ impl EditHistory {
         key: &str,
         ranges: &[SourceRange],
         unmute: bool,
+        short: Option<&str>,
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
@@ -718,9 +754,25 @@ impl EditHistory {
         {
             return Err("A muted moment must lie inside its sound".into());
         }
-        let current: Vec<(u64, u64)> = self
-            .current
-            .noise_mutes
+        // A short's mutes are its own; without one, the video's.
+        let own_mutes = |document: &EditDocument| -> Result<NoiseMutes, String> {
+            match short {
+                None => Ok(document.noise_mutes.clone()),
+                Some(id) => document
+                    .shorts
+                    .iter()
+                    .find(|s| s.id == id)
+                    .ok_or("That short no longer exists")?
+                    .edit
+                    .as_ref()
+                    .map(|e| e.noise_mutes.clone())
+                    .ok_or_else(|| {
+                        "Part of this short was cut from the video; adjust it first".into()
+                    }),
+            }
+        };
+        let mut mutes = own_mutes(&self.current)?;
+        let current: Vec<(u64, u64)> = mutes
             .get(key)
             .map(|ranges| ranges.iter().map(|r| (r.start_us, r.end_us)).collect())
             .unwrap_or_default();
@@ -733,11 +785,11 @@ impl EditHistory {
         if next_ranges.len() > MAX_NOISE_MUTES {
             return Err(format!("Mute at most {MAX_NOISE_MUTES} moments of a sound"));
         }
-        let mut next = self.current.clone();
+        let before = mutes.clone();
         if next_ranges.is_empty() {
-            next.noise_mutes.remove(key);
+            mutes.remove(key);
         } else {
-            next.noise_mutes.insert(
+            mutes.insert(
                 key.to_string(),
                 next_ranges
                     .into_iter()
@@ -745,12 +797,26 @@ impl EditHistory {
                     .collect(),
             );
         }
-        if next.noise_mutes == self.current.noise_mutes {
+        if mutes == before {
             return Err(if unmute {
                 "Those moments are not muted".into()
             } else {
                 "Those moments are already muted".into()
             });
+        }
+        let mut next = self.current.clone();
+        match short {
+            None => next.noise_mutes = mutes,
+            Some(id) => {
+                if let Some(edit) = next
+                    .shorts
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                    .and_then(|s| s.edit.as_mut())
+                {
+                    edit.noise_mutes = mutes;
+                }
+            }
         }
         self.commit_next(expected_revision, persist_root, next)
     }
@@ -887,17 +953,47 @@ impl EditHistory {
     ) -> Result<&EditDocument, String> {
         settings.validate()?;
         let mut next = self.current.clone();
-        let transition = settings.transition_ms as u64 * 1_000;
-        for zoom in next
-            .zooms
-            .iter_mut()
-            .filter(|z| z.source == ZoomSource::Generated)
-        {
-            zoom.scale = settings.scale_for(zoom.origin);
-            let length = zoom.source_end_us - zoom.source_start_us;
-            zoom.transition_us = transition.min(length.saturating_sub(1) / 2).max(1);
+        with_zoom_settings(&mut next, settings);
+        if next == self.current {
+            return Ok(&self.current);
         }
-        next.zoom_settings = settings;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Takes on a saved template's settings, and its short look on `short` when one is named,
+    /// in one step. What belongs to this project (see [`crate::templates`]) stays.
+    pub fn apply_template(
+        &mut self,
+        expected_revision: u64,
+        template: &crate::templates::Template,
+        short: Option<&str>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        use crate::templates::{captions_onto, layout_onto, short_look_onto};
+        self.check(expected_revision)?;
+        let mut next = self.current.clone();
+        next.layout = layout_onto(&template.layout, &self.current.layout);
+        validate_layout(&next.layout)?;
+        next.captions = captions_onto(&template.captions, &self.current.captions);
+        next.captions.validate()?;
+        template.zoom_settings.validate()?;
+        with_zoom_settings(&mut next, template.zoom_settings.clone());
+        next.webcam_focus.settings = template.webcam_focus.clone();
+        next.webcam_focus.validate()?;
+        next.graphics_brand = template.graphics_brand.clone();
+        if let Some(id) = short {
+            let look = template
+                .short_look
+                .as_ref()
+                .ok_or("This template was saved without a short look")?;
+            let own = next
+                .shorts
+                .iter_mut()
+                .find(|s| s.id == id)
+                .ok_or("That short is gone")?;
+            own.layout = short_look_onto(look, &own.layout);
+            crate::shorts::validate(&next.shorts)?;
+        }
         if next == self.current {
             return Ok(&self.current);
         }
@@ -1158,7 +1254,11 @@ impl EditHistory {
             .iter_mut()
             .find(|s| s.id == short_id)
             .ok_or("That short no longer exists")?;
-        own.edit = Some(crate::shorts::ShortEdit { sequence });
+        let noise_mutes = own.edit.take().map(|e| e.noise_mutes).unwrap_or_default();
+        own.edit = Some(crate::shorts::ShortEdit {
+            sequence,
+            noise_mutes,
+        });
         self.commit_next(expected_revision, persist_root, next)?;
         Ok(outcome)
     }
@@ -1177,9 +1277,24 @@ impl EditHistory {
             .iter_mut()
             .find(|s| s.id == short_id)
             .ok_or("That short no longer exists")?;
-        if short.edit.take().is_none() {
-            return Err("This short already follows the video".into());
+        if short.take.is_some() {
+            return Err(
+                "This short is made from a take: it has no stretch of the video to follow".into(),
+            );
         }
+        // Its stretch of the video as edited now; its own muted noises stay.
+        let noise_mutes = short.edit.take().map(|e| e.noise_mutes).unwrap_or_default();
+        let (start, end) = crate::shorts::edited_range_in(short, &self.current)
+            .ok_or("Part of this short was cut from the video; adjust it first")?;
+        short.edit = Some(crate::shorts::ShortEdit {
+            sequence: crate::shorts::slice_sequence(
+                &self.current.sequence,
+                &self.current.assets,
+                start,
+                end,
+            ),
+            noise_mutes,
+        });
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1220,6 +1335,21 @@ impl EditHistory {
         self.current = next;
         Ok(&self.current)
     }
+}
+
+/// New auto-zoom settings on `document`: automatic zooms take the new amounts and transition.
+fn with_zoom_settings(document: &mut EditDocument, settings: crate::zoom::ZoomSettings) {
+    let transition = settings.transition_ms as u64 * 1_000;
+    for zoom in document
+        .zooms
+        .iter_mut()
+        .filter(|z| z.source == ZoomSource::Generated)
+    {
+        zoom.scale = settings.scale_for(zoom.origin);
+        let length = zoom.source_end_us - zoom.source_start_us;
+        zoom.transition_us = transition.min(length.saturating_sub(1) / 2).max(1);
+    }
+    document.zoom_settings = settings;
 }
 
 fn sort_zooms(zooms: &mut [ZoomKeyframe]) {

@@ -899,6 +899,17 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    pub fn add_take_short(
+        &mut self,
+        expected_revision: u64,
+        short: crate::shorts::Short,
+        roles: &[(String, String, crate::sequence::Role)],
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .add_take_short(expected_revision, short, roles, &self.root)?;
+        Ok(self.done())
+    }
+
     pub fn set_shorts(
         &mut self,
         expected_revision: u64,
@@ -926,9 +937,27 @@ impl ProjectReader {
         key: &str,
         ranges: &[crate::sequence::SourceRange],
         unmute: bool,
+        short: Option<&str>,
+    ) -> Result<OpenedProject, String> {
+        self.history.update_noise_mutes(
+            expected_revision,
+            key,
+            ranges,
+            unmute,
+            short,
+            &self.root,
+        )?;
+        Ok(self.done())
+    }
+
+    pub fn apply_template(
+        &mut self,
+        expected_revision: u64,
+        template: &crate::templates::Template,
+        short: Option<&str>,
     ) -> Result<OpenedProject, String> {
         self.history
-            .update_noise_mutes(expected_revision, key, ranges, unmute, &self.root)?;
+            .apply_template(expected_revision, template, short, &self.root)?;
         Ok(self.done())
     }
 
@@ -1020,6 +1049,9 @@ impl ProjectReader {
         let mut view = self.summary.clone();
         view.short_view = Some(short_id.to_string());
         view.sequence = timeline.sequence.clone();
+        // A take short's captions read the take.
+        view.captions = timeline.captions.clone();
+        view.noise_mutes = timeline.noise_mutes.clone();
         view.duration_us = timeline.duration_us();
         view.zooms = timeline.zooms_with_ranges();
         let mut focus = timeline.webcam_focus.clone();

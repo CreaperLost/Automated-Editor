@@ -13,7 +13,7 @@ function formatTime(us: number): string {
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
-const ORIGIN_LABEL = { click: "Click", dwell: "Hover", cluster: "Clicks" } as const;
+const ORIGIN_LABEL = { click: "Click", dwell: "Hover", cluster: "Clicks", typing: "Typing" } as const;
 /** One click, one undoable edit: preset amounts rather than a slider for saved zooms. */
 const SCALES = [1.25, 1.5, 1.8, 2, 2.5, 3] as const;
 
@@ -242,10 +242,10 @@ export const ZoomPanel: React.FC = () => {
         <Slider
           label="Transition"
           value={settings.transitionMs}
-          min={100}
+          min={0}
           max={3000}
           step={50}
-          format={(v) => `${v} ms`}
+          format={(v) => (v ? `${v} ms` : "cut")}
           onChange={(transitionMs) => setSettings({ transitionMs })}
         />
         <Slider

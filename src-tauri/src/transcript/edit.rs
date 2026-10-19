@@ -5,11 +5,22 @@ use crate::timeline::TimelineMapper;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Filler sounds cut by "Remove filler words". Real words such as "like" or "so" are left
-/// alone: whether they are filler depends on the sentence.
-const FILLERS: &[&str] = &[
-    "um", "umm", "ummm", "uh", "uhh", "uhm", "er", "erm", "ah", "ahh", "hmm", "hm", "mm", "mmm",
-];
+/// Filler sounds cut by "Remove filler words", with repeated letters folded so every spelling
+/// a transcriber writes counts ("ummm", "uhh", "errm", "hmmm"). Real words such as "like" or
+/// "so" are left alone: whether they are filler depends on the sentence.
+const FILLERS: &[&str] = &["um", "uh", "uhm", "er", "erm", "ehm", "ah", "hm"];
+
+/// A filler sound such as um or uh; `normalized` as `normalize` gives it.
+pub(crate) fn is_filler_sound(normalized: &str) -> bool {
+    let mut folded = String::with_capacity(normalized.len());
+    for c in normalized.chars() {
+        if !folded.ends_with(c) {
+            folded.push(c);
+        }
+    }
+    FILLERS.contains(&folded.as_str()) || (folded == "m" && normalized.len() >= 2)
+}
+
 /// Gaps at least this long end a phrase for retake detection.
 const PHRASE_PAUSE_US: u64 = 400_000;
 /// A restart is preceded by at least this much pause, or by punctuation.
@@ -27,7 +38,7 @@ const MAX_FINISHED_EXTRA_WORDS: usize = 2;
 const EDGE_PAD_US: u64 = 50_000;
 
 /// Punctuation on its own, as some providers give it ("." or ",").
-fn is_punctuation(text: &str) -> bool {
+pub(crate) fn is_punctuation(text: &str) -> bool {
     let text = text.trim();
     !text.is_empty() && text.chars().all(|c| !c.is_alphanumeric())
 }
@@ -62,6 +73,9 @@ pub struct TranscriptView {
     pub revision: u64,
     pub word_stamp: String,
     pub words: Vec<TranscriptViewWord>,
+    /// Set once the word times were aligned to the audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<super::align::AlignmentInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -92,6 +106,10 @@ pub struct TranscriptCutSuggestion {
     /// The AI's short explanation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Who made the AI review that found it: `in-house (<agent>)` for the connected agent,
+    /// else the OpenRouter or OpenAI model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
     /// An agent's proposal item this is, decided through its batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<ProposalRef>,
@@ -115,14 +133,14 @@ pub enum SuggestionSource {
     Agent,
 }
 
-fn normalize(text: &str) -> String {
+pub(crate) fn normalize(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric() || *c == '\'')
         .flat_map(char::to_lowercase)
         .collect()
 }
 
-fn ends_clause(text: &str) -> bool {
+pub(crate) fn ends_clause(text: &str) -> bool {
     text.ends_with(['.', '?', '!', ',', ';', ':', '-', '\u{2014}', '\u{2026}'])
 }
 
@@ -175,6 +193,7 @@ pub fn view(transcript: &Transcript, mapper: &TimelineMapper, revision: u64) -> 
         revision,
         word_stamp: transcript.dependency().word_stamp.unwrap_or_default(),
         words,
+        alignment: transcript.alignment.clone(),
     }
 }
 
@@ -272,12 +291,12 @@ pub fn suggestions(
     // Runs of filler sounds.
     let mut i = 0;
     while i < live.len() {
-        if !FILLERS.contains(&normalized[i].as_str()) {
+        if !is_filler_sound(&normalized[i]) {
             i += 1;
             continue;
         }
         let first = i;
-        while i < live.len() && FILLERS.contains(&normalized[i].as_str()) {
+        while i < live.len() && is_filler_sound(&normalized[i]) {
             i += 1;
         }
         push_suggestion(
@@ -393,6 +412,7 @@ pub fn suggestions(
         if let Some(added) = out.get_mut(before) {
             added.source = SuggestionSource::Ai;
             added.reason = Some(span.reason.clone()).filter(|r| !r.is_empty());
+            added.reviewer = transcript.ai_model.clone();
             taken.push((a, b));
         }
     }
@@ -442,6 +462,7 @@ fn push_suggestion(
         dismissed: false,
         source: SuggestionSource::Rules,
         reason: None,
+        reviewer: None,
         proposal: None,
     });
 }

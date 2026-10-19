@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../../stores/projectStore";
-import { api, isTauriEnvironment } from "../../lib/ipc";
+import { api, isTauriEnvironment, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
 import { PreviewHitMode, PreviewStatus } from "../../lib/types";
 import { usePreviewQualityStore } from "../../stores/previewQualityStore";
 import { restoreSeeThrough, seeThroughPath } from "./seeThrough";
+import { switchStage } from "../../lib/switchTiming";
 
 type Picture = ImageBitmap | HTMLImageElement;
 
@@ -69,6 +70,7 @@ export function useEngineFrames(
           }
           context.drawImage(picture, 0, 0);
           closePicture(picture);
+          switchStage("first frame");
           drawn += 1;
         }
       } finally {
@@ -95,16 +97,33 @@ export function useEngineFrames(
           await sleep(100);
           continue;
         }
-        if (cancelled || buffer.byteLength <= 8) continue;
-        lastSeq = Number(new DataView(buffer).getBigUint64(0, true));
-        if (accept && !accept()) continue;
-        latest = new Blob([buffer.slice(8)], { type: "image/jpeg" });
-        void draw();
+        if (cancelled || buffer.byteLength <= PREVIEW_FRAME_HEADER) continue;
+        const header = new DataView(buffer);
+        lastSeq = Number(header.getBigUint64(0, true));
+        offer(buffer, Number(header.getBigUint64(8, true)));
       }
     };
+    // A frame drawn for an older playback generation (before a seek, or of the short this
+    // window just left) is never shown. One that `accept` turns away waits for the store to
+    // catch up: the engine draws a paused frame once, and its status can land just after it.
+    let held: { buffer: ArrayBuffer; generation: number } | null = null;
+    const offer = (buffer: ArrayBuffer, generation: number) => {
+      held = null;
+      if (generation !== 0 && generation < useProjectStore.getState().playbackGeneration) return;
+      if (accept && !accept()) {
+        held = { buffer, generation };
+        return;
+      }
+      latest = new Blob([buffer.slice(PREVIEW_FRAME_HEADER)], { type: "image/jpeg" });
+      void draw();
+    };
+    const stopHeld = useProjectStore.subscribe(() => {
+      if (held && (!accept || accept())) offer(held.buffer, held.generation);
+    });
     void pull();
     return () => {
       cancelled = true;
+      stopHeld();
       window.clearInterval(measure);
       setMeasuredFps(null);
     };

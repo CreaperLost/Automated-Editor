@@ -12,6 +12,8 @@ use crate::timeline::{SourceInterval, TimelineMapper};
 use std::fs;
 
 const MAX_DIAGNOSTICS: usize = 32;
+/// A segment file that ends this close to its stated end is whole (frame rounding).
+const SEGMENT_SEAM_US: u64 = 1_000;
 
 /// Fixed protection for the secondary source: even quiet, brief sounds count. It is
 /// independent of silence presets and has no minimum sound duration. Only measured,
@@ -235,7 +237,13 @@ pub(crate) fn scan_track_silence(
             return Err(error);
         }
         if !read_failed && detector.is_some() {
-            let read_end = segment.start_us.saturating_add(info.frame_us(frame_index));
+            let mut read_end = segment.start_us.saturating_add(info.frame_us(frame_index));
+            // Frame rounding leaves a file a few microseconds short of where the next one
+            // starts; that is not a hole, and treating it as one dropped every word gap
+            // spanning two segment files.
+            if read_end < segment.end_us && segment.end_us - read_end <= SEGMENT_SEAM_US {
+                read_end = segment.end_us;
+            }
             if read_end > segment.start_us {
                 covered.push((segment.start_us, read_end.min(segment.end_us)));
             }
@@ -277,7 +285,7 @@ pub(crate) fn detect_track_silence_with_words(
         policy,
         diagnostics,
         threshold_db,
-        ..
+        covered,
     } = scan_track_silence(ctx, config)?;
     let mapper = TimelineMapper::try_new(
         ctx.retained
@@ -291,7 +299,21 @@ pub(crate) fn detect_track_silence_with_words(
     )?;
 
     let source_ranges = if let Some(transcript) = transcript {
-        crate::transcript::pauses::protect_words(source_ranges, transcript, config.padding_ms)
+        // Parakeet's words swallow the pauses next to them: guarded as they are, the pauses
+        // inside them would never be cut.
+        let tightened;
+        let words = if transcript.provider == crate::transcript::ProviderKind::Parakeet {
+            tightened = crate::transcript::pauses::tighten_loose_words(
+                transcript,
+                &source_ranges,
+                &covered,
+                false,
+            );
+            &tightened
+        } else {
+            transcript
+        };
+        crate::transcript::pauses::protect_words(source_ranges, words, config.padding_ms)
     } else {
         source_ranges
     };

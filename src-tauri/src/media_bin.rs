@@ -196,6 +196,7 @@ fn describe(root: &Path, id: &str, file: &Path, kind: AssetKind) -> Result<Descr
             Ok((duration_us, width, height, streams, transparent))
         }
         AssetKind::Recording => Err("A recording is imported from its folder".into()),
+        AssetKind::Graphic => Err("A graphic is made from the Graphics tab".into()),
     }
 }
 

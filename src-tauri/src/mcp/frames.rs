@@ -2,6 +2,7 @@
 use crate::commands::AppState;
 use crate::export::SceneEvaluator;
 use crate::media::{ffmpeg::DecodeLimit, PixelFormat, VideoFrame};
+use crate::project::revision::EditDocument;
 use crate::render::Scene;
 use parking_lot::Mutex;
 
@@ -9,43 +10,74 @@ use parking_lot::Mutex;
 /// usually looks at several moments of the same edit in a row.
 static CACHE: Mutex<Option<(String, SceneEvaluator)>> = Mutex::new(None);
 
-/// Runs `use_it` on an evaluator of the open project's current edit at `width` (the height
-/// follows the canvas shape), with `at_us` clamped into the edit. Returns its result, the
-/// moment used, and the full canvas size.
-fn with_evaluator<T>(
+/// The document frames are drawn from: the open project's current edit, or with `short` (an
+/// id or title) that short's 9:16 one, on its own timeline. With the project root and a key
+/// that changes whenever the picture may.
+pub fn document(
     state: &AppState,
-    at_us: u64,
-    width: u32,
-    use_it: impl FnOnce(&mut SceneEvaluator, u64) -> Result<T, String>,
-) -> Result<(T, u64, (u32, u32)), String> {
-    let (document, root, handle) = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or(super::tools::NO_PROJECT_MESSAGE)?;
-        let document = reader.history().current.clone();
-        (
-            document,
-            reader.root().to_path_buf(),
-            reader.summary.project_handle.clone(),
-        )
+    short: Option<&str>,
+) -> Result<(EditDocument, std::path::PathBuf, String), String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or(super::tools::NO_PROJECT_MESSAGE)?;
+    let base = &reader.history().current;
+    // Captions come from transcripts, which change without moving the edit revision.
+    let mut key = format!(
+        "{}:{}:{}",
+        reader.summary.project_handle,
+        base.revision,
+        crate::transcript::store::changes()
+    );
+    let document = match short {
+        None => base.clone(),
+        Some(wanted) => {
+            let short = base
+                .shorts
+                .iter()
+                .find(|s| s.id == wanted)
+                .or_else(|| {
+                    base.shorts
+                        .iter()
+                        .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
+                })
+                .ok_or_else(|| {
+                    let known: Vec<String> = base
+                        .shorts
+                        .iter()
+                        .map(|s| format!("{} \"{}\"", s.id, s.title))
+                        .collect();
+                    format!("No short {wanted}. Shorts: {}", known.join(", "))
+                })?;
+            key.push_str(&format!(":{}", short.id));
+            crate::shorts::short_document(
+                base,
+                short,
+                crate::commands::has_speech_transcript(reader),
+            )?
+        }
     };
+    Ok((document, reader.root().to_path_buf(), key))
+}
+
+/// Runs `use_it` on an evaluator of [`document`] at `width` (the height follows the canvas
+/// shape), with the document it draws.
+pub fn with_document_evaluator<T>(
+    state: &AppState,
+    short: Option<&str>,
+    width: u32,
+    use_it: impl FnOnce(&mut SceneEvaluator, &EditDocument) -> Result<T, String>,
+) -> Result<T, String> {
+    let (document, root, key) = document(state, short)?;
     let canvas = document.layout.preview_dimensions()?;
     let height = ((canvas.1 as u64 * width as u64 / canvas.0.max(1) as u64) as u32 & !1).max(2);
     let width = width & !1;
-    let duration = document.sequence.duration_us();
-    if duration == 0 {
+    if document.sequence.duration_us() == 0 {
         return Err("The timeline is empty".into());
     }
-    let at = at_us.min(duration - 1);
-    // Captions come from transcripts, which change without moving the edit revision.
-    let key = format!(
-        "{handle}:{}:{}:{width}x{height}",
-        document.revision,
-        crate::transcript::store::changes()
-    );
+    let key = format!("{key}:{width}x{height}");
     let mut cache = CACHE.lock();
     if cache.as_ref().map(|(k, _)| k.as_str()) != Some(key.as_str()) {
         let reuse = cache.take().and_then(|(_, e)| e.into_reuse());
-        let evaluator = SceneEvaluator::new_reusing(root, document, width, height, reuse)?
+        let evaluator = SceneEvaluator::new_reusing(root, document.clone(), width, height, reuse)?
             .with_decode_limit(DecodeLimit {
                 max_width: width * 2,
                 max_height: height * 2,
@@ -56,7 +88,23 @@ fn with_evaluator<T>(
         *cache = Some((key, evaluator));
     }
     let evaluator = &mut cache.as_mut().ok_or("The renderer is not ready")?.1;
-    Ok((use_it(evaluator, at)?, at, canvas))
+    use_it(evaluator, &document)
+}
+
+/// Runs `use_it` on an evaluator of the open project's current edit at `width` (the height
+/// follows the canvas shape), with `at_us` clamped into the edit. Returns its result, the
+/// moment used, and the full canvas size.
+fn with_evaluator<T>(
+    state: &AppState,
+    at_us: u64,
+    width: u32,
+    use_it: impl FnOnce(&mut SceneEvaluator, u64) -> Result<T, String>,
+) -> Result<(T, u64, (u32, u32)), String> {
+    with_document_evaluator(state, None, width, |evaluator, document| {
+        let at = at_us.min(document.sequence.duration_us() - 1);
+        let canvas = document.layout.preview_dimensions()?;
+        Ok((use_it(evaluator, at)?, at, canvas))
+    })
 }
 
 /// The finished frame at `at_us`, `width` pixels wide.

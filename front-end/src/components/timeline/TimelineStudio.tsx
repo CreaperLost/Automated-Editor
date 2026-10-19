@@ -10,6 +10,7 @@ import {
   EyeOff,
   Film,
   Image as ImageIcon,
+  Sparkles,
   Layers,
   Link2,
   Lock,
@@ -85,6 +86,7 @@ import {
 } from "./timelineShared";
 import { useZoomLane } from "./useZoomLane";
 import { useCaptionLane } from "./useCaptionLane";
+import { useSoundEffectsLane } from "./useSoundEffectsLane";
 
 type SourceRange = [start: number, end: number];
 
@@ -215,6 +217,8 @@ interface ClipInfo {
   /** "Screen", "Speech"…: what it plays as. */
   roleLabel?: string;
   image: boolean;
+  /** A motion graphic: drawn over everything, never cut into. */
+  graphic?: boolean;
   missing: boolean;
   /** An unlinked clip of media with several streams (it shows the unlink mark). */
   unlinked: boolean;
@@ -270,7 +274,7 @@ const ClipBlock = React.memo(function ClipBlock({
   const showContents = widthPx >= 40;
   const showTrimHandles = widthPx >= 24;
   const { name, role, missing } = info;
-  const Icon = audio ? (role === "mic" ? Mic : AudioLines) : info.image ? ImageIcon : role === "webcam" ? Camera : Film;
+  const Icon = audio ? (role === "mic" ? Mic : AudioLines) : info.graphic ? Sparkles : info.image ? ImageIcon : role === "webcam" ? Camera : Film;
   const tint = missing
     ? "bg-danger/15 border-danger/50"
     : audio
@@ -518,6 +522,7 @@ export const TimelineStudio: React.FC = () => {
         was.role === next.role &&
         was.roleLabel === next.roleLabel &&
         was.image === next.image &&
+        was.graphic === next.graphic &&
         was.missing === next.missing &&
         was.unlinked === next.unlinked;
       info.set(id, same ? was : next);
@@ -532,6 +537,7 @@ export const TimelineStudio: React.FC = () => {
           role,
           roleLabel: stream ? ROLE_LABEL[role ?? stream.role] : undefined,
           image: asset?.kind === "image",
+          graphic: asset?.kind === "graphic",
           missing: !asset || !!asset.missing,
           unlinked: !clip.link && !!asset && asset.streams.length > 1,
         });
@@ -1029,6 +1035,7 @@ export const TimelineStudio: React.FC = () => {
     suppressClick,
     hint,
   });
+  const soundEffects = useSoundEffectsLane({ view, onError: setEditError });
 
   // ---- Keyboard -----------------------------------------------------------------------------
   const actions = useRef<Partial<Record<HotkeyAction, () => void>>>({});
@@ -1897,6 +1904,7 @@ export const TimelineStudio: React.FC = () => {
               {addTrackButton(false)}
               {[...videoTracks].reverse().map(trackHeader)}
               {audioTracks.map(trackHeader)}
+              {soundEffects.header}
               {addTrackButton(true)}
             </div>
           </div>
@@ -2031,6 +2039,7 @@ export const TimelineStudio: React.FC = () => {
                   {newTrackRow(false)}
                   {[...videoTracks].reverse().map(trackLane)}
                   {audioTracks.map(trackLane)}
+                  {soundEffects.lane}
                   {newTrackRow(true)}
                 </div>
                 {empty && (

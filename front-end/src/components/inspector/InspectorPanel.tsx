@@ -3,6 +3,7 @@ import { Palette, Camera, Monitor } from "lucide-react";
 import { InspectorSection, NumberGrid, RangeRow } from "./InspectorSection";
 import { WebcamFocusSection } from "./WebcamFocusSection";
 import { TrackClipSection } from "./TrackClipSection";
+import { GraphicSection } from "./GraphicSection";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
@@ -195,7 +196,12 @@ export const InspectorPanel: React.FC = () => {
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {tab === "clip" && <TrackClipSection />}
+        {tab === "clip" && (
+          <>
+            <GraphicSection />
+            <TrackClipSection />
+          </>
+        )}
 
         {tab === "video" && (
           <>
@@ -268,6 +274,48 @@ export const InspectorPanel: React.FC = () => {
                   unit="%"
                   onChange={(cursorSizePct) => setCanvas({ cursorSizePct })}
                 />
+              )}
+
+              <Field label="Shortcuts">
+                <Switch
+                  checked={canvas.shortcutBadges}
+                  onChange={(shortcutBadges) => setCanvas({ shortcutBadges })}
+                  label="Show shortcut badges"
+                  title="Show keyboard shortcuts pressed while recording (Ctrl + S) in a corner of the screen. Needs a recording made with keyboard recording on; typed text is never recorded."
+                />
+              </Field>
+
+              <Field label="Window crop">
+                <Switch
+                  checked={canvas.windowCrop}
+                  onChange={(windowCrop) => setCanvas({ windowCrop })}
+                  label="Crop to the active window"
+                  title="When the window you work in is clearly smaller than the recorded display, show just that window and glide to the next one when you switch. Quick switches, menus and popups never move it. Needs a recording made with window recording on."
+                />
+              </Field>
+              {canvas.windowCrop && (
+                <>
+                  <RangeRow
+                    label="Room around it"
+                    value={canvas.windowCropPaddingPct}
+                    min={0}
+                    max={15}
+                    step={0.5}
+                    unit="%"
+                    onChange={(windowCropPaddingPct) => setCanvas({ windowCropPaddingPct })}
+                  />
+                  {canvas.windowCropOff.length > 0 && (
+                    <div className="flex items-center justify-between gap-2 text-meta text-studio-400">
+                      <span>
+                        Off for {canvas.windowCropOff.length} stretch{canvas.windowCropOff.length === 1 ? "" : "es"}
+                      </span>
+                      <Button size="sm" variant="ghost" onClick={() => setCanvas({ windowCropOff: [] })}>
+                        Crop everywhere
+                      </Button>
+                    </div>
+                  )}
+                  <p className="text-meta text-studio-500">Turn it off for one clip from the Clip page.</p>
+                </>
               )}
 
               <NumberGrid
@@ -505,6 +553,14 @@ export const InspectorPanel: React.FC = () => {
                     <Switch checked={cameraBubble.mirror} onChange={(mirror) => setCamera({ mirror })} label="Mirror" />
                     <Switch checked={cameraBubble.shadow} onChange={(shadow) => setCamera({ shadow })} label="Shadow" />
                   </div>
+                  <Field label="Out of the way">
+                    <Switch
+                      checked={cameraBubble.autoHide}
+                      onChange={(autoHide) => setCamera({ autoHide })}
+                      label="Hide while you work under it"
+                      title="Fade the camera out while you click, drag, scroll, rest the pointer or type where it sits, and back in afterwards. It never moves to another corner."
+                    />
+                  </Field>
                 </>
               )}
             </InspectorSection>

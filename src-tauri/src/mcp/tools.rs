@@ -112,7 +112,7 @@ pub fn find(name: &str) -> Option<&'static ToolDef> {
     all().iter().find(|tool| tool.name == name)
 }
 
-static TOOLS: [ToolDef; 13] = [
+static TOOLS: [ToolDef; 14] = [
     ToolDef {
         name: "project_info",
         description: "The open project: name, revision, length, canvas size, tracks (V1 is the \
@@ -169,10 +169,12 @@ static TOOLS: [ToolDef; 13] = [
     },
     ToolDef {
         name: "telemetry_get",
-        description: "What the mouse did, on the edited timeline: clicks and scrolls with their \
-            positions on the recorded screen (0-1, x right, y down), and the zooms in the \
-            edit. Clicks show where the tutorial's action is; use them to place callouts and \
-            to judge cuts.",
+        description: "What the mouse and keyboard did, on the edited timeline: clicks and \
+            scrolls with their positions on the recorded screen (0-1, x right, y down), typing \
+            stretches (key count and caret position, never the text) and shortcuts pressed, \
+            when the recorder recorded the keyboard, and the zooms in the edit. Clicks and \
+            typing show where the tutorial's action is; use them to place callouts and to \
+            judge cuts. Shortcut badges are the layout setting `shortcutBadges`.",
         schema: schema::<RangeParams>,
         read_only: true,
         run: super::views::telemetry_get,
@@ -186,6 +188,18 @@ static TOOLS: [ToolDef; 13] = [
         schema: schema::<super::views::ViewParams>,
         read_only: true,
         run: super::views::timeline_view,
+    },
+    ToolDef {
+        name: "storyboard",
+        description: "One small PNG contact sheet of the whole edit (or `fromUs`-`toUs`, or a \
+            short with `short`): a tile per scene, split where the camera or a short's scene, \
+            a zoom, a graphic, a chapter or a long silence starts, short stretches merged. \
+            Each tile is a finished frame with its time, what it shows, zoom, graphic, chapter \
+            and words; the JSON lists the same per tile number. Use it to check an edit after \
+            your passes and before export, instead of many frame_render calls.",
+        schema: schema::<super::storyboard::StoryboardArgs>,
+        read_only: true,
+        run: super::storyboard::storyboard,
     },
     ToolDef {
         name: "propose_cuts",
@@ -371,6 +385,10 @@ pub struct TranscriptParams {
     /// Only words before this (edited microseconds).
     #[serde(default)]
     pub to_us: Option<u64>,
+    /// Times on this short's own timeline instead of the video's. A take's voice is read on
+    /// its short's timeline without it.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 /// A new line starts after a sentence end, a pause this long, or this many words.
@@ -413,17 +431,33 @@ pub(super) fn transcribed_stream(
 fn transcript_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let state = ctx.state;
     let args: TranscriptParams = params(args)?;
-    let (key, view) = with_reader(state, |reader| {
+    let (key, view, on_short) = with_reader(state, |reader| {
         let document = &reader.history().current;
         let key = transcribed_stream(reader, args.stream)?;
         let transcript = store::load_transcript(reader.root(), &key)?
             .ok_or_else(|| format!("{key} has no transcript"))?;
-        let view = crate::transcript::edit::view(
-            &transcript,
-            &document.transcript_clock(&key)?,
-            document.revision,
-        );
-        Ok((key, view))
+        // A short's timeline: the one named, else the take short this is the voice of.
+        let short = match &args.short {
+            Some(id) => Some(
+                document
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or_else(|| format!("No short {id}"))?,
+            ),
+            None => document
+                .shorts
+                .iter()
+                .find(|s| s.take.as_ref().is_some_and(|t| t.voice == key)),
+        };
+        let clock = match short {
+            Some(short) => {
+                crate::shorts::short_timeline(document, short)?.transcript_clock(&key)?
+            }
+            None => document.transcript_clock(&key)?,
+        };
+        let view = crate::transcript::edit::view(&transcript, &clock, document.revision);
+        Ok((key, view, short.map(|s| s.id.clone())))
     })?;
     let from = args.from_us.unwrap_or(0);
     let to = args.to_us.unwrap_or(u64::MAX);
@@ -438,8 +472,11 @@ fn transcript_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .filter(|w| w.edited_start_us.is_none())
         .count();
     let mut out = format!(
-        "Transcript of {key}, revision {}. {} words shown, {cut} cut out. \
+        "Transcript of {key}{}, revision {}. {} words shown, {cut} cut out. \
          Lines: [start-end] first..last word id, text.\n",
+        on_short
+            .map(|id| format!(" on short {id}'s timeline"))
+            .unwrap_or_default(),
         view.revision,
         words.len()
     );
@@ -703,8 +740,21 @@ mod tests {
                 "proposal_withdraw" => json!({ "batchId": "b-1" }),
                 "undo_batch" => json!({ "batchId": "b-1", "expectedRevision": 0 }),
                 "settings" => json!({ "area": "captions" }),
-                // These work without a project open.
-                "open" | "create" | "export_status" | "template" | "template_save" => continue,
+                "short_create" => json!({ "title": "t", "fromWord": "w-0", "toWord": "w-1" }),
+                "media_import" => json!({ "paths": ["a.mp4"] }),
+                "short_from_take" => json!({ "title": "t", "camera": "m1" }),
+                "short_footage" => json!({ "short": "s1" }),
+                "graphic_add" => json!({ "template": "title", "atUs": 0 }),
+                "graphic_set" => json!({ "graphic": "g", "name": "n" }),
+                "brand_pick" => json!({ "brand": "none" }),
+                "graphic_templatize" | "graphic_check" => json!({ "graphic": "g" }),
+                "library_save" => json!({ "graphic": "g", "useWhen": "always" }),
+                "graphic_write_file" => {
+                    json!({ "graphic": "g", "path": "index.html", "contents": "" })
+                }
+                // These work without a project open (and installing would download).
+                "open" | "create" | "export_status" | "template" | "template_save" | "graphics"
+                | "graphics_install" | "brand_kits" => continue,
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();

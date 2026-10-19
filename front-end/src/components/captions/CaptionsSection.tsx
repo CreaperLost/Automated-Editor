@@ -163,7 +163,7 @@ export const CaptionsSection: React.FC = () => {
         />
         <RangeRow
           label="Lines at most"
-          value={draft.maxLines ?? 3}
+          value={draft.maxLines ?? 1}
           min={1}
           max={3}
           unit=""

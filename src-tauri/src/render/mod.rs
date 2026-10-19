@@ -42,7 +42,8 @@ struct LayerParams {
     pass_kind: u32,
     /// 0: BGRA; 1: NV12 (limited-range BT.709), converted to RGB in the shader.
     format: u32,
-    _pad: [u32; 2],
+    opacity: f32,
+    _pad: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -88,6 +89,8 @@ pub struct Layer {
     /// Set when the pixels are the same on every frame (the background); the compositor then
     /// keeps the uploaded texture instead of uploading it again.
     pub cache_key: Option<u64>,
+    /// How opaque the layer and its shadow are drawn, 0 to 1.
+    pub opacity: f32,
 }
 
 impl Layer {
@@ -109,6 +112,7 @@ impl Layer {
             shadow_opacity: 0.0,
             shadow_offset: [0.0, 0.0],
             cache_key: None,
+            opacity: 1.0,
         }
     }
 
@@ -139,6 +143,30 @@ impl Layer {
     pub fn cover_uv(mut self, dest_w: u32, dest_h: u32) -> Self {
         let (uv_x, uv_y, uv_w, uv_h) =
             cover_uv(self.frame.width, self.frame.height, dest_w, dest_h);
+        self.uv_x = uv_x;
+        self.uv_y = uv_y;
+        self.uv_w = uv_w;
+        self.uv_h = uv_h;
+        self
+    }
+
+    /// Like [`Layer::cover_uv`], but the crop is cut around `focus` (a face) rather than the
+    /// middle, then nudged by `offset`: see [`focus_uv`].
+    pub fn focus_uv(
+        mut self,
+        focus: Option<crate::face::FocusPoint>,
+        dest_w: u32,
+        dest_h: u32,
+        offset: (f32, f32),
+    ) -> Self {
+        let (uv_x, uv_y, uv_w, uv_h) = focus_uv(
+            focus,
+            self.frame.width,
+            self.frame.height,
+            dest_w,
+            dest_h,
+            offset,
+        );
         self.uv_x = uv_x;
         self.uv_y = uv_y;
         self.uv_w = uv_w;
@@ -299,25 +327,8 @@ impl Scene {
         }
         if let Some(screen) = screen {
             let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
-            let scale = layout.screen_scale_pct.clamp(1.0, 100.0) / 100.0;
-            let area_w = width - padding * 2;
-            let area_h = height - padding * 2;
-            let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
-            let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
-            // The kept region keeps the scale of the uncropped screen (re-fitting it would
-            // enlarge it, so cropping one side looked like cropping both) and is centred
-            // in the content area at its new size.
-            let (_, _, full_w, full_h) =
-                fit_inside(screen.width, screen.height, 0, 0, box_w, box_h);
-            let span = |size: u32, start: f32, length: f32| {
-                let a = (size as f32 * start).round() as u32;
-                let b = (size as f32 * (start + length)).round() as u32;
-                b.saturating_sub(a).clamp(1, size.max(1))
-            };
-            let w = span(full_w, crop_x, crop_w);
-            let h = span(full_h, crop_y, crop_h);
-            let x = padding + (area_w - w) / 2;
-            let y = padding + (area_h - h) / 2;
+            let (x, y, w, h) =
+                screen_layer_rect(width, height, layout, screen.width, screen.height, unit);
             let radius = layout.corner_radius_px as f32 * unit;
             let clip = if radius > 0.0 {
                 ClipMode::RoundedRect
@@ -512,6 +523,30 @@ impl Scene {
         self.layers.insert(at, layer);
     }
 
+    /// A graphic in its slot `rect` (x, y, w, h: the whole canvas, or a part of a short's
+    /// split), above every layer pushed so far.
+    pub fn push_graphic(
+        &mut self,
+        frame: VideoFrame,
+        rect: (u32, u32, u32, u32),
+        cache_key: Option<u64>,
+    ) {
+        let (x, y, w, h) = rect;
+        if self.layers.len() >= MAX_LAYERS
+            || frame.width == 0
+            || frame.height == 0
+            || w == 0
+            || h == 0
+        {
+            return;
+        }
+        let mut layer = Layer::placed(frame, x, y, w, h)
+            .cover_uv(w, h)
+            .with_role(LayerRole::Overlay);
+        layer.cache_key = cache_key;
+        self.layers.push(layer);
+    }
+
     pub fn apply_screen_uv(&mut self, uv_x: f32, uv_y: f32, uv_w: f32, uv_h: f32) {
         if let Some(layer) = self
             .layers
@@ -522,6 +557,30 @@ impl Scene {
             layer.uv_y = uv_y;
             layer.uv_w = uv_w;
             layer.uv_h = uv_h;
+        }
+    }
+
+    /// Fades the webcam bubble (camera, border and shadow) to `opacity`; at 0 it is left out.
+    pub fn fade_webcam(&mut self, opacity: f32) {
+        let opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if opacity >= 1.0 {
+            return;
+        }
+        let webcam = |l: &Layer| matches!(l.role, LayerRole::Webcam | LayerRole::WebcamBorder);
+        if opacity <= 0.0 {
+            self.layers.retain(|l| !webcam(l));
+            return;
+        }
+        for layer in self.layers.iter_mut().filter(|l| webcam(l)) {
+            // The ring sits under the whole camera: faded faster, it hardly shows through.
+            layer.opacity *= match layer.role {
+                LayerRole::WebcamBorder => opacity * opacity,
+                _ => opacity,
+            };
         }
     }
 
@@ -1547,6 +1606,67 @@ fn webcam_bubble_size(
     (w, h)
 }
 
+/// Where the screen sits on the canvas, (x, y, width, height), for a screen picture of
+/// `src_w` x `src_h` under `layout` (pixel values times `unit`).
+pub fn screen_layer_rect(
+    width: u32,
+    height: u32,
+    layout: &EditLayout,
+    src_w: u32,
+    src_h: u32,
+    unit: f32,
+) -> (u32, u32, u32, u32) {
+    let padding = (layout.padding_px as f32 * unit).round() as u32;
+    let padding = padding
+        .min(width.saturating_sub(1) / 2)
+        .min(height.saturating_sub(1) / 2);
+    let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
+    let scale = layout.screen_scale_pct.clamp(1.0, 100.0) / 100.0;
+    let area_w = width - padding * 2;
+    let area_h = height - padding * 2;
+    let box_w = ((area_w as f32 * scale).round() as u32).clamp(1, area_w);
+    let box_h = ((area_h as f32 * scale).round() as u32).clamp(1, area_h);
+    // The kept region keeps the scale of the uncropped screen (re-fitting it would
+    // enlarge it, so cropping one side looked like cropping both) and is centred
+    // in the content area at its new size.
+    let (_, _, full_w, full_h) = fit_inside(src_w, src_h, 0, 0, box_w, box_h);
+    let span = |size: u32, start: f32, length: f32| {
+        let a = (size as f32 * start).round() as u32;
+        let b = (size as f32 * (start + length)).round() as u32;
+        b.saturating_sub(a).clamp(1, size.max(1))
+    };
+    let w = span(full_w, crop_x, crop_w);
+    let h = span(full_h, crop_y, crop_h);
+    (padding + (area_w - w) / 2, padding + (area_h - h) / 2, w, h)
+}
+
+/// The canvas rectangle the webcam bubble covers, border included, as (x, y, width, height)
+/// for a camera picture of `src_w` x `src_h`.
+pub fn webcam_bubble_rect(
+    canvas_w: u32,
+    canvas_h: u32,
+    src_w: u32,
+    src_h: u32,
+    layout: &EditLayout,
+) -> (u32, u32, u32, u32) {
+    let unit = layout_px_unit(canvas_w, canvas_h);
+    let (w, h) = webcam_bubble_size(canvas_w, canvas_h, src_w, src_h, layout);
+    let (x, y) = webcam_origin(canvas_w, canvas_h, w, h, layout, unit);
+    let inset = if layout.webcam_border_width > 0 {
+        ((layout.webcam_border_width as f32 * unit).round() as u32).max(1)
+    } else {
+        0
+    };
+    let bx = x.saturating_sub(inset);
+    let by = y.saturating_sub(inset);
+    (
+        bx,
+        by,
+        (w + inset * 2).min(canvas_w.saturating_sub(bx)),
+        (h + inset * 2).min(canvas_h.saturating_sub(by)),
+    )
+}
+
 fn webcam_origin(
     canvas_w: u32,
     canvas_h: u32,
@@ -1761,6 +1881,52 @@ fn cover_uv(src_w: u32, src_h: u32, dest_w: u32, dest_h: u32) -> (f32, f32, f32,
     }
 }
 
+/// Where the eye line sits in a face-framed crop: a third of the way down, as in portraits.
+const EYE_LINE: f32 = 1.0 / 3.0;
+
+/// The most a face-framed crop zooms in to centre a face that sits near the picture's edge.
+pub const MAX_FACE_ZOOM: f32 = 1.5;
+
+/// The part of a `src_w` x `src_h` picture (as UV) that covers a `dest_w` x `dest_h` area, cut
+/// around a face: the face in the middle across, its eyes a third of the way down, kept inside
+/// the picture. A face too near the left or right edge to be centred that way is centred by
+/// zooming in (a smaller crop, up to [`MAX_FACE_ZOOM`]), rather than leaving empty room on the
+/// far side. Without a face it is the centre crop of [`cover_uv`]. `offset` (-1 to 1 each
+/// way) then moves the crop by up to half the room it has to move in that direction: with no
+/// face it spans the whole picture.
+pub fn focus_uv(
+    focus: Option<crate::face::FocusPoint>,
+    src_w: u32,
+    src_h: u32,
+    dest_w: u32,
+    dest_h: u32,
+    offset: (f32, f32),
+) -> (f32, f32, f32, f32) {
+    let (cx, cy, mut w, mut h) = cover_uv(src_w, src_h, dest_w, dest_h);
+    if let Some(face) = focus {
+        // The widest crop centred on the face that stays inside the picture.
+        let room = 2.0 * face.x.min(1.0 - face.x);
+        if room < w {
+            let zoom = (w / room.max(1e-3)).min(MAX_FACE_ZOOM);
+            w /= zoom;
+            h /= zoom;
+        }
+    }
+    let (slack_x, slack_y) = (1.0 - w, 1.0 - h);
+    let (mut x, mut y) = match focus {
+        None => (cx, cy),
+        Some(face) => (face.x - w / 2.0, face.eye_y - h * EYE_LINE),
+    };
+    x += offset.0.clamp(-1.0, 1.0) * slack_x / 2.0;
+    y += offset.1.clamp(-1.0, 1.0) * slack_y / 2.0;
+    (
+        x.clamp(0.0, slack_x.max(0.0)),
+        y.clamp(0.0, slack_y.max(0.0)),
+        w,
+        h,
+    )
+}
+
 fn sdf_rounded_rect(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
     let r = radius.min(half_w).min(half_h).max(0.0);
     let qx = px.abs() - (half_w - r);
@@ -1829,7 +1995,8 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
             PixelFormat::Bgra8888 => 0,
             PixelFormat::Nv12 => 1,
         },
-        _pad: [0, 0],
+        opacity: layer.opacity.clamp(0.0, 1.0),
+        _pad: 0,
     }
 }
 
@@ -1928,7 +2095,9 @@ fn blit_shadow(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             let local_x = (x as f32 + 0.5 - layer.x as f32) / layer.width as f32;
             let local_y = (y as f32 + 0.5 - layer.y as f32) / layer.height as f32;
             let sdf = layer_sdf(layer, local_x, local_y, true);
-            let alpha = layer.shadow_opacity * shadow_coverage(sdf, layer.shadow_blur_px);
+            let alpha = layer.shadow_opacity
+                * layer.opacity.clamp(0.0, 1.0)
+                * shadow_coverage(sdf, layer.shadow_blur_px);
             if alpha <= 0.0 {
                 continue;
             }
@@ -1986,6 +2155,16 @@ fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             let u = layer.uv_x + layer.uv_w * local_x;
             let src = sample_bilinear(&layer.frame, u, v);
             let di = (y * dest.stride + x * 4) as usize;
+            let opacity = layer.opacity.clamp(0.0, 1.0);
+            if opacity < 1.0 {
+                // A fading layer: its picture is opaque except where it carries alpha.
+                let straight = matches!(layer.role, LayerRole::Caption | LayerRole::Overlay);
+                let alpha = if straight { src[3] as f32 / 255.0 } else { 1.0 } * opacity;
+                for (dst, s) in dest.data[di..di + 3].iter_mut().zip(src) {
+                    *dst = (s as f32 * alpha + *dst as f32 * (1.0 - alpha)).round() as u8;
+                }
+                continue;
+            }
             if matches!(layer.role, LayerRole::Caption | LayerRole::Overlay) {
                 // Same blend as the GPU pipeline: source over, straight alpha.
                 let alpha = src[3] as u32;
@@ -2142,6 +2321,71 @@ pub fn run_parity(
 mod tests {
     use super::*;
     use crate::media::VideoFrame;
+
+    #[test]
+    fn focus_uv_frames_the_face_and_stays_inside_the_picture() {
+        use crate::face::FocusPoint;
+        let face = |x: f32, eye_y: f32| {
+            Some(FocusPoint {
+                x,
+                eye_y,
+                face_h: 0.3,
+            })
+        };
+        // A 16:9 webcam in a 9:16 frame: a window 0.316 of the width, the full height.
+        let (_, _, w, h) = cover_uv(1920, 1080, 1080, 1920);
+        assert!((w - 0.3164).abs() < 1e-3 && h == 1.0);
+        // No face: the centre crop.
+        assert_eq!(
+            focus_uv(None, 1920, 1080, 1080, 1920, (0.0, 0.0)),
+            cover_uv(1920, 1080, 1080, 1920)
+        );
+        // Sitting right of centre: the window is centred on the face.
+        let (x, y, ..) = focus_uv(face(0.7, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert!((x + w / 2.0 - 0.7).abs() < 1e-6 && y == 0.0);
+        // Too near the edge to centre with the whole height: it zooms in just enough, and the
+        // face is centred with no empty room beside it.
+        let (x, _, zw, zh) = focus_uv(face(0.12, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert!(
+            (zw - 0.24).abs() < 1e-5 && (zh - 0.24 / w).abs() < 1e-4,
+            "{zw} {zh}"
+        );
+        assert!(x.abs() < 1e-6 && (x + zw / 2.0 - 0.12).abs() < 1e-5);
+        assert!((zw / zh - w / h).abs() < 1e-4, "same shape");
+        // At most 1.5x: past that it stops at the picture's edge rather than showing past it.
+        let (x, _, zw, _) = focus_uv(face(0.95, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert!((zw - w / MAX_FACE_ZOOM).abs() < 1e-6 && (x - (1.0 - zw)).abs() < 1e-6);
+        let (x, ..) = focus_uv(face(0.02, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert_eq!(x, 0.0);
+        // Enough room either side: no zoom.
+        let (_, _, zw, _) = focus_uv(face(0.3, 0.4), 1920, 1080, 1080, 1920, (0.0, 0.0));
+        assert_eq!(zw, w);
+        // A wide strip (the camera across the top of a short): eyes a third of the way down.
+        let (_, _, sw, sh) = cover_uv(1920, 1080, 1080, 384);
+        let (sx, sy, ..) = focus_uv(face(0.5, 0.4), 1920, 1080, 1080, 384, (0.0, 0.0));
+        assert!((sw - 1.0).abs() < 1e-6 && sx == 0.0, "no room across");
+        assert!((sy - (0.4 - sh / 3.0)).abs() < 1e-6, "{sy}");
+        let (_, sy, ..) = focus_uv(face(0.5, 0.95), 1920, 1080, 1080, 384, (0.0, 0.0));
+        assert!((sy - (1.0 - sh)).abs() < 1e-6, "kept inside: {sy}");
+        // Off to the side in the strip, it zooms in to bring the face to the middle.
+        let (sx, _, zw, _) = focus_uv(face(0.35, 0.4), 1920, 1080, 1080, 384, (0.0, 0.0));
+        assert!((zw - 0.7).abs() < 1e-5 && sx.abs() < 1e-6);
+        // Offsets: with no face they span the whole picture, and they nudge a face's framing
+        // without ever leaving the picture.
+        let (x, ..) = focus_uv(None, 1920, 1080, 1080, 1920, (-1.0, 0.0));
+        assert_eq!(x, 0.0);
+        let (x, ..) = focus_uv(None, 1920, 1080, 1080, 1920, (1.0, 0.0));
+        assert!((x - (1.0 - w)).abs() < 1e-6);
+        let (x, ..) = focus_uv(face(0.5, 0.4), 1920, 1080, 1080, 1920, (0.2, 0.0));
+        assert!((x - (0.5 - w / 2.0 + 0.1 * (1.0 - w))).abs() < 1e-6);
+        let (x, _, zw, _) = focus_uv(face(0.9, 0.4), 1920, 1080, 1080, 1920, (5.0, 5.0));
+        assert!((x - (1.0 - zw)).abs() < 1e-6);
+        // A square webcam in a square spot, face in the middle: nothing to move.
+        assert_eq!(
+            focus_uv(face(0.5, 0.5), 640, 640, 300, 300, (1.0, -1.0)),
+            (0.0, 0.0, 1.0, 1.0)
+        );
+    }
 
     /// Nearest sampling at 60% scale skipped source column 3 entirely; bilinear keeps it.
     #[test]

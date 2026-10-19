@@ -98,6 +98,8 @@ pub enum StreamSource {
     Video(PathBuf),
     /// A still picture.
     Image(PathBuf),
+    /// A motion graphic's folder; what plays is its render for the canvas (see `graphics`).
+    Graphic(PathBuf),
 }
 
 /// What plays stream `stream` of `asset`.
@@ -116,6 +118,10 @@ pub fn stream_source(root: &Path, asset: &Asset, stream: &str) -> Result<StreamS
             ))
         }
         AssetKind::Image => Ok(StreamSource::Image(PathBuf::from(&asset.path))),
+        // Inside the project, found from its root, so a moved project keeps its graphics.
+        AssetKind::Graphic => Ok(StreamSource::Graphic(crate::graphics::folder(
+            root, &asset.id,
+        ))),
         AssetKind::Video if info.kind == StreamKind::Picture => {
             Ok(StreamSource::Video(PathBuf::from(&asset.path)))
         }

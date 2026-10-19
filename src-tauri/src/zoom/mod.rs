@@ -91,7 +91,7 @@ pub struct ZoomSettings {
     pub click_scale: f64,
     /// How far a zoom where the mouse rests goes in; 1 switches hover zooms off.
     pub hover_scale: f64,
-    /// Time to zoom in, and to zoom out.
+    /// Time to zoom in, and to zoom out; 0 cuts straight in and out.
     pub transition_ms: u32,
     /// The shortest zoom.
     pub min_hold_ms: u32,
@@ -110,7 +110,8 @@ impl Default for ZoomSettings {
         Self {
             click_scale: 1.6,
             hover_scale: 1.4,
-            transition_ms: 700,
+            // A cut: no ease in or out.
+            transition_ms: 0,
             min_hold_ms: 5_000,
             merge_gap_ms: 5_000,
             max_zooms: 20,
@@ -133,7 +134,7 @@ impl ZoomSettings {
         {
             return Err("Zoom amounts are out of range".into());
         }
-        if !(100..=3_000).contains(&self.transition_ms)
+        if self.transition_ms > 3_000
             || !(500..=20_000).contains(&self.min_hold_ms)
             || !(0..=10_000).contains(&self.merge_gap_ms)
             || !(1..=200).contains(&self.max_zooms)
@@ -152,7 +153,8 @@ impl ZoomSettings {
             click_scale: self.click_scale,
             dwell_scale: if hover { self.hover_scale } else { 1.0 },
             max_scale: self.click_scale.max(self.hover_scale).clamp(1.0, 8.0),
-            transition_us: self.transition_ms as u64 * 1_000,
+            // 0 is a cut; a zoom keeps a 1 µs transition, which plays as one.
+            transition_us: (self.transition_ms as u64 * 1_000).max(1),
             min_hold_us: self.min_hold_ms as u64 * 1_000,
             // Hover off: a rest no one reaches.
             min_dwell_us: if hover {
@@ -232,6 +234,8 @@ pub enum ZoomOrigin {
     Click,
     Dwell,
     Cluster,
+    /// Typing, from the recorder's keyboard telemetry.
+    Typing,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -733,8 +737,77 @@ fn extract_interest(
     }
     let end = dwell.as_ref().map(|d| d.last_us).unwrap_or(0);
     flush_dwell(&mut dwell, end, &mut interest);
+    let typing = typing_interest(stream, &interest, uncertainty);
+    interest.extend(typing);
     interest.sort_by_key(|p| (p.t_us, p.seq));
     interest
+}
+
+/// Typing runs closer than this are one stretch of typing.
+const TYPING_JOIN_US: u64 = 2_000_000;
+/// Typing shorter than this, or with fewer keys, is a quick edit, not worth a zoom.
+const TYPING_MIN_US: u64 = 2_000_000;
+const TYPING_MIN_KEYS: u32 = 10;
+/// Without a caret, the click that put the cursor in the text, if this recent.
+const TYPING_CLICK_BEFORE_US: u64 = 10_000_000;
+
+/// A point of interest for each real stretch of typing, aimed at the caret, or else at the
+/// click just before it (clicking into the field). Typing with no known place is left out.
+fn typing_interest(
+    stream: &TelemetryStream,
+    mouse: &[InterestPoint],
+    uncertainty: &[Interval],
+) -> Vec<InterestPoint> {
+    let Some(keys) = &stream.keys else {
+        return Vec::new();
+    };
+    let mut stretches: Vec<(crate::telemetry::keys::TypingRun, u32)> = Vec::new();
+    for run in &keys.typing {
+        match stretches.last_mut() {
+            Some((last, keys)) if run.start_us <= last.end_us.saturating_add(TYPING_JOIN_US) => {
+                last.end_us = last.end_us.max(run.end_us);
+                last.caret_start = last.caret_start.or(run.caret_start);
+                last.caret_end = run.caret_end.or(last.caret_end);
+                *keys += run.keys;
+            }
+            _ => stretches.push((run.clone(), run.keys)),
+        }
+    }
+    let clicks: Vec<&InterestPoint> = mouse
+        .iter()
+        .filter(|p| p.origin == ZoomOrigin::Click)
+        .collect();
+    stretches
+        .into_iter()
+        .filter(|(run, keys)| {
+            run.end_us - run.start_us >= TYPING_MIN_US && *keys >= TYPING_MIN_KEYS
+        })
+        .filter_map(|(run, _)| {
+            let caret = run
+                .caret_start
+                .filter(|_| !in_uncertainty(uncertainty, run.start_us))
+                .map(|c| (c.norm_x, c.norm_y));
+            let click = || {
+                clicks
+                    .iter()
+                    .rev()
+                    .find(|p| {
+                        p.t_us <= run.start_us && run.start_us - p.t_us <= TYPING_CLICK_BEFORE_US
+                    })
+                    .map(|p| (p.x, p.y))
+            };
+            let (x, y) = caret.or_else(click)?;
+            Some(InterestPoint {
+                t_us: run.start_us,
+                end_us: run.end_us,
+                seq: u64::MAX,
+                seqs: Vec::new(),
+                x,
+                y,
+                origin: ZoomOrigin::Typing,
+            })
+        })
+        .collect()
 }
 
 struct Dwell {
@@ -766,8 +839,16 @@ impl Session<'_> {
             .count()
     }
 
-    /// How much this moment deserves a zoom: clicks count most, a rest a little, and a long
-    /// session no more than a few clicks would.
+    fn typing_us(&self) -> u64 {
+        self.points
+            .iter()
+            .filter(|p| p.origin == ZoomOrigin::Typing)
+            .map(|p| p.end_us.saturating_sub(p.t_us))
+            .sum()
+    }
+
+    /// How much this moment deserves a zoom: clicks count most, typing about one click per
+    /// two seconds, a rest a little, and a long session no more than a few clicks would.
     fn score(&self) -> f64 {
         let rest_us: u64 = self
             .points
@@ -775,7 +856,9 @@ impl Session<'_> {
             .filter(|p| p.origin == ZoomOrigin::Dwell)
             .map(|p| p.end_us.saturating_sub(p.t_us).min(4_000_000))
             .sum();
-        3.0 * (self.clicks() as f64).min(6.0) + (rest_us as f64 / 1e6).min(4.0)
+        3.0 * (self.clicks() as f64).min(6.0)
+            + (1.5 * self.typing_us() as f64 / 1e6).min(9.0)
+            + (rest_us as f64 / 1e6).min(4.0)
     }
 }
 
@@ -834,7 +917,17 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
             continue;
         }
         let clicks = session.clicks();
-        let first = session.points[0];
+        let typed = session
+            .points
+            .iter()
+            .any(|p| p.origin == ZoomOrigin::Typing);
+        // Typing aims at its own place: a rest before it is the mouse parked, not the target.
+        let first = session
+            .points
+            .iter()
+            .find(|p| !typed || p.origin != ZoomOrigin::Dwell)
+            .copied()
+            .unwrap_or(session.points[0]);
         // In before the first action, out a little after the last.
         let hold_start = session.start_us;
         let hold_end = session
@@ -851,21 +944,26 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
             .collect();
         seqs.sort_unstable();
         seqs.dedup();
-        let origin = if clicks == 0 {
-            ZoomOrigin::Dwell
-        } else if clicks == session.points.len() {
-            ZoomOrigin::Click
-        } else {
-            ZoomOrigin::Cluster
+        let origin = match (clicks, typed) {
+            (0, true) => ZoomOrigin::Typing,
+            (0, false) => ZoomOrigin::Dwell,
+            (_, true) => ZoomOrigin::Cluster,
+            _ if clicks == session.points.len() => ZoomOrigin::Click,
+            _ => ZoomOrigin::Cluster,
+        };
+        let id = match seqs.first() {
+            Some(first_seq) => format!("z-{first_seq}-n{}", seqs.len()),
+            // Typing alone has no mouse events to name it by.
+            None => format!("z-typing-{}", session.start_us / 1_000),
         };
         let zoom = ZoomSuggestion {
             path: Vec::new(),
-            id: format!("z-{}-n{}", seqs[0], seqs.len()),
+            id,
             source_start_us: source_start,
             source_end_us: source_end,
             center_x: first.x,
             center_y: first.y,
-            scale: if clicks > 0 {
+            scale: if clicks > 0 || typed {
                 config.click_scale
             } else {
                 config.dwell_scale
@@ -903,7 +1001,8 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
     zooms
 }
 
-/// Where the mouse was, (time, x, y) on the recorded screen, from a recording's telemetry.
+/// Where the viewer looks, (time, x, y) on the recorded screen, from a recording's telemetry:
+/// the mouse, and the text caret while typing.
 pub fn cursor_samples(stream: &TelemetryStream) -> Vec<(u64, f64, f64)> {
     let mut samples: Vec<(u64, f64, f64)> = stream
         .events
@@ -935,6 +1034,13 @@ pub fn cursor_samples(stream: &TelemetryStream) -> Vec<(u64, f64, f64)> {
             _ => None,
         })
         .collect();
+    for run in stream.keys.iter().flat_map(|keys| &keys.typing) {
+        if let Some(start) = run.caret_start {
+            let end = run.caret_end.unwrap_or(start);
+            samples.push((run.start_us, start.norm_x, start.norm_y));
+            samples.push((run.end_us, end.norm_x, end.norm_y));
+        }
+    }
     samples.sort_by_key(|s| s.0);
     samples
 }
@@ -1048,13 +1154,18 @@ pub fn recording_cursor_samples(folder: &std::path::Path) -> std::sync::Arc<Vec<
     type Cache = Mutex<
         std::collections::HashMap<
             std::path::PathBuf,
-            (Option<std::time::SystemTime>, Arc<Vec<(u64, f64, f64)>>),
+            (
+                [Option<std::time::SystemTime>; 2],
+                Arc<Vec<(u64, f64, f64)>>,
+            ),
         >,
     >;
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    let modified = std::fs::metadata(folder.join("telemetry").join("events.jsonl"))
-        .and_then(|m| m.modified())
-        .ok();
+    let modified = ["events.jsonl", "keys.jsonl"].map(|name| {
+        std::fs::metadata(folder.join("telemetry").join(name))
+            .and_then(|m| m.modified())
+            .ok()
+    });
     let cache = CACHE.get_or_init(Default::default);
     if let Some((stamp, samples)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
         if *stamp == modified {
@@ -1076,6 +1187,7 @@ pub fn recording_cursor_samples(folder: &std::path::Path) -> std::sync::Arc<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::telemetry::keys::{Caret, KeyStream, TypingRun};
     use crate::telemetry::reader::{CanonicalEvent, CanonicalGeometry, CanonicalKind};
     use crate::timeline::{SourceInterval, TimelineMapper};
     use std::collections::BTreeMap;
@@ -1099,6 +1211,7 @@ mod tests {
             events,
             geometries,
             diagnostics: Vec::new(),
+            keys: None,
         }
     }
 
@@ -1159,6 +1272,80 @@ mod tests {
                 dropped_events: 0,
             },
         }
+    }
+
+    fn typing(start: u64, end: u64, keys: u32, caret: Option<(f64, f64)>) -> TypingRun {
+        TypingRun {
+            start_us: start,
+            end_us: end,
+            keys,
+            caret_start: caret.map(|(norm_x, norm_y)| Caret { norm_x, norm_y }),
+            caret_end: None,
+        }
+    }
+
+    fn with_typing(mut data: TelemetryStream, runs: Vec<TypingRun>) -> TelemetryStream {
+        data.keys = Some(KeyStream {
+            typing: runs,
+            ..Default::default()
+        });
+        data
+    }
+
+    #[test]
+    fn typing_zooms_on_the_caret_or_the_click_before_it() {
+        let config = ZoomSettings::default().config();
+        // A resting mouse far away; typing for 6 s with the caret known.
+        let data = with_typing(
+            stream(vec![move_at(0, 1_000_000, 0.9, 0.9)]),
+            vec![typing(10_000_000, 16_000_000, 60, Some((0.3, 0.6)))],
+        );
+        let zooms = generate_zoom_suggestions(&data, &config)
+            .unwrap()
+            .suggestions;
+        assert_eq!(zooms.len(), 1, "{zooms:?}");
+        assert_eq!(zooms[0].origin, ZoomOrigin::Typing);
+        assert_eq!((zooms[0].center_x, zooms[0].center_y), (0.3, 0.6));
+        assert_eq!(zooms[0].id, "z-typing-10000");
+        assert_eq!(zooms[0].scale, config.click_scale);
+        // The camera follows the caret, not the parked mouse.
+        let samples = cursor_samples(&data);
+        assert!(samples.contains(&(10_000_000, 0.3, 0.6)));
+
+        // No caret: the click into the field just before. Runs split by short pauses join.
+        let data = with_typing(
+            stream(vec![
+                down(0, 9_000_000, 0, 0.2, 0.25),
+                up(1, 9_050_000, 0, 0.2, 0.25),
+            ]),
+            vec![
+                typing(10_000_000, 12_000_000, 20, None),
+                typing(12_800_000, 15_000_000, 20, None),
+            ],
+        );
+        let zooms = generate_zoom_suggestions(&data, &config)
+            .unwrap()
+            .suggestions;
+        assert_eq!(zooms.len(), 1, "{zooms:?}");
+        assert_eq!(zooms[0].origin, ZoomOrigin::Cluster);
+        assert_eq!((zooms[0].center_x, zooms[0].center_y), (0.2, 0.25));
+    }
+
+    #[test]
+    fn quick_edits_and_typing_with_no_place_never_zoom() {
+        let config = ZoomSettings::default().config();
+        let data = with_typing(
+            stream(vec![]),
+            vec![
+                // Too short, too few keys, and nowhere to look.
+                typing(1_000_000, 1_500_000, 4, Some((0.5, 0.5))),
+                typing(20_000_000, 30_000_000, 200, None),
+            ],
+        );
+        assert!(generate_zoom_suggestions(&data, &config)
+            .unwrap()
+            .suggestions
+            .is_empty());
     }
 
     #[test]

@@ -109,7 +109,7 @@ test("word-edge controls reach gap detection, retain silence review and reject a
   useJumpCutStore.getState().finishScan("silence", silence.generation, measured, silence.snapshot);
   const pending = start("nonSpeech");
   const settings = gapSettings({ thresholdDb: -30, autoLevel: 0.8, minDurationMs: 20, paddingMs: 0, refineWordEdges: true, edgeThresholdDb: -42 });
-  assert.deepEqual(settings, { minDurationMs: 20, paddingMs: 0, refineWordEdges: true, edgeThresholdDb: -42 });
+  assert.deepEqual(settings, { minDurationMs: 20, paddingMs: 0, refineWordEdges: true, edgeThresholdDb: -42, keepSoundEvents: false });
   useJumpCutStore.getState().configureGaps(settings);
   useJumpCutStore.getState().finishScan("nonSpeech", pending.generation, result, pending.snapshot);
   const state = useJumpCutStore.getState();

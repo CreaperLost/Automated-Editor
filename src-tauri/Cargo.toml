@@ -46,6 +46,8 @@ parakeet-rs = { version = "0.3.8", optional = true }
 # Session::builder. Cargo.lock is not committed, so pin ort here until parakeet-rs catches up.
 ort = { version = "=2.0.0-rc.13", optional = true, default-features = false }
 fontdue = "0.9"
+# Checks the graphics runtime's downloads and names graphic renders.
+sha2 = "0.10"
 # Names the fields of an agent's settings change that the settings do not have.
 serde_ignored = "0.1"
 

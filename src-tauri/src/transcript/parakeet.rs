@@ -18,11 +18,12 @@ const MODEL_FILES: &[&str] = &[
     "encoder-model.int8.onnx",
 ];
 
-/// Parakeet's encoder attends over the whole chunk, so memory grows with chunk length.
-/// Ninety seconds fits comfortably on 6-8 GB GPUs.
+/// Parakeet was trained on short utterances: given 90 s at once it went silent for over a
+/// minute of clear speech (48 words where 30 s and 15 s chunks found 175). Chunks of 16-24 s,
+/// split at the quietest moment, stay where it is reliable.
 pub const PLAN: ChunkPlan = ChunkPlan {
-    max_chunk_us: 90_000_000,
-    search_window_us: 15_000_000,
+    max_chunk_us: 24_000_000,
+    search_window_us: 8_000_000,
 };
 
 pub fn default_model_dir() -> PathBuf {
@@ -74,6 +75,19 @@ pub fn download_model(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
+    let files: Vec<(&str, &str)> = MODEL_FILES.iter().map(|name| (*name, *name)).collect();
+    download_files(dir, MODEL_REPO, &files, cancel, progress)
+}
+
+/// Downloads `files` (path under `repo`, name in `dir`) into `dir`, skipping files already
+/// there, reporting `(bytes_done, bytes_total)` when known.
+pub fn download_files(
+    dir: &Path,
+    repo: &str,
+    files: &[(&str, &str)],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     // The blocking client's timeout bounds the wait for headers and each read on its own, not
     // the whole download: a stalled server fails (and frees Cancel) within a minute.
@@ -84,12 +98,12 @@ pub fn download_model(
         .map_err(|e| e.to_string())?;
     let cancelled = || cancel.load(Ordering::Relaxed);
     let mut sizes = Vec::new();
-    for name in MODEL_FILES {
+    for (remote, _) in files {
         if cancelled() {
             return Err("Download cancelled".into());
         }
         let size = client
-            .head(format!("{MODEL_REPO}/{name}"))
+            .head(format!("{repo}/{remote}"))
             .send()
             .ok()
             .filter(|r| r.status().is_success())
@@ -98,7 +112,7 @@ pub fn download_model(
     }
     let total = sizes.iter().copied().sum::<Option<u64>>();
     let mut done = 0u64;
-    for name in MODEL_FILES {
+    for (remote, name) in files {
         let target = dir.join(name);
         if target.is_file() {
             done += std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
@@ -109,7 +123,7 @@ pub fn download_model(
             return Err("Download cancelled".into());
         }
         let mut response = client
-            .get(format!("{MODEL_REPO}/{name}"))
+            .get(format!("{repo}/{remote}"))
             .send()
             .map_err(|e| format!("Could not download {name}: {e}"))?;
         if !response.status().is_success() {
@@ -188,7 +202,8 @@ mod engine {
     /// Loading the model takes seconds, so the last one loaded is kept for the next run.
     static LOADED: Mutex<Option<(PathBuf, ParakeetTDT)>> = Mutex::new(None);
 
-    fn execution_config() -> ExecutionConfig {
+    /// The execution provider this build asks for; the word aligner runs on it too.
+    pub(crate) fn execution_config() -> ExecutionConfig {
         #[allow(unused_mut)]
         let mut config = ExecutionConfig::new();
         #[cfg(feature = "parakeet-cuda")]
@@ -291,6 +306,8 @@ mod engine {
     }
 }
 
+#[cfg(feature = "parakeet")]
+pub(crate) use engine::execution_config;
 #[cfg(feature = "parakeet")]
 pub use engine::ParakeetTranscriber;
 
@@ -397,6 +414,57 @@ mod tests {
         assert!(model_present(dir.path()));
         std::fs::remove_file(dir.path().join("vocab.txt")).unwrap();
         assert!(!model_present(dir.path()));
+    }
+
+    /// `AEROEDITS_PARAKEET_PROBE=<16 kHz mono wav>;<from s>;<to s>;<chunk s>[,<chunk s>]`
+    #[cfg(feature = "parakeet")]
+    #[test]
+    #[ignore]
+    fn parakeet_chunk_probe() {
+        use super::super::audio::AudioChunk;
+        use super::super::provider::ChunkTranscriber;
+        let spec = std::env::var("AEROEDITS_PARAKEET_PROBE").unwrap();
+        let parts: Vec<&str> = spec.split(';').collect();
+        let mut reader = crate::project::pcm::PcmReader::open(Path::new(parts[0])).unwrap();
+        let from = (parts[1].parse::<f64>().unwrap() * 16_000.0) as usize;
+        let to = (parts[2].parse::<f64>().unwrap() * 16_000.0) as usize;
+        let mut all = vec![0f32; reader.info().frame_count as usize];
+        let len = all.len();
+        let n = reader.read_frames(&mut all, len).unwrap();
+        let samples = &all[from..to.min(n)];
+        let mut model = ParakeetTranscriber::new(&default_model_dir()).unwrap();
+        for chunk_s in parts[3].split(',') {
+            let len = (chunk_s.parse::<f64>().unwrap() * 16_000.0) as usize;
+            let mut words = Vec::new();
+            for (i, piece) in samples.chunks(len).enumerate() {
+                let offset = from + i * len;
+                let result = model
+                    .transcribe_chunk(&AudioChunk {
+                        source_start_us: 0,
+                        samples: piece.to_vec(),
+                    })
+                    .unwrap();
+                for w in result.words {
+                    words.push((
+                        w.source_start_us + offset as u64 * 1_000_000 / 16_000,
+                        w.text,
+                    ));
+                }
+            }
+            println!("--- {chunk_s} s chunks: {} words", words.len());
+            let mut line = String::new();
+            let mut second = u64::MAX;
+            for (start, text) in &words {
+                if start / 10_000_000 != second {
+                    second = start / 10_000_000;
+                    println!("{line}");
+                    line = format!("[{:>4}s]", start / 1_000_000);
+                }
+                line.push(' ');
+                line.push_str(text);
+            }
+            println!("{line}");
+        }
     }
 
     #[cfg(not(feature = "parakeet"))]

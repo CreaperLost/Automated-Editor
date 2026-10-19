@@ -97,8 +97,9 @@ pub struct CaptionSettings {
     pub max_lines: u32,
 }
 
+/// One line: easier to read, and what a caption turned on starts with.
 fn default_max_lines() -> u32 {
-    MAX_LINES as u32
+    1
 }
 
 impl Default for CaptionSettings {
@@ -361,13 +362,35 @@ fn word_width(font: &fontdue::Font, text: &str, px: f32) -> f32 {
     width
 }
 
-/// Lays out and rasterizes `cue` for a canvas of `canvas_w` x `canvas_h`.
-pub fn rasterize_cue(
+/// A cue laid out for a canvas: its text size, where each word goes and the box it takes.
+struct CueFit {
+    px: f32,
+    placed: Vec<PlacedWord>,
+    line_widths: Vec<f32>,
+    ascent: f32,
+    line_height: f32,
+    outline_px: f32,
+    pad_y: f32,
+    width: u32,
+    height: u32,
+}
+
+/// The size `cue` takes on a canvas of `canvas_w` x `canvas_h`, without drawing it.
+pub fn cue_size(
     cue: &CaptionCue,
     settings: &CaptionSettings,
     canvas_w: u32,
     canvas_h: u32,
-) -> Option<CueRaster> {
+) -> Option<(u32, u32)> {
+    fit_cue(cue, settings, canvas_w, canvas_h).map(|fit| (fit.width, fit.height))
+}
+
+fn fit_cue(
+    cue: &CaptionCue,
+    settings: &CaptionSettings,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Option<CueFit> {
     if cue.words.is_empty() || canvas_w < 16 || canvas_h < 16 {
         return None;
     }
@@ -431,6 +454,38 @@ pub fn rasterize_cue(
     let width = ((text_w + pad_x * 2.0).ceil() as u32).clamp(1, canvas_w);
     let height =
         ((line_height * line_widths.len() as f32 + pad_y * 2.0).ceil() as u32).clamp(1, canvas_h);
+    Some(CueFit {
+        px,
+        placed,
+        line_widths,
+        ascent,
+        line_height,
+        outline_px,
+        pad_y,
+        width,
+        height,
+    })
+}
+
+/// Lays out and rasterizes `cue` for a canvas of `canvas_w` x `canvas_h`.
+pub fn rasterize_cue(
+    cue: &CaptionCue,
+    settings: &CaptionSettings,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Option<CueRaster> {
+    let CueFit {
+        px,
+        placed,
+        line_widths,
+        ascent,
+        line_height,
+        outline_px,
+        pad_y,
+        width,
+        height,
+    } = fit_cue(cue, settings, canvas_w, canvas_h)?;
+    let font = font();
     let len = (width * height) as usize;
     let mut fill = vec![0u8; len];
     let mut word_of = vec![u16::MAX; len];
@@ -613,6 +668,48 @@ pub fn colorize(
         color: ColorInfo::rec709_full(),
         data: data.into(),
     }
+}
+
+/// A keyboard shortcut badge ("Ctrl + Shift + P") for a canvas, drawn like a caption in a
+/// dark rounded box.
+pub fn rasterize_badge(keys: &[String], canvas_w: u32, canvas_h: u32) -> Option<VideoFrame> {
+    let mut words = Vec::new();
+    for (i, key) in keys.iter().enumerate() {
+        if i > 0 {
+            words.push("+".to_string());
+        }
+        words.push(key.clone());
+    }
+    let cue = CaptionCue {
+        start_us: 0,
+        end_us: 1,
+        words: words
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| CueWord {
+                id: i.to_string(),
+                text,
+                start_us: 0,
+                end_us: 1,
+            })
+            .collect(),
+    };
+    let settings = CaptionSettings {
+        enabled: true,
+        font_size_pct: 3.4,
+        text_color: "#f8fafc".into(),
+        highlight_words: false,
+        outline: false,
+        background: true,
+        background_color: "#0f172a".into(),
+        background_opacity: 0.86,
+        max_lines: 1,
+        ..CaptionSettings::default()
+    };
+    // The short side sets the size, so a 9:16 short's badge is as big as a video's.
+    let short = canvas_w.min(canvas_h);
+    let raster = rasterize_cue(&cue, &settings, canvas_w, short)?;
+    Some(colorize(&raster, &settings, None))
 }
 
 /// Where a caption of `w` x `h` sits on the canvas.
@@ -873,6 +970,7 @@ mod tests {
         let settings = CaptionSettings {
             max_words: 10,
             font_size_pct: 10.0,
+            max_lines: 3,
             ..Default::default()
         };
         let cues = build_cues(&t, &mapper(&[(0, 2000)]), &settings);

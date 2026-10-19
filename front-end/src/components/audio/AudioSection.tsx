@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowDownToLine, Mic, Music, Volume2, VolumeX, Wand2 } from "lucide-react";
+import { ArrowDownToLine, Mic, MousePointerClick, Music, Sparkles, Volume2, VolumeX, Wand2, Wind } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
 import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
@@ -10,6 +10,9 @@ import { clipName, clipRole, trackLabel } from "../../lib/sequence";
 import {
   AudioSettings,
   DEFAULT_AUDIO_SETTINGS,
+  DEFAULT_SOUND_EFFECTS,
+  SOUND_EFFECTS_VOLUME_DB_RANGE,
+  SoundEffects,
   TRACK_VOLUME_DB_RANGE,
   TrackMix,
   type OpenedProject,
@@ -210,6 +213,67 @@ const LaneRow: React.FC<{
   </div>
 );
 
+/** The sound effects lane: soft clicks and a few whooshes from the recording, with its own
+ *  volume and mute, lowered under speech. */
+const SoundEffectsRow: React.FC<{
+  settings: SoundEffects;
+  onChange: (patch: Partial<SoundEffects>) => void;
+}> = ({ settings, onChange }) => {
+  const silent = settings.muted || (!settings.clicks && !settings.whooshes);
+  return (
+    <div className="grid grid-cols-[auto_7rem_minmax(0,1fr)_auto_auto_auto_auto] items-center gap-1">
+      <span className="h-7 w-7 inline-flex items-center justify-center text-studio-500" aria-hidden>
+        <Sparkles className="w-4 h-4" />
+      </span>
+      <span
+        className={`text-label truncate ${silent ? "text-studio-500 line-through" : "text-studio-200"}`}
+        title="Soft clicks on your mouse clicks and a light whoosh on zooms and layout switches, thinned out so it never gets busy, and lowered under speech."
+      >
+        Sound effects
+      </span>
+      <input
+        type="range"
+        aria-label="Sound effects volume"
+        min={SOUND_EFFECTS_VOLUME_DB_RANGE.min}
+        max={SOUND_EFFECTS_VOLUME_DB_RANGE.max}
+        step={1}
+        value={settings.volumeDb}
+        disabled={silent}
+        onChange={(e) => onChange({ volumeDb: Number(e.target.value) })}
+        onDoubleClick={() => onChange({ volumeDb: 0 })}
+        title="Double-click to reset"
+        className="w-full min-w-0 h-1.5 cursor-pointer disabled:opacity-40"
+      />
+      <span className="w-14 text-right font-mono text-meta tabular-nums text-studio-200">{formatDb(settings.volumeDb)}</span>
+      <LaneToggle
+        on={settings.clicks}
+        label="Click sounds"
+        title="A soft click on each mouse click (at most one every fifth of a second; a double click clicks once)"
+        onClick={() => onChange({ clicks: !settings.clicks })}
+      >
+        <MousePointerClick className="w-4 h-4" />
+      </LaneToggle>
+      <LaneToggle
+        on={settings.whooshes}
+        label="Whooshes"
+        title="A light whoosh when a zoom goes in or out and when the layout switches; none on small zooms or back-to-back moves"
+        onClick={() => onChange({ whooshes: !settings.whooshes })}
+      >
+        <Wind className="w-4 h-4" />
+      </LaneToggle>
+      <button
+        type="button"
+        onClick={() => onChange({ muted: !settings.muted })}
+        aria-pressed={settings.muted}
+        aria-label={`${settings.muted ? "Unmute" : "Mute"} sound effects`}
+        className={`h-7 w-7 inline-flex items-center justify-center rounded-control hover:bg-studio-800 ${settings.muted ? "text-danger-fg" : "text-studio-400 hover:text-studio-100"}`}
+      >
+        {settings.muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+      </button>
+    </div>
+  );
+};
+
 /** Cleanup is committed only after a reusable audio copy has been prepared. */
 const MouthClickCleanup: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
@@ -278,6 +342,7 @@ export const AudioSection: React.FC = () => {
 
   // Every audio track is one lane of the mix; its settings are kept under its id.
   const lanes = soundLanes(openedProject);
+  const soundEffects = draft.soundEffects ?? DEFAULT_SOUND_EFFECTS;
   const mix = (lane: SoundLane) => openedProject.audio?.tracks?.[lane.id];
   const setTrack = (lane: SoundLane, change: Partial<Pick<SeqTrack, "muted" | "role">>) => {
     const next = { ...lane.track, ...change };
@@ -378,6 +443,10 @@ export const AudioSection: React.FC = () => {
               onDuck={(db) => setPolish(lane, { duckDb: db })}
             />
           ))}
+          <SoundEffectsRow
+            settings={soundEffects}
+            onChange={(patch) => update({ soundEffects: { ...soundEffects, ...patch } })}
+          />
         </div>
       )}
       {lanes.some((lane) => lane.role === "mic") && <MouthClickCleanup />}

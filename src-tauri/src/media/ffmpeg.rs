@@ -387,6 +387,72 @@ pub fn extract_audio_wav(source: &Path, stream: usize, target: &Path) -> Result<
     run(cmd, log, "Extracting the audio failed").map(|_| ())
 }
 
+/// One picture of the video every `every_s` seconds from its start, scaled to `w` x `h` and
+/// packed BGR, handed to `each` in order (with their index) until it returns false. Only
+/// keyframes are decoded, the picture nearest each moment standing in for it: a whole file
+/// is read in a fraction of its length. For analysis passes that need a rough look, like
+/// face framing; one FFmpeg thread, so it can run beside playback.
+pub fn sample_bgr(
+    path: &Path,
+    every_s: u32,
+    w: u32,
+    h: u32,
+    each: &mut dyn FnMut(usize, &[u8]) -> bool,
+) -> Result<(), String> {
+    validate_dim(w, h)?;
+    let (mut cmd, mut log) = command(ffmpeg_path()?)?;
+    cmd.args(["-nostdin", "-threads", "1", "-skip_frame", "nokey", "-i"])
+        .arg(file_arg(path))
+        .args([
+            "-an",
+            "-sn",
+            "-vf",
+            &format!("fps=1/{},scale={w}:{h}:flags=bilinear", every_s.max(1)),
+            "-pix_fmt",
+            "bgr24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ])
+        .stdout(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Could not start FFmpeg: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or("FFmpeg gave no output")?;
+    let mut frame = vec![0u8; w as usize * h as usize * 3];
+    let mut index = 0;
+    let stopped = loop {
+        match stdout.read_exact(&mut frame) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break false,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Reading {} failed: {e}", path.display()));
+            }
+        }
+        if !each(index, &frame) {
+            break true;
+        }
+        index += 1;
+    };
+    drop(stdout);
+    if stopped {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(());
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(failure(
+            &format!("Reading {} failed", path.display()),
+            &mut log,
+        ))
+    }
+}
+
 /// Lays audio files out on one timeline (each at its start time, silence between) and writes
 /// `duration_us` of it as 48 kHz stereo 16-bit WAV: a recording's audio segments as one file.
 pub fn assemble_audio_wav(

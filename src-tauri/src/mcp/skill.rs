@@ -24,13 +24,28 @@ pub struct Template {
     text: &'static str,
 }
 
-pub static TEMPLATES: [Template; 1] = [Template {
-    name: "tutorial",
-    title: "Tutorial edit",
-    description: "A screen-recorded tutorial, long form: clean speech, steady pacing, webcam and \
-        zooms, no captions, chapters, then export when the user says.",
-    text: include_str!("skill/templates/tutorial.md"),
-}];
+pub static TEMPLATES: [Template; 3] = [
+    Template {
+        name: "tutorial",
+        title: "Tutorial edit",
+        description: "A screen-recorded tutorial, long form: clean speech, steady pacing, \
+            webcam and zooms, no captions, chapters, then export when the user says.",
+        text: include_str!("skill/templates/tutorial.md"),
+    },
+    Template {
+        name: "shorts",
+        title: "Shorts from the video",
+        description: "Vertical shorts picked by you from the edited video's transcript, with \
+            the split-screen look and scenes picked by the app, then export when the user says.",
+        text: include_str!("skill/templates/shorts.md"),
+    },
+    Template {
+        name: "take-shorts",
+        title: "Shorts from a take",
+        description: "A vertical short told again by the user in a new take (camera and             microphone): the take talks, you pick the footage from the long video that shows             each sentence, then graphics, then export when the user says.",
+        text: include_str!("skill/templates/take-shorts.md"),
+    },
+];
 
 fn find(name: &str) -> Result<&'static Template, String> {
     TEMPLATES

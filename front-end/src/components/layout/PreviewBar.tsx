@@ -80,7 +80,7 @@ const PlayheadTime: React.FC = () => {
 };
 
 /// The bar under a preview: go to start, play, where the playhead is, then the preview's
-/// quality and the canvas shape. Used by the editor and the Shorts Studio alike.
+/// quality and the canvas shape. Used for the video and for shorts alike.
 export const PreviewBar: React.FC<{
   aspect: string;
   aspectTitle?: string;

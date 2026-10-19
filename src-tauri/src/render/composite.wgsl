@@ -14,8 +14,9 @@ struct LayerParams {
     pass_kind: u32,
     // 0: BGRA; 1: NV12, limited-range BT.709 (luma in layer_tex, chroma in layer_chroma).
     format: u32,
-    _pad1: u32,
-    _pad2: u32,
+    // How opaque the layer and its shadow are drawn, 0 to 1.
+    opacity: f32,
+    _pad: u32,
 }
 
 @group(0) @binding(0) var layer_tex: texture_2d<f32>;
@@ -93,7 +94,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if params.pass_kind == 1u {
         let p = (in.local - vec2<f32>(0.5)) * params.size_px - params.shadow_offset;
         let sdf = shape_sdf(p);
-        let alpha = params.shadow_opacity * shadow_coverage(sdf, params.shadow_blur_px);
+        let alpha = params.shadow_opacity * params.opacity * shadow_coverage(sdf, params.shadow_blur_px);
         return vec4<f32>(0.0, 0.0, 0.0, alpha);
     }
     let p = (in.local - vec2<f32>(0.5)) * params.size_px;
@@ -101,5 +102,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if sdf > 0.0 {
         return vec4<f32>(0.0);
     }
-    return layer_color(in.uv);
+    let color = layer_color(in.uv);
+    return vec4<f32>(color.rgb, color.a * params.opacity);
 }

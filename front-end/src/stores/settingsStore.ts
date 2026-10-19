@@ -32,6 +32,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     borderWidth: 8,
     mirror: true,
     shadow: true,
+    autoHide: true,
   },
 
   canvas: {
@@ -47,6 +48,10 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     aspectRatio: "16:9",
     cursorVisible: true,
     cursorSizePct: 150,
+    shortcutBadges: true,
+    windowCrop: true,
+    windowCropPaddingPct: 3,
+    windowCropOff: [],
   },
 
   layoutOwnedByProject: false,

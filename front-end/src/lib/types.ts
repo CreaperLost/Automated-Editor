@@ -8,7 +8,7 @@ export interface WaveformOverview {
   diagnostics: string[];
 }
 
-export type ZoomOrigin = "click" | "dwell" | "cluster";
+export type ZoomOrigin = "click" | "dwell" | "cluster" | "typing";
 
 export interface EditedRange {
   startUs: number;
@@ -94,7 +94,7 @@ export interface ZoomSettings {
 export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
   clickScale: 1.6,
   hoverScale: 1.4,
-  transitionMs: 700,
+  transitionMs: 0,
   minHoldMs: 5000,
   mergeGapMs: 5000,
   maxZooms: 20,
@@ -146,6 +146,16 @@ export interface CameraBubbleSettings {
   borderWidth: number;
   mirror: boolean;
   shadow: boolean;
+  /** Fade the bubble out while you click, drag, scroll, rest the pointer or type under it. */
+  autoHide: boolean;
+}
+
+/** A stretch of a recording (its own time) where the window crop is off. */
+export interface WindowCropOff {
+  /** The recording whose clock the times are on; unset is the first. */
+  media?: string;
+  sourceStartUs: number;
+  sourceEndUs: number;
 }
 
 export type BackgroundPreset = "aurora" | "sunset" | "ocean" | "forest" | "candy" | "graphite";
@@ -172,7 +182,34 @@ export interface CanvasSettings {
   cursorVisible: boolean;
   /** Pointer size, percent of its recorded size: 25 to 400. */
   cursorSizePct: number;
+  /** Show keyboard shortcuts pressed in the recording as a badge (when the keyboard was recorded). */
+  shortcutBadges: boolean;
+  /** Crop the screen to the window in front when it is clearly smaller than the display. */
+  windowCrop: boolean;
+  /** Room around the window, 0 to 15 % of the source height. */
+  windowCropPaddingPct: number;
+  /** Stretches where the window crop is off. */
+  windowCropOff: WindowCropOff[];
 }
+
+/** The sound effects lane: soft clicks and a few whooshes, from the recording's telemetry. */
+export interface SoundEffects {
+  clicks: boolean;
+  whooshes: boolean;
+  muted: boolean;
+  /** The lane's volume in dB, -30 to +6. */
+  volumeDb: number;
+}
+
+/** One sound on the sound effects lane, at timeline time `atUs`. */
+export interface SoundEffect {
+  atUs: number;
+  kind: "click" | "whoosh";
+  gain: number;
+}
+
+export const DEFAULT_SOUND_EFFECTS: SoundEffects = { clicks: true, whooshes: true, muted: false, volumeDb: 0 };
+export const SOUND_EFFECTS_VOLUME_DB_RANGE = { min: -30, max: 6 } as const;
 
 /** Audio polish. Each effect has its own switch and applies to playback and export. */
 export interface AudioSettings {
@@ -190,6 +227,8 @@ export interface AudioSettings {
   duckDb: number;
   /** Volume, noise reduction and ducking per audio track id; absent plays as recorded. */
   tracks?: Record<string, TrackMix>;
+  /** The sound effects lane; absent is the default (on, quiet). */
+  soundEffects?: SoundEffects;
 }
 
 /** One audio track's mix, kept under the track's id. Muting is the track's own switch. */
@@ -255,6 +294,7 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
   backgroundOpacity: 0.55,
   uppercase: false,
   maxWords: 6,
+  maxLines: 1,
 };
 
 export interface EditLayout {
@@ -287,6 +327,11 @@ export interface EditLayout {
   webcamShadow?: boolean;
   cursorVisible?: boolean;
   cursorSizePct?: number;
+  shortcutBadges?: boolean;
+  webcamAutoHide?: boolean;
+  windowCrop?: boolean;
+  windowCropPaddingPct?: number;
+  windowCropOff?: WindowCropOff[];
 }
 
 export const LAYOUT_UNSUPPORTED = {
@@ -362,6 +407,10 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
         : "16:9",
     cursorVisible: layout.cursorVisible ?? true,
     cursorSizePct: layout.cursorSizePct ?? 150,
+    shortcutBadges: layout.shortcutBadges ?? true,
+    windowCrop: layout.windowCrop ?? true,
+    windowCropPaddingPct: layout.windowCropPaddingPct ?? 3,
+    windowCropOff: layout.windowCropOff ?? [],
   };
 }
 
@@ -394,6 +443,7 @@ export function cameraFromLayout(layout: EditLayout): CameraBubbleSettings {
     borderWidth: layout.webcamBorderWidth ?? 0,
     mirror: layout.webcamMirror ?? true,
     shadow: layout.webcamShadow ?? false,
+    autoHide: layout.webcamAutoHide ?? true,
   };
 }
 
@@ -432,6 +482,11 @@ export function layoutFromSettings(
     webcamShadow: camera.shadow,
     cursorVisible: canvas.cursorVisible,
     cursorSizePct: canvas.cursorSizePct,
+    shortcutBadges: canvas.shortcutBadges,
+    webcamAutoHide: camera.autoHide,
+    windowCrop: canvas.windowCrop,
+    windowCropPaddingPct: canvas.windowCropPaddingPct,
+    windowCropOff: canvas.windowCropOff,
   };
 }
 
@@ -465,6 +520,8 @@ export interface TranscriptGapConfig {
   paddingMs: number;
   refineWordEdges?: boolean;
   edgeThresholdDb?: number;
+  /** Keep sounds the transcriber tagged between words ("[keyboard clacking]"); default cut. */
+  keepSoundEvents?: boolean;
 }
 
 /** A range of an asset's own time. */
@@ -480,22 +537,39 @@ export interface SourceSpan {
 export type NoiseKind = "click" | "knock" | "mouth" | "breath";
 
 /** A mouth noise or knock found in a sound (src-tauri/src/commands/noises.rs). */
+/** One place to review: a noise, or several close together with no word between them. */
 export interface FoundNoise {
   sourceStartUs: number;
   sourceEndUs: number;
   /** Where it plays on the timeline. */
   startUs: number;
   endUs: number;
-  kind: NoiseKind;
+  /** null: a muted moment the last scan does not list (muted by hand or by an older scan). */
+  kind: NoiseKind | null;
   contrastDb: number;
   /** Voiced speech is right next to it: it may be part of a word. */
   nearSpeech: boolean;
+  /** How many noises it joins. */
+  count: number;
+  /** What muting (or unmuting) it changes, in its sound's own time. */
+  parts: SourceSpan[];
+  /** All of it is muted. */
   muted: boolean;
 }
 
+export interface NoiseConfig {
+  sensitivity: number;
+  paddingMs: number;
+}
+
+/** A sound's last scan (kept with the project) where the timeline plays it now. */
 export interface NoiseScan {
   key: string;
   revision: number;
+  /** The settings of that scan; null when the sound was never scanned. */
+  config: NoiseConfig | null;
+  /** The transcript guarded the words in that scan. */
+  guarded: boolean;
   noises: FoundNoise[];
   diagnostics: string[];
 }
@@ -512,7 +586,8 @@ export interface SilenceDetectionResult {
 }
 
 // The timeline as tracks of clips (src-tauri/src/sequence)
-export type AssetKind = "recording" | "video" | "image" | "audio";
+/** A "graphic" is a motion graphic made in the Graphics tab: a HyperFrames composition the app renders. */
+export type AssetKind = "recording" | "video" | "image" | "audio" | "graphic";
 export type StreamKind = "picture" | "sound";
 /**
  * What a stream stands for. Pictures: "screen" (the canvas layout, zooms and cursor), "webcam"
@@ -547,6 +622,195 @@ export interface Asset {
   pauses?: { startUs: number; endUs: number }[];
   /** The file or folder is no longer there. */
   missing?: boolean;
+}
+
+/** The graphics renderer (HyperFrames with its own Node and Chrome), downloaded on first use. */
+export interface GraphicsRuntimeStatus {
+  installed: boolean;
+  /** Something is installed, but not the versions this build uses. */
+  outdated: boolean;
+  dir: string;
+  downloadMb: number;
+  hyperframes: string;
+  node: string;
+  chrome: string;
+}
+
+export interface GraphicsInstallProgress {
+  step: string;
+  bytesDone: number;
+  bytesTotal: number | null;
+}
+
+/** One variable a graphic declares (HyperFrames' data-composition-variables). */
+export interface GraphicVariable {
+  id: string;
+  type: "string" | "number" | "color" | "boolean" | "enum" | string;
+  label: string;
+  default: unknown;
+  options?: { value: unknown; label: string }[];
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+export interface GraphicTemplate {
+  name: string;
+  label: string;
+  description: string;
+  lengthUs: number;
+  variables: GraphicVariable[];
+}
+
+export interface GraphicRenderState {
+  state: "idle" | "queued" | "rendering" | "failed" | string;
+  progress: number;
+  error?: string;
+}
+
+export interface GraphicView {
+  assetId: string;
+  name: string;
+  template: string | null;
+  /** The graphic's source folder (index.html and its files). */
+  folder: string;
+  /** Values set; the rest use the declared defaults. */
+  variables: Record<string, unknown>;
+  declarations: GraphicVariable[];
+  render: GraphicRenderState;
+  /** Its own brand kit: null follows the project's default, "none" is no kit. */
+  brand: string | null;
+}
+
+/** An app-level brand kit the graphics take their colours, font and logo from. */
+export interface BrandKit {
+  name: string;
+  background: string;
+  text: string;
+  accent: string;
+  /** A font family; empty keeps each graphic's own. */
+  font: string;
+  /** The kit's own font and logo file names. */
+  fontFile: string | null;
+  logo: string | null;
+  logoPath: string | null;
+  folder: string;
+}
+
+/** A kit to save: `logo`/`fontFile` are the kit's own file (kept), a full path to copy, or null. */
+export interface BrandKitInput {
+  name: string;
+  previous?: string | null;
+  background: string;
+  text: string;
+  accent: string;
+  font: string;
+  fontFile: string | null;
+  logo: string | null;
+}
+
+export interface BrandsView {
+  kits: BrandKit[];
+  /** The open project's default kit (it may have been removed since). */
+  projectDefault: string | null;
+  folder: string;
+}
+
+/** A graphic saved to the app's library to use in other projects. */
+export interface GraphicLibraryItem {
+  id: string;
+  /** Its short name for agents (graphic_add library). */
+  name: string;
+  label: string;
+  /** When to use it, for agents picking from the library. */
+  useWhen: string;
+  lengthUs: number;
+  version: number;
+  /** The project it was saved from. */
+  project: string | null;
+  projectFolder: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Passed the gate: a general template. Otherwise saved as is. */
+  general: boolean;
+  /** The checks it failed, when saved as is. */
+  failed?: string[];
+  /** The bundled template it was first made from. */
+  template: string | null;
+  variables: GraphicVariable[];
+  folder: string;
+  /** The gate's contact sheet (a file path), if it was checked. */
+  sheet: string | null;
+}
+
+/** One check of the library's gate. */
+export interface GateCheck {
+  id: string;
+  label: string;
+  status: "pass" | "warn" | "fail";
+  reason: string;
+}
+
+/** The library's gate on a graphic: no model, renders and checks by the app. */
+export interface GateReport {
+  passed: boolean;
+  checks: GateCheck[];
+  sourceHash: string;
+  checkedAt: string;
+  seconds: number;
+  /** The contact sheet as a data URL: 16:9 with its text and long text, then 9:16. */
+  sheetUrl: string | null;
+}
+
+/** A library item or bundled template much like a graphic being saved. */
+export interface GraphicCloseMatch {
+  kind: "library" | "template";
+  id: string;
+  label: string;
+  version: number | null;
+  why: string;
+}
+
+/** Saving a graphic to the library. */
+export interface GraphicLibrarySave {
+  assetId: string;
+  label?: string | null;
+  name?: string | null;
+  useWhen?: string | null;
+  lengthUs?: number | null;
+  /** Save it although the gate fails, marked not general. */
+  asIs?: boolean;
+  /** A library item (id or name) this becomes the next version of. */
+  update?: string | null;
+  /** A new item although a close one exists. */
+  asNew?: boolean;
+}
+
+/** How a save went: saved, or why not (the gate failed, or a close item to update). */
+export interface GraphicLibrarySaved {
+  saved: GraphicLibraryItem | null;
+  check: GateReport;
+  close: GraphicCloseMatch | null;
+}
+
+/** Where a graphic plays in a short. */
+export type GraphicSlot = "full" | "camera" | "screen" | "overScreen";
+
+export interface GraphicListed extends GraphicView {
+  /** [clip id, start, length] on the timeline. */
+  clips: [string, number, number][];
+}
+
+export interface GraphicCreated {
+  project: OpenedProject;
+  assetId: string;
+  clipId: string;
+}
+
+export interface GraphicUpdated {
+  graphic: GraphicView;
+  /** Set when the name changed: that is an edit. */
+  project: OpenedProject | null;
 }
 
 export type TrackKind = "video" | "audio";
@@ -615,6 +879,19 @@ export type SequenceEdit =
   | { kind: "setClip"; clipId: string; fit: Fit }
   /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
   | { kind: "restoreCuts"; clipIds: string[] };
+
+/** Saved settings any project can take on (src-tauri/src/templates.rs). */
+export interface Template {
+  id: string;
+  name: string;
+  layout: EditLayout;
+  captions: CaptionSettings;
+  zoomSettings: ZoomSettings;
+  webcamFocus: WebcamFocusSettings;
+  graphicsBrand?: string;
+  /** A short's look; absent when saved without a short. */
+  shortLook?: ShortLayout;
+}
 
 /** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
 export interface OpenedProject {
@@ -760,7 +1037,7 @@ export interface PlaybackStatus {
   positionUs: number;
   durationUs: number;
   clockKind: ClockKind;
-  /** The short playing instead of the video, while the Shorts Studio has one in focus. */
+  /** The short playing instead of the video, while the Shorts workspace shows one. */
   shortId?: string;
   /** How fast it plays: 1 is normal speed. */
   speed?: number;
@@ -957,7 +1234,7 @@ export interface SegmentPage {
 }
 
 // Transcription (src-tauri/src/transcript)
-export type TranscriptProvider = "parakeet" | "elevenlabs";
+export type TranscriptProvider = "parakeet" | "elevenlabs" | "openrouter";
 
 export interface TranscriptSettings {
   provider: TranscriptProvider;
@@ -965,15 +1242,32 @@ export interface TranscriptSettings {
   scribeModel: string;
   keyterms: string[];
   parakeetModelDir: string;
+  /** Align word times to the audio after transcribing, when the model is downloaded. */
+  alignWords: boolean;
 }
 
 export interface TranscriptSettingsView {
   settings: TranscriptSettings;
   elevenlabsKeySource: "keychain" | "file" | "environment" | null;
+  /** The OpenRouter key, shared with AI review. */
+  openrouterKeySource: "keychain" | "file" | "environment" | null;
   parakeetAvailable: boolean;
   parakeetAccelerator: string;
   parakeetModelDir: string;
   parakeetModelPresent: boolean;
+  /** Word alignment runs in this build (it shares Parakeet's ONNX Runtime). */
+  alignerAvailable: boolean;
+  alignerModelPresent: boolean;
+  alignerModelDir: string;
+  alignerModelBytes: number;
+}
+
+/** What word alignment did to a transcript. */
+export interface TranscriptAlignment {
+  model: string;
+  version: number;
+  alignedWords: number;
+  keptWords: number;
 }
 
 export interface TranscriptViewWord {
@@ -1004,6 +1298,8 @@ export interface TranscriptView {
   createdAt: string;
   revision: number;
   words: TranscriptViewWord[];
+  /** Set once the word times were aligned to the audio. */
+  alignment?: TranscriptAlignment | null;
 }
 
 export interface TranscriptRunResult {
@@ -1037,6 +1333,8 @@ export interface TranscriptCutSuggestion {
   source?: "rules" | "ai" | "agent";
   /** The AI's or agent's short explanation. */
   reason?: string;
+  /** Who made the AI review: `in-house (<agent>)` for the connected agent, else the OpenRouter or OpenAI model. */
+  reviewer?: string;
   /** For an agent's cut: the proposal item it is, decided through its batch. */
   proposal?: { batchId: string; itemId: string; agent: string };
 }
@@ -1117,10 +1415,73 @@ export interface Chapter {
   editedUs?: number | null;
 }
 
+/** Mirrors `check::Severity` in src-tauri/src/check.rs. */
+export type CheckSeverity = "error" | "warning" | "info";
+
+/** One problem the check before export found (`check::Finding`). */
+export interface CheckFinding {
+  /** Names it while the edit stays at the report's revision. */
+  id: string;
+  kind: string;
+  severity: CheckSeverity;
+  title: string;
+  detail: string;
+  /** Where it is on the edited timeline; absent when it is about the whole video. */
+  startUs?: number;
+  endUs?: number;
+  /** What its fix does; absent when it needs someone to decide. */
+  fixLabel?: string;
+}
+
+export interface CheckReport {
+  revision: number;
+  durationUs: number;
+  /** Errors first, then warnings, then notes; each in timeline order. */
+  findings: CheckFinding[];
+}
+
+/** One scene of a storyboard (`mcp/storyboard.rs`), numbered from 1 as on the sheet. */
+export interface StoryboardTile {
+  n: number;
+  from: string;
+  to: string;
+  fromUs: number;
+  toUs: number;
+  /** The moment the tile's frame shows. */
+  atUs: number;
+  kind: string;
+  /** The zoom in the frame. */
+  zoom?: number;
+  /** Zooms starting within the tile. */
+  zooms?: number;
+  graphic?: string;
+  chapter?: string;
+  say?: string;
+}
+
+/** A contact sheet of the edit, a tile per scene, in rows of `cols` tiles. */
+export interface Storyboard {
+  /** The sheet as a PNG data URL. */
+  image: string;
+  width: number;
+  height: number;
+  cols: number;
+  gap: number;
+  tileWidth: number;
+  /** The frame and its caption strip. */
+  tileHeight: number;
+  revision: number;
+  tiles: StoryboardTile[];
+}
+
 export interface ShortLayout {
   cameraPosition: "top" | "bottom";
   /** Share of the frame height the camera takes, 20 to 70. */
   cameraPct: number;
+  /** Camera clips (by clip id) framed by hand, each placed -1 to 1 each way from the centre.
+   *  Every other camera clip is lined up with the face as it starts (zooming in a little when
+   *  the face is near an edge). */
+  cameraClips: Record<string, { offsetX: number; offsetY: number }>;
   /** Zoom on the screen part, 0.3 to 3: 1 fills its part, below 1 shows all of it smaller. */
   screenZoom: number;
   followZooms: boolean;
@@ -1140,6 +1501,39 @@ export interface ShortLayout {
   backgroundColorStart: string;
   backgroundColorEnd: string;
   backgroundPreset: string;
+  /** Stretches showing only the camera or only the screen; the rest is split. */
+  scenes: ShortScene[];
+  /** How long the frame takes to change into and out of a scene; 0 is a hard cut. */
+  sceneTransitionMs: number;
+  /** Where each graphic plays, by clip id; one not listed plays full frame. */
+  graphicSlots?: Record<string, GraphicSlot>;
+}
+
+/** Mirrors `short_scenes::Scene` in src-tauri/src/short_scenes.rs. */
+export interface ShortScene {
+  id: string;
+  sourceStartUs: number;
+  sourceEndUs: number;
+  mode: "camera" | "screen";
+  /** Picked automatically; picking again replaces these and keeps the others. */
+  auto?: boolean;
+  media?: string;
+  /** Where it plays on the short's own timeline; absent when cut. Filled in by the backend. */
+  shownStartUs?: number;
+  shownEndUs?: number;
+}
+
+/** Where a camera stream's face track stands; shorts frame their camera on it. */
+export interface FaceTrackStatus {
+  asset: string;
+  stream: string;
+  assetName: string;
+  state: "ready" | "detecting" | "missing" | "failed" | "unavailable";
+  /** 0 to 1 while detecting. */
+  progress: number;
+  /** The share of the camera where a face was found, once ready. */
+  faceShare?: number;
+  error?: string;
 }
 
 /** A vertical clip of the video, anchored in source time at its first and last word. */
@@ -1154,12 +1548,48 @@ export interface Short {
   media?: string;
   /** Present once the short was edited on its own; it then no longer follows the video. */
   edit?: unknown;
+  /** A short made from a take recorded for it: its camera and voice (stream keys). */
+  take?: ShortTake;
   /** How long it plays now. */
   lengthUs?: number;
   /** Absent when an end was cut from the video. Filled in by the backend. */
   editedStartUs?: number;
   editedEndUs?: number;
 }
+
+export interface ShortTake {
+  camera?: string;
+  voice: string;
+}
+
+/** How a take's camera was lined up with a separate voice. */
+export interface TakeSync {
+  /** Camera time minus voice time. */
+  offsetUs: number;
+  /** How well the camera's own sound matched the voice (0-1); absent when nothing was compared. */
+  score?: number | null;
+}
+
+export interface TakeShortMade {
+  project: OpenedProject;
+  shortId: string;
+  sync: TakeSync;
+}
+
+/** A stretch of the video (as edited: only what it keeps) to play under a take, on the
+ *  short's own timeline from `atUs` to `toUs`. */
+export interface Footage {
+  atUs: number;
+  toUs: number;
+  /** Where it starts on the video's timeline. */
+  videoUs: number;
+  /** Its game or desktop sound, ducked under the voice; default on. */
+  sound?: boolean;
+}
+
+export type FootageChange =
+  | { op: "add"; items: Footage[] }
+  | { op: "remove"; fromUs?: number | null; toUs?: number | null };
 
 export type AiProvider = "openAi" | "openRouter";
 

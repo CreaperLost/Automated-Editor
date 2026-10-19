@@ -41,6 +41,10 @@ pub enum AssetKind {
     Video,
     Image,
     Audio,
+    /// A motion graphic: a HyperFrames composition in the project's `graphics/<id>/` folder,
+    /// which the app renders for the canvas it plays on. Edited like a still (any length up to
+    /// [`IMAGE_MAX_US`]), drawn over everything, never cut into.
+    Graphic,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,8 +133,13 @@ impl Asset {
         self.streams.iter().find(|s| s.id == id)
     }
 
+    /// A picture with no clock of its own: an image or a graphic, stretched to any length.
     pub fn is_still(&self) -> bool {
-        self.kind == AssetKind::Image
+        matches!(self.kind, AssetKind::Image | AssetKind::Graphic)
+    }
+
+    pub fn is_graphic(&self) -> bool {
+        self.kind == AssetKind::Graphic
     }
 
     pub fn is_recording(&self) -> bool {

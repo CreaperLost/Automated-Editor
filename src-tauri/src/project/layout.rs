@@ -76,6 +76,20 @@ pub struct EditLayout {
     pub cursor_visible: bool,
     /// The pointer's size, percent of its recorded size (a little larger reads better).
     pub cursor_size_pct: f32,
+    /// Show keyboard shortcuts pressed in the recording ("Ctrl + S") as a badge, when the
+    /// recorder recorded the keyboard.
+    pub shortcut_badges: bool,
+    /// Fade the webcam bubble out while you click, drag, scroll, rest the pointer or type
+    /// under it (it never moves to another corner).
+    pub webcam_auto_hide: bool,
+    /// Crop the screen to the window in front when it is clearly smaller than the recorded
+    /// display, when the recorder recorded the windows.
+    pub window_crop: bool,
+    /// Room around the window, as a percent of the source height.
+    pub window_crop_padding_pct: f32,
+    /// Stretches of a recording where the window crop is off.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub window_crop_off: Vec<crate::window_crop::CropOffRange>,
 }
 
 /// A new project's look: the screen a little smaller with rounded corners on the Forest
@@ -113,6 +127,11 @@ impl Default for EditLayout {
             webcam_shadow: true,
             cursor_visible: true,
             cursor_size_pct: 150.0,
+            shortcut_badges: true,
+            webcam_auto_hide: true,
+            window_crop: true,
+            window_crop_padding_pct: crate::window_crop::DEFAULT_PADDING_PCT,
+            window_crop_off: Vec::new(),
         }
     }
 }
@@ -234,6 +253,23 @@ impl EditLayout {
             return Err("Webcam border width is out of range".into());
         }
         parse_hex_rgb(&self.webcam_border_color)?;
+        if !in_range(
+            self.window_crop_padding_pct,
+            0.0,
+            crate::window_crop::MAX_PADDING_PCT,
+        ) {
+            return Err("Window crop padding is out of range".into());
+        }
+        if self.window_crop_off.len() > crate::window_crop::MAX_OFF_RANGES {
+            return Err("Too many stretches without the window crop".into());
+        }
+        if self
+            .window_crop_off
+            .iter()
+            .any(|r| r.source_end_us <= r.source_start_us)
+        {
+            return Err("A stretch without the window crop must end after it starts".into());
+        }
         Ok(())
     }
 

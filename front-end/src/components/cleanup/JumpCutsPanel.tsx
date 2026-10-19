@@ -1,11 +1,9 @@
 import { useShallow } from "zustand/react/shallow";
-import React, { useEffect, useState } from "react";
-import { X, Scissors, AlertCircle, ChevronDown, Play, Loader2 } from "lucide-react";
+import React, { useState } from "react";
+import { Scissors, AlertCircle, ChevronDown, Play, Loader2 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useJumpCutStore } from "../../stores/jumpCutStore";
-import { useWorkspaceStore } from "../../stores/workspaceStore";
-import { useNoiseStore } from "../../stores/noiseStore";
-import { NoisePass } from "./NoisePass";
+import { requestPanel } from "../layout/dockLayout";
 import { api } from "../../lib/ipc";
 import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import { OpenedProject } from "../../lib/types";
@@ -48,17 +46,11 @@ function formatTime(us: number): string {
 }
 
 /// Jump cuts: find the pauses in a sound, review them, and cut the chosen ones from every
-/// track at once (one undoable edit).
-export const SilenceModal: React.FC = () => {
-  const {
-    isSilenceModalOpen,
-    setIsSilenceModalOpen,
-    openedProject,
-    applyOpenedProject,
-  } = useProjectStore(
+/// track at once (one undoable edit). A dock panel, so the preview and the timeline stay
+/// usable while reviewing.
+export const JumpCutsPanel: React.FC = () => {
+  const { openedProject, applyOpenedProject } = useProjectStore(
     useShallow((s) => ({
-      isSilenceModalOpen: s.isSilenceModalOpen,
-      setIsSilenceModalOpen: s.setIsSilenceModalOpen,
       openedProject: s.openedProject,
       applyOpenedProject: s.applyOpenedProject,
     })),
@@ -74,18 +66,13 @@ export const SilenceModal: React.FC = () => {
   const { blocks: activeSilenceBlocks, snapshot: silenceAnalysis, busy: isDetecting, error, diagnostics, thresholds, sourceMode, chosenTrack, secondTrack, notice } = review;
   const [advanced, setAdvanced] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
-  const noisesOpen = useNoiseStore((s) => s.open);
+  // Only the pause under the playhead re-renders the list as it plays.
+  const playingId = useProjectStore((s) => {
+    const at = s.currentTimeUs;
+    return activeSilenceBlocks.find((block) => block.startUs <= at && at < block.endUs)?.id ?? null;
+  });
 
-  useEffect(() => {
-    if (!isSilenceModalOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsSilenceModalOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isSilenceModalOpen, setIsSilenceModalOpen]);
-
-  if (!isSilenceModalOpen) return null;
+  if (!openedProject) return <p className="p-3 text-label text-studio-500">Open a project to find pauses.</p>;
 
   const sounds = scannableSounds(openedProject);
   const individualSounds = sounds.filter((sound) => sound.key !== ALL_SPEECH);
@@ -167,7 +154,14 @@ export const SilenceModal: React.FC = () => {
       .applyJumpCuts(silenceAnalysis.projectHandle, silenceAnalysis.revision, cuts, silenceAnalysis.transcriptDependencies)
       .then((next) => {
         applyOpenedProject(next);
-        setIsSilenceModalOpen(false);
+        // The change cleared the list; say what it did instead.
+        const shorter = (totalTrimDurationMs / 1000).toFixed(1);
+        useJumpCutStore.setState((state) => ({
+          reviews: {
+            ...state.reviews,
+            [activePass]: { ...state.reviews[activePass], notice: `Cut ${cuts.length} pause${cuts.length === 1 ? "" : "s"}: ${shorter} s shorter. Undo brings them back.` },
+          },
+        }));
       })
       .catch((err) => {
         const store = useJumpCutStore.getState();
@@ -205,57 +199,26 @@ export const SilenceModal: React.FC = () => {
   );
 
   const passPicker = (
-    <Segmented<"noises" | "silence" | "nonSpeech">
+    <Segmented<"silence" | "nonSpeech">
       label="Cleanup pass"
-      value={noisesOpen ? "noises" : activePass}
-      onChange={(pass) => {
-        useNoiseStore.getState().setOpen(pass === "noises");
-        if (pass !== "noises") setActivePass(pass);
-      }}
+      className="w-full [&>button]:flex-1"
+      value={activePass}
+      onChange={setActivePass}
       options={[
-        { value: "noises", label: "1. Mouth noises" },
-        { value: "silence", label: "2. Remove silence" },
-        { value: "nonSpeech", label: "3. Gaps without words" },
+        { value: "silence", label: "Remove silence" },
+        { value: "nonSpeech", label: "Gaps without words" },
       ]}
     />
   );
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setIsSilenceModalOpen(false);
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Jump cuts"
-        className="w-full max-w-xl bg-studio-900 border border-studio-700 rounded-panel shadow-dialog overflow-hidden flex flex-col max-h-[88vh]"
-      >
-        <div className="px-5 py-4 border-b border-studio-800 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-heading text-studio-100">Jump cuts</h2>
-            <p className="text-label text-studio-400">Mute mouth noises, remove silence, then gaps without words. Each pass also works on its own.</p>
-          </div>
-          <IconButton icon={X} label="Close (Esc)" onClick={() => setIsSilenceModalOpen(false)} />
-        </div>
-
-        {noisesOpen ? (
-          <>
-            <div className="px-5 pt-4 pb-4">{passPicker}</div>
-            <NoisePass
-              onClose={() => setIsSilenceModalOpen(false)}
-              onNext={() => {
-                useNoiseStore.getState().setOpen(false);
-                setActivePass("silence");
-              }}
-            />
-          </>
-        ) : (
-        <>
-        <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1">
+    <div className="h-full flex flex-col min-h-0 bg-studio-900/95 select-none">
+        <div className="p-3 space-y-4 overflow-y-auto flex-1 min-h-0">
           <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 rounded-control bg-studio-850 px-3 py-2">
+              <span className="text-meta text-studio-400">First mute mouth noises: muted, they count as silence.</span>
+              <Button size="sm" variant="ghost" onClick={() => requestPanel("noises")}>Mouth noises</Button>
+            </div>
             {passPicker}
             {transcriptAssisted && (
               <p className="text-meta text-studio-400">
@@ -265,9 +228,9 @@ export const SilenceModal: React.FC = () => {
               </p>
             )}
             {!transcriptAssisted && <p className="text-meta text-studio-400">Find very quiet parts from the audio. Saved word timings add protection when available; transcription is optional.</p>}
-            <div className="flex items-center justify-between gap-3 rounded-control bg-studio-850 px-3 py-2">
-              <span className="text-meta text-studio-400">4. Edit words, fillers, and retakes in Transcript.</span>
-              <Button size="sm" variant="ghost" onClick={() => { setIsSilenceModalOpen(false); useWorkspaceStore.getState().setWorkspace("cleanup"); }}>Edit words</Button>
+            <div className="flex items-center justify-between gap-2 rounded-control bg-studio-850 px-3 py-2">
+              <span className="text-meta text-studio-400">Then fillers and retakes, in Transcript.</span>
+              <Button size="sm" variant="ghost" onClick={() => requestPanel("transcript")}>Transcript</Button>
             </div>
           </div>
           <div className="space-y-2">
@@ -368,6 +331,14 @@ export const SilenceModal: React.FC = () => {
                     onChange={e => changeConfig({ ...config, refineWordEdges: e.target.checked })} />
                   Refine quiet word edges
                 </label>}
+                {transcriptAssisted && <label
+                  className="flex items-center gap-2 text-label text-studio-300"
+                  title="Sounds the transcriber tagged between words, like [keyboard clacking] or [laughs]. Off: a gap without words is cut, typing and all."
+                >
+                  <input type="checkbox" checked={config.keepSoundEvents ?? false}
+                    onChange={e => changeConfig({ ...config, keepSoundEvents: e.target.checked })} />
+                  Keep tagged sounds (typing, laughs)
+                </label>}
                 {transcriptAssisted && config.refineWordEdges && slider(
                   "Word edge threshold", config.edgeThresholdDb ?? -42, `${config.edgeThresholdDb ?? -42} dB`,
                   -70, -20, 1, edgeThresholdDb => changeConfig({ ...config, edgeThresholdDb }),
@@ -441,18 +412,21 @@ export const SilenceModal: React.FC = () => {
                 </Button>
               </div>
 
-              <ul className="space-y-1 max-h-64 overflow-y-auto pr-1">
+              <ul className="space-y-1">
                 {activeSilenceBlocks.map((block) => (
                   <li
                     key={block.id}
+                    onClick={() => seekPlayback(block.startUs)}
                     className={cn(
-                      "flex items-center gap-3 rounded-control border px-3 h-11 transition-colors",
-                      block.selected ? "bg-studio-850 border-studio-700" : "bg-transparent border-studio-800 text-studio-500",
+                      "flex items-center gap-3 rounded-control border px-3 h-10 cursor-pointer transition-colors",
+                      playingId === block.id ? "border-accent/60 bg-accent/10" :
+                        block.selected ? "bg-studio-850 border-studio-700" : "bg-transparent border-studio-800 text-studio-500",
                     )}
                   >
                     <input
                       type="checkbox"
                       checked={block.selected}
+                      onClick={(e) => e.stopPropagation()}
                       onChange={() => useJumpCutStore.getState().select(activePass, block.id)}
                       aria-label={`Cut the pause at ${formatTime(block.startUs)}`}
                       className="w-4 h-4 cursor-pointer"
@@ -467,7 +441,10 @@ export const SilenceModal: React.FC = () => {
                       icon={Play}
                       size="sm"
                       label="Listen: play from just before the pause"
-                      onClick={() => audition(block.startUs)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        audition(block.startUs);
+                      }}
                     />
                   </li>
                 ))}
@@ -482,25 +459,18 @@ export const SilenceModal: React.FC = () => {
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-studio-800 bg-studio-900 flex items-center justify-between gap-3">
+        <div className="shrink-0 px-3 py-2 border-t border-studio-800 flex items-center justify-between gap-2">
           <span className="text-meta text-studio-500">Undo brings everything back.</span>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={() => setIsSilenceModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              icon={Scissors}
-              disabled={isDetecting || isApplying || selectedCount === 0 || !openedProject || !silenceAnalysis}
-              onClick={apply}
-            >
-              Apply {selectedCount} cut{selectedCount === 1 ? "" : "s"}
-            </Button>
-          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={Scissors}
+            disabled={isDetecting || isApplying || selectedCount === 0 || !openedProject || !silenceAnalysis}
+            onClick={apply}
+          >
+            Apply {selectedCount} cut{selectedCount === 1 ? "" : "s"}
+          </Button>
         </div>
-        </>
-        )}
-      </div>
     </div>
   );
 };

@@ -26,12 +26,15 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
   const [keyterms, setKeyterms] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [download, setDownload] = useState<ModelDownloadProgress | null>(null);
-  const [downloading, setDownloading] = useState(false);
+  /** Which model is downloading, if any. */
+  const [downloading, setDownloading] = useState<"parakeet" | "aligner" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [aiView, setAiView] = useState<AiSettingsView | null>(null);
   const [aiDraft, setAiDraft] = useState<AiSettings | null>(null);
   const [aiKey, setAiKey] = useState("");
+  /** The OpenRouter key typed in the transcription section. */
+  const [routerKey, setRouterKey] = useState("");
 
   const loadAi = (next: AiSettingsView) => {
     setAiView(next);
@@ -78,15 +81,21 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
         next = await api.transcriptSetApiKey(apiKey.trim());
         setApiKey("");
       }
-      load(next);
       if (aiDraft) {
         let ai = await api.aiSettingsSet(aiDraft);
         if (aiKey.trim()) {
           ai = await api.aiSetApiKey(aiDraft.provider, aiKey.trim());
           setAiKey("");
         }
+        if (routerKey.trim()) {
+          ai = await api.aiSetApiKey("openRouter", routerKey.trim());
+          setRouterKey("");
+        }
         loadAi(ai);
+        // The OpenRouter key is shared, so the transcription view reads it again.
+        next = await api.transcriptSettingsGet();
       }
+      load(next);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1500);
     } catch (err) {
@@ -103,6 +112,16 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
     }
   };
 
+  const removeRouterKey = async () => {
+    setError(null);
+    try {
+      loadAi(await api.aiSetApiKey("openRouter", ""));
+      load(await api.transcriptSettingsGet());
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const removeAiKey = async () => {
     if (!aiDraft) return;
     setError(null);
@@ -113,19 +132,22 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
     }
   };
 
-  const downloadModel = async () => {
-    setDownloading(true);
+  const downloadModel = async (model: "parakeet" | "aligner" = "parakeet") => {
+    setDownloading(model);
     setError(null);
     setDownload(null);
     try {
       if (draft) await api.transcriptSettingsSet(draft);
-      load(await api.transcriptDownloadModel());
+      load(await api.transcriptDownloadModel(model));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
-      setDownloading(false);
+      setDownloading(null);
     }
   };
+
+  const downloadLabel = () =>
+    download ? `${formatMb(download.bytesDone)}${download.bytesTotal ? ` of ${formatMb(download.bytesTotal)}` : ""}` : "Starting";
 
   const input = "w-full bg-studio-800 border border-studio-700 rounded px-2 py-1 text-studio-100";
 
@@ -151,6 +173,11 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                 [
                   ["parakeet", "Parakeet (local)", "NVIDIA Parakeet TDT 0.6B on this computer. Free and private."],
                   ["elevenlabs", "ElevenLabs Scribe (cloud)", "Uploads the audio to ElevenLabs. Needs an API key."],
+                  [
+                    "openrouter",
+                    "Scribe via OpenRouter (cloud)",
+                    "The same Scribe v2, uploaded through OpenRouter and billed to your OpenRouter key (about $0.11 an hour).",
+                  ],
                 ] as const
               ).map(([value, label, hint]) => (
                 <label key={value} className="flex items-start gap-2 p-2 rounded-control border border-studio-800 bg-studio-850/60 cursor-pointer">
@@ -206,24 +233,51 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   {!view.parakeetModelPresent && (
                     <button
                       type="button"
-                      disabled={downloading}
-                      onClick={() => void downloadModel()}
+                      disabled={downloading !== null}
+                      onClick={() => void downloadModel("parakeet")}
                       className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent-hover disabled:opacity-50 text-white"
                     >
                       <Download className="w-3 h-3" />
-                      {downloading
-                        ? download
-                          ? `${formatMb(download.bytesDone)}${download.bytesTotal ? ` of ${formatMb(download.bytesTotal)}` : ""}`
-                          : "Starting"
-                        : "Download"}
+                      {downloading === "parakeet" ? downloadLabel() : "Download"}
                     </button>
                   )}
-                  {downloading && (
+                  {downloading === "parakeet" && (
                     <button type="button" onClick={() => void api.transcriptCancel()} className="text-studio-400 hover:text-white">
                       Cancel
                     </button>
                   )}
                 </div>
+              </div>
+            ) : draft.provider === "openrouter" ? (
+              <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">
+                <label className="block space-y-1">
+                  <span className="flex items-center gap-1 text-studio-400">
+                    <KeyRound className="w-3 h-3" /> OpenRouter API key
+                    {view.openrouterKeySource && (
+                      <span className="ml-auto text-accent-fg">
+                        saved ({view.openrouterKeySource === "environment" ? "from OPENROUTER_API_KEY" : view.openrouterKeySource})
+                      </span>
+                    )}
+                  </span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={routerKey}
+                    placeholder={view.openrouterKeySource ? "Enter a new key to replace it" : "Paste your OpenRouter API key"}
+                    onChange={(e) => setRouterKey(e.target.value)}
+                    className={input}
+                  />
+                  <span className="text-studio-500">The same key OpenRouter review uses below.</span>
+                </label>
+                {view.openrouterKeySource && view.openrouterKeySource !== "environment" && (
+                  <button type="button" onClick={() => void removeRouterKey()} className="text-danger-fg hover:text-danger-fg">
+                    Remove saved key
+                  </button>
+                )}
+                <label className="block space-y-1">
+                  <span className="text-studio-400">Key terms, comma separated (names it should spell right)</span>
+                  <input value={keyterms} onChange={(e) => setKeyterms(e.target.value)} className={input} />
+                </label>
               </div>
             ) : (
               <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">
@@ -261,12 +315,63 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
               </div>
             )}
 
+            <div className="space-y-2 p-3 rounded-control border border-studio-800 bg-studio-850/60">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={draft.alignWords}
+                  disabled={!view.alignerAvailable}
+                  onChange={(e) => setDraft({ ...draft, alignWords: e.target.checked })}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block text-studio-100">Align words to the audio</span>
+                  <span className="text-studio-500">
+                    After transcribing, times every word against the audio (to 20 ms) with a small local model, so cuts at
+                    word edges keep whole words and drop the pauses beside them. Works with either provider; English only.
+                  </span>
+                </span>
+              </label>
+              {!view.alignerAvailable ? (
+                <p className="text-suggest-fg">This build has no local models; word alignment needs a Parakeet build.</p>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {view.alignerModelPresent ? (
+                    <span className="flex items-center gap-1 text-accent-fg">
+                      <Check className="w-3 h-3" /> Alignment model installed
+                    </span>
+                  ) : (
+                    <span className="text-studio-400">
+                      Alignment model not downloaded (about {formatMb(view.alignerModelBytes)}).
+                    </span>
+                  )}
+                  {!view.alignerModelPresent && (
+                    <button
+                      type="button"
+                      disabled={downloading !== null}
+                      onClick={() => void downloadModel("aligner")}
+                      className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent-hover disabled:opacity-50 text-white"
+                    >
+                      <Download className="w-3 h-3" />
+                      {downloading === "aligner" ? downloadLabel() : "Download"}
+                    </button>
+                  )}
+                  {downloading === "aligner" && (
+                    <button type="button" onClick={() => void api.transcriptCancel()} className="text-studio-400 hover:text-white">
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
             {aiDraft && aiView && (
               <div className="space-y-3 pt-4 border-t border-studio-800">
                 <div>
-                  <span className="font-semibold text-studio-300">AI review (filler words and retakes)</span>
+                  <span className="font-semibold text-studio-300">OpenRouter review (filler words and retakes, chapters, shorts)</span>
                   <p className="text-studio-500">
-                    Sends the transcript text, never audio or video, to the provider when you press Find with AI.
+                    Optional. Sends the transcript text, never audio or video, to the provider when you press Find with
+                    OpenRouter. A connected agent reviews fillers and retakes in-house instead, with no key.
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-control p-1">

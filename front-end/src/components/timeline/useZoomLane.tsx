@@ -243,7 +243,8 @@ export function useZoomLane({
           const selected = k.zoomId === selectedZoomId;
           const [startUs, endUs] = zoomDrag && zoomDrag.barId === k.id ? draggedSpan(k, zoomDrag.mode, zoomDrag.deltaUs) : [k.tUs, k.endUs];
           const seconds = ((endUs - startUs) / 1e6).toFixed(1);
-          const kind = k.source === "manual" ? "Manual zoom" : k.origin === "dwell" ? "Hover zoom" : "Click zoom";
+          const kind =
+            k.source === "manual" ? "Manual zoom" : k.origin === "dwell" ? "Hover zoom" : k.origin === "typing" ? "Typing zoom" : "Click zoom";
           return (
             <div
               key={k.id}
