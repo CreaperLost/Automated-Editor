@@ -117,7 +117,8 @@ Tutorials have no captions: if `status` shows them on, `settings` `area: caption
 ## 6. Graphics (ask)
 
 Graphics come after the cuts, on the final timeline: they play full screen over everything and
-no cut goes through one. Ask whether the user wants graphics (default no in automatic mode
+no cut goes through one. A full-screen graphic cuts in and out, never eases; only one laid over
+the full-screen camera eases (the app decides, see Graphics in the skill). Ask whether the user wants graphics (default no in automatic mode
 unless the saved answers say yes). If yes:
 
 1. `graphics`: the templates, the user's library and their variables. If the renderer is not

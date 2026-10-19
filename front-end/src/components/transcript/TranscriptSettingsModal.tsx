@@ -33,6 +33,8 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
   const [aiView, setAiView] = useState<AiSettingsView | null>(null);
   const [aiDraft, setAiDraft] = useState<AiSettings | null>(null);
   const [aiKey, setAiKey] = useState("");
+  /** The OpenRouter key typed in the transcription section. */
+  const [routerKey, setRouterKey] = useState("");
 
   const loadAi = (next: AiSettingsView) => {
     setAiView(next);
@@ -79,15 +81,21 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
         next = await api.transcriptSetApiKey(apiKey.trim());
         setApiKey("");
       }
-      load(next);
       if (aiDraft) {
         let ai = await api.aiSettingsSet(aiDraft);
         if (aiKey.trim()) {
           ai = await api.aiSetApiKey(aiDraft.provider, aiKey.trim());
           setAiKey("");
         }
+        if (routerKey.trim()) {
+          ai = await api.aiSetApiKey("openRouter", routerKey.trim());
+          setRouterKey("");
+        }
         loadAi(ai);
+        // The OpenRouter key is shared, so the transcription view reads it again.
+        next = await api.transcriptSettingsGet();
       }
+      load(next);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1500);
     } catch (err) {
@@ -99,6 +107,16 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
     setError(null);
     try {
       load(await api.transcriptSetApiKey(""));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
+  const removeRouterKey = async () => {
+    setError(null);
+    try {
+      loadAi(await api.aiSetApiKey("openRouter", ""));
+      load(await api.transcriptSettingsGet());
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -155,6 +173,11 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                 [
                   ["parakeet", "Parakeet (local)", "NVIDIA Parakeet TDT 0.6B on this computer. Free and private."],
                   ["elevenlabs", "ElevenLabs Scribe (cloud)", "Uploads the audio to ElevenLabs. Needs an API key."],
+                  [
+                    "openrouter",
+                    "Scribe via OpenRouter (cloud)",
+                    "The same Scribe v2, uploaded through OpenRouter and billed to your OpenRouter key (about $0.11 an hour).",
+                  ],
                 ] as const
               ).map(([value, label, hint]) => (
                 <label key={value} className="flex items-start gap-2 p-2 rounded-control border border-studio-800 bg-studio-850/60 cursor-pointer">
@@ -224,6 +247,37 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                     </button>
                   )}
                 </div>
+              </div>
+            ) : draft.provider === "openrouter" ? (
+              <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">
+                <label className="block space-y-1">
+                  <span className="flex items-center gap-1 text-studio-400">
+                    <KeyRound className="w-3 h-3" /> OpenRouter API key
+                    {view.openrouterKeySource && (
+                      <span className="ml-auto text-accent-fg">
+                        saved ({view.openrouterKeySource === "environment" ? "from OPENROUTER_API_KEY" : view.openrouterKeySource})
+                      </span>
+                    )}
+                  </span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={routerKey}
+                    placeholder={view.openrouterKeySource ? "Enter a new key to replace it" : "Paste your OpenRouter API key"}
+                    onChange={(e) => setRouterKey(e.target.value)}
+                    className={input}
+                  />
+                  <span className="text-studio-500">The same key OpenRouter review uses below.</span>
+                </label>
+                {view.openrouterKeySource && view.openrouterKeySource !== "environment" && (
+                  <button type="button" onClick={() => void removeRouterKey()} className="text-danger-fg hover:text-danger-fg">
+                    Remove saved key
+                  </button>
+                )}
+                <label className="block space-y-1">
+                  <span className="text-studio-400">Key terms, comma separated (names it should spell right)</span>
+                  <input value={keyterms} onChange={(e) => setKeyterms(e.target.value)} className={input} />
+                </label>
               </div>
             ) : (
               <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">

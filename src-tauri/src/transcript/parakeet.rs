@@ -18,11 +18,12 @@ const MODEL_FILES: &[&str] = &[
     "encoder-model.int8.onnx",
 ];
 
-/// Parakeet's encoder attends over the whole chunk, so memory grows with chunk length.
-/// Ninety seconds fits comfortably on 6-8 GB GPUs.
+/// Parakeet was trained on short utterances: given 90 s at once it went silent for over a
+/// minute of clear speech (48 words where 30 s and 15 s chunks found 175). Chunks of 16-24 s,
+/// split at the quietest moment, stay where it is reliable.
 pub const PLAN: ChunkPlan = ChunkPlan {
-    max_chunk_us: 90_000_000,
-    search_window_us: 15_000_000,
+    max_chunk_us: 24_000_000,
+    search_window_us: 8_000_000,
 };
 
 pub fn default_model_dir() -> PathBuf {
@@ -413,6 +414,54 @@ mod tests {
         assert!(model_present(dir.path()));
         std::fs::remove_file(dir.path().join("vocab.txt")).unwrap();
         assert!(!model_present(dir.path()));
+    }
+
+    /// `AEROEDITS_PARAKEET_PROBE=<16 kHz mono wav>;<from s>;<to s>;<chunk s>[,<chunk s>]`
+    #[cfg(feature = "parakeet")]
+    #[test]
+    #[ignore]
+    fn parakeet_chunk_probe() {
+        use super::super::audio::AudioChunk;
+        use super::super::provider::ChunkTranscriber;
+        let spec = std::env::var("AEROEDITS_PARAKEET_PROBE").unwrap();
+        let parts: Vec<&str> = spec.split(';').collect();
+        let mut reader = crate::project::pcm::PcmReader::open(Path::new(parts[0])).unwrap();
+        let from = (parts[1].parse::<f64>().unwrap() * 16_000.0) as usize;
+        let to = (parts[2].parse::<f64>().unwrap() * 16_000.0) as usize;
+        let mut all = vec![0f32; reader.info().frame_count as usize];
+        let len = all.len();
+        let n = reader.read_frames(&mut all, len).unwrap();
+        let samples = &all[from..to.min(n)];
+        let mut model = ParakeetTranscriber::new(&default_model_dir()).unwrap();
+        for chunk_s in parts[3].split(',') {
+            let len = (chunk_s.parse::<f64>().unwrap() * 16_000.0) as usize;
+            let mut words = Vec::new();
+            for (i, piece) in samples.chunks(len).enumerate() {
+                let offset = from + i * len;
+                let result = model
+                    .transcribe_chunk(&AudioChunk {
+                        source_start_us: 0,
+                        samples: piece.to_vec(),
+                    })
+                    .unwrap();
+                for w in result.words {
+                    words.push((w.source_start_us + offset as u64 * 1_000_000 / 16_000, w.text));
+                }
+            }
+            println!("--- {chunk_s} s chunks: {} words", words.len());
+            let mut line = String::new();
+            let mut second = u64::MAX;
+            for (start, text) in &words {
+                if start / 10_000_000 != second {
+                    second = start / 10_000_000;
+                    println!("{line}");
+                    line = format!("[{:>4}s]", start / 1_000_000);
+                }
+                line.push(' ');
+                line.push_str(text);
+            }
+            println!("{line}");
+        }
     }
 
     #[cfg(not(feature = "parakeet"))]

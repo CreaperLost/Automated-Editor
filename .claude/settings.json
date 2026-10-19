@@ -1,16 +1,2 @@
 {
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "shell": "powershell",
-            "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"$env:CLAUDE_PROJECT_DIR/scripts/auto-build-installer.ps1\"",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
 }

@@ -604,6 +604,15 @@ fn apply(transcript: &mut Transcript, new_times: &[Option<(u64, u64)>]) -> Align
         }
         word.source_end_us = word.source_end_us.max(word.source_start_us);
     }
+    // Stretches are aligned one at a time, in windows that overlap, so the last word of one can
+    // land after the first word of the next (or after a tagged sound that kept its times). No
+    // word starts before the one ahead of it.
+    let mut previous_start = 0u64;
+    for word in &mut transcript.words {
+        word.source_start_us = word.source_start_us.max(previous_start);
+        word.source_end_us = word.source_end_us.max(word.source_start_us);
+        previous_start = word.source_start_us;
+    }
     let info = AlignmentInfo {
         model: MODEL_NAME.into(),
         version: ALIGN_VERSION,
@@ -916,6 +925,50 @@ mod tests {
         );
         let b = &overlapping.words[1];
         assert_eq!((b.source_start_us, b.source_end_us), (500_000, 800_000));
+    }
+
+    #[test]
+    fn words_of_neighbouring_stretches_stay_in_time_order() {
+        let mut typing = word("[typing]", 1_000, 1_100);
+        typing.kind = WordKind::AudioEvent;
+        let mut transcript = Transcript::new(
+            "mic".into(),
+            ProviderKind::Parakeet,
+            "parakeet".into(),
+            None,
+            vec![
+                word("end", 400, 600),
+                word("start", 650, 900),
+                typing,
+                word("next", 1_150, 1_300),
+            ],
+        );
+        // "end" was aligned in its stretch's padded window, past where "start" was aligned in
+        // the next stretch; "next" grew back over the tagged sound.
+        apply(
+            &mut transcript,
+            &[
+                Some((700_000, 800_000)),
+                Some((600_000, 900_000)),
+                None,
+                Some((1_030_000, 1_300_000)),
+            ],
+        );
+        let times: Vec<_> = transcript
+            .words
+            .iter()
+            .map(|w| (w.source_start_us, w.source_end_us))
+            .collect();
+        assert_eq!(
+            times,
+            vec![
+                (700_000, 800_000),
+                (700_000, 900_000),
+                (1_000_000, 1_100_000),
+                (1_030_000, 1_300_000)
+            ]
+        );
+        transcript.validate().unwrap();
     }
 
     #[test]

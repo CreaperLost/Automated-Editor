@@ -1234,7 +1234,7 @@ export interface SegmentPage {
 }
 
 // Transcription (src-tauri/src/transcript)
-export type TranscriptProvider = "parakeet" | "elevenlabs";
+export type TranscriptProvider = "parakeet" | "elevenlabs" | "openrouter";
 
 export interface TranscriptSettings {
   provider: TranscriptProvider;
@@ -1249,6 +1249,8 @@ export interface TranscriptSettings {
 export interface TranscriptSettingsView {
   settings: TranscriptSettings;
   elevenlabsKeySource: "keychain" | "file" | "environment" | null;
+  /** The OpenRouter key, shared with AI review. */
+  openrouterKeySource: "keychain" | "file" | "environment" | null;
   parakeetAvailable: boolean;
   parakeetAccelerator: string;
   parakeetModelDir: string;

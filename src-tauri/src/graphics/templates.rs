@@ -1,5 +1,6 @@
 //! The graphics the app ships, made for tutorials. Each is a full-screen HyperFrames
-//! composition with a transparent page (its card fades in and out over the video), laid out in
+//! composition with a transparent page and a card that fills the frame, so it cuts in and out
+//! (it fades only when the app asks, see [`super::Entrance`]), laid out in
 //! the viewport so it fits a 16:9 video and a 9:16 short alike, animated with the Web
 //! Animations API (no library, no network), with its text and colours as variables.
 use serde::Serialize;

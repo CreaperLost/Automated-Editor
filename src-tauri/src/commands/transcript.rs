@@ -212,6 +212,15 @@ pub fn transcript_run_impl(
                 .with_cancel(transcripts.cancel.clone()),
             )
         }
+        ProviderKind::OpenRouter => {
+            let key = settings::openrouter_key(&dir)
+                .map(|(k, _)| k)
+                .ok_or("Add your OpenRouter API key in transcription settings first")?;
+            Box::new(
+                ScribeTranscriber::via_openrouter(key, language, config.keyterms.clone())?
+                    .with_cancel(transcripts.cancel.clone()),
+            )
+        }
         ProviderKind::Parakeet => {
             progress(TranscriptionProgress {
                 track_id: track_id.clone(),

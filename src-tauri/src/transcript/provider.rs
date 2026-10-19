@@ -16,6 +16,9 @@ pub enum ProviderKind {
     /// ElevenLabs Scribe, a cloud API.
     #[serde(rename = "elevenlabs")]
     ElevenLabs,
+    /// ElevenLabs Scribe v2 through OpenRouter, on the OpenRouter key.
+    #[serde(rename = "openrouter")]
+    OpenRouter,
 }
 
 impl ProviderKind {
@@ -23,6 +26,7 @@ impl ProviderKind {
         match self {
             ProviderKind::Parakeet => "Parakeet (local)",
             ProviderKind::ElevenLabs => "ElevenLabs Scribe",
+            ProviderKind::OpenRouter => "Scribe via OpenRouter",
         }
     }
 }

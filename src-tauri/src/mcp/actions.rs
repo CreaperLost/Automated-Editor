@@ -72,7 +72,8 @@ pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "transcribe",
         description: "Transcribes a sound with `provider` (parakeet: local and free; elevenlabs: \
-            Scribe, cloud, the user's key), which becomes the saved choice; default the one in \
+            Scribe, cloud, the user's ElevenLabs key; openrouter: the same Scribe through \
+            OpenRouter, the user's OpenRouter key), which becomes the saved choice; default the one in \
             the transcription settings. Default sound: the speech on the timeline. Skips a sound \
             already transcribed unless `force`. Takes a while; reports progress.",
         schema: schema::<TranscribeArgs>,
@@ -325,9 +326,13 @@ pub static ACTIONS: [ToolDef; 36] = [
             uses), for a composition of your own; answers with HyperFrames' lint of it. Its \
             folder is in `graphics`; with a shell you can write there directly. Rules: a \
             HyperFrames composition, full-screen over the video, laid out with vw/vh/vmin so it \
-            fits 16:9 and 9:16; a transparent page with a background you fade in and out; no \
-            network (no CDN scripts or web fonts); Web Animations or CSS, finite and paused; \
-            editable text as data-composition-variables.",
+            fits 16:9 and 9:16; a transparent page with a background of your own; a graphic \
+            that fills the frame never eases in or out: show it whole from the first frame to \
+            the last, and fade or slide it in and out only when the root's data-entrance is \
+            \"ease\" (the app sets that only for an overlay over the full-screen camera; mark a \
+            lower third or callout with data-overlay on the root); no network (no CDN scripts \
+            or web fonts); Web Animations or CSS, finite and paused; editable text as \
+            data-composition-variables.",
         schema: schema::<GraphicWriteArgs>,
         read_only: false,
         run: graphic_write_file,
@@ -335,8 +340,9 @@ pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "graphic_render",
         description: "Renders the graphics (or one) for the video's canvas now, waiting, and \
-            reports each one's lint and render. Look at the result with frame_render at a time \
-            inside the graphic.",
+            reports each one's lint, render and whether it cuts in and out or eases (only an \
+            overlay over the full-screen camera eases). Look at the result with frame_render at \
+            a time inside the graphic.",
         schema: schema::<GraphicRenderArgs>,
         read_only: true,
         run: graphic_render,
@@ -347,7 +353,8 @@ pub static ACTIONS: [ToolDef; 36] = [
             for the user's library: returns its source, what the app already sees in it (network \
             references, missing brand colours, fixed text) and the rules to rewrite it by (text \
             as variables, brand kit colours, timing from data-duration, viewport layout with a \
-            portrait block, a fading card, no network). Rewrite its files, then graphic_check.",
+            portrait block, a cut unless data-entrance is \"ease\", no network). Rewrite its \
+            files, then graphic_check.",
         schema: schema::<GraphicOnlyArgs>,
         read_only: true,
         run: graphic_templatize,
@@ -860,7 +867,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Some(reason) => format!("{name} not ready: {reason}"),
     };
     lines.push(format!(
-        "Transcribers: {}; {}. Saved choice: {}.",
+        "Transcribers: {}; {}; {}. Saved choice: {}.",
         ready(
             crate::transcript::ProviderKind::Parakeet,
             "parakeet",
@@ -870,6 +877,11 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             crate::transcript::ProviderKind::ElevenLabs,
             "elevenlabs",
             "Scribe, cloud, the user's key"
+        ),
+        ready(
+            crate::transcript::ProviderKind::OpenRouter,
+            "openrouter",
+            "the same Scribe through OpenRouter, the user's OpenRouter key"
         ),
         one_line(&view.settings.provider).trim_matches('"'),
     ));
@@ -1077,8 +1089,9 @@ pub struct TranscribeArgs {
     /// Transcribe again even if it already is.
     #[serde(default)]
     pub force: bool,
-    /// parakeet (local, free) or elevenlabs (Scribe, cloud, the user's key). It becomes the
-    /// saved choice. Default: the one in the transcription settings.
+    /// parakeet (local, free), elevenlabs (Scribe, cloud, the user's ElevenLabs key) or
+    /// openrouter (Scribe through OpenRouter, the user's OpenRouter key). It becomes the saved
+    /// choice. Default: the one in the transcription settings.
     #[serde(default)]
     pub provider: Option<Transcriber>,
 }
@@ -1088,6 +1101,7 @@ pub struct TranscribeArgs {
 pub enum Transcriber {
     Parakeet,
     Elevenlabs,
+    Openrouter,
 }
 
 impl Transcriber {
@@ -1095,6 +1109,7 @@ impl Transcriber {
         match self {
             Transcriber::Parakeet => crate::transcript::ProviderKind::Parakeet,
             Transcriber::Elevenlabs => crate::transcript::ProviderKind::ElevenLabs,
+            Transcriber::Openrouter => crate::transcript::ProviderKind::OpenRouter,
         }
     }
 }
@@ -1112,6 +1127,9 @@ fn not_ready(
         ),
         ElevenLabs if view.elevenlabs_key_source.is_none() => {
             Some("no ElevenLabs key is set (Transcription settings in the app)".into())
+        }
+        OpenRouter if view.openrouter_key_source.is_none() => {
+            Some("no OpenRouter key is set (Transcription settings in the app)".into())
         }
         _ => None,
     }
@@ -3573,6 +3591,18 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             }
         }
     }
+    for spec in &specs {
+        lines.push(format!(
+            "{} \"{}\" ({:.1} s): {}",
+            spec.asset_id,
+            spec.name,
+            spec.length_us as f64 / 1e6,
+            match spec.entrance {
+                crate::graphics::Entrance::Cut => "cuts in and out",
+                crate::graphics::Entrance::Ease => "eases in and out over the full-screen camera",
+            }
+        ));
+    }
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let started = std::time::Instant::now();
     crate::graphics::render::ensure(&specs, &cancel, &mut |fraction, label| {
@@ -3607,16 +3637,21 @@ an item per line. No text written into the markup that no variable fills.
 use var(--background), var(--text), var(--accent)), so the user's brand kits apply. Tints come \
 from color-mix() or opacity, not new hex colours.
 3. Timing: read the length from the root's data-duration (parseFloat(root.dataset.duration) * \
-1000) and place every animation as a share of it: in over about 300 ms, out over the last \
-450 ms, nothing at fixed end times, so it fits any clip length.
+1000) and place every animation as a share of it: when it eases, in over about 300 ms and out \
+over the last 450 ms; nothing at fixed end times, so it fits any clip length.
 4. Layout: vw/vh/vmin with flex or grid, no px sizes; text wraps (max-width, never nowrap) and \
 long text still fits; an @media (orientation: portrait) block re-flows it for 9:16 shorts.
-5. Page: transparent, with a card (var(--background)) that fades in and out, so the first and \
-last frames are see-through. A graphic meant to hold to the end of its clip (an end card) puts \
-data-holds-end on the root element and fades in only; its first frame is still see-through.
+5. In and out: the page is transparent, with a card (var(--background)). A graphic that fills \
+the frame never eases in or out: the app sets data-entrance=\"cut\" on the root and the card \
+shows whole from the first frame to the last. Only a graphic over the full-screen camera eases: \
+the app sets data-entrance=\"ease\" and the card fades (or slides) in and out, so the first and \
+last frames are see-through. So fade only when root.dataset.entrance === \"ease\". A graphic \
+that covers only part of the frame (a lower third, a callout) puts data-overlay on the root; \
+without it the app treats it as full screen and always cuts it. A graphic meant to hold to the \
+end of its clip (an end card) puts data-holds-end on the root and, when it eases, fades in only.
 6. No network: no CDN scripts, web fonts or http(s) URLs; images and fonts go beside index.html.
-Then graphic_check, which renders it at 16:9 and 9:16, 3 s and 8 s, with long text and with \
-each text variable changed, and says what fails. Fix and check again until it passes; then ask \
+Then graphic_check, which renders it at 16:9 and 9:16, 3 s and 8 s, eased and cut, with long \
+text and with each text variable changed, and says what fails. Fix and check again until it passes; then ask \
 the user to keep it and call library_save with a label, a one-line useWhen and lengthUs.";
 
 fn graphic_templatize(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {

@@ -485,9 +485,112 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
     Ok(())
 }
 
+/// How a graphic comes on and goes off. The app decides it from where the graphic plays and
+/// sets it on the root as `data-entrance` when it renders; the composition reads it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Entrance {
+    /// Shown whole from its first frame to its last: no fade or slide in or out. Every graphic
+    /// that fills the frame, and every graphic over the screen.
+    #[default]
+    Cut,
+    /// Its card fades (or slides) in and out: only a graphic laid over the full-screen camera,
+    /// such as a lower third on a camera-only stretch.
+    Ease,
+}
+
+impl Entrance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Entrance::Cut => "cut",
+            Entrance::Ease => "ease",
+        }
+    }
+}
+
+/// On the root: a graphic that covers only part of the frame (a lower third, a callout), so it
+/// may ease in and out over the full-screen camera. Without it a graphic fills the frame.
+pub const OVERLAY_ATTR: &str = "data-overlay";
+
+/// Whether the root composition element's opening tag has attribute `name`.
+pub fn root_has(html: &str, name: &str) -> bool {
+    let Some(at) = html.find("data-composition-id") else {
+        return false;
+    };
+    let start = html[..at].rfind('<').unwrap_or(0);
+    let end = html[at..].find('>').map_or(html.len(), |e| at + e);
+    html[start..end]
+        .split(|c: char| c.is_whitespace() || c == '<')
+        .any(|word| word == name || word.starts_with(&format!("{name}=")))
+}
+
+/// Whether the composition says it covers only part of the frame ([`OVERLAY_ATTR`]).
+pub fn is_overlay(html: &str) -> bool {
+    root_has(html, OVERLAY_ATTR)
+}
+
+/// Where the camera fills the frame on `document`'s timeline, sorted and merged: a short's
+/// camera scenes, or the video's webcam focus. Empty when the camera is off.
+pub fn full_camera_ranges(document: &crate::project::revision::EditDocument) -> Vec<(u64, u64)> {
+    if !document.layout.webcam_enabled {
+        return Vec::new();
+    }
+    let ranges: Vec<(u64, u64)> = match &document.short_layout {
+        Some(short) => crate::short_scenes::edited_ranges(&short.scenes, |media| {
+            document
+                .clock_asset(media)
+                .map(|asset| document.asset_clock(asset))
+        })
+        .into_iter()
+        .filter(|r| r.2 == crate::short_scenes::SceneMode::Camera)
+        .map(|r| (r.0, r.1))
+        .collect(),
+        None => document
+            .webcam_focus
+            .edited_ranges(&document.focus_clock()),
+    };
+    let mut ranges: Vec<(u64, u64)> = ranges.into_iter().filter(|r| r.1 > r.0).collect();
+    ranges.sort();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (a, b) in ranges {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 + ENTRANCE_SLACK_US => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
+}
+
+/// About a frame: a graphic this close to a camera stretch's ends is still over it.
+const ENTRANCE_SLACK_US: u64 = 34_000;
+
+/// How graphic clip `clip` comes on and goes off, given where the camera fills the frame
+/// ([`full_camera_ranges`]). It eases only when it plays wholly over the full-screen camera and
+/// does not fill the frame itself; `fills_frame` is asked only then.
+pub fn entrance_for(
+    full_camera: &[(u64, u64)],
+    clip: &crate::sequence::Clip,
+    fills_frame: impl FnOnce() -> bool,
+) -> Entrance {
+    let over_camera = full_camera.iter().any(|&(a, b)| {
+        a <= clip.start_us + ENTRANCE_SLACK_US && clip.end_us() <= b + ENTRANCE_SLACK_US
+    });
+    if over_camera && !fills_frame() {
+        Entrance::Ease
+    } else {
+        Entrance::Cut
+    }
+}
+
 /// Sets the root composition's `data-*` attributes and the viewport to the canvas a render is
-/// for. The composition lays itself out in the viewport, so one source fits any canvas.
-pub fn size_composition(html: &str, width: u32, height: u32, seconds: f64) -> String {
+/// for, and how it comes on and goes off. The composition lays itself out in the viewport, so
+/// one source fits any canvas.
+pub fn size_composition(
+    html: &str,
+    width: u32,
+    height: u32,
+    seconds: f64,
+    entrance: Entrance,
+) -> String {
     let mut html = html.to_string();
     if let Some(at) = html.find("data-composition-id") {
         let start = html[..at].rfind('<').unwrap_or(0);
@@ -496,6 +599,7 @@ pub fn size_composition(html: &str, width: u32, height: u32, seconds: f64) -> St
         tag = set_attribute(&tag, "data-width", &width.to_string());
         tag = set_attribute(&tag, "data-height", &height.to_string());
         tag = set_attribute(&tag, "data-duration", &format!("{seconds:.3}"));
+        tag = set_attribute(&tag, "data-entrance", entrance.as_str());
         html.replace_range(start..end, &tag);
     }
     if let Some(at) = html.find("name=\"viewport\"") {
@@ -628,14 +732,105 @@ mod tests {
     #[test]
     fn the_root_and_viewport_take_the_canvas_size() {
         let html = "<meta name=\"viewport\" content=\"width=1920, height=1080\" />\n<div\n  id=\"root\"\n  data-composition-id=\"graphic\"\n  data-width=\"1920\"\n  data-height=\"1080\"\n  data-duration=\"4\"\n>";
-        let sized = size_composition(html, 1080, 1920, 6.5);
+        let sized = size_composition(html, 1080, 1920, 6.5, Entrance::Cut);
         assert!(sized.contains("data-width=\"1080\""), "{sized}");
         assert!(sized.contains("data-height=\"1920\""));
         assert!(sized.contains("data-duration=\"6.500\""));
+        assert!(sized.contains("data-entrance=\"cut\""));
         assert!(sized.contains("content=\"width=1080, height=1920\""));
         // A root without the attributes gets them.
-        let bare = size_composition("<div data-composition-id=\"g\">", 640, 360, 2.0);
+        let bare = size_composition("<div data-composition-id=\"g\">", 640, 360, 2.0, Entrance::Ease);
         assert!(bare.contains("data-width=\"640\"") && bare.contains("data-duration=\"2.000\""));
+        assert!(bare.contains("data-entrance=\"ease\""), "{bare}");
+        // Rendering again replaces it rather than adding a second one.
+        let again = size_composition(&sized, 1080, 1920, 6.5, Entrance::Ease);
+        assert_eq!(again.matches("data-entrance").count(), 1, "{again}");
+        assert!(again.contains("data-entrance=\"ease\""));
+    }
+
+    fn graphic_clip(start_us: u64, duration_us: u64) -> crate::sequence::Clip {
+        crate::sequence::Clip {
+            id: "g1".into(),
+            asset: "graphic-1".into(),
+            stream: "v".into(),
+            start_us,
+            in_us: 0,
+            duration_us,
+            link: None,
+            fit: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_graphic_filling_the_frame_always_cuts() {
+        let camera = [(0, 20_000_000)];
+        // Over the screen, and over the full-screen camera: a full-screen card cuts either way.
+        assert_eq!(
+            entrance_for(&[], &graphic_clip(1_000_000, 4_000_000), || true),
+            Entrance::Cut
+        );
+        assert_eq!(
+            entrance_for(&camera, &graphic_clip(1_000_000, 4_000_000), || true),
+            Entrance::Cut
+        );
+    }
+
+    #[test]
+    fn an_overlay_eases_only_over_the_full_screen_camera() {
+        let camera = [(2_000_000, 10_000_000)];
+        let overlay = || false;
+        // Wholly over the camera stretch: it eases.
+        assert_eq!(
+            entrance_for(&camera, &graphic_clip(3_000_000, 4_000_000), overlay),
+            Entrance::Ease
+        );
+        // A frame's slack at the stretch's ends still counts.
+        assert_eq!(
+            entrance_for(&camera, &graphic_clip(1_990_000, 8_020_000), overlay),
+            Entrance::Ease
+        );
+        // Over the screen, or running past the camera stretch: it cuts.
+        assert_eq!(
+            entrance_for(&[], &graphic_clip(3_000_000, 4_000_000), overlay),
+            Entrance::Cut
+        );
+        assert_eq!(
+            entrance_for(&camera, &graphic_clip(8_000_000, 4_000_000), overlay),
+            Entrance::Cut
+        );
+        assert_eq!(
+            entrance_for(&camera, &graphic_clip(500_000, 4_000_000), overlay),
+            Entrance::Cut
+        );
+    }
+
+    #[test]
+    fn the_overlay_mark_is_read_from_the_root() {
+        assert!(is_overlay(
+            "<div id=\"root\" data-composition-id=\"g\" data-overlay data-duration=\"3\">"
+        ));
+        assert!(is_overlay("<div\n  data-composition-id=\"g\"\n  data-overlay\n>"));
+        assert!(!is_overlay(
+            "<div data-composition-id=\"g\"></div><div data-overlay></div>"
+        ));
+        assert!(!is_overlay("<div data-composition-id=\"g\" data-overlay-ish>"));
+        for template in templates::all() {
+            assert!(!is_overlay(template.html()), "{} fills the frame", template.name);
+        }
+    }
+
+    #[test]
+    fn every_template_cuts_unless_told_to_ease() {
+        // The bundled cards fill the frame, so their fades run only when the app asks for an
+        // ease (a template in a short's slot over a camera scene), never by default.
+        for template in templates::all() {
+            let html = template.html();
+            assert!(
+                html.contains("root.dataset.entrance === \"ease\""),
+                "{} does not read data-entrance",
+                template.name
+            );
+        }
     }
 
     #[test]

@@ -270,6 +270,8 @@ pub struct SceneEvaluator {
     webcam_focus: std::cell::OnceCell<Vec<(u64, u64)>>,
     /// A short's scenes on its timeline.
     short_scenes: std::cell::OnceCell<Vec<(u64, u64, crate::short_scenes::SceneMode)>>,
+    /// Where the camera fills the frame, for the graphics that ease in over it.
+    full_camera: std::cell::OnceCell<Vec<(u64, u64)>>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The last cue drawn and its colored frame for the active word.
@@ -547,6 +549,7 @@ impl SceneEvaluator {
             wallpaper,
             webcam_focus: std::cell::OnceCell::new(),
             short_scenes: std::cell::OnceCell::new(),
+            full_camera: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -1038,12 +1041,16 @@ impl SceneEvaluator {
     fn graphic_job(&self, clip: &Clip, local_us: u64) -> Option<PictureJob> {
         use crate::graphics::render::{self, Lookup};
         let asset = self.document.asset(&clip.asset)?;
+        let full_camera = self
+            .full_camera
+            .get_or_init(|| crate::graphics::full_camera_ranges(&self.document));
         let spec = render::Spec::for_clip(
             &self.root,
             &self.document,
             asset,
             clip,
             (self.width, self.height),
+            full_camera,
         );
         // Never past a render's last frame.
         let last_frame = 1_000_000 / render::RENDER_FPS as u64;
@@ -3619,6 +3626,7 @@ mod tests {
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
             short_scenes: std::cell::OnceCell::new(),
+            full_camera: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -3678,6 +3686,7 @@ mod tests {
             wallpaper: std::cell::OnceCell::new(),
             webcam_focus: std::cell::OnceCell::new(),
             short_scenes: std::cell::OnceCell::new(),
+            full_camera: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -3959,6 +3968,83 @@ mod tests {
             .unwrap();
         let last = scene.layers.last().unwrap();
         assert_eq!((last.x, last.y, last.width, last.height), (0, 0, 160, 90));
+    }
+
+    #[test]
+    fn only_a_graphic_over_the_full_screen_camera_eases() {
+        use crate::graphics::Entrance;
+        use crate::shorts::GraphicSlot;
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let lower_third =
+            crate::graphics::create(dir.path(), "blank", None, &serde_json::Map::new()).unwrap();
+        let html_path = std::path::Path::new(&lower_third.path).join(crate::graphics::ENTRY);
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        std::fs::write(
+            &html_path,
+            html.replacen("data-composition-id=\"graphic\"", "data-composition-id=\"graphic\" data-overlay", 1),
+        )
+        .unwrap();
+        crate::graphics::render::sources_changed();
+        let clip = |id: &str, asset: &str| Clip {
+            id: id.into(),
+            asset: asset.into(),
+            stream: "picture".into(),
+            start_us: 1_000_000,
+            in_us: 0,
+            duration_us: 3_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+        };
+        let (card_clip, lower_clip) = (clip("g1", &card.id), clip("g2", &lower_third.id));
+        document.assets.push(card.clone());
+        document.assets.push(lower_third.clone());
+        let camera = [(0, 5_000_000)];
+        let entrance = |document: &EditDocument, asset, clip, full_camera: &[(u64, u64)]| {
+            crate::graphics::render::Spec::for_clip(
+                dir.path(),
+                document,
+                asset,
+                clip,
+                (160, 90),
+                full_camera,
+            )
+            .entrance
+        };
+        // The 16:9 video: the full-screen card cuts, over the camera or not.
+        assert_eq!(entrance(&document, &card, &card_clip, &camera), Entrance::Cut);
+        assert_eq!(entrance(&document, &card, &card_clip, &[]), Entrance::Cut);
+        // The lower third eases over the full-screen camera, and cuts over the screen.
+        assert_eq!(
+            entrance(&document, &lower_third, &lower_clip, &camera),
+            Entrance::Ease
+        );
+        assert_eq!(entrance(&document, &lower_third, &lower_clip, &[]), Entrance::Cut);
+        // A short: the card on the whole frame still cuts; in the camera's part of the split it
+        // covers only part of the frame, so over a camera scene it eases.
+        let short: crate::shorts::Short = serde_json::from_value(serde_json::json!({
+            "id": "s1", "title": "Short", "media": "logo",
+            "sourceStartUs": 0, "sourceEndUs": 5_000_000
+        }))
+        .unwrap();
+        let mut short_document = crate::shorts::short_document(&document, &short, false).unwrap();
+        assert_eq!(
+            entrance(&short_document, &card, &card_clip, &camera),
+            Entrance::Cut
+        );
+        let layout = short_document.short_layout.as_mut().unwrap();
+        layout.graphic_slots.insert("g1".into(), GraphicSlot::Camera);
+        assert_eq!(
+            entrance(&short_document, &card, &card_clip, &camera),
+            Entrance::Ease
+        );
+        assert_eq!(entrance(&short_document, &card, &card_clip, &[]), Entrance::Cut);
+        // Without a camera nothing fills the frame with it.
+        let mut no_camera = document.clone();
+        no_camera.layout.webcam_enabled = false;
+        assert!(crate::graphics::full_camera_ranges(&no_camera).is_empty());
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the

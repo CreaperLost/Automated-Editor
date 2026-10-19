@@ -144,11 +144,14 @@
       play("bar", [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }], 250, 600);
       play("title", rise, 300, 700);
       play("subtitle", rise, 480, 700);
-      // The page is transparent: the card fades in over the video and out again.
-      document.getElementById("card-back").animate(
-        [{ opacity: 0 }, { opacity: 1, offset: 300 / length }, { opacity: 1, offset: outAt / length }, { opacity: 0 }],
-        { duration: length, fill: "both", iterations: 1 },
-      ).pause();
+      // The card fills the frame, so it cuts in and out. Only when AeroEdits asks for an ease
+      // (in a short's slot over the full-screen camera) does it fade in and out again.
+      if (root.dataset.entrance === "ease") {
+        document.getElementById("card-back").animate(
+          [{ opacity: 0 }, { opacity: 1, offset: 300 / length }, { opacity: 1, offset: outAt / length }, { opacity: 0 }],
+          { duration: length, fill: "both", iterations: 1 },
+        ).pause();
+      }
     </script>
   </body>
 </html>

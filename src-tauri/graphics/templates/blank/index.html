@@ -4,9 +4,17 @@
   - It plays full screen over the video (16:9, or a short's 9:16), so lay it out in the
     viewport with vw/vh/vmin and an @media (orientation: portrait) block; AeroEdits sets the
     root's data-width, data-height and data-duration to the canvas and clip when it renders.
-  - Keep the page transparent and fade your own background in and out (#card-back below), so
-    the graphic eases over the video instead of cutting. A graphic that holds to the end of
-    its clip (an end card) says so with data-holds-end on the root and fades in only.
+  - Keep the page transparent and draw your own background (#card-back below).
+  - In and out: a graphic that fills the frame never eases in or out; it cuts. Only a graphic
+    laid over the full-screen camera eases. AeroEdits decides which from where the graphic
+    plays and sets data-entrance on the root to "cut" or "ease": show the card whole from the
+    first frame to the last unless root.dataset.entrance is "ease", and only then fade or
+    slide it in and out. A graphic that covers only part of the frame (a lower third, a
+    callout) says so with data-overlay on the root; without it AeroEdits treats the graphic
+    as full screen and always cuts it. Motion inside the card (text rising, a bar growing) is
+    fine either way.
+  - A graphic that holds to the end of its clip (an end card) says so with data-holds-end on
+    the root and, when it eases, fades in only.
   - No network: no CDN scripts or web fonts. Use the Web Animations API (element.animate,
     finite, fill "both", paused) or CSS; put any images next to this file.
   - Declare what should be editable in data-composition-variables on <html>; read values with
@@ -76,6 +84,8 @@
       const root = document.getElementById("root");
       const length = (parseFloat(root.dataset.duration) || 4) * 1000;
       const outAt = Math.max(1200, length - 450);
+      // Full screen: cut in and out unless AeroEdits asks for an ease (see the note above).
+      const eases = root.dataset.entrance === "ease";
       const fade = (id, delay) =>
         document
           .getElementById(id)
@@ -89,8 +99,10 @@
             { duration: length, delay, fill: "both", iterations: 1 },
           )
           .pause();
-      fade("card-back", 0);
-      fade("layout", 0);
+      if (eases) {
+        fade("card-back", 0);
+        fade("layout", 0);
+      }
     </script>
   </body>
 </html>

@@ -5,8 +5,11 @@
 //! files, then at staged copies of it rendered through the pinned HyperFrames:
 //! - `hyperframes check` (lint, runtime errors, layout overflow, contrast) at 16:9 and 9:16,
 //!   with the graphic's own values and again with long test values for every string variable;
-//! - stills of a 3 s copy and an 8 s copy: the first and last see-through, the card shown in
-//!   between, so its timing follows the length;
+//! - stills of a 3 s copy and an 8 s copy, eased in and out as over the full-screen camera: the
+//!   first and last see-through, the card shown in between, so its timing follows the length;
+//! - stills of a 3 s copy the app cuts in and out (`data-entrance="cut"`, as everywhere else):
+//!   the card shown whole on the first and last frames, and whether it fills the frame matches
+//!   its `data-overlay` mark;
 //! - one copy per string variable with another value, whose stills must differ from the plain
 //!   ones.
 //!
@@ -27,7 +30,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Bumped when the checks change, so older results are not reused.
-const GATE_VERSION: u32 = 1;
+const GATE_VERSION: u32 = 2;
 /// The two lengths the gate plays a graphic at.
 pub const SHORT_US: u64 = 3_000_000;
 pub const LONG_US: u64 = 8_000_000;
@@ -40,6 +43,12 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(180);
 const SEE_THROUGH_MAX: f64 = 0.005;
 /// The card shows when at least this share of the frame is nearly opaque (alpha 200 or more).
 const SHOWN_MIN: f64 = 0.02;
+/// A graphic fills the frame when its card covers at least this share of it.
+const FILLS_MIN: f64 = 0.9;
+/// A graphic that covers less than this share is an overlay (a lower third, a callout).
+const OVERLAY_MAX: f64 = 0.6;
+/// Cut in, the first and last frames show at least this share of what the card covers.
+const CUT_SHOWN_SHARE: f64 = 0.5;
 /// A variable changes the picture when this many pixels differ.
 const CHANGED_PIXELS: usize = 100;
 /// What a string variable is set to, to see that it changes the picture.
@@ -522,6 +531,8 @@ struct Run {
     values: Map<String, Value>,
     check: bool,
     contrast: bool,
+    /// How the app brings it on and off in this run.
+    entrance: super::Entrance,
     /// Stills to take, in seconds.
     at: Vec<f64>,
 }
@@ -606,6 +617,7 @@ pub fn run(
             values: values.clone(),
             check: true,
             contrast: true,
+            entrance: super::Entrance::Ease,
             at: times(SHORT_US, &[0.0, 0.5, 0.75], true),
         },
         Run {
@@ -615,6 +627,7 @@ pub fn run(
             values: values.clone(),
             check: true,
             contrast: true,
+            entrance: super::Entrance::Ease,
             at: times(LONG_US, &[0.0, 0.5, 0.75], true),
         },
         Run {
@@ -624,6 +637,7 @@ pub fn run(
             values: long.clone(),
             check: true,
             contrast: false,
+            entrance: super::Entrance::Ease,
             at: times(SHORT_US, &[0.5], false),
         },
         Run {
@@ -633,6 +647,7 @@ pub fn run(
             values: long,
             check: true,
             contrast: false,
+            entrance: super::Entrance::Ease,
             at: times(LONG_US, &[0.5], false),
         },
     ];
@@ -647,9 +662,21 @@ pub fn run(
             values: changed,
             check: false,
             contrast: false,
+            entrance: super::Entrance::Ease,
             at: times(SHORT_US, &[0.5, 0.75], false),
         });
     }
+    // As the app places it everywhere but over the full-screen camera: cut in and out.
+    runs.push(Run {
+        key: "c".into(),
+        size: WIDE,
+        length_us: SHORT_US,
+        values: values.clone(),
+        check: false,
+        contrast: false,
+        entrance: super::Entrance::Cut,
+        at: times(SHORT_US, &[0.0, 0.5], true),
+    });
 
     let work = runtime::runtime_dir()
         .join("work")
@@ -774,6 +801,10 @@ pub fn run(
         checks.push(timing(id, label, run, length_us, holds));
     }
 
+    // Cut in and out where the app wants a cut, and marked an overlay only when it is one.
+    checks.push(cut(result("c"), wide));
+    checks.push(shape(wide, super::is_overlay(&html)));
+
     // Each string variable changes the picture.
     checks.push(if strings.is_empty() {
         check(
@@ -830,6 +861,8 @@ pub fn run(
         "fitsTall",
         "lengthShort",
         "lengthLong",
+        "cut",
+        "overlay",
         "variables",
         "network",
         "brandColours",
@@ -936,6 +969,105 @@ fn timing(id: &str, label: &str, run: &RunResult, length_us: u64, holds_end: boo
     }
 }
 
+/// Whether `cut`'s stills (the first frame, the middle and the last, rendered with
+/// `data-entrance="cut"`) show the card whole at both ends: a graphic that fills the frame never
+/// eases, so it must not fade or slide in when the app cuts it in. `eased` is the 16:9 run whose
+/// middle still says how much the card covers.
+fn cut(cut: &RunResult, eased: &RunResult) -> Check {
+    let (id, label) = ("cut", "Cuts in and out");
+    if cut.frames.len() < 3 {
+        return check(
+            id,
+            label,
+            Status::Fail,
+            cut.error
+                .clone()
+                .unwrap_or_else(|| "its stills were not made".into()),
+        );
+    }
+    let shown = eased
+        .frames
+        .get(1)
+        .map_or_else(|| coverage(&cut.frames[1], 200), |f| coverage(f, 200));
+    let need = (shown * CUT_SHOWN_SHARE).max(SHOWN_MIN);
+    let mut problems = Vec::new();
+    for (frame, which) in [(&cut.frames[0], "first"), (&cut.frames[2], "last")] {
+        let covered = coverage(frame, 96);
+        if covered < need {
+            problems.push(format!(
+                "with data-entrance=\"cut\" the {which} frame is {:.0}% covered (the card covers {:.0}%)",
+                covered * 100.0,
+                shown * 100.0
+            ));
+        }
+    }
+    if problems.is_empty() {
+        check(
+            id,
+            label,
+            Status::Pass,
+            "shown whole on its first and last frames when the app cuts it in",
+        )
+    } else {
+        check(
+            id,
+            label,
+            Status::Fail,
+            format!(
+                "{}: fade or slide the card in and out only when root.dataset.entrance is \"ease\"; otherwise show it whole from the first frame to the last",
+                problems.join("; ")
+            ),
+        )
+    }
+}
+
+/// Whether the graphic's `data-overlay` mark matches how much of the frame its card covers in
+/// `eased`'s middle still: a graphic that fills the frame never eases, so it must not say it is
+/// an overlay; one that covers only part of it should, so it eases over the full-screen camera.
+fn shape(eased: &RunResult, overlay: bool) -> Check {
+    let (id, label) = ("overlay", "Full screen or overlay");
+    let Some(middle) = eased.frames.get(1) else {
+        return check(id, label, Status::Fail, "its stills were not made");
+    };
+    let shown = coverage(middle, 200);
+    let percent = shown * 100.0;
+    if overlay && shown >= FILLS_MIN {
+        check(
+            id,
+            label,
+            Status::Fail,
+            format!(
+                "it covers {percent:.0}% of the frame but says data-overlay: a graphic that fills the frame never eases, so remove data-overlay"
+            ),
+        )
+    } else if !overlay && shown < OVERLAY_MAX {
+        check(
+            id,
+            label,
+            Status::Warn,
+            format!(
+                "it covers {percent:.0}% of the frame: if it is an overlay (a lower third, a callout), put data-overlay on the root so it eases over the full-screen camera"
+            ),
+        )
+    } else if overlay {
+        check(
+            id,
+            label,
+            Status::Pass,
+            format!(
+                "an overlay ({percent:.0}% of the frame): it eases over the full-screen camera and cuts elsewhere"
+            ),
+        )
+    } else {
+        check(
+            id,
+            label,
+            Status::Pass,
+            format!("fills the frame ({percent:.0}%): it always cuts in and out"),
+        )
+    }
+}
+
 /// Stages and renders every run, `PARALLEL` at a time.
 fn execute(
     paths: &runtime::RuntimePaths,
@@ -1005,8 +1137,13 @@ fn one_run(
     let stills = work.join(format!("{}-s", run.key));
     let staged = (|| {
         render::copy_dir(dir, &stage)?;
-        let sized =
-            super::size_composition(html, run.size.0, run.size.1, run.length_us as f64 / 1e6);
+        let sized = super::size_composition(
+            html,
+            run.size.0,
+            run.size.1,
+            run.length_us as f64 / 1e6,
+            run.entrance,
+        );
         let html = super::with_defaults(&sized, &run.values)?;
         std::fs::write(stage.join(super::ENTRY), html).map_err(|e| e.to_string())
     })();
@@ -1554,5 +1691,71 @@ mod tests {
         assert!(!holds_end(
             "<div data-composition-id=\"g\"><p data-holds-end></p>"
         ));
+    }
+
+    /// A 10x10 frame with its bottom two rows covered: a lower third.
+    fn lower_third() -> RgbaImage {
+        let mut third = RgbaImage::from_pixel(10, 10, Rgba([0, 0, 0, 0]));
+        for x in 0..10 {
+            for y in 8..10 {
+                third.put_pixel(x, y, Rgba([9, 9, 9, 255]));
+            }
+        }
+        third
+    }
+
+    #[test]
+    fn a_cut_shows_the_card_whole_at_both_ends() {
+        let clear = RgbaImage::from_pixel(10, 10, Rgba([0, 0, 0, 0]));
+        let card = RgbaImage::from_pixel(10, 10, Rgba([9, 9, 9, 255]));
+        let run = |frames: Vec<&RgbaImage>| RunResult {
+            frames: frames.into_iter().cloned().collect(),
+            ..Default::default()
+        };
+        let eased = run(vec![&clear, &card, &card, &clear]);
+        // A full-screen card cut in: whole on the first and last frames.
+        let whole = run(vec![&card, &card, &card]);
+        assert_eq!(cut(&whole, &eased).status, Status::Pass);
+        // Still fading in and out although the app asked for a cut.
+        let fades = run(vec![&clear, &card, &clear]);
+        let failed = cut(&fades, &eased);
+        assert_eq!(failed.status, Status::Fail);
+        assert!(
+            failed.reason.contains("first frame") && failed.reason.contains("last frame"),
+            "{}",
+            failed.reason
+        );
+        assert!(failed.reason.contains("entrance"), "{}", failed.reason);
+        // A lower third cut in is measured against its own size.
+        let third = lower_third();
+        let eased_third = run(vec![&clear, &third, &third, &clear]);
+        assert_eq!(
+            cut(&run(vec![&third, &third, &third]), &eased_third).status,
+            Status::Pass
+        );
+        assert_eq!(
+            cut(&run(vec![&clear, &third, &third]), &eased_third).status,
+            Status::Fail
+        );
+    }
+
+    #[test]
+    fn the_overlay_mark_matches_what_the_card_covers() {
+        let clear = RgbaImage::from_pixel(10, 10, Rgba([0, 0, 0, 0]));
+        let card = RgbaImage::from_pixel(10, 10, Rgba([9, 9, 9, 255]));
+        let run = |middle: &RgbaImage| RunResult {
+            frames: vec![clear.clone(), middle.clone(), clear.clone(), clear.clone()],
+            ..Default::default()
+        };
+        // A full-screen card is not an overlay: it never eases.
+        assert_eq!(shape(&run(&card), false).status, Status::Pass);
+        let claimed = shape(&run(&card), true);
+        assert_eq!(claimed.status, Status::Fail);
+        assert!(claimed.reason.contains("never eases"), "{}", claimed.reason);
+        // A lower third should say it is one, so it eases over the camera.
+        assert_eq!(shape(&run(&lower_third()), true).status, Status::Pass);
+        let unmarked = shape(&run(&lower_third()), false);
+        assert_eq!(unmarked.status, Status::Warn);
+        assert!(unmarked.reason.contains("data-overlay"), "{}", unmarked.reason);
     }
 }

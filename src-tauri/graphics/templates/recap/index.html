@@ -149,12 +149,17 @@
         el.animate(frames, { duration, delay, easing, fill: "both", iterations: 1 }).pause();
       }
       const byId = (id) => document.getElementById(id);
-      play(byId("card-back"), [
-        { opacity: 0 },
-        { opacity: 1, offset: 300 / length },
-        { opacity: 1, offset: outAt / length },
-        { opacity: 0 },
-      ], 0, length, "linear");
+      // The card fills the frame, so it cuts in and out. Only when AeroEdits asks for an ease
+      // (in a short's slot over the full-screen camera) does it fade in and out.
+      const eases = root.dataset.entrance === "ease";
+      if (eases) {
+        play(byId("card-back"), [
+          { opacity: 0 },
+          { opacity: 1, offset: 300 / length },
+          { opacity: 1, offset: outAt / length },
+          { opacity: 0 },
+        ], 0, length, "linear");
+      }
       play(byId("title"), [
         { transform: "translateY(3vmin)", opacity: 0 },
         { transform: "translateY(0)", opacity: 1 },
@@ -169,7 +174,7 @@
         ], at, 500);
         play(byId(`tick-${i}`), [{ strokeDashoffset: 30 }, { strokeDashoffset: 0 }], at + 250, 400);
       });
-      play(byId("layout"), [{ opacity: 1 }, { opacity: 0 }], outAt, 350);
+      if (eases) play(byId("layout"), [{ opacity: 1 }, { opacity: 0 }], outAt, 350);
     </script>
   </body>
 </html>

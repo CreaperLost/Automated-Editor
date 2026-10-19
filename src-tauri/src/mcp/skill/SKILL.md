@@ -88,6 +88,16 @@ If anything is cut after them, run `chapters` again before exporting.
 Motion graphics are HyperFrames compositions the app renders and plays full screen over
 everything (screen, camera, captions); in a 9:16 short the same graphic renders at 9:16. Cuts
 never go through a graphic, so add them after the cuts are done and checked, before chapters.
+
+A graphic that fills the whole screen never eases in or out: it appears and disappears with a
+hard cut. The only graphics that ease in and out are those laid over the full-screen camera (a
+lower third or callout during webcam focus, or a short's camera scene). The app decides this
+from where each graphic plays and sets `data-entrance` (`cut` or `ease`) on its root when it
+renders; `graphic_render` says which each one got. Never add your own fade to a full-screen
+graphic. In a composition you write, show the card whole from the first frame to the last and
+fade or slide it only when `root.dataset.entrance === "ease"`; mark one that covers only part
+of the frame with `data-overlay` on the root (without it the app treats it as full screen and
+always cuts it).
 Look first at what exists: `graphics` lists the bundled templates and the user's library, each
 library item with a `useWhen` line; pick one whose `useWhen` fits and fill in its variables.
 Write a composition of your own (`graphic_add` with `blank`, then `graphic_write_file` or the
@@ -96,7 +106,8 @@ adding, `graphic_render`, then look with `frame_render`.
 
 When the user likes a graphic you wrote, offer to keep it for later projects. If they say yes:
 `graphic_templatize` (its source and the rules: text as variables, brand kit colours, timing
-from `data-duration`, a portrait block, a fading card, no network), rewrite the files, then
+from `data-duration`, a portrait block, a cut unless `data-entrance` is `ease`, no network),
+rewrite the files, then
 `graphic_check` until it passes (fix what it names; it is the app's own check, no model). Then
 `library_save` with a `label`, a one-line `useWhen` and `lengthUs`. If it answers with a close
 library item or template, ask whether to update that item (`update`, its next version) or keep

@@ -129,14 +129,18 @@
       const root = document.getElementById("root");
       const length = (parseFloat(root.dataset.duration) || 6) * 1000;
       const ease = "cubic-bezier(0.2, 0, 0, 1)";
-      // The end card holds to the end of the video: it fades in, never out.
+      // The end card holds to the end of the video, so it never goes out. It fills the frame,
+      // so it cuts in; only when AeroEdits asks for an ease (in a short's slot over the
+      // full-screen camera) does it fade in.
       function play(id, frames, delay, duration, easing = ease) {
         document
           .getElementById(id)
           .animate(frames, { duration, delay, easing, fill: "both", iterations: 1 })
           .pause();
       }
-      play("card-back", [{ opacity: 0 }, { opacity: 1 }], 0, 400, "linear");
+      if (root.dataset.entrance === "ease") {
+        play("card-back", [{ opacity: 0 }, { opacity: 1 }], 0, 400, "linear");
+      }
       play("ring", [
         { transform: "scale(0.6)", opacity: 0 },
         { transform: "scale(1)", opacity: 0.18 },

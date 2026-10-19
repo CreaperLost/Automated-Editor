@@ -1,12 +1,13 @@
 //! Rendering graphics in the background, one at a time (each render already runs several
 //! Chrome workers), into `<project>/assets/graphics/<asset id>/`.
 //!
-//! A render is named by what it was made from: `<w>x<h>-<length ms>-<fps>-<hash>.webm`, where
-//! the hash covers every file in the graphic's folder, the canvas, the length, the frame rate
-//! and the HyperFrames version. So a change to the source, the clip's length or the canvas
-//! needs a new render, and an unchanged graphic never renders twice. Until the new one is
+//! A render is named by what it was made from:
+//! `<w>x<h>-<length ms>-<fps>-<entrance>-<hash>.webm`, where the hash covers every file in the
+//! graphic's folder, the canvas, the length, the frame rate, how it comes on and goes off (see
+//! [`super::Entrance`]) and the HyperFrames version. So a change to the source, the clip's
+//! length, the canvas or where it plays needs a new render, and an unchanged graphic never renders twice. Until the new one is
 //! there, the last render for that canvas plays (or a placeholder). WebM VP9 keeps the page's
-//! transparency, so a template can fade its card in and out over the video.
+//! transparency, so a template can fade its card in and out over the full-screen camera.
 use super::runtime;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,6 +36,8 @@ pub struct Spec {
     pub height: u32,
     pub fps: u32,
     pub length_us: u64,
+    /// How it comes on and goes off where it plays: a cut, or an ease over the camera.
+    pub entrance: super::Entrance,
     /// The app's brand kits folder.
     pub brands: PathBuf,
     /// The project's brand kit, for a graphic that has not picked its own.
@@ -67,28 +70,39 @@ impl Spec {
             height,
             fps: RENDER_FPS,
             length_us: length_us.max(100_000),
+            entrance: super::Entrance::Cut,
             brands: super::brands::dir(),
             default_brand: None,
         }
     }
 
     /// The same graphic and length rendered for a canvas of its own: `document`'s render size
-    /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), and the
-    /// document's brand kit.
+    /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), the
+    /// document's brand kit, and how it comes on and goes off there. `full_camera` is where the
+    /// camera fills the frame ([`super::full_camera_ranges`] of `document`).
     pub fn for_clip(
         root: &Path,
         document: &crate::project::revision::EditDocument,
         asset: &crate::sequence::Asset,
         clip: &crate::sequence::Clip,
         canvas: (u32, u32),
+        full_camera: &[(u64, u64)],
     ) -> Self {
         let mut spec = Self::new(root, asset, canvas, clip.duration_us);
+        let mut whole_frame = true;
         if let Some(short) = &document.short_layout {
+            whole_frame =
+                crate::shorts::graphic_slot(short, &clip.id) == crate::shorts::GraphicSlot::Full;
             let (_, _, w, h) =
                 crate::shorts::graphic_rect(short, &clip.id, spec.width, spec.height);
             spec.width = (w & !1).max(2);
             spec.height = (h & !1).max(2);
         }
+        // A graphic in a slot of a short covers part of the frame; on the whole frame it fills
+        // it unless its composition says it is an overlay.
+        spec.entrance = super::entrance_for(full_camera, clip, || {
+            whole_frame && !overlay_of(&spec.dir)
+        });
         spec.default_brand = document.graphics_brand.clone();
         spec
     }
@@ -106,10 +120,11 @@ impl Spec {
 
     fn file_name(&self, hash: &str) -> String {
         format!(
-            "{}{}-{}-{}.webm",
+            "{}{}-{}-{}-{}.webm",
             self.prefix(),
             self.length_us / 1000,
             self.fps,
+            self.entrance.as_str(),
             hash
         )
     }
@@ -119,8 +134,12 @@ impl Spec {
         let mut hasher = Sha256::new();
         hasher.update(runtime::HYPERFRAMES_VERSION.as_bytes());
         hasher.update(format!(
-            "{}x{}@{}:{}",
-            self.width, self.height, self.fps, self.length_us
+            "{}x{}@{}:{}:{}",
+            self.width,
+            self.height,
+            self.fps,
+            self.length_us,
+            self.entrance.as_str()
         ));
         let mut files = Vec::new();
         list_files(&self.dir, &self.dir, &mut files)?;
@@ -296,6 +315,23 @@ fn hash_of(spec: &Spec) -> Result<String, String> {
     hash
 }
 
+/// Whether the graphic in `dir` says it covers only part of the frame, read once per
+/// generation (a source change bumps it): placing graphics asks for every frame.
+fn overlay_of(dir: &Path) -> bool {
+    static OVERLAYS: OnceLock<Mutex<(u64, HashMap<PathBuf, bool>)>> = OnceLock::new();
+    let now = generation();
+    let mut overlays = OVERLAYS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if overlays.0 != now {
+        *overlays = (now, HashMap::new());
+    }
+    *overlays.1.entry(dir.to_path_buf()).or_insert_with(|| {
+        std::fs::read_to_string(dir.join(super::ENTRY)).is_ok_and(|html| super::is_overlay(&html))
+    })
+}
+
 /// What plays for `spec`, asking for its render when there is none (without waiting).
 pub fn lookup(spec: &Spec) -> Lookup {
     let Ok(hash) = hash_of(spec) else {
@@ -447,12 +483,13 @@ pub fn specs_for(
     canvas: (u32, u32),
 ) -> Vec<Spec> {
     let mut specs: Vec<Spec> = Vec::new();
+    let full_camera = super::full_camera_ranges(document);
     for track in document.sequence.video_tracks().filter(|t| !t.hidden) {
         for clip in &track.clips {
             let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
                 continue;
             };
-            let spec = Spec::for_clip(root, document, asset, clip, canvas);
+            let spec = Spec::for_clip(root, document, asset, clip, canvas, &full_camera);
             if !specs.contains(&spec) {
                 specs.push(spec);
             }
@@ -568,8 +605,13 @@ fn render_now(
         let entry = stage.join(super::ENTRY);
         let html =
             std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
-        let sized =
-            super::size_composition(&html, spec.width, spec.height, spec.length_us as f64 / 1e6);
+        let sized = super::size_composition(
+            &html,
+            spec.width,
+            spec.height,
+            spec.length_us as f64 / 1e6,
+            spec.entrance,
+        );
         std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
         let source = super::read_source(&spec.dir)?;
         // The brand kit fills the colours the graphic left to it and sets the font.
@@ -616,7 +658,13 @@ fn remove_superseded(spec: &Spec, name: &str) {
     let Ok(entries) = std::fs::read_dir(&spec.cache) else {
         return;
     };
-    let same = format!("{}{}-{}-", spec.prefix(), spec.length_us / 1000, spec.fps);
+    let same = format!(
+        "{}{}-{}-{}-",
+        spec.prefix(),
+        spec.length_us / 1000,
+        spec.fps,
+        spec.entrance.as_str()
+    );
     let mut others = Vec::new();
     for entry in entries.flatten() {
         let other = entry.file_name().to_string_lossy().into_owned();
@@ -826,6 +874,7 @@ mod tests {
             height: 1080,
             fps: 30,
             length_us,
+            entrance: super::super::Entrance::Cut,
             brands: dir.join("brands"),
             default_brand: None,
         }
@@ -915,7 +964,12 @@ mod tests {
         )
         .unwrap();
         assert_ne!(a.hash().unwrap(), first);
-        assert!(a.file_name(&first).starts_with("1920x1080-4000-30-"));
+        assert!(a.file_name(&first).starts_with("1920x1080-4000-30-cut-"));
+        // An ease over the camera is a render of its own, beside the cut one.
+        let mut eased = a.clone();
+        eased.entrance = super::super::Entrance::Ease;
+        assert_ne!(eased.hash().unwrap(), a.hash().unwrap());
+        assert!(eased.file_name("h").starts_with("1920x1080-4000-30-ease-"));
     }
 
     #[test]
@@ -972,16 +1026,17 @@ mod tests {
         let cache = dir.path().join("cache");
         std::fs::create_dir_all(&cache).unwrap();
         for name in [
-            "1920x1080-4000-30-aaaa.webm",
-            "1920x1080-8000-30-old0.webm",
-            "1920x1080-8000-30-new0.webm",
-            "1080x1920-8000-30-cccc.webm",
+            "1920x1080-4000-30-cut-aaaa.webm",
+            "1920x1080-8000-30-cut-old0.webm",
+            "1920x1080-8000-30-cut-new0.webm",
+            "1920x1080-8000-30-ease-eeee.webm",
+            "1080x1920-8000-30-cut-cccc.webm",
         ] {
             std::fs::write(cache.join(name), b"x").unwrap();
         }
         remove_superseded(
             &spec(dir.path(), &cache, 8_000_000),
-            "1920x1080-8000-30-new0.webm",
+            "1920x1080-8000-30-cut-new0.webm",
         );
         let mut left: Vec<String> = std::fs::read_dir(&cache)
             .unwrap()
@@ -991,11 +1046,12 @@ mod tests {
         assert_eq!(
             left,
             [
-                "1080x1920-8000-30-cccc.webm",
-                "1920x1080-4000-30-aaaa.webm",
-                "1920x1080-8000-30-new0.webm",
+                "1080x1920-8000-30-cut-cccc.webm",
+                "1920x1080-4000-30-cut-aaaa.webm",
+                "1920x1080-8000-30-cut-new0.webm",
+                "1920x1080-8000-30-ease-eeee.webm",
             ],
-            "only the older render of the same length goes"
+            "only the older render of the same length and entrance goes"
         );
     }
 
