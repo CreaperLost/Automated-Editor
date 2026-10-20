@@ -705,7 +705,7 @@ fn probe_restore_all_cuts() {
                     w[0].asset == w[1].asset
                         && w[0].stream == w[1].stream
                         && w[0].start_us + w[0].duration_us == w[1].start_us
-                        && w[0].in_us + w[0].duration_us < w[1].in_us
+                        && w[0].out_us() < w[1].in_us
                 })
                 .map(|w| w[0].id.clone())
                 .collect();

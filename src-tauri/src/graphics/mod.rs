@@ -757,6 +757,7 @@ mod tests {
             duration_us,
             link: None,
             fit: Default::default(),
+            speed: 1.0,
         }
     }
 

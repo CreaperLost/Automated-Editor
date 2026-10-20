@@ -8,7 +8,7 @@
 //! on the timeline counts.
 use super::{Asset, Clip, Role, Sequence, StreamKind, Track};
 use crate::project::RetainedInterval;
-use crate::timeline::{SourceInterval, TimelineMapper};
+use crate::timeline::TimelineMapper;
 
 /// The media marker of a clock entry that maps nowhere.
 pub const GAP: &str = "gap";
@@ -32,9 +32,20 @@ pub fn entries(sequence: &Sequence, pick: impl Fn(&Track, &Clip) -> bool) -> Vec
     for (_, clip) in clips {
         // What the clip adds: its part after the timeline already used, less the moments
         // already placed (the first time a moment plays counts).
-        let skip = cursor.saturating_sub(clip.start_us).min(clip.duration_us);
-        for (a, b) in unplaced(&used, clip.in_us + skip, clip.out_us()) {
-            let start = clip.start_us + (a - clip.in_us);
+        let skip = clip.source_offset(cursor.saturating_sub(clip.start_us).min(clip.duration_us));
+        let out_us = clip.out_us();
+        for (a, b) in unplaced(&used, (clip.in_us + skip).min(out_us), out_us) {
+            place(&mut used, (a, b));
+            // Where it plays, at the clip's speed (rounding never steps back over the last).
+            let start = clip.timeline_at(a).max(cursor);
+            let end = if b == out_us {
+                clip.end_us()
+            } else {
+                clip.timeline_at(b)
+            };
+            if end <= start {
+                continue;
+            }
             if start > cursor {
                 out.push(RetainedInterval {
                     start_us: 0,
@@ -43,9 +54,11 @@ pub fn entries(sequence: &Sequence, pick: impl Fn(&Track, &Clip) -> bool) -> Vec
                     ..Default::default()
                 });
             }
-            out.push(RetainedInterval::recording(a, b));
-            place(&mut used, (a, b));
-            cursor = start + (b - a);
+            out.push(RetainedInterval {
+                edited_len_us: (end - start != b - a).then_some(end - start),
+                ..RetainedInterval::recording(a, b)
+            });
+            cursor = end;
         }
     }
     out
@@ -91,10 +104,7 @@ pub fn mapper(entries: &[RetainedInterval]) -> TimelineMapper {
         entries
             .iter()
             .enumerate()
-            .map(|(i, e)| {
-                SourceInterval::new(format!("k{i}"), e.start_us, e.end_us)
-                    .with_media(e.media.clone())
-            })
+            .map(|(i, e)| e.interval(format!("k{i}")))
             .collect(),
     )
 }
@@ -160,6 +170,7 @@ mod tests {
             duration_us: len,
             link: None,
             fit: Fit::Contain,
+            speed: 1.0,
         }
     }
 
@@ -225,6 +236,33 @@ mod tests {
             None,
             "under the first"
         );
+    }
+
+    #[test]
+    fn a_clip_played_faster_maps_at_its_speed() {
+        let mut a1 = Track::new("a1".into(), TrackKind::Audio);
+        // 0-2 s plays source 0-4 s at 2x; 2-4 s plays source 10-11 s at half speed.
+        a1.clips = vec![
+            Clip {
+                speed: 2.0,
+                ..clip("c1", "mic", 0, 0, 2_000_000)
+            },
+            Clip {
+                speed: 0.5,
+                ..clip("c2", "mic", 2_000_000, 10_000_000, 2_000_000)
+            },
+        ];
+        let seq = Sequence {
+            tracks: vec![a1],
+            magnetic: true,
+        };
+        let clock = stream_clock(&seq, "rec", "mic");
+        assert_eq!(clock.source_to_edited_us(3_000_000), Some(1_500_000));
+        assert_eq!(clock.edited_to_source_us(1_000_000), Some(2_000_000));
+        assert_eq!(clock.source_to_edited_us(10_500_000), Some(3_000_000));
+        assert_eq!(clock.edited_to_source_us(3_000_000), Some(10_500_000));
+        assert_eq!(clock.source_to_edited_us(11_000_000), None, "never placed");
+        assert_eq!(clock.total_edited_duration_us(), 4_000_000);
     }
 
     #[test]

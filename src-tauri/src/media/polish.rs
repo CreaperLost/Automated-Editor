@@ -449,12 +449,11 @@ impl PolishPlan {
                         continue;
                     };
                     // Each timeline block takes the file's block under its middle.
-                    let first = (clip.edited_start + (a - clip.in_us)) / LOUDNESS_BLOCK_US;
-                    let last = (clip.edited_start + (b - clip.in_us)).div_ceil(LOUDNESS_BLOCK_US);
+                    let first = clip.edited_at(a) / LOUDNESS_BLOCK_US;
+                    let last = clip.edited_at(b).div_ceil(LOUDNESS_BLOCK_US);
                     for block in first..last {
                         let center = block * LOUDNESS_BLOCK_US + LOUDNESS_BLOCK_US / 2;
-                        let Some(source) = (center + clip.in_us).checked_sub(clip.edited_start)
-                        else {
+                        let Some(source) = clip.source_at(center) else {
                             continue;
                         };
                         if source < a || source >= b {
@@ -560,11 +559,14 @@ fn lane_ducks(
                 let Some(analysis) = analyze(segment) else {
                     continue;
                 };
-                let edited_a = clip.edited_start + (a - clip.in_us);
-                let edited_b = clip.edited_start + (b - clip.in_us);
+                let edited_a = clip.edited_at(a);
+                let edited_b = clip.edited_at(b);
                 for block in edited_a / VOICE_BLOCK_US..edited_b.div_ceil(VOICE_BLOCK_US) {
                     let edited = (block * VOICE_BLOCK_US).max(edited_a);
-                    let file = clip.in_us + (edited - clip.edited_start) - segment.start_us;
+                    let Some(source) = clip.source_at(edited) else {
+                        continue;
+                    };
+                    let file = source.clamp(a, b) - segment.start_us;
                     if analysis.voice.get((file / VOICE_BLOCK_US) as usize) == Some(&true) {
                         if let Some(slot) = speech.get_mut(block as usize) {
                             *slot = true;
@@ -674,6 +676,8 @@ mod tests {
                     edited_start: i * 100_000,
                     in_us: i * 100_000,
                     len: 100_000,
+                    edited_len: 100_000,
+                    speed: 1.0,
                     source_end: 3_000_000,
                     segments: segments.clone(),
                     mutes: Default::default(),
@@ -689,6 +693,8 @@ mod tests {
                 edited_start: 0,
                 in_us: 2_000_000,
                 len: 1_000_000,
+                edited_len: 1_000_000,
+                speed: 1.0,
                 source_end: 3_000_000,
                 segments,
                 mutes: Default::default(),
@@ -737,6 +743,8 @@ mod tests {
                     edited_start: i * (2_000_000 / count),
                     in_us: i * (2_000_000 / count),
                     len: 2_000_000 / count,
+                    edited_len: 2_000_000 / count,
+                    speed: 1.0,
                     source_end: 2_000_000,
                     segments: segments.clone(),
                     mutes: Default::default(),
@@ -789,6 +797,8 @@ mod tests {
                 edited_start: 0,
                 in_us: 0,
                 len: 2_000_000,
+                edited_len: 2_000_000,
+                speed: 1.0,
                 source_end: 2_000_000,
                 segments,
                 mutes: Default::default(),

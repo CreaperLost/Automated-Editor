@@ -13,8 +13,8 @@
 //! wholly inside one is refused), splits pass them by, and an edit that would still shorten,
 //! split or drop one it was not about is refused. Cuts before a graphic move it along.
 use super::{
-    validate_sequence, Asset, Clip, Fit, Role, Sequence, SourceRange, StreamKind, Track, TrackKind,
-    IMAGE_CLIP_US, MAX_TRACKS, MIN_PIECE_US,
+    source_len, timeline_len, validate_sequence, Asset, Clip, Fit, Role, Sequence, SourceRange,
+    StreamKind, Track, TrackKind, IMAGE_CLIP_US, MAX_SPEED, MAX_TRACKS, MIN_PIECE_US, MIN_SPEED,
 };
 use crate::zoom::EditedRange;
 use serde::{Deserialize, Serialize};
@@ -136,6 +136,18 @@ pub enum SequenceEdit {
     SetClip {
         clip_id: String,
         fit: Fit,
+    },
+    /// Plays clips (with their linked partners) at `speed`: each keeps the media it plays and
+    /// gets shorter or longer. With `range` instead of clips, every unlocked track is split at
+    /// its ends and what plays inside it changes. `ripple` overrides magnetic for this edit.
+    SetSpeed {
+        #[serde(default)]
+        clip_ids: Vec<String>,
+        speed: f64,
+        #[serde(default)]
+        range: Option<EditedRange>,
+        #[serde(default)]
+        ripple: Option<bool>,
     },
     /// Puts back the time cut between clips that were one stretch of their source: each listed
     /// clip grows to meet the next clip of its sound or picture, pushing the rest along. None
@@ -483,7 +495,7 @@ impl<'a> Editor<'a> {
             in_us: if self.is_still(&clip.asset) {
                 0
             } else {
-                clip.in_us + skip
+                clip.in_us + clip.source_offset(skip)
             },
             duration_us: clip.end_us() - at,
             ..clip.clone()
@@ -759,6 +771,19 @@ impl<'a> Editor<'a> {
                 self.seq.tracks[t].clips[c].fit = *fit;
                 Ok(())
             }
+            SequenceEdit::SetSpeed {
+                clip_ids,
+                speed,
+                range,
+                ripple,
+            } => {
+                let ids = match range {
+                    Some(range) if clip_ids.is_empty() => self.split_out(range)?,
+                    Some(_) => return Err("Give clips or a range, not both".into()),
+                    None => clip_ids.clone(),
+                };
+                self.set_speed(&ids, *speed, ripple.unwrap_or(magnetic))
+            }
             SequenceEdit::RestoreCuts { clip_ids } => self.restore_cuts(clip_ids),
         }
         .map(|()| EditOutcome::default())
@@ -772,8 +797,9 @@ impl<'a> Editor<'a> {
         let (left, right) = (clips.get(c)?, clips.get(c + 1)?);
         if left.asset != right.asset
             || left.stream != right.stream
+            || left.speed != right.speed
             || left.end_us() != right.start_us
-            || left.out_us() >= right.in_us
+            || left.out_us() + left.join_slack() >= right.in_us
             || self.is_still(&left.asset)
         {
             return None;
@@ -819,28 +845,33 @@ impl<'a> Editor<'a> {
             let Ok(partners) = self.with_partners(std::slice::from_ref(&id)) else {
                 continue;
             };
+            let speed = self.seq.tracks[t].clips[c].speed;
             let group: Vec<(usize, Clip)> = partners
                 .iter()
                 .filter_map(|p| {
                     let (t, c) = self.find(p).ok()?;
                     let clip = &self.seq.tracks[t].clips[c];
-                    (clip.end_us() == at).then(|| (t, clip.clone()))
+                    (clip.end_us() == at && clip.speed == speed).then(|| (t, clip.clone()))
                 })
                 .collect();
-            // Everything after moves along, and each recorded stretch comes back as a piece:
-            // across a recorder pause, the pieces stay apart as they were recorded.
-            let total: u64 = cut.iter().map(|(a, b)| b - a).sum();
+            // Everything after moves along, and each recorded stretch comes back as a piece
+            // playing at the clip's speed: across a recorder pause, the pieces stay apart as
+            // they were recorded.
+            let lens: Vec<u64> = cut
+                .iter()
+                .map(|&(a, b)| fit_len(timeline_len(b - a, speed), speed, b - a))
+                .collect();
             let mut links = HashMap::new();
-            self.insert_time(at, total, &mut links);
+            self.insert_time(at, lens.iter().sum(), &mut links);
             let mut start = at;
-            for (a, b) in cut {
+            for ((a, _), len) in cut.into_iter().zip(lens) {
                 let link = (group.len() > 1).then(|| self.link_id());
                 for (t, member) in &group {
                     let piece = Clip {
                         id: self.clip_id(),
                         start_us: start,
                         in_us: a,
-                        duration_us: b - a,
+                        duration_us: len,
                         link: link.clone(),
                         ..member.clone()
                     };
@@ -850,7 +881,7 @@ impl<'a> Editor<'a> {
                     clips.insert(index, piece);
                 }
                 restored.extend(link);
-                start += b - a;
+                start += len;
             }
             for (_, member) in group {
                 restored.insert(member.id);
@@ -867,12 +898,7 @@ impl<'a> Editor<'a> {
                 let (left, right) = (&track.clips[i], &track.clips[i + 1]);
                 let mine = restored.contains(&left.id)
                     || left.link.as_ref().is_some_and(|l| restored.contains(l));
-                if mine
-                    && left.asset == right.asset
-                    && left.stream == right.stream
-                    && left.end_us() == right.start_us
-                    && left.out_us() == right.in_us
-                {
+                if mine && left.continues_into(right) {
                     let right = track.clips.remove(i + 1);
                     track.clips[i].duration_us += right.duration_us;
                 } else {
@@ -1070,6 +1096,7 @@ impl<'a> Editor<'a> {
                     duration_us: out_us - in_us,
                     link: link.clone(),
                     fit: Fit::Contain,
+                    speed: 1.0,
                 };
                 self.seq.tracks[t].clips.push(clip);
                 self.seq.tracks[t].clips.sort_by_key(|c| c.start_us);
@@ -1228,13 +1255,13 @@ impl<'a> Editor<'a> {
             for &(t, c) in &members {
                 let still = self.is_still(&self.seq.tracks[t].clips[c].asset);
                 let member = &mut self.seq.tracks[t].clips[c];
-                member.duration_us -= d;
                 if edge == Edge::Start {
                     member.start_us += d;
                     if !still {
-                        member.in_us += d;
+                        member.in_us += member.source_offset(d);
                     }
                 }
+                member.duration_us -= d;
             }
             if ripple {
                 let freed = match edge {
@@ -1256,10 +1283,14 @@ impl<'a> Editor<'a> {
                 let span = asset
                     .span_at(member.in_us)
                     .ok_or("That clip's media is missing")?;
-                match edge {
+                // The media left, as timeline time at the clip's speed.
+                let media = match edge {
                     Edge::Start => member.in_us - span.start_us,
                     Edge::End => span.end_us.saturating_sub(member.out_us()),
-                }
+                };
+                let longest = timeline_len(member.source_len_us() + media, member.speed);
+                fit_len(longest, member.speed, member.source_len_us() + media)
+                    .saturating_sub(member.duration_us)
             };
             d = d.min(room);
         }
@@ -1316,17 +1347,139 @@ impl<'a> Editor<'a> {
         for (t, c) in members {
             let still = self.is_still(&self.seq.tracks[t].clips[c].asset);
             let member = &mut self.seq.tracks[t].clips[c];
+            let out = member.out_us();
             member.duration_us += d;
             if edge == Edge::Start {
                 // After making room the clip moved right by `d`; either way it now starts at
-                // `old - d` or (rippled) stays at `old`.
+                // `old - d` or (rippled) stays at `old`. Its media still ends where it did.
                 member.start_us = member.start_us.saturating_sub(d);
                 if !still {
-                    member.in_us -= d;
+                    member.in_us = out - member.source_len_us();
                 }
             }
         }
         Ok(())
+    }
+
+    /// Each clip keeps where it starts and the media it plays, and its length follows the
+    /// speed. Shorter clips leave room (closed up when rippling); longer ones make room after
+    /// themselves when rippling, else play as far as the next clip lets them.
+    fn set_speed(&mut self, clip_ids: &[String], speed: f64, ripple: bool) -> Result<(), String> {
+        if !(MIN_SPEED..=MAX_SPEED).contains(&speed) {
+            return Err(format!("Choose a speed from {MIN_SPEED}x to {MAX_SPEED}x"));
+        }
+        // Speeds are kept to a thousandth, so 1/3 and 33.3% are one speed.
+        let speed = (speed * 1000.0).round() / 1000.0;
+        let ids = self.with_partners(clip_ids)?;
+        // (id, media it plays, new length)
+        let mut changes: Vec<(String, u64, u64)> = Vec::new();
+        for id in &ids {
+            let (t, c) = self.find(id)?;
+            let clip = &self.seq.tracks[t].clips[c];
+            if self.is_still(&clip.asset) {
+                continue;
+            }
+            let media = clip.source_len_us();
+            let len = fit_len(timeline_len(media, speed), speed, media).max(1);
+            changes.push((id.clone(), media, len));
+        }
+        if changes.is_empty() {
+            return Err("A picture has no speed: drag its edge to show it longer".into());
+        }
+        let mut freed = Vec::new();
+        let mut growing: Vec<(u64, u64, String)> = Vec::new(); // (end, growth, id)
+        for (id, _, len) in &changes {
+            let (t, c) = self.find(id)?;
+            let clip = &mut self.seq.tracks[t].clips[c];
+            clip.speed = speed;
+            if *len <= clip.duration_us {
+                freed.push((clip.start_us + len, clip.end_us()));
+                clip.duration_us = *len;
+            } else {
+                growing.push((clip.end_us(), len - clip.duration_us, id.clone()));
+            }
+        }
+        if ripple {
+            self.close_empty(&freed);
+        }
+        // Latest first, the clips ending together (linked picture and sound) as one: the room
+        // made after one does not move those before it.
+        growing.sort_by(|a, b| b.cmp(a));
+        let mut done = 0;
+        while done < growing.len() {
+            let (_, growth, ref id) = growing[done];
+            let end = self
+                .find(id)
+                .map(|(t, c)| self.seq.tracks[t].clips[c].end_us())?;
+            let group: Vec<String> = growing[done..]
+                .iter()
+                .take_while(|(e, g, _)| (*e, *g) == (growing[done].0, growth))
+                .map(|(_, _, id)| id.clone())
+                .collect();
+            done += group.len();
+            let members: Vec<(usize, usize)> = group
+                .iter()
+                .map(|id| self.find(id))
+                .collect::<Result<_, _>>()?;
+            let free = members
+                .iter()
+                .all(|&(t, _)| self.seq.tracks[t].is_free(end, end + growth));
+            let mut d = growth;
+            if !free {
+                if ripple {
+                    let mut links = HashMap::new();
+                    self.insert_time(end, growth, &mut links);
+                } else {
+                    d = members
+                        .iter()
+                        .map(|&(t, c)| {
+                            self.seq.tracks[t]
+                                .clips
+                                .get(c + 1)
+                                .map_or(u64::MAX, |n| n.start_us.saturating_sub(end))
+                        })
+                        .min()
+                        .unwrap_or(0)
+                        .min(growth);
+                }
+            }
+            for id in &group {
+                let (t, c) = self.find(id)?;
+                self.seq.tracks[t].clips[c].duration_us += d;
+            }
+        }
+        Ok(())
+    }
+
+    /// Splits every unlocked track at `range`'s ends and lists the clips inside it that can
+    /// change speed (graphics and pictures left out).
+    fn split_out(&mut self, range: &EditedRange) -> Result<Vec<String>, String> {
+        if range.end_us <= range.start_us {
+            return Err("A range runs from a time to a later one".into());
+        }
+        let mut links = HashMap::new();
+        for at in [range.start_us, range.end_us] {
+            for t in self.unlocked() {
+                let graphic = self.seq.tracks[t]
+                    .clip_at(at)
+                    .is_some_and(|c| self.is_graphic(&c.asset));
+                if !graphic {
+                    self.split_track(t, at, &mut links);
+                }
+            }
+        }
+        let ids: Vec<String> = self
+            .unlocked()
+            .into_iter()
+            .flat_map(|t| self.seq.tracks[t].clips.iter())
+            .filter(|c| range.start_us <= c.start_us && c.end_us() <= range.end_us)
+            .filter(|c| !self.is_still(&c.asset))
+            .map(|c| c.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return Err("No clip with sound or moving pictures plays there".into());
+        }
+        Ok(ids)
     }
 
     fn split(&mut self, at: u64, clip_ids: &[String]) -> Result<(), String> {
@@ -1372,6 +1525,16 @@ impl<'a> Editor<'a> {
         }
         Ok(())
     }
+}
+
+/// The longest timeline length up to `len` that plays no more than `source_max` of media at
+/// `speed` (rounding can take a microsecond more).
+fn fit_len(len: u64, speed: f64, source_max: u64) -> u64 {
+    let mut len = len;
+    while len > 0 && source_len(len, speed) > source_max {
+        len -= 1;
+    }
+    len
 }
 
 /// Where position `t` (before) is after the `closed` ranges (before, disjoint) closed up.
@@ -2340,6 +2503,188 @@ mod tests {
         }
     }
 
+    fn speed(ids: &[String], speed: f64) -> SequenceEdit {
+        SequenceEdit::SetSpeed {
+            clip_ids: ids.to_vec(),
+            speed,
+            range: None,
+            ripple: None,
+        }
+    }
+
+    /// A range's speed: every track is split at its ends and plays faster inside it, the rest
+    /// closing up after it.
+    #[test]
+    fn a_range_plays_faster_on_every_track() {
+        let (assets, seq) = rec_project();
+        let fast = run(
+            &seq,
+            &assets,
+            SequenceEdit::SetSpeed {
+                clip_ids: Vec::new(),
+                speed: 2.0,
+                range: Some(EditedRange {
+                    start_us: 2 * S,
+                    end_us: 4 * S,
+                }),
+                ripple: None,
+            },
+        );
+        assert_eq!(fast.duration_us(), 9 * S);
+        for track in &fast.tracks {
+            let spans: Vec<_> = track
+                .clips
+                .iter()
+                .map(|c| (c.start_us, c.in_us, c.duration_us, c.speed))
+                .collect();
+            assert_eq!(
+                spans,
+                vec![
+                    (0, 0, 2 * S, 1.0),
+                    (2 * S, 2 * S, S, 2.0),
+                    (3 * S, 4 * S, 6 * S, 1.0)
+                ]
+            );
+            assert_eq!(track.clips[1].local_us(2 * S + S / 2), Some(3 * S));
+        }
+        let none = apply(
+            &seq,
+            &assets,
+            &SequenceEdit::SetSpeed {
+                clip_ids: vec![clip_on(&seq, "V1", 0)],
+                speed: 2.0,
+                range: Some(EditedRange {
+                    start_us: 2 * S,
+                    end_us: 4 * S,
+                }),
+                ripple: None,
+            },
+        );
+        assert!(none.is_err(), "clips and a range together");
+    }
+
+    #[test]
+    fn a_faster_clip_keeps_its_media_and_closes_up() {
+        let (assets, seq) = rec_project();
+        let screen = clip_on(&seq, "V1", 0);
+        let fast = run(&seq, &assets, speed(std::slice::from_ref(&screen), 2.0));
+        // Every linked clip plays the whole recording in half the time.
+        assert_eq!(fast.duration_us(), 5 * S);
+        for track in &fast.tracks {
+            let clip = &track.clips[0];
+            assert_eq!((clip.start_us, clip.in_us, clip.duration_us), (0, 0, 5 * S));
+            assert_eq!((clip.speed, clip.out_us()), (2.0, 10 * S));
+            assert_eq!(clip.local_us(S), Some(2 * S));
+        }
+        // Splitting keeps the speed and carries on in the media.
+        let split = run(
+            &fast,
+            &assets,
+            SequenceEdit::Split {
+                at_us: S,
+                clip_ids: vec![],
+            },
+        );
+        let parts: Vec<_> = split.tracks[0]
+            .clips
+            .iter()
+            .map(|c| (c.start_us, c.in_us, c.duration_us, c.speed))
+            .collect();
+        assert_eq!(parts, vec![(0, 0, S, 2.0), (S, 2 * S, 4 * S, 2.0)]);
+        assert!(split.tracks[0].clips[0].continues_into(&split.tracks[0].clips[1]));
+        // Trimming the start skips media at the clip's speed.
+        let right = split.tracks[0].clips[1].id.clone();
+        let trimmed = run(
+            &split,
+            &assets,
+            SequenceEdit::TrimClip {
+                clip_id: right.clone(),
+                edge: Edge::Start,
+                to_us: 2 * S,
+                ripple: Some(false),
+            },
+        );
+        let clip = trimmed.clip(&right).unwrap().1;
+        assert_eq!(
+            (clip.start_us, clip.in_us, clip.duration_us),
+            (2 * S, 4 * S, 3 * S)
+        );
+        // Back to normal speed: the media takes its own length again.
+        let normal = run(&fast, &assets, speed(&[screen], 1.0));
+        assert_eq!(layout(&normal), layout(&seq));
+    }
+
+    #[test]
+    fn a_slower_clip_makes_room_or_stops_at_the_next_one() {
+        let (mut assets, seq) = rec_project();
+        assets.push(video("m1", 4 * S));
+        let seq = run(&seq, &assets, cut(&[(5 * S, 6 * S)]));
+        // Two linked sets: 0-5 s and 5-9 s. The first at half speed pushes the second along.
+        let first = clip_on(&seq, "V1", 0);
+        let slow = run(&seq, &assets, speed(std::slice::from_ref(&first), 0.5));
+        assert_eq!(slow.duration_us(), 14 * S);
+        for track in &slow.tracks {
+            assert_eq!(track.clips[0].duration_us, 10 * S);
+            assert_eq!(track.clips[1].start_us, 10 * S);
+        }
+        // Without magnetic it plays only as far as the next clip: less of its media.
+        let loose = run(&seq, &assets, SequenceEdit::SetMagnetic { magnetic: false });
+        let held = run(&loose, &assets, speed(std::slice::from_ref(&first), 0.5));
+        assert_eq!(held.duration_us(), 9 * S);
+        let clip = held.clip(&first).unwrap().1;
+        assert_eq!((clip.duration_us, clip.out_us()), (5 * S, 2 * S + S / 2));
+        // Faster without magnetic leaves a gap.
+        let gap = run(&loose, &assets, speed(&[first.clone()], 2.5));
+        assert_eq!(gap.clip(&first).unwrap().1.duration_us, 2 * S);
+        assert_eq!(gap.tracks[0].clips[1].start_us, 5 * S);
+        // Out of range, and pictures, are refused.
+        assert!(apply(&seq, &assets, &speed(&[first], 20.0)).is_err());
+        let img = run(
+            &seq,
+            &[assets.clone(), vec![image("img")]].concat(),
+            SequenceEdit::PlaceAsset {
+                asset_id: "img".into(),
+                at_us: 0,
+                track_id: None,
+                streams: vec![],
+                range: None,
+            },
+        );
+        let picture = img
+            .clips()
+            .find(|(_, c)| c.asset == "img")
+            .unwrap()
+            .1
+            .id
+            .clone();
+        assert!(apply(
+            &img,
+            &[assets, vec![image("img")]].concat(),
+            &speed(&[picture], 2.0)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn restoring_a_cut_between_fast_clips_plays_it_at_their_speed() {
+        let (assets, seq) = rec_project();
+        let all: Vec<String> = seq.clips().map(|(_, c)| c.id.clone()).collect();
+        let fast = run(&seq, &assets, speed(&all, 2.0));
+        // Cut 1-2 s of the timeline: 2-4 s of the recording.
+        let cut = run(&fast, &assets, cut(&[(S, 2 * S)]));
+        assert_eq!(cut.duration_us(), 4 * S);
+        let back = run(
+            &cut,
+            &assets,
+            SequenceEdit::RestoreCuts { clip_ids: vec![] },
+        );
+        assert_eq!(back.duration_us(), 5 * S);
+        for track in &back.tracks {
+            assert_eq!(track.clips.len(), 1, "one stretch again");
+            assert_eq!(track.clips[0].out_us(), 10 * S);
+        }
+    }
+
     /// The edits exactly as the timeline sends them.
     #[test]
     fn edits_read_the_ui_messages() {
@@ -2362,6 +2707,8 @@ mod tests {
             r#"{"kind":"deleteRange","ranges":[{"startUs":1,"endUs":2}],"ripple":true}"#,
             r#"{"kind":"setMagnetic","magnetic":false}"#,
             r#"{"kind":"setClip","clipId":"c1","fit":"cover"}"#,
+            r#"{"kind":"setSpeed","clipIds":["c1"],"speed":2}"#,
+            r#"{"kind":"setSpeed","clipIds":["c1"],"speed":1.5,"ripple":false}"#,
             r#"{"kind":"restoreCuts","clipIds":[]}"#,
             r#"{"kind":"link","clipIds":["a","b"]}"#,
             r#"{"kind":"removeTrack","trackId":"t1"}"#,

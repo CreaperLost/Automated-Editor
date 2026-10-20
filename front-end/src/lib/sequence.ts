@@ -6,6 +6,29 @@ export const streamKey = (asset: string, stream: string) => `${asset}.${stream}`
 
 export const clipEnd = (clip: Pick<Clip, "startUs" | "durationUs">) => clip.startUs + clip.durationUs;
 
+/** The slowest and fastest a clip plays (src-tauri/src/sequence `MIN_SPEED`, `MAX_SPEED`). */
+export const MIN_SPEED = 0.25;
+export const MAX_SPEED = 8;
+
+/** How fast a clip plays its media. */
+export const clipSpeed = (clip: Pick<Clip, "speed">) => clip.speed ?? 1;
+
+/** "2×", "1.25×". */
+export const formatSpeed = (speed: number) => `${Number(speed.toFixed(2))}×`;
+
+/** How much of its asset's time `offsetUs` of a clip's timeline time plays. */
+export function clipSourceOffset(clip: Pick<Clip, "speed">, offsetUs: number): number {
+  const speed = clipSpeed(clip);
+  return speed === 1 ? offsetUs : Math.round(offsetUs * speed);
+}
+
+/** The asset time a clip plays at timeline time `editedUs`. */
+export const clipSourceAt = (clip: Pick<Clip, "startUs" | "inUs" | "speed">, editedUs: number) =>
+  clip.inUs + clipSourceOffset(clip, editedUs - clip.startUs);
+
+/** Where a clip's media ends, in its asset's time. */
+export const clipOut = (clip: Pick<Clip, "inUs" | "durationUs" | "speed">) => clip.inUs + clipSourceOffset(clip, clip.durationUs);
+
 export const videoTracks = (sequence: Sequence) => sequence.tracks.filter((t) => t.kind === "video");
 export const audioTracks = (sequence: Sequence) => sequence.tracks.filter((t) => t.kind === "audio");
 
@@ -87,7 +110,7 @@ export function sourceAt(project: OpenedProject, assetId: string, editedUs: numb
     for (const track of tracks) {
       const clip = clipAt(track, editedUs);
       if (clip && clip.asset === assetId && (!want || clipRole(project, track, clip) === want)) {
-        return clip.inUs + (editedUs - clip.startUs);
+        return clipSourceAt(clip, editedUs);
       }
     }
     return null;
@@ -116,13 +139,16 @@ export function cutJoins(project: OpenedProject, track: SeqTrack): { clipId: str
     const left = track.clips[i];
     const right = track.clips[i + 1];
     const asset = assetById(project, left.asset);
-    const out = left.inUs + left.durationUs;
+    const out = clipOut(left);
+    // Pieces of a clip played faster or slower can be a microsecond or two apart in the media.
+    const slack = clipSpeed(left) === 1 ? 0 : Math.ceil(clipSpeed(left));
     if (
       asset?.kind !== "image" &&
       left.asset === right.asset &&
       left.stream === right.stream &&
+      clipSpeed(left) === clipSpeed(right) &&
       clipEnd(left) === right.startUs &&
-      out < right.inUs
+      out + slack < right.inUs
     ) {
       const gapUs = recordedBetween(asset?.pauses, out, right.inUs);
       if (gapUs > 0) joins.push({ clipId: left.id, atUs: right.startUs, gapUs });

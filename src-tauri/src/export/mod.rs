@@ -1093,12 +1093,14 @@ impl SceneEvaluator {
             let crate::sequence::sources::StreamSource::Segments(segments) = &*source else {
                 continue;
             };
-            let reach = local.saturating_add(horizon_us).min(clip.out_us());
+            let reach = local
+                .saturating_add(clip.source_offset(horizon_us))
+                .min(clip.out_us());
             for segment in segments
                 .iter()
                 .filter(|s| s.available && s.start_us > local && s.start_us < reach)
             {
-                edges.insert(clip.start_us + (segment.start_us - clip.in_us));
+                edges.insert(clip.timeline_at(segment.start_us));
             }
         }
         let mut prefetched = self.prefetched.borrow_mut();
@@ -3737,6 +3739,7 @@ mod tests {
                 duration_us: 5_000_000,
                 link: None,
                 fit: crate::sequence::Fit::Contain,
+                speed: 1.0,
             });
             document.sequence.tracks.push(track);
         }
@@ -3872,6 +3875,7 @@ mod tests {
             duration_us: 1_000_000,
             link: None,
             fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
         });
         document.sequence.tracks.push(track);
         document.validate().unwrap();
@@ -3939,6 +3943,7 @@ mod tests {
             duration_us: 3_000_000,
             link: None,
             fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
         });
         document.assets.push(graphic);
         document.sequence.tracks.push(track);
@@ -4012,6 +4017,7 @@ mod tests {
             duration_us: 3_000_000,
             link: None,
             fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
         };
         let (card_clip, lower_clip) = (clip("g1", &card.id), clip("g2", &lower_third.id));
         document.assets.push(card.clone());

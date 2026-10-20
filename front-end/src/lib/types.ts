@@ -960,6 +960,8 @@ export interface Clip {
   /** Clips cut from one moment of an asset share this: they move and trim together. */
   link?: string;
   fit?: Fit;
+  /** How fast it plays its media (absent: 1). At 2 it plays twice as much in `durationUs`. */
+  speed?: number;
 }
 
 export interface SeqTrack {
@@ -1009,6 +1011,8 @@ export type SequenceEdit =
   | { kind: "unlink"; clipIds: string[] }
   | { kind: "setMagnetic"; magnetic: boolean }
   | { kind: "setClip"; clipId: string; fit: Fit }
+  /** Plays clips (and their partners), or what plays in `range`, at `speed`, keeping their media: they get shorter or longer. */
+  | { kind: "setSpeed"; clipIds: string[]; speed: number; range?: { startUs: number; endUs: number } | null; ripple?: boolean | null }
   /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
   | { kind: "restoreCuts"; clipIds: string[] };
 

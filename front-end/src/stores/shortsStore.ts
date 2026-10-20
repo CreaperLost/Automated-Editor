@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api } from "../lib/ipc";
 import { GAP_PRESETS } from "../lib/jumpCutConfig";
-import { clipEnd, soundSources } from "../lib/sequence";
+import { clipEnd, clipSourceAt, soundSources } from "../lib/sequence";
 import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 
@@ -213,12 +213,12 @@ function newShortRange(project: OpenedProject, limitUs: number): { media: string
   const firstUs = Math.min(...clips.map((c) => c.startUs));
   let best: { media: string; startUs: number; endUs: number; reachUs: number } | null = null;
   for (const opening of clips.filter((c) => c.startUs <= firstUs && firstUs < clipEnd(c))) {
-    const startUs = opening.inUs + (firstUs - opening.startUs);
+    const startUs = clipSourceAt(opening, firstUs);
     let reachUs = 0;
     let endUs = 0;
     for (const clip of clips.filter((c) => c.asset === opening.asset && c.startUs < firstUs + limitUs)) {
       const until = Math.min(clipEnd(clip), firstUs + limitUs);
-      const sourceEnd = clip.inUs + (until - clip.startUs);
+      const sourceEnd = clipSourceAt(clip, until);
       if (until > reachUs && sourceEnd > startUs) {
         reachUs = until;
         endUs = sourceEnd;

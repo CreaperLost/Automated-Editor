@@ -5,7 +5,7 @@ use crate::project::{
     reader::{safe_path, SegmentSummary},
     revision::EditDocument,
 };
-use crate::sequence::{sources::sound_segments, Role};
+use crate::sequence::{join_slack, source_len, sources::sound_segments, timeline_len, Role};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,7 +62,15 @@ struct Span {
     gain: f64,
     segments: Arc<Vec<SegmentSummary>>,
     /// Moments of its sound that are muted, in the sound's own time.
-    mutes: Arc<Vec<(u64, u64)>>,
+    mutes: Mutes,
+    /// How fast it plays its sound; other than 1, stretched in time keeping its pitch.
+    speed: f64,
+    /// Clips that carry straight on from each other share the grains of one stretch (so a
+    /// split plays as if it were not there): its number, and where it starts on the timeline
+    /// and in the sound.
+    stretch: usize,
+    stretch_edited: u64,
+    stretch_source: u64,
 }
 
 /// How long a muted moment fades out before it and back in after it (so the mute itself
@@ -91,19 +99,49 @@ fn mute_gain(mutes: &[(u64, u64)], source_us: f64) -> f64 {
     (nearest / MUTE_FADE_US).clamp(0.0, 1.0)
 }
 
+impl Span {
+    /// The sound itself, at the output rate: output frame `n` is its time `n / SAMPLE_RATE`.
+    fn source(&self) -> Self {
+        Self {
+            edited_start: 0,
+            edited_end: SOURCE_END_US,
+            source_start: 0,
+            source_end: SOURCE_END_US,
+            fade_in: false,
+            fade_out: false,
+            lane: self.lane.clone(),
+            gain: 1.0,
+            segments: self.segments.clone(),
+            mutes: self.mutes.clone(),
+            speed: 1.0,
+            stretch: 0,
+            stretch_edited: 0,
+            stretch_source: 0,
+        }
+    }
+}
+
+/// Far past any sound (about 140 years), where [`Span::source`] ends.
+const SOURCE_END_US: u64 = 1 << 52;
+
 pub struct AudioMixer {
     root: PathBuf,
     /// Every audible clip, by lane, each lane's by where they start. Clips on one lane never
     /// overlap, so a chunk finds the few it needs by binary search.
     lanes: Vec<Vec<Span>>,
     polish: Option<PolishPlan>,
-    /// Clicks and whooshes on their own lane, when it makes any sound.
-    effects: Option<crate::sound_effects::SoundEffectsLane>,
     clean_files: super::declick::CleanFiles,
     /// Open sound files, so sequential chunks do not open and parse them again.
     readers: std::sync::Mutex<Vec<(PathBuf, PcmReader)>>,
+    /// Grain shifts of stretched sound, by stretch and block of grains.
+    shifts: std::sync::Mutex<GrainShifts>,
+    /// Clicks and whooshes on their own lane, when it makes any sound.
+    effects: Option<crate::sound_effects::SoundEffectsLane>,
     pub total_frames: u64,
 }
+
+/// Grain moves of stretched sound, by stretch and block of grains.
+type GrainShifts = HashMap<(usize, i64), Arc<Vec<i64>>>;
 
 /// Sound files a mixer keeps open.
 const MAX_OPEN_READERS: usize = 16;
@@ -122,12 +160,28 @@ pub struct Lane {
 pub struct LaneClip {
     pub edited_start: u64,
     pub in_us: u64,
+    /// How much of its sound it plays.
     pub len: u64,
+    /// How long it plays on the timeline (`len` at `speed`).
+    pub edited_len: u64,
+    pub speed: f64,
     /// Where its sound ends: a clip running to it needs no fade out.
     pub source_end: u64,
     pub segments: Arc<Vec<SegmentSummary>>,
     /// Moments of its sound that are muted, in the sound's own time (merged, in order).
     pub mutes: Arc<Vec<(u64, u64)>>,
+}
+
+impl LaneClip {
+    /// Where its sound's time `source_us` plays on the timeline.
+    pub fn edited_at(&self, source_us: u64) -> u64 {
+        self.edited_start + timeline_len(source_us.saturating_sub(self.in_us), self.speed)
+    }
+
+    /// Its sound's time playing at timeline time `edited_us`, unless that is before it.
+    pub fn source_at(&self, edited_us: u64) -> Option<u64> {
+        Some(self.in_us + source_len(edited_us.checked_sub(self.edited_start)?, self.speed))
+    }
 }
 
 /// The audible audio tracks of a document (muted ones and silent clips left out).
@@ -170,7 +224,9 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
             clips.push(LaneClip {
                 edited_start: clip.start_us,
                 in_us: clip.in_us,
-                len: clip.duration_us,
+                len: clip.source_len_us(),
+                edited_len: clip.duration_us,
+                speed: clip.speed,
                 source_end: asset.duration_us,
                 segments,
                 mutes,
@@ -214,28 +270,44 @@ impl AudioMixer {
         }
         let polish = PolishPlan::build(root, &audio, &lanes, duration);
         let mut by_lane = Vec::new();
+        let mut stretches = 0;
         for lane in &lanes {
-            let mut spans = Vec::new();
+            let mut spans: Vec<Span> = Vec::new();
             for (i, clip) in lane.clips.iter().enumerate() {
                 // Sound fades in and out where a clip cuts into it, not where it starts or ends
                 // anyway, nor where it carries straight on into the next clip on the lane.
                 let joins = |a: &LaneClip, b: &LaneClip| {
-                    a.edited_start + a.len == b.edited_start
-                        && a.in_us + a.len == b.in_us
+                    a.edited_start + a.edited_len == b.edited_start
+                        && a.speed == b.speed
+                        && (a.in_us + a.len).abs_diff(b.in_us) <= join_slack(a.speed)
                         && Arc::ptr_eq(&a.segments, &b.segments)
+                };
+                let joined = i > 0 && joins(&lane.clips[i - 1], clip);
+                let (stretch, stretch_edited, stretch_source) = match spans.last() {
+                    Some(last) if joined => {
+                        (last.stretch, last.stretch_edited, last.stretch_source)
+                    }
+                    _ => {
+                        stretches += 1;
+                        (stretches, clip.edited_start, clip.in_us)
+                    }
                 };
                 spans.push(Span {
                     edited_start: clip.edited_start,
-                    edited_end: clip.edited_start + clip.len,
+                    edited_end: clip.edited_start + clip.edited_len,
                     source_start: clip.in_us,
                     source_end: clip.in_us + clip.len,
-                    fade_in: clip.in_us > 0 && !(i > 0 && joins(&lane.clips[i - 1], clip)),
+                    fade_in: clip.in_us > 0 && !joined,
                     fade_out: clip.in_us + clip.len < clip.source_end
                         && !lane.clips.get(i + 1).is_some_and(|next| joins(clip, next)),
                     lane: lane.id.clone(),
                     gain: lane.gain,
                     segments: clip.segments.clone(),
                     mutes: clip.mutes.clone(),
+                    speed: clip.speed,
+                    stretch,
+                    stretch_edited,
+                    stretch_source,
                 });
             }
             spans.sort_by_key(|s| s.edited_start);
@@ -245,9 +317,10 @@ impl AudioMixer {
             root: root.into(),
             lanes: by_lane,
             polish,
-            effects,
             clean_files,
             readers: std::sync::Mutex::new(Vec::new()),
+            shifts: std::sync::Mutex::new(HashMap::new()),
+            effects,
             total_frames: (duration as u128 * SAMPLE_RATE as u128 / 1_000_000) as u64,
         })
     }
@@ -313,7 +386,48 @@ impl AudioMixer {
 
     /// Adds one span's audio, faded at its cut edges, to `out` (frames `start..end`).
     fn mix_span(&self, span: &Span, start: u64, end: u64, out: &mut [f64]) -> Result<(), String> {
-        let mut mixed = vec![0f64; out.len()];
+        let mut mixed = if span.speed == 1.0 {
+            self.render(span, start, end, true)?
+        } else {
+            self.stretch(span, start, end)?
+        };
+        let a = start.max(ceil_frame(span.edited_start));
+        let b = end.min(ceil_frame(span.edited_end));
+        for frame in a..b {
+            let t = frame as f64 * 1e6 / SAMPLE_RATE as f64;
+            let mut gain = 1.0f64;
+            if span.fade_in {
+                gain = gain.min(((t - span.edited_start as f64) / FADE_US as f64).clamp(0.0, 1.0));
+            }
+            if span.fade_out {
+                gain = gain.min(((span.edited_end as f64 - t) / FADE_US as f64).clamp(0.0, 1.0));
+            }
+            // A stretched span's mutes are in the sound it stretches (see `sound`).
+            if span.speed == 1.0 && !span.mutes.is_empty() {
+                let source = span.source_start as f64 + (t - span.edited_start as f64);
+                gain = gain.min(mute_gain(&span.mutes, source));
+            }
+            for ch in 0..2 {
+                mixed[(frame - start) as usize * 2 + ch] *= gain;
+            }
+        }
+        for (sum, sample) in out.iter_mut().zip(mixed) {
+            *sum += sample;
+        }
+        Ok(())
+    }
+
+    /// One span's audio at normal speed for frames `start..end`. On the timeline it has its
+    /// track's gain and ducking; off it (the sound itself, to be stretched) it has neither.
+    fn render(
+        &self,
+        span: &Span,
+        start: u64,
+        end: u64,
+        on_timeline: bool,
+    ) -> Result<Vec<f64>, String> {
+        let mut mixed = vec![0f64; (end - start) as usize * 2];
+        let gain = if on_timeline { span.gain } else { 1.0 };
         {
             let out = &mut mixed;
             let a = start.max(ceil_frame(span.edited_start));
@@ -325,7 +439,7 @@ impl AudioMixer {
                 + ((b as u128 * 1_000_000 / SAMPLE_RATE as u128) as u64)
                     .saturating_sub(span.edited_start)
                 + 1;
-            for (track_gain, track) in [(&span.gain, span.segments.as_slice())] {
+            for (track_gain, track) in [(&gain, span.segments.as_slice())] {
                 let first = track.partition_point(|s| s.end_us <= source_a);
                 for segment in track[first..].iter().take_while(|s| s.start_us < source_b) {
                     if !segment.available {
@@ -396,10 +510,11 @@ impl AudioMixer {
                         continue;
                     }
                     // Ducking where its lane has it on, under speech anywhere on the timeline.
-                    let ducked = self
-                        .polish
-                        .as_ref()
-                        .is_some_and(|plan| plan.ducks(&span.lane));
+                    let ducked = on_timeline
+                        && self
+                            .polish
+                            .as_ref()
+                            .is_some_and(|plan| plan.ducks(&span.lane));
                     // Fold a sample frame to stereo: stereo stays stereo; more channels
                     // average even ones left and odd ones right.
                     let fold = |values: &[f32]| -> [f64; 2] {
@@ -472,30 +587,275 @@ impl AudioMixer {
                     }
                 }
             }
-            for frame in a..b {
-                let t = frame as f64 * 1e6 / SAMPLE_RATE as f64;
-                let mut gain = 1.0f64;
-                if span.fade_in {
-                    gain =
-                        gain.min(((t - span.edited_start as f64) / FADE_US as f64).clamp(0.0, 1.0));
-                }
-                if span.fade_out {
-                    gain =
-                        gain.min(((span.edited_end as f64 - t) / FADE_US as f64).clamp(0.0, 1.0));
-                }
-                if !span.mutes.is_empty() {
-                    let source = span.source_start as f64 + (t - span.edited_start as f64);
-                    gain = gain.min(mute_gain(&span.mutes, source));
-                }
+        }
+        Ok(mixed)
+    }
+
+    /// A span played faster or slower, for frames `start..end`: its sound stretched in time
+    /// keeping its pitch (WSOLA), with its track's gain and ducking.
+    ///
+    /// Grains of [`GRAIN_HOP`] either side of their centre, one every [`GRAIN_HOP`] output
+    /// frames from where the stretch starts, each read from the sound where the speed puts it,
+    /// moved by up to [`GRAIN_SEEK`] to line up with the grain before. The moves are worked
+    /// out a block of grains at a time, each block from a few grains before it, so any chunk
+    /// of output is the same however the output is read.
+    fn stretch(&self, span: &Span, start: u64, end: u64) -> Result<Vec<f64>, String> {
+        let mut mixed = vec![0f64; (end - start) as usize * 2];
+        let a = (start.max(ceil_frame(span.edited_start))) as i64;
+        let b = (end.min(ceil_frame(span.edited_end))) as i64;
+        if b <= a {
+            return Ok(mixed);
+        }
+        let grid = Grains::of(span);
+        let (k0, k1) = (grid.first_reaching(a), grid.last_reaching(b - 1));
+        let shifts = self.grain_shifts(span, &grid, k0, k1)?;
+        let centres: Vec<i64> = (k0..=k1)
+            .zip(&shifts)
+            .map(|(k, shift)| grid.input(k) + shift)
+            .collect();
+        let sound = self.sound(
+            span,
+            centres
+                .iter()
+                .map(|c| (c - GRAIN_HOP, c + GRAIN_HOP))
+                .collect(),
+        )?;
+        for (k, centre) in (k0..=k1).zip(centres) {
+            let at = grid.output(k);
+            let samples = sound.frames(centre - GRAIN_HOP, 2 * GRAIN_HOP as usize);
+            for n in (at - GRAIN_HOP).max(a)..(at + GRAIN_HOP).min(b) {
+                let j = n - at;
+                let weight =
+                    0.5 * (1.0 + (std::f64::consts::PI * j as f64 / GRAIN_HOP as f64).cos());
+                let from = (j + GRAIN_HOP) as usize * 2;
                 for ch in 0..2 {
-                    out[(frame - start) as usize * 2 + ch] *= gain;
+                    mixed[(n as u64 - start) as usize * 2 + ch] += weight * samples[from + ch];
                 }
             }
         }
-        for (sum, sample) in out.iter_mut().zip(mixed) {
-            *sum += sample;
+        let ducked = self.polish.as_ref().filter(|plan| plan.ducks(&span.lane));
+        for n in a as u64..b as u64 {
+            let gain = span.gain
+                * ducked.map_or(1.0, |plan| {
+                    plan.lane_duck_gain(&span.lane, n as f64 * 1e6 / SAMPLE_RATE as f64)
+                });
+            for ch in 0..2 {
+                mixed[(n - start) as usize * 2 + ch] *= gain;
+            }
         }
-        Ok(())
+        Ok(mixed)
+    }
+
+    /// The moves of grains `k0..=k1` of `span`'s stretch, from blocks worked out once.
+    fn grain_shifts(
+        &self,
+        span: &Span,
+        grid: &Grains,
+        k0: i64,
+        k1: i64,
+    ) -> Result<Vec<i64>, String> {
+        let mut out = Vec::with_capacity((k1 - k0 + 1) as usize);
+        for block in k0.div_euclid(SHIFT_BLOCK)..=k1.div_euclid(SHIFT_BLOCK) {
+            let key = (span.stretch, block);
+            let cached = self
+                .shifts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&key)
+                .cloned();
+            let shifts = match cached {
+                Some(shifts) => shifts,
+                None => {
+                    let shifts = Arc::new(self.block_shifts(span, grid, block)?);
+                    let mut cache = self.shifts.lock().unwrap_or_else(|e| e.into_inner());
+                    if cache.len() >= MAX_SHIFT_BLOCKS {
+                        cache.clear();
+                    }
+                    cache.insert(key, shifts.clone());
+                    shifts
+                }
+            };
+            let first = block * SHIFT_BLOCK;
+            for k in k0.max(first)..=k1.min(first + SHIFT_BLOCK - 1) {
+                out.push(shifts[(k - first) as usize]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Works out the moves of block `block`'s grains: from a few grains before it (or the
+    /// stretch's first, which stays where it is), each grain moves to where its start best
+    /// carries on from the last one's centre.
+    fn block_shifts(&self, span: &Span, grid: &Grains, block: i64) -> Result<Vec<i64>, String> {
+        let first = block * SHIFT_BLOCK;
+        let from = (first - SHIFT_LEAD).max(0);
+        let end = first + SHIFT_BLOCK;
+        let sound = self.sound(
+            span,
+            (from..end)
+                .map(|k| {
+                    let m = grid.input(k);
+                    (m - GRAIN_SEEK - GRAIN_HOP, m + GRAIN_SEEK + GRAIN_HOP)
+                })
+                .collect(),
+        )?;
+        let mono = |at: i64, len: usize| -> Vec<f32> {
+            sound
+                .frames(at, len)
+                .chunks_exact(2)
+                .map(|s| ((s[0] + s[1]) * 0.5) as f32)
+                .collect()
+        };
+        let mut shifts = Vec::with_capacity(SHIFT_BLOCK as usize);
+        if from == first {
+            shifts.push(0);
+        }
+        let mut last = grid.input(from);
+        for k in from + 1..end {
+            let m = grid.input(k);
+            let target = mono(last, GRAIN_HOP as usize);
+            let candidates = mono(
+                m - GRAIN_SEEK - GRAIN_HOP,
+                (2 * GRAIN_SEEK + GRAIN_HOP) as usize,
+            );
+            let shift = best_shift(&candidates, &target);
+            last = m + shift;
+            if k >= first {
+                shifts.push(shift);
+            }
+        }
+        Ok(shifts)
+    }
+
+    /// `span`'s sound itself at the output rate over `windows` of frames of its own time
+    /// (merged where they meet), silent before it starts.
+    fn sound(&self, span: &Span, mut windows: Vec<(i64, i64)>) -> Result<Sound, String> {
+        windows.sort_unstable();
+        let mut merged: Vec<(i64, i64)> = Vec::new();
+        for (a, b) in windows {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        let source = span.source();
+        let mut pieces = Vec::with_capacity(merged.len());
+        for (a, b) in merged {
+            let mut samples = vec![0f64; (b - a) as usize * 2];
+            let from = a.max(0);
+            if b > from {
+                let rendered = self.render(&source, from as u64, b as u64, false)?;
+                samples[(from - a) as usize * 2..].copy_from_slice(&rendered);
+                // Its muted moments, before it is stretched.
+                if !span.mutes.is_empty() {
+                    for n in from..b {
+                        let gain = mute_gain(&span.mutes, n as f64 * 1e6 / SAMPLE_RATE as f64);
+                        if gain < 1.0 {
+                            let at = (n - a) as usize * 2;
+                            samples[at] *= gain;
+                            samples[at + 1] *= gain;
+                        }
+                    }
+                }
+            }
+            pieces.push((a, samples));
+        }
+        Ok(Sound { pieces })
+    }
+}
+
+/// Output frames either side of a stretch grain's centre, and between centres (15 ms).
+const GRAIN_HOP: i64 = 720;
+/// How far a grain may move in the sound to line up with the one before (10 ms).
+const GRAIN_SEEK: i64 = 480;
+/// Grains whose moves are worked out together.
+const SHIFT_BLOCK: i64 = 32;
+/// Grains before a block its moves are worked out from.
+const SHIFT_LEAD: i64 = 4;
+/// Blocks of moves kept (about 8 minutes of stretched sound).
+const MAX_SHIFT_BLOCKS: usize = 1024;
+
+/// The grains of a stretch: grain `k` is centred `k` hops after where the stretch starts on
+/// the timeline, read from as far into its sound as the speed takes it.
+struct Grains {
+    output: i64,
+    source: f64,
+    speed: f64,
+}
+
+impl Grains {
+    fn of(span: &Span) -> Self {
+        Self {
+            output: ceil_frame(span.stretch_edited) as i64,
+            source: span.stretch_source as f64 * SAMPLE_RATE as f64 / 1e6,
+            speed: span.speed,
+        }
+    }
+
+    fn output(&self, k: i64) -> i64 {
+        self.output + k * GRAIN_HOP
+    }
+
+    /// Where grain `k` is read from before it moves.
+    fn input(&self, k: i64) -> i64 {
+        (self.source + (k * GRAIN_HOP) as f64 * self.speed).round() as i64
+    }
+
+    /// The first grain reaching output frame `n` or later.
+    fn first_reaching(&self, n: i64) -> i64 {
+        ((n - self.output - GRAIN_HOP).div_euclid(GRAIN_HOP) + 1).max(0)
+    }
+
+    /// The last grain reaching output frame `n` or earlier.
+    fn last_reaching(&self, n: i64) -> i64 {
+        (n - self.output + GRAIN_HOP).div_euclid(GRAIN_HOP)
+    }
+}
+
+/// How far (within [`GRAIN_SEEK`]) to move a grain so the start of it best matches `target`:
+/// `candidates` holds the sound from `GRAIN_SEEK` before its start to `GRAIN_SEEK` after.
+/// Searched coarsely, then around the best; no move wins ties.
+fn best_shift(candidates: &[f32], target: &[f32]) -> i64 {
+    let len = target.len();
+    let score = |shift: i64, step: usize| {
+        let window = &candidates[(shift + GRAIN_SEEK) as usize..][..len];
+        let (mut cross, mut energy) = (0f32, 0f32);
+        for i in (0..len).step_by(step) {
+            cross += window[i] * target[i];
+            energy += window[i] * window[i];
+        }
+        cross / (energy + 1e-9).sqrt()
+    };
+    let mut best = (score(0, 4), 0);
+    for shift in (-GRAIN_SEEK..=GRAIN_SEEK).step_by(4) {
+        let s = score(shift, 4);
+        if s > best.0 {
+            best = (s, shift);
+        }
+    }
+    let coarse = best.1;
+    best = (score(coarse, 1), coarse);
+    for shift in (coarse - 3).max(-GRAIN_SEEK)..=(coarse + 3).min(GRAIN_SEEK) {
+        let s = score(shift, 1);
+        if s > best.0 {
+            best = (s, shift);
+        }
+    }
+    best.1
+}
+
+/// Stretches of a sound at the output rate: (first frame, stereo samples).
+struct Sound {
+    pieces: Vec<(i64, Vec<f64>)>,
+}
+
+impl Sound {
+    /// Frames `[at, at + len)`, which lie in one stretch.
+    fn frames(&self, at: i64, len: usize) -> &[f64] {
+        let i = self.pieces.partition_point(|(start, _)| *start <= at) - 1;
+        let (start, samples) = &self.pieces[i];
+        let from = (at - start) as usize * 2;
+        &samples[from..from + len * 2]
     }
 }
 
@@ -703,11 +1063,17 @@ mod tests {
 
     /// Clips of the first track's sound at `(start, in, length)`.
     fn clips(doc: &mut EditDocument, parts: &[(u64, u64, u64)]) {
+        let parts: Vec<_> = parts.iter().map(|&(s, i, d)| (s, i, d, 1.0)).collect();
+        clips_at_speed(doc, &parts);
+    }
+
+    /// Clips of the first track's sound at `(start, in, length, speed)`.
+    fn clips_at_speed(doc: &mut EditDocument, parts: &[(u64, u64, u64, f64)]) {
         let asset = doc.sequence.tracks[0].clips[0].asset.clone();
         doc.sequence.tracks[0].clips = parts
             .iter()
             .enumerate()
-            .map(|(i, &(start_us, in_us, duration_us))| Clip {
+            .map(|(i, &(start_us, in_us, duration_us, speed))| Clip {
                 id: format!("c{}", i + 100),
                 asset: asset.clone(),
                 stream: "sound0".into(),
@@ -716,8 +1082,60 @@ mod tests {
                 duration_us,
                 link: None,
                 fit: Fit::Contain,
+                speed,
             })
             .collect();
+    }
+
+    /// Times a signal crosses zero upwards in `samples` (interleaved stereo, left channel).
+    fn rising_crossings(samples: &[f64]) -> usize {
+        samples
+            .chunks_exact(2)
+            .map(|f| f[0])
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count()
+    }
+
+    /// A clip at twice the speed plays its sound in half the time at the same pitch and level,
+    /// reads the same however it is chunked, and split in two sounds as if it were whole.
+    #[test]
+    fn a_faster_clip_keeps_its_pitch_and_splits_without_a_seam() {
+        let rate = 48_000usize;
+        let values: Vec<i16> = (0..rate * 2)
+            .map(|i| {
+                (8000.0 * (std::f64::consts::TAU * 220.0 * i as f64 / rate as f64).sin()) as i16
+            })
+            .collect();
+        let (dir, mut doc) = fixture(rate as u32, 1, values);
+        clips_at_speed(&mut doc, &[(0, 0, 1_000_000, 2.0)]);
+        let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
+        assert_eq!(mixer.total_frames, 48_000);
+        let whole = mix_all(&mixer);
+        let middle = seconds(&whole, 0.1, 0.9);
+        // 220 Hz for 0.8 s: 176 cycles (it would be 352 if the pitch went up).
+        let cycles = rising_crossings(middle);
+        assert!((cycles as i64 - 176).abs() <= 2, "{cycles} cycles");
+        let level = rms(middle) / (8000.0 / 32767.0 / 2f64.sqrt());
+        assert!((level - 1.0).abs() < 0.1, "level {level}");
+        let a = mixer.read_frames(20_000, 3_000).unwrap();
+        let mut b = mixer.read_frames(20_000, 1_111).unwrap();
+        b.extend(mixer.read_frames(21_111, 1_889).unwrap());
+        assert_eq!(a, b);
+        // Split at 0.4 s of the timeline (0.8 s of the sound).
+        clips_at_speed(
+            &mut doc,
+            &[(0, 0, 400_000, 2.0), (400_000, 800_000, 600_000, 2.0)],
+        );
+        let split = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        assert_eq!(split, whole);
+        // Half speed: twice as long, same pitch.
+        clips_at_speed(&mut doc, &[(0, 0, 4_000_000, 0.5)]);
+        let slow = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        assert_eq!(slow.len(), 4 * 96_000);
+        let cycles = rising_crossings(seconds(&slow, 0.5, 3.5));
+        assert!((cycles as i64 - 660).abs() <= 2, "{cycles} cycles");
     }
 
     /// Mic: hiss, then a 220 Hz "voice" from 1 s to 2 s, then hiss. System: a steady
@@ -1012,6 +1430,28 @@ mod tests {
         );
         assert_eq!(frame(&muted, 490_000), frame(&plain, 490_000));
         assert_eq!(frame(&muted, 530_000), frame(&plain, 530_000));
+    }
+
+    /// A muted moment of a clip played at twice the speed is silent where it plays, half as
+    /// far into the timeline.
+    #[test]
+    fn muted_moments_follow_speed() {
+        let (dir, mut doc) = fixture(48_000, 1, vec![16384; 96_000]);
+        clips_at_speed(&mut doc, &[(0, 0, 1_000_000, 2.0)]);
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let key = crate::sequence::StreamRef::new("mic", "sound0").key();
+        doc.noise_mutes.insert(
+            key,
+            vec![crate::sequence::SourceRange {
+                start_us: 1_000_000,
+                end_us: 1_100_000,
+            }],
+        );
+        let muted = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let frame = |samples: &[f64], us: u64| samples[(us * 48 / 1000) as usize * 2];
+        assert!(frame(&muted, 525_000).abs() < 1e-3, "{}", frame(&muted, 525_000));
+        assert!((frame(&muted, 400_000) - frame(&plain, 400_000)).abs() < 1e-3);
+        assert!((frame(&muted, 650_000) - frame(&plain, 650_000)).abs() < 1e-3);
     }
 
     #[test]

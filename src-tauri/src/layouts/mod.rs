@@ -645,7 +645,10 @@ pub fn sections_for(
     let in_order = pieces.windows(2).all(|p| p[0].1 <= p[1].0);
     let hull = (pieces[0].0, pieces[pieces.len() - 1].1);
     let back = merge(clock.source_range_to_edited(hull.0, hull.1), 0);
-    let whole = in_order && back == merge(vec![(start, end)], 0);
+    // Clips played faster or slower map back to within rounding.
+    let slack = crate::sequence::join_slack(crate::sequence::MAX_SPEED);
+    let whole = in_order
+        && matches!(back.as_slice(), [(a, b)] if a.abs_diff(start) <= slack && b.abs_diff(end) <= slack);
     let spans = if whole { vec![hull] } else { pieces };
     spans
         .into_iter()

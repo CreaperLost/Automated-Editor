@@ -56,6 +56,9 @@ pub struct RetainedInterval {
     pub end_us: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
+    /// How long it plays on the timeline when a clip plays it faster or slower.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_len_us: Option<u64>,
 }
 
 impl RetainedInterval {
@@ -65,11 +68,19 @@ impl RetainedInterval {
             start_us,
             end_us,
             media: None,
+            edited_len_us: None,
         }
     }
 
     pub fn is_recording(&self) -> bool {
         self.media.is_none()
+    }
+
+    /// The entry as a mapper interval named `id`.
+    pub fn interval(&self, id: String) -> crate::timeline::SourceInterval {
+        crate::timeline::SourceInterval::new(id, self.start_us, self.end_us)
+            .with_media(self.media.clone())
+            .with_edited_len(self.edited_len_us)
     }
 }
 

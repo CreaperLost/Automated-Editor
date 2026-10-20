@@ -249,6 +249,46 @@ impl Fit {
     }
 }
 
+/// The slowest and fastest a clip can play.
+pub const MIN_SPEED: f64 = 0.25;
+pub const MAX_SPEED: f64 = 8.0;
+
+fn normal_speed() -> f64 {
+    1.0
+}
+
+fn is_normal_speed(speed: &f64) -> bool {
+    *speed == 1.0
+}
+
+/// `len` of timeline time played at `speed`: how much of the asset's time it takes.
+pub fn source_len(len: u64, speed: f64) -> u64 {
+    if speed == 1.0 {
+        len
+    } else {
+        (len as f64 * speed).round() as u64
+    }
+}
+
+/// How long `len` of the asset's time plays for at `speed`.
+pub fn timeline_len(len: u64, speed: f64) -> u64 {
+    if speed == 1.0 {
+        len
+    } else {
+        (len as f64 / speed).round() as u64
+    }
+}
+
+/// How far apart in the media two pieces of one stretch played at `speed` can be, after
+/// rounding their lengths to whole microseconds of timeline time.
+pub fn join_slack(speed: f64) -> u64 {
+    if speed == 1.0 {
+        0
+    } else {
+        speed.ceil() as u64
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Clip {
@@ -259,12 +299,16 @@ pub struct Clip {
     pub start_us: u64,
     /// Where in the asset's time it starts.
     pub in_us: u64,
+    /// How long it plays on the timeline.
     pub duration_us: u64,
     /// Clips cut from one moment of an asset share this, so they move and trim together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
     #[serde(default, skip_serializing_if = "Fit::is_default")]
     pub fit: Fit,
+    /// How fast it plays its media: 2 plays twice as much of the asset in its duration.
+    #[serde(default = "normal_speed", skip_serializing_if = "is_normal_speed")]
+    pub speed: f64,
 }
 
 impl Clip {
@@ -272,13 +316,51 @@ impl Clip {
         self.start_us + self.duration_us
     }
 
+    /// How much of the asset's time it plays.
+    pub fn source_len_us(&self) -> u64 {
+        source_len(self.duration_us, self.speed)
+    }
+
     pub fn out_us(&self) -> u64 {
-        self.in_us + self.duration_us
+        self.in_us + self.source_len_us()
+    }
+
+    /// The asset time `offset` into the clip on the timeline.
+    pub fn source_offset(&self, offset: u64) -> u64 {
+        source_len(offset, self.speed)
     }
 
     /// The asset time playing at timeline time `us`, if the clip covers it.
     pub fn local_us(&self, us: u64) -> Option<u64> {
-        (self.start_us <= us && us < self.end_us()).then(|| self.in_us + (us - self.start_us))
+        (self.start_us <= us && us < self.end_us()).then(|| {
+            (self.in_us + self.source_offset(us - self.start_us))
+                .min(self.out_us().saturating_sub(1).max(self.in_us))
+        })
+    }
+
+    /// Where asset time `source_us` (inside the clip's media) plays on the timeline.
+    pub fn timeline_at(&self, source_us: u64) -> u64 {
+        self.start_us + timeline_len(source_us.saturating_sub(self.in_us), self.speed)
+    }
+
+    /// Asset time `[a, b)` as the timeline time it plays, clamped to the clip.
+    pub fn timeline_range(&self, a: u64, b: u64) -> Option<(u64, u64)> {
+        let (a, b) = (a.max(self.in_us), b.min(self.out_us()));
+        (b > a).then(|| (self.timeline_at(a), self.timeline_at(b).min(self.end_us())))
+    }
+
+    /// Whether `next` carries straight on from this clip: the same stream at the same speed,
+    /// from where this one's media ends (to within rounding when it is not at normal speed).
+    pub fn continues_into(&self, next: &Clip) -> bool {
+        self.asset == next.asset
+            && self.stream == next.stream
+            && self.speed == next.speed
+            && self.end_us() == next.start_us
+            && self.out_us().abs_diff(next.in_us) <= self.join_slack()
+    }
+
+    pub fn join_slack(&self) -> u64 {
+        join_slack(self.speed)
     }
 
     pub fn source(&self) -> StreamRef {
@@ -605,7 +687,15 @@ pub fn validate_sequence(sequence: &Sequence, assets: &[Asset]) -> Result<(), St
                     StreamKind::Sound => "Pictures go on video tracks".into(),
                 });
             }
-            if !asset.holds(clip.in_us, clip.duration_us) {
+            if !(MIN_SPEED..=MAX_SPEED).contains(&clip.speed) {
+                return Err(format!(
+                    "A clip plays at {MIN_SPEED}x to {MAX_SPEED}x its speed"
+                ));
+            }
+            if clip.speed != 1.0 && asset.is_still() {
+                return Err("A picture has no speed".into());
+            }
+            if !asset.holds(clip.in_us, clip.source_len_us()) {
                 return Err(format!("A clip of {} runs past its media", asset.name));
             }
         }
@@ -734,6 +824,7 @@ pub(crate) mod tests {
             duration_us: len,
             link: None,
             fit: Fit::Contain,
+            speed: 1.0,
         };
         let mut v1 = Track::new("t1".into(), TrackKind::Video);
         v1.clips = vec![

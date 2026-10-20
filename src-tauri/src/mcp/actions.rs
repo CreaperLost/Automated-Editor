@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 36] = [
+pub static ACTIONS: [ToolDef; 37] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -68,6 +68,13 @@ pub static ACTIONS: [ToolDef; 36] = [
         schema: schema::<NoArgs>,
         read_only: false,
         run: redo,
+    },
+    ToolDef {
+        name: "speed",
+        description: "Plays clips faster or slower, 0.25x to 8x, keeping their media and the             sound's pitch: a clip gets shorter or longer (with what it is linked to). Give             `clips` (ids from timeline_get) or a timeline range `fromUs`-`toUs` (every unlocked             track is split at its ends), and `speed` (1 is normal). Magnetic closes up or pushes             along; `ripple` overrides it (false leaves a gap or stops at the next clip).             `short` works on a short's own timeline. Without `speed` it lists what plays at             other speeds. Only when the user asks: never speed up waiting by yourself.",
+        schema: schema::<SpeedArgs>,
+        read_only: false,
+        run: speed,
     },
     ToolDef {
         name: "transcribe",
@@ -1046,6 +1053,108 @@ fn redo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let before = opened(ctx)?;
     commands::project_redo_impl(ctx.state, before.handle.clone(), before.revision, None)?;
     undone(ctx, &before, "Redid the last undone change.")
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedArgs {
+    /// How fast to play, from 0.25 to 8 (2 is twice as fast, 1 normal). Leave it out to list
+    /// what plays at other speeds.
+    #[serde(default)]
+    pub speed: Option<f64>,
+    /// Clip ids; the clips linked to them change too.
+    #[serde(default)]
+    pub clips: Vec<String>,
+    /// A range of the timeline instead of clips (edited microseconds).
+    #[serde(default)]
+    pub from_us: Option<u64>,
+    #[serde(default)]
+    pub to_us: Option<u64>,
+    /// Overrides magnetic for this change.
+    #[serde(default)]
+    pub ripple: Option<bool>,
+    /// A short's id, for its own timeline instead of the video's.
+    #[serde(default)]
+    pub short: Option<String>,
+}
+
+fn speed(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: SpeedArgs = params(args)?;
+    let before = opened(ctx)?;
+    let report = |ctx: &Ctx| -> Result<Vec<String>, String> {
+        with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let sequence = match &args.short {
+                None => &document.sequence,
+                Some(id) => {
+                    let short = document
+                        .shorts
+                        .iter()
+                        .find(|s| &s.id == id)
+                        .ok_or_else(|| format!("No short {id}"))?;
+                    &short
+                        .edit
+                        .as_ref()
+                        .ok_or_else(|| format!("{id} has no timeline of its own yet"))?
+                        .sequence
+                }
+            };
+            let lines: Vec<String> = sequence
+                .tracks
+                .iter()
+                .flat_map(|t| t.clips.iter().map(move |c| (t, c)))
+                .filter(|(_, c)| c.speed != 1.0)
+                .map(|(t, c)| {
+                    format!(
+                        "{} on {}: {} at {}-{}, playing {}-{} of {}.",
+                        c.id,
+                        sequence.number(&t.id).unwrap_or_default(),
+                        super::views::speed_label(c.speed),
+                        clock(c.start_us),
+                        clock(c.end_us()),
+                        clock(c.in_us),
+                        clock(c.out_us()),
+                        document.asset(&c.asset).map_or(c.asset.as_str(), |a| a.name.as_str())
+                    )
+                })
+                .collect();
+            Ok(lines)
+        })
+    };
+    let Some(speed) = args.speed else {
+        let lines = report(ctx)?;
+        return text(if lines.is_empty() {
+            "Every clip plays at normal speed.".to_string()
+        } else {
+            lines.join("
+")
+        });
+    };
+    let range = match (args.from_us, args.to_us) {
+        (Some(start_us), Some(end_us)) => Some(crate::zoom::EditedRange { start_us, end_us }),
+        (None, None) => None,
+        _ => return Err("Give `fromUs` and `toUs` together".into()),
+    };
+    if range.is_none() && args.clips.is_empty() {
+        return Err("Give `clips` or `fromUs` and `toUs`".into());
+    }
+    commands::project_sequence_edit_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        crate::sequence::edit::SequenceEdit::SetSpeed {
+            clip_ids: args.clips.clone(),
+            speed,
+            range,
+            ripple: args.ripple,
+        },
+        args.short.clone(),
+    )?;
+    let mut lines = report(ctx)?;
+    if lines.is_empty() {
+        lines.push("Every clip plays at normal speed now.".into());
+    }
+    text(applied(ctx, "speed", &before, lines)?)
 }
 
 fn undone(ctx: &Ctx, before: &Open, what: &str) -> Result<Vec<Output>, String> {

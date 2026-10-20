@@ -8,7 +8,7 @@ use crate::dsp::silence::{
     LevelBlock, SilenceConfig, SilenceCutInterval, SilenceDetectionResult, SoundThreshold,
     StreamingSilenceDetector,
 };
-use crate::timeline::{SourceInterval, TimelineMapper};
+use crate::timeline::TimelineMapper;
 use std::fs;
 
 const MAX_DIAGNOSTICS: usize = 32;
@@ -291,10 +291,7 @@ pub(crate) fn detect_track_silence_with_words(
         ctx.retained
             .iter()
             .enumerate()
-            .map(|(i, interval)| {
-                SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
-                    .with_media(interval.media.clone())
-            })
+            .map(|(i, interval)| interval.interval(format!("ret-{i}")))
             .collect(),
     )?;
 
@@ -509,6 +506,7 @@ mod tests {
                 start_us: 0,
                 end_us: 5_000_000,
                 media: None,
+                edited_len_us: None,
             }],
             edited_duration_us: 5_000_000,
             muted: Vec::new(),

@@ -46,10 +46,14 @@ import {
   assetById,
   clipEnd,
   clipName,
+  clipOut,
   clipRole,
+  clipSourceAt,
+  clipSpeed,
   cutJoins,
   defaultClipUs,
   formatRulerLabel,
+  formatSpeed,
   rulerStepUs,
   sequenceEdges,
   snapStart,
@@ -257,6 +261,13 @@ const ClipBlock = React.memo(function ClipBlock({
   const showContents = widthPx >= 40;
   const showTrimHandles = widthPx >= 24;
   const { name, role, missing } = info;
+  const speed = clipSpeed(clip);
+  // Played faster or slower: the speed, by its name.
+  const speedTag = speed !== 1 && (
+    <span className="shrink-0 px-1 rounded-sm bg-studio-950/70 text-[10px] leading-4 font-semibold text-zoom-fg" aria-label={`Plays at ${formatSpeed(speed)}`}>
+      {formatSpeed(speed)}
+    </span>
+  );
   const Icon = audio ? (role === "mic" ? Mic : AudioLines) : info.graphic ? Sparkles : info.image ? ImageIcon : role === "webcam" ? Camera : Film;
   const tint = missing
     ? "bg-danger/15 border-danger/50"
@@ -301,7 +312,7 @@ const ClipBlock = React.memo(function ClipBlock({
         // Padding/borders must not widen a short clip over its neighbours. Subpixel
         // clips show their fill alone; zooming in reveals their border and trim handles.
         style={{ left: pct(clip.startUs), width: pct(clip.durationUs), borderWidth: widthPx < 2 ? 0 : undefined }}
-        title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${
+        title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${speed !== 1 ? ` at ${formatSpeed(speed)}` : ""}${
           info.roleLabel ? ` · ${info.roleLabel}` : ""
         }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click to add or remove), drag to move, drag an edge to trim. Drag over empty space to select several.`}
         onClick={click}
@@ -320,24 +331,26 @@ const ClipBlock = React.memo(function ClipBlock({
               >
                 <ClipWaveform
                   overview={waveform}
-                  fromUs={clip.inUs + (waveFromUs - clip.startUs)}
-                  toUs={clip.inUs + (waveToUs - clip.startUs)}
+                  fromUs={clipSourceAt(clip, waveFromUs)}
+                  toUs={clipSourceAt(clip, waveToUs)}
                   speech={role === "mic"}
                 />
               </div>
             )}
             {/* Muted moments: a mark over the waveform where the sound is silenced. */}
             {mutes
-              ?.filter((m) => m.endUs > clip.inUs && m.startUs < clip.inUs + clip.durationUs)
+              ?.filter((m) => m.endUs > clip.inUs && m.startUs < clipOut(clip))
               .map((m) => {
+                // In the sound's own time: the same share of the clip at any speed.
+                const sourceUs = clipOut(clip) - clip.inUs;
                 const from = Math.max(m.startUs, clip.inUs) - clip.inUs;
-                const to = Math.min(m.endUs, clip.inUs + clip.durationUs) - clip.inUs;
+                const to = Math.min(m.endUs, clipOut(clip)) - clip.inUs;
                 return (
                   <div
                     key={m.startUs}
                     aria-hidden
                     className="absolute inset-y-0 bg-danger/60 pointer-events-none"
-                    style={{ left: `${(from / clip.durationUs) * 100}%`, width: `max(1px, ${((to - from) / clip.durationUs) * 100}%)` }}
+                    style={{ left: `${(from / sourceUs) * 100}%`, width: `max(1px, ${((to - from) / sourceUs) * 100}%)` }}
                   />
                 );
               })}
@@ -345,6 +358,7 @@ const ClipBlock = React.memo(function ClipBlock({
               <span className="absolute top-0.5 left-1 max-w-[calc(100%-0.5rem)] flex items-center gap-1 px-1 rounded-sm bg-studio-950/55 text-[10px] leading-4 font-medium text-white/85 truncate pointer-events-none">
                 {info.unlinked && <Unlink className="w-2.5 h-2.5 shrink-0" aria-label="Unlinked" />}
                 <span className="truncate">{name}</span>
+                {speedTag}
               </span>
             )}
           </>
@@ -353,6 +367,7 @@ const ClipBlock = React.memo(function ClipBlock({
             <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
             {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
             <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
+            {speedTag && <span className="relative pointer-events-none">{speedTag}</span>}
           </>
         ) : null}
         {!locked && showTrimHandles &&

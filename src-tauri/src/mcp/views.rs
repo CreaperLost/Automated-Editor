@@ -221,6 +221,7 @@ const WORD: Rgba<u8> = Rgba([230, 232, 236, 255]);
 const WORD_ID: Rgba<u8> = Rgba([120, 126, 138, 255]);
 const CUT_SHADE: Rgba<u8> = Rgba([230, 80, 80, 70]);
 const CUT_TEXT: Rgba<u8> = Rgba([255, 130, 130, 255]);
+const SPEED_MARK: Rgba<u8> = Rgba([240, 190, 70, 255]);
 
 const RULER_H: u32 = 22;
 const WAVE_H: u32 = 84;
@@ -293,18 +294,19 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             })
             .filter(|&(a, b, _)| b > from && a < to)
             .collect();
+        let speeds = sped_stretches(&document.sequence, from, to);
         Ok((
             from,
             to,
             canvas,
             stream,
             wave,
-            spoken,
+            (spoken, speeds),
             cuts,
             document.revision,
         ))
     })?;
-    let (from, to, canvas, stream, wave, spoken, cuts, revision) = gathered;
+    let (from, to, canvas, stream, wave, (spoken, speeds), cuts, revision) = gathered;
     let span = (to - from) as f64;
     let x_of = |t: u64| ((t.saturating_sub(from)) as f64 / span * width as f64).round() as i64;
 
@@ -365,6 +367,13 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         );
     }
 
+    // Stretches played faster or slower: a bar under the ruler, with the speed.
+    for (a, b, speed) in &speeds {
+        let (x0, x1) = (x_of(*a).max(0), x_of(*b).min(width as i64));
+        fill(&mut image, x0, RULER_H as i64 - 4, x1.max(x0 + 1), RULER_H as i64, SPEED_MARK);
+        draw_text(&mut image, x0 + 2, film_y as i64 + 2, &speed_label(*speed), 12.0, SPEED_MARK);
+    }
+
     // Pending cut proposals, shaded over the waveform and the words.
     for (a, b, label) in &cuts {
         let (x0, x1) = (x_of(*a).max(0), x_of(*b).min(width as i64));
@@ -422,8 +431,43 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             spoken.len(),
             cuts.len(),
             if cuts.len() == 1 { "" } else { "s" },
-        )),
+        ) + &speeds
+            .iter()
+            .map(|(a, b, speed)| {
+                format!(" Plays at {} {}-{}.", speed_label(*speed), clock(*a), clock(*b))
+            })
+            .collect::<String>()),
     ])
+}
+
+/// "2×", "0.5×".
+pub(super) fn speed_label(speed: f64) -> String {
+    format!("{}×", (speed * 100.0).round() / 100.0)
+}
+
+/// Where clips of `sequence` play at other than normal speed within `[from, to)`, by
+/// speed, merged where they meet (linked picture and sound are one stretch).
+pub(super) fn sped_stretches(
+    sequence: &crate::sequence::Sequence,
+    from: u64,
+    to: u64,
+) -> Vec<(u64, u64, f64)> {
+    let mut spans: Vec<(u64, u64, f64)> = sequence
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter())
+        .filter(|c| c.speed != 1.0 && c.end_us() > from && c.start_us < to)
+        .map(|c| (c.start_us.max(from), c.end_us().min(to), c.speed))
+        .collect();
+    spans.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut out: Vec<(u64, u64, f64)> = Vec::new();
+    for (a, b, speed) in spans {
+        match out.iter_mut().rev().find(|s| s.2 == speed && a <= s.1) {
+            Some(last) => last.1 = last.1.max(b),
+            None => out.push((a, b, speed)),
+        }
+    }
+    out
 }
 
 /// A ruler step that keeps labels about 110 pixels apart or more.
