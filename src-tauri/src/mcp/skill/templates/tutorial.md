@@ -80,11 +80,11 @@ The passes:
 
    Choices: yes / rules only (`review: in-house` without saving a review) / skip. Then
    `fillers`. When the user wants nothing sent to OpenRouter, use `review: in-house`.
-5. **Webcam** (only with a camera; `scan` says how many): first, keep the camera bubble? Yes
-   (default) / no (`settings` `area: layout`, `set: {"webcamEnabled": false}`, and skip focus).
-   Then **webcam focus**: `webcam_focus` (the camera fills the frame where the speaker talks
-   and the mouse rests: stretches and their total). Choices: yes / skip (`webcam_focus` with
-   `enabled: false`).
+5. **Layouts** (only with a camera; `scan` says how many): first, the base layout: keep the
+   camera bubble (default) / side by side / no camera (`layouts` `op: base` with `layout`
+   "Side by side" or "Screen only"). Then **picked sections**: `layouts` `op: pick` with
+   `apply: false` first (the camera alone where the speaker talks and the mouse rests:
+   sections and their total). Choices: yes (`op: pick`) / skip.
 6. **Zooms** (only with mouse data): `zooms` (count, average length, how far in). Choices:
    yes / fewer and longer / shorter / skip. "Fewer and longer" raises `minHoldMs` and
    `mergeGapMs` (default 5000 each), "shorter" lowers them; how far in is `clickScale`
@@ -161,7 +161,7 @@ up the edit in a few lines:
 - What to check by hand:
   - the first and last ten seconds (cuts at the edges),
   - each retake cut (that the kept take is the right one),
-  - the webcam focus stretches and zooms on the timeline,
+  - the layout sections and zooms on the timeline,
   - mouth noises left alone next to words.
 - Any step can be undone from the Agent panel's history.
 

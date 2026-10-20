@@ -1,15 +1,16 @@
-//! Saved looks: a video's settings (canvas, camera bubble, captions, zooms, the auto webcam
-//! and the graphics brand) and a short's look, under a name. They are kept for the app, not
-//! one project, so any project can take one on, in one undo step.
+//! Saved looks: a video's settings (its style, base layout, captions, zooms, how layouts are
+//! picked and the graphics brand) and a short's look and base layout, under a name. They are
+//! kept for the app, not one project, so any project can take one on, in one undo step.
 //!
 //! What belongs to one project stays with it: the transcript captions read, the wallpaper
-//! file, stretches where the window crop is off, a short's scenes and hand-framed clips.
+//! file, stretches where the window crop is off, layout sections and hand-framed clips.
 
 use crate::captions::CaptionSettings;
+use crate::layouts::pick::PickSettings;
+use crate::layouts::Layout;
 use crate::project::revision::EditDocument;
 use crate::project::EditLayout;
 use crate::shorts::ShortLayout;
-use crate::webcam_focus::WebcamFocusSettings;
 use crate::zoom::ZoomSettings;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -25,12 +26,16 @@ pub struct Template {
     pub layout: EditLayout,
     pub captions: CaptionSettings,
     pub zoom_settings: ZoomSettings,
-    pub webcam_focus: WebcamFocusSettings,
+    /// The video's base layout and how its sections are picked.
+    pub base: Layout,
+    pub pick: PickSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphics_brand: Option<String>,
-    /// A short's look; none when it was saved without a short.
+    /// A short's look and base layout; none when it was saved without a short.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_look: Option<ShortLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_base: Option<Layout>,
 }
 
 /// The app's templates file (`AEROEDITS_TEMPLATES_DIR` overrides its folder).
@@ -67,7 +72,6 @@ fn check_name(name: &str) -> Result<&str, String> {
 /// The look of a short without what belongs to its own stretch.
 fn bare_short_look(layout: &ShortLayout) -> ShortLayout {
     ShortLayout {
-        scenes: Vec::new(),
         camera_clips: Default::default(),
         graphic_slots: Default::default(),
         ..layout.clone()
@@ -81,15 +85,14 @@ pub fn capture(
     short: Option<&str>,
 ) -> Result<Template, String> {
     let name = check_name(name)?;
-    let short_look = match short {
-        Some(id) => Some(bare_short_look(
-            &document
+    let short = match short {
+        Some(id) => Some(
+            document
                 .shorts
                 .iter()
                 .find(|s| s.id == id)
-                .ok_or("That short is gone")?
-                .layout,
-        )),
+                .ok_or("That short is gone")?,
+        ),
         None => None,
     };
     Ok(Template {
@@ -98,6 +101,7 @@ pub fn capture(
         layout: EditLayout {
             wallpaper_asset: None,
             window_crop_off: Vec::new(),
+            camera_clips: Default::default(),
             ..document.layout.clone()
         },
         captions: CaptionSettings {
@@ -105,9 +109,11 @@ pub fn capture(
             ..document.captions.clone()
         },
         zoom_settings: document.zoom_settings.clone(),
-        webcam_focus: document.webcam_focus.settings.clone(),
+        base: document.layouts.base.clone(),
+        pick: document.layouts.pick.clone(),
         graphics_brand: document.graphics_brand.clone(),
-        short_look,
+        short_look: short.map(|s| bare_short_look(&s.layout)),
+        short_base: short.map(|s| s.layouts.base.clone()),
     })
 }
 
@@ -166,6 +172,7 @@ pub fn layout_onto(template: &EditLayout, current: &EditLayout) -> EditLayout {
     let mut layout = EditLayout {
         wallpaper_asset: current.wallpaper_asset.clone(),
         window_crop_off: current.window_crop_off.clone(),
+        camera_clips: current.camera_clips.clone(),
         ..template.clone()
     };
     if layout.background_type == "wallpaper" && layout.wallpaper_asset.is_none() {
@@ -188,7 +195,6 @@ pub fn captions_onto(template: &CaptionSettings, current: &CaptionSettings) -> C
 /// A short's layout with the template's look; its scenes and framing stay.
 pub fn short_look_onto(template: &ShortLayout, current: &ShortLayout) -> ShortLayout {
     ShortLayout {
-        scenes: current.scenes.clone(),
         camera_clips: current.camera_clips.clone(),
         graphic_slots: current.graphic_slots.clone(),
         ..template.clone()

@@ -1,6 +1,6 @@
 //! Shorts: vertical clips cut from the long video. A short is anchored in source time at the
 //! first and last word it covers, so it follows later edits; it exports as a 9:16 video made of
-//! that stretch of the current edit, with the project's zooms, webcam focus and captions.
+//! that stretch of the current edit, with the project's zooms and captions and its own layouts.
 use crate::project::revision::EditDocument;
 use crate::sequence::Sequence;
 use crate::timeline::TimelineMapper;
@@ -9,14 +9,6 @@ use serde::{Deserialize, Serialize};
 pub const MAX_SHORTS: usize = 50;
 pub const MIN_SHORT_US: u64 = 3_000_000;
 pub const MAX_SHORT_US: u64 = 180_000_000;
-
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum CameraPosition {
-    #[default]
-    Top,
-    Bottom,
-}
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -42,20 +34,15 @@ pub struct ClipFraming {
 /// More clips framed by hand than any short has.
 pub const MAX_FRAMED_CLIPS: usize = 500;
 
-pub const MIN_CAMERA_PCT: f32 = 20.0;
-pub const MAX_CAMERA_PCT: f32 = 70.0;
 pub const MAX_SCREEN_ZOOM: f32 = 3.0;
 /// Below 1 the screen zooms out: smaller than its part of the frame, background around it.
 pub const MIN_SCREEN_ZOOM: f32 = 0.3;
 
-/// The split-screen look of a short: the camera across the top or bottom, the screen in the
-/// rest, cut to that shape and following the project's zooms.
+/// The look of a short: how its screen and camera are framed, its captions and background.
+/// Where they go is its layouts' business ([`Short::layouts`]).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShortLayout {
-    pub camera_position: CameraPosition,
-    /// Share of the frame height the camera takes.
-    pub camera_pct: f32,
     /// Camera clips (by clip id) framed by hand. Every other camera clip is lined up with the
     /// face as it starts, zooming in a little when the face is near an edge.
     pub camera_clips: std::collections::BTreeMap<String, ClipFraming>,
@@ -81,10 +68,6 @@ pub struct ShortLayout {
     pub background_color_start: String,
     pub background_color_end: String,
     pub background_preset: String,
-    /// Stretches that show only the camera or only the screen; the rest is split.
-    pub scenes: Vec<crate::short_scenes::Scene>,
-    /// How long the frame takes to change into and out of a scene; 0 is a hard cut.
-    pub scene_transition_ms: u32,
     /// Where each graphic plays in this short, by its clip id; a graphic not listed plays
     /// full screen.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -100,9 +83,9 @@ pub enum GraphicSlot {
     /// The whole frame, over everything.
     #[default]
     Full,
-    /// The camera's part of the split (at the short's own share), over everything there.
+    /// The camera's part of the short's base layout, over everything there.
     Camera,
-    /// The screen's part of the split, over everything there.
+    /// The screen's part of the base layout, over everything there.
     Screen,
     /// Over the screen's part, under the captions; the graphic's see-through parts show the
     /// screen.
@@ -121,27 +104,42 @@ pub fn graphic_slot(layout: &ShortLayout, clip_id: &str) -> GraphicSlot {
         .unwrap_or_default()
 }
 
-/// Where graphic clip `clip_id` plays in a `width` x `height` short: the whole frame, or a
-/// part of the split at the short's own share (scenes do not move it), as with a camera.
+/// Where graphic clip `clip_id` plays in a `width` x `height` frame of `document` (a short's):
+/// the whole frame, or a part of its base layout (sections do not move it).
 pub fn graphic_rect(
-    layout: &ShortLayout,
+    document: &EditDocument,
     clip_id: &str,
     width: u32,
     height: u32,
 ) -> (u32, u32, u32, u32) {
-    let rects = split_rects(width, height, layout, true);
-    match graphic_slot(layout, clip_id) {
-        GraphicSlot::Full => (0, 0, width, height),
-        GraphicSlot::Camera => rects.camera.unwrap_or((0, 0, width, height)),
-        GraphicSlot::Screen | GraphicSlot::OverScreen => rects.screen,
+    use crate::layouts::arrange::{arrange, Canvas, Sources};
+    let whole = (0, 0, width, height);
+    let Some(short) = &document.short_layout else {
+        return whole;
+    };
+    let slot = graphic_slot(short, clip_id);
+    if slot == GraphicSlot::Full {
+        return whole;
     }
+    let parts = arrange(
+        &document.layouts.base,
+        &document.layout,
+        Canvas::new(width, height),
+        Sources {
+            screen: Some((1920, 1080)),
+            camera: Some((1920, 1080)),
+        },
+    );
+    let rect = match slot {
+        GraphicSlot::Camera => parts.camera.map(|c| c.rect),
+        _ => parts.screen.map(|s| s.rect),
+    };
+    rect.map_or(whole, |r| r.pixels(width, height))
 }
 
 impl Default for ShortLayout {
     fn default() -> Self {
         Self {
-            camera_position: CameraPosition::Top,
-            camera_pct: 35.0,
             camera_clips: Default::default(),
             screen_zoom: 1.0,
             follow_zooms: true,
@@ -156,8 +154,6 @@ impl Default for ShortLayout {
             background_color_start: "#000000".into(),
             background_color_end: "#1e1b4b".into(),
             background_preset: "aurora".into(),
-            scenes: Vec::new(),
-            scene_transition_ms: crate::short_scenes::DEFAULT_TRANSITION_MS,
             graphic_slots: Default::default(),
         }
     }
@@ -165,11 +161,6 @@ impl Default for ShortLayout {
 
 impl ShortLayout {
     pub fn validate(&self) -> Result<(), String> {
-        if !(MIN_CAMERA_PCT..=MAX_CAMERA_PCT).contains(&self.camera_pct) {
-            return Err(format!(
-                "The camera takes {MIN_CAMERA_PCT}% to {MAX_CAMERA_PCT}% of a short's height"
-            ));
-        }
         if !(MIN_SCREEN_ZOOM..=MAX_SCREEN_ZOOM).contains(&self.screen_zoom) {
             return Err(format!(
                 "Screen zoom is {MIN_SCREEN_ZOOM}x to {MAX_SCREEN_ZOOM}x"
@@ -190,19 +181,7 @@ impl ShortLayout {
         {
             return Err("The screen pans -1 to 1 each way".into());
         }
-        if self.camera_clips.len() > MAX_FRAMED_CLIPS {
-            return Err("Too many camera clips framed by hand".into());
-        }
-        for (clip, framing) in &self.camera_clips {
-            if clip.is_empty() || clip.len() > 128 {
-                return Err("Unknown camera clip".into());
-            }
-            if !(-1.0..=1.0).contains(&framing.offset_x)
-                || !(-1.0..=1.0).contains(&framing.offset_y)
-            {
-                return Err("The camera framing moves -1 to 1 each way".into());
-            }
-        }
+        validate_framing(&self.camera_clips)?;
         if self.caption_max_words > crate::captions::MAX_WORDS_RANGE.1 {
             return Err("Too many words per caption".into());
         }
@@ -223,50 +202,26 @@ impl ShortLayout {
         {
             return Err("Too many graphic slots, or a bad clip id".into());
         }
-        crate::short_scenes::validate(&self.scenes, self.scene_transition_ms)
+        Ok(())
     }
 }
 
-/// Pixel rectangles (x, y, width, height) of a split frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SplitRects {
-    pub camera: Option<(u32, u32, u32, u32)>,
-    pub screen: (u32, u32, u32, u32),
-}
-
-/// Where camera and screen go. Without a camera the screen takes the whole frame.
-pub fn split_rects(width: u32, height: u32, layout: &ShortLayout, has_camera: bool) -> SplitRects {
-    split_rects_at(width, height, layout, has_camera, layout.camera_pct / 100.0)
-}
-
-/// [`split_rects`] with the camera taking `share` of the height: 0 leaves only the screen, 1
-/// only the camera (the screen's part is then empty).
-pub fn split_rects_at(
-    width: u32,
-    height: u32,
-    layout: &ShortLayout,
-    has_camera: bool,
-    share: f32,
-) -> SplitRects {
-    let camera_h = (height as f32 * share.clamp(0.0, 1.0)).round() as u32;
-    if !has_camera || camera_h == 0 {
-        return SplitRects {
-            camera: None,
-            screen: (0, 0, width, height),
-        };
+/// Checks camera clips framed by hand.
+pub fn validate_framing(
+    clips: &std::collections::BTreeMap<String, ClipFraming>,
+) -> Result<(), String> {
+    if clips.len() > MAX_FRAMED_CLIPS {
+        return Err("Too many camera clips framed by hand".into());
     }
-    let camera_h = camera_h.min(height);
-    let screen_h = height - camera_h;
-    match layout.camera_position {
-        CameraPosition::Top => SplitRects {
-            camera: Some((0, 0, width, camera_h)),
-            screen: (0, camera_h, width, screen_h),
-        },
-        CameraPosition::Bottom => SplitRects {
-            camera: Some((0, screen_h, width, camera_h)),
-            screen: (0, 0, width, screen_h),
-        },
+    for (clip, framing) in clips {
+        if clip.is_empty() || clip.len() > 128 {
+            return Err("Unknown camera clip".into());
+        }
+        if !(-1.0..=1.0).contains(&framing.offset_x) || !(-1.0..=1.0).contains(&framing.offset_y) {
+            return Err("The camera framing moves -1 to 1 each way".into());
+        }
     }
+    Ok(())
 }
 
 /// The part of the screen recording (as UV) shown in a `region_w` x `region_h` area: the
@@ -302,25 +257,26 @@ pub fn screen_window(
     (x, y, uv_w, uv_h)
 }
 
-/// How a short frames camera clip `clip`, as `render::focus_uv` takes it: the face to centre
-/// on and an offset. A clip framed by hand has no face and its own offset (flipped for a
-/// mirrored camera, so it moves the picture the way it looks). Every other clip is lined up
+/// How camera clip `clip` is framed under `style`, as `render::focus_uv` takes it: the face to
+/// centre on and an offset. A clip framed by hand has no face and its own offset (flipped for
+/// a mirrored camera, so it moves the picture the way it looks). Every other clip is lined up
 /// once with the typical face over the part of the camera it plays, and holds for the whole
-/// clip; no face track, or no face found, keeps the centre crop. For the camera part of the
-/// split and for any scene that shows the camera alone.
+/// clip; face framing off, no face track, or no face found keeps the centre crop.
 pub fn camera_framing(
     root: &std::path::Path,
-    short: &ShortLayout,
+    style: &crate::project::EditLayout,
     clip: &crate::sequence::Clip,
-    mirrored: bool,
 ) -> (Option<crate::face::FocusPoint>, (f32, f32)) {
-    if let Some(framing) = short.camera_clips.get(&clip.id) {
-        let x = if mirrored {
+    if let Some(framing) = style.camera_clips.get(&clip.id) {
+        let x = if style.webcam_mirror {
             -framing.offset_x
         } else {
             framing.offset_x
         };
         return (None, (x, framing.offset_y));
+    }
+    if !style.face_framing {
+        return (None, (0.0, 0.0));
     }
     let focus = crate::face::cached_track(root, &clip.asset, &clip.stream)
         .and_then(|track| crate::face::clip_focus(&track, clip.in_us, clip.out_us()));
@@ -388,19 +344,31 @@ pub fn screen_placement(
     ((x, y, w, h), (uv_x, uv_y, uv_w, uv_h))
 }
 
-/// The caption's top edge in a split frame.
-pub fn caption_y(spot: CaptionSpot, rects: &SplitRects, caption_h: u32, canvas_h: u32) -> u32 {
-    let margin = canvas_h / 40;
-    let bottom_of = |(_, y, _, h): (u32, u32, u32, u32)| (y + h).saturating_sub(caption_h + margin);
-    let y = match (spot, rects.camera) {
-        (CaptionSpot::Seam, Some((_, cam_y, _, cam_h))) => {
-            let seam = if cam_y == 0 { cam_h } else { cam_y };
-            seam.saturating_sub(caption_h / 2)
-        }
-        (CaptionSpot::Camera, Some(camera)) => bottom_of(camera),
-        _ => bottom_of(rects.screen),
+/// Where captions sit when one picture fills a short's frame: their middle at this share of
+/// the height, above the controls short-video apps draw over the bottom.
+pub const FULL_FRAME_CAPTION_AT: f32 = 0.70;
+
+/// The caption's top edge in a short's frame laid out as `parts`: at `spot` when camera and
+/// screen are stacked, else at the full-frame spot.
+pub fn caption_y(
+    spot: CaptionSpot,
+    parts: &crate::layouts::arrange::Arrangement,
+    caption_h: u32,
+    canvas_h: u32,
+) -> f32 {
+    let (h, canvas) = (caption_h as f32, canvas_h as f32);
+    let margin = (canvas_h / 40) as f32;
+    let bottom_of = |r: crate::layouts::arrange::Rect| r.bottom() - h - margin;
+    let full = canvas * FULL_FRAME_CAPTION_AT - h / 2.0;
+    let y = match (parts.seam, parts.camera, parts.screen) {
+        (Some(seam), Some(camera), Some(screen)) => match spot {
+            CaptionSpot::Seam => seam - h / 2.0,
+            CaptionSpot::Camera => bottom_of(camera.rect),
+            CaptionSpot::Screen => bottom_of(screen.rect),
+        },
+        _ => full,
     };
-    y.min(canvas_h.saturating_sub(caption_h))
+    y.clamp(0.0, (canvas - h).max(0.0))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -413,9 +381,12 @@ pub struct Short {
     /// Why the AI picked it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
-    /// How the vertical frame is split between camera and screen.
+    /// How its screen and camera are framed, its captions and background.
     #[serde(default)]
     pub layout: ShortLayout,
+    /// Its base layout and sections, on its own timeline.
+    #[serde(default = "crate::layouts::LayoutTrack::for_short")]
+    pub layouts: crate::layouts::LayoutTrack,
     /// The asset whose clock the start and end are on; `None` is the first recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
@@ -541,6 +512,7 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
     timeline.shorts.clear();
     timeline.chapters.clear();
     timeline.short_layout = None;
+    timeline.layouts = short.layouts.clone();
     // A take's captions read the take's own words.
     if let Some(take) = &short.take {
         timeline.captions.track_id = Some(take.voice.clone());
@@ -557,78 +529,6 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
         }
     };
     Ok(timeline)
-}
-
-/// Scenes for stretches of `short`'s own timeline, as (start, end, mode) in the short's time,
-/// anchored in its recording's time. A stretch over a cut becomes one scene per piece.
-pub fn scenes_at(
-    base: &EditDocument,
-    short: &Short,
-    ranges: &[(u64, u64, crate::short_scenes::SceneMode)],
-) -> Result<Vec<crate::short_scenes::Scene>, String> {
-    let timeline = short_timeline(base, short)?;
-    let asset = timeline
-        .clock_asset(short.media.as_deref())
-        .ok_or("This short plays no recording")?;
-    let clock = timeline.asset_clock(asset);
-    let mut scenes = Vec::new();
-    for &(start, end, mode) in ranges {
-        for (a, b) in clock.edited_range_to_source(start, end) {
-            scenes.push(crate::short_scenes::Scene {
-                media: short.media.clone(),
-                ..crate::short_scenes::Scene::new(format!("scene-{}", a / 1000), a, b, mode)
-            });
-        }
-    }
-    Ok(scenes)
-}
-
-/// `short`'s scenes with a new one over `[start, end)` of its own timeline; the new one takes
-/// that time from any it overlaps.
-pub fn with_scene(
-    base: &EditDocument,
-    short: &Short,
-    start: u64,
-    end: u64,
-    mode: crate::short_scenes::SceneMode,
-) -> Result<Vec<crate::short_scenes::Scene>, String> {
-    let added = scenes_at(base, short, &[(start, end, mode)])?;
-    if added.is_empty() {
-        return Err("Nothing of the recording plays there".into());
-    }
-    let mut out = Vec::new();
-    for scene in &short.layout.scenes {
-        let mut pieces = vec![(scene.source_start_us, scene.source_end_us)];
-        for new in added.iter().filter(|n| n.media == scene.media) {
-            pieces = pieces
-                .into_iter()
-                .flat_map(|(a, b)| {
-                    let mut left = Vec::new();
-                    if a < new.source_start_us {
-                        left.push((a, b.min(new.source_start_us)));
-                    }
-                    if b > new.source_end_us {
-                        left.push((a.max(new.source_end_us), b));
-                    }
-                    left
-                })
-                .collect();
-        }
-        for (i, (a, b)) in pieces.into_iter().enumerate() {
-            out.push(crate::short_scenes::Scene {
-                id: if i == 0 {
-                    scene.id.clone()
-                } else {
-                    format!("{}-{i}", scene.id)
-                },
-                source_start_us: a,
-                source_end_us: b,
-                ..scene.clone()
-            });
-        }
-    }
-    out.extend(added);
-    Ok(crate::short_scenes::normalized(out))
 }
 
 /// Checks each short's own timeline the way the project's is checked.
@@ -662,6 +562,7 @@ pub fn validate(shorts: &[Short]) -> Result<(), String> {
             return Err("A short's note is too long".into());
         }
         short.layout.validate()?;
+        short.layouts.validate()?;
     }
     Ok(())
 }
@@ -669,8 +570,7 @@ pub fn validate(shorts: &[Short]) -> Result<(), String> {
 pub fn normalized(mut shorts: Vec<Short>) -> Vec<Short> {
     for short in &mut shorts {
         short.title = short.title.trim().to_string();
-        short.layout.scenes =
-            crate::short_scenes::normalized(std::mem::take(&mut short.layout.scenes));
+        short.layouts = std::mem::take(&mut short.layouts).normalized();
         short.edited_start_us = None;
         short.edited_end_us = None;
         short.length_us = None;
@@ -710,17 +610,6 @@ pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
             short.length_us = Some(own.sequence.duration_us());
             short.edited_start_us = None;
             short.edited_end_us = None;
-            let length = own.sequence.duration_us();
-            for scene in &mut short.layout.scenes {
-                let shown = document
-                    .clock_asset(scene.media.as_deref())
-                    .and_then(|asset| {
-                        let clock = crate::sequence::clock::asset_clock(&own.sequence, asset);
-                        shown_in(&clock, scene, 0, length)
-                    });
-                scene.shown_start_us = shown.map(|s| s.0);
-                scene.shown_end_us = shown.map(|s| s.1);
-            }
             continue;
         }
         let range = document
@@ -736,36 +625,7 @@ pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
         });
         short.edited_start_us = range.map(|r| r.0);
         short.edited_end_us = range.map(|r| r.1);
-        for scene in &mut short.layout.scenes {
-            let shown = range.and_then(|(start, end)| {
-                let asset = document.clock_asset(scene.media.as_deref())?;
-                let clock = clocks
-                    .entry(asset.to_string())
-                    .or_insert_with(|| document.asset_clock(asset));
-                shown_in(clock, scene, start, end)
-            });
-            scene.shown_start_us = shown.map(|s| s.0);
-            scene.shown_end_us = shown.map(|s| s.1);
-        }
     }
-}
-
-/// Where `scene` plays within `[start, end)` of `clock`'s timeline, from `start`.
-fn shown_in(
-    clock: &TimelineMapper,
-    scene: &crate::short_scenes::Scene,
-    start: u64,
-    end: u64,
-) -> Option<(u64, u64)> {
-    let pieces: Vec<(u64, u64)> = clock
-        .source_range_to_edited(scene.source_start_us, scene.source_end_us)
-        .into_iter()
-        .map(|(a, b)| (a.max(start), b.min(end)))
-        .filter(|(a, b)| a < b)
-        .collect();
-    let first = pieces.iter().map(|p| p.0).min()?;
-    let last = pieces.iter().map(|p| p.1).max()?;
-    Some((first - start, last - start))
 }
 
 /// The document a short exports from: the short's stretch of the edit on a 9:16 canvas, with
@@ -790,6 +650,8 @@ pub fn short_document(
     if short.layout.caption_size_pct > 0.0 {
         document.captions.font_size_pct = short.layout.caption_size_pct;
     }
+    // Its camera clips are its own (the same ids can be the video's).
+    document.layout.camera_clips = short.layout.camera_clips.clone();
     document.short_layout = Some(short.layout.clone());
     document.chapters.clear();
     document.shorts.clear();
@@ -831,6 +693,7 @@ mod tests {
             source_end_us: end,
             reason: String::new(),
             layout: ShortLayout::default(),
+            layouts: crate::layouts::LayoutTrack::for_short(),
             media: None,
             edit: None,
             take: None,
@@ -841,47 +704,37 @@ mod tests {
     }
 
     #[test]
-    fn scenes_follow_the_short_through_cuts() {
-        use crate::short_scenes::SceneMode;
+    fn layout_sections_follow_the_short_through_cuts() {
+        use crate::layouts::{CameraOnly, Layout, LayoutSection, ScreenOnly};
         // A short of 10-40 s of the recording; the video then loses 15-20 s.
         let mut document = doc(60 * S);
         let mut s = short(10 * S, 40 * S);
         cut(&mut document, 15 * S, 20 * S);
-        // 2-8 s of the short spans the cut: 12-15 s and 20-23 s of the recording.
-        s.layout.scenes = with_scene(&document, &s, 2 * S, 8 * S, SceneMode::Camera).unwrap();
+        let add = |s: &mut Short, start: u64, end: u64, layout: Layout| {
+            let timeline = short_timeline(&document, s).unwrap();
+            let template = LayoutSection::new(s.layouts.new_id(), None, 0, 1, Some(layout));
+            let made = crate::layouts::sections_on(&timeline, start, end, &template).unwrap();
+            s.layouts.add(made);
+        };
+        // 2-8 s of the short spans the cut: 12-15 s and 20-23 s of the recording, one section.
+        add(&mut s, 2 * S, 8 * S, Layout::CameraOnly(CameraOnly::default()));
         let spans: Vec<(u64, u64)> = s
-            .layout
-            .scenes
+            .layouts
+            .sections
             .iter()
             .map(|sc| (sc.source_start_us, sc.source_end_us))
             .collect();
-        assert_eq!(spans, vec![(12 * S, 15 * S), (20 * S, 23 * S)]);
-        // A screen scene over 6-10 s takes its time from the camera one.
-        s.layout.scenes = with_scene(&document, &s, 6 * S, 10 * S, SceneMode::Screen).unwrap();
+        assert_eq!(spans, vec![(12 * S, 23 * S)]);
+        // A screen section over 6-10 s takes its time from the camera one.
+        add(&mut s, 6 * S, 10 * S, Layout::ScreenOnly(ScreenOnly::default()));
         validate(std::slice::from_ref(&s)).unwrap();
-        let mut shown = vec![s.clone()];
-        attach_edited(&mut shown, &document);
-        let placed: Vec<(Option<u64>, Option<u64>, SceneMode)> = shown[0]
-            .layout
-            .scenes
+        let timeline = short_timeline(&document, &s).unwrap();
+        let shown: Vec<(u64, u64, bool)> = crate::layouts::resolve::of_document(&timeline)
+            .pieces
             .iter()
-            .map(|sc| (sc.shown_start_us, sc.shown_end_us, sc.mode))
+            .map(|p| (p.start_us, p.end_us, p.layout.camera_fills()))
             .collect();
-        assert_eq!(
-            placed,
-            vec![
-                (Some(2 * S), Some(5 * S), SceneMode::Camera),
-                (Some(5 * S), Some(6 * S), SceneMode::Camera),
-                (Some(6 * S), Some(10 * S), SceneMode::Screen),
-            ]
-        );
-        // Storing drops the UI's positions.
-        let stored = normalized(shown);
-        assert!(stored[0]
-            .layout
-            .scenes
-            .iter()
-            .all(|sc| sc.shown_start_us.is_none()));
+        assert_eq!(shown, vec![(2 * S, 6 * S, true), (6 * S, 10 * S, false)]);
     }
 
     #[test]
@@ -952,49 +805,37 @@ mod tests {
     }
 
     #[test]
-    fn split_frames_and_screen_windows() {
+    fn graphic_slots_captions_and_screen_windows() {
+        use crate::layouts::arrange::{arrange, Canvas, Sources};
+        use crate::layouts::{Layout, SideBySide};
         let layout = ShortLayout::default();
-        let rects = split_rects(1080, 1920, &layout, true);
-        assert_eq!(rects.camera, Some((0, 0, 1080, 672)));
-        assert_eq!(rects.screen, (0, 672, 1080, 1248));
-        let bottom = ShortLayout {
-            camera_position: CameraPosition::Bottom,
+        // The camera below the screen, half and half.
+        let bottom = Layout::SideBySide(SideBySide {
+            camera_first: false,
             camera_pct: 50.0,
-            ..ShortLayout::default()
-        };
-        let rects_b = split_rects(1080, 1920, &bottom, true);
-        assert_eq!(rects_b.camera, Some((0, 960, 1080, 960)));
-        assert_eq!(rects_b.screen, (0, 0, 1080, 960));
-        // Scenes: a screen scene gives the screen the frame, a camera scene the camera.
-        let screen_only = split_rects_at(1080, 1920, &layout, true, 0.0);
-        assert_eq!(screen_only.camera, None);
-        assert_eq!(screen_only.screen, (0, 0, 1080, 1920));
-        let camera_only = split_rects_at(1080, 1920, &layout, true, 1.0);
-        assert_eq!(camera_only.camera, Some((0, 0, 1080, 1920)));
-        assert_eq!(camera_only.screen.3, 0);
-        assert_eq!(
-            split_rects(1080, 1920, &layout, false).screen,
-            (0, 0, 1080, 1920)
-        );
-
-        // Graphics: full frame unless given a part of the split (at the short's own share).
-        let mut slotted = bottom.clone();
+            ..SideBySide::default()
+        });
+        // Graphics: full frame unless given a part of the base layout.
+        let mut slotted = layout.clone();
         slotted
             .graphic_slots
             .insert("g-cam".into(), GraphicSlot::Camera);
         slotted
             .graphic_slots
             .insert("g-over".into(), GraphicSlot::OverScreen);
+        let mut document = doc(10 * S);
+        document.layouts.base = bottom.clone();
+        document.short_layout = Some(slotted.clone());
         assert_eq!(
-            graphic_rect(&slotted, "g-other", 1080, 1920),
+            graphic_rect(&document, "g-other", 1080, 1920),
             (0, 0, 1080, 1920)
         );
         assert_eq!(
-            graphic_rect(&slotted, "g-cam", 1080, 1920),
+            graphic_rect(&document, "g-cam", 1080, 1920),
             (0, 960, 1080, 960)
         );
         assert_eq!(
-            graphic_rect(&slotted, "g-over", 1080, 1920),
+            graphic_rect(&document, "g-over", 1080, 1920),
             (0, 0, 1080, 960)
         );
         let json = serde_json::to_value(&slotted).unwrap();
@@ -1048,24 +889,37 @@ mod tests {
         );
         assert!((x3 - 0.1).abs() < 1e-6);
 
-        // Captions: on the seam, in the screen part, or in the camera part.
-        assert_eq!(caption_y(CaptionSpot::Seam, &rects, 100, 1920), 622);
+        // Captions: on the seam, in the screen part, or in the camera part; at the full-frame
+        // spot when one picture fills the frame.
+        let style = crate::project::EditLayout::plain();
+        let both = Sources {
+            screen: Some((1920, 1080)),
+            camera: Some((1920, 1080)),
+        };
+        let canvas = Canvas::new(1080, 1920);
+        let top = arrange(&crate::layouts::LayoutTrack::for_short().base, &style, canvas, both);
+        assert_eq!(caption_y(CaptionSpot::Seam, &top, 100, 1920), 622.0);
         assert_eq!(
-            caption_y(CaptionSpot::Screen, &rects, 100, 1920),
-            1920 - 100 - 48
+            caption_y(CaptionSpot::Screen, &top, 100, 1920),
+            (1920 - 100 - 48) as f32
         );
         assert_eq!(
-            caption_y(CaptionSpot::Camera, &rects, 100, 1920),
-            672 - 100 - 48
+            caption_y(CaptionSpot::Camera, &top, 100, 1920),
+            (672 - 100 - 48) as f32
         );
-        assert_eq!(caption_y(CaptionSpot::Seam, &rects_b, 100, 1920), 910);
+        let under = arrange(&bottom, &style, canvas, both);
+        assert_eq!(caption_y(CaptionSpot::Seam, &under, 100, 1920), 910.0);
+        let alone = arrange(
+            &Layout::CameraOnly(Default::default()),
+            &style,
+            canvas,
+            both,
+        );
+        assert_eq!(
+            caption_y(CaptionSpot::Seam, &alone, 100, 1920),
+            1920.0 * FULL_FRAME_CAPTION_AT - 50.0
+        );
 
-        assert!(ShortLayout {
-            camera_pct: 10.0,
-            ..ShortLayout::default()
-        }
-        .validate()
-        .is_err());
         let mut by_hand = ShortLayout::default();
         by_hand.camera_clips.insert(
             "c1".into(),

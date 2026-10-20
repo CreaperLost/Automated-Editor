@@ -519,7 +519,7 @@ mod tests {
         };
         let scan = scan_track_silence(&ctx, &config).unwrap();
         assert_eq!(scan.covered, vec![(0, 5_000_000)]);
-        let speech = crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges);
+        let speech = crate::layouts::pick::speech_ranges(&scan.covered, &scan.source_ranges);
         assert_eq!(speech.len(), 2, "{speech:?}");
         assert!(speech[0].1.abs_diff(2_000_000) < 60_000, "{speech:?}");
         assert!(speech[1].0.abs_diff(3_000_000) < 60_000, "{speech:?}");

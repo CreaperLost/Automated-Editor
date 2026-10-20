@@ -36,7 +36,7 @@ const ACTION_LABEL: Record<string, string> = {
   silence: "Silence",
   gaps: "Gaps",
   fillers: "Fillers",
-  webcam_focus: "Webcam focus",
+  layouts: "Layouts",
   zooms: "Zooms",
   settings: "Settings",
   chapters: "Chapters",

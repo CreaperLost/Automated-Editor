@@ -10,6 +10,7 @@ pub mod export;
 pub mod face;
 pub mod fixtures;
 pub mod graphics;
+pub mod layouts;
 pub mod mcp;
 pub mod media;
 pub mod media_bin;
@@ -21,7 +22,6 @@ pub mod proposals;
 pub mod render;
 pub mod secrets;
 pub mod sequence;
-pub mod short_scenes;
 pub mod shorts;
 pub mod sound_effects;
 pub mod take_short;
@@ -29,7 +29,6 @@ pub mod telemetry;
 pub mod templates;
 pub mod timeline;
 pub mod transcript;
-pub mod webcam_focus;
 pub mod window_crop;
 pub mod zoom;
 
@@ -307,17 +306,19 @@ fn project_zoom_delete(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-async fn project_webcam_focus_detect(
+async fn project_layouts_pick(
     app: tauri::AppHandle,
     project_handle: String,
     expected_revision: u64,
-    settings: webcam_focus::WebcamFocusSettings,
-) -> Result<commands::WebcamFocusDetection, String> {
+    short_id: Option<String>,
+    settings: Option<layouts::pick::PickSettings>,
+) -> Result<commands::LayoutPick, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::project_webcam_focus_detect_impl(
+        commands::project_layouts_pick_impl(
             &app.state::<AppState>(),
             project_handle,
             expected_revision,
+            short_id,
             settings,
         )
     })
@@ -327,49 +328,41 @@ async fn project_webcam_focus_detect(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_webcam_focus_update(
+fn project_layouts_change(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
-    focus: webcam_focus::WebcamFocus,
+    short_id: Option<String>,
+    change: commands::LayoutChange,
 ) -> Result<project::OpenedProject, String> {
-    commands::project_webcam_focus_update_impl(&state, project_handle, expected_revision, focus)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_webcam_focus_add(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    edited_start_us: u64,
-    edited_end_us: u64,
-) -> Result<project::OpenedProject, String> {
-    commands::project_webcam_focus_add_impl(
+    commands::project_layouts_change_impl(
         &state,
         project_handle,
         expected_revision,
-        edited_start_us,
-        edited_end_us,
+        short_id,
+        change,
     )
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_webcam_focus_remove(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    edited_start_us: u64,
-    edited_end_us: u64,
-) -> Result<project::OpenedProject, String> {
-    commands::project_webcam_focus_remove_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        edited_start_us,
-        edited_end_us,
-    )
+fn layout_favourites_list() -> Vec<layouts::favourites::Favourite> {
+    layouts::favourites::list(&templates::dir())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn layout_favourite_save(
+    name: String,
+    layout: layouts::Layout,
+) -> Result<Vec<layouts::favourites::Favourite>, String> {
+    layouts::favourites::save(&templates::dir(), &name, layout)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn layout_favourite_remove(id: String) -> Result<Vec<layouts::favourites::Favourite>, String> {
+    layouts::favourites::remove(&templates::dir(), &id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1073,49 +1066,6 @@ fn project_short_footage(
         short_id,
         change,
     )
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-fn project_short_scene_add(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    short_id: String,
-    start_us: u64,
-    end_us: u64,
-    mode: short_scenes::SceneMode,
-) -> Result<project::OpenedProject, String> {
-    commands::project_short_scene_add_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        short_id,
-        start_us,
-        end_us,
-        mode,
-    )
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn project_short_scenes_pick(
-    app: tauri::AppHandle,
-    project_handle: String,
-    expected_revision: u64,
-    short_id: String,
-) -> Result<project::OpenedProject, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        commands::project_short_scenes_pick_impl(
-            &app.state::<AppState>(),
-            project_handle,
-            expected_revision,
-            short_id,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2265,10 +2215,11 @@ pub fn run() {
             project_zoom_add,
             project_zoom_delete,
             project_layout_update,
-            project_webcam_focus_detect,
-            project_webcam_focus_update,
-            project_webcam_focus_add,
-            project_webcam_focus_remove,
+            project_layouts_pick,
+            project_layouts_change,
+            layout_favourites_list,
+            layout_favourite_save,
+            layout_favourite_remove,
             project_audio_update,
             project_captions_update,
             project_ripple_cuts,
@@ -2339,8 +2290,6 @@ pub fn run() {
             template_apply,
             project_short_from_take,
             project_short_footage,
-            project_short_scenes_pick,
-            project_short_scene_add,
             project_shorts_generate,
             project_short_export,
             short_preview_frame,

@@ -897,8 +897,8 @@ pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject
     let summary = reader.summary.clone();
     let document = reader.history().current.clone();
     let mut owner = PlaybackOwner::open(summary.project_handle.clone(), &document)?;
-    // A project with shorts frames their camera on the face: find it in the background.
-    if !document.shorts.is_empty() {
+    // Every camera is framed on the face unless that is off: find it in the background.
+    if document.layout.face_framing || !document.shorts.is_empty() {
         crate::face::ensure(reader.root(), &document, false);
     }
     *state.opened_project.lock() = Some(reader);
@@ -1260,124 +1260,397 @@ pub fn project_captions_update_impl(
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct WebcamFocusDetection {
+pub struct LayoutPick {
     pub project: OpenedProject,
-    /// Talking-while-idle segments found by this run.
-    pub detected: usize,
+    /// Sections picked by this run.
+    pub picked: usize,
     pub diagnostics: Vec<String>,
 }
 
-/// Finds where the speaker talks while the screen is idle and stores those stretches as
-/// auto webcam focus segments. Manual segments stay. Reading the mic happens outside the
-/// project lock; the commit checks the revision so a concurrent edit is not overwritten.
-pub fn project_webcam_focus_detect_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    settings: crate::webcam_focus::WebcamFocusSettings,
-) -> Result<WebcamFocusDetection, String> {
-    let found = webcam_focus_find_impl(state, &project_handle, &settings)?;
-    webcam_focus_store_impl(state, project_handle, expected_revision, settings, found)
+/// Sections the pick rules found, not stored yet.
+pub struct LayoutsFound {
+    pub sections: Vec<crate::layouts::LayoutSection>,
+    pub settings: crate::layouts::pick::PickSettings,
+    pub diagnostics: Vec<String>,
 }
 
-/// Stores stretches found by [`webcam_focus_find_impl`] as the auto segments and turns focus on.
-pub fn webcam_focus_store_impl(
+/// Picks the layout sections of the video (`short` none) or a short from its recording (see
+/// [`crate::layouts::pick`]), with `settings` or the timeline's own, and stores them in place
+/// of the earlier picks; sections made by hand stay. Reading the mic and the mouse happens
+/// outside the project lock; the commit checks the revision.
+pub fn project_layouts_pick_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
-    settings: crate::webcam_focus::WebcamFocusSettings,
-    found: WebcamFocusFound,
-) -> Result<WebcamFocusDetection, String> {
+    short: Option<String>,
+    settings: Option<crate::layouts::pick::PickSettings>,
+) -> Result<LayoutPick, String> {
+    let found = layouts_find_impl(state, &project_handle, short.as_deref(), settings)?;
+    layouts_store_impl(state, project_handle, expected_revision, short, found)
+}
+
+/// Stores what [`layouts_find_impl`] found.
+pub fn layouts_store_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short: Option<String>,
+    found: LayoutsFound,
+) -> Result<LayoutPick, String> {
+    let picked = found.sections.len();
     let project = mutate_opened(state, project_handle, |reader| {
-        let mut focus = reader.history().current.webcam_focus.clone();
-        focus.enabled = true;
-        focus.media = Some(found.media.clone());
-        focus.settings = settings;
-        focus.replace_auto_segments(&found.ranges);
-        reader.update_webcam_focus(expected_revision, focus)
+        reader.change_layouts(expected_revision, short.as_deref(), |_, track| {
+            track.pick = found.settings;
+            track.replace_auto(found.sections);
+            Ok(())
+        })
     })?;
-    Ok(WebcamFocusDetection {
+    Ok(LayoutPick {
         project,
-        detected: found.ranges.len(),
+        picked,
         diagnostics: found.diagnostics,
     })
 }
 
-/// Talking-while-idle stretches webcam focus would use, found without storing them.
-pub struct WebcamFocusFound {
-    /// Source ranges on `media`'s clock.
-    pub ranges: Vec<(u64, u64)>,
-    pub media: String,
-    pub diagnostics: Vec<String>,
-}
-
-pub fn webcam_focus_find_impl(
+/// What the pick rules find on the video or a short, without storing it.
+pub fn layouts_find_impl(
     state: &AppState,
     project_handle: &str,
-    settings: &crate::webcam_focus::WebcamFocusSettings,
-) -> Result<WebcamFocusFound, String> {
-    settings.validate()?;
-    let (ctx, root, source_duration_us, media) = {
+    short: Option<&str>,
+    settings: Option<crate::layouts::pick::PickSettings>,
+) -> Result<LayoutsFound, String> {
+    use crate::layouts::pick::{self, PickInput};
+    // What to read, worked out under the lock.
+    struct Plan {
+        settings: pick::PickSettings,
+        media: String,
+        folder: std::path::PathBuf,
+        range: (u64, u64),
+        move_us: u64,
+        /// Speech from the transcript's words, or the mic to scan for it.
+        words: Option<Vec<(u64, u64)>>,
+        mic: Option<WaveformTrackContext>,
+    }
+    let plan = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, project_handle)?;
         let document = reader.document();
-        // The recording focus is on, else the first one.
-        let asset = document
-            .clock_asset(document.webcam_focus.media.as_deref())
-            .and_then(|id| document.asset(id))
-            .filter(|a| a.is_recording())
-            .ok_or("Webcam focus needs a recording with a camera")?;
-        let mic = asset.streams.iter().find(|s| s.role == Role::Mic);
-        let ctx = match (settings.require_speech, mic) {
-            (false, _) => None,
-            (true, None) => {
-                return Err("This recording has no microphone track to detect speech on".into())
+        let (track, media, range) = match short {
+            Some(id) => {
+                let short = document
+                    .shorts
+                    .iter()
+                    .find(|s| s.id == id)
+                    .ok_or("That short no longer exists")?;
+                // A take: the camera fills the frame wherever no footage plays.
+                if short.take.is_some() {
+                    return Ok(LayoutsFound {
+                        sections: crate::take_short::camera_sections(short)?,
+                        settings: settings.unwrap_or_else(|| short.layouts.pick.clone()),
+                        diagnostics: Vec::new(),
+                    });
+                }
+                let media = document
+                    .clock_asset(short.media.as_deref())
+                    .ok_or("This short plays no recording")?;
+                (
+                    &short.layouts,
+                    media.to_string(),
+                    (short.source_start_us, short.source_end_us),
+                )
             }
-            (true, Some(stream)) => Some(sound_context(
-                reader,
-                &crate::sequence::StreamRef::new(&asset.id, &stream.id).key(),
-                false,
-            )?),
+            None => {
+                // The recording with a camera, else the first.
+                let recordings = || document.assets.iter().filter(|a| a.is_recording());
+                let asset = recordings()
+                    .find(|a| a.streams.iter().any(|s| s.role == Role::Webcam))
+                    .or_else(|| recordings().next())
+                    .ok_or("Layouts are picked from a recording's mouse data")?;
+                (
+                    &document.layouts,
+                    asset.id.clone(),
+                    (0, asset.duration_us),
+                )
+            }
         };
-        (
-            ctx,
-            std::path::PathBuf::from(&asset.path),
-            asset.duration_us,
-            asset.id.clone(),
-        )
-    };
-    // Without the speech requirement the whole recording is a candidate; only the mouse
-    // decides.
-    let (speech, mut diagnostics) = match ctx {
-        None => (vec![(0, source_duration_us)], Vec::new()),
-        Some(ctx) => {
-            let silence = SilenceConfig {
-                threshold_db: settings.speech_threshold_db,
-                min_duration_ms: settings.pause_tolerance_ms,
-                padding_ms: 0,
-                ..SilenceConfig::default()
-            };
-            let scan = crate::project::silence::scan_track_silence(&ctx, &silence)?;
-            (
-                crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges),
-                scan.diagnostics,
-            )
+        let settings = settings.unwrap_or_else(|| track.pick.clone());
+        settings.validate()?;
+        let asset = document
+            .asset(&media)
+            .filter(|a| a.is_recording())
+            .ok_or("Layouts are picked from a recording's mouse data; this is a file")?;
+        if !asset.streams.iter().any(|s| s.role == Role::Webcam) {
+            return Err("This recording has no camera, so it shows the screen throughout".into());
+        }
+        let mic = asset.streams.iter().find(|s| s.role == Role::Mic);
+        let key = mic.map(|s| crate::sequence::StreamRef::new(&asset.id, &s.id).key());
+        // A short reads its words; the video scans the mic, as the speech threshold says.
+        let words = match (short, &key) {
+            (Some(_), Some(key)) => crate::transcript::store::load_transcript(reader.root(), key)
+                .ok()
+                .flatten()
+                .map(|t| {
+                    t.words
+                        .iter()
+                        .filter(|w| w.kind == crate::transcript::WordKind::Word)
+                        .filter(|w| w.source_end_us > range.0 && w.source_start_us < range.1)
+                        .map(|w| (w.source_start_us, w.source_end_us))
+                        .collect()
+                }),
+            _ => None,
+        };
+        let mic = match (settings.require_speech && words.is_none(), &key) {
+            (true, None) => {
+                return Err("This recording has no microphone track to find speech on".into())
+            }
+            (true, Some(key)) => Some(sound_context(reader, key, false)?),
+            (false, _) => None,
+        };
+        Plan {
+            move_us: track.transition_ms as u64 * 1_000,
+            settings,
+            media,
+            folder: std::path::PathBuf::from(&asset.path),
+            range,
+            words,
+            mic,
         }
     };
-    let telemetry = crate::telemetry::reader::read_telemetry(&root)?;
+    let mut diagnostics = Vec::new();
+    let speech: Vec<(u64, u64)> = if !plan.settings.require_speech {
+        vec![plan.range]
+    } else if let Some(words) = &plan.words {
+        // Nothing transcribed in it: all of it counts as speech.
+        if words.is_empty() {
+            vec![plan.range]
+        } else {
+            pick::speech_from_words(words)
+        }
+    } else if let Some(ctx) = &plan.mic {
+        let silence = SilenceConfig {
+            threshold_db: plan.settings.speech_threshold_db,
+            min_duration_ms: plan.settings.pause_tolerance_ms,
+            padding_ms: 0,
+            ..SilenceConfig::default()
+        };
+        let scan = crate::project::silence::scan_track_silence(ctx, &silence)?;
+        diagnostics.extend(scan.diagnostics.iter().cloned());
+        pick::speech_ranges(&scan.covered, &scan.source_ranges)
+    } else {
+        vec![plan.range]
+    };
+    let telemetry = crate::telemetry::reader::read_telemetry(&plan.folder)?;
     if telemetry.events.is_empty() {
-        diagnostics.push(if settings.require_speech {
+        diagnostics.push(if plan.settings.require_speech {
             "No mouse activity was recorded, so speech alone decides the layout".into()
         } else {
             "No mouse activity was recorded, so the whole recording counts as idle".into()
         });
     }
-    Ok(WebcamFocusFound {
-        ranges: crate::webcam_focus::detect_focus_ranges(&speech, &telemetry, settings),
-        media,
+    let sections = pick::pick(
+        &PickInput {
+            start_us: plan.range.0,
+            end_us: plan.range.1,
+            media: Some(plan.media),
+            telemetry: &telemetry,
+            speech: &speech,
+            move_us: plan.move_us,
+        },
+        &plan.settings,
+    );
+    Ok(LayoutsFound {
+        sections,
+        settings: plan.settings,
         diagnostics,
     })
+}
+
+/// Changes the layouts of the video (`short` none) or a short, as `change` says.
+pub fn project_layouts_change_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short: Option<String>,
+    change: LayoutChange,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.change_layouts(expected_revision, short.as_deref(), |timeline, track| {
+            change.apply(timeline, track)
+        })
+    })
+}
+
+/// One change to a timeline's layouts. Times are on that timeline.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "op", rename_all_fields = "camelCase")]
+pub enum LayoutChange {
+    /// A section over `[startUs, endUs)` showing `layout` (none: the base). It takes that time
+    /// from the sections it overlaps.
+    Add {
+        start_us: u64,
+        end_us: u64,
+        #[serde(default)]
+        layout: Option<crate::layouts::Layout>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        transition: Option<crate::layouts::Transition>,
+        #[serde(default)]
+        transition_ms: Option<u32>,
+    },
+    /// A section's layout, name and transition; a manual one from then on.
+    Update {
+        id: String,
+        #[serde(default)]
+        layout: Option<crate::layouts::Layout>,
+        /// Show the base there instead of a layout.
+        #[serde(default)]
+        base: bool,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        transition: Option<crate::layouts::Transition>,
+        #[serde(default)]
+        transition_ms: Option<u32>,
+    },
+    /// A section moved to `[startUs, endUs)`, keeping its id and layout.
+    Retime { id: String, start_us: u64, end_us: u64 },
+    /// Sections removed by id.
+    Remove { ids: Vec<String> },
+    /// `[startUs, endUs)` taken out of every section there.
+    Clear { start_us: u64, end_us: u64 },
+    /// Every section, or only the picked ones.
+    ClearAll {
+        #[serde(default)]
+        auto_only: bool,
+    },
+    /// The base layout.
+    Base { layout: crate::layouts::Layout },
+    /// How long a move takes, and how sections are picked.
+    Settings {
+        #[serde(default)]
+        transition_ms: Option<u32>,
+        #[serde(default)]
+        pick: Option<crate::layouts::pick::PickSettings>,
+    },
+    /// Several changes in order, all or none, as one step.
+    Many { changes: Vec<LayoutChange> },
+}
+
+impl LayoutChange {
+    pub fn apply(
+        self,
+        timeline: &crate::project::revision::EditDocument,
+        track: &mut crate::layouts::LayoutTrack,
+    ) -> Result<(), String> {
+        use crate::layouts::{sections_on, LayoutSection, Transition};
+        let find = |track: &crate::layouts::LayoutTrack, id: &str| {
+            track
+                .sections
+                .iter()
+                .position(|s| s.id == id)
+                .ok_or_else(|| format!("No layout section {id}"))
+        };
+        match self {
+            LayoutChange::Add {
+                start_us,
+                end_us,
+                layout,
+                name,
+                transition,
+                transition_ms,
+            } => {
+                if let Some(layout) = &layout {
+                    layout.validate()?;
+                }
+                let template = LayoutSection {
+                    name,
+                    transition: transition.unwrap_or(Transition::Auto),
+                    transition_ms,
+                    ..LayoutSection::new(track.new_id(), None, 0, 1, layout)
+                };
+                let made = sections_on(timeline, start_us, end_us, &template)?;
+                track.add(made);
+            }
+            LayoutChange::Update {
+                id,
+                layout,
+                base,
+                name,
+                transition,
+                transition_ms,
+            } => {
+                let index = find(track, &id)?;
+                let section = &mut track.sections[index];
+                if base {
+                    section.layout = None;
+                    section.name = None;
+                } else if let Some(layout) = layout {
+                    layout.validate()?;
+                    section.layout = Some(layout);
+                    section.name = name;
+                }
+                if let Some(transition) = transition {
+                    section.transition = transition;
+                }
+                if transition_ms.is_some() {
+                    section.transition_ms = transition_ms;
+                }
+                section.auto = false;
+                section.rule = None;
+            }
+            LayoutChange::Retime { id, start_us, end_us } => {
+                let index = find(track, &id)?;
+                let old = track.sections.remove(index);
+                let made = sections_on(
+                    timeline,
+                    start_us,
+                    end_us,
+                    &LayoutSection {
+                        auto: false,
+                        rule: None,
+                        ..old
+                    },
+                )?;
+                track.add(made);
+            }
+            LayoutChange::Remove { ids } => {
+                track.sections.retain(|s| !ids.contains(&s.id));
+            }
+            LayoutChange::Clear { start_us, end_us } => {
+                if end_us <= start_us {
+                    return Err("Clear a range from a time to a later one".into());
+                }
+                crate::layouts::remove_on(timeline, track, start_us, end_us);
+            }
+            LayoutChange::ClearAll { auto_only } => {
+                track.sections.retain(|s| auto_only && !s.auto);
+            }
+            LayoutChange::Base { layout } => {
+                layout.validate()?;
+                track.base = layout;
+            }
+            LayoutChange::Settings {
+                transition_ms,
+                pick,
+            } => {
+                if let Some(ms) = transition_ms {
+                    track.transition_ms = ms;
+                }
+                if let Some(pick) = pick {
+                    pick.validate()?;
+                    track.pick = pick;
+                }
+            }
+            LayoutChange::Many { changes } => {
+                for change in changes {
+                    change.apply(timeline, track)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn project_chapters_set_impl(
@@ -1752,112 +2025,6 @@ pub fn project_short_footage_impl(
     })
 }
 
-/// Picks a short's scenes from its recording (see [`crate::short_scenes::suggest`]) and saves
-/// them in place of its earlier automatic ones; scenes set by hand stay.
-pub fn project_short_scenes_pick_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    short_id: String,
-) -> Result<OpenedProject, String> {
-    let (shorts, path, input) = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
-        require_handle(reader, &project_handle)?;
-        let document = reader.document();
-        let short = document
-            .shorts
-            .iter()
-            .find(|s| s.id == short_id)
-            .ok_or("That short no longer exists")?;
-        let asset = document
-            .clock_asset(short.media.as_deref())
-            .and_then(|id| document.asset(id))
-            .filter(|a| a.is_recording())
-            .ok_or("Scenes are picked from a recording's mouse data; this short is on a file")?;
-        if !document.layout.webcam_enabled || !asset.streams.iter().any(|s| s.role == Role::Webcam)
-        {
-            return Err("This short has no camera, so it shows the screen throughout".into());
-        }
-        let (start, end) = (short.source_start_us, short.source_end_us);
-        let words: Vec<(u64, u64)> = asset
-            .streams
-            .iter()
-            .filter(|s| s.role == Role::Mic)
-            .filter_map(|s| {
-                let key = crate::sequence::StreamRef::new(&asset.id, &s.id).key();
-                crate::transcript::store::load_transcript(reader.root(), &key)
-                    .ok()
-                    .flatten()
-            })
-            .next()
-            .map(|t| {
-                t.words
-                    .iter()
-                    .filter(|w| w.kind == crate::transcript::WordKind::Word)
-                    .filter(|w| w.source_end_us > start && w.source_start_us < end)
-                    .map(|w| (w.source_start_us, w.source_end_us))
-                    .collect()
-            })
-            .unwrap_or_default();
-        (
-            document.shorts.clone(),
-            std::path::PathBuf::from(&asset.path),
-            (start, end, short.media.clone(), words),
-        )
-    };
-    let telemetry = crate::telemetry::reader::read_telemetry(&path)?;
-    let (start_us, end_us, media, words) = input;
-    let picked = crate::short_scenes::suggest(&crate::short_scenes::SuggestInput {
-        start_us,
-        end_us,
-        media,
-        telemetry: &telemetry,
-        words: &words,
-    });
-    let shorts = shorts
-        .into_iter()
-        .map(|mut short| {
-            if short.id == short_id {
-                short.layout.scenes =
-                    crate::short_scenes::replace_auto(&short.layout.scenes, picked.clone());
-            }
-            short
-        })
-        .collect();
-    project_shorts_set_impl(state, project_handle, expected_revision, shorts)
-}
-
-/// Adds a scene over `[start_us, end_us)` of a short's own timeline; it takes that time from
-/// the scenes it overlaps.
-pub fn project_short_scene_add_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    short_id: String,
-    start_us: u64,
-    end_us: u64,
-    mode: crate::short_scenes::SceneMode,
-) -> Result<OpenedProject, String> {
-    if end_us <= start_us {
-        return Err("A scene must end after it starts".into());
-    }
-    let shorts = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
-        require_handle(reader, &project_handle)?;
-        let document = reader.document();
-        let mut shorts = document.shorts.clone();
-        let short = shorts
-            .iter_mut()
-            .find(|s| s.id == short_id)
-            .ok_or("That short no longer exists")?;
-        short.layout.scenes = crate::shorts::with_scene(document, short, start_us, end_us, mode)?;
-        shorts
-    };
-    project_shorts_set_impl(state, project_handle, expected_revision, shorts)
-}
-
 /// Exports one short as a 9:16 video next to the project (or to `settings.destination`),
 /// named after the project and the short. Captions are turned on when a speech track has a
 /// transcript.
@@ -1904,41 +2071,6 @@ pub fn project_short_export_impl(
             Ok(status)
         }
     }
-}
-
-pub fn project_webcam_focus_update_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    focus: crate::webcam_focus::WebcamFocus,
-) -> Result<OpenedProject, String> {
-    mutate_opened(state, project_handle, |reader| {
-        reader.update_webcam_focus(expected_revision, focus)
-    })
-}
-
-pub fn project_webcam_focus_add_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    edited_start_us: u64,
-    edited_end_us: u64,
-) -> Result<OpenedProject, String> {
-    mutate_opened(state, project_handle, |reader| {
-        reader.add_webcam_focus(expected_revision, edited_start_us, edited_end_us)
-    })
-}
-
-pub fn project_webcam_focus_remove_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    edited_start_us: u64,
-    edited_end_us: u64,
-) -> Result<OpenedProject, String> {
-    mutate_opened(state, project_handle, |reader| {
-        reader.remove_webcam_focus(expected_revision, edited_start_us, edited_end_us)
-    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

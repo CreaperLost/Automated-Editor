@@ -81,7 +81,7 @@ export const TrackClipSection: React.FC = () => {
   const cropOff = cropOffFor(canvas.windowCropOff, clip.asset, clipFrom, clipTo, firstRecording);
   const setClipCrop = (on: boolean) => {
     const windowCropOff = setCropFor(canvas.windowCropOff, clip.asset, clipFrom, clipTo, on, firstRecording);
-    const layout = layoutFromSettings({ ...canvas, windowCropOff }, cameraBubble, openedProject.layout?.wallpaperAsset);
+    const layout = layoutFromSettings({ ...canvas, windowCropOff }, cameraBubble, openedProject.layout);
     void run(() => api.projectLayoutUpdate(openedProject.projectHandle, openedProject.revision, layout));
   };
 

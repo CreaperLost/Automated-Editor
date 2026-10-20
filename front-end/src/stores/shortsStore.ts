@@ -6,8 +6,6 @@ import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../lib/typ
 import { useProjectStore } from "./projectStore";
 
 export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
-  cameraPosition: "top",
-  cameraPct: 35,
   cameraClips: {},
   screenZoom: 1,
   followZooms: true,
@@ -22,8 +20,6 @@ export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   backgroundColorStart: "#000000",
   backgroundColorEnd: "#1e1b4b",
   backgroundPreset: "aurora",
-  scenes: [],
-  sceneTransitionMs: 0,
 };
 /** How long a new short lasts. */
 const NEW_SHORT_US = 30_000_000;
@@ -184,10 +180,10 @@ export function changeLayout(patch: Partial<ShortLayout>) {
 }
 
 /**
- * Runs a scene change on the backend after any look change still waiting to be saved, so
- * that save can't put back the scenes from before.
+ * Runs a change of the short on the backend (its layouts, say) after any look change still
+ * waiting to be saved, one at a time with the saves.
  */
-export function sceneOp(label: string, work: (p: OpenedProject) => Promise<OpenedProject>) {
+export function shortOp(label: string, work: (p: OpenedProject) => Promise<OpenedProject>) {
   const { draft } = useShortsStore.getState();
   const short = selected();
   if (draft && short && saveTimer !== undefined) {
@@ -362,13 +358,15 @@ export function removeShort(id: string) {
   void saveShorts((list) => list.filter((s) => s.id !== id));
 }
 
-/** Gives every short `layout`; each keeps its own scenes and graphic places (they are of its
- *  own stretch). */
+/** Gives every short `layout` and this short's base layout; each keeps its own sections, graphic
+ *  places and hand framing (they are of its own stretch). */
 export function applyLookToAll(layout: ShortLayout) {
+  const base = selected()?.layouts?.base;
   void saveShorts((list) =>
     list.map((s) => ({
       ...s,
-      layout: { ...layout, scenes: s.layout?.scenes ?? [], graphicSlots: s.layout?.graphicSlots ?? {} },
+      layout: { ...layout, graphicSlots: s.layout?.graphicSlots ?? {}, cameraClips: s.layout?.cameraClips ?? {} },
+      layouts: s.layouts && base ? { ...s.layouts, base } : s.layouts,
     })),
   );
 }

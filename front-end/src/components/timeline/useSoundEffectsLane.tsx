@@ -31,7 +31,7 @@ export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onE
     openedProject?.projectHandle,
     openedProject?.sequence,
     openedProject?.zooms,
-    JSON.stringify(openedProject?.webcamFocus ?? null),
+    JSON.stringify(openedProject?.layouts ?? null),
     JSON.stringify(settings),
     hasRecording,
   ]);

@@ -16,7 +16,7 @@ the defaults below, report in one message and go on. Export still waits for the 
   none, ask which transcriber (as in the tutorial template; automatic: the saved one, else
   Parakeet) and `transcribe` it. The long video should be edited first: footage only comes
   from what its edit keeps.
-- `short_scenes` without `short` lists the shorts already made.
+- `status` says how many shorts are already made.
 
 ## 2. The take (ask only if unclear)
 

@@ -39,19 +39,30 @@ exporting an MP4.
 - **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
   `telemetry/keys.jsonl` ([format](docs/keyboard-telemetry.md)): typing stretches with a key
   count (never the text) and shortcuts pressed. Typing counts as screen activity, so the
-  auto webcam stays in its bubble and short scenes keep the screen while you type with a
+  picked layouts keep the screen in view while you type with a
   resting mouse. Long typing gets a zoom on the text caret (or the click into the field), and
   the zoom follows the caret. Shortcuts show as a badge ("Ctrl + S") in a corner of the screen,
   switched by **Show shortcut badges** in the canvas settings (`shortcutBadges` for agents),
   and `telemetry_get` lists both. Recordings without the file behave as before.
-- **Layout:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows
-  and a styled webcam bubble.
+- **Style:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows,
+  and the camera's border, shadow and mirror. Every camera clip is centred on the face (found
+  once per recording on this computer, YuNet) unless framed by hand or switched off.
+- **Layouts** ([plan](docs/plans/layouts.md)): camera bubble (a 3x3 grid of spots or anywhere,
+  Small/Medium/Large or any size, rect/circle/squircle), side by side (camera left or right,
+  top or bottom in 9:16, any share, an even split or a card over the screen, the screen fitted
+  or filled), camera only (with a punch-in) and screen only. Each timeline (the video, every
+  short) has a base layout and sections that change it, anchored in the recording's time so
+  cuts never move them; the base shows everywhere else. Changes cut between full-frame shots
+  and on cuts, and move otherwise (or as each section says). Favourites are kept for every
+  project. **Pick from the recording** fills sections in, no AI: the camera while the mouse
+  rests as you talk, and in shorts the opening line and the screen while you click a lot;
+  sections you set yourself stay. The timeline's Layouts lane shows them; agents use `layouts`.
 - **Bubble out of the way:** when a click, drag, scroll, resting pointer or the typing caret
   lands where the webcam bubble sits (after layout, window crop and zoom), the bubble fades
   out for that stretch and back in afterwards; it never jumps to another corner. Activity near
   it keeps it hidden, and minimum hidden and shown times stop it flickering. On by default:
   **Hide while you work under it** in the Camera settings (`webcamAutoHide` for agents). Only
-  where the bubble sits over the screen, not in a short's split.
+  while a bubble layout sits over a fitted screen.
 - **Crop to the active window:** recordings from AeroShoot with window recording on carry
   `telemetry/windows.jsonl` ([format](docs/window-telemetry.md)). When the window in front is
   clearly smaller than the recorded display, the screen shows just that window with room
@@ -73,14 +84,10 @@ exporting an MP4.
   Requires FFmpeg with `adeclick`, including on macOS. Strong settings can soften consonants;
   this is general click repair, not a classifier for every mouth noise.
 - **Export:** H.264 video with AAC stereo audio at 720p, 1080p or 4K.
-- **Shorts scenes:** in the Shorts Studio a short is split (camera above or below the screen)
-  by default, and scenes switch it to only the camera or only the screen, easing between
-  them (or a hard cut). Pick scenes fills them in from the recording, no AI: the camera for
-  the opening line and while the mouse rests as you talk, the screen while clicks and scrolls
-  come thick and fast; scenes you add or change yourself stay when picking again. Scenes are
-  anchored in the recording's time, so they follow the video's cuts and the short's own edits.
-  Agents use the `short_create` (a short from two word ids), `short_scenes` and `export`
-  `short` actions, and a `shorts` template where they pick the moments themselves.
+- **Shorts layouts:** in the Shorts Studio a short is split (camera above the screen) by
+  default, with its own sections on its own timeline, as above. Agents use the `short_create`
+  (a short from two word ids), `layouts` with `short` and `export` `short` actions, and a
+  `shorts` template where they pick the moments themselves.
 - **Check before export:** the export dialog lists what a viewer would notice, read from the
   edit itself (nothing is decoded): missing files, black frames, no sound, blips left between
   two cuts, words cut partway (beyond what word-edge refinement trims), many cuts close

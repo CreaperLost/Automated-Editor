@@ -1,16 +1,5 @@
 import React from "react";
-import {
-  ArrowDownToLine,
-  ArrowUpToLine,
-  Camera,
-  Captions,
-  Clapperboard,
-  Monitor,
-  Palette,
-  Shapes,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
+import { Camera, Captions, Monitor, Palette, Shapes, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { assetById, videoTracks } from "../../lib/sequence";
@@ -23,22 +12,20 @@ import {
   fullLayout,
   removeShort,
   runShorts,
-  sceneOp,
   useSelectedShort,
   useShortsStore,
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "./CameraFraming";
 import { TakeFootage } from "./TakeFootage";
-import { Button, Switch } from "../ui";
+import { Switch } from "../ui";
 
-/** How long a scene added at the playhead lasts. */
-const NEW_SCENE_US = 3_000_000;
 /** Where a graphic can play in a short: value, label, what it does. */
 const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
   ["full", "Full", "The whole frame, over everything"],
-  ["camera", "Camera", "The camera's part of the split, over everything there"],
-  ["screen", "Screen", "The screen's part of the split, over everything there"],
+  ["camera", "Camera", "The camera's part of the base layout, over everything there"],
+  ["screen", "Screen", "The screen's part of the base layout, over everything there"],
   ["overScreen", "Over screen", "Over the screen's part, under the captions; its see-through parts show the screen"],
 ];
 
@@ -56,11 +43,10 @@ const segmented = (active: boolean) =>
       : "text-studio-400 hover:text-studio-100 hover:bg-studio-800"
   }`;
 
-/// The picked short's look: the camera and screen split, scenes, graphic places, background
-/// and captions. Changes show in the preview at once.
+/// The picked short's look: its layouts, camera framing, graphic places, background and
+/// captions. Changes show in the preview at once.
 export const ShortLookPanel: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
-  const currentTimeUs = useProjectStore((s) => s.currentTimeUs);
   const selected = useSelectedShort();
   const draft = useShortsStore((s) => s.draft);
   const busy = useShortsStore((s) => s.busy);
@@ -74,9 +60,6 @@ export const ShortLookPanel: React.FC = () => {
   const playable = viewing && lengthUs > 0;
   // A take short always has its own timeline; it has no stretch of the video to follow.
   const ownEdit = !!selected?.edit && !selected?.take;
-  const scenes = [...(layout.scenes ?? [])]
-    .filter((scene) => scene.shownStartUs !== undefined && scene.shownEndUs !== undefined)
-    .sort((a, b) => a.shownStartUs! - b.shownStartUs!);
   // The graphics this short plays (its own timeline is in the store while viewing it).
   const shortGraphics = viewing
     ? videoTracks(project.sequence)
@@ -120,158 +103,15 @@ export const ShortLookPanel: React.FC = () => {
 
           {selected.take && <TakeFootage project={project} short={selected} viewing={viewing} />}
 
-          <InspectorSection id="short-camera" title="Camera" icon={Camera}>
-            <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
-              <button type="button" aria-pressed={layout.cameraPosition === "top"} onClick={() => changeLayout({ cameraPosition: "top" })} className={segmented(layout.cameraPosition === "top")}>
-                <ArrowUpToLine className="inline w-3 h-3 mr-1" />
-                On top
-              </button>
-              <button type="button" aria-pressed={layout.cameraPosition === "bottom"} onClick={() => changeLayout({ cameraPosition: "bottom" })} className={segmented(layout.cameraPosition === "bottom")}>
-                <ArrowDownToLine className="inline w-3 h-3 mr-1" />
-                Below
-              </button>
-            </div>
-            <label className="block space-y-1">
-              <div className="flex justify-between">
-                <span className="text-label text-studio-400">Camera height</span>
-                <span className="font-mono text-meta tabular-nums text-studio-200">{Math.round(layout.cameraPct)}%</span>
-              </div>
-              <input type="range" aria-label="Camera height" min={20} max={70} step={1} value={layout.cameraPct} onChange={(e) => changeLayout({ cameraPct: Number(e.target.value) })} className="w-full" />
-            </label>
-            <CameraFramingControl project={project} layout={layout} onChange={changeLayout} segmented={segmented} />
-          </InspectorSection>
+          {/* The layouts of the short's own timeline (in the store while viewing it). */}
+          {playable ? (
+            <LayoutsSection />
+          ) : (
+            <p className="p-4 text-meta text-studio-500">The short's layouts show once it plays.</p>
+          )}
 
-          <InspectorSection id="short-scenes" title="Scenes" icon={Clapperboard}>
-            <p className="text-meta text-studio-500">
-              {selected.take
-                ? "Split where footage plays, the camera alone where none does. A scene shows only the camera or only the screen, easing in and out."
-                : "Split by default. A scene shows only the camera or only the screen, easing in and out."}
-            </p>
-            {!selected.take && (
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={Sparkles}
-              className="w-full"
-              disabled={!!busy || !playable}
-              onClick={() =>
-                sceneOp("Picking scenes", (p) => api.projectShortScenesPick(p.projectHandle, p.revision, selected.id))
-              }
-              title="From the recording, no AI: the camera for the opening line and while the mouse rests as you talk, the screen while you click a lot. Scenes you set yourself stay."
-            >
-              {busy === "Picking scenes" ? "Picking…" : "Pick scenes"}
-            </Button>
-            )}
-            <div className="flex gap-1.5">
-              {(
-                [
-                  ["camera", "Camera here", Camera],
-                  ["screen", "Screen here", Monitor],
-                ] as const
-              ).map(([mode, label, Icon]) => (
-                <Button
-                  key={mode}
-                  size="sm"
-                  variant="ghost"
-                  icon={Icon}
-                  className="flex-1"
-                  disabled={!!busy || !playable}
-                  title={`Only the ${mode} for ${NEW_SCENE_US / 1e6} s from the playhead`}
-                  onClick={() => {
-                    const start = Math.min(currentTimeUs, Math.max(0, lengthUs - 500_000));
-                    const end = Math.min(lengthUs, start + NEW_SCENE_US);
-                    sceneOp("Adding a scene", (p) =>
-                      api.projectShortSceneAdd(p.projectHandle, p.revision, selected.id, start, end, mode),
-                    );
-                  }}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-            {playable && scenes.length > 0 && (
-              <>
-                {/* The short at a glance: where each scene sits, and the playhead. */}
-                <div
-                  className="relative h-3 rounded-sm bg-studio-800 overflow-hidden cursor-pointer"
-                  aria-hidden
-                  onClick={(e) => {
-                    const box = e.currentTarget.getBoundingClientRect();
-                    seekPlayback(((e.clientX - box.left) / box.width) * lengthUs);
-                  }}
-                >
-                  {scenes.map((scene) => (
-                    <div
-                      key={scene.id}
-                      className={`absolute inset-y-0 ${scene.mode === "camera" ? "bg-accent/70" : "bg-video/70"}`}
-                      style={{
-                        left: `${(scene.shownStartUs! / lengthUs) * 100}%`,
-                        width: `${((scene.shownEndUs! - scene.shownStartUs!) / lengthUs) * 100}%`,
-                      }}
-                    />
-                  ))}
-                  <div className="absolute inset-y-0 w-px bg-white" style={{ left: `${(currentTimeUs / lengthUs) * 100}%` }} />
-                </div>
-                <ul className="space-y-1">
-                  {scenes.map((scene) => (
-                    <li key={scene.id} className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => seekPlayback(scene.shownStartUs!)}
-                        className="font-mono text-meta tabular-nums text-studio-300 hover:text-white w-[7.5rem] text-left"
-                        title="Go to the scene"
-                      >
-                        {formatTime(scene.shownStartUs!)}–{formatTime(scene.shownEndUs!)}
-                      </button>
-                      <div className="flex flex-1 gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
-                        {(["camera", "screen"] as const).map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            aria-pressed={scene.mode === mode}
-                            onClick={() =>
-                              changeLayout({
-                                scenes: layout.scenes.map((s) => (s.id === scene.id ? { ...s, mode, auto: false } : s)),
-                              })
-                            }
-                            className={`${segmented(scene.mode === mode)} !h-6 !text-meta capitalize`}
-                          >
-                            {mode}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        type="button"
-                        aria-label="Remove the scene"
-                        title={scene.auto ? "Remove (picked automatically)" : "Remove"}
-                        onClick={() => changeLayout({ scenes: layout.scenes.filter((s) => s.id !== scene.id) })}
-                        className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded-control text-studio-500 hover:text-danger-fg hover:bg-danger/15"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                <label className="block space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-label text-studio-400">Change speed</span>
-                    <span className="font-mono text-meta tabular-nums text-studio-200">
-                      {layout.sceneTransitionMs ? `${layout.sceneTransitionMs} ms` : "cut"}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    aria-label="Scene change speed"
-                    min={0}
-                    max={1000}
-                    step={50}
-                    value={layout.sceneTransitionMs}
-                    onChange={(e) => changeLayout({ sceneTransitionMs: Number(e.target.value) })}
-                    className="w-full"
-                  />
-                </label>
-              </>
-            )}
+          <InspectorSection id="short-camera" title="Camera framing" icon={Camera}>
+            <CameraFramingControl project={project} layout={layout} onChange={changeLayout} segmented={segmented} />
           </InspectorSection>
 
           {shortGraphics.length > 0 && (

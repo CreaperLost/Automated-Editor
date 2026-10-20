@@ -151,7 +151,16 @@ pub fn hide_ranges(enter: &[(u64, u64)], stay: &[(u64, u64)]) -> Vec<(u64, u64)>
 /// How hidden the bubble is at `edited_us`: 0 shown, 1 gone, easing over [`FADE_US`] at each
 /// end of a stretch.
 pub fn hidden_weight(ranges: &[(u64, u64)], edited_us: u64) -> f32 {
-    crate::webcam_focus::focus_weight(ranges, edited_us, FADE_US)
+    let index = ranges.partition_point(|&(_, end)| end <= edited_us);
+    let Some(&(start, end)) = ranges.get(index) else {
+        return 0.0;
+    };
+    if edited_us < start {
+        return 0.0;
+    }
+    let rise = (edited_us - start) as f64 / FADE_US as f64;
+    let fall = (end - edited_us) as f64 / FADE_US as f64;
+    crate::zoom::cubic_bezier_unit(rise.min(fall)) as f32
 }
 
 /// Whether the canvas point `(px, py)` is on the bubble `rect` (x, y, w, h) grown by `margin`

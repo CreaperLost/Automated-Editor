@@ -1,7 +1,8 @@
 # Layouts: plan v1 (2026-10-21)
 
-Task 1 in [future-work.md](../future-work.md#1-more-layouts). Status: **plan, waiting on the
-open decisions at the end.** No code yet.
+Task 1 in [future-work.md](../future-work.md#1-more-layouts). Status: **decided 21 Oct 2026,
+being built.** See [Decisions](#decisions-21-oct-2026); they override the text below where they
+differ.
 
 Goal: a small set of named layouts (camera bubble, side by side, camera only, screen only) that
 work in 16:9 and 9:16, changed over time by **layout sections** that stay on their content
@@ -346,7 +347,65 @@ Follows the preview-performance rules.
 Each phase builds and passes `cargo test` and the front-end type check. George tries it in the
 app after phases 1, 4 and 5.
 
-## Open decisions for George
+## Decisions (21 Oct 2026)
+
+George's answers to the open decisions below:
+
+1. One shared style per timeline; layouts only arrange.
+2. Favourites are copied into a section when applied.
+3. Default transition `Auto`.
+4. Moves play inside the section (today's focus behaviour).
+5. Face centring on by default for **every** camera slot, the bubble included, in the video
+   and in shorts; each camera clip can still be framed by hand (the shorts' `cameraClips`
+   moves into the shared style, with a switch to turn auto-centring off).
+6. Shorts keep their own base and sections.
+7. Remove `webcamEnabled`, the focus on/off switch and the `webcam_focus` / `short_scenes`
+   MCP actions.
+8. Bubble placement on a 3x3 grid (plus a custom spot), size as Small / Medium / Large presets
+   plus the slider.
+9. Side by side has both *fit* and *fill*, and a slider for the camera's share (not only
+   50/50).
+10. No fixed number slots: people bind layouts to keys themselves in the shortcuts menu
+    (task 10). Favourites carry no slot.
+11. Build now, on top of `expansion`, without waiting for the 20 Oct work.
+
+## Built (21 Oct 2026, branch `claude/layouts-970278`)
+
+- `src-tauri/src/layouts/`: the model and track ops (`mod.rs`), `resolve.rs` (sections to
+  what plays, sliver rules, moves), `arrange.rs` (geometry and blending), `pick.rs` (rest, busy
+  and hook rules) and `favourites.rs` (`layouts.json` next to `templates.json`).
+- `webcam_focus.rs` and `short_scenes.rs` are gone. `EditLayout` is the style only, with
+  `faceFraming` and `cameraClips`. `EditDocument.layouts` and `Short.layouts` hold the tracks.
+  Take shorts use the no-footage rule (`take_short::camera_sections`).
+- One drawing path in `export::SceneEvaluator::scene_at` for the video and shorts. It also
+  covers bubble-hide per bubble layout, captions in shorts, graphic slots from the base
+  layout, and face framing on every camera slot (cached per clip). Face detection starts on
+  open while face framing is on.
+- Tauri commands: `project_layouts_change` (add, update, retime, remove, clear, base,
+  settings, many), `project_layouts_pick`, and `layout_favourite(s)_*`.
+- MCP: the `layouts` action (`mcp/layouts.rs`) replaces `webcam_focus` and `short_scenes`,
+  and the skill templates were updated.
+- UI:
+  - the Layouts lane on the timeline (click to select, drag an edge to retime,
+    double-click to seek);
+  - the Inspector's Layouts section (tiles, editor, transition, pick rules, favourites);
+  - "Camera only" and "Base layout" over the selection in the toolbar;
+  - the Camera section keeps only the style, plus face framing and hand framing;
+  - the Shorts tab shows the same Layouts section.
+- Checked: `cargo test --lib` (513 tests) and the GPU tests that can run here (18, among
+  them a mid-move GPU/CPU parity test for bubble→camera, bubble→side by side and side by
+  side→camera); `tsc` is clean. In the dev app, the preview showed side by side, the bubble
+  and camera only, and the lane and Inspector worked. A pick on a 15-minute recording took
+  0.2 s.
+
+Not done yet:
+- The look-only swap in playback (performance risk 1). A layout edit still rebuilds the
+  evaluator and mixer, like any edit. Task 10's live keys need the swap.
+- Measuring with `perf.rs` on a real `.aero`.
+- Number-key bindings (task 10). `layoutsStore.switchAt` and MCP `layouts op: switch` are the
+  hooks.
+
+## Open decisions for George (answered above)
 
 1. **Style shared, layouts only arrange?** One style per timeline (background, borders,
    corners, mirror), and layouts and favourites hold only the arrangement. *Recommended.* The

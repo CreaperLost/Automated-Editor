@@ -66,6 +66,7 @@ pub fn parse_shorts(reply: &Value, lines: &[Line]) -> Vec<Short> {
             source_end_us: lines[to].source_end_us,
             reason,
             layout: Default::default(),
+            layouts: crate::layouts::LayoutTrack::for_short(),
             media: None,
             edit: None,
             take: None,

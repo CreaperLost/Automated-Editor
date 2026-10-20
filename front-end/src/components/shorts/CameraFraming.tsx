@@ -74,7 +74,7 @@ function trackLine(tracks: FaceTrackStatus[] | null): { text: string; busy?: boo
  */
 export const CameraFramingControl: React.FC<{
   project: OpenedProject;
-  layout: ShortLayout;
+  layout: Pick<ShortLayout, "cameraClips">;
   onChange: (patch: FramingPatch) => void;
   segmented: (active: boolean) => string;
 }> = ({ project, layout, onChange, segmented }) => {

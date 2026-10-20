@@ -48,8 +48,8 @@ The other seven findings were fixed and their file was removed; it is in Git his
 A small set of named layouts that work for both long-form (16:9) and shorts (9:16), changed
 over time on the timeline instead of one look for the whole edit.
 
-**Plan:** [docs/plans/layouts.md](plans/layouts.md) (21 Oct 2026, waiting on George's
-decisions).
+**Plan:** [docs/plans/layouts.md](plans/layouts.md). Decided and built 21 Oct 2026; still to
+do: the look-only playback swap (needed by task 10) and a perf measurement.
 
 - **Kinds:**
   - camera bubble (position, size, shape)

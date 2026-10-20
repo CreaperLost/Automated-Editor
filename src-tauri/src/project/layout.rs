@@ -1,4 +1,5 @@
-//! Validated, revisioned canvas and webcam layout. Schema version stays 1.
+//! A timeline's style: the canvas, its background, how the screen and the camera are framed and
+//! dressed. Where they go is the layout's business (`crate::layouts`).
 use super::reader::{open_regular, safe_path};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -17,25 +18,11 @@ pub const REFERENCE_SHORT_SIDE_PX: f32 = 1080.0;
 /// Each screen crop edge, as a percent of the source width or height.
 pub const MAX_SCREEN_CROP_PCT: f32 = 45.0;
 pub const MIN_SCREEN_SCALE_PCT: f32 = 40.0;
-pub const MIN_WEBCAM_SIZE_PCT: f32 = 5.0;
-pub const MAX_WEBCAM_SIZE_PCT: f32 = 60.0;
-/// Webcam roundness, as a percent of the bubble's short side; 50 is a pill or circle.
-pub const MAX_WEBCAM_ROUNDNESS_PCT: f32 = 50.0;
 /// Built-in backgrounds rendered by the compositor, so they need no project asset.
 pub const BACKGROUND_PRESETS: [&str; 6] =
     ["aurora", "sunset", "ocean", "forest", "candy", "graphite"];
 
-/// The webcam size slider value a legacy S/M/L/XL preset maps to.
-pub fn webcam_size_preset_pct(size: &str) -> f32 {
-    match size {
-        "sm" => 12.5,
-        "lg" => 28.0,
-        "xl" => 36.0,
-        _ => 20.0,
-    }
-}
-
-/// Fields missing from a stored layout take the values of [`EditLayout::default`].
+/// Fields missing from a stored style take the values of [`EditLayout::default`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct EditLayout {
@@ -57,21 +44,17 @@ pub struct EditLayout {
     pub screen_crop_bottom: f32,
     /// Screen size as a percent of the padded content area.
     pub screen_scale_pct: f32,
-    pub webcam_enabled: bool,
-    pub webcam_shape: String,
-    pub webcam_size: String,
-    /// Bubble long side as a percent of the canvas short side. Overrides `webcam_size`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webcam_size_pct: Option<f32>,
-    /// Corner radius of a rect webcam, as a percent of the bubble's short side.
-    pub webcam_roundness_pct: f32,
-    pub webcam_position: String,
-    pub webcam_custom_x: f32,
-    pub webcam_custom_y: f32,
+    /// The camera's border, around a bubble or a card.
     pub webcam_border_color: String,
     pub webcam_border_width: u32,
     pub webcam_mirror: bool,
     pub webcam_shadow: bool,
+    /// Line every camera clip up with the face in it (from its face track), wherever the
+    /// camera shows; off keeps the centre crop.
+    pub face_framing: bool,
+    /// Camera clips (by clip id) framed by hand instead.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub camera_clips: std::collections::BTreeMap<String, crate::shorts::ClipFraming>,
     /// Draw the recorded mouse pointer (recordings that left it out of the video).
     pub cursor_visible: bool,
     /// The pointer's size, percent of its recorded size (a little larger reads better).
@@ -93,8 +76,8 @@ pub struct EditLayout {
 }
 
 /// A new project's look: the screen a little smaller with rounded corners on the Forest
-/// background, the bottom of the screen (the taskbar) cropped off, and a large squircle
-/// camera bottom left with a border and a shadow.
+/// background, the bottom of the screen (the taskbar) cropped off, and the camera with a border
+/// and a shadow, lined up with the face.
 impl Default for EditLayout {
     fn default() -> Self {
         Self {
@@ -113,18 +96,12 @@ impl Default for EditLayout {
             screen_crop_right: 0.0,
             screen_crop_bottom: 5.5,
             screen_scale_pct: 84.0,
-            webcam_enabled: true,
-            webcam_shape: "squircle".into(),
-            webcam_size: "md".into(),
-            webcam_size_pct: Some(MAX_WEBCAM_SIZE_PCT),
-            webcam_roundness_pct: 0.0,
-            webcam_position: "bottom-left".into(),
-            webcam_custom_x: 80.0,
-            webcam_custom_y: 80.0,
             webcam_border_color: "#6366f1".into(),
             webcam_border_width: MAX_BORDER_WIDTH,
             webcam_mirror: true,
             webcam_shadow: true,
+            face_framing: true,
+            camera_clips: Default::default(),
             cursor_visible: true,
             cursor_size_pct: 150.0,
             shortcut_badges: true,
@@ -202,14 +179,7 @@ impl EditLayout {
         if !in_range(self.screen_scale_pct, MIN_SCREEN_SCALE_PCT, 100.0) {
             return Err("Screen scale is out of range".into());
         }
-        if let Some(pct) = self.webcam_size_pct {
-            if !in_range(pct, MIN_WEBCAM_SIZE_PCT, MAX_WEBCAM_SIZE_PCT) {
-                return Err("Webcam size is out of range".into());
-            }
-        }
-        if !in_range(self.webcam_roundness_pct, 0.0, MAX_WEBCAM_ROUNDNESS_PCT) {
-            return Err("Webcam roundness is out of range".into());
-        }
+        crate::shorts::validate_framing(&self.camera_clips)?;
         match self.background_type.as_str() {
             "solid" | "gradient" => {}
             "preset" => {
@@ -231,24 +201,6 @@ impl EditLayout {
         }
         parse_hex_rgb(&self.color_start)?;
         parse_hex_rgb(&self.color_end)?;
-        match self.webcam_shape.as_str() {
-            "rect" | "circle" | "squircle" | "rect_16_9" => {}
-            other => return Err(format!("Unknown webcam shape: {other}")),
-        }
-        match self.webcam_size.as_str() {
-            "sm" | "md" | "lg" | "xl" => {}
-            other => return Err(format!("Unknown webcam size: {other}")),
-        }
-        match self.webcam_position.as_str() {
-            "top-left" | "top-right" | "bottom-left" | "bottom-right" | "custom" => {}
-            other => return Err(format!("Unknown webcam position: {other}")),
-        }
-        if !self.webcam_custom_x.is_finite() || !(0.0..=100.0).contains(&self.webcam_custom_x) {
-            return Err("Webcam custom X is out of range".into());
-        }
-        if !self.webcam_custom_y.is_finite() || !(0.0..=100.0).contains(&self.webcam_custom_y) {
-            return Err("Webcam custom Y is out of range".into());
-        }
         if self.webcam_border_width > MAX_BORDER_WIDTH {
             return Err("Webcam border width is out of range".into());
         }
@@ -283,13 +235,6 @@ impl EditLayout {
             pct(self.screen_crop_bottom),
         );
         (l, t, 1.0 - l - r, 1.0 - t - b)
-    }
-
-    pub fn webcam_size_fraction(&self) -> f32 {
-        self.webcam_size_pct
-            .unwrap_or_else(|| webcam_size_preset_pct(&self.webcam_size))
-            .clamp(MIN_WEBCAM_SIZE_PCT, MAX_WEBCAM_SIZE_PCT)
-            / 100.0
     }
 
     pub fn background_rgba(&self) -> Result<([f32; 4], Option<[f32; 4]>), String> {
@@ -424,19 +369,30 @@ pub fn ingest_wallpaper(root: &Path, source: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 impl EditLayout {
-    /// A neutral layout for tests: the screen fills the canvas, nothing cropped or rounded,
-    /// a plain webcam rectangle bottom right, a gradient behind.
+    /// A neutral style for tests: the screen fills the canvas, nothing cropped or rounded, the
+    /// camera without border, shadow or face framing, a gradient behind.
     pub fn plain() -> Self {
         Self {
             background_type: "gradient".into(),
             corner_radius_px: 0,
             screen_crop_bottom: 0.0,
             screen_scale_pct: 100.0,
-            webcam_shape: "rect".into(),
-            webcam_size_pct: None,
-            webcam_position: "bottom-right".into(),
             webcam_border_width: 0,
             webcam_shadow: false,
+            face_framing: false,
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
+impl crate::layouts::Bubble {
+    /// The bubble tests use: a plain rectangle bottom right at the old "medium" size.
+    pub fn plain() -> Self {
+        Self {
+            spot: crate::layouts::BubbleSpot::BottomRight,
+            size_pct: 20.0,
+            shape: crate::layouts::CameraShape::Rect,
             ..Self::default()
         }
     }
@@ -448,13 +404,10 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn rejects_unknown_aspect_and_non_finite_custom() {
+    fn rejects_unknown_aspect_padding_and_colors() {
         let mut layout = EditLayout::default();
         layout.aspect_ratio = "21:9".into();
         assert!(layout.validate().unwrap_err().contains("aspect"));
-        layout = EditLayout::default();
-        layout.webcam_custom_x = f32::NAN;
-        assert!(layout.validate().unwrap_err().contains("custom X"));
         layout = EditLayout::default();
         layout.padding_px = 81;
         assert!(layout.validate().unwrap_err().contains("padding"));
@@ -464,22 +417,22 @@ mod tests {
     }
 
     #[test]
-    fn crop_scale_and_webcam_controls_validate_and_default() {
-        // A new project: the bottom 5.5 % cropped off, the screen at 84 %, the largest webcam.
+    fn crop_scale_and_camera_style_validate_and_default() {
+        // A new project: the bottom 5.5 % cropped off, the screen at 84 %, faces framed.
         let fresh = EditLayout::default();
         fresh.validate().unwrap();
         let (x, y, w, h) = fresh.screen_crop_uv();
         assert!(x == 0.0 && y == 0.0 && w == 1.0 && (h - 0.945).abs() < 1e-6);
         assert_eq!(fresh.screen_scale_pct, 84.0);
-        assert!((fresh.webcam_size_fraction() - 0.6).abs() < 1e-6);
-        // Fields missing from a stored layout take those defaults.
+        assert!(fresh.face_framing);
+        // Fields missing from a stored style take those defaults.
         let sparse: EditLayout =
-            serde_json::from_str(r#"{"aspectRatio":"9:16","webcamShape":"rect"}"#).unwrap();
+            serde_json::from_str(r#"{"aspectRatio":"9:16","faceFraming":false}"#).unwrap();
         assert_eq!(
             sparse,
             EditLayout {
                 aspect_ratio: "9:16".into(),
-                webcam_shape: "rect".into(),
+                face_framing: false,
                 ..EditLayout::default()
             }
         );
@@ -497,11 +450,14 @@ mod tests {
         layout.screen_scale_pct = 30.0;
         assert!(layout.validate().unwrap_err().contains("scale"));
         layout = EditLayout::default();
-        layout.webcam_size_pct = Some(70.0);
-        assert!(layout.validate().unwrap_err().contains("size"));
-        layout = EditLayout::default();
-        layout.webcam_roundness_pct = f32::NAN;
-        assert!(layout.validate().unwrap_err().contains("roundness"));
+        layout.camera_clips.insert(
+            "c1".into(),
+            crate::shorts::ClipFraming {
+                offset_x: 2.0,
+                offset_y: 0.0,
+            },
+        );
+        assert!(layout.validate().unwrap_err().contains("framing"));
         layout = EditLayout::default();
         layout.background_type = "preset".into();
         layout.validate().unwrap();

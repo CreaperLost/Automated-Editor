@@ -102,8 +102,9 @@ pub struct OpenedProject {
     pub zoom_settings: crate::zoom::ZoomSettings,
     #[serde(default)]
     pub layout: EditLayout,
+    /// The timeline's base layout and sections, with where each section plays.
     #[serde(default)]
-    pub webcam_focus: crate::webcam_focus::WebcamFocus,
+    pub layouts: crate::layouts::LayoutTrack,
     pub audio: crate::project::AudioSettings,
     /// Moments muted in each sound, by stream key, in that sound's own time.
     #[serde(default)]
@@ -574,7 +575,7 @@ impl ProjectReader {
                 dismissed_zoom_ids: Vec::new(),
                 zoom_settings: Default::default(),
                 layout: EditLayout::default(),
-                webcam_focus: Default::default(),
+                layouts: Default::default(),
                 audio: Default::default(),
                 noise_mutes: Default::default(),
                 captions: Default::default(),
@@ -849,44 +850,21 @@ impl ProjectReader {
         Ok(self.done())
     }
 
-    pub fn update_webcam_focus(
+    /// Changes the layouts of the video or of short `short` (see
+    /// [`super::revision::EditHistory::change_layouts`]); a short's change returns its view.
+    pub fn change_layouts(
         &mut self,
         expected_revision: u64,
-        focus: crate::webcam_focus::WebcamFocus,
+        short: Option<&str>,
+        change: impl FnOnce(&EditDocument, &mut crate::layouts::LayoutTrack) -> Result<(), String>,
     ) -> Result<OpenedProject, String> {
         self.history
-            .update_webcam_focus(expected_revision, focus, &self.root)?;
-        Ok(self.done())
-    }
-
-    pub fn add_webcam_focus(
-        &mut self,
-        expected_revision: u64,
-        edited_start_us: u64,
-        edited_end_us: u64,
-    ) -> Result<OpenedProject, String> {
-        self.history.add_webcam_focus(
-            expected_revision,
-            edited_start_us,
-            edited_end_us,
-            &self.root,
-        )?;
-        Ok(self.done())
-    }
-
-    pub fn remove_webcam_focus(
-        &mut self,
-        expected_revision: u64,
-        edited_start_us: u64,
-        edited_end_us: u64,
-    ) -> Result<OpenedProject, String> {
-        self.history.remove_webcam_focus(
-            expected_revision,
-            edited_start_us,
-            edited_end_us,
-            &self.root,
-        )?;
-        Ok(self.done())
+            .change_layouts(expected_revision, short, change, &self.root)?;
+        let project = self.done();
+        match short {
+            Some(id) => self.short_view(id),
+            None => Ok(project),
+        }
     }
 
     pub fn set_chapters(
@@ -1054,9 +1032,7 @@ impl ProjectReader {
         view.noise_mutes = timeline.noise_mutes.clone();
         view.duration_us = timeline.duration_us();
         view.zooms = timeline.zooms_with_ranges();
-        let mut focus = timeline.webcam_focus.clone();
-        focus.attach_edited_ranges(&timeline.focus_clock());
-        view.webcam_focus = focus;
+        view.layouts = timeline.layouts_with_ranges();
         view.chapters = Vec::new();
         Ok(view)
     }
@@ -1122,9 +1098,7 @@ impl ProjectReader {
         self.summary.dismissed_zoom_ids = document.dismissed_zoom_ids.clone();
         self.summary.zoom_settings = document.zoom_settings.clone();
         self.summary.layout = document.layout.clone();
-        let mut focus = document.webcam_focus.clone();
-        focus.attach_edited_ranges(&document.focus_clock());
-        self.summary.webcam_focus = focus;
+        self.summary.layouts = document.layouts_with_ranges();
         self.summary.audio = document.audio.clone();
         self.summary.noise_mutes = document.noise_mutes.clone();
         self.summary.captions = document.captions.clone();

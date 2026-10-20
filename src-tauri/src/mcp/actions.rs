@@ -1,5 +1,5 @@
 //! The app's own buttons, for an agent: transcription, jump cuts, mouth noises, fillers and
-//! retakes, webcam focus, zooms, settings, chapters, shorts and export. Each runs the same
+//! retakes, layouts, zooms, settings, chapters, shorts and export. Each runs the same
 //! built-in pass the UI runs (no model reads the video), applies at once as one undo step like a
 //! click, and answers with a line or two the agent can pass on to the user. What changed the
 //! edit is listed in the Agent panel's history, with Undo.
@@ -15,11 +15,11 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 37] = [
+pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
-            they are transcribed, mouth noises muted, zooms, webcam focus, captions, chapters, \
+            they are transcribed, mouth noises muted, zooms, layouts, captions, chapters, \
             shorts, whether each camera has a face track for framing shorts, and anything \
             running. Call it first and after a cleanup.",
         schema: schema::<NoArgs>,
@@ -30,7 +30,7 @@ pub static ACTIONS: [ToolDef; 37] = [
         name: "scan",
         description: "An overview before an edit, changing nothing: microphones, cameras, mouse \
             data, the transcribers and AI key ready, and a first estimate of each pass for a \
-            preset (mouth noises, silence, gaps, fillers and retakes, webcam focus, zooms). \
+            preset (mouth noises, silence, gaps, fillers and retakes, layouts, zooms). \
             Each pass changes what the next finds, so before running one, ask with its own dry \
             run (`apply: false`), not these numbers.",
         schema: schema::<ScanArgs>,
@@ -140,14 +140,11 @@ pub static ACTIONS: [ToolDef; 37] = [
         run: fillers_review,
     },
     ToolDef {
-        name: "webcam_focus",
-        description: "Finds where the speaker talks while the mouse rests and makes the webcam \
-            fill the frame there (manual stretches stay). Settings as in `settings \
-            webcam_focus`; `enabled: false` turns it off; `apply: false` only reports. To hide \
-            the camera altogether: `settings` layout {\"webcamEnabled\": false}.",
-        schema: schema::<WebcamArgs>,
+        name: "layouts",
+        description: super::layouts::DESCRIPTION,
+        schema: schema::<super::layouts::LayoutsArgs>,
         read_only: false,
-        run: webcam_focus,
+        run: super::layouts::layouts,
     },
     ToolDef {
         name: "faces",
@@ -169,8 +166,9 @@ pub static ACTIONS: [ToolDef; 37] = [
     },
     ToolDef {
         name: "settings",
-        description: "Reads or changes settings. `area`: captions, layout, audio, zoom, \
-            webcam_focus, transcription, ai, export, presets. Without `set` it shows the current \
+        description: "Reads or changes settings. `area`: captions, layout (the style: \
+            background, corners, camera border, `faceFraming`; where things go is `layouts`), \
+            audio, zoom, transcription, ai, export, presets. Without `set` it shows the current \
             values; `set` is a JSON object of just the fields to change (nested objects merge). \
             Telemetry polish: layout `webcamAutoHide` (the bubble fades while work is under it), \
             `windowCrop` with `windowCropPaddingPct` and `windowCropOff` (recording stretches \
@@ -204,23 +202,11 @@ pub static ACTIONS: [ToolDef; 37] = [
         description: "Makes a vertical short from the words `fromWord` to `toWord` (ids from \
             `transcript_get`) with your `title`, for when you pick the moments yourself rather \
             than with `shorts`. It takes the look of the shorts already made and picks its \
-            scenes (`short_scenes`) unless `scenes: false`. 3 s to 3 min; 20-60 s works best.",
+            layout sections (`layouts` `pick`) unless `scenes: false`. 3 s to 3 min; 20-60 s \
+            works best.",
         schema: schema::<ShortCreateArgs>,
         read_only: false,
         run: short_create,
-    },
-    ToolDef {
-        name: "short_scenes",
-        description: "Scenes of a vertical short: stretches showing only the camera or only the \
-            screen instead of the split (camera above or below the screen), easing between \
-            them. Without `short` it lists the shorts and their scenes. `op: pick` (default \
-            with a short) picks them from the recording, no AI: the camera for the opening \
-            line and while the mouse rests as the speaker talks, the screen while clicks come \
-            thick and fast; scenes set by hand stay. `op: set` replaces them with `scenes` \
-            (seconds on the short's own timeline), `op: clear` makes it split throughout.",
-        schema: schema::<ShortScenesArgs>,
-        read_only: false,
-        run: short_scenes,
     },
     ToolDef {
         name: "media_import",
@@ -430,9 +416,9 @@ pub static ACTIONS: [ToolDef; 37] = [
 pub struct NoArgs {}
 
 /// The open project as an action starts.
-struct Open {
-    handle: String,
-    revision: u64,
+pub(super) struct Open {
+    pub(super) handle: String,
+    pub(super) revision: u64,
     duration: u64,
 }
 
@@ -451,13 +437,13 @@ fn current(ctx: &Ctx) -> Result<Open, String> {
 }
 
 /// The project open now.
-fn opened(ctx: &Ctx) -> Result<Open, String> {
+pub(super) fn opened(ctx: &Ctx) -> Result<Open, String> {
     current(ctx)
 }
 
 /// The answer for an action that may have changed the edit: `lines`, then the length and the
 /// revision when it did, and the action listed in the Agent panel's history.
-fn applied(
+pub(super) fn applied(
     ctx: &Ctx,
     action: &str,
     before: &Open,
@@ -587,7 +573,7 @@ fn merge(base: &mut Value, patch: &Value) {
 /// `current` with `patch` merged in, checked by the settings' own types. A field the types do
 /// not have is refused, since serde would otherwise ignore it (a typo would do nothing); map
 /// keys, unset options and empty lists count as the fields they are.
-fn patched<T: Serialize + DeserializeOwned>(
+pub(super) fn patched<T: Serialize + DeserializeOwned>(
     what: &str,
     current: &T,
     patch: &Value,
@@ -615,7 +601,7 @@ fn one_line(value: &impl Serialize) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
-fn plural(n: usize, one: &str) -> String {
+pub(super) fn plural(n: usize, one: &str) -> String {
     if n == 1 {
         format!("1 {one}")
     } else if one.ends_with("ch") || one.ends_with('s') {
@@ -683,12 +669,11 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
                 sound_lines.push(line);
             }
             lines.push(format!("Sounds: {}.", sound_lines.join("; ")));
-            let focus = &document.webcam_focus;
             lines.push(format!(
-            "Zooms: {} in the edit. Webcam focus: {}, {}. Captions: {}. Chapters: {}. Shorts: {}.",
+            "Zooms: {} in the edit. Layout: {}, {}. Captions: {}. Chapters: {}. Shorts: {}.",
             document.zooms.len(),
-            if focus.enabled { "on" } else { "off" },
-            plural(focus.segments.len(), "stretch"),
+            super::layouts::describe(&document.layouts.base),
+            plural(document.layouts.sections.len(), "section"),
             if document.captions.enabled { "on" } else { "off" },
             document.chapters.len(),
             document.shorts.len(),
@@ -839,14 +824,10 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 "Cameras: none, so no webcam questions.".to_string()
             } else {
                 format!(
-                    "Cameras: {} ({}), {}.",
+                    "Cameras: {} ({}), base layout {}.",
                     cameras.len(),
                     cameras.join(", "),
-                    if document.layout.webcam_enabled {
-                        "shown as a bubble"
-                    } else {
-                        "hidden (layout webcamEnabled is false)"
-                    }
+                    super::layouts::describe(&document.layouts.base)
                 )
             });
             let mouse: usize = reader
@@ -857,7 +838,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 .map(|t| t.events.len())
                 .sum();
             lines.push(if mouse == 0 {
-                "Mouse data: none, so no zooms or webcam focus from it.".to_string()
+                "Mouse data: none, so no zooms or picked layouts from it.".to_string()
             } else {
                 format!("Mouse data: {mouse} events.")
             });
@@ -969,14 +950,8 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     if cameras {
         pass(
             &mut lines,
-            "Webcam focus",
-            run_webcam(
-                ctx,
-                WebcamArgs {
-                    apply: dry,
-                    ..Default::default()
-                },
-            ),
+            "Layouts",
+            super::layouts::run_pick(ctx, None, None, dry != Some(false)),
         );
     }
     if mouse {
@@ -1929,88 +1904,6 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct WebcamArgs {
-    /// false turns webcam focus off (its stretches are kept for turning it back on).
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    /// Detection settings to change first, as in `settings webcam_focus` (`settings` part),
-    /// such as {"idleMs": 2500, "requireSpeech": true}.
-    #[serde(default)]
-    pub settings: Option<Value>,
-    /// false: only report what it would do. Default true.
-    #[serde(default)]
-    pub apply: Option<bool>,
-}
-
-fn webcam_focus(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    text(run_webcam(ctx, params(args)?)?)
-}
-
-/// "9 stretches, 1:10 in all" for source ranges.
-fn stretches(ranges: &[(u64, u64)]) -> String {
-    let total: u64 = ranges.iter().map(|(a, b)| b.saturating_sub(*a)).sum();
-    format!(
-        "{}, {} in all",
-        plural(ranges.len(), "stretch"),
-        clock(total)
-    )
-}
-
-fn run_webcam(ctx: &Ctx, args: WebcamArgs) -> Result<String, String> {
-    let before = opened(ctx)?;
-    let focus = with_reader(ctx.state, |reader| {
-        Ok(reader.document().webcam_focus.clone())
-    })?;
-    if args.enabled == Some(false) {
-        let mut off = focus;
-        off.enabled = false;
-        commands::project_webcam_focus_update_impl(
-            ctx.state,
-            before.handle.clone(),
-            before.revision,
-            off,
-        )?;
-        return applied(
-            ctx,
-            "webcam_focus",
-            &before,
-            vec!["Webcam focus is off.".into()],
-        );
-    }
-    let settings = match &args.settings {
-        Some(patch) => patched("webcam focus", &focus.settings, patch)?,
-        None => focus.settings.clone(),
-    };
-    ctx.progress(0.1, "Finding where the speaker talks while the mouse rests");
-    let found = commands::webcam_focus_find_impl(ctx.state, &before.handle, &settings)?;
-    let mut lines = vec![if found.ranges.is_empty() {
-        "No long enough idle-mouse stretches while talking were found.".to_string()
-    } else if args.apply == Some(false) {
-        format!(
-            "The webcam would fill the frame in {} (talking while the mouse rests).",
-            stretches(&found.ranges)
-        )
-    } else {
-        format!(
-            "The webcam fills the frame in {} (talking while the mouse rests).",
-            stretches(&found.ranges)
-        )
-    }];
-    lines.extend(found.diagnostics.iter().cloned());
-    if args.apply != Some(false) {
-        commands::webcam_focus_store_impl(
-            ctx.state,
-            before.handle.clone(),
-            before.revision,
-            settings,
-            found,
-        )?;
-    }
-    applied(ctx, "webcam_focus", &before, lines)
-}
-
-#[derive(Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct FacesArgs {
     /// false: start detection and report at once. Default true: wait until every camera is
     /// done (a long recording takes a few minutes).
@@ -2221,7 +2114,6 @@ pub enum Area {
     Layout,
     Audio,
     Zoom,
-    WebcamFocus,
     Transcription,
     Ai,
     Export,
@@ -2231,7 +2123,7 @@ pub enum Area {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsArgs {
-    /// captions, layout, audio, zoom, webcam_focus, transcription, ai, export or presets.
+    /// captions, layout, audio, zoom, transcription, ai, export or presets.
     pub area: Area,
     /// Only the fields to change, such as {"enabled": true, "fontSizePct": 6}.
     #[serde(default)]
@@ -2286,10 +2178,6 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                     let next = patched(&name, &document.zoom_settings, &patch)?;
                     commands::project_zoom_settings_set_impl(ctx.state, handle, revision, next)?;
                 }
-                Area::WebcamFocus => {
-                    let next = patched(&name, &document.webcam_focus, &patch)?;
-                    commands::project_webcam_focus_update_impl(ctx.state, handle, revision, next)?;
-                }
                 _ => unreachable!("handled above"),
             }
         }
@@ -2341,16 +2229,6 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
                 Area::Layout => value(&document.layout),
                 Area::Audio => value(&document.audio),
                 Area::Zoom => value(&document.zoom_settings),
-                Area::WebcamFocus => {
-                    // The stretches themselves are long and are the action's business.
-                    let mut focus = value(&document.webcam_focus);
-                    if let Value::Object(map) = &mut focus {
-                        let count = document.webcam_focus.segments.len();
-                        map.insert("segments".into(), json!(format!("{count} stretches")));
-                        map.remove("normalView");
-                    }
-                    focus
-                }
                 _ => Value::Null,
             })
         })?,
@@ -2457,14 +2335,21 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             return Err("`toWord` must come after `fromWord`".into());
         }
         let source = document.stream_ref(&key)?;
-        // The look of the shorts made so far, so they match; each short has its own scenes.
+        // The look and base layout of the shorts made so far, so they match; each short has
+        // its own sections.
         let mut layout = document
             .shorts
             .first()
             .map(|s| s.layout.clone())
             .unwrap_or_default();
-        layout.scenes.clear();
         layout.graphic_slots.clear();
+        layout.camera_clips.clear();
+        let mut layouts = document
+            .shorts
+            .first()
+            .map(|s| s.layouts.clone())
+            .unwrap_or_else(crate::layouts::LayoutTrack::for_short);
+        layouts.sections.clear();
         let base = format!("short-{}", first.source_start_us / 1000);
         let id = (1..)
             .map(|n| {
@@ -2483,6 +2368,7 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             source_end_us: last.source_end_us,
             reason: args.reason.unwrap_or_default().trim().to_string(),
             layout,
+            layouts,
             media: Some(source.asset),
             edit: None,
             take: None,
@@ -2505,7 +2391,7 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         shorts.push(short.clone());
         Ok((shorts, short))
     })?;
-    let saved = commands::project_shorts_set_impl(
+    commands::project_shorts_set_impl(
         ctx.state,
         before.handle.clone(),
         before.revision,
@@ -2513,66 +2399,14 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     )?;
     let mut lines = vec![format!("Made short {} \"{}\".", short.id, short.title)];
     if args.scenes != Some(false) {
-        match commands::project_short_scenes_pick_impl(
-            ctx.state,
-            before.handle.clone(),
-            saved.revision,
-            short.id.clone(),
-        ) {
-            Ok(_) => {
-                lines.push("Scenes:".into());
-                lines.extend(with_reader(ctx.state, |reader| {
-                    let document = reader.document();
-                    let now = document
-                        .shorts
-                        .iter()
-                        .find(|s| s.id == short.id)
-                        .unwrap_or(&short);
-                    Ok(scene_lines(document, now))
-                })?);
-            }
-            Err(why) => lines.push(format!("Scenes not picked: {why}.")),
+        match super::layouts::run_pick(ctx, Some(short.id.clone()), None, true) {
+            Ok(picked) => lines.extend(picked.lines().take(2).map(String::from)),
+            Err(why) => lines.push(format!("Layouts not picked: {why}.")),
         }
     }
     text(applied(ctx, "short_create", &before, lines)?)
 }
 
-#[derive(Deserialize, JsonSchema, Default, Clone, Copy, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum ScenesOp {
-    #[default]
-    Pick,
-    Set,
-    Clear,
-    List,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SceneInput {
-    /// Seconds on the short's own timeline.
-    pub from_s: f64,
-    pub to_s: f64,
-    pub mode: crate::short_scenes::SceneMode,
-}
-
-#[derive(Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortScenesArgs {
-    /// The short, by id or title. Without it, the shorts are listed.
-    #[serde(default)]
-    pub short: Option<String>,
-    #[serde(default)]
-    pub op: Option<ScenesOp>,
-    /// For `set`: the scenes, e.g. [{"fromS": 0, "toS": 2.5, "mode": "camera"}].
-    #[serde(default)]
-    pub scenes: Option<Vec<SceneInput>>,
-    /// How long the frame takes to change, in ms (0 is a hard cut, at most 2000).
-    #[serde(default)]
-    pub transition_ms: Option<u32>,
-}
-
-/// A short's scenes as lines, in seconds on its own timeline.
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaImportArgs {
@@ -2915,151 +2749,6 @@ fn video_speech(reader: &ProjectReader, take_voice: &str) -> Result<String, Stri
         .map(|s| s.key)
         .ok_or_else(|| "The video is not transcribed: `transcribe` it first".into())
 }
-
-fn scene_lines(
-    document: &crate::project::revision::EditDocument,
-    short: &crate::shorts::Short,
-) -> Vec<String> {
-    let Ok(timeline) = crate::shorts::short_timeline(document, short) else {
-        return vec!["Part of it was cut from the video, so its scenes can't be placed.".into()];
-    };
-    let ranges = crate::short_scenes::edited_ranges(&short.layout.scenes, |media| {
-        timeline
-            .clock_asset(media)
-            .map(|asset| timeline.asset_clock(asset))
-    });
-    if ranges.is_empty() {
-        return vec!["Split throughout.".into()];
-    }
-    ranges
-        .iter()
-        .map(|&(a, b, mode)| {
-            format!(
-                "{:.1}-{:.1} s: {}",
-                a as f64 / 1e6,
-                b as f64 / 1e6,
-                match mode {
-                    crate::short_scenes::SceneMode::Camera => "camera only",
-                    crate::short_scenes::SceneMode::Screen => "screen only",
-                }
-            )
-        })
-        .collect()
-}
-
-fn short_scenes(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: ShortScenesArgs = params(args)?;
-    let before = opened(ctx)?;
-    let Some(wanted) = args.short else {
-        return text(with_reader(ctx.state, |reader| {
-            let document = reader.document();
-            if document.shorts.is_empty() {
-                return Ok(
-                    "No shorts yet: `shorts` finds some, or make one in the Shorts Studio.".into(),
-                );
-            }
-            let mut lines = Vec::new();
-            for short in &document.shorts {
-                lines.push(format!("{} \"{}\":", short.id, short.title));
-                lines.extend(
-                    scene_lines(document, short)
-                        .into_iter()
-                        .map(|l| format!("  {l}")),
-                );
-            }
-            Ok(lines.join("\n"))
-        })?);
-    };
-    let (short, shorts) = with_reader(ctx.state, |reader| {
-        let shorts = reader.document().shorts.clone();
-        let short = shorts
-            .iter()
-            .find(|s| s.id == wanted)
-            .or_else(|| {
-                shorts
-                    .iter()
-                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
-            })
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "No short {wanted}. Shorts: {}",
-                    shorts
-                        .iter()
-                        .map(|s| format!("{} \"{}\"", s.id, s.title))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })?;
-        Ok((short, shorts))
-    })?;
-    let op = args.op.unwrap_or_default();
-    if op == ScenesOp::List {
-        let lines = with_reader(ctx.state, |reader| {
-            Ok(scene_lines(reader.document(), &short))
-        })?;
-        return text(lines.join("\n"));
-    }
-    let mut revision = before.revision;
-    if op == ScenesOp::Pick {
-        revision = commands::project_short_scenes_pick_impl(
-            ctx.state,
-            before.handle.clone(),
-            revision,
-            short.id.clone(),
-        )?
-        .revision;
-    }
-    let set: Option<Vec<crate::short_scenes::Scene>> = match op {
-        ScenesOp::Clear => Some(Vec::new()),
-        ScenesOp::Set => {
-            let wanted = args.scenes.ok_or("`set` needs `scenes`")?;
-            let mut ranges = Vec::new();
-            for scene in wanted {
-                if !(scene.from_s.is_finite() && scene.from_s >= 0.0 && scene.to_s > scene.from_s) {
-                    return Err(format!(
-                        "A scene runs from a time to a later one: {}-{}",
-                        scene.from_s, scene.to_s
-                    ));
-                }
-                ranges.push((
-                    (scene.from_s * 1e6) as u64,
-                    (scene.to_s * 1e6) as u64,
-                    scene.mode,
-                ));
-            }
-            Some(with_reader(ctx.state, |reader| {
-                crate::shorts::scenes_at(reader.document(), &short, &ranges)
-            })?)
-        }
-        _ => None,
-    };
-    if set.is_some() || args.transition_ms.is_some() {
-        let mut shorts =
-            with_reader(ctx.state, |reader| Ok(reader.document().shorts.clone())).unwrap_or(shorts);
-        for s in shorts.iter_mut().filter(|s| s.id == short.id) {
-            if let Some(scenes) = set.clone() {
-                s.layout.scenes = scenes;
-            }
-            if let Some(ms) = args.transition_ms {
-                s.layout.scene_transition_ms = ms;
-            }
-        }
-        commands::project_shorts_set_impl(ctx.state, before.handle.clone(), revision, shorts)?;
-    }
-    let mut lines = vec![format!("Scenes of \"{}\":", short.title)];
-    lines.extend(with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        let now = document
-            .shorts
-            .iter()
-            .find(|s| s.id == short.id)
-            .unwrap_or(&short);
-        Ok(scene_lines(document, now))
-    })?);
-    text(applied(ctx, "short_scenes", &before, lines)?)
-}
-
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckArgs {
@@ -4604,7 +4293,7 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_makes_a_short_and_sets_its_scenes() {
+    fn an_agent_makes_a_short_and_sets_its_layouts() {
         if !crate::media::ffmpeg::available() {
             return;
         }
@@ -4617,9 +4306,9 @@ mod tests {
             json!({ "title": "Next step", "fromWord": "w-0", "toWord": "w-6", "reason": "A tip" }),
         )
         .unwrap();
-        // The voice is a file, not a recording: there is no mouse data to pick scenes from.
+        // The voice is a file, not a recording: there is no mouse data to pick layouts from.
         assert!(made.contains("Made short short-0 \"Next step\""), "{made}");
-        assert!(made.contains("Scenes not picked"), "{made}");
+        assert!(made.contains("Layouts not picked"), "{made}");
         assert!(call(
             &ctx,
             "short_create",
@@ -4630,23 +4319,23 @@ mod tests {
 
         let set = call(
             &ctx,
-            "short_scenes",
-            json!({ "short": "Next step", "op": "set", "scenes": [{ "fromS": 0, "toS": 1.5, "mode": "camera" }] }),
+            "layouts",
+            json!({ "short": "Next step", "op": "add", "sections": [{ "fromS": 0, "toS": 1.5, "layout": "Camera only" }] }),
         )
         .unwrap();
-        assert!(set.contains("0.0-1.5 s: camera only"), "{set}");
-        let listed = call(&ctx, "short_scenes", json!({})).unwrap();
-        assert!(
-            listed.contains("short-0 \"Next step\":\n  0.0-1.5 s: camera only"),
-            "{listed}"
-        );
-        let cleared = call(
+        assert!(set.contains("s1 0:00.00-0:01.50 Camera only: Camera only (100 %) (by hand)"), "{set}");
+        let listed = call(&ctx, "layouts", json!({ "short": "short-0" })).unwrap();
+        assert!(listed.contains("base Side by side (camera first, 35 %)"), "{listed}");
+        assert!(listed.contains("Built-in layouts: Camera bubble"), "{listed}");
+        assert!(call(
             &ctx,
-            "short_scenes",
-            json!({ "short": "short-0", "op": "clear" }),
+            "layouts",
+            json!({ "short": "short-0", "op": "add", "sections": [{ "fromS": 0, "toS": 1, "layout": "Nope" }] }),
         )
-        .unwrap();
-        assert!(cleared.contains("Split throughout."), "{cleared}");
+        .unwrap_err()
+        .contains("No layout \"Nope\""));
+        let cleared = call(&ctx, "layouts", json!({ "short": "short-0", "op": "clear" })).unwrap();
+        assert!(cleared.contains("No sections: the base shows throughout."), "{cleared}");
     }
 
     #[test]
