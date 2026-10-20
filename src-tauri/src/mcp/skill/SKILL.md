@@ -138,7 +138,7 @@ recording with window telemetry), `windowCropPaddingPct` is the room around it, 
 `windowCropOff` lists recording stretches (`{media, sourceStartUs, sourceEndUs}`) shown whole,
 for a part the user wants uncropped. In `area: audio`, `soundEffects` (`clicks`, `whooshes`,
 `muted`, `volumeDb`) is a quiet lane of click sounds and a few whooshes on zooms and layout
-switches; when the user wants silence or no clicks, switch it there.
+switches. Both are off by default; switch them on only when the user asks for them.
 
 ## Looking at the edit
 

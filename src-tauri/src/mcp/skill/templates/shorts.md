@@ -16,6 +16,8 @@ go.
   the tutorial template; automatic: the saved one, else Parakeet) and `transcribe`.
 - `short_scenes` without `short` lists the shorts already made. Ask whether to keep them
   (default) or start over (remove them in the Shorts Studio; there is no action for it).
+- With a camera, `faces` (it waits until the face is found in every camera; shorts centre
+  each camera clip on it). Pass on a camera with little or no face found.
 
 ## 2. Read (automatic)
 
