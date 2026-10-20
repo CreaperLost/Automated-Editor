@@ -240,7 +240,7 @@ pub fn detect_non_speech_gaps_for(
         }
     }
     if gaps.is_empty() {
-        diagnostics.push("No gaps between recognized words matched these settings. Audio before the first word and after the last word is kept.".into());
+        diagnostics.push("No gaps between recognized words, or before the first or after the last, matched these settings.".into());
     }
     let first = &found[0].0;
     let dependencies = sounds
@@ -777,7 +777,9 @@ mod tests {
             config.clone(),
         )
         .unwrap();
-        assert_eq!(single.suggestions.len(), 3);
+        // Three between words, and the dead air after the last one.
+        assert_eq!(single.suggestions.len(), 4);
+        assert_eq!(single.suggestions[3].start_us, 7_620_000);
         let all = detect_transcript_pauses_impl(
             &state,
             original.project_handle.clone(),

@@ -97,8 +97,8 @@ pub struct ZoomSettings {
     pub min_hold_ms: u32,
     /// Activity closer than this is one zoom that follows the mouse.
     pub merge_gap_ms: u32,
-    /// The most zooms per recording.
-    pub max_zooms: u32,
+    /// How many zooms per five minutes of the edited video; the strongest moments are kept.
+    pub zooms_per_five_minutes: u32,
     /// The camera follows the mouse inside a zoom.
     pub follow: bool,
     /// How calmly it follows: the camera's lag behind the mouse.
@@ -114,7 +114,7 @@ impl Default for ZoomSettings {
             transition_ms: 0,
             min_hold_ms: 5_000,
             merge_gap_ms: 5_000,
-            max_zooms: 20,
+            zooms_per_five_minutes: 10,
             follow: true,
             follow_ms: 700,
         }
@@ -137,7 +137,7 @@ impl ZoomSettings {
         if self.transition_ms > 3_000
             || !(500..=20_000).contains(&self.min_hold_ms)
             || !(0..=10_000).contains(&self.merge_gap_ms)
-            || !(1..=200).contains(&self.max_zooms)
+            || !(1..=60).contains(&self.zooms_per_five_minutes)
             || !(100..=3_000).contains(&self.follow_ms)
         {
             return Err("Auto-zoom settings are out of range".into());
@@ -163,9 +163,18 @@ impl ZoomSettings {
                 3_600_000_000
             },
             merge_gap_us: self.merge_gap_ms as u64 * 1_000,
-            max_zooms: self.max_zooms,
+            // Every moment: how many stay depends on how long the edit is, see `budget`.
+            max_zooms: 200,
             ..defaults
         }
+    }
+
+    /// How many zooms an edit `edited_us` long gets: `zooms_per_five_minutes` scaled to its
+    /// length, at least one.
+    pub fn budget(&self, edited_us: u64) -> usize {
+        let five_minutes = 300_000_000.0;
+        ((self.zooms_per_five_minutes as f64 * edited_us as f64 / five_minutes).round() as usize)
+            .max(1)
     }
 
     /// The zoom amount for a zoom of this kind.
@@ -267,6 +276,10 @@ pub struct ZoomSuggestion {
     /// Worked out from the recording when drawing; never stored.
     #[serde(default, skip)]
     pub path: Vec<(u64, f32, f32)>,
+    /// How much the moment deserves a zoom, to keep the strongest when there are too many.
+    /// Only known while generating; never stored.
+    #[serde(default, skip)]
+    pub score: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -328,6 +341,7 @@ impl ZoomKeyframe {
     pub fn as_suggestion(&self) -> ZoomSuggestion {
         ZoomSuggestion {
             path: Vec::new(),
+            score: 0.0,
             id: self.id.clone(),
             source_start_us: self.source_start_us,
             source_end_us: self.source_end_us,
@@ -974,6 +988,7 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
             contributing_event_seqs: seqs,
             edited_ranges: Vec::new(),
             media: None,
+            score: session.score(),
         };
         // Overlapping the one before, or so close that the view would pop out and straight
         // back in: one zoom carries on, following the mouse.
@@ -981,6 +996,7 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
             if zoom.source_start_us < previous.source_end_us.saturating_add(MIN_ZOOM_GAP_US) {
                 previous.source_end_us = previous.source_end_us.max(zoom.source_end_us);
                 previous.scale = previous.scale.max(zoom.scale);
+                previous.score += zoom.score;
                 if zoom.origin != ZoomOrigin::Dwell {
                     previous.origin = ZoomOrigin::Cluster;
                 }
@@ -1584,6 +1600,7 @@ mod tests {
         let config = ZoomConfig::default();
         let suggestion = ZoomSuggestion {
             path: Vec::new(),
+            score: 0.0,
             id: "z-1-n1".into(),
             source_start_us: 1_000_000,
             source_end_us: 3_000_000,
@@ -1648,6 +1665,7 @@ mod tests {
             config: ZoomConfig::default(),
             suggestions: vec![ZoomSuggestion {
                 path: Vec::new(),
+                score: 0.0,
                 id: "z-1-n1".into(),
                 source_start_us: 1_000_000,
                 source_end_us: 6_000_000,
@@ -1686,6 +1704,7 @@ mod tests {
     fn window(id: &str, start: u64, end: u64, origin: ZoomOrigin) -> ZoomSuggestion {
         ZoomSuggestion {
             path: Vec::new(),
+            score: 0.0,
             id: id.into(),
             source_start_us: start,
             source_end_us: end,
@@ -1778,6 +1797,16 @@ mod tests {
             .unwrap()
             .suggestions
             .is_empty());
+    }
+
+    #[test]
+    fn zoom_count_scales_with_the_edited_length() {
+        let settings = ZoomSettings::default();
+        let minutes = |m: u64| m * 60_000_000;
+        assert_eq!(settings.budget(minutes(5)), 10);
+        assert_eq!(settings.budget(minutes(12)), 24);
+        assert_eq!(settings.budget(minutes(1)), 2);
+        assert_eq!(settings.budget(5_000_000), 1);
     }
 
     #[test]

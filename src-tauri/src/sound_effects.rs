@@ -38,19 +38,16 @@ const WHOOSH_PEAK: f64 = 0.07;
 /// A zoom out is a little softer than a zoom in.
 const WHOOSH_OUT_GAIN: f64 = 0.75;
 
-fn yes() -> bool {
-    true
-}
-
 /// The sound effects lane's settings, kept with the project's audio.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SoundEffects {
-    /// A soft click on each recorded mouse click (thinned out).
-    #[serde(default = "yes")]
+    /// A soft click on each recorded mouse click (thinned out). Off by default: on a busy
+    /// recording they came across as spammy.
+    #[serde(default)]
     pub clicks: bool,
-    /// A light whoosh on zooms and layout switches.
-    #[serde(default = "yes")]
+    /// A light whoosh on zooms and layout switches. Off by default, like the clicks.
+    #[serde(default)]
     pub whooshes: bool,
     /// The lane's own mute.
     #[serde(default)]
@@ -63,8 +60,8 @@ pub struct SoundEffects {
 impl Default for SoundEffects {
     fn default() -> Self {
         Self {
-            clicks: true,
-            whooshes: true,
+            clicks: false,
+            whooshes: false,
             muted: false,
             volume_db: 0.0,
         }
@@ -506,15 +503,16 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_on_quiet_and_validate_the_volume() {
+    fn settings_default_off_and_validate_the_volume() {
         let settings: SoundEffects = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, SoundEffects::default());
-        assert!(settings.audible());
-        assert!(!SoundEffects {
-            muted: true,
+        assert!(!settings.audible());
+        let on = SoundEffects {
+            clicks: true,
             ..Default::default()
-        }
-        .audible());
+        };
+        assert!(on.audible());
+        assert!(!SoundEffects { muted: true, ..on }.audible());
         assert!(SoundEffects {
             volume_db: 12.0,
             ..Default::default()

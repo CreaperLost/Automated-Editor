@@ -1667,6 +1667,7 @@ mod tests {
     ) -> ZoomSuggestion {
         ZoomSuggestion {
             path: Vec::new(),
+            score: 0.0,
             id: id.into(),
             source_start_us: start,
             source_end_us: start + 2 * S,

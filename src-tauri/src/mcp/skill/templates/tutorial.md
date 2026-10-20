@@ -65,17 +65,21 @@ The passes:
 3. **Gaps between words:** `silence` with `mode: gaps` and `preset`: cuts the breaths and
    noises between transcribed words that the audio pass left. Choices: no (default) / yes /
    gentler / tighter.
-4. **Fillers and retakes (in-house):** you review the transcript yourself, nothing goes to
-   OpenRouter. By default `fillers_review` shows only windows of about 15 words either side of
-   what the app's local pass flagged (a "like" or "so" that may be filler, a phrase said again);
-   um and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the
-   fillers and retakes by the criteria it gives (a flag that carries meaning stays), then save
-   them in one `fillers_review` call with `cuts` and the pages' `stamp`. Read every word with
-   `review: "thorough"` only when the user asks for a thorough pass or the windows miss things
-   they point out. Dry-run `fillers` (`apply: false`): give how many came from your review and
-   a few examples. Choices: yes / rules only (skip saving a review) / skip. Then `fillers`.
-   Only when the user asks for it, `review: openrouter` has the app's paid OpenRouter review
-   find them instead.
+4. **Fillers and retakes (rules and AI):** always both. `status` says whether an AI key is set.
+   - **Key set:** `fillers` runs the rules and the app's OpenRouter review together (the
+     default, `review: auto`). Dry-run it (`apply: false`): give how many came from the
+     review and a few examples.
+   - **No key, or the review could not run** (`fillers` says so): you are the AI review.
+     By default `fillers_review` shows only windows of about 15 words either side of what the
+     app's local pass flagged (a "like" or "so" that may be filler, a phrase said again); um
+     and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the
+     fillers and retakes by the criteria it gives (a flag that carries meaning stays), then
+     save them in one `fillers_review` call with `cuts` and the pages' `stamp`. Read every
+     word with `review: "thorough"` only when the user asks for a thorough pass or the
+     windows miss things they point out. Then dry-run `fillers` the same way.
+
+   Choices: yes / rules only (`review: in-house` without saving a review) / skip. Then
+   `fillers`. When the user wants nothing sent to OpenRouter, use `review: in-house`.
 5. **Webcam** (only with a camera; `scan` says how many): first, keep the camera bubble? Yes
    (default) / no (`settings` `area: layout`, `set: {"webcamEnabled": false}`, and skip focus).
    Then **webcam focus**: `webcam_focus` (the camera fills the frame where the speaker talks
@@ -94,7 +98,7 @@ After the passes, save the choices with `template_save` (`name: tutorial`), in t
   "mouthNoises": { "apply": true, "preset": "balanced" },
   "silence": { "apply": true, "preset": "balanced", "microphones": "all" },
   "gaps": { "apply": false, "preset": "balanced" },
-  "fillers": { "apply": true, "review": "in-house" },
+  "fillers": { "apply": true, "review": "auto" },
   "webcam": { "keep": true, "focus": true },
   "zooms": { "apply": true, "settings": { "minHoldMs": 5000, "mergeGapMs": 5000, "clickScale": 1.6 } },
   "graphics": { "apply": false, "brand": "the project's" },

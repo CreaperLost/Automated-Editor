@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 36] = [
+pub static ACTIONS: [ToolDef; 37] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -117,10 +117,11 @@ pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "fillers",
         description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) in the \
-            transcript, one undo step: the app's rules plus the review saved with \
-            `fillers_review` (in-house: you read the transcript, the default). `review: \
-            openrouter` instead has the app send it to OpenRouter/OpenAI now (the user's key, \
-            paid). `apply: false` only lists.",
+            transcript, one undo step: the app's rules plus an AI review. By default (`review: \
+            auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
+            and otherwise uses the review you saved with `fillers_review` (in-house: you read \
+            the transcript). `review: in-house` or `openrouter` forces one. `apply: false` only \
+            lists.",
         schema: schema::<FillerArgs>,
         read_only: false,
         run: fillers,
@@ -147,6 +148,13 @@ pub static ACTIONS: [ToolDef; 36] = [
         schema: schema::<WebcamArgs>,
         read_only: false,
         run: webcam_focus,
+    },
+    ToolDef {
+        name: "faces",
+        description: "Webcam face detection: finds the face in every camera stream (on this             computer, YuNet) so shorts frame each camera clip on it. Starts the cameras that             have no face track yet (and retries failed ones), waits until they are done unless             `wait: false`, and reports each camera: ready (and how much of it shows a face),             detecting, failed or missing. `redo: true` finds faces again even where a track             exists.",
+        schema: schema::<FacesArgs>,
+        read_only: false,
+        run: faces,
     },
     ToolDef {
         name: "zooms",
@@ -891,9 +899,9 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         crate::ai::AiProvider::OpenRouter => ("OpenRouter", &ai.openrouter_key_source),
     };
     lines.push(if key.is_some() {
-        format!("AI key: {provider} key set (chapters and shorts can run). Fillers and retakes are reviewed in-house by you (`fillers_review`) unless the user asks for the OpenRouter review.")
+        format!("AI key: {provider} key set (chapters and shorts can run). `fillers` runs the rules and the {provider} review together.")
     } else {
-        format!("AI key: none for {provider}, so no chapters or shorts. Fillers and retakes are reviewed in-house by you (`fillers_review`).")
+        format!("AI key: none for {provider}, so no chapters or shorts. Fillers and retakes are reviewed in-house by you (`fillers_review`), then `fillers` cuts them with the rules' finds.")
     });
 
     // Each pass as a dry run; one that can't run says why and the rest go on.
@@ -1602,9 +1610,10 @@ pub struct FillerArgs {
     /// Which to cut: `filler`, `retake`. Default both.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
-    /// Whose review adds to the rules. `in-house` (default): the one you saved with
-    /// `fillers_review` (nothing leaves the computer). `openrouter`: the app sends the
-    /// transcript to OpenRouter or OpenAI now (the user's key, paid).
+    /// Whose review adds to the rules. `auto` (default): `openrouter` when the user has a key
+    /// set, else `in-house`. `in-house`: the one you saved with `fillers_review` (nothing
+    /// leaves the computer). `openrouter`: the app sends the transcript to OpenRouter or
+    /// OpenAI now (the user's key, paid).
     #[serde(default)]
     pub review: Option<FillerReview>,
     /// false: only list them. Default true.
@@ -1614,8 +1623,11 @@ pub struct FillerArgs {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
 pub enum FillerReview {
-    /// The connected agent's own review, saved with `fillers_review`.
+    /// The app's review when a key is set, else the agent's own.
     #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    /// The connected agent's own review, saved with `fillers_review`.
     #[serde(rename = "in-house")]
     InHouse,
     /// The app's OpenRouter (or OpenAI) review, run now with the user's key.
@@ -1801,16 +1813,37 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             TranscriptSuggestionKind::Retake,
         ]
     });
-    let use_ai = args.review == Some(FillerReview::OpenRouter);
+    // Rules and AI together by default: the rules alone miss most fillers and retakes.
+    let review = args.review.unwrap_or_default();
+    let mut use_ai = match review {
+        FillerReview::OpenRouter => true,
+        FillerReview::Auto => ctx.host.ai_review_ready(),
+        FillerReview::InHouse => false,
+    };
+    let mut fallback = None;
     let found = if use_ai {
         ctx.progress(0.1, "Asking the OpenRouter review for fillers and retakes");
-        tc::transcript_ai_suggest_impl(
+        match tc::transcript_ai_suggest_impl(
             ctx.state,
             ctx.host.transcripts(),
             before.handle.clone(),
             key.clone(),
             &mut |p| ctx.progress(p.fraction, &p.message),
-        )?
+        ) {
+            Ok(found) => found,
+            // Only by default: carry on with the in-house review and say why.
+            Err(error) if review == FillerReview::Auto => {
+                use_ai = false;
+                fallback = Some(error);
+                tc::transcript_suggestions_impl(
+                    ctx.state,
+                    before.handle.clone(),
+                    key.clone(),
+                    None,
+                )?
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         tc::transcript_suggestions_impl(ctx.state, before.handle.clone(), key.clone(), None)?
     };
@@ -1854,6 +1887,11 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             " (the rules only)".to_string()
         },
     )];
+    if let Some(error) = fallback {
+        lines.push(format!(
+            "The OpenRouter review could not run ({error}), so the in-house review was used."
+        ));
+    }
     if !use_ai && from_ai == 0 {
         lines.push(
             "The rules alone miss most fillers and retakes. Review the transcript in-house \
@@ -1969,6 +2007,76 @@ fn run_webcam(ctx: &Ctx, args: WebcamArgs) -> Result<String, String> {
         )?;
     }
     applied(ctx, "webcam_focus", &before, lines)
+}
+
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FacesArgs {
+    /// false: start detection and report at once. Default true: wait until every camera is
+    /// done (a long recording takes a few minutes).
+    #[serde(default)]
+    pub wait: Option<bool>,
+    /// true: drop the existing face tracks and find them again.
+    #[serde(default)]
+    pub redo: Option<bool>,
+}
+
+fn faces(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: FacesArgs = params(args)?;
+    let before = opened(ctx)?;
+    let (root, document) = with_reader(ctx.state, |reader| {
+        Ok((reader.root().to_path_buf(), reader.document().clone()))
+    })?;
+    if crate::face::camera_streams(&document).is_empty() {
+        return text("This project has no camera, so there is no face to find.");
+    }
+    if args.redo == Some(true) {
+        for (asset, stream) in crate::face::camera_streams(&document) {
+            let path = crate::face::track_path(&root, &asset, &stream)?;
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    let mut status = commands::project_face_tracks_impl(ctx.state, before.handle.clone(), true)?;
+    while args.wait != Some(false) && status.iter().any(|s| s.state == "detecting") {
+        let progress = status.iter().map(|s| {
+            s.progress
+                .max(if s.state == "detecting" { 0.0 } else { 1.0 })
+        });
+        let fraction = progress.map(f64::from).sum::<f64>() / status.len() as f64;
+        ctx.progress(
+            fraction,
+            &format!("Finding faces, {:.0}%", fraction * 100.0),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        status = commands::project_face_tracks_impl(ctx.state, before.handle.clone(), false)?;
+    }
+    let lines: Vec<String> = status
+        .iter()
+        .map(|s| {
+            let name = &s.asset_name;
+            match (s.state.as_str(), s.face_share) {
+                ("ready", Some(share)) => {
+                    format!("{name}: face found in {:.0}% of the camera.", share * 100.0)
+                }
+                ("detecting", _) => format!(
+                    "{name}: still finding the face ({:.0}%).",
+                    s.progress * 100.0
+                ),
+                ("failed", _) => format!(
+                    "{name}: face detection failed: {}",
+                    s.error.as_deref().unwrap_or("unknown error")
+                ),
+                ("unavailable", _) => format!("{name}: face detection is not in this build."),
+                (state, _) => format!("{name}: {state}."),
+            }
+        })
+        .collect();
+    text(lines.join(
+        "
+",
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]

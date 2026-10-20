@@ -4418,6 +4418,7 @@ mod tests {
                 ("events.jsonl", &[lines[0].as_str(), lines[1].as_str()]),
             ],
         );
+        document.audio.sound_effects.clicks = true;
         let effects = crate::sound_effects::plan(&document);
         // Two presses 50 ms apart: one click sound.
         assert_eq!(effects.len(), 1, "{effects:?}");

@@ -83,8 +83,8 @@ export interface ZoomSettings {
   minHoldMs: number;
   /** Activity closer than this is one zoom that follows the mouse. */
   mergeGapMs: number;
-  /** The most zooms per recording: the strongest moments are kept. */
-  maxZooms: number;
+  /** Zooms per five minutes of the edited video: the strongest moments are kept. */
+  zoomsPerFiveMinutes: number;
   /** The camera follows the mouse inside a zoom. */
   follow: boolean;
   /** How calmly: the camera's lag behind the mouse. */
@@ -97,7 +97,7 @@ export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
   transitionMs: 0,
   minHoldMs: 5000,
   mergeGapMs: 5000,
-  maxZooms: 20,
+  zoomsPerFiveMinutes: 10,
   follow: true,
   followMs: 700,
 };
@@ -208,7 +208,7 @@ export interface SoundEffect {
   gain: number;
 }
 
-export const DEFAULT_SOUND_EFFECTS: SoundEffects = { clicks: true, whooshes: true, muted: false, volumeDb: 0 };
+export const DEFAULT_SOUND_EFFECTS: SoundEffects = { clicks: false, whooshes: false, muted: false, volumeDb: 0 };
 export const SOUND_EFFECTS_VOLUME_DB_RANGE = { min: -30, max: 6 } as const;
 
 /** Audio polish. Each effect has its own switch and applies to playback and export. */
@@ -248,7 +248,7 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   mouthClicks: false,
   mouthClickStrength: 35,
   normalize: false,
-  targetLufs: -14,
+  targetLufs: -16,
   noiseReduction: false,
   noiseReductionDb: 12,
   duckSystemAudio: false,

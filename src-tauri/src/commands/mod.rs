@@ -1009,6 +1009,27 @@ fn all_zoom_suggestions(
             generation.suggestions.push(suggestion);
         }
     }
+    // Zooms scale with the edit, not the raw recordings: moments cut out of the edit take
+    // no place, and the strongest of the rest are kept, back in time order.
+    generation
+        .suggestions
+        .retain(|s| !s.edited_ranges.is_empty());
+    let budget = document.zoom_settings.budget(document.duration_us());
+    if generation.suggestions.len() > budget {
+        let mut ranked: Vec<usize> = (0..generation.suggestions.len()).collect();
+        ranked.sort_by(|&a, &b| {
+            generation.suggestions[b]
+                .score
+                .total_cmp(&generation.suggestions[a].score)
+                .then(a.cmp(&b))
+        });
+        let keep: std::collections::BTreeSet<usize> = ranked.into_iter().take(budget).collect();
+        let mut index = 0;
+        generation.suggestions.retain(|_| {
+            index += 1;
+            keep.contains(&(index - 1))
+        });
+    }
     Ok(generation)
 }
 

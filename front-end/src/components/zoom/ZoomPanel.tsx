@@ -222,13 +222,13 @@ export const ZoomPanel: React.FC = () => {
           onChange={(hoverScale) => setSettings({ hoverScale })}
         />
         <Slider
-          label="Most zooms"
-          value={settings.maxZooms}
+          label="Zooms per 5 minutes of edit"
+          value={settings.zoomsPerFiveMinutes}
           min={1}
-          max={40}
+          max={30}
           step={1}
           format={(v) => `${v}`}
-          onChange={(maxZooms) => setSettings({ maxZooms })}
+          onChange={(zoomsPerFiveMinutes) => setSettings({ zoomsPerFiveMinutes })}
         />
         <Slider
           label="Join activity closer than"

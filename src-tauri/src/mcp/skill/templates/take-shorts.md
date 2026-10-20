@@ -30,6 +30,7 @@ the defaults below, report in one message and go on. Export still waits for the 
   over the camera's own) and `idea` (one line: what the user said the take is about). With no
   title given, make one from that. Pass on what it says about lining the camera
   up with the voice; if the match was weak, tell the user to check the lip sync.
+- `faces`, so the camera is framed on the face (it waits until it is found).
 
 ## 3. Transcribe and clean the take (automatic)
 

@@ -452,7 +452,7 @@ export const AudioSection: React.FC = () => {
       {lanes.some((lane) => lane.role === "mic") && <MouthClickCleanup />}
       <EffectRow
         label="Normalize loudness"
-        hint="Scales the whole edit to a standard loudness. -14 LUFS matches YouTube."
+        hint="Scales the whole edit to a standard loudness without pushing peaks into the limiter. -16 LUFS suits speech."
         enabled={draft.normalize}
         onToggle={(normalize) => update({ normalize })}
         valueLabel={`${draft.targetLufs} LUFS`}

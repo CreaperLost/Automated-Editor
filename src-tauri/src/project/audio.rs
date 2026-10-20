@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// YouTube and most streaming platforms normalize to about -14 LUFS.
-pub const DEFAULT_TARGET_LUFS: f32 = -14.0;
+/// Spoken-word standard (podcasts, Apple). YouTube turns louder uploads down to -14 LUFS
+/// and never turns quieter ones up, but -16 leaves speech room before the limiter.
+pub const DEFAULT_TARGET_LUFS: f32 = -16.0;
 pub const DEFAULT_NOISE_REDUCTION_DB: f32 = 12.0;
 pub const DEFAULT_DUCK_DB: f32 = 12.0;
 pub const TARGET_LUFS_RANGE: (f32, f32) = (-30.0, -8.0);

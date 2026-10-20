@@ -39,8 +39,15 @@ const DUCK_ATTACK_BLOCKS: f32 = 8.0;
 const DUCK_RELEASE_BLOCKS: f32 = 40.0;
 /// Normalization never boosts or cuts by more than this.
 const MAX_NORMALIZE_DB: f64 = 20.0;
-/// Peaks above -1 dBFS are softly limited after normalization.
-const LIMIT_THRESHOLD: f64 = 0.891;
+/// After normalization, peaks above -3 dBFS are softly limited, and never pass -1 dBFS: a
+/// ceiling at full scale let AAC overshoot it by up to 3 dB on export, which clips on playback.
+const LIMIT_KNEE: f64 = 0.708;
+const LIMIT_CEILING: f64 = 0.891;
+/// Normalization boosts no further than this share of the edit's loud blocks can take
+/// without reaching the limiter: the rest are rare transients (a clap, a plosive). Boosting
+/// a quiet recording to the target regardless clipped every syllable into the limiter, so
+/// the edit sounded squashed and much louder than its LUFS.
+const PEAK_PERCENTILE: f64 = 0.995;
 /// Analyses kept for reuse, in bytes: an hour of sound analyses to well under a megabyte, so
 /// this holds every segment of many long recordings. The least recently used go first.
 const CACHE_BYTES: usize = 128 << 20;
@@ -53,6 +60,8 @@ pub struct SegmentAnalysis {
     pub voice: Vec<bool>,
     /// K-weighted mean square per 100 ms, summed over the two output channels.
     pub loudness: Vec<f64>,
+    /// Largest sample magnitude per 100 ms on either output channel.
+    pub peaks: Vec<f32>,
     /// Absent when the file has too little quiet audio to measure.
     pub noise: Option<NoiseProfile>,
 }
@@ -72,6 +81,7 @@ impl SegmentAnalysis {
         std::mem::size_of::<Self>()
             + self.voice.capacity()
             + self.loudness.capacity() * std::mem::size_of::<f64>()
+            + self.peaks.capacity() * std::mem::size_of::<f32>()
             + self
                 .noise
                 .as_ref()
@@ -158,6 +168,7 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
     let mut filters = [KWeighting::new(rate), KWeighting::new(rate)];
     let mut block_db = Vec::new();
     let mut loudness = Vec::new();
+    let (mut peaks, mut peak) = (Vec::new(), 0f32);
     // Per channel, the louder one counting: a channel in opposite phase cancels in a mix.
     let (mut voice_sum, mut voice_n) = ([0f64; 2], 0usize);
     let (mut loud_sum, mut loud_n) = (0f64, 0usize);
@@ -177,13 +188,15 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
                 block_db.push(to_db((energy / voice_n as f64).sqrt() as f32));
                 (voice_sum, voice_n) = ([0.0; 2], 0);
             }
+            peak = peak.max(stereo[0].abs()).max(stereo[1].abs());
             let l = filters[0].process(stereo[0]);
             let r = filters[1].process(stereo[1]);
             loud_sum += l * l + r * r;
             loud_n += 1;
             if loud_n == loudness_frames {
                 loudness.push(loud_sum / loud_n as f64);
-                (loud_sum, loud_n) = (0.0, 0);
+                peaks.push(peak);
+                (loud_sum, loud_n, peak) = (0.0, 0, 0.0);
             }
         }
     }
@@ -193,6 +206,7 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
     }
     if loud_n > 0 {
         loudness.push(loud_sum / loud_n as f64);
+        peaks.push(peak);
     }
 
     let mut audible: Vec<f32> = block_db
@@ -222,6 +236,7 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
         sample_rate: rate,
         voice,
         loudness,
+        peaks,
         noise,
     })
 }
@@ -395,24 +410,31 @@ impl PolishPlan {
             lane_ducks,
         };
         if settings.normalize {
-            if let Some(lufs) = plan.edit_loudness(lanes, duration_us, &analyze) {
-                let db =
+            if let Some((lufs, peak)) = plan.edit_loudness(lanes, duration_us, &analyze) {
+                let mut db =
                     (settings.target_lufs as f64 - lufs).clamp(-MAX_NORMALIZE_DB, MAX_NORMALIZE_DB);
+                if peak > 0.0 {
+                    db = db.min(20.0 * (LIMIT_CEILING / peak).log10());
+                }
                 plan.gain = 10f64.powf(db / 20.0);
             }
         }
         Some(plan)
     }
 
-    /// Integrated loudness of the edit before normalization: every lane's clips, 100 ms
-    /// blocks on the timeline, with ducking applied.
+    /// Integrated loudness of the edit before normalization, and the peak that all but its
+    /// loudest blocks stay under (`PEAK_PERCENTILE`): every lane's clips, 100 ms blocks on
+    /// the timeline, with ducking applied.
     fn edit_loudness(
         &self,
         lanes: &[Lane],
         duration_us: u64,
         analyze: &dyn Fn(&SegmentSummary) -> Option<Arc<SegmentAnalysis>>,
-    ) -> Option<f64> {
-        let mut energy = vec![0f64; duration_us.div_ceil(LOUDNESS_BLOCK_US) as usize];
+    ) -> Option<(f64, f64)> {
+        let blocks = duration_us.div_ceil(LOUDNESS_BLOCK_US) as usize;
+        let mut energy = vec![0f64; blocks];
+        // Lanes add: their peaks sum at worst.
+        let mut peaks = vec![0f64; blocks];
         for lane in lanes {
             for clip in &lane.clips {
                 for segment in clip.segments.iter().filter(|s| s.available) {
@@ -446,11 +468,28 @@ impl PolishPlan {
                         if let Some(slot) = energy.get_mut(block as usize) {
                             *slot += e * gain * gain;
                         }
+                        if let (Some(slot), Some(&p)) =
+                            (peaks.get_mut(block as usize), analysis.peaks.get(index))
+                        {
+                            *slot += p as f64 * gain;
+                        }
                     }
                 }
             }
         }
-        integrated_lufs(&energy)
+        let lufs = integrated_lufs(&energy)?;
+        // Only blocks that count towards loudness: silence between takes says nothing.
+        let gate = 10f64.powf((lufs - 20.0 + 0.691) / 10.0);
+        let mut loud: Vec<f64> = energy
+            .iter()
+            .zip(&peaks)
+            .filter(|(&e, _)| e > gate)
+            .map(|(_, &p)| p)
+            .collect();
+        loud.sort_by(f64::total_cmp);
+        let index =
+            ((loud.len() as f64 * PEAK_PERCENTILE) as usize).min(loud.len().saturating_sub(1));
+        Some((lufs, loud.get(index).copied().unwrap_or(0.0)))
     }
 
     /// Whether lane `lane` is lowered under speech.
@@ -478,14 +517,15 @@ impl PolishPlan {
             .map(|d| d.as_ref())
     }
 
-    /// Applies normalization gain and, when normalizing, a soft limiter above -1 dBFS.
+    /// Applies normalization gain and, when normalizing, a soft limiter from -3 dBFS that
+    /// never passes -1 dBFS.
     pub fn finish(&self, sample: f64) -> f64 {
         let x = sample * self.gain;
-        if !self.limit || x.abs() <= LIMIT_THRESHOLD {
+        if !self.limit || x.abs() <= LIMIT_KNEE {
             return x;
         }
-        let headroom = 1.0 - LIMIT_THRESHOLD;
-        x.signum() * (LIMIT_THRESHOLD + headroom * ((x.abs() - LIMIT_THRESHOLD) / headroom).tanh())
+        let headroom = LIMIT_CEILING - LIMIT_KNEE;
+        x.signum() * (LIMIT_KNEE + headroom * ((x.abs() - LIMIT_KNEE) / headroom).tanh())
     }
 }
 
@@ -714,6 +754,62 @@ mod tests {
     }
 
     #[test]
+    fn normalization_stops_where_peaks_would_reach_the_limiter() {
+        use super::super::audio::LaneClip;
+        let dir = tempfile::tempdir().unwrap();
+        // Quiet talk (about -38 LUFS) with a sharp transient every 50 ms near -6 dBFS.
+        let samples: Vec<i16> = (0..96_000)
+            .map(|i| {
+                if i % 2_400 == 0 {
+                    16_000
+                } else {
+                    (600.0 * (std::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin()) as i16
+                }
+            })
+            .collect();
+        let wav = generate_pcm16_wav(48_000, 1, &samples);
+        std::fs::write(dir.path().join("speech.wav"), &wav).unwrap();
+        let segments = Arc::new(vec![SegmentSummary {
+            track_id: "mic".into(),
+            relative_path: "speech.wav".into(),
+            start_us: 0,
+            end_us: 2_000_000,
+            size_bytes: wav.len() as u64,
+            media_timescale: 48_000,
+            media_start_value: 0,
+            host_anchor_us: 0,
+            is_keyframe_start: None,
+            available: true,
+        }]);
+        let lane = Lane {
+            id: "speech".into(),
+            speech: true,
+            gain: 1.0,
+            clips: vec![LaneClip {
+                edited_start: 0,
+                in_us: 0,
+                len: 2_000_000,
+                source_end: 2_000_000,
+                segments,
+                mutes: Default::default(),
+            }],
+        };
+        let settings = crate::project::AudioSettings {
+            normalize: true,
+            ..Default::default()
+        };
+        let plan = PolishPlan::build(dir.path(), &settings, &[lane], 2_000_000).unwrap();
+        let peak = 16_000.0 / 32_768.0;
+        // The loudness target alone asks for the full 20 dB; the peaks allow about 5.
+        assert!(plan.gain > 1.0);
+        assert!(
+            plan.gain * peak <= LIMIT_CEILING + 1e-3,
+            "gain {}",
+            plan.gain
+        );
+    }
+
+    #[test]
     fn duck_envelope_ramps_around_speech() {
         let mut voice = vec![false; 300];
         voice[100..150].fill(true);
@@ -766,8 +862,9 @@ mod tests {
             denoisers: HashMap::new(),
         };
         assert!((plan.finish(0.2) - 0.4).abs() < 1e-12);
-        assert!(plan.finish(5.0) <= 1.0 && plan.finish(5.0) > 0.99);
-        assert!(plan.finish(0.5) < 1.0 && plan.finish(0.5) > 0.891);
-        assert!(plan.finish(-5.0) >= -1.0 && plan.finish(-0.5) > -1.0);
+        assert!((plan.finish(0.35) - 0.7).abs() < 1e-12);
+        assert!(plan.finish(5.0) <= LIMIT_CEILING && plan.finish(5.0) > 0.89);
+        assert!(plan.finish(0.5) < LIMIT_CEILING && plan.finish(0.5) > LIMIT_KNEE);
+        assert!(plan.finish(-5.0) >= -LIMIT_CEILING && plan.finish(-0.5) > -LIMIT_CEILING);
     }
 }

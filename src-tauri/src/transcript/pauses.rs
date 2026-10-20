@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Secondary sound protection stays conservative even when microphone cuts get tighter.
 pub const PC_AUDIO_PADDING_MS: u32 = 80;
+/// How far a cut before the first word or after the last may reach past the recorded audio.
+const EDGE_SLACK_US: u64 = 1_000_000;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptGapConfig {
@@ -38,8 +40,9 @@ impl TranscriptGapConfig {
     }
 }
 
-/// Source-time candidates only. Never infer a cut before the first word or after the
-/// last one: those regions may not have been transcribed. Tagged sounds between words are
+/// Source-time candidates only. The dead air before the first word and after the last one
+/// (settling in, reaching for the stop button) is cut too, but only where the recording
+/// really has audio and the edge word is a confident anchor. Tagged sounds between words are
 /// cut with the gap unless `keep_sound_events`; then they stay intact.
 pub(crate) fn gap_ranges(
     transcript: &Transcript,
@@ -89,6 +92,39 @@ pub(crate) fn gap_ranges(
             continue;
         }
         gaps.push((start, end));
+    }
+    let min_us = u64::from(config.min_duration_ms) * 1_000;
+    // The covered stretch holding `at`, which the edge gap may not leave, except past the
+    // recording's outermost audio by `EDGE_SLACK_US`: the picture often runs a few frames
+    // longer than the microphone, and those frames would stay as a sliver.
+    let coverage = |at: u64| covered.iter().position(|&(a, b)| a <= at && at <= b);
+    if let Some(&(first, _, true)) = spans.first() {
+        if let Some(i) = coverage(first) {
+            let a = covered[i].0;
+            let start = if i == 0 {
+                a.saturating_sub(EDGE_SLACK_US)
+            } else {
+                a
+            };
+            let end = first.saturating_sub(padding);
+            if first - a >= min_us && end > start {
+                gaps.insert(0, (start, end));
+            }
+        }
+    }
+    if let Some(&(_, last, true)) = spans.last() {
+        if let Some(i) = coverage(last) {
+            let b = covered[i].1;
+            let end = if i + 1 == covered.len() {
+                b.saturating_add(EDGE_SLACK_US)
+            } else {
+                b
+            };
+            let start = last.saturating_add(padding);
+            if b - last >= min_us && end > start {
+                gaps.push((start, end));
+            }
+        }
     }
     gaps
 }
@@ -302,14 +338,16 @@ mod tests {
         }
     }
     #[test]
-    fn gaps_preserve_word_edges_and_leading_trailing_audio() {
+    fn gaps_preserve_word_edges_and_cut_dead_air_at_both_ends() {
         let t = transcript(vec![
             test_word("hello", 200, 1000),
             test_word("world", 2000, 2800),
         ]);
+        // 200 ms before "hello" is under the minimum; 1.2 s after "world" is not, and that cut
+        // reaches a little past the audio, where the picture may run on.
         assert_eq!(
             gap_ranges(&t, &[(0, 4_000_000)], &config()),
-            vec![(1_120_000, 1_880_000)]
+            vec![(1_120_000, 1_880_000), (2_920_000, 5_000_000)]
         );
         let tight = TranscriptGapConfig {
             padding_ms: 0,
@@ -317,7 +355,26 @@ mod tests {
         };
         assert_eq!(
             gap_ranges(&t, &[(0, 4_000_000)], &tight),
-            vec![(1_000_000, 2_000_000)]
+            vec![(1_000_000, 2_000_000), (2_800_000, 5_000_000)]
+        );
+        // Seconds of settling in before the first word go, from where the audio starts.
+        let late = transcript(vec![
+            test_word("hello", 3000, 3500),
+            test_word("world", 4500, 5000),
+        ]);
+        assert_eq!(
+            gap_ranges(&late, &[(1_000_000, 5_000_000)], &config()),
+            vec![(0, 2_880_000), (3_620_000, 4_380_000)]
+        );
+        // A dropout in the audio is never cut across: the cut starts where the audio resumes.
+        assert_eq!(
+            gap_ranges(&late, &[(0, 1_000_000), (2_000_000, 5_000_000)], &config()),
+            vec![(2_000_000, 2_880_000), (3_620_000, 4_380_000)]
+        );
+        // Not where the recording has no audio to show for it.
+        assert_eq!(
+            gap_ranges(&late, &[(2_900_000, 5_000_000)], &config()),
+            vec![(3_620_000, 4_380_000)]
         );
     }
     #[test]
@@ -332,14 +389,17 @@ mod tests {
         let covered = [(0, 11_000_000)];
         assert_eq!(
             gap_ranges(&t, &covered, &config()),
-            vec![(1_120_000, 9_380_000)],
+            vec![(1_120_000, 9_380_000), (10_120_000, 12_000_000)],
             "the typing goes with the gap"
         );
         let keep = TranscriptGapConfig {
             keep_sound_events: true,
             ..config()
         };
-        assert!(gap_ranges(&t, &covered, &keep).is_empty());
+        assert_eq!(
+            gap_ranges(&t, &covered, &keep),
+            vec![(10_120_000, 12_000_000)]
+        );
     }
 
     #[test]
@@ -349,10 +409,10 @@ mod tests {
             test_word("world", 2000, 2800),
         ]);
         t.words[0].confidence = Some(0.3);
-        assert!(gap_ranges(&t, &[(0, 4_000_000)], &config()).is_empty());
+        assert!(gap_ranges(&t, &[(0, 2_800_000)], &config()).is_empty());
         t.words[0].confidence = None;
         t.words[0].source_end_us = t.words[0].source_start_us;
-        assert!(gap_ranges(&t, &[(0, 4_000_000)], &config()).is_empty());
+        assert!(gap_ranges(&t, &[(0, 2_800_000)], &config()).is_empty());
     }
 
     #[test]
@@ -365,12 +425,12 @@ mod tests {
         cfg.min_duration_ms = 20;
         cfg.padding_ms = 0;
         assert_eq!(
-            gap_ranges(&t, &[(0, 300_000)], &cfg),
+            gap_ranges(&t, &[(0, 230_000)], &cfg),
             vec![(100_000, 130_000)]
         );
         cfg.padding_ms = 10;
         assert_eq!(
-            gap_ranges(&t, &[(0, 300_000)], &cfg),
+            gap_ranges(&t, &[(0, 230_000)], &cfg),
             vec![(110_000, 120_000)]
         );
         assert_eq!(
@@ -461,7 +521,7 @@ mod tests {
                 ..config()
             },
         );
-        assert_eq!(gaps, vec![(600_000, 860_000)]);
+        assert_eq!(gaps, vec![(600_000, 860_000), (1_240_000, 3_000_000)]);
         assert!(tight.words[0].source_end_us == 300_000);
         // A stop consonant's short closure stays inside the word, and so does a quiet word.
         let t = transcript(vec![
@@ -486,7 +546,7 @@ mod tests {
             test_word("hello", 200, 1000),
             test_word("world", 2000, 2800),
         ]);
-        assert!(gap_ranges(&t, &[(0, 1_500_000), (1_600_000, 4_000_000)], &config()).is_empty());
+        assert!(gap_ranges(&t, &[(0, 1_500_000), (1_600_000, 2_800_000)], &config()).is_empty());
         assert!(gap_ranges(&t, &[(0, 2_100_000)], &config()).is_empty());
         let mut event = test_word("(laughter)", 1400, 1600);
         event.kind = WordKind::AudioEvent;
@@ -495,9 +555,9 @@ mod tests {
             keep_sound_events: true,
             ..config()
         };
-        assert!(gap_ranges(&t, &[(0, 4_000_000)], &keep).is_empty());
+        assert!(gap_ranges(&t, &[(0, 2_800_000)], &keep).is_empty());
         assert_eq!(
-            gap_ranges(&t, &[(0, 4_000_000)], &config()),
+            gap_ranges(&t, &[(0, 2_800_000)], &config()),
             vec![(1_120_000, 1_880_000)]
         );
     }
@@ -508,14 +568,14 @@ mod tests {
             test_word("inner", 500, 700),
             test_word("next", 2000, 2800),
         ]);
-        assert!(gap_ranges(&t, &[(0, 4_000_000)], &config()).is_empty());
+        assert!(gap_ranges(&t, &[(0, 2_800_000)], &config()).is_empty());
         let short = transcript(vec![
             test_word("a", 990, 1000),
             test_word("world", 2000, 2800),
         ]);
         assert_eq!(
-            gap_ranges(&short, &[(0, 4_000_000)], &config()),
-            vec![(1_120_000, 1_880_000)]
+            gap_ranges(&short, &[(0, 2_800_000)], &config()),
+            vec![(0, 870_000), (1_120_000, 1_880_000)]
         );
     }
     #[test]
