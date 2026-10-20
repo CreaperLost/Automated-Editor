@@ -48,12 +48,15 @@ The other seven findings were fixed and their file was removed; it is in Git his
 A small set of named layouts that work for both long-form (16:9) and shorts (9:16), changed
 over time on the timeline instead of one look for the whole edit.
 
+**Plan:** [docs/plans/layouts.md](plans/layouts.md) (21 Oct 2026, waiting on George's
+decisions).
+
 - **Kinds:**
   - camera bubble (position, size, shape)
   - side by side (camera left or right, or top or bottom in portrait; even or overlapping)
   - camera only (fullscreen, or punched in)
   - screen only
-  - presenter cut out over the screen (needs task 10)
+  - presenter cut out over the screen (needs task 9's matte)
 - **Saved favourites:** your own layouts, reused across projects.
 - **Timed layout sections** that stay attached to their content through cuts. The base layout
   fills every gap, so there is never a flash of a default layout.
