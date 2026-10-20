@@ -1,0 +1,220 @@
+{
+ "transcript": "C:/Users/George/Documents/AeroEdits/Agent test/transcripts/rec-1305403b5579.mic.json",
+ "language": "en",
+ "words": 1200,
+ "gold": [
+  {
+   "from": 104,
+   "to": 104,
+   "type": "filler",
+   "note": "lone So before a pause"
+  },
+  {
+   "from": 310,
+   "to": 311,
+   "type": "retake",
+   "note": "we j- (false start)",
+   "alt": []
+  },
+  {
+   "from": 425,
+   "to": 425,
+   "type": "filler",
+   "note": "lone So between long pauses"
+  },
+  {
+   "from": 1088,
+   "to": 1088,
+   "type": "filler",
+   "note": "lone So"
+  },
+  {
+   "from": 1165,
+   "to": 1166,
+   "type": "filler",
+   "note": "you know"
+  },
+  {
+   "from": 25,
+   "to": 25,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 39,
+   "to": 39,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 63,
+   "to": 63,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 113,
+   "to": 113,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 143,
+   "to": 143,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 155,
+   "to": 155,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 309,
+   "to": 309,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 343,
+   "to": 343,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 416,
+   "to": 416,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 436,
+   "to": 436,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 600,
+   "to": 600,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 654,
+   "to": 654,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 668,
+   "to": 668,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 820,
+   "to": 820,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 864,
+   "to": 864,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 896,
+   "to": 896,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1004,
+   "to": 1004,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1093,
+   "to": 1093,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1153,
+   "to": 1153,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1186,
+   "to": 1186,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 29,
+   "to": 29,
+   "type": "filler",
+   "note": "just",
+   "optional": true
+  },
+  {
+   "from": 74,
+   "to": 74,
+   "type": "filler",
+   "note": "just",
+   "optional": true
+  },
+  {
+   "from": 178,
+   "to": 178,
+   "type": "filler",
+   "note": "just",
+   "optional": true
+  },
+  {
+   "from": 769,
+   "to": 769,
+   "type": "filler",
+   "note": "Essentially",
+   "optional": true
+  },
+  {
+   "from": 454,
+   "to": 455,
+   "type": "filler",
+   "note": "sort of",
+   "optional": true
+  },
+  {
+   "from": 982,
+   "to": 982,
+   "type": "retake",
+   "note": "pretty, pretty",
+   "optional": true
+  }
+ ]
+}

@@ -196,7 +196,9 @@ pub fn transcript_run_impl(
     let ctx = audio_track(state, &project_handle, &track_id)?;
     let dir = config_dir();
     let config = settings::load_settings(&dir);
-    let language = Some(config.language.clone()).filter(|l| !l.is_empty());
+    config.validate()?;
+    let spoken = config.language;
+    let language = Some(spoken.code().to_string());
     let mut transcriber: Box<dyn ChunkTranscriber> = match config.provider {
         ProviderKind::ElevenLabs => {
             let key = settings::api_key(&dir)
@@ -227,7 +229,10 @@ pub fn transcript_run_impl(
                 fraction: 0.0,
                 message: "Loading the Parakeet model".into(),
             });
-            Box::new(ParakeetTranscriber::new(&config.parakeet_dir())?)
+            Box::new(ParakeetTranscriber::new(
+                config.parakeet_model,
+                &config.parakeet_dir(),
+            )?)
         }
     };
     let mut output = transcribe_segments(
@@ -242,6 +247,23 @@ pub fn transcript_run_impl(
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Transcription cancelled".into());
     }
+    // Scribe is told the language, but says what it heard: a mismatch means the setting is
+    // probably wrong for this recording.
+    let heard = output
+        .transcript
+        .language
+        .as_deref()
+        .and_then(crate::transcript::Language::from_code);
+    if let Some(heard) = heard.filter(|&h| h != spoken) {
+        output.diagnostics.push(format!(
+            "The language is set to {}, but {} heard {}: check the language in transcription settings",
+            spoken.label(),
+            config.provider.label(),
+            heard.label()
+        ));
+    }
+    // Every later pass (fillers, retakes, alignment, AI review) reads the language from here.
+    output.transcript.language = Some(spoken.code().into());
     // A transcript that could not be aligned is still a transcript: keep it and say why.
     match align_if_wanted(&mut output.transcript, &ctx, &transcripts.cancel, progress) {
         Ok(Some(info)) => output.diagnostics.push(format!(
@@ -299,6 +321,7 @@ pub fn transcript_align_impl(
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?
     };
     let before = transcript.dependency();
+    require_alignable(&transcript)?;
     let info = run_alignment(&mut transcript, &ctx, &transcripts.cancel, progress)?;
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Alignment cancelled".into());
@@ -487,21 +510,20 @@ pub fn transcript_cut_words_checked_impl(
     )
 }
 
-/// Downloads the Parakeet model, or with `model` `aligner` the word alignment model.
+/// Downloads the Parakeet model; with `model` `aligner` the word alignment model, `gpu` the
+/// NVIDIA GPU pack (CUDA and cuDNN).
 pub fn transcript_download_model_impl(
     transcripts: &TranscriptState,
     model: Option<&str>,
     progress: &mut dyn FnMut(ModelDownloadProgress),
 ) -> Result<TranscriptSettingsView, String> {
-    let aligner = match model.unwrap_or("parakeet") {
-        "parakeet" => false,
-        "aligner" => true,
+    let model = model.unwrap_or("parakeet");
+    let what = match model {
+        "parakeet" => "downloading the Parakeet model",
+        "aligner" => "downloading the word alignment model",
+        "gpu" => "downloading the NVIDIA GPU pack",
+        "llm" => "downloading the local model",
         other => return Err(format!("Unknown model {other}")),
-    };
-    let what = if aligner {
-        "downloading the word alignment model"
-    } else {
-        "downloading the Parakeet model"
     };
     let _run = RunGuard::start(transcripts, what.into())?;
     let dir = config_dir();
@@ -511,15 +533,32 @@ pub fn transcript_download_model_impl(
             bytes_total,
         })
     };
-    if aligner {
-        align::download_model(
+    match model {
+        "aligner" => align::download_model(
             &align::default_model_dir(),
             &transcripts.cancel,
             &mut report,
-        )?;
-    } else {
-        let model_dir = settings::load_settings(&dir).parakeet_dir();
-        parakeet::download_model(&model_dir, &transcripts.cancel, &mut report)?;
+        )?,
+        "gpu" => {
+            if !crate::cuda::wanted() {
+                return Err("This build does not use CUDA, so it has no use for the GPU pack".into());
+            }
+            crate::cuda::download(&crate::cuda::default_dir(), &transcripts.cancel, &mut report)?
+        }
+        "llm" => crate::ai::local::download(
+            &crate::ai::local::default_dir(),
+            &transcripts.cancel,
+            &mut report,
+        )?,
+        _ => {
+            let config = settings::load_settings(&dir);
+            parakeet::download_model(
+                config.parakeet_model,
+                &config.parakeet_dir(),
+                &transcripts.cancel,
+                &mut report,
+            )?;
+        }
     }
     Ok(settings::settings_view(&dir))
 }
@@ -537,7 +576,22 @@ fn align_if_wanted(
     if !config.align_words || !align::compiled_in() || !align::model_present(&model_dir) {
         return Ok(None);
     }
+    // Asked for, but not possible: the caller reports the reason next to the transcript.
+    require_alignable(transcript)?;
     run_alignment(transcript, ctx, cancel, progress).map(Some)
+}
+
+/// The aligner's wav2vec2 model knows English letters only.
+fn require_alignable(transcript: &crate::transcript::Transcript) -> Result<(), String> {
+    let language = crate::transcript::Language::of(transcript);
+    if language.runs_locally() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Word alignment is English only; {} words keep the times Scribe gave them",
+            language.label()
+        ))
+    }
 }
 
 fn run_alignment(
@@ -605,49 +659,111 @@ pub fn ai_set_api_key_impl(
     Ok(crate::ai::settings_view(&dir))
 }
 
-/// Sends the kept words to the chosen AI provider and stores the filler and retake spans it
-/// finds with the transcript. Returns the merged suggestion list.
+/// Reviews the kept words for fillers and retakes with `engine` (the settings' choice when
+/// `None`) and stores the spans it finds with the transcript. The cloud review reads every
+/// word; the local model reads only the windows the local pass flagged. Returns the merged
+/// suggestion list.
 pub fn transcript_ai_suggest_impl(
     state: &AppState,
     transcripts: &TranscriptState,
     project_handle: String,
     track_id: String,
+    engine: Option<crate::ai::FillerEngine>,
     progress: &mut dyn FnMut(TranscriptionProgress),
 ) -> Result<Vec<TranscriptCutSuggestion>, String> {
-    // Missing settings or key fail here, before the job slot or the project is touched.
-    let mut client =
-        crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
+    use crate::ai::client::JsonModel;
+    use crate::ai::{local, FillerEngine};
+    let dir = config_dir();
+    let engine = engine.unwrap_or_else(|| {
+        let settings = crate::ai::load_settings(&dir);
+        // The cloud review without a key: the local model stands in when it is downloaded.
+        let keyless = crate::secrets::get(&dir, settings.provider.key_spec()).is_none();
+        match settings.filler_engine {
+            FillerEngine::Cloud if keyless && local::ready() => FillerEngine::Local,
+            chosen => chosen,
+        }
+    });
+    // Missing settings, key or model fail here, before the job slot or the project is touched.
+    let client = match engine {
+        FillerEngine::Cloud => {
+            Some(crate::ai::client_from_settings(&dir)?.with_cancel(transcripts.cancel.clone()))
+        }
+        FillerEngine::Local => {
+            if !local::compiled_in() {
+                return Err("This build of AeroEdits does not include the local model".into());
+            }
+            if !local::present(&local::default_dir()) {
+                return Err(
+                    "Download the local model first: Transcription and AI settings, Local review"
+                        .into(),
+                );
+            }
+            None
+        }
+    };
     let _run = RunGuard::start(transcripts, format!("AI review of {track_id}"))?;
-    let (dependency, words) = {
+    let (dependency, words, language, plan) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
         let mapper = transcript_clock(reader, &track_id, None)?;
-        let words: Vec<crate::transcript::TranscriptWord> = transcript
+        let kept: Vec<&crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
             .filter(|w| w.kind == crate::transcript::WordKind::Word && edit::kept(w, &mapper))
-            .cloned()
             .collect();
-        (transcript.dependency(), words)
+        let plan = (engine == FillerEngine::Local).then(|| {
+            let (_, settled) = settled_by_rules(&transcript, &mapper, &kept);
+            crate::ai::candidates::plan(&kept, &settled)
+        });
+        (
+            transcript.dependency(),
+            kept.into_iter().cloned().collect::<Vec<_>>(),
+            crate::transcript::Language::of(&transcript),
+            plan,
+        )
     };
-    // No lock is held while waiting on the network.
+    // No lock is held while the model reads.
     let refs: Vec<&crate::transcript::TranscriptWord> = words.iter().collect();
-    let spans = crate::ai::fillers::detect(
-        &mut client,
-        &refs,
-        &mut |fraction| {
-            progress(TranscriptionProgress {
-                track_id: track_id.clone(),
-                fraction: fraction as f64,
-                message: format!("AI review {}%", (fraction * 100.0).round()),
-            })
-        },
-        &|| !transcripts.cancel.load(Ordering::SeqCst),
-    )?;
-    let model = crate::ai::client::JsonModel::describe(&client);
+    let label = match engine {
+        FillerEngine::Cloud => "AI review",
+        FillerEngine::Local => "Local AI review",
+    };
+    let mut report = |fraction: f32| {
+        progress(TranscriptionProgress {
+            track_id: track_id.clone(),
+            fraction: fraction as f64,
+            message: format!("{label} {}%", (fraction * 100.0).round()),
+        })
+    };
+    let keep_going = || !transcripts.cancel.load(Ordering::SeqCst);
+    let (spans, model) = match (client, plan) {
+        (Some(mut client), _) => (
+            crate::ai::fillers::detect(&mut client, language, &refs, &mut report, &keep_going)?,
+            client.describe(),
+        ),
+        (None, Some(plan)) => {
+            report(0.0);
+            let mut model = local::LocalModel::load(&local::default_dir())?
+                .with_cancel(transcripts.cancel.clone());
+            let spans = if refs.is_empty() {
+                Vec::new()
+            } else {
+                crate::ai::fillers::detect_candidates(
+                    &mut model,
+                    language,
+                    &refs,
+                    &plan,
+                    &mut report,
+                    &keep_going,
+                )?
+            };
+            (spans, model.describe())
+        }
+        (None, None) => return Err("No AI review was set up".into()),
+    };
     modify_transcript(state, &project_handle, &track_id, |t| {
         if t.dependency() != dependency {
             return Err(
@@ -677,6 +793,8 @@ pub struct ReviewPage {
     pub text: String,
     /// Names these kept words: the review is saved against it.
     pub stamp: String,
+    /// What is spoken: the review criteria follow it.
+    pub language: crate::transcript::Language,
 }
 
 fn kept_words(
@@ -687,6 +805,7 @@ fn kept_words(
     (
         crate::transcript::TranscriptDependency,
         Vec<crate::transcript::TranscriptWord>,
+        crate::transcript::Language,
     ),
     String,
 > {
@@ -702,7 +821,11 @@ fn kept_words(
         .filter(|w| w.kind == crate::transcript::WordKind::Word && edit::kept(w, &mapper))
         .cloned()
         .collect();
-    Ok((transcript.dependency(), words))
+    Ok((
+        transcript.dependency(),
+        words,
+        crate::transcript::Language::of(&transcript),
+    ))
 }
 
 fn review_stamp<'a>(
@@ -724,7 +847,7 @@ pub fn transcript_review_page_impl(
     track_id: String,
     page: usize,
 ) -> Result<ReviewPage, String> {
-    let (_, words) = kept_words(state, &project_handle, &track_id)?;
+    let (_, words, language) = kept_words(state, &project_handle, &track_id)?;
     let ranges = crate::ai::fillers::chunks(words.len());
     if ranges.is_empty() {
         return Err("There are no kept words to check".into());
@@ -743,6 +866,7 @@ pub fn transcript_review_page_impl(
         words: words.len(),
         text: crate::ai::fillers::chunk_prompt(&refs, range),
         stamp: review_stamp(&words),
+        language,
     })
 }
 
@@ -770,6 +894,36 @@ pub struct CandidatePage {
     /// The page's windows; empty when nothing was flagged.
     pub text: String,
     pub stamp: String,
+    /// What is spoken: the review criteria follow it.
+    pub language: crate::transcript::Language,
+}
+
+/// The rules' own live suggestions, and the word index ranges (inclusive, in `words`) they
+/// cover: a candidate review leaves those alone, since they are cut by default.
+fn settled_by_rules(
+    transcript: &crate::transcript::Transcript,
+    mapper: &crate::timeline::TimelineMapper,
+    words: &[&crate::transcript::TranscriptWord],
+) -> (Vec<TranscriptCutSuggestion>, Vec<(usize, usize)>) {
+    let index: std::collections::HashMap<&str, usize> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.id.as_str(), i))
+        .collect();
+    let rules: Vec<_> = edit::suggestions(transcript, mapper)
+        .into_iter()
+        .filter(|s| s.source == edit::SuggestionSource::Rules && !s.dismissed)
+        .collect();
+    let settled = rules
+        .iter()
+        .filter_map(|s| {
+            Some((
+                *index.get(s.word_ids.first()?.as_str())?,
+                *index.get(s.word_ids.last()?.as_str())?,
+            ))
+        })
+        .collect();
+    (rules, settled)
 }
 
 /// Page `page` of the candidate windows of `track_id`. Flags the rules settle (filler sounds,
@@ -795,24 +949,7 @@ pub fn transcript_review_candidates_impl(
     if words.is_empty() {
         return Err("There are no kept words to check".into());
     }
-    let index: std::collections::HashMap<&str, usize> = words
-        .iter()
-        .enumerate()
-        .map(|(i, w)| (w.id.as_str(), i))
-        .collect();
-    let rules: Vec<_> = edit::suggestions(&transcript, &mapper)
-        .into_iter()
-        .filter(|s| s.source == edit::SuggestionSource::Rules && !s.dismissed)
-        .collect();
-    let settled: Vec<(usize, usize)> = rules
-        .iter()
-        .filter_map(|s| {
-            Some((
-                *index.get(s.word_ids.first()?.as_str())?,
-                *index.get(s.word_ids.last()?.as_str())?,
-            ))
-        })
-        .collect();
+    let (rules, settled) = settled_by_rules(&transcript, &mapper, &words);
     let rule_count = |kind| rules.iter().filter(|s| s.kind == kind).count();
     let plan = candidates::plan(&words, &settled);
     let text = match plan.page_text(&words, page) {
@@ -841,6 +978,7 @@ pub fn transcript_review_candidates_impl(
         rule_retakes: rule_count(crate::transcript::TranscriptSuggestionKind::Retake),
         text,
         stamp: review_stamp(words.iter().copied()),
+        language: crate::transcript::Language::of(&transcript),
     })
 }
 
@@ -856,7 +994,7 @@ pub fn transcript_review_save_impl(
     cuts: serde_json::Value,
     reviewer: &str,
 ) -> Result<(usize, Vec<TranscriptCutSuggestion>), String> {
-    let (dependency, words) = kept_words(state, &project_handle, &track_id)?;
+    let (dependency, words, _) = kept_words(state, &project_handle, &track_id)?;
     if review_stamp(&words) != stamp {
         return Err(
             "The kept words changed since those pages were read (a cut, an undo, a word fixed): \

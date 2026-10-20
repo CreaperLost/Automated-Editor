@@ -1307,9 +1307,16 @@ export interface SegmentPage {
 // Transcription (src-tauri/src/transcript)
 export type TranscriptProvider = "parakeet" | "elevenlabs" | "openrouter";
 
+/** What is spoken. Greek is transcribed online only (Scribe or Scribe via OpenRouter). */
+export type TranscriptLanguage = "en" | "el";
+
+/** Which Parakeet transcribes English: the most accurate words, or every um and stutter. */
+export type ParakeetModel = "unified" | "verbatim";
+
 export interface TranscriptSettings {
   provider: TranscriptProvider;
-  language: string;
+  language: TranscriptLanguage;
+  parakeetModel: ParakeetModel;
   scribeModel: string;
   keyterms: string[];
   parakeetModelDir: string;
@@ -1326,6 +1333,17 @@ export interface TranscriptSettingsView {
   parakeetAccelerator: string;
   parakeetModelDir: string;
   parakeetModelPresent: boolean;
+  /** Download size of the Parakeet model this build uses, in bytes. */
+  parakeetModelBytes: number;
+  /** Both Parakeet models, so the choice shows what each needs before it is saved. */
+  parakeetModels: { model: ParakeetModel; present: boolean; bytes: number }[];
+  /** This build runs local models on CUDA, so the NVIDIA GPU pack is of use. */
+  gpuPackWanted: boolean;
+  nvidiaDriver: boolean;
+  gpuPackPresent: boolean;
+  gpuPackBytes: number;
+  /** Why the GPU is not in use, once a model tried it. */
+  gpuProblem: string | null;
   /** Word alignment runs in this build (it shares Parakeet's ONNX Runtime). */
   alignerAvailable: boolean;
   alignerModelPresent: boolean;
@@ -1645,7 +1663,12 @@ export type FootageChange =
 
 export type AiProvider = "openAi" | "openRouter";
 
+/** Who reviews fillers and retakes: the built-in model, or OpenRouter / OpenAI. */
+export type FillerEngine = "local" | "cloud";
+
 export interface AiSettings {
+  /** Who reviews fillers and retakes. Chapters and shorts always use `provider`. */
+  fillerEngine: FillerEngine;
   provider: AiProvider;
   /** Empty uses the default model. */
   openaiModel: string;
@@ -1727,4 +1750,8 @@ export interface AiSettingsView {
   openrouterKeySource: "keychain" | "file" | "environment" | null;
   openaiDefaultModel: string;
   openrouterDefaultModel: string;
+  /** The built-in model is in this build, and downloaded. */
+  localAvailable: boolean;
+  localPresent: boolean;
+  localModelBytes: number;
 }

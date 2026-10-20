@@ -8,6 +8,7 @@ pub mod align;
 pub mod audio;
 pub mod edit;
 pub mod elevenlabs;
+pub mod language;
 pub mod parakeet;
 pub mod pauses;
 pub mod provider;
@@ -20,6 +21,7 @@ use std::hash::{Hash, Hasher};
 pub use edit::{
     SuggestionSource, TranscriptCutSuggestion, TranscriptSuggestionKind, TranscriptView,
 };
+pub use language::Language;
 pub use provider::{ProviderKind, TranscriptionProgress};
 pub use settings::{TranscriptSettings, TranscriptSettingsView};
 
@@ -65,7 +67,7 @@ pub struct Transcript {
     pub schema_version: u32,
     pub track_id: String,
     pub provider: ProviderKind,
-    /// Provider model, e.g. `scribe_v2` or `parakeet-tdt-0.6b-v3`.
+    /// Provider model, e.g. `scribe_v2` or `parakeet-unified-en-0.6b`.
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -560,7 +562,9 @@ pub fn strip_punctuation(text: &str) -> String {
                 }
                 '!' | '?' | ';' | ':' | '\u{2026}' | '"' | '\u{201c}' | '\u{201d}' | '\u{2018}'
                 | '\u{00ab}' | '\u{00bb}' | '(' | ')' | '[' | ']' | '{' | '}' | '\u{2014}'
-                | '\u{2013}' | '\u{00a1}' | '\u{00bf}' => false,
+                | '\u{2013}' | '\u{00a1}' | '\u{00bf}'
+                // Greek question mark and ano teleia (its semicolon).
+                | '\u{037e}' | '\u{0387}' => false,
                 _ => true,
             }
         })
@@ -585,6 +589,9 @@ mod punctuation_tests {
         assert_eq!(strip_punctuation("(aside)"), "aside");
         assert_eq!(strip_punctuation("$20%"), "$20%");
         assert_eq!(strip_punctuation("\u{2014}"), "");
+        assert_eq!(strip_punctuation("γιατί;"), "γιατί");
+        assert_eq!(strip_punctuation("τώρα\u{0387}"), "τώρα");
+        assert_eq!(strip_punctuation("πώς\u{037e}"), "πώς");
     }
 
     #[test]

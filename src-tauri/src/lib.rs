@@ -4,6 +4,7 @@ pub mod captions;
 pub mod chapters;
 pub mod check;
 pub mod commands;
+pub mod cuda;
 pub mod cursor;
 pub mod dsp;
 pub mod export;
@@ -1388,6 +1389,7 @@ async fn transcript_ai_suggest(
     app: tauri::AppHandle,
     project_handle: String,
     track_id: String,
+    engine: Option<ai::FillerEngine>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     use tauri::Emitter;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1397,6 +1399,7 @@ async fn transcript_ai_suggest(
             &app.state::<commands::transcript::TranscriptState>(),
             project_handle,
             track_id,
+            engine,
             &mut |progress| {
                 let _ = emitter.emit("transcript-progress", progress);
             },

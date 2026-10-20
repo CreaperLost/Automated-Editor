@@ -119,9 +119,9 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) in the \
             transcript, one undo step: the app's rules plus an AI review. By default (`review: \
             auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
-            and otherwise uses the review you saved with `fillers_review` (in-house: you read \
-            the transcript). `review: in-house` or `openrouter` forces one. `apply: false` only \
-            lists.",
+            else its built-in local model when downloaded, and otherwise uses the review you \
+            saved with `fillers_review` (in-house: you read the transcript). `review: \
+            in-house`, `openrouter` or `local` forces one. `apply: false` only lists.",
         schema: schema::<FillerArgs>,
         read_only: false,
         run: fillers,
@@ -1586,9 +1586,11 @@ pub struct FillerArgs {
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
     /// Whose review adds to the rules. `auto` (default): `openrouter` when the user has a key
-    /// set, else `in-house`. `in-house`: the one you saved with `fillers_review` (nothing
-    /// leaves the computer). `openrouter`: the app sends the transcript to OpenRouter or
-    /// OpenAI now (the user's key, paid).
+    /// set, else `local` when the built-in model is downloaded, else `in-house`. `local`:
+    /// the app's built-in model reads the flagged windows now (free, nothing leaves the
+    /// computer). `in-house`: the one you saved with `fillers_review` (nothing leaves the
+    /// computer). `openrouter`: the app sends the transcript to OpenRouter or OpenAI now (the
+    /// user's key, paid).
     #[serde(default)]
     pub review: Option<FillerReview>,
     /// false: only list them. Default true.
@@ -1598,10 +1600,14 @@ pub struct FillerArgs {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
 pub enum FillerReview {
-    /// The app's review when a key is set, else the agent's own.
+    /// The app's review when a key is set, else the local model when downloaded, else the
+    /// agent's own.
     #[default]
     #[serde(rename = "auto")]
     Auto,
+    /// The app's built-in local model (Qwen3.5 4B), run now.
+    #[serde(rename = "local")]
+    Local,
     /// The connected agent's own review, saved with `fillers_review`.
     #[serde(rename = "in-house")]
     InHouse,
@@ -1689,7 +1695,7 @@ fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 page.pages,
                 page.words,
                 page.stamp,
-                crate::ai::fillers::CRITERIA,
+                crate::ai::fillers::criteria(page.language),
                 page.text,
                 next(page.page, page.pages, &page.stamp),
             ));
@@ -1723,7 +1729,7 @@ fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 page.full_words,
                 plural(page.full_pages, "page"),
                 (page.shown_words * 100).div_ceil(page.full_words.max(1)),
-                crate::ai::fillers::CRITERIA,
+                crate::ai::fillers::criteria(page.language),
             )
         } else {
             String::new()
@@ -1790,19 +1796,30 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     });
     // Rules and AI together by default: the rules alone miss most fillers and retakes.
     let review = args.review.unwrap_or_default();
-    let mut use_ai = match review {
-        FillerReview::OpenRouter => true,
-        FillerReview::Auto => ctx.host.ai_review_ready(),
-        FillerReview::InHouse => false,
+    use crate::ai::FillerEngine;
+    let engine = match review {
+        FillerReview::OpenRouter => Some(FillerEngine::Cloud),
+        FillerReview::Local => Some(FillerEngine::Local),
+        // The OpenRouter review first: measured against the local one on 21 Oct 2026 it missed
+        // fewer cuts and made no wrong ones (docs/plans/local-review-eval.md).
+        FillerReview::Auto if ctx.host.ai_review_ready() => Some(FillerEngine::Cloud),
+        FillerReview::Auto if ctx.host.local_review_ready() => Some(FillerEngine::Local),
+        FillerReview::Auto | FillerReview::InHouse => None,
     };
+    let name = match engine {
+        Some(FillerEngine::Local) => "the local review",
+        _ => "the OpenRouter review",
+    };
+    let mut use_ai = engine.is_some();
     let mut fallback = None;
-    let found = if use_ai {
-        ctx.progress(0.1, "Asking the OpenRouter review for fillers and retakes");
+    let found = if let Some(engine) = engine {
+        ctx.progress(0.1, &format!("Asking {name} for fillers and retakes"));
         match tc::transcript_ai_suggest_impl(
             ctx.state,
             ctx.host.transcripts(),
             before.handle.clone(),
             key.clone(),
+            Some(engine),
             &mut |p| ctx.progress(p.fraction, &p.message),
         ) {
             Ok(found) => found,
@@ -1844,6 +1861,8 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         .map(|r| {
             if r.starts_with(tc::IN_HOUSE) {
                 "the in-house review".to_string()
+            } else if r.starts_with("local/") {
+                format!("the local review ({r})")
             } else {
                 format!("the OpenRouter review ({r})")
             }
@@ -1854,7 +1873,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         plural(filler_count, "filler"),
         plural(retake_count, "retake"),
         if use_ai {
-            format!(" (rules and the OpenRouter review run now; {from_ai} from it)")
+            format!(" (rules and {name} run now; {from_ai} from it)")
         } else if from_ai > 0 {
             // The review's finds are kept with the transcript.
             format!(" (rules, and {from_ai} from {reviewer})")
@@ -1864,7 +1883,8 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     )];
     if let Some(error) = fallback {
         lines.push(format!(
-            "The OpenRouter review could not run ({error}), so the in-house review was used."
+            "The {} could not run ({error}), so the in-house review was used.",
+            name.trim_start_matches("the ")
         ));
     }
     if !use_ai && from_ai == 0 {

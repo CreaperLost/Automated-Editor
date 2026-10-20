@@ -1,7 +1,7 @@
 //! App-wide transcription settings. The ElevenLabs key never goes in a project or in the
 //! settings file: it lives in the OS credential store (Windows Credential Manager, macOS
 //! Keychain), or in an owner-only file on other platforms. `ELEVENLABS_API_KEY` overrides it.
-use super::{align, parakeet, ProviderKind};
+use super::{align, parakeet, Language, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,12 +12,16 @@ const SETTINGS_FILE: &str = "transcription.json";
 #[serde(rename_all = "camelCase", default)]
 pub struct TranscriptSettings {
     pub provider: ProviderKind,
-    /// ISO language code passed to the provider; empty lets it detect the language.
-    pub language: String,
+    /// What is spoken: sent to the provider, and the filler, retake and alignment passes
+    /// follow it. Greek is transcribed online only.
+    pub language: Language,
     /// ElevenLabs model id; empty uses the default.
     pub scribe_model: String,
     /// Words to bias recognition towards, such as game or product names.
     pub keyterms: Vec<String>,
+    /// Which Parakeet transcribes English: Unified (the most accurate words) or Verbatim
+    /// (TDT v3: keeps stutters, repeats and filler sounds).
+    pub parakeet_model: parakeet::ParakeetModel,
     /// Folder holding the Parakeet ONNX files; empty uses the app data folder.
     pub parakeet_model_dir: String,
     /// Align word times to the audio after transcribing, when the model is downloaded.
@@ -28,9 +32,10 @@ impl Default for TranscriptSettings {
     fn default() -> Self {
         Self {
             provider: ProviderKind::Parakeet,
-            language: "en".into(),
+            language: Language::English,
             scribe_model: String::new(),
             keyterms: Vec::new(),
+            parakeet_model: parakeet::ParakeetModel::Unified,
             parakeet_model_dir: String::new(),
             align_words: false,
         }
@@ -39,13 +44,11 @@ impl Default for TranscriptSettings {
 
 impl TranscriptSettings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.language.len() > 16
-            || !self
-                .language
-                .chars()
-                .all(|c| c.is_ascii_alphabetic() || c == '-')
-        {
-            return Err("Language must be a short code such as en".into());
+        if self.provider == ProviderKind::Parakeet && !self.language.runs_locally() {
+            return Err(format!(
+                "{} is transcribed online: choose ElevenLabs Scribe or Scribe via OpenRouter",
+                self.language.label()
+            ));
         }
         if self.scribe_model.len() > 64 {
             return Err("Model id is too long".into());
@@ -61,7 +64,7 @@ impl TranscriptSettings {
 
     pub fn parakeet_dir(&self) -> PathBuf {
         if self.parakeet_model_dir.trim().is_empty() {
-            parakeet::default_model_dir()
+            self.parakeet_model.default_dir()
         } else {
             PathBuf::from(self.parakeet_model_dir.trim())
         }
@@ -80,12 +83,34 @@ pub struct TranscriptSettingsView {
     pub parakeet_accelerator: String,
     pub parakeet_model_dir: String,
     pub parakeet_model_present: bool,
+    /// Download size of the Parakeet model this build uses, in bytes.
+    pub parakeet_model_bytes: u64,
+    /// Both Parakeet models, so the choice shows what each needs before it is saved.
+    pub parakeet_models: Vec<ParakeetModelStatus>,
     /// Word alignment runs in this build (it shares Parakeet's ONNX Runtime).
     pub aligner_available: bool,
     pub aligner_model_present: bool,
     pub aligner_model_dir: String,
     /// Download size of the alignment model, in bytes.
     pub aligner_model_bytes: u64,
+    /// This build runs ONNX Runtime on CUDA, so the NVIDIA GPU pack is of use.
+    pub gpu_pack_wanted: bool,
+    /// An NVIDIA driver is installed.
+    pub nvidia_driver: bool,
+    pub gpu_pack_present: bool,
+    /// Download size of the GPU pack, in bytes.
+    pub gpu_pack_bytes: u64,
+    /// Why the GPU is not in use, once a model tried it; `None` when it is or none tried.
+    pub gpu_problem: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ParakeetModelStatus {
+    pub model: parakeet::ParakeetModel,
+    pub present: bool,
+    /// Download size in this build, in bytes.
+    pub bytes: u64,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -121,12 +146,33 @@ pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
         openrouter_key_source: openrouter_key(dir).map(|(_, source)| source.to_string()),
         parakeet_available: parakeet::compiled_in(),
         parakeet_accelerator: parakeet::accelerator().into(),
-        parakeet_model_present: parakeet::model_present(&model_dir),
+        parakeet_model_present: settings.parakeet_model.present(&model_dir),
+        parakeet_model_bytes: settings.parakeet_model.bytes(),
+        parakeet_models: [parakeet::ParakeetModel::Unified, parakeet::ParakeetModel::Verbatim]
+            .into_iter()
+            .map(|model| {
+                let dir = TranscriptSettings {
+                    parakeet_model: model,
+                    ..settings.clone()
+                }
+                .parakeet_dir();
+                ParakeetModelStatus {
+                    model,
+                    present: model.present(&dir),
+                    bytes: model.bytes(),
+                }
+            })
+            .collect(),
         parakeet_model_dir: model_dir.to_string_lossy().into_owned(),
         aligner_available: align::compiled_in(),
         aligner_model_present: align::model_present(&align::default_model_dir()),
         aligner_model_dir: align::default_model_dir().to_string_lossy().into_owned(),
         aligner_model_bytes: align::MODEL_BYTES,
+        gpu_pack_wanted: crate::cuda::wanted(),
+        nvidia_driver: crate::cuda::nvidia_driver(),
+        gpu_pack_present: crate::cuda::present(&crate::cuda::default_dir()),
+        gpu_pack_bytes: crate::cuda::download_bytes(),
+        gpu_problem: crate::cuda::loaded().and_then(Result::err),
         settings,
     }
 }
@@ -171,7 +217,11 @@ mod tests {
     #[test]
     fn invalid_settings_are_rejected() {
         let mut s = TranscriptSettings::default();
-        s.language = "en; rm".into();
+        s.language = Language::Greek;
         assert!(s.validate().is_err());
+        s.provider = ProviderKind::OpenRouter;
+        assert!(s.validate().is_ok());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"language\":\"el\""));
     }
 }
