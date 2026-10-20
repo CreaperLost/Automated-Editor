@@ -45,6 +45,9 @@ parakeet-rs = { version = "0.3.8", optional = true }
 # parakeet-rs 0.3.8 asks for ort ^2.0.0-rc.13, which also matches rc.14, and rc.14 changed
 # Session::builder. Cargo.lock is not committed, so pin ort here until parakeet-rs catches up.
 ort = { version = "=2.0.0-rc.13", optional = true, default-features = false }
+# The built-in model for fillers and retakes (Qwen3.5 4B), on the GPU through Vulkan. No
+# OpenMP: it would need the MSVC OpenMP runtime next to the app.
+llama-cpp-2 = { version = "=0.1.160", optional = true, default-features = false, features = ["common", "vulkan"] }
 fontdue = "0.9"
 # Checks the graphics runtime's downloads and names graphic renders.
 sha2 = "0.10"
@@ -59,7 +62,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 cpal = "0.15"
 # The MCP pipe: only this Windows account may open it. FileSystem: exports to drives without
 # hard links (exFAT) publish with a move that never replaces.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_LibraryLoader"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", optional = true , features = [] }
@@ -74,6 +77,9 @@ parakeet = ["dep:parakeet-rs", "dep:ort"]
 parakeet-cuda = ["parakeet", "parakeet-rs/cuda"]
 parakeet-directml = ["parakeet", "parakeet-rs/directml"]
 parakeet-webgpu = ["parakeet", "parakeet-rs/webgpu"]
+# The built-in local model for the filler and retake review (llama.cpp on Vulkan). Building it
+# needs CMake, the Vulkan SDK (VULKAN_SDK) and libclang (LIBCLANG_PATH).
+local-llm = ["dep:llama-cpp-2"]
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

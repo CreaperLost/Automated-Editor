@@ -17,7 +17,16 @@ function errorMessage(err: unknown): string {
 }
 
 function formatMb(bytes: number): string {
-  return `${Math.round(bytes / 1_000_000)} MB`;
+  return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB`;
+}
+
+type DownloadKind = "parakeet" | "aligner" | "gpu" | "llm";
+
+/** Where the local models run: the GPU once the NVIDIA pack is in, else the build's own. */
+function acceleratorLabel(view: TranscriptSettingsView): string {
+  if (!view.gpuPackWanted) return view.parakeetAccelerator;
+  if (!view.nvidiaDriver) return "CPU (no NVIDIA GPU found)";
+  return view.gpuPackPresent ? "CUDA (NVIDIA GPU)" : "CPU until the GPU pack is downloaded";
 }
 
 export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
@@ -27,7 +36,7 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
   const [apiKey, setApiKey] = useState("");
   const [download, setDownload] = useState<ModelDownloadProgress | null>(null);
   /** Which model is downloading, if any. */
-  const [downloading, setDownloading] = useState<"parakeet" | "aligner" | null>(null);
+  const [downloading, setDownloading] = useState<DownloadKind | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [aiView, setAiView] = useState<AiSettingsView | null>(null);
@@ -132,13 +141,15 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
     }
   };
 
-  const downloadModel = async (model: "parakeet" | "aligner" = "parakeet") => {
+  const downloadModel = async (model: DownloadKind = "parakeet") => {
     setDownloading(model);
     setError(null);
     setDownload(null);
     try {
       if (draft) await api.transcriptSettingsSet(draft);
       load(await api.transcriptDownloadModel(model));
+      // The local model shows in the AI section.
+      if (model === "llm") loadAi(await api.aiSettingsGet());
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -148,6 +159,35 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
 
   const downloadLabel = () =>
     download ? `${formatMb(download.bytesDone)}${download.bytesTotal ? ` of ${formatMb(download.bytesTotal)}` : ""}` : "Starting";
+
+  /** A download's state: installed, or what it is and a Download button. */
+  const downloadRow = (model: DownloadKind, present: boolean, presentLabel: string, missingLabel: string) => (
+    <div className="flex items-center gap-2">
+      {present ? (
+        <span className="flex items-center gap-1 text-accent-fg">
+          <Check className="w-3 h-3" /> {presentLabel}
+        </span>
+      ) : (
+        <span className="text-studio-400">{missingLabel}</span>
+      )}
+      {!present && (
+        <button
+          type="button"
+          disabled={downloading !== null}
+          onClick={() => void downloadModel(model)}
+          className="ml-auto shrink-0 flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent-hover disabled:opacity-50 text-white"
+        >
+          <Download className="w-3 h-3" />
+          {downloading === model ? downloadLabel() : "Download"}
+        </button>
+      )}
+      {downloading === model && (
+        <button type="button" onClick={() => void api.transcriptCancel()} className="text-studio-400 hover:text-white">
+          Cancel
+        </button>
+      )}
+    </div>
+  );
 
   const input = "w-full bg-studio-800 border border-studio-700 rounded px-2 py-1 text-studio-100";
 
@@ -168,10 +208,57 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
         {draft && view && (
           <div className="p-6 space-y-5 overflow-y-auto">
             <div className="space-y-2">
+              <span className="font-semibold text-studio-300">Language spoken</span>
+              <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-control p-1">
+                {(
+                  [
+                    ["en", "English"],
+                    ["el", "Ελληνικά (Greek)"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={draft.language === value}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        language: value,
+                        // Greek has no good local model: move off Parakeet to an online provider.
+                        provider:
+                          value === "el" && draft.provider === "parakeet"
+                            ? view.elevenlabsKeySource && !view.openrouterKeySource
+                              ? "elevenlabs"
+                              : "openrouter"
+                            : draft.provider,
+                      })
+                    }
+                    className={`py-1.5 rounded-md ${
+                      draft.language === value ? "bg-accent text-white font-semibold" : "text-studio-300 hover:bg-studio-800"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-studio-500">
+                {draft.language === "el"
+                  ? "Greek is transcribed online with Scribe. Filler words, retakes and the AI review follow the language; word alignment is English only."
+                  : "Filler words, retakes and the AI review follow the language."}
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <span className="font-semibold text-studio-300">Provider</span>
               {(
                 [
-                  ["parakeet", "Parakeet (local)", "NVIDIA Parakeet TDT 0.6B on this computer. Free and private."],
+                  [
+                    "parakeet",
+                    "Parakeet (local)",
+                    draft.language === "el"
+                      ? "English only: no local model transcribes Greek well enough."
+                      : "NVIDIA Parakeet 0.6B on this computer. Free and private.",
+                  ],
                   ["elevenlabs", "ElevenLabs Scribe (cloud)", "Uploads the audio to ElevenLabs. Needs an API key."],
                   [
                     "openrouter",
@@ -180,11 +267,17 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                   ],
                 ] as const
               ).map(([value, label, hint]) => (
-                <label key={value} className="flex items-start gap-2 p-2 rounded-control border border-studio-800 bg-studio-850/60 cursor-pointer">
+                <label
+                  key={value}
+                  className={`flex items-start gap-2 p-2 rounded-control border border-studio-800 bg-studio-850/60 ${
+                    value === "parakeet" && draft.language === "el" ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                  }`}
+                >
                   <input
                     type="radio"
                     name="provider"
                     checked={draft.provider === value}
+                    disabled={value === "parakeet" && draft.language === "el"}
                     onChange={() => setDraft({ ...draft, provider: value })}
                     className="mt-0.5"
                   />
@@ -196,23 +289,57 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
               ))}
             </div>
 
-            <label className="block space-y-1">
-              <span className="text-studio-400">Language code (leave empty to detect)</span>
-              <input value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })} className={input} />
-            </label>
-
             {draft.provider === "parakeet" ? (
               <div className="space-y-2 p-3 rounded-control border border-studio-800 bg-studio-850/60">
                 <div className="flex justify-between">
                   <span className="text-studio-400">Accelerator</span>
-                  <span className={view.parakeetAvailable ? "text-accent-fg" : "text-suggest-fg"}>{view.parakeetAccelerator}</span>
+                  <span className={view.parakeetAvailable ? "text-accent-fg" : "text-suggest-fg"}>{acceleratorLabel(view)}</span>
                 </div>
+                {view.gpuPackWanted &&
+                  view.nvidiaDriver &&
+                  downloadRow(
+                    "gpu",
+                    view.gpuPackPresent,
+                    "NVIDIA GPU pack installed (CUDA 13, cuDNN 9)",
+                    `Runs Parakeet and word alignment on your NVIDIA GPU, several times faster. NVIDIA GPU pack not downloaded (about ${formatMb(view.gpuPackBytes)}).`,
+                  )}
+                {view.gpuProblem && view.gpuPackPresent && (
+                  <p className="text-suggest-fg">The GPU is not in use: {view.gpuProblem}.</p>
+                )}
                 {!view.parakeetAvailable && (
                   <p className="text-suggest-fg">
                     This build has no local transcription. Rebuild with <code>--features tauri-app,parakeet-cuda</code> (or
                     <code> parakeet-directml</code>), or use ElevenLabs.
                   </p>
                 )}
+                <div className="space-y-1">
+                  <span className="text-studio-400">Model</span>
+                  <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-control p-1">
+                    {(
+                      [
+                        ["unified", "Accurate words"],
+                        ["verbatim", "Verbatim"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={draft.parakeetModel === value}
+                        onClick={() => setDraft({ ...draft, parakeetModel: value })}
+                        className={`py-1.5 rounded-md ${
+                          draft.parakeetModel === value ? "bg-accent text-white font-semibold" : "text-studio-300 hover:bg-studio-800"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-studio-500">
+                    {draft.parakeetModel === "verbatim"
+                      ? "Parakeet TDT v3 writes down every um, stutter and repeated word, so filler and retake removal can cut them. A little less accurate on names and numbers."
+                      : "Parakeet Unified gets names and numbers right more often, but tidies speech: it can drop stutters, repeats and some ums before they can be cut."}
+                  </p>
+                </div>
                 <label className="block space-y-1">
                   <span className="text-studio-400">Model folder (leave empty for the default)</span>
                   <input
@@ -222,31 +349,15 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                     className={input}
                   />
                 </label>
-                <div className="flex items-center gap-2">
-                  {view.parakeetModelPresent ? (
-                    <span className="flex items-center gap-1 text-accent-fg">
-                      <Check className="w-3 h-3" /> Model installed
-                    </span>
-                  ) : (
-                    <span className="text-studio-400">Model not downloaded (about 670 MB).</span>
-                  )}
-                  {!view.parakeetModelPresent && (
-                    <button
-                      type="button"
-                      disabled={downloading !== null}
-                      onClick={() => void downloadModel("parakeet")}
-                      className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-accent hover:bg-accent-hover disabled:opacity-50 text-white"
-                    >
-                      <Download className="w-3 h-3" />
-                      {downloading === "parakeet" ? downloadLabel() : "Download"}
-                    </button>
-                  )}
-                  {downloading === "parakeet" && (
-                    <button type="button" onClick={() => void api.transcriptCancel()} className="text-studio-400 hover:text-white">
-                      Cancel
-                    </button>
-                  )}
-                </div>
+                {(() => {
+                  const status = view.parakeetModels.find((m) => m.model === draft.parakeetModel);
+                  return downloadRow(
+                    "parakeet",
+                    status?.present ?? false,
+                    "Model installed",
+                    `Model not downloaded (about ${formatMb(status?.bytes ?? view.parakeetModelBytes)}).`,
+                  );
+                })()}
               </div>
             ) : draft.provider === "openrouter" ? (
               <div className="space-y-3 p-3 rounded-control border border-studio-800 bg-studio-850/60">
@@ -364,6 +475,61 @@ export const TranscriptSettingsModal: React.FC<{ onClose: () => void }> = ({ onC
                 </div>
               )}
             </div>
+
+            {aiDraft && aiView && (
+              <div className="space-y-3 pt-4 border-t border-studio-800">
+                <div>
+                  <span className="font-semibold text-studio-300">Filler and retake review</span>
+                  <p className="text-studio-500">
+                    Who checks the words the rules flag, in English or Greek, when you press Find with AI.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-1 bg-studio-950/60 border border-studio-800 rounded-control p-1">
+                  {(
+                    [
+                      ["cloud", "OpenRouter / OpenAI"],
+                      ["local", "Local model"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={aiDraft.fillerEngine === value}
+                      onClick={() => setAiDraft({ ...aiDraft, fillerEngine: value })}
+                      className={`py-1.5 rounded-md ${
+                        aiDraft.fillerEngine === value ? "bg-accent text-white font-semibold" : "text-studio-300 hover:bg-studio-800"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {aiDraft.fillerEngine === "cloud" && (
+                  <p className="text-studio-500">
+                    Recommended: it misses fewer fillers and retakes and makes fewer wrong cuts. Until a key is set
+                    below, the local model reviews them when it is downloaded.
+                  </p>
+                )}
+                {aiDraft.fillerEngine === "local" && (
+                  <div className="space-y-2 p-3 rounded-control border border-studio-800 bg-studio-850/60">
+                    <p className="text-studio-500">
+                      Qwen3.5 4B runs inside the app on your GPU: free, private, no key. It reads only the windows around
+                      what the rules flagged.
+                    </p>
+                    {aiView.localAvailable ? (
+                      downloadRow(
+                        "llm",
+                        aiView.localPresent,
+                        "Local model installed",
+                        `Local model not downloaded (about ${formatMb(aiView.localModelBytes)}).`,
+                      )
+                    ) : (
+                      <p className="text-suggest-fg">This build has no local model. Rebuild with the local-llm feature.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {aiDraft && aiView && (
               <div className="space-y-3 pt-4 border-t border-studio-800">

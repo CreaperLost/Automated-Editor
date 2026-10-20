@@ -10,6 +10,14 @@ fn main() {
     if !skip_swift && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         build_macos_editor_bridge();
     }
+    // llama.cpp's Vulkan backend links the Vulkan loader. Loaded on first use instead of at
+    // start, the app still opens on a PC without one; `ai::local` checks for it first.
+    if env::var_os("CARGO_FEATURE_LOCAL_LLM").is_some()
+        && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+    {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:vulkan-1.dll");
+        println!("cargo:rustc-link-lib=delayimp");
+    }
 
     #[cfg(feature = "tauri-app")]
     tauri_build::build();

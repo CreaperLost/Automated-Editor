@@ -1,0 +1,160 @@
+{
+ "transcript": "el-synthetic.mic.json",
+ "language": "el",
+ "gold": [
+  {
+   "from": 0,
+   "to": 0,
+   "type": "filler",
+   "note": "Εεε,",
+   "optional": false
+  },
+  {
+   "from": 11,
+   "to": 11,
+   "type": "filler",
+   "note": "Λοιπόν,",
+   "optional": false
+  },
+  {
+   "from": 41,
+   "to": 42,
+   "type": "retake",
+   "note": "ανοίγουμε το",
+   "optional": false
+  },
+  {
+   "from": 72,
+   "to": 72,
+   "type": "filler",
+   "note": "Εντάξει,",
+   "optional": false
+  },
+  {
+   "from": 79,
+   "to": 79,
+   "type": "filler",
+   "note": "Βασικά,",
+   "optional": false
+  },
+  {
+   "from": 84,
+   "to": 84,
+   "type": "filler",
+   "note": "ξέρεις,",
+   "optional": false
+  },
+  {
+   "from": 114,
+   "to": 114,
+   "type": "filler",
+   "note": "λοιπόν",
+   "optional": true
+  },
+  {
+   "from": 124,
+   "to": 125,
+   "type": "retake",
+   "note": "το ενεργο-",
+   "optional": false
+  },
+  {
+   "from": 142,
+   "to": 142,
+   "type": "filler",
+   "note": "εμ,",
+   "optional": false
+  },
+  {
+   "from": 145,
+   "to": 145,
+   "type": "filler",
+   "note": "Και",
+   "optional": true
+  },
+  {
+   "from": 151,
+   "to": 153,
+   "type": "retake",
+   "note": "Θα πατήσουμε στο",
+   "optional": false
+  },
+  {
+   "from": 169,
+   "to": 169,
+   "type": "filler",
+   "note": "πολύ",
+   "optional": true
+  },
+  {
+   "from": 179,
+   "to": 180,
+   "type": "filler",
+   "note": "ας πούμε,",
+   "optional": false
+  },
+  {
+   "from": 199,
+   "to": 199,
+   "type": "filler",
+   "note": "Λοιπόν,",
+   "optional": false
+  },
+  {
+   "from": 221,
+   "to": 222,
+   "type": "retake",
+   "note": "Και τρέχουμε",
+   "optional": false
+  },
+  {
+   "from": 241,
+   "to": 241,
+   "type": "filler",
+   "note": "Εμ,",
+   "optional": false
+  },
+  {
+   "from": 272,
+   "to": 272,
+   "type": "filler",
+   "note": "δηλαδή,",
+   "optional": false
+  },
+  {
+   "from": 293,
+   "to": 293,
+   "type": "filler",
+   "note": "Οκ,",
+   "optional": false
+  },
+  {
+   "from": 301,
+   "to": 303,
+   "type": "retake",
+   "note": "Το αρχείο αυτό",
+   "optional": false
+  },
+  {
+   "from": 326,
+   "to": 326,
+   "type": "filler",
+   "note": "ξέρετε,",
+   "optional": false
+  },
+  {
+   "from": 335,
+   "to": 336,
+   "type": "filler",
+   "note": "Τέλος πάντων,",
+   "optional": false
+  },
+  {
+   "from": 360,
+   "to": 361,
+   "type": "filler",
+   "note": "ας πούμε,",
+   "optional": false
+  }
+ ]
+}

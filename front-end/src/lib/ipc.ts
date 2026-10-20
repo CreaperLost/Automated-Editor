@@ -42,6 +42,7 @@ import {
   ShortLayout,
   ShortScene,
   AiSettings,
+  FillerEngine,
   AiSettingsView,
   McpApp,
   McpSkillHome,
@@ -340,8 +341,9 @@ export const api = {
   transcriptSuggestions: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_suggestions", { projectHandle, trackId, shortId: editTarget }),
   /** Sends the kept words to the chosen AI provider; progress arrives as `transcript-progress`. */
-  transcriptAiSuggest: (projectHandle: string, trackId: string) =>
-    invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId }),
+  /** Reviews fillers and retakes with `engine`, or the settings' choice when left out. */
+  transcriptAiSuggest: (projectHandle: string, trackId: string, engine?: FillerEngine) =>
+    invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId, engine }),
   mcpStatus: () => invokeTauri<McpStatus>("mcp_status"),
   mcpSetEnabled: (enabled: boolean) => invokeTauri<McpStatus>("mcp_set_enabled", { enabled }),
   /** Adds AeroEdits to (or removes it from) the Claude app's or Codex's MCP settings. */
@@ -414,7 +416,7 @@ export const api = {
       shortId: editTarget,
     }),
   /** Downloads the Parakeet model, or with `"aligner"` the word alignment model. */
-  transcriptDownloadModel: (model: "parakeet" | "aligner" = "parakeet") =>
+  transcriptDownloadModel: (model: "parakeet" | "aligner" | "gpu" | "llm" = "parakeet") =>
     invokeTauri<TranscriptSettingsView>("transcript_download_model", { model }),
   /** Aligns an existing transcript's word times to the audio. */
   transcriptAlign: (projectHandle: string, trackId: string) =>

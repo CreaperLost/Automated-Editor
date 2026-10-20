@@ -222,7 +222,7 @@ pub fn build_cues(
             continue;
         };
         let text = if settings.uppercase {
-            word.text.trim().to_uppercase()
+            crate::transcript::language::to_caps(word.text.trim())
         } else {
             word.text.trim().to_string()
         };
@@ -736,6 +736,14 @@ mod tests {
     use super::*;
     use crate::timeline::SourceInterval;
     use crate::transcript::{test_word, ProviderKind};
+
+    #[test]
+    fn the_caption_font_draws_greek() {
+        let font = font();
+        for c in "αβγδεζηθικλμνξοπρσςτυφχψωάέήίόύώϊϋΐΰΑΩΆΈΉΊΌΎΏ;·".chars() {
+            assert_ne!(font.lookup_glyph_index(c), 0, "no glyph for {c}");
+        }
+    }
 
     fn transcript(words: &[(&str, u64, u64)]) -> Transcript {
         Transcript::new(

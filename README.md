@@ -187,7 +187,7 @@ The VibeRunner **Build** action calls a builder for the current platform:
 
 | Platform | Command from the repository root | Installer output |
 |---|---|---|
-| Windows | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1` | `src-tauri/target/release/bundle/nsis/` |
+| Windows | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1` | `C:\aeb\release\bundle\nsis\` (the short target folder the local model needs; with `-NoLocalLlm`, `src-tauri/target/release/bundle/nsis/`) |
 | macOS | `bash scripts/build-macos.sh` | `src-tauri/target/release/bundle/dmg/` |
 | Linux | `bash scripts/build-linux.sh` | `src-tauri/target/release/bundle/deb/` and `appimage/` |
 
@@ -229,25 +229,57 @@ then Intel Quick Sync, each checked with a one-frame test encode), otherwise lib
 ### Transcription
 
 Transcripts drive word-based editing: delete words to cut them, remove filler sounds, and
-drop abandoned retakes. Two providers are supported, chosen in transcription settings:
+drop abandoned retakes. The language is English or Greek (**Language spoken** in
+transcription settings); filler words, retakes, the AI review and caption capitals follow it.
+Three providers are supported:
 
-- **Parakeet (local):** NVIDIA Parakeet TDT 0.6B v3 through ONNX Runtime. It is opt-in at
-  build time, with one feature per accelerator:
+- **Parakeet (local, English only):** NVIDIA
+  [Parakeet Unified EN 0.6B](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) (an
+  RNN-T) through ONNX Runtime. On FLEURS it makes 4.0% word errors where the multilingual
+  Parakeet TDT 0.6B v3 used before made 4.8%, at the same speed. It is opt-in at build time,
+  with one feature per accelerator:
 
   ```bash
-  cargo tauri dev --features tauri-app,parakeet-cuda      # NVIDIA GPU (needs CUDA 12 and cuDNN 9)
+  cargo tauri dev --features tauri-app,parakeet-cuda      # NVIDIA GPU (with the GPU pack below)
   cargo tauri dev --features tauri-app,parakeet-directml  # any DirectX 12 GPU on Windows, no extra installs
   cargo tauri dev --features tauri-app,parakeet-webgpu    # Metal on macOS
   cargo tauri dev --features tauri-app,parakeet           # CPU only
   ```
 
-  The model (about 670 MB, INT8) downloads from Hugging Face from the settings dialog, or
-  can be placed by hand in any folder holding `vocab.txt`, `encoder-model*.onnx` and
-  `decoder_joint-model*.onnx` from
+  Unified tidies speech, though: on a 15-minute tutorial it dropped stutters and repeats
+  ("see see", "we can can") and six of nine "uh"s, which the filler and retake passes would
+  have cut. So settings also offer **Verbatim**: Parakeet TDT 0.6B v3, which writes them down.
+
+  Each model downloads from transcription settings (checked against its SHA-256): full
+  precision (about 2.5 GB, fastest on the GPU) in CUDA builds, INT8 (about 0.7 GB) otherwise.
+  Unified comes from
+  [bobNight/parakeet-unified-en-0.6b-onnx](https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx),
+  Verbatim from
   [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx).
 - **ElevenLabs Scribe (cloud):** enter an API key in settings. It is stored in Windows
   Credential Manager or the macOS Keychain, never in the project; `ELEVENLABS_API_KEY`
   overrides it for development.
+- **Scribe via OpenRouter (cloud):** the same Scribe v2, billed to the OpenRouter key.
+
+Greek is transcribed online only: no local model is good enough yet (Parakeet v3 gets about a
+third of Greek words wrong on FLEURS, Whisper large-v3 about 12%, Cohere Transcribe 9% but
+without word times).
+
+**NVIDIA GPU pack:** ONNX Runtime's CUDA provider (shipped with CUDA builds) needs CUDA 13 and
+cuDNN 9. They are about 1.9 GB, so they are not in the installer: **Download** next to the
+accelerator in transcription settings fetches NVIDIA's redistributable archives (each checked
+against NVIDIA's SHA-256), keeps only the 14 DLLs into `%APPDATA%/AeroEdits/runtime`, and
+loads them by full path before the first session. Without them everything runs on the CPU.
+
+**Local AI review (fillers and retakes):** Qwen3.5 4B (Q4_K_M, 2.7 GB, Apache-2.0) runs inside
+the app through llama.cpp on the GPU via Vulkan (the `local-llm` feature, on by default in
+`scripts/build-windows.ps1`). It reads only the windows around what the rules flagged, in
+English or Greek, answers under a JSON grammar and decodes greedily, so the same words always
+give the same cuts. Building it needs the [Vulkan SDK](https://vulkan.lunarg.com/)
+(`VULKAN_SDK`), LLVM (`LIBCLANG_PATH`), Ninja (`CMAKE_GENERATOR=Ninja`) in the Visual Studio
+developer environment, and a short `CARGO_TARGET_DIR` such as `C:\aeb`: under
+`src-tauri\target` llama.cpp's nested shader-generator build passes Windows' path limit. The
+build script sets all of that up. Users need nothing, since Vulkan comes with GPU drivers. Choose it or OpenRouter / OpenAI under **Filler and retake review**.
 
 Transcripts are saved per audio track in `<project>.aero/transcripts/<track id>.json`, with
 word times in source time, so they stay valid across cuts and undo.

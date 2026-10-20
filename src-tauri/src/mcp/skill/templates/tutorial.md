@@ -24,9 +24,15 @@ Two ways to run it:
 
 - `scan` gives an overview: the transcribers that are ready, the microphones, cameras and
   mouse data. Tell the user what the recording has in a line or two.
+- The language: English (default) or Greek, in `settings` `area: transcription`
+  (`set: {"language": "el"}` or `"en"`). Ask only when the user has not said. Greek is
+  transcribed online only, with ElevenLabs Scribe or Scribe via OpenRouter: Parakeet is
+  English only, and so is word alignment.
 - Ask which transcriber to use, offering only the ready ones (automatic: the saved one, else
   Parakeet):
-  - Parakeet: runs on this computer, free. The default.
+  - Parakeet: runs on this computer, free. The default. Its model (`settings` `area:
+    transcription`, `parakeetModel`) is `unified` (the most accurate words, the default) or
+    `verbatim` (keeps every um, stutter and repeat for the filler and retake passes).
   - ElevenLabs Scribe: cloud, on the user's key. Better with names and jargon.
   If only one is ready, say which and go on without asking.
 - Two or more microphones: ask which to transcribe: the presenter's (default), or all of
@@ -65,11 +71,14 @@ The passes:
 3. **Gaps between words:** `silence` with `mode: gaps` and `preset`: cuts the breaths and
    noises between transcribed words that the audio pass left. Choices: no (default) / yes /
    gentler / tighter.
-4. **Fillers and retakes (rules and AI):** always both. `status` says whether an AI key is set.
-   - **Key set:** `fillers` runs the rules and the app's OpenRouter review together (the
-     default, `review: auto`). Dry-run it (`apply: false`): give how many came from the
-     review and a few examples.
-   - **No key, or the review could not run** (`fillers` says so): you are the AI review.
+4. **Fillers and retakes (rules and AI):** always both, in English or Greek: the rules and the
+   review follow the language the track was transcribed in. `status` says whether an AI key is
+   set.
+   - **The default, `review: auto`:** `fillers` runs the rules with the OpenRouter review when
+     a key is set, else with the app's built-in local model when it is downloaded (free,
+     nothing leaves the computer, but it makes more wrong cuts). Dry-run it (`apply: false`):
+     give how many came from the review and a few examples.
+   - **Neither, or the review could not run** (`fillers` says so): you are the AI review.
      By default `fillers_review` shows only windows of about 15 words either side of what the
      app's local pass flagged (a "like" or "so" that may be filler, a phrase said again); um
      and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the
@@ -79,7 +88,8 @@ The passes:
      windows miss things they point out. Then dry-run `fillers` the same way.
 
    Choices: yes / rules only (`review: in-house` without saving a review) / skip. Then
-   `fillers`. When the user wants nothing sent to OpenRouter, use `review: in-house`.
+   `fillers`. When the user wants nothing sent to OpenRouter, use `review: local` (or
+   `review: in-house` when the local model is not downloaded).
 5. **Webcam** (only with a camera; `scan` says how many): first, keep the camera bubble? Yes
    (default) / no (`settings` `area: layout`, `set: {"webcamEnabled": false}`, and skip focus).
    Then **webcam focus**: `webcam_focus` (the camera fills the frame where the speaker talks

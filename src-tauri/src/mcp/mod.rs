@@ -55,6 +55,10 @@ pub trait Host: Send + Sync + 'static {
     fn ai_review_ready(&self) -> bool {
         actions::ai_key_ready()
     }
+    /// The built-in local model is downloaded: fillers use it when no AI key is set.
+    fn local_review_ready(&self) -> bool {
+        crate::ai::local::ready()
+    }
     /// The app's settings folder; the user's answers to templates are kept in it.
     fn config_dir(&self) -> std::path::PathBuf {
         crate::transcript::settings::config_dir()
@@ -599,6 +603,10 @@ mod tests {
         }
 
         fn ai_review_ready(&self) -> bool {
+            false
+        }
+
+        fn local_review_ready(&self) -> bool {
             false
         }
 

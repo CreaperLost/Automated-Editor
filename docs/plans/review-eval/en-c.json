@@ -1,0 +1,204 @@
+{
+ "transcript": "C:/Users/George/Documents/ChatGPT/VideoEditing/Untitled 19 Oct 2026 - Review Edit/transcripts/rec-33a71d63fdfb.mic.json",
+ "language": "en",
+ "words": 1000,
+ "gold": [
+  {
+   "from": 364,
+   "to": 364,
+   "type": "retake",
+   "note": "comp (cut off) -> Complementary"
+  },
+  {
+   "from": 365,
+   "to": 365,
+   "type": "filler",
+   "note": "um"
+  },
+  {
+   "from": 548,
+   "to": 548,
+   "type": "retake",
+   "note": "see set -> set",
+   "alt": [
+    [
+     549,
+     549
+    ]
+   ]
+  },
+  {
+   "from": 724,
+   "to": 724,
+   "type": "filler",
+   "note": "uh"
+  },
+  {
+   "from": 886,
+   "to": 886,
+   "type": "filler",
+   "note": "like"
+  },
+  {
+   "from": 83,
+   "to": 83,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 117,
+   "to": 117,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 167,
+   "to": 167,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 249,
+   "to": 249,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 345,
+   "to": 345,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 424,
+   "to": 424,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 502,
+   "to": 502,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 515,
+   "to": 515,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 621,
+   "to": 621,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 703,
+   "to": 703,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 776,
+   "to": 776,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 852,
+   "to": 852,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 930,
+   "to": 930,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 966,
+   "to": 966,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 518,
+   "to": 518,
+   "type": "filler",
+   "note": "so/yeah",
+   "optional": true
+  },
+  {
+   "from": 672,
+   "to": 672,
+   "type": "filler",
+   "note": "so/yeah",
+   "optional": true
+  },
+  {
+   "from": 726,
+   "to": 726,
+   "type": "filler",
+   "note": "so/yeah",
+   "optional": true
+  },
+  {
+   "from": 427,
+   "to": 427,
+   "type": "retake",
+   "note": "doubled pretty/very",
+   "optional": true
+  },
+  {
+   "from": 499,
+   "to": 499,
+   "type": "retake",
+   "note": "doubled pretty/very",
+   "optional": true
+  },
+  {
+   "from": 832,
+   "to": 832,
+   "type": "retake",
+   "note": "doubled pretty/very",
+   "optional": true
+  },
+  {
+   "from": 914,
+   "to": 914,
+   "type": "retake",
+   "note": "doubled pretty/very",
+   "optional": true
+  },
+  {
+   "from": 465,
+   "to": 467,
+   "type": "retake",
+   "note": "via custom endpoints. -> restated",
+   "optional": true
+  },
+  {
+   "from": 959,
+   "to": 965,
+   "type": "retake",
+   "note": "And if you open up settings again.",
+   "optional": true
+  }
+ ]
+}

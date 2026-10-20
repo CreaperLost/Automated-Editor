@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderKind {
-    /// NVIDIA Parakeet TDT, run locally through ONNX Runtime.
+    /// NVIDIA Parakeet (English), run locally through ONNX Runtime.
     #[default]
     Parakeet,
     /// ElevenLabs Scribe, a cloud API.

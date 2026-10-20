@@ -1,0 +1,270 @@
+{
+ "transcript": "C:/Users/George/Documents/ChatGPT/VideoEditing/Untitled 19 Oct 2026 2 - Edited/transcripts/rec-e2fbb4d5db3a.mic.json",
+ "language": "en",
+ "gold": [
+  {
+   "from": 138,
+   "to": 138,
+   "type": "retake",
+   "note": "volume volume",
+   "alt": [
+    [
+     139,
+     139
+    ]
+   ]
+  },
+  {
+   "from": 222,
+   "to": 223,
+   "type": "retake",
+   "note": "Strong revenue said again"
+  },
+  {
+   "from": 252,
+   "to": 252,
+   "type": "filler",
+   "note": "uh"
+  },
+  {
+   "from": 627,
+   "to": 627,
+   "type": "filler",
+   "note": "um"
+  },
+  {
+   "from": 629,
+   "to": 629,
+   "type": "filler",
+   "note": "Um"
+  },
+  {
+   "from": 816,
+   "to": 816,
+   "type": "filler",
+   "note": "Uh"
+  },
+  {
+   "from": 817,
+   "to": 817,
+   "type": "retake",
+   "note": "they -> there is"
+  },
+  {
+   "from": 938,
+   "to": 941,
+   "type": "retake",
+   "note": "to the lower pairs -> to the lower perpetuals"
+  },
+  {
+   "from": 33,
+   "to": 33,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 88,
+   "to": 88,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 189,
+   "to": 189,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 296,
+   "to": 296,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 326,
+   "to": 326,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 451,
+   "to": 451,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 539,
+   "to": 539,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 560,
+   "to": 560,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 579,
+   "to": 579,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 592,
+   "to": 592,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 630,
+   "to": 630,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 671,
+   "to": 671,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 746,
+   "to": 746,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 756,
+   "to": 756,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 765,
+   "to": 765,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 782,
+   "to": 782,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 804,
+   "to": 804,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 865,
+   "to": 865,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 908,
+   "to": 908,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 946,
+   "to": 946,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 982,
+   "to": 982,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 995,
+   "to": 995,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1015,
+   "to": 1015,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 245,
+   "to": 245,
+   "type": "filler",
+   "note": "very/well/really",
+   "optional": true
+  },
+  {
+   "from": 846,
+   "to": 846,
+   "type": "filler",
+   "note": "very/well/really",
+   "optional": true
+  },
+  {
+   "from": 905,
+   "to": 905,
+   "type": "filler",
+   "note": "very/well/really",
+   "optional": true
+  },
+  {
+   "from": 1004,
+   "to": 1004,
+   "type": "filler",
+   "note": "very/well/really",
+   "optional": true
+  },
+  {
+   "from": 456,
+   "to": 461,
+   "type": "retake",
+   "note": "what you need to do is -> you need to go",
+   "optional": true
+  },
+  {
+   "from": 669,
+   "to": 670,
+   "type": "filler",
+   "note": "All right",
+   "optional": true
+  },
+  {
+   "from": 1026,
+   "to": 1030,
+   "type": "retake",
+   "note": "I hope you like it -> hope you enjoy it",
+   "optional": true
+  }
+ ]
+}
