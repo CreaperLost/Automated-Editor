@@ -12,6 +12,11 @@ so the research stays together.
 - [Higgsfield and HyperFrames](#current-conclusion)
 - [Gling and AeroEdits](#gling-and-aeroedits)
 
+The [21 October tutorial motion research](tutorial-motion-workflows.md) records the later
+review of five supplied X posts and their linked repositories, including source-specific
+findings, implementation constraints and proposed workflows for Greek AI tutorials. It
+also carries forward the motion-graphics conclusions below with their original evidence limits.
+
 ## Current conclusion
 
 Higgsfield Motion Designer's clearest documented advantage over our HyperFrames setup is

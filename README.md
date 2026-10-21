@@ -5,6 +5,24 @@ multi-track `.aero` recording projects (screen, webcam, microphone and system au
 mouse telemetry) and edits them with smart zoom, silence cuts and layout presets before
 exporting an MP4.
 
+## Working with AI agents
+
+AeroEdits has no built-in chat. AI comes from your own agent (Claude Code, Codex, the Claude
+app…) over MCP or the `aeroedits do` command line. The app runs the editing passes; the agent
+runs them in order, asks you with real numbers, and you approve. Agent proposals wait in the
+Agent panel, and every change is one undo step.
+
+![How the user's agent works with AeroEdits today](docs/overview/images/ai-collaboration-today.svg)
+
+Where this is heading: the agent moves from running passes to directing the edit, with a plan
+you approve, a style trial, moving previews with sound, and rules it learns from your
+corrections. This is a proposal from the 21 Oct 2026 research, not a commitment.
+
+![The AeroEdits AI loop: today and tomorrow](docs/overview/images/ai-loop-today-vs-tomorrow.svg)
+
+Start with [docs/overview/](docs/overview/README.md) for the vision, the current state, the
+gaps and the roadmap.
+
 ## Features
 
 - **Multi-track timeline:** screen and webcam video, microphone and system audio waveforms,

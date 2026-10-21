@@ -134,6 +134,11 @@ suggested for review or placed directly.
   cheapest first step.
 - **Fits with:** graphic slots (the Graphics v1 design) and the layout sections in task 1
   (B-roll fills the screen slot for a range).
+- **Find the right source moment first:** the Premiere MCP review below shows a missing
+  step before placement: searchable source footage, including parts cut from the current
+  edit. Build on task 14, then let the agent propose B-roll from returned source ranges.
+  `short_footage` already places the edited video's footage under a take short; extend that
+  workflow rather than building placement again.
 
 ### 5. Music and sound effects
 
@@ -235,6 +240,98 @@ shipped this together with its MCP, so users can roll back an AI edit they don't
 was turned down once as "named versions/compare", and is back on the list as plain
 persistent history.
 
+### 14. Search and summarize source footage
+
+The largest gap found in the [Premiere MCP review](#premiere-pro-mcp-servers): an agent can
+inspect our edit, but cannot ask the app to find "where I open the export dialog" across
+recordings. The general media index in [AI readiness](plans/ai-readiness.md#b-roll-and-media-library)
+is still a plan; the shipped `library_save` is for reusable graphics.
+
+- **First step:** search saved source transcripts by words and phrases, with a bounded
+  result count. Return asset/stream IDs, source in/out times, transcript excerpts and word
+  IDs; optionally include their occurrences on the edited timeline. Searching only the kept
+  words would miss useful material already cut from the edit.
+- **Next:** scene descriptions and tags from sparse contact sheets, written by the user's
+  agent and cached against the source identity. Add OCR for tutorial UI labels if it proves
+  useful. Keep this on the existing "user's agent supplies understanding" path; a bundled
+  semantic model is a separate decision, after measuring keyword search misses.
+- **Reuse the evidence:** keep source-analysis versions separate from timeline revisions,
+  as in leancoderkavy's context engine below. Moving/trimming a clip should retain its source
+  descriptions; replacing the source should invalidate them. Store evidence IDs, source
+  ranges and provenance, then return a bounded context pack for the agent's current task.
+  Existing saved transcripts already survive edits; extend that principle to shot notes and
+  audio observations. Offer a way to clear the index.
+- **Navigate long recordings:** a compact source summary with timed sections and a way to
+  read just one section's evidence. `storyboard` already summarizes the finished picture;
+  this is an index of the source, including material outside the current edit.
+- **Scope:** current project's sources first, then folders and cross-project reuse. Persist
+  analysis status and file fingerprints; distinguish an unavailable source from no matches.
+  Analysis must report progress, support cancellation and resume without redoing unchanged
+  files. Offline results may stay searchable, but unavailable files cannot be placed/exported.
+- **Finish the workflow:** saved selects (named source ranges with notes), then a reviewed
+  placement batch for task 4 or a take short. Preserve source time separately from edited
+  time, and recheck the target revision before applying.
+- **Verify:** retrieve labelled moments from a real tutorial, including one removed by a
+  cut and one in an imported take; return playable source ranges and rebuild the same
+  selects after unrelated timeline edits. Measure retrieval misses and latency before
+  expanding to embeddings or people recognition. Face centering already exists; identifying
+  named people across a footage library is a different, lower-priority feature.
+
+### 15. Export a handoff for another editor
+
+Today MCP exports a rendered video or shorts. Consider an editable handoff for someone who
+wants to finish in Premiere, alongside the transcript/audio exports already listed below.
+
+- Start by choosing a target format and testing a minimal cuts-only sequence with source
+  paths, source in/out, frame rate and linked audio. Decide how unavailable media is reported.
+- Layouts, telemetry zooms, captions, speed changes and HyperFrames graphics need an explicit
+  mapping or a rendered fallback; report what was flattened or omitted. Do not promise a
+  lossless round trip before it has been tested in the receiving editor.
+- Individual source selects with a timecode manifest could be a smaller first deliverable.
+- **Priority:** after source search if an actual Premiere finishing workflow needs it.
+  Verify by importing a fixture and checking frame boundaries and audio sync in Premiere.
+
+### 16. MCP discovery and connection diagnostics
+
+The current server registers 53 tools (2 guide tools, 14 reading/proposal tools and 37 app
+actions) and returns their full schemas in `tools/list`. Before the catalog grows further:
+
+- Measure schema/context cost in supported clients. If material, offer a small default set
+  with searchable tool descriptions and on-demand schemas/invocation, while retaining a
+  full-catalog option for clients that discover native tools themselves. Existing tool names
+  and CLI commands should keep working.
+- Add one read-only readiness report usable without an open project: app/bridge versions,
+  connected state, open project and revision if any, available actions, missing runtime/model
+  dependencies and actionable errors. Reuse `status` and `scan` checks where possible.
+  MCP's handshake already reports a server version; it does not provide this full report.
+- Distinguish "connected but no project", "model/runtime missing" and "unsupported here"
+  from a failed operation. Return structured fields alongside the short human explanation.
+- Run a disposable-project workflow through the real bridge on Windows and macOS: inspect,
+  propose, accept, inspect the changed timeline, undo, render, export and check the output.
+  Existing unit/bridge tests remain useful; record host-verified coverage separately.
+- Publish a generated capability ledger from tool registration, with platform/dependency
+  requirements and what each check establishes. Distinguish timeline readback, rendered-frame
+  inspection and audio/playback review. Our exporter already checks output duration and
+  decodes the first/last frames to check dimensions (`export/mod.rs`); broader delivery QA
+  would add sampled frames around edit boundaries and audio checks, not replace those checks.
+
+### 17. Bind agent edits to the intended project
+
+The additional Premiere MCP review highlighted a concrete guard to add to our proposal
+path. `propose_cuts` and `propose_edit` take `expectedRevision`, but their shared MCP helper
+calls `with_proposals(state, None, ...)`, which selects whichever project is open when the
+call runs. The UI path already supplies a project handle. A matching numeric revision alone
+does not identify a project; local clip IDs can coincide too.
+
+- Return and require the inspected project/session identity alongside the revision for
+  agent-planned mutations; check both under the command lock. Carry the short/timeline
+  identity explicitly where relevant. Audit the other direct-action paths for the same race.
+- **Verify:** inspect project A, switch to B with the same revision and colliding clip IDs,
+  then submit A's proposal. It must refuse without saving a batch or changing B. Repeat with
+  a close/reopen so the intended lifetime of a session handle is explicit.
+- This is separate from task 13's persistent undo. Prioritize the guard before adding more
+  agent mutation tools; the existing revision and proposal checks remain useful.
+
 ## More ideas from the competitor review
 
 Smaller things worth keeping:
@@ -252,7 +349,95 @@ Smaller things worth keeping:
 
 ## Competitor notes
 
-Gathered 20 Oct 2026.
+Borumi and Tella gathered 20 Oct 2026; Premiere MCP review added 21 Oct 2026.
+
+### Premiere Pro MCP servers
+
+Reviewed 21 Oct 2026 against the current AeroEdits source. These are research findings and
+proposed backlog items, not decisions to integrate or a claim that the external tools were
+tested locally. The three references cover different parts of the workflow.
+
+**Jumper — footage understanding.** Its [Premiere page](https://getjumper.io/ai-agents/premiere-pro)
+documents local visual, speech and named-person search, active-sequence reading, timeline
+delivery to Premiere, XML export and individual clip exports. Search requires prior analysis;
+the agent can start it. Its [documentation](https://docs.getjumper.io/) also describes
+cross-project search, including indexed media on disconnected drives, and summaries for
+navigating long footage. These are vendor-documented capabilities, not retrieval results
+measured here. We should borrow the search → source range → selects → placement workflow.
+
+**Adobe_Premiere_Pro_MCP — editing control.** The
+[repository](https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP) reports 283 catalog tools,
+covering projects/media, timeline edits, effects/keyframes, captions, proxies, multicam,
+color, audio and export. Its supported bridge is a live CEP panel; UXP is experimental.
+It provides readiness/capability checks and advertises a small tool set by default, with
+`search_tools` / `get_tool_schema` / `invoke_tool` for the rest. The
+[dispatcher source](https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP/blob/main/src/tools/index.ts)
+confirms catalog discovery and schema validation before dispatch. Tool count is not a
+quality measure or evidence that every operation works on every host.
+
+The repository's [known issues](https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP/blob/main/KNOWN_ISSUES.md)
+qualify those claims: scripting has host limits, render-queue status needs Media Encoder,
+some MOGRT behavior remains unverified, and a live sweep mutates its test project. Earlier
+bugs included editing the wrong sequence and reporting success without a visible change.
+For us, that argues for explicit target IDs and checking resulting state in real-host tests.
+
+**leancoderkavy/premiere-pro-mcp — reusable context and explicit verification.** This is a
+[separate project](https://github.com/leancoderkavy/premiere-pro-mcp), published as
+`premiere-pro-mcp`; the previous repository uses `adobe-premiere-pro-mcp`. Both declare the
+same executable name, so identify the repository/package when comparing them. Its README
+describes a CEP path plus capability-gated UXP additions, project-target guards and bounded
+capability discovery. Catalog/version figures differ between the retrieved README and
+[generated manifest](https://github.com/leancoderkavy/premiere-pro-mcp/blob/main/public-product-manifest.json);
+treat them as source snapshots, not a verified installed feature count.
+
+The most relevant design is its
+[context engine](https://github.com/leancoderkavy/premiere-pro-mcp/blob/main/docs/project-context-engine.md):
+capture a bounded timeline snapshot, attach explicit transcript/shot/audio evidence, retrieve
+matching evidence, and retain source analysis across timeline changes. It does not itself
+perform vision or transcription. The
+[implementation](https://github.com/leancoderkavy/premiere-pro-mcp/blob/main/src/tools/project-context.ts)
+defines separate source/timeline revisions, media fingerprints and bounded enrichment input.
+This gives task 14 a concrete implementation reference compatible with our agent-led design.
+
+Its [editorial workflow guide](https://github.com/leancoderkavy/premiere-pro-mcp/blob/main/docs/ai-editorial-workflows.md)
+separates evidence packs and plan previews from applying a supported operation. It also
+separates structural readback from playback/render verification. AeroEdits already checks
+proposals on a copy and provides review/undo; the additions to pursue are reusable evidence,
+explicit project binding (task 17), and a capability/verification ledger (task 16).
+These are documented/source-inspected contracts; no Premiere host was exercised here.
+
+**What AeroEdits already has, and what is actually missing:**
+
+| Area | Current AeroEdits evidence | Gap / next step |
+|---|---|---|
+| Inspect and review an edit | `project_info`, `timeline_get`, `transcript_get`, `frame_render`, `timeline_view`, `storyboard` | Keep these; source search and source summaries are task 14. A finished-frame sheet is not an indexed footage library. |
+| Find footage by meaning | Agents can read a transcript and inspect frames; graphics have a reusable library | No general footage-search tool or persistent searchable scene index. Begin with source transcript search and cached descriptions (task 14). |
+| People | `faces` detects faces for framing | No named-person retrieval across sources. Defer unless multi-person footage becomes a real use case. |
+| Build an edit | `media_import`, `propose_edit` with ordered `SequenceEdit` operations, word-based cuts, linked clips and `speed` | Basic editing is already covered. Named source selects and reusable B-roll placement need task 14 + task 4. |
+| Agent workflow guidance | `template`, saved answers, shipped skill, three MCP prompts | Already present; add a search/selects recipe when those tools exist. |
+| Export and quality review | `check`, `export`, `export_status`, rendered shorts; storyboard verification | Editable NLE handoff and individual selects are missing (task 15). Export progress and readiness checking already exist. |
+| Connection and discovery | Private stdio bridge to the running app, version handshake, client setup, `status`, `scan`; full tool list | Add a project-independent readiness report; measure catalog cost before progressive discovery (task 16). |
+| Recover from edits | Revision-checked proposals, preview diff, accept/reject, undo/redo and agent history | Preserve these guarantees. Persistent history remains task 13; a larger tool catalog would not solve it. |
+| Bind a request to its target | UI commands can require a project handle; MCP proposals check the current project's revision | Require project/session identity too, so a project switch cannot redirect a stale request (task 17). |
+| General finishing | Layout transitions, telemetry zooms, caption settings, graphics, speech cleanup and audio settings | No generic effects/Lumetri/keyframe surface or full proxy/multicam workflow found in the MCP catalog. These are broader editor scope, not immediate tutorial priorities. |
+
+**Recommended order:** add the project-identity guard before expanding mutation tools. For
+footage features, source transcript search and saved selects first; source descriptions
+and summaries next; use those results for B-roll; then add handoff if needed. Connection
+diagnostics can be a small separate task. Keep the existing proposal/revision/undo path for
+agent-planned edits, while the built-in actions retain their current direct-action behavior.
+We do not need to match Premiere's catalog to improve the tutorial workflow.
+
+Local evidence checked: [`mcp/tools.rs`](../src-tauri/src/mcp/tools.rs),
+[`mcp/actions.rs`](../src-tauri/src/mcp/actions.rs),
+[`mcp/mod.rs`](../src-tauri/src/mcp/mod.rs),
+[`mcp/skill.rs`](../src-tauri/src/mcp/skill.rs),
+[`sequence/edit.rs`](../src-tauri/src/sequence/edit.rs),
+[`proposals.rs`](../src-tauri/src/proposals.rs), and
+[`graphics/library.rs`](../src-tauri/src/graphics/library.rs). Additional review:
+[`mcp/propose.rs`](../src-tauri/src/mcp/propose.rs),
+[`commands/proposals.rs`](../src-tauri/src/commands/proposals.rs) and
+[`export/mod.rs`](../src-tauri/src/export/mod.rs).
 
 ### Borumi
 
