@@ -1,9 +1,9 @@
 //! Versioned edit document (`project.json`). Source media is never rewritten.
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path};
+use crate::layouts::LayoutTrack;
 use crate::sequence::edit::{EditOutcome, SequenceEdit};
 use crate::sequence::{clock, Asset, Role, Sequence, SourceRange, StreamRef};
-use crate::layouts::LayoutTrack;
 use crate::timeline::TimelineMapper;
 use crate::zoom::{
     validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion, MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
@@ -1528,7 +1528,12 @@ mod tests {
                 None,
                 |timeline, track| {
                     let template = LayoutSection::new(track.new_id(), None, 0, 1, Some(camera));
-                    track.add(crate::layouts::sections_on(timeline, 3 * S, 5 * S, &template)?);
+                    track.add(crate::layouts::sections_on(
+                        timeline,
+                        3 * S,
+                        5 * S,
+                        &template,
+                    )?);
                     Ok(())
                 },
                 dir.path(),

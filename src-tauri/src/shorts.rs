@@ -717,7 +717,12 @@ mod tests {
             s.layouts.add(made);
         };
         // 2-8 s of the short spans the cut: 12-15 s and 20-23 s of the recording, one section.
-        add(&mut s, 2 * S, 8 * S, Layout::CameraOnly(CameraOnly::default()));
+        add(
+            &mut s,
+            2 * S,
+            8 * S,
+            Layout::CameraOnly(CameraOnly::default()),
+        );
         let spans: Vec<(u64, u64)> = s
             .layouts
             .sections
@@ -726,7 +731,12 @@ mod tests {
             .collect();
         assert_eq!(spans, vec![(12 * S, 23 * S)]);
         // A screen section over 6-10 s takes its time from the camera one.
-        add(&mut s, 6 * S, 10 * S, Layout::ScreenOnly(ScreenOnly::default()));
+        add(
+            &mut s,
+            6 * S,
+            10 * S,
+            Layout::ScreenOnly(ScreenOnly::default()),
+        );
         validate(std::slice::from_ref(&s)).unwrap();
         let timeline = short_timeline(&document, &s).unwrap();
         let shown: Vec<(u64, u64, bool)> = crate::layouts::resolve::of_document(&timeline)
@@ -897,7 +907,12 @@ mod tests {
             camera: Some((1920, 1080)),
         };
         let canvas = Canvas::new(1080, 1920);
-        let top = arrange(&crate::layouts::LayoutTrack::for_short().base, &style, canvas, both);
+        let top = arrange(
+            &crate::layouts::LayoutTrack::for_short().base,
+            &style,
+            canvas,
+            both,
+        );
         assert_eq!(caption_y(CaptionSpot::Seam, &top, 100, 1920), 622.0);
         assert_eq!(
             caption_y(CaptionSpot::Screen, &top, 100, 1920),

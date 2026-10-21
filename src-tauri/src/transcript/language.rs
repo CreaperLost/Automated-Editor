@@ -3,7 +3,9 @@
 //! Greek well enough (Parakeet v3 gets about a third of its words wrong).
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 pub enum Language {
     #[default]
     #[serde(rename = "en")]

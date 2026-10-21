@@ -533,7 +533,8 @@ pub fn is_overlay(html: &str) -> bool {
 pub fn full_camera_ranges(document: &crate::project::revision::EditDocument) -> Vec<(u64, u64)> {
     let has_camera = document.sequence.video_tracks().any(|t| {
         t.clips.iter().any(|c| {
-            crate::sequence::clip_role(&document.assets, t, c) == Some(crate::sequence::Role::Webcam)
+            crate::sequence::clip_role(&document.assets, t, c)
+                == Some(crate::sequence::Role::Webcam)
         })
     });
     if !has_camera {

@@ -157,14 +157,22 @@ pub fn pick(input: &PickInput, settings: &PickSettings) -> Vec<LayoutSection> {
             .map(|&r| clip(r))
             .filter(|(a, b)| b > a)
             .collect();
-        camera.extend(rest_ranges(&speech, input.telemetry, settings, input.move_us));
+        camera.extend(rest_ranges(
+            &speech,
+            input.telemetry,
+            settings,
+            input.move_us,
+        ));
     }
     if settings.hook {
         // The opening line, unless the screen is busy from the start.
         let hook_end = (start + HOOK_US).min(end);
         let busy_soon = screen.first().is_some_and(|s| s.0 < start + MIN_PICK_US);
         if !busy_soon {
-            camera.push((start, screen.first().map_or(hook_end, |s| hook_end.min(s.0))));
+            camera.push((
+                start,
+                screen.first().map_or(hook_end, |s| hook_end.min(s.0)),
+            ));
         }
     }
     let screen = merge(screen, MERGE_GAP_US);
@@ -178,7 +186,11 @@ pub fn pick(input: &PickInput, settings: &PickSettings) -> Vec<LayoutSection> {
         picked.push((a, b, Layout::ScreenOnly(ScreenOnly::default()), "busy"));
     }
     for &(a, b) in camera.iter().filter(|(a, b)| b - a >= MIN_PICK_US) {
-        let rule = if settings.hook && a == start { "hook" } else { "rest" };
+        let rule = if settings.hook && a == start {
+            "hook"
+        } else {
+            "rest"
+        };
         picked.push((a, b, camera_layout.clone(), rule));
     }
     picked.sort_by_key(|p| p.0);
@@ -395,7 +407,12 @@ mod tests {
     #[test]
     fn clicks_carve_activity_out_of_speech_with_lead_and_idle() {
         let settings = quick();
-        let ranges = rest_ranges(&[(0, 30 * S)], &stream(vec![click(10 * S)]), &settings, MOVE);
+        let ranges = rest_ranges(
+            &[(0, 30 * S)],
+            &stream(vec![click(10 * S)]),
+            &settings,
+            MOVE,
+        );
         let lead = MOVE + ACTIVITY_LEAD_US;
         let idle = settings.idle_ms as u64 * 1_000;
         assert_eq!(ranges, vec![(0, 10 * S - lead), (10 * S + idle, 30 * S)]);
@@ -453,7 +470,10 @@ mod tests {
             vec![(0, 20 * S)]
         );
         let moving = stream(vec![mv(S, 0.2), mv(10 * S, 0.8)]);
-        assert_eq!(rest_ranges(&[(0, 20 * S)], &moving, &settings, MOVE).len(), 2);
+        assert_eq!(
+            rest_ranges(&[(0, 20 * S)], &moving, &settings, MOVE).len(),
+            2
+        );
         settings.cursor_moves_are_activity = false;
         assert_eq!(
             rest_ranges(&[(0, 20 * S)], &moving, &settings, MOVE),
@@ -493,7 +513,9 @@ mod tests {
             .iter()
             .filter(|s| matches!(s.layout, Some(Layout::CameraOnly(_))))
             .collect();
-        assert!(camera.iter().any(|s| s.source_start_us == 100 * S && s.rule.as_deref() == Some("hook")));
+        assert!(camera
+            .iter()
+            .any(|s| s.source_start_us == 100 * S && s.rule.as_deref() == Some("hook")));
         assert!(camera.iter().any(|s| s.source_start_us >= 116 * S));
         assert!(picked.iter().all(|s| s.auto));
         // Nothing overlaps.

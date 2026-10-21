@@ -51,7 +51,11 @@ pub struct Frame<'a> {
 impl Frame<'_> {
     /// How much a layout matching `test` shows, 0 to 1.
     pub fn share(&self, test: impl Fn(&Layout) -> bool) -> f32 {
-        let a = if test(self.from) { 1.0 - self.weight } else { 0.0 };
+        let a = if test(self.from) {
+            1.0 - self.weight
+        } else {
+            0.0
+        };
         let b = if test(self.to) { self.weight } else { 0.0 };
         a + b
     }
@@ -109,9 +113,7 @@ pub fn resolve(
     let mut joined: Vec<(u64, u64, usize)> = Vec::with_capacity(placed.len());
     for piece in placed {
         match joined.last_mut() {
-            Some(last) if last.1 == piece.0 && shown(last.2) == shown(piece.2) => {
-                last.1 = piece.1
-            }
+            Some(last) if last.1 == piece.0 && shown(last.2) == shown(piece.2) => last.1 = piece.1,
             _ => joined.push(piece),
         }
     }
@@ -329,7 +331,13 @@ mod tests {
     }
 
     fn whole(len: u64) -> impl Fn(Option<&str>) -> Option<TimelineMapper> {
-        move |_| Some(TimelineMapper::new(vec![SourceInterval::new("r".into(), 0, len)]))
+        move |_| {
+            Some(TimelineMapper::new(vec![SourceInterval::new(
+                "r".into(),
+                0,
+                len,
+            )]))
+        }
     }
 
     fn spans(resolved: &Resolved) -> Vec<(u64, u64, String)> {

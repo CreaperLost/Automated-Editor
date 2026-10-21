@@ -39,7 +39,9 @@ pub fn save(dir: &Path, name: &str, layout: Layout) -> Result<Vec<Favourite>, St
         return Err("A favourite needs a one-line name of at most 60 characters".into());
     }
     if super::built_in(name).is_some() {
-        return Err(format!("\"{name}\" is a built-in layout; pick another name"));
+        return Err(format!(
+            "\"{name}\" is a built-in layout; pick another name"
+        ));
     }
     layout.validate()?;
     let mut favourites = list(dir);
@@ -116,8 +118,12 @@ mod tests {
         });
         let saved = save(dir.path(), "Narrow camera", wide.clone()).unwrap();
         assert_eq!(saved.len(), 1);
-        let again = save(dir.path(), "narrow camera", Layout::CameraOnly(CameraOnly::default()))
-            .unwrap();
+        let again = save(
+            dir.path(),
+            "narrow camera",
+            Layout::CameraOnly(CameraOnly::default()),
+        )
+        .unwrap();
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].id, saved[0].id);
         assert!(save(dir.path(), "Screen only", wide.clone()).is_err());

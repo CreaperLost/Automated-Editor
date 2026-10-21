@@ -1367,11 +1367,7 @@ pub fn layouts_find_impl(
                     .find(|a| a.streams.iter().any(|s| s.role == Role::Webcam))
                     .or_else(|| recordings().next())
                     .ok_or("Layouts are picked from a recording's mouse data")?;
-                (
-                    &document.layouts,
-                    asset.id.clone(),
-                    (0, asset.duration_us),
-                )
+                (&document.layouts, asset.id.clone(), (0, asset.duration_us))
             }
         };
         let settings = settings.unwrap_or_else(|| track.pick.clone());
@@ -1515,7 +1511,11 @@ pub enum LayoutChange {
         transition_ms: Option<u32>,
     },
     /// A section moved to `[startUs, endUs)`, keeping its id and layout.
-    Retime { id: String, start_us: u64, end_us: u64 },
+    Retime {
+        id: String,
+        start_us: u64,
+        end_us: u64,
+    },
     /// Sections removed by id.
     Remove { ids: Vec<String> },
     /// `[startUs, endUs)` taken out of every section there.
@@ -1600,7 +1600,11 @@ impl LayoutChange {
                 section.auto = false;
                 section.rule = None;
             }
-            LayoutChange::Retime { id, start_us, end_us } => {
+            LayoutChange::Retime {
+                id,
+                start_us,
+                end_us,
+            } => {
                 let index = find(track, &id)?;
                 let old = track.sections.remove(index);
                 let made = sections_on(

@@ -541,9 +541,15 @@ pub fn transcript_download_model_impl(
         )?,
         "gpu" => {
             if !crate::cuda::wanted() {
-                return Err("This build does not use CUDA, so it has no use for the GPU pack".into());
+                return Err(
+                    "This build does not use CUDA, so it has no use for the GPU pack".into(),
+                );
             }
-            crate::cuda::download(&crate::cuda::default_dir(), &transcripts.cancel, &mut report)?
+            crate::cuda::download(
+                &crate::cuda::default_dir(),
+                &transcripts.cancel,
+                &mut report,
+            )?
         }
         "llm" => crate::ai::local::download(
             &crate::ai::local::default_dir(),

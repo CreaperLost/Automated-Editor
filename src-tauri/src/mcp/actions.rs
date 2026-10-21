@@ -621,96 +621,99 @@ fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 
 fn status_text(ctx: &Ctx) -> Result<String, String> {
     let open = opened(ctx)?;
-    let mut lines =
-        with_reader(ctx.state, |reader| {
-            let document = reader.document();
-            let summary = &reader.summary;
-            let recorded: u64 = reader.recordings().map(|a| a.duration_us).sum();
-            let (width, height) = document.layout.preview_dimensions()?;
-            let mut lines = vec![format!(
-                "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}.",
-                summary.name,
-                document.revision,
-                clock(document.duration_us()),
-                if recorded > 0 {
-                    format!(" ({} recorded)", clock(recorded))
+    let mut lines = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let summary = &reader.summary;
+        let recorded: u64 = reader.recordings().map(|a| a.duration_us).sum();
+        let (width, height) = document.layout.preview_dimensions()?;
+        let mut lines = vec![format!(
+            "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}.",
+            summary.name,
+            document.revision,
+            clock(document.duration_us()),
+            if recorded > 0 {
+                format!(" ({} recorded)", clock(recorded))
+            } else {
+                String::new()
+            },
+        )];
+        let mut sound_lines = Vec::new();
+        for sound in sounds(reader) {
+            let mut line = format!(
+                "{} ({}{})",
+                sound.key,
+                if sound.speech { "speech" } else { "background" },
+                if sound.placed {
+                    ""
                 } else {
-                    String::new()
-                },
-            )];
-            let mut sound_lines = Vec::new();
-            for sound in sounds(reader) {
-                let mut line = format!(
-                    "{} ({}{})",
-                    sound.key,
-                    if sound.speech { "speech" } else { "background" },
-                    if sound.placed {
-                        ""
-                    } else {
-                        ", not on the timeline"
-                    }
-                );
-                if let Some(transcript) = store::load_transcript(reader.root(), &sound.key)? {
-                    let clock_of = document.transcript_clock(&sound.key)?;
-                    let kept = transcript
-                        .words
-                        .iter()
-                        .filter(|w| crate::transcript::edit::kept(w, &clock_of))
-                        .count();
-                    line.push_str(&format!(
-                        ": transcribed, {kept} of {} words kept",
-                        transcript.words.len()
-                    ));
+                    ", not on the timeline"
                 }
-                let muted = document.noise_mutes.get(&sound.key).map_or(0, |r| r.len());
-                if muted > 0 {
-                    line.push_str(&format!(", {} muted", plural(muted, "noise")));
-                }
-                sound_lines.push(line);
+            );
+            if let Some(transcript) = store::load_transcript(reader.root(), &sound.key)? {
+                let clock_of = document.transcript_clock(&sound.key)?;
+                let kept = transcript
+                    .words
+                    .iter()
+                    .filter(|w| crate::transcript::edit::kept(w, &clock_of))
+                    .count();
+                line.push_str(&format!(
+                    ": transcribed, {kept} of {} words kept",
+                    transcript.words.len()
+                ));
             }
-            lines.push(format!("Sounds: {}.", sound_lines.join("; ")));
-            lines.push(format!(
+            let muted = document.noise_mutes.get(&sound.key).map_or(0, |r| r.len());
+            if muted > 0 {
+                line.push_str(&format!(", {} muted", plural(muted, "noise")));
+            }
+            sound_lines.push(line);
+        }
+        lines.push(format!("Sounds: {}.", sound_lines.join("; ")));
+        lines.push(format!(
             "Zooms: {} in the edit. Layout: {}, {}. Captions: {}. Chapters: {}. Shorts: {}.",
             document.zooms.len(),
             super::layouts::describe(&document.layouts.base),
             plural(document.layouts.sections.len(), "section"),
-            if document.captions.enabled { "on" } else { "off" },
+            if document.captions.enabled {
+                "on"
+            } else {
+                "off"
+            },
             document.chapters.len(),
             document.shorts.len(),
         ));
-            let faces = crate::face::status(reader.root(), document);
-            if !faces.is_empty() {
-                let each: Vec<String> = faces
-                    .iter()
-                    .map(|f| {
-                        let key = format!("{}.{}", f.asset, f.stream);
-                        match (f.state.as_str(), f.face_share) {
-                            ("ready", Some(share)) => format!(
-                                "{key} has a face track (a face in {:.0}% of it)",
-                                share * 100.0
-                            ),
-                            ("detecting", _) => {
-                                format!("{key} is being looked at ({:.0}%)", f.progress * 100.0)
-                            }
-                            ("failed", _) => format!(
-                                "{key} has no face track: {}",
-                                f.error.as_deref().unwrap_or("detection failed")
-                            ),
-                            ("unavailable", _) => {
-                                format!("{key} has no face track (not in this build)")
-                            }
-                            _ => format!("{key} has no face track yet"),
+        let faces = crate::face::status(reader.root(), document);
+        if !faces.is_empty() {
+            let each: Vec<String> = faces
+                .iter()
+                .map(|f| {
+                    let key = format!("{}.{}", f.asset, f.stream);
+                    match (f.state.as_str(), f.face_share) {
+                        ("ready", Some(share)) => format!(
+                            "{key} has a face track (a face in {:.0}% of it)",
+                            share * 100.0
+                        ),
+                        ("detecting", _) => {
+                            format!("{key} is being looked at ({:.0}%)", f.progress * 100.0)
                         }
-                    })
-                    .collect();
-                lines.push(format!(
-                    "Camera framing in shorts (each camera clip centred on the face unless the \
+                        ("failed", _) => format!(
+                            "{key} has no face track: {}",
+                            f.error.as_deref().unwrap_or("detection failed")
+                        ),
+                        ("unavailable", _) => {
+                            format!("{key} has no face track (not in this build)")
+                        }
+                        _ => format!("{key} has no face track yet"),
+                    }
+                })
+                .collect();
+            lines.push(format!(
+                "Camera framing in shorts (each camera clip centred on the face unless the \
                      short's layout lists it in cameraClips): {}.",
-                    each.join("; ")
-                ));
-            }
-            Ok(lines)
-        })?;
+                each.join("; ")
+            ));
+        }
+        Ok(lines)
+    })?;
     if let Ok(generation) = commands::project_zoom_suggestions_impl(ctx.state, open.handle, None) {
         if !generation.suggestions.is_empty() {
             lines.push(format!(
@@ -2411,12 +2414,7 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         shorts.push(short.clone());
         Ok((shorts, short))
     })?;
-    commands::project_shorts_set_impl(
-        ctx.state,
-        before.handle.clone(),
-        before.revision,
-        shorts,
-    )?;
+    commands::project_shorts_set_impl(ctx.state, before.handle.clone(), before.revision, shorts)?;
     let mut lines = vec![format!("Made short {} \"{}\".", short.id, short.title)];
     if args.scenes != Some(false) {
         match super::layouts::run_pick(ctx, Some(short.id.clone()), None, true) {
@@ -4343,10 +4341,19 @@ mod tests {
             json!({ "short": "Next step", "op": "add", "sections": [{ "fromS": 0, "toS": 1.5, "layout": "Camera only" }] }),
         )
         .unwrap();
-        assert!(set.contains("s1 0:00.00-0:01.50 Camera only: Camera only (100 %) (by hand)"), "{set}");
+        assert!(
+            set.contains("s1 0:00.00-0:01.50 Camera only: Camera only (100 %) (by hand)"),
+            "{set}"
+        );
         let listed = call(&ctx, "layouts", json!({ "short": "short-0" })).unwrap();
-        assert!(listed.contains("base Side by side (camera first, 35 %)"), "{listed}");
-        assert!(listed.contains("Built-in layouts: Camera bubble"), "{listed}");
+        assert!(
+            listed.contains("base Side by side (camera first, 35 %)"),
+            "{listed}"
+        );
+        assert!(
+            listed.contains("Built-in layouts: Camera bubble"),
+            "{listed}"
+        );
         assert!(call(
             &ctx,
             "layouts",
@@ -4354,8 +4361,16 @@ mod tests {
         )
         .unwrap_err()
         .contains("No layout \"Nope\""));
-        let cleared = call(&ctx, "layouts", json!({ "short": "short-0", "op": "clear" })).unwrap();
-        assert!(cleared.contains("No sections: the base shows throughout."), "{cleared}");
+        let cleared = call(
+            &ctx,
+            "layouts",
+            json!({ "short": "short-0", "op": "clear" }),
+        )
+        .unwrap();
+        assert!(
+            cleared.contains("No sections: the base shows throughout."),
+            "{cleared}"
+        );
     }
 
     #[test]

@@ -22,7 +22,8 @@ struct Archive {
 /// CUDA 13.4 (the ONNX Runtime 1.28 CUDA build is a CUDA 13 build) and cuDNN 9.27 for CUDA 13.
 const ARCHIVES: &[Archive] = &[
     Archive {
-        path: "cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.4.92-archive.zip",
+        path:
+            "cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.4.92-archive.zip",
         sha256: "621a70c4778287b1abf8c27c61b841d797fda2aeff01033374dd19624bcfa249",
         bytes: 3_437_000,
     },
@@ -97,7 +98,11 @@ pub fn nvidia_driver() -> bool {
         let name: Vec<u16> = "nvcuda.dll\0".encode_utf16().collect();
         // SAFETY: a NUL-terminated name; the module is freed again at once.
         unsafe {
-            let module = LoadLibraryExW(name.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32);
+            let module = LoadLibraryExW(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            );
             if module.is_null() {
                 return false;
             }
@@ -128,14 +133,20 @@ pub fn download(
         .zip(&names)
         .map(|(a, name)| (a.path, name.as_str(), Some(a.sha256)))
         .collect();
-    crate::transcript::parakeet::download_files_checked(&downloads, REDIST, &files, cancel, progress)?;
+    crate::transcript::parakeet::download_files_checked(
+        &downloads, REDIST, &files, cancel, progress,
+    )?;
     let unpacked = dir.join("unpacked");
     for name in &names {
         let _ = std::fs::remove_dir_all(&unpacked);
         std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
         unpack_dlls(&downloads.join(name), &unpacked)?;
         for found in find_files(&unpacked, "dll") {
-            let file = found.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let file = found
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             if DLLS.iter().any(|d| d.eq_ignore_ascii_case(&file)) {
                 std::fs::rename(&found, dir.join(&file))
                     .or_else(|_| std::fs::copy(&found, dir.join(&file)).map(|_| ()))
@@ -244,7 +255,12 @@ fn load_from(dir: &Path) -> Result<(), String> {
             LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
         };
         for name in DLLS {
-            let wide: Vec<u16> = dir.join(name).as_os_str().encode_wide().chain([0]).collect();
+            let wide: Vec<u16> = dir
+                .join(name)
+                .as_os_str()
+                .encode_wide()
+                .chain([0])
+                .collect();
             // SAFETY: a NUL-terminated absolute path. The modules stay loaded for the
             // process's life: ONNX Runtime keeps using them.
             let module = unsafe {
@@ -298,7 +314,11 @@ mod tests {
         }
         let started = std::time::Instant::now();
         download(&dir, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
-        println!("installed in {:?} into {}", started.elapsed(), dir.display());
+        println!(
+            "installed in {:?} into {}",
+            started.elapsed(),
+            dir.display()
+        );
         assert!(present(&dir));
         assert!(!dir.join("downloads").exists());
         println!("nvidia driver: {}, load: {:?}", nvidia_driver(), load());

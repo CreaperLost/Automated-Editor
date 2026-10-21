@@ -8,11 +8,11 @@
 //! (webcam); then the Voice track (speech) and the Footage sound track (background, ducked
 //! under the voice).
 
+use crate::layouts::{CameraOnly, Layout, LayoutSection, LayoutTrack};
 use crate::project::revision::EditDocument;
 use crate::sequence::{
     clock, Asset, Clip, Role, Sequence, StreamKind, StreamRef, Track, TrackKind,
 };
-use crate::layouts::{CameraOnly, Layout, LayoutSection, LayoutTrack};
 use crate::shorts::{Short, ShortEdit, ShortLayout, ShortTake};
 use serde::{Deserialize, Serialize};
 use std::path::Path;

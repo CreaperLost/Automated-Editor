@@ -357,7 +357,13 @@ pub struct LayoutSection {
 }
 
 impl LayoutSection {
-    pub fn new(id: String, media: Option<String>, start: u64, end: u64, layout: Option<Layout>) -> Self {
+    pub fn new(
+        id: String,
+        media: Option<String>,
+        start: u64,
+        end: u64,
+        layout: Option<Layout>,
+    ) -> Self {
         Self {
             id,
             media,
@@ -424,12 +430,13 @@ impl LayoutTrack {
             return Err(format!("A move takes at most {MAX_TRANSITION_MS} ms"));
         }
         if self.sections.len() > MAX_SECTIONS {
-            return Err(format!("A timeline has at most {MAX_SECTIONS} layout sections"));
+            return Err(format!(
+                "A timeline has at most {MAX_SECTIONS} layout sections"
+            ));
         }
         let mut ids = std::collections::HashSet::new();
         for section in &self.sections {
-            if section.id.is_empty() || section.id.len() > 64 || !ids.insert(section.id.as_str())
-            {
+            if section.id.is_empty() || section.id.len() > 64 || !ids.insert(section.id.as_str()) {
                 return Err("Layout section ids must be unique".into());
             }
             if section.source_end_us <= section.source_start_us {
@@ -438,10 +445,17 @@ impl LayoutTrack {
             if let Some(layout) = &section.layout {
                 layout.validate()?;
             }
-            if section.transition_ms.is_some_and(|ms| ms > MAX_TRANSITION_MS) {
+            if section
+                .transition_ms
+                .is_some_and(|ms| ms > MAX_TRANSITION_MS)
+            {
                 return Err(format!("A move takes at most {MAX_TRANSITION_MS} ms"));
             }
-            if section.name.as_ref().is_some_and(|n| n.chars().count() > 60) {
+            if section
+                .name
+                .as_ref()
+                .is_some_and(|n| n.chars().count() > 60)
+            {
                 return Err("A layout name is at most 60 characters".into());
             }
         }
@@ -503,7 +517,10 @@ impl LayoutTrack {
     /// overlap on the same asset, auto or not.
     pub fn add(&mut self, added: Vec<LayoutSection>) {
         for new in added {
-            self.take_out(new.media.as_deref(), &[(new.source_start_us, new.source_end_us)]);
+            self.take_out(
+                new.media.as_deref(),
+                &[(new.source_start_us, new.source_end_us)],
+            );
             let mut new = new;
             new.id = self.unique_id(&new.id);
             self.sections.push(new);
@@ -667,7 +684,11 @@ pub fn sections_for(
 
 /// The asset a section over `[start, end)` of `document`'s timeline is anchored on: what the
 /// screen shows at its start, else the camera, else any picture, else the first recording.
-pub fn anchor_at(document: &crate::project::revision::EditDocument, start: u64, end: u64) -> Option<String> {
+pub fn anchor_at(
+    document: &crate::project::revision::EditDocument,
+    start: u64,
+    end: u64,
+) -> Option<String> {
     use crate::sequence::Role;
     let probe = start + (end.saturating_sub(start)).min(1_000) / 2;
     document
@@ -676,9 +697,18 @@ pub fn anchor_at(document: &crate::project::revision::EditDocument, start: u64, 
         .map(|(_, c)| c.asset.clone())
         .or_else(|| {
             // Any picture there, else any sound (a voice-only take).
-            let video = document.sequence.video_tracks().find_map(|t| t.clip_at(probe));
+            let video = document
+                .sequence
+                .video_tracks()
+                .find_map(|t| t.clip_at(probe));
             video
-                .or_else(|| document.sequence.tracks.iter().find_map(|t| t.clip_at(probe)))
+                .or_else(|| {
+                    document
+                        .sequence
+                        .tracks
+                        .iter()
+                        .find_map(|t| t.clip_at(probe))
+                })
                 .map(|c| c.asset.clone())
         })
         .or_else(|| document.clock_asset(None).map(String::from))
@@ -771,7 +801,12 @@ mod tests {
     #[test]
     fn adding_takes_time_from_what_it_overlaps_and_picking_keeps_manual() {
         let mut track = LayoutTrack::default();
-        track.add(vec![section("a", 10 * S, 20 * S, Some(Layout::ScreenOnly(Default::default())))]);
+        track.add(vec![section(
+            "a",
+            10 * S,
+            20 * S,
+            Some(Layout::ScreenOnly(Default::default())),
+        )]);
         track.add(vec![section("b", 14 * S, 16 * S, None)]);
         let spans: Vec<(&str, u64, u64)> = track
             .sections
@@ -780,7 +815,11 @@ mod tests {
             .collect();
         assert_eq!(
             spans,
-            vec![("a", 10 * S, 14 * S), ("b", 14 * S, 16 * S), ("a-1", 16 * S, 20 * S)]
+            vec![
+                ("a", 10 * S, 14 * S),
+                ("b", 14 * S, 16 * S),
+                ("a-1", 16 * S, 20 * S)
+            ]
         );
         track.validate().unwrap();
         // Picked sections go around the manual ones, and too-short leftovers are dropped.
@@ -812,7 +851,10 @@ mod tests {
         ]);
         let made = sections_for(&clock, None, 8 * S, 12 * S, &section("n", 0, 1, None));
         assert_eq!(made.len(), 1);
-        assert_eq!((made[0].source_start_us, made[0].source_end_us), (8 * S, 17 * S));
+        assert_eq!(
+            (made[0].source_start_us, made[0].source_end_us),
+            (8 * S, 17 * S)
+        );
         // Reordered: 15-30 s plays first, then 0-10 s.
         let reordered = TimelineMapper::new(vec![
             SourceInterval::new("b".into(), 15 * S, 30 * S),
