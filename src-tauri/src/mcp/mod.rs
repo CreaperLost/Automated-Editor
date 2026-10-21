@@ -355,8 +355,12 @@ passes and cost you almost nothing: status, scan, transcribe, mouth_noises, sile
 layouts, zooms, settings, chapters, shorts, export; each applies as one undo step and \
 answers in a line or two to pass on to the user. Times are microseconds on the edited \
 timeline (after every cut). Read transcripts (transcript_get) and frames (frame_render) only \
-for judgment calls or when a step fails; then propose_cuts and propose_edit store a batch with \
-your reason for the user to accept in the Agent panel. Prefer cuts by word id, which stay \
+for judgment calls, a thorough review the user chose, or when a step fails; then propose_cuts \
+and propose_edit store a batch with \
+your reason for the user to accept in the Agent panel. status and project_info give the open \
+project's `project` id: pass it on every call that changes something (propose_cuts, \
+propose_edit and undo_batch need it), and if a call says the project changed, read again \
+before going on. Prefer cuts by word id, which stay \
 valid while the user edits; check proposals_list for what they decided. Graphics (graphics, \
 graphic_add) play full screen over everything and cuts never go through them: add them after \
 the cuts, from the user's library first (each item says when to use it) or the templates, \
@@ -433,7 +437,6 @@ impl rmcp::ServerHandler for Handler {
             .unwrap_or(serde_json::Value::Null);
         let host = self.host.clone();
         let started = std::time::Instant::now();
-        let run = tool.run;
         let agent = client.clone().unwrap_or_else(|| "agent".into());
         let call = {
             let mut server = SERVER.lock();
@@ -475,9 +478,9 @@ impl rmcp::ServerHandler for Handler {
                 progress_host.activity_changed();
                 let _ = progress_tx.send((fraction, message.to_string()));
             };
-            let ctx = tools::Ctx::new(host.as_ref(), agent, host.autopilot())
+            let mut ctx = tools::Ctx::new(host.as_ref(), agent, host.autopilot())
                 .with_progress(Box::new(report));
-            let out = run(&ctx, args);
+            let out = tools::call(tool, &mut ctx, args);
             if ctx.project_was_changed() {
                 host.project_changed();
             }
@@ -563,15 +566,44 @@ pub(crate) fn tool_list() -> Vec<rmcp::model::Tool> {
 }
 
 fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
-    let schema = match (tool.schema)() {
+    let mut schema = match (tool.schema)() {
         serde_json::Value::Object(map) => map,
         _ => Default::default(),
     };
+    if tools::takes_project(tool) {
+        bind_to_project(&mut schema, tools::NEEDS_PROJECT.contains(&tool.name));
+    }
     let annotations = rmcp::model::ToolAnnotations::new()
         .read_only(tool.read_only)
-        .destructive(false);
+        .destructive(tools::destructive(tool.name));
     rmcp::model::Tool::new(tool.name, tool.description, Arc::new(schema))
         .with_annotations(annotations)
+}
+
+/// Adds the `project` argument [`tools::call`] takes out before a tool sees its arguments.
+fn bind_to_project(schema: &mut serde_json::Map<String, serde_json::Value>, required: bool) {
+    use serde_json::{json, Value};
+    let properties = schema
+        .entry("properties")
+        .or_insert_with(|| json!({}))
+        .as_object_mut();
+    if let Some(properties) = properties {
+        properties.insert(
+            "project".into(),
+            json!({
+                "type": "string",
+                "description": "The `project` id from project_info or status. The call is \
+                    refused if another project is open now, so a project switch can't redirect \
+                    it.",
+            }),
+        );
+    }
+    if required {
+        let list = schema.entry("required").or_insert_with(|| json!([]));
+        if let Value::Array(list) = list {
+            list.push(json!("project"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -823,6 +855,17 @@ mod tests {
             .join("\n")
     }
 
+    fn project_id(host: &TestHost) -> String {
+        host.0
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .summary
+            .project_handle
+            .clone()
+    }
+
     fn revision(host: &TestHost) -> u64 {
         host.0
             .opened_project
@@ -853,6 +896,7 @@ mod tests {
             2,
             "propose_cuts",
             json!({
+                "project": project_id(&host),
                 "expectedRevision": start,
                 "reason": "Remove the false start",
                 "cuts": [{ "fromWord": "w-0", "toWord": "w-1", "reason": "restarted" }],
@@ -930,7 +974,7 @@ mod tests {
         messages.push(call(
             2,
             "undo_batch",
-            json!({ "batchId": "b-1", "expectedRevision": start + 1 }),
+            json!({ "project": project_id(&host), "batchId": "b-1", "expectedRevision": start + 1 }),
         ));
         let replies = runtime.block_on(talk(&endpoint, &messages, 2));
         assert!(
@@ -962,6 +1006,7 @@ mod tests {
             2,
             "propose_edit",
             json!({
+                "project": project_id(&host),
                 "expectedRevision": start,
                 "reason": "A track for the lower third",
                 "edits": [{ "kind": "addTrack", "trackKind": "video" }],
@@ -971,6 +1016,7 @@ mod tests {
             3,
             "propose_edit",
             json!({
+                "project": project_id(&host),
                 "expectedRevision": start,
                 "reason": "stale",
                 "edits": [{ "kind": "teleport" }],

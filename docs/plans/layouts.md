@@ -1,14 +1,16 @@
 # Layouts: plan v1 (2026-10-21)
 
-Task 1 in [future-work.md](../future-work.md#1-more-layouts). Status: **decided 21 Oct 2026,
-being built.** See [Decisions](#decisions-21-oct-2026); they override the text below where they
-differ.
+Was backlog task 1. Status: **built 21 Oct 2026** (see [Built](#built-21-oct-2026-branch-claudelayouts-970278));
+open follow-ups are [LAY-1](../roadmap.md#lay-1) (look-only swap, perf measurement) to
+[LAY-4](../roadmap.md#lay-4). See [Decisions](#decisions-21-oct-2026); they override the text
+below where they differ. When the follow-ups ship, fold the model into
+[architecture.md](../architecture.md) and delete this plan.
 
 Goal: a small set of named layouts (camera bubble, side by side, camera only, screen only) that
 work in 16:9 and 9:16, changed over time by **layout sections** that stay on their content
 through cuts, with a **base layout** that fills every gap. One system replaces today's global
-layout, webcam focus and the shorts' scenes. The presenter cut-out is task 9 (the backlog says
-"needs task 10"; it needs task 9's matte).
+layout, webcam focus and the shorts' scenes. The presenter cut-out is
+[LAY-4](../roadmap.md#lay-4); it needs [FX-1](../roadmap.md#fx-1)'s matte.
 
 ## What exists today
 
@@ -42,7 +44,7 @@ never written back.
 
 ## Lessons taken from Tella and Borumi
 
-- Tella's kinds and placement rules shape the kinds below and the task 11 hooks. Its
+- Tella's kinds and placement rules shape the kinds below and the LAY-3 hooks. Its
   transitions are `hardCut` or `spring` per layout; ours are per section, with an automatic
   default.
 - Borumi's pitfalls, and how this design avoids each:
@@ -126,9 +128,9 @@ pub struct LayoutSection {
     pub transition: Transition, // Auto | Cut | Move { ms: Option<u32> }
     /// Picked by a rule; picking again replaces these and keeps manual ones.
     pub auto: bool,
-    /// Which rule picked it (task 11 explains its plan with this).
+    /// Which rule picked it (LAY-3 explains its plan with this).
     pub rule: Option<String>,
-    /// Which camera fills the camera slot; `None` is the one on the timeline (task 10 hook).
+    /// Which camera fills the camera slot; `None` is the one on the timeline (LAY-2 hook).
     pub camera: Option<String>,
     /// Filled in for the UI, never stored.
     pub edited_ranges: Vec<EditedRange>,
@@ -190,7 +192,7 @@ bubble-hide, check, storyboard, MCP `list`.
   `AEROEDITS_TEMPLATES_DIR` override). They are shared by every project.
 - Applying a favourite **copies** its `Layout` into the section and remembers its name for
   display. Editing or deleting a favourite later never changes a project. (Open decision 2.)
-- Templates (`templates.rs`, task 6) hold the style and the **base** layout. Favourites hold
+- Templates (`templates.rs`, UI-3) hold the style and the **base** layout. Favourites hold
   arrangements only.
 
 ## Rendering: one path
@@ -268,9 +270,9 @@ own timeline, as `short_scenes set` uses now.
   functions, and drop one `settings` branch. Land it after that work is committed, then
   rebase.
 
-## Hooks for task 10 and task 11
+## Hooks for LAY-2 and LAY-3
 
-- **Task 10 (number keys):**
+- **LAY-2 (number keys):**
   - Built-ins and favourites have a `slot` 1-9, which makes the numbered palette.
   - A core `switch_at(target, at_us, layout)` gives key semantics as in multicam editing: from
     `at_us` to the next section edge, the layout becomes N, splitting the stretch it lands in.
@@ -278,7 +280,7 @@ own timeline, as `short_scenes set` uses now.
   - `LayoutSection.camera` chooses a camera when there are several.
   - While playing, switches show at once through the look-only swap (performance, item 1)
     and commit as one undo step on stop.
-- **Task 11 (auto layouts):**
+- **LAY-3 (auto layouts):**
   - `pick` is a list of rules over telemetry, speech and face tracks. Sections carry `auto`
     and `rule`.
   - Room is left for Tella's limits: at most N changes a minute, and length windows per kind
@@ -316,7 +318,7 @@ Follows the preview-performance rules.
 
 1. **Look edits rebuild playback.** Any edit bumps `content_generation`. `playback/engine.rs`
    then builds a new `SceneEvaluator` *and* a new `AudioMixer` and drops the last frame. That
-   is fine for occasional edits, but wrong for dragging a section edge and for task 10's live
+   is fine for occasional edits, but wrong for dragging a section edge and for LAY-2's live
    keys.
    - **Mitigation:** a separate look generation. Edits that change only layouts or style swap
      a new `Arc<ResolvedLayouts>` and style into the running evaluator, which resets only its
@@ -366,7 +368,7 @@ George's answers to the open decisions below:
 9. Side by side has both *fit* and *fill*, and a slider for the camera's share (not only
    50/50).
 10. No fixed number slots: people bind layouts to keys themselves in the shortcuts menu
-    (task 10). Favourites carry no slot.
+    (LAY-2). Favourites carry no slot.
 11. Build now, on top of `expansion`, without waiting for the 20 Oct work.
 
 ## Built (21 Oct 2026, branch `claude/layouts-970278`)
@@ -400,36 +402,7 @@ George's answers to the open decisions below:
 
 Not done yet:
 - The look-only swap in playback (performance risk 1). A layout edit still rebuilds the
-  evaluator and mixer, like any edit. Task 10's live keys need the swap.
+  evaluator and mixer, like any edit. LAY-2's live keys need the swap.
 - Measuring with `perf.rs` on a real `.aero`.
-- Number-key bindings (task 10). `layoutsStore.switchAt` and MCP `layouts op: switch` are the
+- Number-key bindings (LAY-2). `layoutsStore.switchAt` and MCP `layouts op: switch` are the
   hooks.
-
-## Open decisions for George (answered above)
-
-1. **Style shared, layouts only arrange?** One style per timeline (background, borders,
-   corners, mirror), and layouts and favourites hold only the arrangement. *Recommended.* The
-   alternative, a style per layout, is Borumi's model and is heavier to edit.
-2. **Favourites copied or linked?** Copied into the section when applied, so editing a
-   favourite later doesn't touch old projects. *Recommended.*
-3. **Default transition:** `Auto` (cuts between full-frame shots and at jump cuts, a 350 ms
-   move otherwise), or today's default, a hard cut everywhere?
-4. **Where a move plays:** inside the section (today's focus behaviour; the section's look is
-   complete only after the move), or centred on its edge?
-5. **Face framing in the main video:** side by side in 16:9 cuts a 16:9 camera to about 8:9,
-   so centre crops cut people off. Turn on face framing for the video's camera slots too? It
-   is shorts-only today by your 17 Oct call. *Recommended: yes for side by side and camera
-   only; the bubble keeps the centre crop.*
-6. **Shorts keep their own base and sections** (*recommended*, since shorts are mostly split
-   and the video mostly bubble), or inherit the video's?
-7. **Remove outright:** `webcam_enabled`, the webcam focus on/off switch, and the MCP
-   `webcam_focus` and `short_scenes` actions, all replaced by `layouts`. OK?
-8. **Bubble placement:** today's 4 corners plus custom and a size slider, or Tella's 9
-   positions and S/M/L?
-9. **Side by side in 16:9:** screen *fit* (whole screen letterboxed in its half, background
-   around), or *fill* (cut to the slot and following zooms, as in shorts)? *Recommended: fit
-   by default, fill as an option.*
-10. **Number slots (for task 10):** built-ins fixed on 1-5 and favourites on 6-9, or you
-    number everything?
-11. **Merge order:** land this after the 20 Oct work in the main checkout is committed, since
-    both touch `mcp/actions.rs`?

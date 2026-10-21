@@ -9,7 +9,8 @@ description: Edit videos in AeroEdits (screen-recorded tutorials first) with its
 AeroEdits runs the editing passes itself: transcription, mouth noises, silence, fillers and
 retakes, layouts, zooms, captions, chapters, export. You run them in the right order, ask
 the user what they want, and report back. A pass costs you a line of text. Reading a transcript
-or rendering frames costs far more, so do that only when a step fails or the user asks.
+or rendering frames costs far more, so do that only when a step fails, the user asks, or the
+user chose a thorough review (the template says what it reads).
 
 The actions are MCP tools (`aeroedits` server) and shell commands:
 `aeroedits do <action> --option value` (`aeroedits do <action> --help` lists the options).
@@ -67,6 +68,11 @@ user can switch either way at any point.
 After each action, one line: what it did and the length before → after. The actions answer in
 a line or two; pass that on without padding it.
 
+Say only what you checked, and how. Keep apart what you **did**, what you **looked at** (and
+how much of it), what was **heard** (you can't listen: nothing, unless the user did), and what
+the user **approved**. "Reviewed" from a contact sheet or a windowed read is not a review of the
+whole edit; say what it covered.
+
 ## When something fails
 
 Stop. Tell the user the app's error and what you suggest. Don't work around it with other
@@ -86,8 +92,13 @@ speed. Never speed up waiting or slow parts by yourself: cut them, or ask.
 ## Chapters
 
 Chapters are the last edit, right before export, after every cut: they read the final edit's
-words. Never run `chapters` earlier; if the user asks for them sooner, say why they come last.
-If anything is cut after them, run `chapters` again before exporting.
+words. Never make chapters earlier; if the user asks for them sooner, say why they come last.
+If anything is cut after them, make them again before exporting.
+
+Write them yourself: read `transcript_get`, pick where each topic starts, and send `chapters`
+with `set` (each a `title` and the `atWord` it starts at). YouTube wants at least 3, each 10 s or
+longer, the first at the start. Use the app's own pass (`chapters` without `set`) only if the
+user asks for it.
 
 ## Graphics
 
@@ -136,15 +147,18 @@ screen). It renders for that space, so the templates fit any slot.
 
 ## Telemetry polish
 
-Three touches come from the recording's telemetry, on by default and subtle; leave them on
-unless the user asks. In `settings` `area: layout`: `webcamAutoHide` fades the bubble out while
-clicks, drags, scrolling, a resting pointer or typing are under it (it never moves); `windowCrop`
-crops the screen to the front window when it is clearly smaller than the display (needs a
-recording with window telemetry), `windowCropPaddingPct` is the room around it, and
-`windowCropOff` lists recording stretches (`{media, sourceStartUs, sourceEndUs}`) shown whole,
-for a part the user wants uncropped. In `area: audio`, `soundEffects` (`clicks`, `whooshes`,
-`muted`, `volumeDb`) is a quiet lane of click sounds and a few whooshes on zooms and layout
-switches. Both are off by default; switch them on only when the user asks for them.
+A few touches come from the recording's telemetry. Each is listed with its default:
+
+- **On by default; leave on unless the user asks.** In `settings` `area: layout`:
+  `webcamAutoHide` fades the bubble out while clicks, drags, scrolling, a resting pointer or
+  typing are under it (it never moves). `windowCrop` crops the screen to the front window when it
+  is clearly smaller than the display; it only does anything on a recording with window
+  telemetry. `windowCropPaddingPct` is the room around it, and `windowCropOff` lists recording
+  stretches (`{media, sourceStartUs, sourceEndUs}`) shown whole, for a part the user wants
+  uncropped.
+- **Off by default; switch on only when the user asks.** In `area: audio`, `soundEffects`
+  (`clicks`, `whooshes`, `muted`, `volumeDb`) is a quiet lane of click sounds and a few whooshes
+  on zooms and layout switches.
 
 ## Looking at the edit
 
@@ -165,3 +179,24 @@ and at the end of every template).
 When the user asks for cuts the passes don't make (a tangent, a wrong take the rules missed),
 read `transcript_get`, then `propose_cuts` by word id with a reason. The user accepts it in the
 Agent panel.
+
+## Cleaning up and correcting
+
+You can undo or fix what you made, each change one undo step unless it says otherwise:
+- a graphic: `graphic_set` with `moveToWord` / `moveToUs`, or `remove: true`;
+- a zoom: `zooms` `op: list`, then `update` (`scale`, centre, `fixed`), `remove` (`ids`), or
+  `create` one of your own (`startUs`, `endUs`, `scale`, `centerX`/`centerY`);
+- a short: `shorts` `op: range` (new `fromWord`/`toWord`) or `op: remove`;
+- a word the transcriber got wrong: `transcript_fix` (not an undo step: keep the old text it
+  reports);
+- what an imported file's streams stand for: `media_import` with `roles`;
+- an export you started with `wait: false`: `export` with `cancel`.
+Brand kits (`brand_kit_set`) and the graphics library (`library_remove`) are the user's, shared
+by every project: change them only when the user asks.
+
+## Stay on the right project
+
+`status` and `project_info` give the open project's `project` id. Pass it as `project` on every
+call that changes something; `propose_cuts`, `propose_edit` and `undo_batch` refuse to run
+without it. If a call answers that the project changed, the user opened another one (or reopened
+this one): nothing was changed. Read `status` again and ask before going on.

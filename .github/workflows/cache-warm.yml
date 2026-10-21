@@ -35,7 +35,7 @@ jobs:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -53,7 +53,7 @@ jobs:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -67,7 +67,7 @@ jobs:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -78,14 +78,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: linux-tauri
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: front-end/package-lock.json
       # Installed from apt directly: cache-apt-pkgs-action restored these without
@@ -108,7 +108,7 @@ jobs:
         working-directory: src-tauri
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri

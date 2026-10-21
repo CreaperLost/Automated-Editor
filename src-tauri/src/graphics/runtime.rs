@@ -2,6 +2,9 @@
 //! with `npm ci` from the lock file shipped in the app, so every package is checked against its
 //! integrity hash) and a pinned chrome-headless-shell. Downloaded on first use into the app's
 //! data folder, like the Parakeet model; nothing on `PATH` is used or changed.
+//!
+//! Pinned on purpose: recheck these three together at each dependency review
+//! (`docs/dependencies.md`) and bump them only after the gate passes on every bundled template.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};

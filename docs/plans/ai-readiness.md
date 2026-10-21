@@ -1,5 +1,12 @@
 # AI readiness: plan v2 (2026-10-13)
 
+**Status 21 Oct 2026:** phases 0–3 built (MCP bridge, proposals, app actions + CLI, skill and
+templates, `check`, shorts scenes, graphics v1, brand kits, library + gate). This file is the
+design record and build log of the agent system; the current summary is in
+[architecture.md](../architecture.md#the-agent-connection-mcp) and the open work in
+[roadmap.md](../roadmap.md). Phases 4–6 below ("brand kit … recipes", "library, providers",
+"screen-pinned callouts") are superseded by roadmap items STY-1, FTG-2/FTG-6 and FX-2.
+
 AeroEdits is a free, open-source editor. AI comes from the **user's own agent** (Claude Code, Codex,
 Gemini CLI, OpenCode with MiniMax or GLM, Cursor, …) connecting to the app over **MCP**, paid by
 the user's own subscription. The app has no model, no chat panel, and no AI keys on this path.
@@ -397,6 +404,9 @@ touched by a render. The composition reads its size from the slot, so a template
 relative units fits any slot.
 
 **Placement: anchored, rigid, protected.**
+- *(As built, `graphic_add(atWord)` resolves the word to a time once and stores a plain clip
+  that ripples with cuts; keeping the word anchor is part of [PLAN-1](../roadmap.md#plan-1).
+  The design below is the intent.)*
 - A placement stores an anchor in the recording's time (a word id when there is one, else source
   µs) and its own length. Its start is mapped through `sequence::clock`, then it plays its full
   length in timeline time. Shown on a **Graphics lane** above the video tracks (like the zoom lane);
@@ -601,8 +611,9 @@ generalizes it; the app checks it, with no model and no free-text rules.
 2. **WebM VP9 alpha is the default render cache** (decoded with `libvpx-vp9` forced, a keyframe every
    second). **ProRes 4444** for the macOS native path and for exporting a graphic to another editor.
 3. **Fullscreen graphics hide the webcam bubble and the captions by default**, with a per-clip override.
-4. **No keystroke capture.** The recorder is unchanged. A shortcut-chip template may still be placed
-   from the transcript when the speaker names a shortcut.
+4. **No typed text is ever captured.** (Amended 17–18 Oct: originally "no keystroke capture".)
+   Keyboard telemetry v1 records typing stretches with a key count and shortcuts only; see
+   [keyboard-telemetry.md](../contracts/keyboard-telemetry.md).
 5. **The existing AI passes stay**: transcription (ElevenLabs or local Parakeet), fillers, retakes,
    chapters, shorts. The agent is a second way to produce the same suggestions over MCP, landing
    in the same review lists. Transcription stays in the app in any case, because a subscription

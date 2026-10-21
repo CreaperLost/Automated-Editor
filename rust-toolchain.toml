@@ -1,0 +1,5 @@
+# The Rust the app builds with. rustup installs it on first use. Change it only through the
+# dependency review in docs/dependencies.md, together with the version in the CI workflows.
+[toolchain]
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]

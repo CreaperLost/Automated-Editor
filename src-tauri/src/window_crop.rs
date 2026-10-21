@@ -3,7 +3,7 @@
 //! around it, and glides to the next window when the user switches.
 //!
 //! The plan is worked out from the recording's window telemetry (`telemetry/windows.jsonl`,
-//! see `docs/window-telemetry.md`) in source time, so every frame of preview and export reads
+//! see `docs/contracts/window-telemetry.md`) in source time, so every frame of preview and export reads
 //! the same crop. Quick app switches, popups, menus and tiny windows never move it. Zooms work
 //! inside the crop (see [`zoom_inside`]), so their targets stay on the same pixels.
 use crate::telemetry::windows::{WindowBox, WindowRole, WindowStream};

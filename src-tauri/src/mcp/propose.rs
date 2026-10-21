@@ -35,12 +35,11 @@ pub struct EditParams {
     pub reason: String,
     /// Timeline edits, applied in order. Each is an object with `kind` and its fields
     /// (camelCase), for example `{"kind": "placeAsset", "assetId": "a-3", "atUs": 12000000,
-    /// "trackId": "t-4"}`, `{"kind": "addTrack", "trackKind": "video"}`, `{"kind":
-    /// "moveClips", "clipIds": ["c-7"], "deltaUs": -500000}`, `{"kind": "trimClip", "clipId":
-    /// "c-7", "edge": "end", "toUs": 15000000}`, `{"kind": "split", "atUs": 9000000}`,
-    /// `{"kind": "delete", "clipIds": ["c-7"], "ripple": false}`, `{"kind": "deleteRange",
-    /// "ranges": [{"startUs": 1000000, "endUs": 2000000}], "ripple": true}`. Track and clip
-    /// ids come from timeline_get, assets from project_info.
+    /// "trackId": "t-4", "streams": ["screen"]}` or `{"kind": "deleteRange", "ranges":
+    /// [{"startUs": 1000000, "endUs": 2000000}], "ripple": true}`. Track and clip ids come
+    /// from timeline_get, assets and streams from project_info.
+    // Parsed one by one (so an error names the edit), but published with every kind's schema.
+    #[schemars(with = "Vec<SequenceEdit>")]
     pub edits: Vec<Value>,
 }
 
@@ -77,16 +76,17 @@ fn propose(
     propose: impl FnOnce(&ProjectReader, &mut Proposals) -> Result<String, String>,
 ) -> Result<Vec<Output>, String> {
     let autopilot = ctx.autopilot;
-    let ((id, accepted), view) = with_proposals(ctx.state, None, |reader, proposals| {
-        let id = propose(reader, proposals)?;
-        if !autopilot {
-            return Ok((id, None));
-        }
-        let revision = reader.document().revision;
-        // A batch autopilot cannot take (nothing left to cut) waits for the user instead.
-        let accepted = proposals::accept(reader, proposals, &id, revision, None, false, true);
-        Ok((id, Some(accepted)))
-    })?;
+    let ((id, accepted), view) =
+        with_proposals(ctx.state, ctx.project.as_deref(), |reader, proposals| {
+            let id = propose(reader, proposals)?;
+            if !autopilot {
+                return Ok((id, None));
+            }
+            let revision = reader.document().revision;
+            // A batch autopilot cannot take (nothing left to cut) waits for the user instead.
+            let accepted = proposals::accept(reader, proposals, &id, revision, None, false, true);
+            Ok((id, Some(accepted)))
+        })?;
     ctx.changed_proposals();
     let batch = view.batches.iter().find(|b| b.id == id);
     let summary = batch.map(|b| b.summary.join("\n")).unwrap_or_default();
@@ -220,15 +220,18 @@ fn listing(view: &ProposalsView, agent: &str, pending_only: bool, mine: bool) ->
 
 pub fn proposals_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ListParams = params(args)?;
-    let view = super::tools::with_reader(ctx.state, |reader| {
-        Ok(proposals::view(reader, &proposals::load(reader.root())?))
+    let (project, view) = super::tools::with_reader(ctx.state, |reader| {
+        let view = proposals::view(reader, &proposals::load(reader.root())?);
+        Ok((reader.summary.project_handle.clone(), view))
     })?;
-    pretty(&listing(&view, &ctx.agent, args.pending_only, args.mine))
+    let mut listed = listing(&view, &ctx.agent, args.pending_only, args.mine);
+    listed["project"] = json!(project);
+    pretty(&listed)
 }
 
 pub fn proposal_withdraw(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: BatchParams = params(args)?;
-    let ((), view) = with_proposals(ctx.state, None, |_, proposals| {
+    let ((), view) = with_proposals(ctx.state, ctx.project.as_deref(), |_, proposals| {
         proposals::withdraw(proposals, &args.batch_id, &ctx.agent)
     })?;
     ctx.changed_proposals();
@@ -240,7 +243,7 @@ pub fn proposal_withdraw(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> 
 
 pub fn undo_batch(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: UndoParams = params(args)?;
-    let (_, view) = with_proposals(ctx.state, None, |reader, proposals| {
+    let (_, view) = with_proposals(ctx.state, ctx.project.as_deref(), |reader, proposals| {
         proposals::undo(
             reader,
             proposals,

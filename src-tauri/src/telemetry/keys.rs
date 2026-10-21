@@ -1,5 +1,5 @@
 //! Keyboard activity recorded beside the mouse stream (`telemetry/keys.jsonl`), as specified
-//! in `docs/keyboard-telemetry.md`: shortcuts by key, typing as stretches with a key count and
+//! in `docs/contracts/keyboard-telemetry.md`: shortcuts by key, typing as stretches with a key count and
 //! never the text, and gaps where the keyboard was not seen. Same clock as `events.jsonl`.
 //!
 //! No file means the keyboard was not recorded, and everything falls back to the mouse.

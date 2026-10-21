@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 37] = [
+pub static ACTIONS: [ToolDef; 40] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -162,11 +162,13 @@ pub static ACTIONS: [ToolDef; 37] = [
     },
     ToolDef {
         name: "zooms",
-        description: "Automatic zooms from the recording's clicks. `op`: `add` (default) adds the \
-            suggested zooms, `reload` finds them again with the zoom settings (dismissed ones \
-            too; manual ones stay), `dismiss` drops the suggestions. `settings` changes the zoom \
-            settings first. Reports how many, how long and how far in; `apply: false` with `add` \
-            only reports.",
+        description: "Zooms. Automatic ones from the recording's clicks: `op` `add` (default) \
+            adds the suggested zooms, `reload` finds them again with the zoom settings \
+            (dismissed ones too; manual ones stay), `dismiss` drops the suggestions; `settings` \
+            changes the zoom settings first; `apply: false` with `add` only reports. Single \
+            zooms: `list` (ids, times, scale, centre), `create` (`startUs`, `endUs` on the edited \
+            timeline, `scale`, `centerX`/`centerY` 0-1), `update` (`id` with `scale`, centre or \
+            `fixed`), `remove` (`ids`). Each change is one undo step.",
         schema: schema::<ZoomArgs>,
         read_only: false,
         run: zooms,
@@ -177,30 +179,35 @@ pub static ACTIONS: [ToolDef; 37] = [
             background, corners, camera border, `faceFraming`; where things go is `layouts`), \
             audio, zoom, transcription, ai, export, presets. Without `set` it shows the current \
             values; `set` is a JSON object of just the fields to change (nested objects merge). \
-            Telemetry polish: layout `webcamAutoHide` (the bubble fades while work is under it), \
-            `windowCrop` with `windowCropPaddingPct` and `windowCropOff` (recording stretches \
-            `{media, sourceStartUs, sourceEndUs}` shown uncropped), and audio `soundEffects` \
-            (`clicks`, `whooshes`, `muted`, `volumeDb`). API keys are not reachable here.",
+            Telemetry polish: layout `webcamAutoHide` (on by default; the bubble fades while work \
+            is under it), `windowCrop` (on by default) with `windowCropPaddingPct` and \
+            `windowCropOff` (recording stretches `{media, sourceStartUs, sourceEndUs}` shown \
+            uncropped), and audio `soundEffects` (off by default; `clicks`, `whooshes`, `muted`, \
+            `volumeDb`). API keys are not reachable here.",
         schema: schema::<SettingsArgs>,
         read_only: false,
         run: settings,
     },
     ToolDef {
         name: "chapters",
-        description: "Makes YouTube chapters from the transcript with the app's AI pass (the \
-            user's OpenAI/OpenRouter key) and saves them in the project. Run it last, after \
-            every cut and right before export: it reads the final edit's words, and cuts made \
-            after it can leave chapters titled for talk that is gone. `status` says when they \
-            are out of date.",
-        schema: schema::<StreamArgs>,
+        description: "YouTube chapters. With `set` (a list of `title` + `atWord` or `atUs`) \
+            the chapters you wrote replace the project's; without it the app's AI pass makes \
+            them (the user's OpenAI/OpenRouter key). Run it last, after every cut and right \
+            before export: cuts made after it can leave chapters titled for talk that is gone. \
+            YouTube needs at least 3, each 10 s or longer, the first at 0:00. `status` says \
+            when they are out of date.",
+        schema: schema::<ChaptersArgs>,
         read_only: false,
         run: chapters,
     },
     ToolDef {
         name: "shorts",
-        description: "Finds moments for vertical shorts with the app's AI pass and saves them \
-            for the Shorts Studio.",
-        schema: schema::<StreamArgs>,
+        description: "Vertical shorts. `op` `find` (default): the app's AI pass finds moments \
+            and saves them for the Shorts tab (when you can read the transcript, pick them \
+            yourself with `short_create` instead). `remove` with `short` (id or title) removes \
+            one; `range` with `short`, `fromWord` and `toWord` sets the stretch it plays. One \
+            undo step each.",
+        schema: schema::<ShortsArgs>,
         read_only: false,
         run: shorts,
     },
@@ -222,7 +229,8 @@ pub static ACTIONS: [ToolDef; 37] = [
             user recorded for a short, whatever its form: a camera video (often with its own \
             microphone) and, if they used one, a separate microphone file, or a .aero \
             recording (its camera and microphone together). Never `open` a take. Answers each \
-            new media id and its streams.",
+            new media id and its streams. `roles` (`media`, `stream`, `role`) sets what streams \
+            stand for, after importing or on media already in the project.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -272,9 +280,10 @@ pub static ACTIONS: [ToolDef; 37] = [
         name: "export",
         description: "Exports the video (the canvas size and frame rate unless given; next to the \
             project unless `destination`). Waits until done and reports progress unless `wait: \
-            false`, which returns a job id for export_status.",
+            false`, which returns a job id for export_status; `cancel` with that id stops it.",
         schema: schema::<ExportArgs>,
-        read_only: true,
+        // Writes the video file (over `destination` if it exists).
+        read_only: false,
         run: export,
     },
     ToolDef {
@@ -316,7 +325,9 @@ pub static ACTIONS: [ToolDef; 37] = [
             brand kit (`default` for the project's, `none`, or a kit from brand_kits), and with \
             `short` the slot it plays in that short (`full` frame, the `camera` or `screen` \
             part of the split, or `overScreen`: over the screen part, under the captions, its \
-            see-through parts showing the screen). It renders again by itself.",
+            see-through parts showing the screen). It renders again by itself. `moveToUs` or \
+            `moveToWord` moves it; `remove: true` takes it out of the project with its clips \
+            (one undo step).",
         schema: schema::<GraphicSetArgs>,
         read_only: false,
         run: graphic_set,
@@ -345,7 +356,8 @@ pub static ACTIONS: [ToolDef; 37] = [
             overlay over the full-screen camera eases). Look at the result with frame_render at \
             a time inside the graphic.",
         schema: schema::<GraphicRenderArgs>,
-        read_only: true,
+        // Writes renders into the project's graphics cache.
+        read_only: false,
         run: graphic_render,
     },
     ToolDef {
@@ -369,7 +381,8 @@ pub static ACTIONS: [ToolDef; 37] = [
             Answers pass or fail per check with why, and a contact sheet (both shapes, its text \
             and long text). Takes 30-90 s; an unchanged graphic answers at once.",
         schema: schema::<GraphicOnlyArgs>,
-        read_only: true,
+        // Writes its report and contact sheet into the gate cache.
+        read_only: false,
         run: graphic_check,
     },
     ToolDef {
@@ -393,6 +406,36 @@ pub static ACTIONS: [ToolDef; 37] = [
         schema: schema::<NoArgs>,
         read_only: false,
         run: graphics_install,
+    },
+    ToolDef {
+        name: "brand_kit_set",
+        description: "Makes or changes one of the user's brand kits (app-wide, every project \
+            sees it): `name`, `background`, `text` and `accent` colours (#RRGGBB), `font`, and \
+            `fontFile` / `logo` as full paths to copy into the kit. Fields left out keep the \
+            kit's current values; `previous` renames a kit; `remove: true` deletes it. Graphics \
+            using it render again. Ask the user first: kits are theirs.",
+        schema: schema::<BrandKitSetArgs>,
+        read_only: false,
+        run: brand_kit_set,
+    },
+    ToolDef {
+        name: "library_remove",
+        description: "Removes an item (id or name, from `graphics`) from the user's graphics \
+            library, for every project. Graphics already placed from it stay. Only at the \
+            user's word.",
+        schema: schema::<LibraryRemoveArgs>,
+        read_only: false,
+        run: library_remove,
+    },
+    ToolDef {
+        name: "transcript_fix",
+        description: "Corrects words the transcriber got wrong: `fixes` is a list of `word` (id \
+            from transcript_get) and its right `text`. The fix shows in captions, in the video \
+            and every short; times and cuts don't change. It is not an undo step: the answer \
+            lists the old text so you can put it back.",
+        schema: schema::<TranscriptFixArgs>,
+        read_only: false,
+        run: transcript_fix,
     },
     ToolDef {
         name: "brand_kits",
@@ -443,9 +486,14 @@ fn current(ctx: &Ctx) -> Result<Open, String> {
     })
 }
 
-/// The project open now.
+/// The project open now. A call bound to a project (`project`) runs only on that one; the
+/// commands it then runs check the same handle again under the command lock.
 pub(super) fn opened(ctx: &Ctx) -> Result<Open, String> {
-    current(ctx)
+    let open = current(ctx)?;
+    if ctx.project.as_ref().is_some_and(|p| *p != open.handle) {
+        return Err(super::tools::OTHER_PROJECT_MESSAGE.into());
+    }
+    Ok(open)
 }
 
 /// The answer for an action that may have changed the edit: `lines`, then the length and the
@@ -634,7 +682,8 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
         let recorded: u64 = reader.recordings().map(|a| a.duration_us).sum();
         let (width, height) = document.layout.preview_dimensions()?;
         let mut lines = vec![format!(
-            "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}.",
+            "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}. Its `project` id \
+             (pass it on changes): {}.",
             summary.name,
             document.revision,
             clock(document.duration_us()),
@@ -643,6 +692,7 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             } else {
                 String::new()
             },
+            summary.project_handle,
         )];
         let mut sound_lines = Vec::new();
         for sound in sounds(reader) {
@@ -2118,14 +2168,45 @@ pub enum ZoomOp {
     Reload,
     /// Drop the suggestions.
     Dismiss,
+    /// List the zooms in the edit with their ids.
+    List,
+    /// A zoom of your own over `startUs`..`endUs` (edited time) at `scale`, centred on
+    /// `centerX`, `centerY`.
+    Create,
+    /// Change zoom `id`: `scale`, `centerX`, `centerY`, `fixed`.
+    Update,
+    /// Remove the zooms in `ids`.
+    Remove,
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomArgs {
-    /// add (default), reload or dismiss.
+    /// add (default), reload, dismiss; list, create, update, remove for single zooms.
     #[serde(default)]
     pub op: ZoomOp,
+    /// create: where it starts and ends, microseconds on the edited timeline.
+    #[serde(default)]
+    pub start_us: Option<u64>,
+    #[serde(default)]
+    pub end_us: Option<u64>,
+    /// create, update: how far in (1.6 is a usual zoom).
+    #[serde(default)]
+    pub scale: Option<f64>,
+    /// create, update: the point to zoom on, 0 to 1 across and down the screen recording.
+    #[serde(default)]
+    pub center_x: Option<f64>,
+    #[serde(default)]
+    pub center_y: Option<f64>,
+    /// update: stay on the centre instead of following the mouse.
+    #[serde(default)]
+    pub fixed: Option<bool>,
+    /// update: the zoom's id (from `list`).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// remove: the zooms' ids (from `list`).
+    #[serde(default)]
+    pub ids: Vec<String>,
     /// Zoom settings to change first, as in `settings zoom`, such as {"clickScale": 1.8}.
     #[serde(default)]
     pub settings: Option<Value>,
@@ -2136,6 +2217,134 @@ pub struct ZoomArgs {
 
 fn zooms(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(run_zooms(ctx, params(args)?)?)
+}
+
+/// Every zoom in the edit, with its id and where it plays.
+fn list_zooms(ctx: &Ctx) -> Result<String, String> {
+    with_reader(ctx.state, |reader| {
+        let zooms = reader.document().zooms_with_ranges();
+        if zooms.is_empty() {
+            return Ok("No zooms in the edit.".to_string());
+        }
+        let mut lines = vec![format!(
+            "{} (times on the edited timeline):",
+            plural(zooms.len(), "zoom")
+        )];
+        for zoom in zooms {
+            let kind = match zoom.source {
+                crate::zoom::ZoomSource::Manual => "manual",
+                crate::zoom::ZoomSource::Generated => "from the recording",
+            };
+            let fixed = if zoom.fixed { ", fixed" } else { "" };
+            let at = match zoom.edited_ranges.first() {
+                Some(r) => format!(
+                    "{}-{} ({}-{} us)",
+                    clock(r.start_us),
+                    clock(r.end_us),
+                    r.start_us,
+                    r.end_us
+                ),
+                None => "cut out".to_string(),
+            };
+            lines.push(format!(
+                "{}: {at}, {:.1}x at ({:.2}, {:.2}), {kind}{fixed}",
+                zoom.id, zoom.scale, zoom.center_x, zoom.center_y
+            ));
+        }
+        Ok(lines.join("\n"))
+    })
+}
+
+/// Creates, changes or removes zooms one by one, as the zoom lane does.
+fn single_zoom(ctx: &Ctx, before: &Open, args: ZoomArgs) -> Result<String, String> {
+    let in_unit = |v: Option<f64>, name: &str| match v {
+        Some(v) if !(0.0..=1.0).contains(&v) => Err(format!("`{name}` goes from 0 to 1")),
+        _ => Ok(v),
+    };
+    let (center_x, center_y) = (
+        in_unit(args.center_x, "centerX")?,
+        in_unit(args.center_y, "centerY")?,
+    );
+    let line = match args.op {
+        ZoomOp::Create => {
+            let (Some(start), Some(end)) = (args.start_us, args.end_us) else {
+                return Err("`create` needs `startUs` and `endUs` (edited time)".into());
+            };
+            let scale = args.scale.unwrap_or(1.6);
+            commands::project_zoom_add_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                commands::ManualZoomInput {
+                    edited_start_us: start,
+                    edited_end_us: end,
+                    center_x: center_x.unwrap_or(0.5),
+                    center_y: center_y.unwrap_or(0.5),
+                    scale,
+                },
+            )?;
+            format!(
+                "Added a {scale:.1}x zoom from {} to {}.",
+                clock(start),
+                clock(end)
+            )
+        }
+        ZoomOp::Update => {
+            let id = args
+                .id
+                .ok_or("`update` needs the zoom's `id` (zooms `op: list`)")?;
+            if args.start_us.is_some() || args.end_us.is_some() {
+                return Err(
+                    "To move a zoom, `remove` it and `create` it where it should be".into(),
+                );
+            }
+            let mut zoom = with_reader(ctx.state, |reader| {
+                reader
+                    .document()
+                    .zooms
+                    .iter()
+                    .find(|z| z.id == id)
+                    .cloned()
+                    .ok_or_else(|| format!("No zoom {id} (zooms `op: list`)"))
+            })?;
+            if let Some(scale) = args.scale {
+                zoom.scale = scale;
+            }
+            if let Some(x) = center_x {
+                zoom.center_x = x;
+            }
+            if let Some(y) = center_y {
+                zoom.center_y = y;
+            }
+            if let Some(fixed) = args.fixed {
+                zoom.fixed = fixed;
+            }
+            commands::project_zoom_update_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                zoom,
+            )?;
+            format!("Changed zoom {id}.")
+        }
+        ZoomOp::Remove => {
+            if args.ids.is_empty() {
+                return Err("`remove` needs `ids` (zooms `op: list`)".into());
+            }
+            for id in &args.ids {
+                let now = opened(ctx)?;
+                commands::project_zoom_delete_impl(
+                    ctx.state,
+                    now.handle,
+                    now.revision,
+                    id.clone(),
+                )?;
+            }
+            format!("Removed {}.", plural(args.ids.len(), "zoom"))
+        }
+        ZoomOp::Add | ZoomOp::Reload | ZoomOp::Dismiss | ZoomOp::List => unreachable!(),
+    };
+    applied(ctx, "zooms", before, vec![line])
 }
 
 /// "18 zooms, 3.2 s on average (1.5 to 8.0 s), 1.6x in" for suggestions.
@@ -2164,6 +2373,11 @@ fn describe_zooms(suggestions: &[crate::zoom::ZoomSuggestion]) -> String {
 
 fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
     let before = opened(ctx)?;
+    match args.op {
+        ZoomOp::List => return list_zooms(ctx),
+        ZoomOp::Create | ZoomOp::Update | ZoomOp::Remove => return single_zoom(ctx, &before, args),
+        ZoomOp::Add | ZoomOp::Reload | ZoomOp::Dismiss => {}
+    }
     let mut lines = Vec::new();
     if args.apply == Some(false) {
         if args.op != ZoomOp::Add || args.settings.is_some() {
@@ -2234,6 +2448,8 @@ fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
                 ));
             }
         }
+        // Answered at the start.
+        ZoomOp::List | ZoomOp::Create | ZoomOp::Update | ZoomOp::Remove => unreachable!(),
     }
     let count = with_reader(ctx.state, |reader| Ok(reader.document().zooms.len()))?;
     lines.push(format!("{} in the edit.", plural(count, "zoom")));
@@ -2374,17 +2590,118 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
 // ---------------------------------------------------------------------------------------
 // Chapters, shorts, export.
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterInput {
+    pub title: String,
+    /// Where it starts: a word (id from `transcript_get`)...
+    #[serde(default)]
+    pub at_word: Option<String>,
+    /// ...or microseconds on the edited timeline.
+    #[serde(default)]
+    pub at_us: Option<u64>,
+}
+
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct StreamArgs {
+pub struct ChaptersArgs {
     /// Sound key of a transcript. Default: the transcribed speech.
     #[serde(default)]
     pub stream: Option<String>,
+    /// The chapters you wrote, in order: they replace the project's chapters and no AI pass
+    /// runs. Leave out to have the app's AI pass make them.
+    #[serde(default)]
+    pub set: Option<Vec<ChapterInput>>,
+}
+
+/// Chapters written by the agent, anchored where they start in the recording.
+fn set_chapters(ctx: &Ctx, before: &Open, args: ChaptersArgs) -> Result<Vec<Output>, String> {
+    let wanted = args.set.unwrap_or_default();
+    let key = match wanted.iter().any(|c| c.at_word.is_some()) {
+        true => Some(pick_sound(ctx, args.stream, Want::Transcribed)?),
+        false => None,
+    };
+    let chapters = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let transcript = match &key {
+            Some(key) => Some(
+                store::load_transcript(reader.root(), key)?
+                    .ok_or("That sound is not transcribed")?,
+            ),
+            None => None,
+        };
+        let mut chapters = Vec::new();
+        for (n, input) in wanted.iter().enumerate() {
+            let title = input.title.trim();
+            if title.is_empty() {
+                return Err(format!("Chapter {} has no title", n + 1));
+            }
+            let (media, source_us) = match (&input.at_word, input.at_us) {
+                (Some(word), None) => {
+                    let (Some(key), Some(transcript)) = (&key, &transcript) else {
+                        unreachable!()
+                    };
+                    let found = transcript
+                        .words
+                        .iter()
+                        .find(|w| &w.id == word)
+                        .ok_or_else(|| format!("No word {word} in the transcript of {key}"))?;
+                    (document.stream_ref(key)?.asset, found.source_start_us)
+                }
+                (None, Some(at)) => {
+                    // Anchored to what plays there: the top picture, else any clip.
+                    let tracks = document.sequence.tracks.iter();
+                    let pictures = tracks
+                        .clone()
+                        .filter(|t| t.kind == crate::sequence::TrackKind::Video)
+                        .rev();
+                    let sounds = tracks.filter(|t| t.kind == crate::sequence::TrackKind::Audio);
+                    let clip = pictures
+                        .chain(sounds)
+                        .find_map(|t| t.clip_at(at))
+                        .ok_or_else(|| {
+                            format!("Nothing plays at {} for chapter {}", clock(at), n + 1)
+                        })?;
+                    (clip.asset.clone(), clip.local_us(at).unwrap_or(clip.in_us))
+                }
+                _ => return Err(format!("Chapter {}: give one of `atWord` or `atUs`", n + 1)),
+            };
+            chapters.push(crate::chapters::Chapter {
+                id: format!("ch-{source_us}-{n}"),
+                source_us,
+                title: title.to_string(),
+                media: Some(media),
+                edited_us: None,
+            });
+        }
+        Ok(chapters)
+    })?;
+    let project = commands::project_chapters_set_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        chapters,
+    )?;
+    let mut lines = vec![format!(
+        "Set {}:",
+        plural(project.chapters.len(), "chapter")
+    )];
+    lines.extend(project.chapters.iter().map(|c| {
+        format!(
+            "{} {}",
+            c.edited_us.map_or("(cut)".to_string(), clock),
+            c.title
+        )
+    }));
+    text(applied(ctx, "chapters", before, lines)?)
 }
 
 fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: StreamArgs = params(args)?;
+    let args: ChaptersArgs = params(args)?;
     let before = opened(ctx)?;
+    if args.set.is_some() {
+        return set_chapters(ctx, &before, args);
+    }
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
     ctx.progress(0.1, "Asking the AI pass for chapters");
     let project = tc::project_chapters_generate_impl(
@@ -2407,9 +2724,117 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(applied(ctx, "chapters", &before, lines)?)
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ShortsOp {
+    /// The app's AI pass finds moments.
+    #[default]
+    Find,
+    /// Remove `short`.
+    Remove,
+    /// Set `short` to play from `fromWord` to `toWord`.
+    Range,
+}
+
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortsArgs {
+    /// find (default), remove or range.
+    #[serde(default)]
+    pub op: ShortsOp,
+    /// remove, range: the short's id or title.
+    #[serde(default)]
+    pub short: Option<String>,
+    /// range: the first and last word, ids from `transcript_get`.
+    #[serde(default)]
+    pub from_word: Option<String>,
+    #[serde(default)]
+    pub to_word: Option<String>,
+    /// Sound key of a transcript. Default: the transcribed speech.
+    #[serde(default)]
+    pub stream: Option<String>,
+}
+
+/// Removes a short or sets the stretch of the video it plays.
+fn change_short(ctx: &Ctx, before: &Open, args: ShortsArgs) -> Result<Vec<Output>, String> {
+    let wanted = args
+        .short
+        .ok_or("Give `short`: its id or title (see status)")?;
+    let words = match (&args.from_word, &args.to_word) {
+        (Some(a), Some(b)) => Some((a.clone(), b.clone())),
+        _ => None,
+    };
+    if args.op == ShortsOp::Range && words.is_none() {
+        return Err("`range` needs `fromWord` and `toWord`".into());
+    }
+    let key = match words {
+        Some(_) => Some(pick_sound(ctx, args.stream, Want::Transcribed)?),
+        None => None,
+    };
+    let (shorts, line) = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        let index = shorts
+            .iter()
+            .position(|s| s.id == wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
+            .ok_or_else(|| format!("No short {wanted} (see status)"))?;
+        if args.op == ShortsOp::Remove {
+            let gone = shorts.remove(index);
+            return Ok((shorts, format!("Removed short \"{}\".", gone.title)));
+        }
+        let short = &mut shorts[index];
+        if short.take.is_some() {
+            return Err(format!(
+                "Short \"{}\" is made from a take; change it in the Shorts tab",
+                short.title
+            ));
+        }
+        // A new stretch follows the video again, as Resync does: its own cuts go.
+        let dropped = short.edit.take().is_some();
+        let (Some(key), Some((from, to))) = (&key, &words) else {
+            unreachable!()
+        };
+        let transcript =
+            store::load_transcript(reader.root(), key)?.ok_or("That sound is not transcribed")?;
+        let word = |id: &str| {
+            transcript
+                .words
+                .iter()
+                .find(|w| w.id == id)
+                .ok_or_else(|| format!("No word {id} in the transcript of {key}"))
+        };
+        let (first, last) = (word(from)?, word(to)?);
+        if last.source_end_us <= first.source_start_us {
+            return Err("`toWord` must come after `fromWord`".into());
+        }
+        short.source_start_us = first.source_start_us;
+        short.source_end_us = last.source_end_us;
+        short.media = Some(document.stream_ref(key)?.asset);
+        crate::shorts::edited_range_in(short, document)
+            .ok_or("A word at one end was cut from the video; pick words that are kept")?;
+        Ok((
+            shorts.clone(),
+            format!(
+                "Short \"{}\" now plays {from}..{to}{}.",
+                shorts[index].title,
+                if dropped {
+                    ", following the video again (its own cuts are gone; undo brings them back)"
+                } else {
+                    ""
+                }
+            ),
+        ))
+    })?;
+    commands::project_shorts_set_impl(ctx.state, before.handle.clone(), before.revision, shorts)?;
+    text(applied(ctx, "shorts", before, vec![line])?)
+}
+
 fn shorts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: StreamArgs = params(args)?;
+    let args: ShortsArgs = params(args)?;
     let before = opened(ctx)?;
+    if args.op != ShortsOp::Find {
+        return change_short(ctx, &before, args);
+    }
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
     ctx.progress(0.1, "Asking the AI pass for shorts");
     let project = tc::project_shorts_generate_impl(
@@ -2542,12 +2967,34 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct MediaImportArgs {
     /// Full paths of the files (or recording folders) to import.
+    #[serde(default)]
     pub paths: Vec<String>,
+    /// What streams stand for, set after importing (or alone, for media already imported).
+    #[serde(default)]
+    pub roles: Vec<MediaRoleArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaRoleArgs {
+    /// The media id (from this answer or project_info).
+    pub media: String,
+    /// Its stream, such as `picture`, `camera` or `audio:0`.
+    pub stream: String,
+    /// screen, webcam, overlay (pictures); mic (speech) or background (sounds).
+    pub role: crate::sequence::Role,
 }
 
 fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: MediaImportArgs = params(args)?;
+    if args.paths.is_empty() && args.roles.is_empty() {
+        return Err("Give `paths` to import, `roles` to set, or both".into());
+    }
     let before = opened(ctx)?;
+    if args.paths.is_empty() {
+        let lines = set_roles(ctx, args.roles)?;
+        return text(applied(ctx, "media_import", &before, lines)?);
+    }
     let known: std::collections::HashSet<String> = with_reader(ctx.state, |reader| {
         Ok(reader
             .document()
@@ -2578,7 +3025,40 @@ fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             streams.join(", ")
         ));
     }
+    lines.extend(set_roles(ctx, args.roles)?);
     text(applied(ctx, "media_import", &before, lines)?)
+}
+
+/// Sets stream roles, one undo step per media.
+fn set_roles(ctx: &Ctx, roles: Vec<MediaRoleArgs>) -> Result<Vec<String>, String> {
+    let mut by_media: Vec<(String, Vec<commands::StreamRoleInput>)> = Vec::new();
+    for role in roles {
+        let input = commands::StreamRoleInput {
+            stream: role.stream,
+            role: role.role,
+        };
+        match by_media.iter_mut().find(|(m, _)| *m == role.media) {
+            Some((_, list)) => list.push(input),
+            None => by_media.push((role.media, vec![input])),
+        }
+    }
+    let mut lines = Vec::new();
+    for (media, roles) in by_media {
+        let now = opened(ctx)?;
+        let count = roles.len();
+        commands::project_media_roles_impl(
+            ctx.state,
+            now.handle,
+            now.revision,
+            media.clone(),
+            roles,
+        )?;
+        lines.push(format!(
+            "Set the role of {} of {media}.",
+            plural(count, "stream")
+        ));
+    }
+    Ok(lines)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -2936,6 +3416,9 @@ pub struct ExportArgs {
     /// next to the project, named after it and the short (1080x1920), one after another.
     #[serde(default)]
     pub short: Option<String>,
+    /// Stop the export with this job id (from `wait: false` or export_status) instead.
+    #[serde(default)]
+    pub cancel: Option<String>,
 }
 
 fn export_defaults(ctx: &Ctx) -> Result<crate::export::ExportSettings, String> {
@@ -2952,6 +3435,10 @@ fn export_defaults(ctx: &Ctx) -> Result<crate::export::ExportSettings, String> {
 
 fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ExportArgs = params(args)?;
+    if let Some(job) = args.cancel {
+        let status = commands::export_cancel_impl(ctx.state, job.clone())?;
+        return text(format!("Asked export {job} to stop: {:?}.", status.state));
+    }
     let open = opened(ctx)?;
     let defaults = export_defaults(ctx)?;
     let mut settings = match &args.settings {
@@ -3222,23 +3709,7 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let before = opened(ctx)?;
     let at = match (args.at_us, &args.at_word) {
         (Some(at), None) => at,
-        (None, Some(word)) => {
-            let key = pick_sound(ctx, args.stream.clone(), Want::Transcribed)?;
-            with_reader(ctx.state, |reader| {
-                let transcript = store::load_transcript(reader.root(), &key)?
-                    .ok_or("That sound is not transcribed")?;
-                let found = transcript
-                    .words
-                    .iter()
-                    .find(|w| &w.id == word)
-                    .ok_or_else(|| format!("No word {word} in the transcript of {key}"))?;
-                reader
-                    .document()
-                    .transcript_clock(&key)?
-                    .source_to_edited_us(found.source_start_us)
-                    .ok_or_else(|| format!("Word {word} was cut from the video"))
-            })?
-        }
+        (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word)?,
         _ => return Err("Give one of `atUs` or `atWord`".into()),
     };
     let (created, from) = match (&args.template, &args.library) {
@@ -3330,12 +3801,89 @@ pub struct GraphicSetArgs {
     /// Where it plays in that short.
     #[serde(default)]
     pub slot: Option<crate::shorts::GraphicSlot>,
+    /// Take the graphic out of the project, with its clips. One undo step.
+    #[serde(default)]
+    pub remove: bool,
+    /// Move it so it starts here, microseconds on the edited timeline...
+    #[serde(default)]
+    pub move_to_us: Option<u64>,
+    /// ...or at this word (id from `transcript_get`).
+    #[serde(default)]
+    pub move_to_word: Option<String>,
+    /// The sound `moveToWord` is from; default the speech that is transcribed.
+    #[serde(default)]
+    pub stream: Option<String>,
+}
+
+/// Where word `word` of the transcript of `stream` starts on the edited timeline.
+fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> Result<u64, String> {
+    let key = pick_sound(ctx, stream, Want::Transcribed)?;
+    with_reader(ctx.state, |reader| {
+        let transcript =
+            store::load_transcript(reader.root(), &key)?.ok_or("That sound is not transcribed")?;
+        let found = transcript
+            .words
+            .iter()
+            .find(|w| w.id == word)
+            .ok_or_else(|| format!("No word {word} in the transcript of {key}"))?;
+        reader
+            .document()
+            .transcript_clock(&key)?
+            .source_to_edited_us(found.source_start_us)
+            .ok_or_else(|| format!("Word {word} was cut from the video"))
+    })
 }
 
 fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicSetArgs = params(args)?;
     let before = opened(ctx)?;
+    graphic_folder(ctx, &args.graphic)?;
+    if args.remove {
+        commands::project_media_remove_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            args.graphic.clone(),
+        )?;
+        let line = format!("Removed graphic {} and its clips.", args.graphic);
+        return text(applied(ctx, "graphic_set", &before, vec![line])?);
+    }
     let mut lines = Vec::new();
+    let target = match (args.move_to_us, &args.move_to_word) {
+        (Some(at), None) => Some(at),
+        (None, Some(word)) => Some(word_edited_us(ctx, args.stream.clone(), word)?),
+        (None, None) => None,
+        _ => return Err("Give one of `moveToUs` or `moveToWord`".into()),
+    };
+    if let Some(target) = target {
+        let now = current(ctx)?;
+        let (clip, start) = with_reader(ctx.state, |reader| {
+            reader
+                .document()
+                .sequence
+                .clips()
+                .find(|(_, c)| c.asset == args.graphic)
+                .map(|(_, c)| (c.id.clone(), c.start_us))
+                .ok_or_else(|| format!("Graphic {} is not on the timeline", args.graphic))
+        })?;
+        commands::project_sequence_edit_impl(
+            ctx.state,
+            now.handle,
+            now.revision,
+            crate::sequence::edit::SequenceEdit::MoveClips {
+                clip_ids: vec![clip],
+                delta_us: target as i64 - start as i64,
+                track_id: None,
+                anchor_id: None,
+            },
+            None,
+        )?;
+        lines.push(format!(
+            "Moved graphic {} to {}.",
+            args.graphic,
+            clock(target)
+        ));
+    }
     if !args.variables.is_empty() || args.name.is_some() || args.brand.is_some() {
         let updated = commands::graphics::project_graphic_set_impl(
             ctx.state,
@@ -3901,6 +4449,158 @@ fn brand_pick(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     )?)
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrandKitSetArgs {
+    pub name: String,
+    /// The kit's name before, to rename it.
+    #[serde(default)]
+    pub previous: Option<String>,
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// A font family name.
+    #[serde(default)]
+    pub font: Option<String>,
+    /// Full path of a font file to copy into the kit.
+    #[serde(default)]
+    pub font_file: Option<String>,
+    /// Full path of a logo to copy into the kit.
+    #[serde(default)]
+    pub logo: Option<String>,
+    /// Delete the kit.
+    #[serde(default)]
+    pub remove: bool,
+}
+
+fn brand_kit_set(_ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: BrandKitSetArgs = params(args)?;
+    let dir = crate::graphics::brands::dir();
+    if args.remove {
+        commands::graphics::graphics_brand_remove_impl(args.name.clone())?;
+        return text(format!("Removed brand kit {}.", args.name));
+    }
+    let existing = crate::graphics::brands::list(&dir)
+        .into_iter()
+        .find(|k| k.name == args.previous.as_deref().unwrap_or(&args.name));
+    let pick = |given: Option<String>, had: Option<&String>, what: &str| {
+        given
+            .or_else(|| had.cloned())
+            .ok_or_else(|| format!("A new kit needs `{what}` (#RRGGBB)"))
+    };
+    let kit = crate::graphics::brands::BrandKitInput {
+        name: args.name.clone(),
+        previous: args.previous.clone(),
+        background: pick(
+            args.background,
+            existing.as_ref().map(|k| &k.background),
+            "background",
+        )?,
+        text: pick(args.text, existing.as_ref().map(|k| &k.text), "text")?,
+        accent: pick(args.accent, existing.as_ref().map(|k| &k.accent), "accent")?,
+        font: args
+            .font
+            .or_else(|| existing.as_ref().map(|k| k.font.clone()))
+            .unwrap_or_default(),
+        font_file: args.font_file,
+        logo: args.logo,
+    };
+    let saved = commands::graphics::graphics_brand_save_impl(kit)?;
+    text(format!(
+        "Saved brand kit {}: {}.",
+        args.name,
+        serde_json::to_string(&saved).unwrap_or_default()
+    ))
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryRemoveArgs {
+    /// The library item's id or name (from `graphics`).
+    pub item: String,
+}
+
+fn library_remove(_ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: LibraryRemoveArgs = params(args)?;
+    let dir = crate::graphics::library::dir();
+    let item = crate::graphics::library::list(&dir)
+        .into_iter()
+        .find(|i| i.id == args.item || i.item.name == args.item)
+        .ok_or_else(|| format!("No library item {} (see graphics)", args.item))?;
+    commands::graphics::graphics_library_remove_impl(item.id.clone())?;
+    text(format!(
+        "Removed {} ({}) from the library.",
+        item.item.name, item.id
+    ))
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WordFix {
+    /// The word's id, from transcript_get.
+    pub word: String,
+    /// What was said.
+    pub text: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptFixArgs {
+    pub fixes: Vec<WordFix>,
+    /// Sound key of the transcript. Default: the transcribed speech.
+    #[serde(default)]
+    pub stream: Option<String>,
+}
+
+fn transcript_fix(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: TranscriptFixArgs = params(args)?;
+    let open = opened(ctx)?;
+    if args.fixes.is_empty() {
+        return Err("Give `fixes`: `word` and `text` for each".into());
+    }
+    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
+    let old = with_reader(ctx.state, |reader| {
+        let transcript =
+            store::load_transcript(reader.root(), &key)?.ok_or("That sound is not transcribed")?;
+        args.fixes
+            .iter()
+            .map(|fix| {
+                transcript
+                    .words
+                    .iter()
+                    .find(|w| w.id == fix.word)
+                    .map(|w| w.text.clone())
+                    .ok_or_else(|| format!("No word {} in the transcript of {key}", fix.word))
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+    let mut lines = Vec::new();
+    for (fix, old) in args.fixes.iter().zip(old) {
+        crate::commands::transcript::transcript_set_word_text_impl(
+            ctx.state,
+            open.handle.clone(),
+            key.clone(),
+            fix.word.clone(),
+            fix.text.clone(),
+            None,
+        )?;
+        lines.push(format!(
+            "{}: \"{old}\" -> \"{}\"",
+            fix.word,
+            fix.text.trim()
+        ));
+    }
+    ctx.changed_project();
+    text(format!(
+        "Fixed {}:\n{}",
+        plural(lines.len(), "word"),
+        lines.join("\n")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4096,6 +4796,229 @@ mod tests {
         let undone = call(&ctx, "undo", json!({})).unwrap();
         assert!(undone.starts_with("Undid the last change."), "{undone}");
         assert_eq!(length(&ctx), before);
+    }
+
+    #[test]
+    fn an_agent_places_lists_changes_and_removes_its_own_zooms() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        // A picture as the screen, set with `roles` on import.
+        let png = dir.path().join("screen.png");
+        image::RgbaImage::from_pixel(64, 36, image::Rgba([40, 80, 120, 255]))
+            .save(&png)
+            .unwrap();
+        let imported = call(
+            &ctx,
+            "media_import",
+            json!({ "paths": [png.to_string_lossy()] }),
+        )
+        .unwrap();
+        let media = imported
+            .split_whitespace()
+            .skip_while(|w| *w != "as")
+            .nth(1)
+            .unwrap()
+            .to_string();
+        let roles = call(
+            &ctx,
+            "media_import",
+            json!({ "roles": [{ "media": media, "stream": "picture", "role": "screen" }] }),
+        )
+        .unwrap();
+        assert!(roles.contains("Set the role of 1 stream"), "{roles}");
+        let open = opened(&ctx).unwrap();
+        commands::project_sequence_edit_impl(
+            ctx.state,
+            open.handle,
+            open.revision,
+            serde_json::from_value(json!({ "kind": "placeAsset", "assetId": media, "atUs": 0 }))
+                .unwrap(),
+            None,
+        )
+        .unwrap();
+
+        let made = call(
+            &ctx,
+            "zooms",
+            json!({ "op": "create", "startUs": 500_000, "endUs": 2_000_000, "scale": 1.8,
+                    "centerX": 0.25, "centerY": 0.75 }),
+        )
+        .unwrap();
+        assert!(made.starts_with("Added a 1.8x zoom"), "{made}");
+        let listed = call(&ctx, "zooms", json!({ "op": "list" })).unwrap();
+        assert!(listed.contains("1.8x at (0.25, 0.75), manual"), "{listed}");
+        let id = listed
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(':')
+            .next()
+            .unwrap()
+            .to_string();
+        call(
+            &ctx,
+            "zooms",
+            json!({ "op": "update", "id": id, "scale": 2.0, "fixed": true }),
+        )
+        .unwrap();
+        let listed = call(&ctx, "zooms", json!({ "op": "list" })).unwrap();
+        assert!(
+            listed.contains("2.0x") && listed.contains("fixed"),
+            "{listed}"
+        );
+        assert!(call(
+            &ctx,
+            "zooms",
+            json!({ "op": "update", "id": id, "startUs": 0 })
+        )
+        .unwrap_err()
+        .contains("remove"));
+        assert!(call(
+            &ctx,
+            "zooms",
+            json!({ "op": "create", "startUs": 0, "endUs": 9, "centerX": 2 })
+        )
+        .unwrap_err()
+        .contains("0 to 1"));
+        let removed = call(&ctx, "zooms", json!({ "op": "remove", "ids": [id] })).unwrap();
+        assert!(removed.starts_with("Removed 1 zoom"), "{removed}");
+        assert_eq!(
+            call(&ctx, "zooms", json!({ "op": "list" })).unwrap(),
+            "No zooms in the edit."
+        );
+        // Each change was one undo step.
+        let undone = call(&ctx, "undo", json!({})).unwrap();
+        assert!(undone.starts_with("Undid the last change."), "{undone}");
+        assert!(call(&ctx, "zooms", json!({ "op": "list" }))
+            .unwrap()
+            .contains("2.0x"));
+    }
+
+    #[test]
+    fn an_agent_fixes_words_writes_chapters_and_edits_shorts() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+
+        let fixed = call(
+            &ctx,
+            "transcript_fix",
+            json!({ "fixes": [{ "word": "w-0", "text": "Hullo" }] }),
+        )
+        .unwrap();
+        assert!(fixed.contains("w-0: \"Hello\" -> \"Hullo\""), "{fixed}");
+        let words = call(&ctx, "transcript_get", json!({})).unwrap();
+        assert!(
+            words.contains("Hullo") && !words.contains("Hello"),
+            "{words}"
+        );
+        assert!(call(
+            &ctx,
+            "transcript_fix",
+            json!({ "fixes": [{ "word": "w-99", "text": "x" }] })
+        )
+        .unwrap_err()
+        .contains("No word w-99"));
+
+        let set = call(
+            &ctx,
+            "chapters",
+            json!({ "set": [
+                { "title": "Hello", "atWord": "w-0" },
+                { "title": "Next step", "atUs": 1_600_000 },
+            ] }),
+        )
+        .unwrap();
+        assert!(set.starts_with("Set 2 chapters:"), "{set}");
+        assert!(
+            set.contains("0:00.00 Hello") && set.contains("0:01.60 Next step"),
+            "{set}"
+        );
+        assert_eq!(history(&ctx)[0].action.as_deref(), Some("chapters"));
+        assert!(call(&ctx, "chapters", json!({ "set": [{ "title": "x" }] }))
+            .unwrap_err()
+            .contains("give one of"));
+
+        call(
+            &ctx,
+            "short_create",
+            json!({ "title": "Whole", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
+        )
+        .unwrap();
+        let ranged = call(
+            &ctx,
+            "shorts",
+            json!({ "op": "range", "short": "Whole", "fromWord": "w-0", "toWord": "w-6" }),
+        )
+        .unwrap();
+        assert!(ranged.contains("now plays w-0..w-6"), "{ranged}");
+        assert!(
+            call(&ctx, "shorts", json!({ "op": "range", "short": "Whole" }))
+                .unwrap_err()
+                .contains("needs `fromWord`")
+        );
+        let removed = call(&ctx, "shorts", json!({ "op": "remove", "short": "whole" })).unwrap();
+        assert!(removed.starts_with("Removed short \"Whole\""), "{removed}");
+        let shorts = with_reader(ctx.state, |r| Ok(r.document().shorts.len())).unwrap();
+        assert_eq!(shorts, 0);
+    }
+
+    #[test]
+    fn an_agent_moves_and_removes_a_graphic() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        call(
+            &ctx,
+            "graphic_add",
+            json!({ "template": "step", "atWord": "w-0", "lengthUs": 1_000_000 }),
+        )
+        .unwrap();
+        let graphic = |ctx: &Ctx| {
+            with_reader(ctx.state, |reader| {
+                let document = reader.document();
+                Ok(document.assets.iter().find(|a| a.is_graphic()).map(|a| {
+                    let start = document
+                        .sequence
+                        .clips()
+                        .find(|(_, c)| c.asset == a.id)
+                        .map(|(_, c)| c.start_us);
+                    (a.id.clone(), start)
+                }))
+            })
+            .unwrap()
+        };
+        let (id, start) = graphic(&ctx).unwrap();
+        assert_eq!(start, Some(0));
+        let total = length(&ctx);
+        let moved = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "moveToWord": "w-3" }),
+        )
+        .unwrap();
+        assert!(moved.contains("Moved graphic"), "{moved}");
+        assert_eq!(graphic(&ctx).unwrap().1, Some(1_600_000));
+        assert_eq!(length(&ctx), total, "moving a graphic changes nothing else");
+        let removed = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "remove": true }),
+        )
+        .unwrap();
+        assert!(removed.starts_with("Removed graphic"), "{removed}");
+        assert!(graphic(&ctx).is_none());
+        assert_eq!(length(&ctx), total);
     }
 
     #[test]

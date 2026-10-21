@@ -15,6 +15,12 @@ use serde_json::{json, Value};
 
 pub const NO_PROJECT_MESSAGE: &str = "No project is open in AeroEdits. Ask the user to open one.";
 
+/// A call bound to a project that isn't the one open now.
+pub const OTHER_PROJECT_MESSAGE: &str = "This call was for another project: the project open in \
+    AeroEdits changed (or was closed and opened again) since you read it. Nothing was changed. \
+    Read project_info or status again, check it is the project the user means, and use its \
+    `project` id.";
+
 /// What a tool hands back.
 #[derive(Debug)]
 pub enum Output {
@@ -34,6 +40,8 @@ pub struct Ctx<'a> {
     pub agent: String,
     /// Proposals are accepted as they arrive.
     pub autopilot: bool,
+    /// The project the call was meant for (its `project` id), when it said.
+    pub project: Option<String>,
     progress: Option<Progress<'a>>,
     project_changed: std::cell::Cell<bool>,
     proposals_changed: std::cell::Cell<bool>,
@@ -46,6 +54,7 @@ impl<'a> Ctx<'a> {
             host,
             agent: agent.into(),
             autopilot,
+            project: None,
             progress: None,
             project_changed: Default::default(),
             proposals_changed: Default::default(),
@@ -90,9 +99,28 @@ pub struct ToolDef {
     pub name: &'static str,
     pub description: &'static str,
     pub schema: fn() -> Value,
-    /// Changes nothing in the project or its proposals.
+    /// Changes nothing: not the project, its proposals, or any file (renders and reports
+    /// included). Sent to clients as `readOnlyHint`.
     pub read_only: bool,
     pub run: Run,
+}
+
+/// Tools that overwrite or delete something the app's undo can't bring back: a file on disk,
+/// graphic source, the shared library, saved answers. Sent to clients as `destructiveHint`;
+/// every other writing tool only makes changes that are one undo step, or adds new files.
+pub const DESTRUCTIVE: &[&str] = &[
+    "brand_kit_set",
+    "export",
+    "graphic_set",
+    "graphic_write_file",
+    "library_remove",
+    "library_save",
+    "template_save",
+    "transcript_fix",
+];
+
+pub fn destructive(name: &str) -> bool {
+    DESTRUCTIVE.contains(&name)
 }
 
 /// Every tool: the reading and proposing ones here, then the app's actions.
@@ -110,6 +138,48 @@ pub fn all() -> &'static [ToolDef] {
 
 pub fn find(name: &str) -> Option<&'static ToolDef> {
     all().iter().find(|tool| tool.name == name)
+}
+
+/// Tools whose change rests on what the agent read before (a revision, a batch id): they must
+/// say which project that was, so a project switch can't send them to another one.
+pub const NEEDS_PROJECT: &[&str] = &["propose_cuts", "propose_edit", "undo_batch"];
+
+/// Whether a tool takes a `project` argument: every tool that changes something, except the
+/// ones that open or make a project.
+pub fn takes_project(tool: &ToolDef) -> bool {
+    !tool.read_only && !matches!(tool.name, "open" | "create")
+}
+
+/// Runs a tool as the server does. A `project` argument (the id project_info and status give)
+/// is taken out of `args` and must be the project open now, else nothing runs; tools in
+/// [`NEEDS_PROJECT`] refuse to run without one. Proposals check the id again under the
+/// command lock, as the UI's commands do.
+pub fn call(tool: &ToolDef, ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output>, String> {
+    let project = match args.as_object_mut().and_then(|args| args.remove("project")) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) => Some(id),
+        Some(_) => return Err("`project` is the id project_info or status gives.".into()),
+    };
+    match &project {
+        Some(id) => {
+            let open = with_reader(ctx.state, |reader| {
+                Ok(reader.summary.project_handle.clone())
+            })?;
+            if *id != open {
+                return Err(OTHER_PROJECT_MESSAGE.into());
+            }
+        }
+        None if NEEDS_PROJECT.contains(&tool.name) => {
+            return Err(format!(
+                "{} needs `project`: the id project_info or status gives for the project you \
+                 read the revision from.",
+                tool.name
+            ))
+        }
+        None => {}
+    }
+    ctx.project = project;
+    (tool.run)(ctx, args)
 }
 
 static TOOLS: [ToolDef; 14] = [
@@ -216,8 +286,10 @@ static TOOLS: [ToolDef; 14] = [
     ToolDef {
         name: "propose_edit",
         description: "Proposes timeline edits, applied in order as one undo step once the user \
-            accepts: addTrack, placeAsset, moveClips, trimClip, split, delete, deleteRange, \
-            setClip, link, unlink, setTrack, moveTrack, removeTrack. They are checked now on \
+            accepts: addTrack, removeTrack, setTrack, moveTrack, placeAsset, moveClips, \
+            trimClip, split, delete, deleteRange, rippleTrim, link, unlink, setMagnetic, \
+            setClip, setSpeed, restoreCuts (the schema lists each one's fields). For B-roll, \
+            give placeAsset `streams` so unwanted sound isn't placed. They are checked now on \
             a copy and the result's diff is returned; they hold only for this revision. For \
             removing speech prefer propose_cuts.",
         schema: schema::<super::propose::EditParams>,
@@ -354,6 +426,7 @@ fn project_info(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             })
             .collect();
         Ok(json!({
+            "project": summary.project_handle,
             "name": summary.name,
             "path": summary.project_path,
             "revision": document.revision,
@@ -699,6 +772,133 @@ mod tests {
     }
 
     #[test]
+    fn a_call_for_another_project_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let (first, folder) = {
+            let opened = host.state.opened_project.lock();
+            let reader = opened.as_ref().unwrap();
+            (
+                reader.summary.project_handle.clone(),
+                reader.root().to_string_lossy().to_string(),
+            )
+        };
+        let revision = |host: &crate::mcp::tests_support::BareHost| {
+            host.state
+                .opened_project
+                .lock()
+                .as_ref()
+                .unwrap()
+                .document()
+                .revision
+        };
+        let start = revision(&host);
+        let edit = |project: Option<&str>| {
+            let mut args = json!({
+                "expectedRevision": start,
+                "reason": "A track for a lower third",
+                "edits": [{ "kind": "addTrack", "trackKind": "video" }],
+            });
+            if let Some(project) = project {
+                args["project"] = json!(project);
+            }
+            args
+        };
+        let propose = find("propose_edit").unwrap();
+        let mut ctx = Ctx::new(&host, "test", false);
+        // Reopening gives the same project (same revision, same clip ids) a new id: a proposal
+        // read before is refused, and nothing is stored.
+        crate::commands::open_project_impl(&host.state, folder.clone()).unwrap();
+        assert_eq!(revision(&host), start);
+        let error = call(propose, &mut ctx, edit(Some(&first))).unwrap_err();
+        assert_eq!(error, OTHER_PROJECT_MESSAGE);
+        let proposals = std::path::Path::new(&folder)
+            .join("agent")
+            .join("proposals.json");
+        assert!(!proposals.exists(), "nothing was proposed");
+        // So is a direct action meant for the old one.
+        let error = call(find("undo").unwrap(), &mut ctx, json!({ "project": first })).unwrap_err();
+        assert_eq!(error, OTHER_PROJECT_MESSAGE);
+        assert_eq!(revision(&host), start);
+        // Without an id a proposal is refused too.
+        assert!(call(propose, &mut ctx, edit(None))
+            .unwrap_err()
+            .contains("needs `project`"));
+        // With the open project's id it goes through.
+        let now = host
+            .state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .summary
+            .project_handle
+            .clone();
+        assert_ne!(now, first);
+        let out = call(propose, &mut ctx, edit(Some(&now))).unwrap();
+        let Output::Text(text) = &out[0] else {
+            panic!("text expected")
+        };
+        assert!(text.starts_with("Proposed b-1"), "{text}");
+        // project_info reports the id to use.
+        let Output::Text(info) =
+            &call(find("project_info").unwrap(), &mut ctx, json!({})).unwrap()[0]
+        else {
+            panic!("text expected")
+        };
+        assert!(info.contains(&now), "{info}");
+    }
+
+    #[test]
+    fn destructive_tools_exist_and_write() {
+        for name in DESTRUCTIVE {
+            let tool = find(name).unwrap_or_else(|| panic!("no tool {name}"));
+            assert!(
+                !tool.read_only,
+                "{name} is destructive, so it can't be read-only"
+            );
+        }
+        // Tools that write files are not read-only.
+        for name in [
+            "export",
+            "graphic_render",
+            "graphic_check",
+            "graphic_write_file",
+        ] {
+            assert!(!find(name).unwrap().read_only, "{name} writes files");
+        }
+    }
+
+    #[test]
+    fn propose_edit_publishes_every_edit_kind() {
+        let schema = schema::<super::super::propose::EditParams>().to_string();
+        for kind in [
+            "addTrack",
+            "removeTrack",
+            "setTrack",
+            "moveTrack",
+            "placeAsset",
+            "moveClips",
+            "trimClip",
+            "split",
+            "delete",
+            "deleteRange",
+            "rippleTrim",
+            "link",
+            "unlink",
+            "setMagnetic",
+            "setClip",
+            "setSpeed",
+            "restoreCuts",
+        ] {
+            assert!(schema.contains(&format!("\"{kind}\"")), "{kind} missing");
+        }
+        // Fields are camelCase, as the edits are parsed.
+        assert!(schema.contains("clipIds") && schema.contains("assetId"));
+        assert!(!schema.contains("clip_ids"));
+    }
+
+    #[test]
     fn clock_reads_minutes_and_hours() {
         assert_eq!(clock(0), "0:00.00");
         assert_eq!(clock(3_250_000), "0:03.25");
@@ -755,8 +955,11 @@ mod tests {
                     json!({ "graphic": "g", "path": "index.html", "contents": "" })
                 }
                 // These work without a project open (and installing would download).
+                "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
                 "open" | "create" | "export_status" | "template" | "template_save" | "graphics"
-                | "graphics_install" | "brand_kits" => continue,
+                | "graphics_install" | "brand_kits" | "brand_kit_set" | "library_remove" => {
+                    continue
+                }
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640" role="img" aria-labelledby="title desc">
+<title id="title">The AeroEdits AI loop: today and tomorrow</title>
+<desc id="desc">Eight stages of an agent-driven edit. For each, what the agent and app do today and what changes with the proposed features. Clean and Export are unchanged; Intake, Build and Verify grow; Plan, Style trial and Learn are new.</desc>
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .bg { fill: #ffffff; }
+  .hd { font-size: 13px; font-weight: 600; fill: #5f5e5a; }
+  .th { font-size: 14px; font-weight: 600; }
+  .ts { font-size: 11px; }
+  .tx { font-size: 13px; fill: #2c2c2a; }
+  .card { fill: #f1efe8; }
+  .legend { font-size: 12px; fill: #5f5e5a; }
+  .same rect.s { fill: #f1efe8; stroke: #888780; stroke-width: 0.8; } .same .th { fill: #2c2c2a; } .same .ts { fill: #5f5e5a; }
+  .grow rect.s { fill: #e1f5ee; stroke: #0f6e56; stroke-width: 0.8; } .grow .th { fill: #085041; } .grow .ts { fill: #0f6e56; }
+  .new  rect.s { fill: #eeedfe; stroke: #534ab7; stroke-width: 0.8; } .new .th { fill: #3c3489; } .new .ts { fill: #534ab7; }
+  .grow rect.t { fill: #e1f5ee; } .new rect.t { fill: #eeedfe; } .same rect.t { fill: #f1efe8; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #1f1f1e; } .hd, .legend { fill: #b4b2a9; } .tx { fill: #f1efe8; } .card { fill: #2c2c2a; }
+    .same rect.s { fill: #444441; stroke: #b4b2a9; } .same .th { fill: #f1efe8; } .same .ts { fill: #d3d1c7; }
+    .grow rect.s { fill: #085041; stroke: #5dcaa5; } .grow .th { fill: #e1f5ee; } .grow .ts { fill: #9fe1cb; }
+    .new  rect.s { fill: #3c3489; stroke: #afa9ec; } .new .th { fill: #eeedfe; } .new .ts { fill: #cecbf6; }
+    .grow rect.t { fill: #04342c; } .new rect.t { fill: #26215c; } .same rect.t { fill: #2c2c2a; }
+  }
+</style>
+<rect class="bg" x="0" y="0" width="960" height="640" rx="12"/>
+<text class="hd" x="24" y="36">Stage</text>
+<text class="hd" x="214" y="36">Today</text>
+<text class="hd" x="584" y="36">Tomorrow (proposed)</text>
+
+<g class="grow" transform="translate(0,52)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">1. Intake</text><text class="ts" x="34" y="42">exists, grows</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">Template + saved answers,</text><text class="tx" x="218" y="41">"same as last time?", scan</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Style kit + project rules, a few questions on</text><text class="tx" x="588" y="41">style, pace and length, readiness check</text>
+</g>
+<g class="same" transform="translate(0,116)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">2. Clean</text><text class="ts" x="34" y="42">unchanged</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">Mouth noises, silence, gaps, fillers, layouts,</text><text class="tx" x="218" y="41">zooms: each dry run, your OK, apply</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Same loop, plus a fast / thorough choice</text><text class="tx" x="588" y="41">that reads every kept transcript page</text>
+</g>
+<g class="new" transform="translate(0,180)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">3. Plan</text><text class="ts" x="34" y="42">new stage</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">Graphics listed in chat, shorts as a list;</text><text class="tx" x="218" y="41">nothing stored, graphics forget their word</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Beat plan in the project, anchored to words:</text><text class="tx" x="588" y="41">purpose, treatment, reason; source search</text>
+</g>
+<g class="new" transform="translate(0,244)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">4. Style trial</text><text class="ts" x="34" y="42">new stage</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">None: the look is found on</text><text class="tx" x="218" y="41">the full video</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">2–3 beats on a 5–10 s range; you approve</text><text class="tx" x="588" y="41">the look before it scales</text>
+</g>
+<g class="grow" transform="translate(0,308)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">5. Build</text><text class="ts" x="34" y="42">exists, grows</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">6 full-screen templates, captions on/off,</text><text class="tx" x="218" y="41">automatic click and whoosh lane</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">App builds the plan: tutorial templates,</text><text class="tx" x="588" y="41">emphasis words, SFX and music tracks, B-roll</text>
+</g>
+<g class="grow" transform="translate(0,372)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">6. Verify</text><text class="ts" x="34" y="42">exists, grows</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">check, one storyboard, frame stills;</text><text class="tx" x="218" y="41">nothing moves or sounds</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Motion preview with sound, review records,</text><text class="tx" x="588" y="41">join audition queue, final-file pass</text>
+</g>
+<g class="same" transform="translate(0,436)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">7. Export</text><text class="ts" x="34" y="42">unchanged</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">Chapters last, check,</text><text class="tx" x="218" y="41">export at your go</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Same, plus a delivery queue for video,</text><text class="tx" x="588" y="41">shorts and subtitle files</text>
+</g>
+<g class="new" transform="translate(0,500)">
+  <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">8. Learn</text><text class="ts" x="34" y="42">new stage</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">template_save for settings,</text><text class="tx" x="218" y="41">library_save for a graphic</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Agent suggests rules and examples;</text><text class="tx" x="588" y="41">you accept what it should remember</text>
+</g>
+
+<g transform="translate(20,592)">
+  <g class="same"><rect class="s" x="0" y="0" width="14" height="14" rx="3"/></g><text class="legend" x="22" y="12">unchanged</text>
+  <g class="grow"><rect class="s" x="110" y="0" width="14" height="14" rx="3"/></g><text class="legend" x="132" y="12">exists, grows</text>
+  <g class="new"><rect class="s" x="240" y="0" width="14" height="14" rx="3"/></g><text class="legend" x="262" y="12">new stage</text>
+  <text class="legend" x="380" y="12">The next video starts again at Intake with what Learn kept.</text>
+</g>
+</svg>

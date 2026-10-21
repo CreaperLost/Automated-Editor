@@ -20,7 +20,7 @@ use crate::zoom::EditedRange;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Edge {
     Start,
@@ -28,7 +28,7 @@ pub enum Edge {
 }
 
 /// Which side of the playhead a ripple trim removes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum TrimSide {
     /// Premiere's Q: from the previous edit point up to the playhead.
@@ -37,7 +37,7 @@ pub enum TrimSide {
     Next,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -52,6 +52,7 @@ pub enum SequenceEdit {
     RemoveTrack {
         track_id: String,
     },
+    /// Changes a track's name, visibility, mute, lock and role.
     SetTrack {
         track_id: String,
         #[serde(default)]
@@ -124,12 +125,15 @@ pub enum SequenceEdit {
         at_us: u64,
         side: TrimSide,
     },
+    /// Links clips so they move, trim and get deleted together.
     Link {
         clip_ids: Vec<String>,
     },
+    /// Unlinks clips so each moves and trims on its own.
     Unlink {
         clip_ids: Vec<String>,
     },
+    /// Turns magnetic (ripple) editing on or off for later edits.
     SetMagnetic {
         magnetic: bool,
     },

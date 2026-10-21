@@ -14,6 +14,16 @@ Two ways to run it:
   run first, report one line per pass, and stop to ask when a result looks wrong (see step 4).
   Export still waits for the user's go.
 
+And two depths of review, asked once per video with the first questions (automatic: the saved
+answer, else fast):
+
+- **Fast (the default).** The cleanup passes and their reviews only look where the rules
+  flagged something (an um, a "so", a phrase said twice). Quick and cheap, but a sentence the
+  speaker gave up on, a restart in other words or a tangent nobody flagged is never looked at.
+- **Thorough.** Also reads the whole kept transcript for those, proposes cuts for them, and
+  looks at the joins (step 3b). Takes minutes and more of your tokens; worth it for a video
+  that matters. Ask: "Review: fast / thorough (reads every word and checks the joins, slower)".
+
 ## 1. Project (automatic)
 
 - Given a recording (a `.aero` folder): `create` with the project name and `recording`.
@@ -35,6 +45,7 @@ Two ways to run it:
     `verbatim` (keeps every um, stutter and repeat for the filler and retake passes).
   - ElevenLabs Scribe: cloud, on the user's key. Better with names and jargon.
   If only one is ready, say which and go on without asking.
+- With these questions, ask the review depth: fast (default) or thorough (see the top).
 - Two or more microphones: ask which to transcribe: the presenter's (default), or all of
   them (needed to cut gaps between words across all of them).
 - `transcribe` with `provider` (and `stream` for each microphone). It can take a few minutes,
@@ -83,9 +94,12 @@ The passes:
      app's local pass flagged (a "like" or "so" that may be filler, a phrase said again); um
      and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the
      fillers and retakes by the criteria it gives (a flag that carries meaning stays), then
-     save them in one `fillers_review` call with `cuts` and the pages' `stamp`. Read every
-     word with `review: "thorough"` only when the user asks for a thorough pass or the
-     windows miss things they point out. Then dry-run `fillers` the same way.
+     save them in one `fillers_review` call with `cuts` and the pages' `stamp`. With a
+     thorough review (or when the windows miss things the user points out), read every word
+     with `review: "thorough"` instead. Then dry-run `fillers` the same way.
+   - **Thorough review with the local model:** it reads only the windows, so after its dry run
+     also do the in-house review with `review: "thorough"` and save it; the OpenRouter review
+     already reads every word.
 
    Choices: yes / rules only (`review: in-house` without saving a review) / skip. Then
    `fillers`. When the user wants nothing sent to OpenRouter, use `review: local` (or
@@ -100,10 +114,31 @@ The passes:
    `mergeGapMs` (default 5000 each), "shorter" lowers them; how far in is `clickScale`
    (1.6 default). Pass them as `settings`.
 
+### 3b. Thorough review (only when the user chose thorough)
+
+After the passes, on the cut edit:
+
+1. **Read every kept word.** `transcript_get` in stretches of about two minutes (`fromUs`,
+   `toUs`) until the end. Look for what the rules can't see: a sentence the speaker gave up on
+   ("so what you want to- okay, let's open the settings"), a restart in other words, a tangent,
+   the same explanation given twice. Keep what teaches: a deliberate repeat ("human in the
+   loop. Human in the loop means..."), items of a list, and pauses while something loads or the
+   viewer reads the screen. Words the transcriber got wrong are not mistakes of the speaker:
+   fix them with `transcript_fix` when you are sure, never cut them.
+2. **Propose those cuts** in one `propose_cuts` batch, by word id, each with a short reason
+   ("abandoned sentence", "said again at 4:12"). Tell the user how many and how many seconds;
+   they accept or reject each in the Agent panel.
+3. **Look at the joins.** `timeline_view` (`fromUs`/`toUs` about 2 s either side) at every
+   retake cut and every gap still over a second: look for a word cut short, a breath or click
+   left at the join, a jump in loudness. You can see the waveform; you cannot hear it.
+4. **Make a listening list** for the user: the joins you looked at that might sound wrong,
+   each with its time and why, at most ten, worst first.
+
 After the passes, save the choices with `template_save` (`name: tutorial`), in this shape:
 
 ```json
 {
+  "review": "fast",
   "transcriber": "parakeet",
   "mouthNoises": { "apply": true, "preset": "balanced" },
   "silence": { "apply": true, "preset": "balanced", "microphones": "all" },
@@ -155,8 +190,10 @@ unless the saved answers say yes). If yes:
 
 ## 7. Chapters (automatic, last edit)
 
-Chapters come last, once everything else is cut, since they follow the final edit. Run
-`chapters`. If `scan` said there is no AI key, skip this and say so.
+Chapters come last, once everything else is cut, since they follow the final edit. Read
+`transcript_get`, pick where each topic starts (at least 3, each 10 s or longer, the first at the
+start), and send `chapters` with `set`: a `title` and the `atWord` each starts at. Use the app's
+own pass (`chapters` without `set`) only if the user asks for it.
 
 ## 8. Check, status and summary (automatic)
 
@@ -164,16 +201,24 @@ Run `check`. Errors and warnings with a fix: apply them in automatic mode (`fix`
 ids), otherwise list them and ask. Notes (loudness, choppy stretches, zoom jumps) are the
 user's call: list them, fix only at the user's word. Then `storyboard`: one image of the whole
 edit; name any tile that looks wrong (by number) and what you would do. Then `status`, and sum
-up the edit in a few lines:
-- What each step cut or changed, with seconds where it cut.
-- Length from → to.
-- What the check found and fixed, and what it left (with times).
-- What to check by hand:
-  - the first and last ten seconds (cuts at the edges),
-  - each retake cut (that the kept take is the right one),
-  - the layout sections and zooms on the timeline,
-  - mouth noises left alone next to words.
-- Any step can be undone from the Agent panel's history.
+up the edit. Keep four kinds of claim apart, under these headings, and never let one stand in
+for another (a storyboard is not a review of the whole edit; a clean `check` reads the edit, not
+the sound):
+
+- **Done:** what each step cut or changed, with seconds where it cut; length from → to; what
+  the check fixed.
+- **Looked at:** what you actually read or saw, and how much of it: every kept word (thorough)
+  or only the flagged windows (fast); the joins you viewed with `timeline_view`; the storyboard;
+  any frames.
+- **Not heard:** you cannot listen, so no join has been heard yet. List the ones to play first
+  (the listening list from 3b, or with fast review: the first and last ten seconds and each
+  retake cut), with times.
+- **Approved by you:** which passes and proposal batches the user said yes to, and which ran
+  automatically on saved answers.
+
+Then **Still open:** what the check left (with times), proposals still waiting in the Agent
+panel, and anything you were unsure about. Any step can be undone from the Agent panel's
+history.
 
 ## 9. Export (ask)
 

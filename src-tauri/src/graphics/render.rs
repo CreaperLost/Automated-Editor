@@ -117,15 +117,27 @@ impl Spec {
         format!("{}x{}-", self.width, self.height)
     }
 
-    fn file_name(&self, hash: &str) -> String {
+    /// The file name up to the source hash: everything about the output (canvas, length, fps,
+    /// entrance). Two renders of one graphic with the same stem differ only in their source.
+    fn stem(&self) -> String {
         format!(
-            "{}{}-{}-{}-{}.webm",
+            "{}{}-{}-{}-",
             self.prefix(),
             self.length_us / 1000,
             self.fps,
-            self.entrance.as_str(),
-            hash
+            self.entrance.as_str()
         )
+    }
+
+    fn file_name(&self, hash: &str) -> String {
+        format!("{}{hash}.webm", self.stem())
+    }
+
+    /// Whether a newer request for `self` makes a waiting render of `other` pointless: the same
+    /// graphic rendered for the same output, from older source. The same graphic at another
+    /// length (the video and a short) or canvas is a different render and must stay queued.
+    fn supersedes(&self, other: &Spec) -> bool {
+        self.asset_id == other.asset_id && self.stem() == other.stem()
     }
 
     /// What names this render: the source files and everything about the output.
@@ -384,10 +396,8 @@ fn request(spec: &Spec, hash: &str) {
     {
         return;
     }
-    // A newer request for the same graphic and canvas replaces one still waiting.
-    queue
-        .waiting
-        .retain(|j| !(j.spec.asset_id == spec.asset_id && j.spec.prefix() == spec.prefix()));
+    // A newer request for the same graphic and output replaces one still waiting.
+    queue.waiting.retain(|j| !spec.supersedes(&j.spec));
     queue.waiting.push_back(Job {
         spec: spec.clone(),
         hash: hash.to_string(),
@@ -943,6 +953,27 @@ mod tests {
             brands: dir.join("brands"),
             default_brand: None,
         }
+    }
+
+    #[test]
+    fn a_newer_request_replaces_only_the_same_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let video = spec(dir.path(), &cache, 4_000_000);
+        // The same graphic and output, newer source: the waiting one is pointless.
+        assert!(video.supersedes(&spec(dir.path(), &cache, 4_000_000)));
+        // The same graphic and canvas at another length (the video and a short) both render.
+        assert!(!video.supersedes(&spec(dir.path(), &cache, 6_000_000)));
+        let mut other_canvas = spec(dir.path(), &cache, 4_000_000);
+        other_canvas.width = 1080;
+        other_canvas.height = 1920;
+        assert!(!video.supersedes(&other_canvas));
+        let mut eased = spec(dir.path(), &cache, 4_000_000);
+        eased.entrance = super::super::Entrance::Ease;
+        assert!(!video.supersedes(&eased));
+        let mut other_graphic = spec(dir.path(), &cache, 4_000_000);
+        other_graphic.asset_id = "g2".into();
+        assert!(!video.supersedes(&other_graphic));
     }
 
     #[test]
