@@ -177,10 +177,11 @@ pub static ACTIONS: [ToolDef; 37] = [
             background, corners, camera border, `faceFraming`; where things go is `layouts`), \
             audio, zoom, transcription, ai, export, presets. Without `set` it shows the current \
             values; `set` is a JSON object of just the fields to change (nested objects merge). \
-            Telemetry polish: layout `webcamAutoHide` (the bubble fades while work is under it), \
-            `windowCrop` with `windowCropPaddingPct` and `windowCropOff` (recording stretches \
-            `{media, sourceStartUs, sourceEndUs}` shown uncropped), and audio `soundEffects` \
-            (`clicks`, `whooshes`, `muted`, `volumeDb`). API keys are not reachable here.",
+            Telemetry polish: layout `webcamAutoHide` (on by default; the bubble fades while work \
+            is under it), `windowCrop` (on by default) with `windowCropPaddingPct` and \
+            `windowCropOff` (recording stretches `{media, sourceStartUs, sourceEndUs}` shown \
+            uncropped), and audio `soundEffects` (off by default; `clicks`, `whooshes`, `muted`, \
+            `volumeDb`). API keys are not reachable here.",
         schema: schema::<SettingsArgs>,
         read_only: false,
         run: settings,
@@ -274,7 +275,8 @@ pub static ACTIONS: [ToolDef; 37] = [
             project unless `destination`). Waits until done and reports progress unless `wait: \
             false`, which returns a job id for export_status.",
         schema: schema::<ExportArgs>,
-        read_only: true,
+        // Writes the video file (over `destination` if it exists).
+        read_only: false,
         run: export,
     },
     ToolDef {
@@ -345,7 +347,8 @@ pub static ACTIONS: [ToolDef; 37] = [
             overlay over the full-screen camera eases). Look at the result with frame_render at \
             a time inside the graphic.",
         schema: schema::<GraphicRenderArgs>,
-        read_only: true,
+        // Writes renders into the project's graphics cache.
+        read_only: false,
         run: graphic_render,
     },
     ToolDef {
@@ -369,7 +372,8 @@ pub static ACTIONS: [ToolDef; 37] = [
             Answers pass or fail per check with why, and a contact sheet (both shapes, its text \
             and long text). Takes 30-90 s; an unchanged graphic answers at once.",
         schema: schema::<GraphicOnlyArgs>,
-        read_only: true,
+        // Writes its report and contact sheet into the gate cache.
+        read_only: false,
         run: graphic_check,
     },
     ToolDef {
@@ -634,7 +638,8 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
         let recorded: u64 = reader.recordings().map(|a| a.duration_us).sum();
         let (width, height) = document.layout.preview_dimensions()?;
         let mut lines = vec![format!(
-            "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}.",
+            "Project \"{}\", revision {}, {} long{}, canvas {width}x{height}. Its `project` id \
+             (pass it on changes): {}.",
             summary.name,
             document.revision,
             clock(document.duration_us()),
@@ -643,6 +648,7 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             } else {
                 String::new()
             },
+            summary.project_handle,
         )];
         let mut sound_lines = Vec::new();
         for sound in sounds(reader) {

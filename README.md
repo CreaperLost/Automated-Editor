@@ -184,8 +184,9 @@ src-tauri/                 Tauri v2 backend (Rust)
 
 ### Prerequisites
 
-- Node.js 18 or newer, and npm
-- Rust (stable) and the Tauri CLI: `cargo install tauri-cli --version "^2"`
+- Node.js 22 (the version in `.nvmrc`), and npm
+- Rust: rustup installs the version pinned in `rust-toolchain.toml` on first build.
+  Then the Tauri CLI: `cargo install tauri-cli --version "^2"`
 - **Windows:** Microsoft C++ Build Tools (the "Desktop development with C++" workload) and
   the WebView2 runtime, which ships with Windows 10 and 11.
 - **macOS:** macOS 13 or newer with Xcode or the Command Line Tools, for the Swift bridges.

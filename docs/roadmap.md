@@ -44,41 +44,6 @@ flowchart LR
 
 ## Now
 
-<a id="fix-1"></a>
-### FIX-1 · Render queue keeps one job per graphic, canvas *and* length — S
-
-- **Why:** the same graphic at two lengths (main edit and a short) can leave one render never queued.
-- **Do:** include the length (and fps) in the waiting-job match in `graphics/render.rs`; add a
-  test with two lengths for one canvas.
-- **Was:** known issue (audit F03 follow-up), now confirmed in code.
-
-<a id="fix-2"></a>
-### FIX-2 · Fix the skill's telemetry-polish paragraph — S
-
-- **Do:** in `mcp/skill/SKILL.md`, say per item: `webcamAutoHide` on, `windowCrop` on when the
-  recording has window telemetry, `soundEffects` off unless asked. Re-check the server
-  instructions in `mcp/mod.rs` say the same.
-
-<a id="fix-3"></a>
-### FIX-3 · Honest MCP tool metadata — S
-
-- **Do:** `read_only: false` for `export`, `graphic_render`, `graphic_check`; set
-  `destructiveHint` for `export` and `library_save`; give `propose_edit` a typed schema
-  (a tagged enum of the 17 `SequenceEdit` kinds) and document all of them; rename the Tauri
-  look-saving `template_save` (e.g. `look_save`) so the word means one thing.
-- **Done when:** the published `tools/list` validates an edit array without the prose.
-
-<a id="safe-1"></a>
-### SAFE-1 · Bind agent edits to the project they were meant for — S/M
-
-- **Why:** a stale proposal can land in another project with the same revision.
-- **Do:** return a project/session identity from the read tools; require it (with the revision)
-  on `propose_*`, `undo_batch` and every direct action that mutates; check both under the
-  command lock; carry the short/timeline target explicitly. Audit the direct-action paths too.
-- **Done when:** inspect project A, switch to B with the same revision and colliding clip ids,
-  submit A's proposal → refused, nothing saved, B unchanged. Repeat across close/reopen.
-- **Rule:** no new agent write tool lands before this. **Was:** backlog #17.
-
 <a id="agt-1"></a>
 ### AGT-1 · Agent parity for cleaning up and correcting — M
 
@@ -92,6 +57,8 @@ flowchart LR
 - **Then the templates change:** when an agent is connected it writes the chapters and picks the
   shorts itself (`chapters set`, `short_create`); the app's cloud passes stay for users without
   an agent (decided 21 Oct).
+- **Also:** direct actions check `project` before they run, not under the command lock
+  (each action takes the lock itself); move the check inside the lock as the ops are touched.
 - **Depends:** SAFE-1. **Done when:** each new op has a test, one undo step, and appears in the skill.
 
 <a id="agt-2"></a>
@@ -132,20 +99,6 @@ is no saved answer; revisit the default after EVAL-1.
 
 - **Do:** `React.lazy` the panels `DockWorkspace.tsx` imports eagerly; compare first-bundle size
   and cold start. **Was:** audit F06.
-
-<a id="dep-1"></a>
-### DEP-1 · Pin the toolchains and start dependency reviews — S
-
-- **Why:** we want the speed and quality gains of updates without surprise migrations
-  (decided 21 Oct). Today Rust isn't pinned (CI uses whatever `stable` is), Node differs between
-  the README (18+), CI (20) and this machine (22), and FFmpeg is fetched from BtbN's moving
-  `latest` 8.1 release.
-- **Do:** add `rust-toolchain.toml` with the version we build with; one Node version in
-  `package.json` `engines`, `.nvmrc`, CI and the README; pin the FFmpeg build to a dated release
-  with its checksum; then run the first review from [dependencies.md](dependencies.md) and record
-  the results there.
-- **Done when:** a clean checkout builds with the pinned toolchains on Windows and in CI, and
-  `dependencies.md` lists every pinned version with its next review date.
 
 ---
 
@@ -470,7 +423,9 @@ Grouped by area. Order within a group is the suggested order.
   **Was:** backlog #8.
 <a id="ui-3"></a>
 - **UI-3 · Templates (saved looks): save over, remove, add (S).** Decide what a look holds
-  (layout, audio, captions, zooms, cleanup choices, brand kit). **Was:** backlog #6.
+  (layout, audio, captions, zooms, cleanup choices, brand kit). Rename the Tauri
+  `templates_list` / `template_save` / `template_apply` family to `looks_*`, so
+  "template" means only the agent's workflow templates. **Was:** backlog #6.
 
 ### Dependencies
 
@@ -508,6 +463,30 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **21 Oct 2026 (evening)** — the first five Now items:
+  - <a id="fix-1"></a>**FIX-1** the graphics render queue now only replaces a waiting render
+    for the same graphic *and* the same output (canvas, length, fps, entrance), so the video
+    and a short at another length both render (`Spec::supersedes`, tested).
+  - <a id="fix-2"></a>**FIX-2** `SKILL.md` and the `settings` description say per item what is
+    on by default (`webcamAutoHide`, `windowCrop`) and off (`soundEffects`).
+  - <a id="fix-3"></a>**FIX-3** `export`, `graphic_render`, `graphic_check` are no longer marked
+    read-only; `destructiveHint` is set for tools that overwrite without undo (`export`,
+    `graphic_set`, `graphic_write_file`, `library_save`, `template_save`); `propose_edit`
+    publishes a real schema of all 17 edit kinds, derived from `SequenceEdit` (tested). The
+    Tauri `template_save` rename moved to [UI-3](#ui-3), since it belongs to the whole
+    saved-look command family.
+  - <a id="safe-1"></a>**SAFE-1** agent calls are bound to the project they were meant for:
+    `project_info`, `status` and `proposals_list` report the open project's `project` id; every
+    writing tool accepts `project` and is refused if another project is open (a reopen counts,
+    since the id is new per open); `propose_cuts`, `propose_edit` and `undo_batch` require it,
+    and proposals check it again under the command lock. Tested: a stale proposal after a
+    reopen with the same revision and clip ids is refused and stores nothing. Skill and server
+    instructions updated. Direct actions still check before they take the lock: see
+    [AGT-1](#agt-1).
+  - <a id="dep-1"></a>**DEP-1** Rust pinned to 1.92.0 (`rust-toolchain.toml`, CI), Node 22
+    everywhere (`.nvmrc`, CI, README; CI was on Node 20, past end of life), FFmpeg pinned to the
+    BtbN 30 Sep 2026 month-end build `n8.1.3-9-g29e619e767` with hard-coded checksums (verified
+    by a real download), `Cargo.lock` now committed. See [dependencies.md](dependencies.md).
 - **21 Oct 2026** — Layouts: base layout + timed sections on every timeline, favourites, pick
   rules, face framing on every camera slot ([plan](plans/layouts.md)). Local vs cloud filler
   review measured; cloud is the default, local only without a key

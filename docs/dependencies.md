@@ -15,9 +15,9 @@ Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
 
 | Component | Version in use | Where it is set | Pinned? | Recheck |
 |---|---|---|---|---|
-| Rust | 1.92.0 on George's PC | CI: `dtolnay/rust-toolchain@stable` | **No** (moving `stable`); no `rust-toolchain.toml` | DEP-1: pin it |
+| Rust | 1.92.0 | `rust-toolchain.toml` (rustup installs it), CI `dtolnay/rust-toolchain@1.92.0` | Yes (21 Oct) | Quarterly; change both places together |
 | Rust edition | 2021 | `src-tauri/Cargo.toml` | Yes | When moving to edition 2024 |
-| Node.js (front-end build) | 22.19 locally, 20 in CI | README says "18 or newer"; `.github/workflows/*.yml` say 20 | **No**, and three different answers | DEP-1: one version everywhere |
+| Node.js (front-end build) | 22 (LTS) | `.nvmrc`; CI reads it (`node-version-file`); README | Major pinned (21 Oct); CI was on Node 20, past end of life | Quarterly; Node 24 is the next LTS |
 | TypeScript | 5.9.3 | `front-end/package.json` `^5.4.5` + lock | Lock file | Quarterly |
 | Tauri | 2.x (`@tauri-apps/api` 2.11.1) | `Cargo.toml` `tauri = "2.0.0"`, `package.json` | Lock files | Quarterly |
 
@@ -31,7 +31,7 @@ Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
 | dockview-react | 8.4.0 | Workspace layouts; layout keys are versioned |
 | zustand | 4.5.7 | v5 is the next major |
 
-### Back end crates (`src-tauri/Cargo.toml`; `Cargo.lock` is git-ignored)
+### Back end crates (`src-tauri/Cargo.toml`, locked by `src-tauri/Cargo.lock`)
 
 | Crate | Requirement | Notes |
 |---|---|---|
@@ -41,9 +41,8 @@ Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
 | `llama-cpp-2` | `=0.1.160` (exact) | Local filler review on Vulkan; lacks Gemma's chat template |
 | `tokio` | 1.38 | — |
 
-`Cargo.lock` is ignored, so two machines can resolve different patch versions of the
-caret-ranged crates. Deciding whether to commit it is part of DEP-1 (it is normally committed for
-applications).
+`Cargo.lock` is committed (since 21 Oct; it used to be git-ignored), so every machine and CI
+build with exactly the same crates. `cargo update` happens only in a review.
 
 ### Runtimes the app downloads (exact, checked by hash)
 
@@ -53,7 +52,7 @@ applications).
 | Node.js (graphics runtime) | 22.23.3 | `graphics/runtime.rs` `NODE_VERSION` | Separate from the build's Node |
 | chrome-headless-shell | 152.0.7977.30 | `graphics/runtime.rs` `CHROME_VERSION` | Must match what HyperFrames pins; bump together |
 | GSAP | not yet | — | To be vendored and pinned by [GFX-2](roadmap.md#gfx-2) |
-| FFmpeg (bundled) | BtbN 8.1 branch, `latest` release | `src-tauri/scripts/fetch-ffmpeg.mjs` | **Not reproducible**: `latest` moves; checksums come from the same moving release. DEP-1: pin a dated release |
+| FFmpeg (bundled) | `n8.1.3-9-g29e619e767`, BtbN release `autobuild-2026-09-30-13-08` | `src-tauri/scripts/fetch-ffmpeg.mjs` (`RELEASE`, `VERSION`, `SHA256`) | Yes, checksums in the script (21 Oct). BtbN prunes daily builds after ~2 weeks but keeps month-end ones, so pin month-end releases only |
 | CUDA / cuDNN (GPU pack) | CUDA 13.4 (cudart 13.4.92, cuBLAS 13.8), cuFFT 12.4, cuDNN 9.27 | `src-tauri/src/cuda.rs` | Must match the ONNX Runtime CUDA build |
 
 ### Models (downloaded on demand, checked by SHA-256)
@@ -89,4 +88,8 @@ a needed feature or a measured performance gain points at one component.
 
 | Date | Component | From → to | Result |
 |---|---|---|---|
-| — | — | — | First review is part of DEP-1 |
+| 21 Oct 2026 | Rust | `stable` (unpinned, 1.92.0 here) → 1.92.0 pinned | Full suite passes (538), `cargo fmt` clean |
+| 21 Oct 2026 | Node.js | 18+ / 20 / 22 → 22 everywhere | Front end unchanged; CI moved off Node 20 (end of life) |
+| 21 Oct 2026 | FFmpeg | BtbN `latest` (8.1.3-20, moving) → 30 Sep build 8.1.3-9 | Pinned with checksums; a real download verified. Same 8.1 branch, a month older than `latest` |
+| 21 Oct 2026 | Crates | `Cargo.lock` ignored → committed | No version changes |
+| Next | Everything else in the inventory | — | January 2027, or sooner when a gain or advisory appears |

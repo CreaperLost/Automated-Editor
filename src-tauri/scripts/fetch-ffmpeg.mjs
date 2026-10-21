@@ -4,11 +4,14 @@
 //
 //   node scripts/fetch-ffmpeg.mjs [--target <triple>] [--lgpl] [--force]
 //
-// Builds come from BtbN/FFmpeg-Builds (release branch 8.1) and are checked against the
-// release's published SHA-256 sums. The default GPL build includes libx264 and the NVENC,
-// AMF and Quick Sync GPU encoders; it is a separate program the app runs, shipped with its
-// license under the GPL's terms. `--lgpl` fetches the LGPL build (same GPU encoders, no
-// libx264). macOS has no BtbN build: on a Mac the Swift bridges are the default backend and
+// Builds come from one pinned BtbN/FFmpeg-Builds release (release branch 8.1), checked against
+// the SHA-256 sums written below, so every build bundles the same FFmpeg. To move to a newer
+// FFmpeg, follow the review in docs/dependencies.md: pick a month-end `autobuild-*` release
+// (BtbN prunes the daily ones after about two weeks), copy its asset names and sums from its
+// checksums.sha256, and update RELEASE, VERSION and SHA256. The default GPL build includes
+// libx264 and the NVENC, AMF and Quick Sync GPU encoders; it is a separate program the app
+// runs, shipped with its license under the GPL's terms. `--lgpl` fetches the LGPL build (same
+// GPU encoders, no libx264). macOS has no BtbN build: on a Mac the Swift bridges are the default backend and
 // FFmpeg comes from Homebrew.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -17,8 +20,21 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RELEASE = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest";
+const RELEASE =
+  "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08";
 const BRANCH = "8.1";
+const VERSION = "n8.1.3-9-g29e619e767";
+// From that release's checksums.sha256.
+const SHA256 = {
+  "win64-gpl": "7b801cdd3a1a0bb54ae6f572187e68b4ed54f52086cfee133fab2180bfb429fa",
+  "win64-lgpl": "4a7642b2264c03e8a0ce8a3825b933ee5580656f45695a086fe7e294045ffc0a",
+  "winarm64-gpl": "061a770557c30bbf8e0b6ca3810288a60f72b85088378b84be03277746f34f17",
+  "winarm64-lgpl": "9e49da7acb363b60bf60f9efad2ac0281cf68d43930ec4b1b8dd6a4f20dd7e5f",
+  "linux64-gpl": "97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79",
+  "linux64-lgpl": "dfa863a00ca81f1bdf58a372b18cff4820f0017e55de32778de8ecd8ed92a02e",
+  "linuxarm64-gpl": "10523d1e0be6b3ce62a9708cc50815c4b5eb5f36ae147fbe2afeecda6f2d6845",
+  "linuxarm64-lgpl": "8463881ca7a25015ca6e00f5c91dd2f1637eb73d33c8230413cb74db760a86b3",
+};
 
 const PLATFORMS = {
   "x86_64-pc-windows-msvc": { build: "win64", ext: "zip", exe: ".exe" },
@@ -69,7 +85,7 @@ async function main() {
     );
   }
   const license = flag("--lgpl") ? "lgpl" : "gpl";
-  const asset = `ffmpeg-n${BRANCH}-latest-${platform.build}-${license}-${BRANCH}.${platform.ext}`;
+  const asset = `ffmpeg-${VERSION}-${platform.build}-${license}-${BRANCH}.${platform.ext}`;
 
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const outDir = path.join(root, "binaries");
@@ -90,12 +106,8 @@ async function main() {
   }
 
   console.log(`Downloading ${asset}`);
-  const sums = (await download(`${RELEASE}/checksums.sha256`)).toString("utf8");
-  const expected = sums
-    .split(/\r?\n/)
-    .map((line) => line.trim().split(/\s+/))
-    .find(([, name]) => name === asset)?.[0];
-  if (!expected) throw new Error(`${asset} is not listed in the release checksums.`);
+  const expected = SHA256[`${platform.build}-${license}`];
+  if (!expected) throw new Error(`No pinned checksum for ${asset}.`);
   const archive = await download(`${RELEASE}/${asset}`);
   const actual = createHash("sha256").update(archive).digest("hex");
   if (actual !== expected) {

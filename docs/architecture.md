@@ -103,7 +103,16 @@ mounted at `recordings/<asset id>/`.
   or `Edits` (`SequenceEdit`s), checked on a copy when proposed, stored in
   `<project>/agent/proposals.json` (no revision used, survives restart). Accepting is one undo
   step; word cuts are re-resolved against the current edit, ranges and edits only at their base
-  revision. Autopilot accepts automatically. Gap: no project identity yet ([SAFE-1](roadmap.md#safe-1)).
+  revision. Autopilot accepts automatically.
+- **Project binding.** Each open gets a fresh `project_handle` (a UUID), reported to agents as
+  `project` by `project_info`, `status` and `proposals_list`. `tools::call` (the one entry the
+  server uses) takes a `project` argument out of any call and refuses it when another project is
+  open; `propose_cuts`, `propose_edit` and `undo_batch` require it, and proposals check it again
+  under the command lock (`with_proposals(state, Some(handle), …)`), as the UI's commands do.
+  `tools::takes_project` adds the argument to every writing tool's schema.
+- **Tool hints.** `read_only` means nothing changes, files included; `tools::DESTRUCTIVE` lists
+  the tools that overwrite without undo. Both become MCP `readOnlyHint` / `destructiveHint`.
+  `propose_edit`'s schema is derived from `SequenceEdit`, so it always lists every edit kind.
 - **Actions** apply directly like a button, one undo step each, listed in the Agent panel
   history. Detection actions take `apply: false`. Long jobs send MCP progress notifications.
   Requests on one connection run concurrently; agents that need order wait for each reply.

@@ -6,10 +6,9 @@ node_modules/
 dist/
 build/
 
-# Rust / Cargo
+# Rust / Cargo (Cargo.lock is committed: the app builds with exactly these crates)
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Tauri
 src-tauri/target/

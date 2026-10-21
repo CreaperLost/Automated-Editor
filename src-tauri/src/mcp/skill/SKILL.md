@@ -136,15 +136,18 @@ screen). It renders for that space, so the templates fit any slot.
 
 ## Telemetry polish
 
-Three touches come from the recording's telemetry, on by default and subtle; leave them on
-unless the user asks. In `settings` `area: layout`: `webcamAutoHide` fades the bubble out while
-clicks, drags, scrolling, a resting pointer or typing are under it (it never moves); `windowCrop`
-crops the screen to the front window when it is clearly smaller than the display (needs a
-recording with window telemetry), `windowCropPaddingPct` is the room around it, and
-`windowCropOff` lists recording stretches (`{media, sourceStartUs, sourceEndUs}`) shown whole,
-for a part the user wants uncropped. In `area: audio`, `soundEffects` (`clicks`, `whooshes`,
-`muted`, `volumeDb`) is a quiet lane of click sounds and a few whooshes on zooms and layout
-switches. Both are off by default; switch them on only when the user asks for them.
+A few touches come from the recording's telemetry. Each is listed with its default:
+
+- **On by default; leave on unless the user asks.** In `settings` `area: layout`:
+  `webcamAutoHide` fades the bubble out while clicks, drags, scrolling, a resting pointer or
+  typing are under it (it never moves). `windowCrop` crops the screen to the front window when it
+  is clearly smaller than the display; it only does anything on a recording with window
+  telemetry. `windowCropPaddingPct` is the room around it, and `windowCropOff` lists recording
+  stretches (`{media, sourceStartUs, sourceEndUs}`) shown whole, for a part the user wants
+  uncropped.
+- **Off by default; switch on only when the user asks.** In `area: audio`, `soundEffects`
+  (`clicks`, `whooshes`, `muted`, `volumeDb`) is a quiet lane of click sounds and a few whooshes
+  on zooms and layout switches.
 
 ## Looking at the edit
 
@@ -165,3 +168,10 @@ and at the end of every template).
 When the user asks for cuts the passes don't make (a tangent, a wrong take the rules missed),
 read `transcript_get`, then `propose_cuts` by word id with a reason. The user accepts it in the
 Agent panel.
+
+## Stay on the right project
+
+`status` and `project_info` give the open project's `project` id. Pass it as `project` on every
+call that changes something; `propose_cuts`, `propose_edit` and `undo_batch` refuse to run
+without it. If a call answers that the project changed, the user opened another one (or reopened
+this one): nothing was changed. Read `status` again and ask before going on.

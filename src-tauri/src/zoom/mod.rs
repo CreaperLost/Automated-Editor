@@ -247,7 +247,7 @@ pub enum ZoomOrigin {
     Typing,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EditedRange {
     pub start_us: u64,

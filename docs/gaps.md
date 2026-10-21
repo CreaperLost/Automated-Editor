@@ -11,9 +11,11 @@ material ([research/](research/README.md)); creator claims are not measurements.
 
 ## The short version
 
-1. **Correctness debt is small and cheap.** One real render-queue bug, a self-contradicting
-   skill paragraph, wrong MCP safety hints, and agent proposals that don't know which project
-   they belong to. Fix these first.
+1. **Correctness debt: fixed 21 Oct.** The render-queue bug, the self-contradicting skill
+   paragraph, the wrong MCP safety hints, the schema-less `propose_edit` and agent calls that
+   didn't know which project they belonged to are all fixed (see section 1). What remains is the
+   Tauri `template_save` name (UI-3) and the direct actions' project check moving under the lock
+   (AGT-1).
 2. **The agent can create but not clean up or correct.** It can add a graphic but not remove
    one, can't author a zoom, can't fix a mis-heard word. Every session ends with manual cleanup.
 3. **Nothing survives a reopen.** Undo is in memory (64 steps), graphic source edits have no
@@ -35,17 +37,17 @@ material ([research/](research/README.md)); creator claims are not measurements.
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| **A newer graphic render drops a waiting one for another length.** The queue replaces a waiting job when asset and canvas match, but the match key (`Spec::prefix`) is only `WxH`, so the same graphic at two lengths (main edit and a short) can leave one render never queued | Code: `graphics/render.rs` (`retain` on `asset_id` + `prefix()`; `prefix()` = `"{w}x{h}-"`) | [FIX-1](roadmap.md#fix-1) |
-| **The skill contradicts itself on telemetry polish.** It says the touches are "on by default … leave them on", then "Both are off by default". Truth: `webcamAutoHide` on, `windowCrop` on when window telemetry exists, `soundEffects` off | Code: `mcp/skill/SKILL.md` § Telemetry polish | [FIX-2](roadmap.md#fix-2) |
-| **MCP safety hints are wrong.** `export`, `graphic_render` and `graphic_check` are flagged `read_only: true` but write files; `destructiveHint` is hard-coded `false` for every tool, including `export` (overwrites) and `library_save` | Code: `mcp/actions.rs`, `mcp/mod.rs` (`.destructive(false)`) | [FIX-3](roadmap.md#fix-3) |
-| **`propose_edit` has no schema.** `edits: Vec<Value>`; the description lists 13 of the 17 `SequenceEdit` kinds (`SetMagnetic`, `SetSpeed`, `RippleTrim`, `RestoreCuts` work but are undocumented) | Code: `mcp/propose.rs`, `sequence/edit.rs` | [FIX-3](roadmap.md#fix-3) |
-| **Two different things are called `template_save`.** The MCP tool saves skill *answers*; the Tauri command saves a *look* | Code: `mcp/skill.rs`, `templates.rs` | [FIX-3](roadmap.md#fix-3) |
+| **A newer graphic render drops a waiting one for another length.** The queue replaces a waiting job when asset and canvas match, but the match key (`Spec::prefix`) is only `WxH`, so the same graphic at two lengths (main edit and a short) can leave one render never queued | Code: `graphics/render.rs` (`retain` on `asset_id` + `prefix()`; `prefix()` = `"{w}x{h}-"`) | Fixed 21 Oct: [FIX-1](roadmap.md#fix-1) |
+| **The skill contradicts itself on telemetry polish.** It says the touches are "on by default … leave them on", then "Both are off by default". Truth: `webcamAutoHide` on, `windowCrop` on when window telemetry exists, `soundEffects` off | Code: `mcp/skill/SKILL.md` § Telemetry polish | Fixed 21 Oct: [FIX-2](roadmap.md#fix-2) |
+| **MCP safety hints are wrong.** `export`, `graphic_render` and `graphic_check` are flagged `read_only: true` but write files; `destructiveHint` is hard-coded `false` for every tool, including `export` (overwrites) and `library_save` | Code: `mcp/actions.rs`, `mcp/mod.rs` (`.destructive(false)`) | Fixed 21 Oct: [FIX-3](roadmap.md#fix-3) |
+| **`propose_edit` has no schema.** `edits: Vec<Value>`; the description lists 13 of the 17 `SequenceEdit` kinds (`SetMagnetic`, `SetSpeed`, `RippleTrim`, `RestoreCuts` work but are undocumented) | Code: `mcp/propose.rs`, `sequence/edit.rs` | Fixed 21 Oct: [FIX-3](roadmap.md#fix-3) |
+| **Two different things are called `template_save`.** The MCP tool saves skill *answers*; the Tauri command saves a *look* | Code: `mcp/skill.rs`, `templates.rs` | Open: moved to [UI-3](roadmap.md#ui-3) (rename the whole saved-look command family) |
 
 ## 2. Safety and recovery
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| **Agent proposals are not bound to a project.** They carry `expectedRevision` but the MCP helper calls `with_proposals(state, None, …)`, i.e. whichever project is open. Switch projects with the same revision and colliding clip ids, and a stale proposal lands in the wrong project | Code: `mcp/propose.rs` | [SAFE-1](roadmap.md#safe-1) — **before any new write tool** |
+| **Agent proposals were not bound to a project.** They carried `expectedRevision` but the MCP helper called `with_proposals(state, None, …)`, i.e. whichever project was open | Code: `mcp/propose.rs` | Fixed 21 Oct: [SAFE-1](roadmap.md#safe-1). Left: direct actions check the `project` id just before running rather than under the command lock ([AGT-1](roadmap.md#agt-1)) |
 | **Undo dies on reopen.** `EditHistory` is in memory, capped at `MAX_UNDO = 64`; only the current document is saved. "Undo what the agent did yesterday" has no substrate | Code: `project/revision.rs` | [SAFE-2](roadmap.md#safe-2) |
 | **Graphic source edits have no undo.** `graphic_set` (variables, brand) and `graphic_write_file` write source directly; library "versions" don't keep old files | Code: `commands/graphics.rs`, `graphics/library.rs` | [SAFE-2](roadmap.md#safe-2), then [GFX-4](roadmap.md#gfx-4) |
 | **No checkpoints.** No "clean cut" / "approved look" snapshot covering the edit, graphic source and caption marks (transcripts sit outside the edit's undo) | Research: ChatCut, every Resolve creator duplicates the project first | [SAFE-2](roadmap.md#safe-2) |
@@ -185,7 +187,7 @@ performance on a real `.aero` with `perf.rs`. → [VER-1](roadmap.md#ver-1).
 
 | # | Contradiction | Status |
 |---|---|---|
-| C1 | `SKILL.md` telemetry polish on/off | Open → [FIX-2](roadmap.md#fix-2) |
+| C1 | `SKILL.md` telemetry polish on/off | **Fixed** 21 Oct ([FIX-2](roadmap.md#fix-2)) |
 | C2 | "No keystroke capture" vs keyboard telemetry v1 | **Fixed** in [ai-readiness.md](plans/ai-readiness.md#decisions-2026-10-13): no typed text is ever captured |
 | C3 | Graphics v1 says a placement stores a word anchor; the code resolves the word to a time once | **Fixed** in the plan text; storing the anchor is part of [PLAN-1](roadmap.md#plan-1) |
 | C4 | "A brand kit feeds every caption" | Marked not yet true; [CAP-1](roadmap.md#cap-1) |

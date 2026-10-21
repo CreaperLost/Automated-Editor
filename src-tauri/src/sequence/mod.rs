@@ -55,7 +55,7 @@ pub enum StreamKind {
 }
 
 /// What a stream stands for, so it is drawn or heard like that part of a recording.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Picture drawn with the canvas layout (size, corners, shadow, crop), zooms and cursor.
@@ -80,7 +80,7 @@ impl Role {
 }
 
 /// A half-open range of an asset's own time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRange {
     pub start_us: u64,
@@ -215,7 +215,9 @@ impl Asset {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackKind {
     #[default]
@@ -233,7 +235,9 @@ impl TrackKind {
 }
 
 /// How an overlay picture fills the canvas.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum Fit {
     /// The whole picture, centred; what is below shows around it.
