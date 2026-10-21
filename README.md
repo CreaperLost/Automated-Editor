@@ -12,15 +12,15 @@ app…) over MCP or the `aeroedits do` command line. The app runs the editing pa
 runs them in order, asks you with real numbers, and you approve. Agent proposals wait in the
 Agent panel, and every change is one undo step.
 
-![How the user's agent works with AeroEdits today](docs/overview/images/ai-collaboration-today.svg)
+![How the user's agent works with AeroEdits today](docs/images/ai-collaboration-today.svg)
 
 Where this is heading: the agent moves from running passes to directing the edit, with a plan
 you approve, a style trial, moving previews with sound, and rules it learns from your
 corrections. This is a proposal from the 21 Oct 2026 research, not a commitment.
 
-![The AeroEdits AI loop: today and tomorrow](docs/overview/images/ai-loop-today-vs-tomorrow.svg)
+![The AeroEdits AI loop: today and tomorrow](docs/images/ai-loop-today-vs-tomorrow.svg)
 
-Start with [docs/overview/](docs/overview/README.md) for the vision, the current state, the
+Start with [docs/](docs/README.md) for the vision, the current state, the
 gaps and the roadmap.
 
 ## Features
@@ -55,7 +55,7 @@ gaps and the roadmap.
   in any order. All cuts share timeline mapping and undo; timeline or transcript changes
   invalidate stale suggestions, including analyses still running.
 - **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
-  `telemetry/keys.jsonl` ([format](docs/keyboard-telemetry.md)): typing stretches with a key
+  `telemetry/keys.jsonl` ([format](docs/contracts/keyboard-telemetry.md)): typing stretches with a key
   count (never the text) and shortcuts pressed. Typing counts as screen activity, so the
   picked layouts keep the screen in view while you type with a
   resting mouse. Long typing gets a zoom on the text caret (or the click into the field), and
@@ -82,7 +82,7 @@ gaps and the roadmap.
   **Hide while you work under it** in the Camera settings (`webcamAutoHide` for agents). Only
   while a bubble layout sits over a fitted screen.
 - **Crop to the active window:** recordings from AeroShoot with window recording on carry
-  `telemetry/windows.jsonl` ([format](docs/window-telemetry.md)). When the window in front is
+  `telemetry/windows.jsonl` ([format](docs/contracts/window-telemetry.md)). When the window in front is
   clearly smaller than the recorded display, the screen shows just that window with room
   around it and glides to the next one when you switch; quick switches, menus, popups and
   tiny windows never move it. Zooms work inside the crop and keep their targets, in shorts

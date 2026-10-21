@@ -29,17 +29,17 @@ The project's own words, as used in the docs and the code.
 | Gate | `graphic_check`: lint, layout overflow, contrast, long text, 16:9 and 9:16, first/last frames. No model |
 | Take short | A short built from a new camera take, with footage from the long video under it |
 | **Proposed terms (not built)** | |
-| Style kit | Rules for using the brand: caption style, motion, density, banned list, references (T1) |
-| Beat plan | Per-moment intent anchored to words: purpose, treatment, reason, locks, status (T2) |
-| Style trial | Building a few beats on a short range and approving the look before scaling (T2) |
-| Event marker | A moment a graphic declares (card lands, counter ends) for sound to sync to (T6) |
-| Cue compiler | App logic turning chosen events + sounds into timed, ducked audio cues (T6) |
-| Motion preview | Short low-res full-rate clip with sound, so agent and user can watch, not sample (T7) |
-| Checkpoint | Named restorable snapshot of edit + graphic source + caption marks (T9) |
-| Selection reference | A serialised pointer to what the user selected, sent to the agent ("Ask AI about this") (T11) |
-| Thorough mode | A tutorial-template option that reads every kept transcript page and reviews joins, instead of candidate windows only (T7) |
-| Review record | Per-revision evidence of which ranges were inspected, listened to, or decided by the user; made stale by later edits (T7) |
-| Join audition queue | A list of cuts to play a few seconds around and mark keep or refine (T7) |
-| Project rules | Editing rules the agent suggests and the user accepts, scoped to a project or to all videos; the "self-improving skill" (T10) |
-| Word-timed emphasis | A graphic that reveals each word of a phrase at its own word ID and re-times after cuts (T3) |
-| Cost per accepted video | All spend (subscriptions, generation, render, human review, retries) divided by videos actually published (vision) |
+| Style kit | Rules for using the brand: caption style, motion, density, banned list, references ([STY-1](roadmap.md#sty-1)) |
+| Beat plan | Per-moment intent anchored to words: purpose, treatment, reason, locks, status ([PLAN-1](roadmap.md#plan-1)) |
+| Style trial | Building a few beats on a short range and approving the look before scaling ([PLAN-1](roadmap.md#plan-1)) |
+| Event marker | A moment a graphic declares (card lands, counter ends) for sound to sync to ([SND-2](roadmap.md#snd-2)) |
+| Cue compiler | App logic turning chosen events + sounds into timed, ducked audio cues ([SND-2](roadmap.md#snd-2)) |
+| Motion preview | Short low-res full-rate clip with sound, so agent and user can watch, not sample ([REV-1](roadmap.md#rev-1)) |
+| Checkpoint | Named restorable snapshot of edit + graphic source + caption marks ([SAFE-2](roadmap.md#safe-2)) |
+| Selection reference | A serialised pointer to what the user selected, sent to the agent ("Ask AI about this") ([NOTE-1](roadmap.md#note-1)) |
+| Thorough mode | A tutorial-template option that reads every kept transcript page and reviews joins, instead of candidate windows only ([AGT-2](roadmap.md#agt-2)) |
+| Review record | Per-revision evidence of which ranges were inspected, listened to, or decided by the user; made stale by later edits ([REV-1](roadmap.md#rev-1)) |
+| Join audition queue | A list of cuts to play a few seconds around and mark keep or refine ([REV-1](roadmap.md#rev-1)) |
+| Project rules | Editing rules the agent suggests and the user accepts, scoped to a project or to all videos; the "self-improving skill" ([AGT-3](roadmap.md#agt-3)) |
+| Word-timed emphasis | A graphic that reveals each word of a phrase at its own word ID and re-times after cuts ([GFX-3](roadmap.md#gfx-3)) |
+| Cost per accepted video | All spend (subscriptions, generation, render, human review, retries) divided by videos actually published ([product](product.md#who-it-is-for)) |

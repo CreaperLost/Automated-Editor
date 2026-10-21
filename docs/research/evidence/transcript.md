@@ -1,10 +1,10 @@
 # Transcripts — AI video editing and motion graphics reference set
 
-Collected 21 October 2026. YouTube's own auto-generated caption tracks, fetched with `youtube-transcript-api` (see [reference-video-scripts/](reference-video-scripts/)). Each paragraph is a merged run of captions; the timestamp is where that paragraph starts.
+Collected 21 October 2026. YouTube's own auto-generated caption tracks, fetched with `youtube-transcript-api` (see [reference-video-scripts/](scripts/)). Each paragraph is a merged run of captions; the timestamp is where that paragraph starts.
 
 **On the text itself.** This is each creator's speech as YouTube's speech model heard it. Brand and product names are routinely mangled — Higgsfield appears as *Higsfield*, *Hicksfield* and *Hixson*, HyperFrames as *Hyperframes*, Opus as *Appus*. The sense is reliably intact; the spellings are not, so do not quote them from here. Bracketed `[music]` markers are the caption track's own.
 
-Companions: [reference-video-review-2026-10-21.md](reference-video-review-2026-10-21.md) (what they do and why it matters) · [agent-video-gaps-and-proposals-2026-10-21.md](agent-video-gaps-and-proposals-2026-10-21.md) (what it means for AeroEdits).
+Companions: [reference-video-review-2026-10-21.md](../creator-workflows.md) (what they do and why it matters) · [agent-video-gaps-and-proposals-2026-10-21.md](../creator-workflows.md) (what it means for AeroEdits).
 
 
 ---

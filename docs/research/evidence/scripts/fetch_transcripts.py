@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Fetch and format the reference-video transcripts in docs/transcript.md.
+"""Fetch and format the reference-video transcripts in docs/research/evidence/transcript.md.
 
-The transcripts in docs/transcript.md are YouTube's own auto-generated caption tracks,
+The transcripts in docs/research/evidence/transcript.md are YouTube's own auto-generated caption tracks,
 pulled from the public videos listed in VIDEOS below. This script re-fetches them and
 rewrites that file, so the research stays reproducible and refreshable.
 
 Usage
 -----
     python3 -m pip install --user youtube-transcript-api
-    python3 docs/reference-video-scripts/fetch_transcripts.py            # refresh all
-    python3 docs/reference-video-scripts/fetch_transcripts.py --refetch  # ignore cache
-    python3 docs/reference-video-scripts/fetch_transcripts.py --only 5 7
+    python3 docs/research/evidence/scripts/fetch_transcripts.py            # refresh all
+    python3 docs/research/evidence/scripts/fetch_transcripts.py --refetch  # ignore cache
+    python3 docs/research/evidence/scripts/fetch_transcripts.py --only 5 7
 
 Raw caption data is cached under .cache/ so re-formatting does not re-hit YouTube. The
 cache is disposable; delete it or pass --refetch to rebuild it.
@@ -18,7 +18,7 @@ cache is disposable; delete it or pass --refetch to rebuild it.
 Provenance notes
 ----------------
 - Transcripts are ASR output, not human captions. Brand and product names are routinely
-  mangled (Higgsfield -> "Higsfield"/"Hicksfield", Opus -> "Appus"). docs/transcript.md
+  mangled (Higgsfield -> "Higsfield"/"Hicksfield", Opus -> "Appus"). docs/research/evidence/transcript.md
   says so in its header; do not quote spellings from it.
 - If YouTube rate-limits or a video's captions are removed, the script reports the failure
   and continues. It never writes a partial file silently -- check the summary it prints.
@@ -148,7 +148,7 @@ VIDEOS: list[tuple[str, str, str, str, str, str]] = [
 HEADER = """# Transcripts — AI video editing and motion graphics reference set
 
 Collected {date}. YouTube's own auto-generated caption tracks, fetched with \
-`youtube-transcript-api` (see [reference-video-scripts/](reference-video-scripts/)). Each paragraph \
+`youtube-transcript-api` (see [scripts/](scripts/)). Each paragraph \
 is a merged run of captions; the timestamp is where that paragraph starts.
 
 **On the text itself.** This is each creator's speech as YouTube's speech model heard it. Brand \

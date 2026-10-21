@@ -7,8 +7,8 @@ through third-party transcript indexers (ReelStack, prepublish.ai, primalvideo.c
 moderncreator.app, babbl-labs.com), then a short "what we can use" line.
 
 The list is **two different** from the eleven in
-[reference-video-review-2026-10-21.md](reference-video-review-2026-10-21.md) and the
-previous ten in [ten-ai-editor-videos-2026-10-21.md](ten-ai-editor-videos-2026-10-21.md):
+[reference-video-review-2026-10-21.md](../creator-workflows.md) and the
+previous ten in [ten-ai-editor-videos-2026-10-21.md](../creator-workflows.md):
 - **removed:** Pat Simmons (Premiere + GPT-6 Astra) and Justin Brown / Primal Video.
   Both were reclassified by the project owner: Pat because the workflow is now natively
   covered by AeroEdits' text-driven cut surface, and Justin because his v3hzMGTb7Es video
@@ -89,7 +89,7 @@ description is empty) / transcript extracts / the inference "what we can use".
   `state_screenshot(state)` in our MCP — a one-shot canvas, timeline and
   inspector for the moment the agent is reasoning about. The "editable
   layers" framing is the same rule we already encode in
-  [`graphics.rs`](../src-tauri/src/mcp/graphics.rs) — every graphic the
+  [`graphics.rs`](../../../src-tauri/src/commands/graphics.rs) — every graphic the
   HyperFrames renderer emits is editable, and a `graphic_edit_layer(graphic_id, layer_id, change)` action closes
   the round-trip Astra is achieving through screen-scraping.
 
@@ -139,7 +139,7 @@ description is empty) / transcript extracts / the inference "what we can use".
 - **What we can use.** This is a perfect three-way head-to-head for the
   gap we already named in the gaps doc — *Cloud agent → cloud editor vs
   coding agent → local editor vs coding agent → local NLE MCP*. The
-  finding here lines up with our [agent-video-gaps-and-proposals-2026-10-21.md](agent-video-gaps-and-proposals-2026-10-21.md)
+  finding here lines up with our [agent-video-gaps-and-proposals-2026-10-21.md](../creator-workflows.md)
   position: the *boring setup* is what the user is happy to delegate;
   the *creative* calls (which takes to keep, the hook, the colour grade)
   stay with them. The tokens claim ("I haven't run into any token
@@ -187,7 +187,7 @@ description is empty) / transcript extracts / the inference "what we can use".
   folder of skill files beats every other architecture for "edit my video
   on its own for a couple hours."* The lever he is pulling is a
   multi-NLE abstraction layer; ours is a single binary (AeroEdits) that
-  *is* the abstraction layer. We have a [`skill.rs`](../src-tauri/src/mcp/skill.rs) that ships with
+  *is* the abstraction layer. We have a [`skill.rs`](../../../src-tauri/src/mcp/skill.rs) that ships with
   the editor. The missing piece — and the biggest delta from this
   video — is a free, published "blueprint" a non-AeroEdits user can
   clone, edit, and ship. `aeroedits skill new <deck>` and
@@ -274,11 +274,11 @@ description is empty) / transcript extracts / the inference "what we can use".
     re-learn a creator's style every time.
   - **"Don't stop to ask, do your own research"** — Zane puts
     the failure-handling rule *inside* the prompt. Our
-    [`proposals_undo`](../src-tauri/src/commands/proposals.rs) and
+    [`proposals_undo`](../../../src-tauri/src/commands/proposals.rs) and
     the `expectedRevision` flow already follow the "stage
     before apply" pattern, but we have no rule for "if the
     tool you tried fails, search the web, don't ask." That is a
-    one-paragraph addition to [`skill.rs`](../src-tauri/src/mcp/skill.rs).
+    one-paragraph addition to [`skill.rs`](../../../src-tauri/src/mcp/skill.rs).
 
 ---
 
@@ -377,7 +377,7 @@ description is empty) / transcript extracts / the inference "what we can use".
     feedback from the creator saved as a rule. We have no equivalent
     of `skill_suggest_edit(action, rule)`. A first implementation is
     `propose_skill_edit(skill_name, diff)` + `proposal_accept`;
-    ~30 lines on top of [`proposals.rs`](../src-tauri/src/commands/proposals.rs).
+    ~30 lines on top of [`proposals.rs`](../../../src-tauri/src/commands/proposals.rs).
 
 ---
 
@@ -430,7 +430,7 @@ description is empty) / transcript extracts / the inference "what we can use".
 
 - **What we can use.** The five-point pipeline is a forcing function
   for our gaps doc. The closest thing we have is:
-  - **Assets → timeline** — we have [`graphics.rs`](../src-tauri/src/mcp/graphics.rs)
+  - **Assets → timeline** — we have [`graphics.rs`](../../../src-tauri/src/commands/graphics.rs)
     but no image-generation MCP. A `graphic_generate(prompt,
     seed_path, brand_id)` action that round-trips with Higgsfield /
     OpenArt / DALL-E would be a one-day add and is the missing
@@ -551,7 +551,7 @@ description is empty) / transcript extracts / the inference "what we can use".
 
 - **What we can use.** Tandem's design point — *the transcript is
   the bus between the model and the timeline* — is the same
-  design we already follow: the [`transcript.rs`](../src-tauri/src/commands/transcript.rs)
+  design we already follow: the [`transcript.rs`](../../../src-tauri/src/commands/transcript.rs)
   surface is the only one that any MCP agent can rely on to plan
   a cut, an arrangement, or a shorts pass. Where we differ is
   *the editor*: Tandem is a brand-new product Convex built, ours
@@ -652,7 +652,7 @@ not yet have.
 |---|---|---|---|
 | 1 Rourke | AE's UI (screen-scraped) | moves the mouse, types | a one-shot prompt |
 | 2 Joris | the open Resolve project, the open invideo project | writes a Resolve Python script; runs a cloud edit | the prompt |
-| 3 Jason | `CLAUDE.md` + 20+ skill files; the open NLE | edits on the timeline; routes through any of Premiere / DaVinci / Final Cut / CapCut | **a 1,400-line project folder** (we have [`skill.rs`](../src-tauri/src/mcp/skill.rs) but no blueprint) |
+| 3 Jason | `CLAUDE.md` + 20+ skill files; the open NLE | edits on the timeline; routes through any of Premiere / DaVinci / Final Cut / CapCut | **a 1,400-line project folder** (we have [`skill.rs`](../../../src-tauri/src/mcp/skill.rs) but no blueprint) |
 | 4 Zane | DaVinci Resolve 21.1 project + OpenArt + YouTube web + Pinterest | builds the story, picks B-roll, generates the graphics | *one master prompt stored in a Google Doc* |
 | 5 Greg | the Resolve project | scripts the resolve console, takes screenshots | none — tests the new feature |
 | 6 Christian | the raw footage + folder of MCP tools | runs seven jobs in order (intake → transcribe → cut → B-roll → layout → graphics → music/SFX) | a 1,400-line skill file that updates itself |
@@ -672,14 +672,14 @@ not yet have.
 2. **The skill beats the model.** Six of the nine credit the *quality* of the result
    to the skill file (or its equivalent), not to the model. Three (Christian, Jason,
    Convex) update the skill itself. *Ours* is a fixed file
-   ([`skill.rs`](../src-tauri/src/mcp/skill.rs)) — we don't accept edits to it from
+   ([`skill.rs`](../../../src-tauri/src/mcp/skill.rs)) — we don't accept edits to it from
    the agent.
 
 3. **The "one prompt" beats the "many prompts."** Three of the nine (Zane #4,
    Christian #6, Convex #9) explicitly say *"I sent one prompt."* The rest
    describe a multi-prompt session, but the impression a viewer walks away with
    is *"the agent did the work, I just pushed the button."* Our
-   [`propose_cuts`](../src-tauri/src/commands/proposals.rs) flow is closer to
+   [`propose_cuts`](../../../src-tauri/src/commands/proposals.rs) flow is closer to
    the multi-prompt style. A "single-proposal, multiple-actions" command would
    close this.
 
@@ -687,7 +687,7 @@ not yet have.
    so explicitly: Greg #5 (*"The big downsides"*), Jason #3 (*"it can do
    that kind of work in Fusion but not in Color, which is silly"*), Adil #7
    (the only one who claims it works, and they may be using Computer Use). Ours
-   grades at composite time in [`render/composite.wgsl`](../src-tauri/src/render/composite.wgsl),
+   grades at composite time in [`render/composite.wgsl`](../../../src-tauri/src/render/composite.wgsl),
    so we don't have this hole — but we also don't expose a typed
    `clip_grade` action.
 
@@ -731,7 +731,7 @@ and the file path that already does the work, or the new file the work needs.
 
 | # | Where they beat us | Severity | One-line answer for AeroEdits |
 |---|---|---|---|
-| 1 | **Premiere / DaVinci / FCP all have a vendor-shipped MCP.** Resolve 21.1 ships its own; Final Cut via community MCPs; Premiere via Adobe. | **High.** A creator on those NLEs can install an MCP in two minutes; a creator on ours reads a README. | Ship a one-page "Install our MCP" page that points at our existing [`aeroedits --mcp-stdio`](../src-tauri/src/mcp/cli.rs) entry. |
+| 1 | **Premiere / DaVinci / FCP all have a vendor-shipped MCP.** Resolve 21.1 ships its own; Final Cut via community MCPs; Premiere via Adobe. | **High.** A creator on those NLEs can install an MCP in two minutes; a creator on ours reads a README. | Ship a one-page "Install our MCP" page that points at our existing [`aeroedits --mcp-stdio`](../../../src-tauri/src/mcp/cli.rs) entry. |
 | 2 | **Cloud editors do not need a powerful local machine.** invideo's flow C is the same agent, the same prompt, run entirely in a browser. | Medium. We are desktop-first; users without a GPU or with a small machine are out. | Out of scope, but a "lite" export-only mode on a server-rendered preview would catch the browser-tab creators. |
 | 3 | **Five-MCP stacks are normal.** Christian's seven jobs run in parallel against five different MCPs. Most users have one — ours. | Medium. Users who already have Tella and Epidemic Sound are paying for them; an extra MCP is friction. | Document the smallest set of MCPs AeroEdits will play nicely with (FFmpeg, yt-dlp, Scribe, OpenArt); recommend a starter profile. |
 | 4 | **Every creator publishes a skill/prompt as a file.** We ship a `skill.rs`; the user can't author their own. | Medium. | `aeroedits skill new <deck>` + `aeroedits skill add <file>` is a one-day feature. |
@@ -739,11 +739,11 @@ and the file path that already does the work, or the new file the work needs.
 | 6 | **Generated sound effects.** ElevenLabs SFX v2, OpenAI's TTS sound-effect beta, Stable Audio. | Medium. | `sfx_generate(prompt, duration_ms, gain_db)` action that returns a file path; the Sound Effects lane handles the rest. |
 | 7 | **Color node trees via MCP.** Higgsfield claims it works; everyone else agrees it doesn't. | Low. | We grade at composite time. Adding `clip_grade(clip_id, nodes)` is the *defensive* move — covers the day a future Resolve release or Premiere release opens it. |
 | 8 | **Image and B-roll generation as a first-class agent action.** Zane #4, Adil #7, Zane #+1. | Medium. | `graphic_generate(prompt, seed_path, brand_id)` round-trips with Higgsfield / OpenArt / DALL-E. The first two are the ones every creator is already paying for. |
-| 9 | **Self-improving skill file.** Christian and Jason do it. | High. | `propose_skill_edit(skill_name, diff)` + `proposal_accept` on top of [`proposals.rs`](../src-tauri/src/commands/proposals.rs). |
+| 9 | **Self-improving skill file.** Christian and Jason do it. | High. | `propose_skill_edit(skill_name, diff)` + `proposal_accept` on top of [`proposals.rs`](../../../src-tauri/src/commands/proposals.rs). |
 | 10 | **The "while it's doing that, I move on" line.** Convex explicitly edits one video while the agent is still cutting the last. | High. | We already have a project journal. Adding an `agent_run(action_id, expectedRevision)` and a `agent_get(action_id)` that the agent can poll asynchronously is the smallest change. |
-| 11 | **Vibe-coded editor with a transcript bar in the playhead.** Convex's Tandem. | Low. We are not going to write a video editor. | Our `storyboard` action ([`storyboard.rs`](../src-tauri/src/mcp/storyboard.rs)) is the closest equivalent. |
+| 11 | **Vibe-coded editor with a transcript bar in the playhead.** Convex's Tandem. | Low. We are not going to write a video editor. | Our `storyboard` action ([`storyboard.rs`](../../../src-tauri/src/mcp/storyboard.rs)) is the closest equivalent. |
 | 12 | **Real-time preview of agent-driven edits.** None of the videos do this, but Convex's transcript bar comes close. | Low. | Out of scope. |
-| 13 | **Single-prompt that does everything.** Zane, Christian, Convex. | Medium. | A "single-proposal, multiple-actions" command that stages every step in [`propose_cuts`](../src-tauri/src/commands/proposals.rs) and accepts in one undo. |
+| 13 | **Single-prompt that does everything.** Zane, Christian, Convex. | Medium. | A "single-proposal, multiple-actions" command that stages every step in [`propose_cuts`](../../../src-tauri/src/commands/proposals.rs) and accepts in one undo. |
 | 14 | **The user's transcript has the word timing they need to plan a cut.** Justin's Deepgram JSON insight. | Low. | We do this already. |
 | 15 | **Folder-watch ingest.** Pat's `OBS recordings` watcher. | Low. | `aeroedits-watch <dir> --profile <name>`. |
 
@@ -754,7 +754,7 @@ and the file path that already does the work, or the new file the work needs.
   model download for Parakeet — we are functionally cheaper than even
   the corrected figure, with no third-party subscriptions.
 - **HyperFrames renders.** Free, but it does not have a frame-by-frame
-  audio-aware graph. Our [`graphics.rs`](../src-tauri/src/mcp/graphics.rs) is
+  audio-aware graph. Our [`graphics.rs`](../../../src-tauri/src/commands/graphics.rs) is
   rendered by the same HyperFrames engine, but the *agent-facing* surface
   is structured (HTML+JSON input, not a free-form code-generation box).
   We win on predictability.
@@ -762,7 +762,7 @@ and the file path that already does the work, or the new file the work needs.
   loses on the creative side — Joris uses it for cloud ingest but
   switches back to Resolve for the actual edit.
 - **Christian's "I move on."** Convex literally edits this video live.
-  Our [proposals_undo](../src-tauri/src/commands/proposals.rs) and the
+  Our [proposals_undo](../../../src-tauri/src/commands/proposals.rs) and the
   `expectedRevision` flow already make this safe *if* the agent
   is willing to drive async. The capability is one MCP action
   shape away.
@@ -780,9 +780,9 @@ These are the eight moves that would close the largest gaps in the smallest
 number of code-changes, given the AeroEdits surface as it stands today.
 
 1. **`aeroedits skill new <deck>` and `aeroedits skill add <file>`.** ~30 lines on
-   top of [`skill.rs`](../src-tauri/src/mcp/skill.rs). Closes gaps #4, #9.
+   top of [`skill.rs`](../../../src-tauri/src/mcp/skill.rs). Closes gaps #4, #9.
 2. **`propose_skill_edit(skill_name, diff)` + `proposal_accept`.** Reuse
-   [`proposals.rs`](../src-tauri/src/commands/proposals.rs). Closes gap #9
+   [`proposals.rs`](../../../src-tauri/src/commands/proposals.rs). Closes gap #9
    (self-improving skill).
 3. **`sfx_generate(prompt, duration_ms, gain_db)` action.** ~50 lines, plus a
    provider dispatch (ElevenLabs SFX v2, OpenAI TTS sound-effect beta, Stable

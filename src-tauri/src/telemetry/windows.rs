@@ -1,5 +1,5 @@
 //! The front window recorded beside the mouse stream (`telemetry/windows.jsonl`), as
-//! specified in `docs/window-telemetry.md`: which window is in front and where it is on the
+//! specified in `docs/contracts/window-telemetry.md`: which window is in front and where it is on the
 //! recorded source, and gaps where that was not known. Same clock as `events.jsonl`.
 //!
 //! No file means the windows were not recorded: the screen is never cropped to one.
