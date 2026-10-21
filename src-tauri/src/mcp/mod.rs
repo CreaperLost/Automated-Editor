@@ -48,6 +48,9 @@ pub trait Host: Send + Sync + 'static {
     fn project_changed(&self) {}
     /// The agent proposed, withdrew or undid something: the Agent panel reloads.
     fn proposals_changed(&self) {}
+    /// The agent started an export (of a short when `short`): the editor shows its progress as
+    /// if started there.
+    fn export_started(&self, _status: &crate::export::ExportStatus, _short: bool) {}
     /// Accept proposals as they arrive.
     fn autopilot(&self) -> bool {
         false
@@ -344,29 +347,14 @@ async fn session(stream: impl ipc::Stream, host: Arc<dyn Host>, stop: Cancellati
     SERVER.lock().connected.retain(|(c, _)| *c != id);
 }
 
-const INSTRUCTIONS: &str = "AeroEdits is a video editor for screen-recorded tutorials. \
-You work on the project the user has open. When the user asks for an edit of a video (a \
-tutorial, a recording, a cleanup), call `template` first and follow the template it gives: \
-the steps, the questions to ask the user, how to report, and the export steps; never export \
-before the user says go. Run the cleanup one pass at a time: a dry run (`apply: false`), the \
-user's OK with its numbers, then the pass, unless the user said to do it automatically. \
-Chapters are the last edit, right before export. The routine work is the app's own actions, which run its built-in \
-passes and cost you almost nothing: status, scan, transcribe, mouth_noises, silence, fillers, \
-layouts, zooms, settings, chapters, shorts, export; each applies as one undo step and \
-answers in a line or two to pass on to the user. Times are microseconds on the edited \
-timeline (after every cut). Read transcripts (transcript_get) and frames (frame_render) only \
-for judgment calls, a thorough review the user chose, or when a step fails; then propose_cuts \
-and propose_edit store a batch with \
-your reason for the user to accept in the Agent panel. status and project_info give the open \
-project's `project` id: pass it on every call that changes something (propose_cuts, \
-propose_edit and undo_batch need it), and if a call says the project changed, read again \
-before going on. Prefer cuts by word id, which stay \
-valid while the user edits; check proposals_list for what they decided. Graphics (graphics, \
-graphic_add) play full screen over everything and cuts never go through them: add them after \
-the cuts, from the user's library first (each item says when to use it) or the templates, \
-before chapters; brand_kits are the user's colours and font. When the user likes a graphic you \
-wrote, offer to keep it: graphic_templatize, rewrite, graphic_check until it passes, then \
-library_save with their yes.";
+/// Kept short: some clients repeat it in front of every tool they look up. The rules come
+/// once, from `template`.
+const INSTRUCTIONS: &str = "AeroEdits edits screen-recorded tutorials, on the project the user \
+has open. For an edit of a video, call `template` first and follow it: it has the rules, the \
+steps, what to ask and the export steps; never export before the user says go. The app's \
+actions (scan, transcribe, silence, fillers, zooms, chapters, export, ...) do the work, each as \
+one undo step answering in a line or two. Times are microseconds on the edited timeline. Pass \
+the `project` id from `status` on every call that changes something.";
 
 #[derive(Clone)]
 struct Handler {
@@ -716,7 +704,6 @@ mod tests {
             ai_suggestions: Vec::new(),
             ai_model: None,
             caption_marks: Default::default(),
-            alignment: None,
         };
         crate::transcript::store::save_transcript(&folder, &transcript).unwrap();
         host
@@ -1171,10 +1158,10 @@ mod tests {
         );
         assert_eq!(hello["result"]["serverInfo"]["name"], "aeroedits");
         assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
-        assert!(hello["result"]["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("one pass at a time"));
+        // Short, since some clients repeat it before every tool; the rules come from `template`.
+        let instructions = hello["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("never export before the user says go"));
+        assert!(instructions.len() < 700, "{}", instructions.len());
         let tools = ask(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
         let names: Vec<&str> = tools["result"]["tools"]
             .as_array()

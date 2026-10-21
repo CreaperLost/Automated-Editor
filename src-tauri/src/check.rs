@@ -19,9 +19,6 @@ const FRAGMENT_NO_WORDS_MAX_US: u64 = 120_000;
 /// kept word (and this share of it) takes sound with it.
 const CLIPPED_REMOVED_MIN_US: u64 = 200_000;
 const CLIPPED_SHARE: f64 = 0.3;
-/// This many cuts within the window reads as choppy.
-const CHOPPY_CUTS: usize = 4;
-const CHOPPY_WINDOW_US: u64 = 3_000_000;
 /// A zoom on screen for less than this flashes.
 const ZOOM_MIN_US: u64 = 800_000;
 /// YouTube shows chapters only when there are at least 3, each at least 10 s.
@@ -55,9 +52,7 @@ pub enum Kind {
     NoSound,
     Fragment,
     ClippedWord,
-    Choppy,
     ZoomTooShort,
-    ZoomJump,
     CaptionsCoverWebcam,
     CaptionsWithoutTranscript,
     ChapterCut,
@@ -86,12 +81,6 @@ pub enum Fix {
     },
     DeleteZoom {
         id: String,
-    },
-    /// Moves a zoom to these moments of its recording, keeping everything else.
-    ZoomEase {
-        id: String,
-        source_start_us: u64,
-        source_end_us: u64,
     },
     CaptionOffset {
         offset_pct: f32,
@@ -217,9 +206,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     let mut taken = std::collections::HashSet::new();
     for finding in &mut findings {
         let about = match &finding.fix {
-            Some(Fix::DeleteZoom { id })
-            | Some(Fix::ZoomEase { id, .. })
-            | Some(Fix::RemoveChapter { id }) => id.clone(),
+            Some(Fix::DeleteZoom { id }) | Some(Fix::RemoveChapter { id }) => id.clone(),
             _ => finding
                 .start_us
                 .map(|us| (us / 1000).to_string())
@@ -501,44 +488,6 @@ fn cuts(out: &mut Builder, document: &EditDocument, speech: &[(Transcript, Timel
             );
         }
     }
-    // Choppy stretches: many cuts close together, merged where they overlap.
-    let cut_times: Vec<u64> = pieces
-        .iter()
-        .filter(|p| p.cut_before)
-        .map(|p| p.edited_start)
-        .collect();
-    let mut stretches: Vec<(u64, u64, usize)> = Vec::new();
-    let mut first = 0;
-    for last in 0..cut_times.len() {
-        while cut_times[last] - cut_times[first] > CHOPPY_WINDOW_US {
-            first += 1;
-        }
-        if last + 1 - first >= CHOPPY_CUTS {
-            let (a, b) = (cut_times[first], cut_times[last]);
-            match stretches.last_mut() {
-                Some(s) if a <= s.1 => {
-                    s.1 = b;
-                    s.2 = s.2.max(last + 1 - first);
-                }
-                _ => stretches.push((a, b, last + 1 - first)),
-            }
-        }
-    }
-    for (a, b, _) in stretches {
-        let count = cut_times.iter().filter(|&&t| (a..=b).contains(&t)).count();
-        out.push(
-            Kind::Choppy,
-            Severity::Info,
-            "Many cuts close together".into(),
-            format!(
-                "{count} cuts in {} from {}; it can feel choppy. A gentler preset or restoring \
-                 a pause or two smooths it.",
-                seconds(b - a),
-                clock(a)
-            ),
-        )
-        .at(a, b);
-    }
 }
 
 /// Kept words that lost more than word-edge refinement trims: cut partway through.
@@ -605,89 +554,9 @@ fn zooms(out: &mut Builder, document: &EditDocument) {
                     id: zoom.id.clone(),
                 },
             );
-            continue;
         }
-        // Its easing in or out was cut, so it jumps part of the way instead.
-        let Some(asset) = document.clock_asset(zoom.media.as_deref()) else {
-            continue;
-        };
-        let mapper = document.picture_clock(asset);
-        let transition = zoom
-            .transition_us
-            .min((zoom.source_end_us - zoom.source_start_us) / 2);
-        if transition == 0 {
-            continue;
-        }
-        // In the zoom's own time: easing played faster is shorter, not cut.
-        let kept = |a: u64, b: u64| -> u64 { mapper.source_kept_us(a, b) };
-        let cut_in = transition.saturating_sub(kept(
-            zoom.source_start_us,
-            zoom.source_start_us + transition,
-        ));
-        let cut_out =
-            transition.saturating_sub(kept(zoom.source_end_us - transition, zoom.source_end_us));
-        // A sliver less is rounding at a clip edge, not a visible jump.
-        let visible = transition / 4;
-        let (jumps_in, jumps_out) = (cut_in > visible, cut_out > visible);
-        let which = match (jumps_in, jumps_out) {
-            (true, true) => "in and out",
-            (true, false) => "in",
-            (false, true) => "out",
-            (false, false) => continue,
-        };
-        let finding = out.push(
-            Kind::ZoomJump,
-            Severity::Info,
-            format!("Zoom jumps {which}"),
-            format!(
-                "A cut removed part of this zoom's easing {which}, so it jumps instead of \
-                 gliding."
-            ),
-        );
-        finding.at(start, end);
-        // The fix starts (or ends) the zoom inside the first (or last) stretch the edit keeps
-        // that holds its whole easing.
-        let mut kept_source: Vec<(u64, u64)> = mapper
-            .intervals()
-            .iter()
-            .filter(|i| i.is_recording())
-            .map(|i| {
-                (
-                    i.start_us.max(zoom.source_start_us),
-                    i.end_us.min(zoom.source_end_us),
-                )
-            })
-            .filter(|(a, b)| a < b)
-            .collect();
-        kept_source.sort_unstable();
-        let roomy = |&&(a, b): &&(u64, u64)| b - a >= zoom.transition_us;
-        let new_start = if jumps_in {
-            kept_source.iter().find(roomy).map(|r| r.0)
-        } else {
-            Some(zoom.source_start_us)
-        };
-        let new_end = if jumps_out {
-            kept_source.iter().rev().find(roomy).map(|r| r.1)
-        } else {
-            Some(zoom.source_end_us)
-        };
-        if let (Some(a), Some(b)) = (new_start, new_end) {
-            if b > a && b - a >= ZOOM_MIN_US.max(zoom.transition_us * 2) {
-                let label = match (jumps_in, jumps_out) {
-                    (true, true) => "Fit the zoom between the cuts",
-                    (true, false) => "Start the zoom after the cut",
-                    _ => "End the zoom before the cut",
-                };
-                finding.fix(
-                    label,
-                    Fix::ZoomEase {
-                        id: zoom.id.clone(),
-                        source_start_us: a,
-                        source_end_us: b,
-                    },
-                );
-            }
-        }
+        // A cut through a zoom's glide in or out no longer makes it jump: the glide is timed on
+        // the edited video (`zoom::kept_stretches`).
     }
 }
 
@@ -934,33 +803,54 @@ pub fn report_text(report: &CheckReport) -> String {
         count(Severity::Warning),
         count(Severity::Info)
     )];
-    for f in &report.findings {
-        let severity = match f.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Info => "note",
-        };
-        let at = match (f.start_us, f.end_us) {
-            (Some(a), Some(b)) if b > a => format!(" {}-{}", clock(a), clock(b)),
-            (Some(a), _) => format!(" {}", clock(a)),
-            _ => String::new(),
-        };
-        let fix = f
-            .fix_label
-            .as_ref()
-            .map(|label| format!(" Fix: {label}."))
-            .unwrap_or_default();
-        lines.push(format!(
-            "- [{severity}]{at} {}: {} {}{fix}",
-            f.id, f.title, f.detail
-        ));
-    }
+    lines.extend(report.findings.iter().map(finding_line));
     if report.findings.iter().any(|f| f.fix.is_some()) {
         lines.push(
             "`check` with `fix` (ids, or [\"all\"]) applies the fixes, each one undo step.".into(),
         );
     }
     lines.join("\n")
+}
+
+/// What is left after fixes, briefly: the counts, and only the errors and warnings in full.
+pub fn left_text(report: &CheckReport) -> String {
+    let count = |s: Severity| report.findings.iter().filter(|f| f.severity == s).count();
+    let mut lines = vec![format!(
+        "Now, at revision {}: {} errors, {} warnings, {} notes (this is the check after the \
+         fixes; `check` again only after another edit).",
+        report.revision,
+        count(Severity::Error),
+        count(Severity::Warning),
+        count(Severity::Info)
+    )];
+    lines.extend(
+        report
+            .findings
+            .iter()
+            .filter(|f| f.severity != Severity::Info)
+            .map(finding_line),
+    );
+    lines.join("\n")
+}
+
+/// `- [warning] 1:02.3-1:02.5 fragment-62300: Blip between two cuts ... Fix: Cut it.`
+fn finding_line(f: &Finding) -> String {
+    let severity = match f.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        Severity::Info => "note",
+    };
+    let at = match (f.start_us, f.end_us) {
+        (Some(a), Some(b)) if b > a => format!(" {}-{}", clock(a), clock(b)),
+        (Some(a), _) => format!(" {}", clock(a)),
+        _ => String::new(),
+    };
+    let fix = f
+        .fix_label
+        .as_ref()
+        .map(|label| format!(" Fix: {label}."))
+        .unwrap_or_default();
+    format!("- [{severity}]{at} {}: {} {}{fix}", f.id, f.title, f.detail)
 }
 
 #[cfg(test)]
@@ -1069,24 +959,6 @@ mod tests {
     }
 
     #[test]
-    fn many_cuts_close_together_read_as_choppy() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut doc = document(30);
-        doc.audio.normalize = true;
-        // Five 0.5 s cuts, one every 0.6 s of what is left, from the back.
-        for i in (0..5).rev() {
-            let at = (10 + i) * S;
-            cut(&mut doc, &[(at, at + 500 * MS)]);
-        }
-        let report = run(dir.path(), &doc, &[]);
-        assert!(
-            kinds(&report).contains(&Kind::Choppy),
-            "{:?}",
-            report.findings
-        );
-    }
-
-    #[test]
     fn black_gaps_get_a_fix_only_when_nothing_plays() {
         let dir = tempfile::tempdir().unwrap();
         let mut doc = document(20);
@@ -1186,51 +1058,6 @@ mod tests {
         let report = run(dir.path(), &doc, &[]);
         assert!(
             !kinds(&report).contains(&Kind::CaptionsCoverWebcam),
-            "{:?}",
-            report.findings
-        );
-    }
-
-    #[test]
-    fn a_zoom_whose_easing_was_cut_moves_after_the_cut() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut doc = document(30);
-        doc.audio.normalize = true;
-        doc.zooms = vec![crate::zoom::ZoomKeyframe {
-            id: "z1".into(),
-            source_start_us: 10 * S,
-            source_end_us: 16 * S,
-            center_x: 0.5,
-            center_y: 0.5,
-            scale: 1.6,
-            transition_us: 500 * MS,
-            origin: crate::zoom::ZoomOrigin::Click,
-            contributing_event_seqs: Vec::new(),
-            source: crate::zoom::ZoomSource::Manual,
-            edited_ranges: Vec::new(),
-            media: None,
-            fixed: true,
-        }];
-        cut(&mut doc, &[(9800 * MS, 10300 * MS)]);
-        let report = run(dir.path(), &doc, &[]);
-        let jump = report
-            .findings
-            .iter()
-            .find(|f| f.kind == Kind::ZoomJump)
-            .expect("the easing in was cut");
-        assert_eq!(jump.id, "zoom_jump-z1");
-        assert_eq!(
-            jump.fix,
-            Some(Fix::ZoomEase {
-                id: "z1".into(),
-                source_start_us: 10300 * MS,
-                source_end_us: 16 * S
-            })
-        );
-        doc.zooms[0].source_start_us = 10300 * MS;
-        let report = run(dir.path(), &doc, &[]);
-        assert!(
-            !kinds(&report).contains(&Kind::ZoomJump),
             "{:?}",
             report.findings
         );

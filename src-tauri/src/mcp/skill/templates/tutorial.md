@@ -32,26 +32,18 @@ answer, else fast):
 
 ## 2. Transcription (ask)
 
-- `scan` gives an overview: the transcribers that are ready, the microphones, cameras and
-  mouse data. Tell the user what the recording has in a line or two.
-- The language: English (default) or Greek, in `settings` `area: transcription`
-  (`set: {"language": "el"}` or `"en"`). Ask only when the user has not said. Greek is
-  transcribed online only, with ElevenLabs Scribe or Scribe via OpenRouter: Parakeet is
-  English only, and so is word alignment.
-- Ask which transcriber to use, offering only the ready ones (automatic: the saved one, else
-  Parakeet):
-  - Parakeet: runs on this computer, free. The default. Its model (`settings` `area:
-    transcription`, `parakeetModel`) is `unified` (the most accurate words, the default) or
-    `verbatim` (keeps every um, stutter and repeat for the filler and retake passes).
-  - ElevenLabs Scribe: cloud, on the user's key. Better with names and jargon.
-  If only one is ready, say which and go on without asking.
+- `scan` gives an overview: the microphones, cameras and mouse data. Tell the user what the
+  recording has in a line or two.
+- Don't ask the language: `transcribe` (default `provider: auto`) runs online with Scribe,
+  which detects it (English, Greek, ...), ElevenLabs first and OpenRouter when ElevenLabs has
+  no key or credits. Its answer says what it heard; the later passes follow it. Use
+  `provider: parakeet` (on this computer, free, English only) only when the user asks for a
+  local or free transcription of an English video.
 - With these questions, ask the review depth: fast (default) or thorough (see the top).
 - Two or more microphones: ask which to transcribe: the presenter's (default), or all of
   them (needed to cut gaps between words across all of them).
-- `transcribe` with `provider` (and `stream` for each microphone). It can take a few minutes,
-  so tell the user. When the word alignment model is downloaded, transcribing also aligns
-  the words to the audio (its result says how many). A transcript made earlier and not aligned
-  yet: run `align` on it before the cleanup passes, since they cut at word edges.
+- `transcribe` (with `stream` for each microphone). It can take a few minutes, so tell the
+  user, and pass on the language it heard.
 
 ## 3. Cleanup, one pass at a time
 
@@ -85,11 +77,14 @@ The passes:
 4. **Fillers and retakes (rules and AI):** always both, in English or Greek: the rules and the
    review follow the language the track was transcribed in. `status` says whether an AI key is
    set.
-   - **The default, `review: auto`:** `fillers` runs the rules with the OpenRouter review when
-     a key is set, else with the app's built-in local model when it is downloaded (free,
-     nothing leaves the computer, but it makes more wrong cuts). Dry-run it (`apply: false`):
-     give how many came from the review and a few examples.
-   - **Neither, or the review could not run** (`fillers` says so): you are the AI review.
+   - **Always `review: auto` (leave `review` out)**, fast or thorough alike: `fillers` runs the
+     rules with the app's OpenRouter review when a key is set, else with its built-in local
+     model when it is downloaded. Don't review the words yourself unless the user asks you to
+     or `fillers` says no review could run: the app's review costs you nothing. Dry-run it
+     (`apply: false`): give how many came from the review, the seconds it would cut and a few
+     examples. Read the transcript around a flagged retake only when it looks like content
+     (a full sentence or an item of a list), and then offer "fillers only".
+   - **No review could run** (`fillers` says so): you are the AI review.
      By default `fillers_review` shows only windows of about 15 words either side of what the
      app's local pass flagged (a "like" or "so" that may be filler, a phrase said again); um
      and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the
@@ -97,22 +92,18 @@ The passes:
      save them in one `fillers_review` call with `cuts` and the pages' `stamp`. With a
      thorough review (or when the windows miss things the user points out), read every word
      with `review: "thorough"` instead. Then dry-run `fillers` the same way.
-   - **Thorough review with the local model:** it reads only the windows, so after its dry run
-     also do the in-house review with `review: "thorough"` and save it; the OpenRouter review
-     already reads every word.
-
-   Choices: yes / rules only (`review: in-house` without saving a review) / skip. Then
-   `fillers`. When the user wants nothing sent to OpenRouter, use `review: local` (or
-   `review: in-house` when the local model is not downloaded).
+   Choices: yes / fillers only (`kinds: ["filler"]`) / skip. Then `fillers`. When the user
+   wants nothing sent to OpenRouter, use `review: local`.
 5. **Layouts** (only with a camera; `scan` says how many): first, the base layout: keep the
    camera bubble (default) / side by side / no camera (`layouts` `op: base` with `layout`
    "Side by side" or "Screen only"). Then **picked sections**: `layouts` `op: pick` with
    `apply: false` first (the camera alone where the speaker talks and the mouse rests:
    sections and their total). Choices: yes (`op: pick`) / skip.
-6. **Zooms** (only with mouse data): `zooms` (count, average length, how far in). Choices:
-   yes / fewer and longer / shorter / skip. "Fewer and longer" raises `minHoldMs` and
-   `mergeGapMs` (default 5000 each), "shorter" lowers them; how far in is `clickScale`
-   (1.6 default). Pass them as `settings`.
+6. **Zooms** (only with mouse data): `zooms` with `apply: false` (count, average length, how
+   far in; add `settings` to try others: nothing is saved). Choices: yes / fewer and longer /
+   shorter / skip. "Fewer and longer" raises `minHoldMs` and `mergeGapMs` (default 5000 each),
+   "shorter" lowers them; how far in is `clickScale` (1.6 default). Then `zooms` with the
+   same `settings`. A cut never makes a zoom jump: its glide plays whole on the edited video.
 
 ### 3b. Thorough review (only when the user chose thorough)
 
@@ -139,11 +130,10 @@ After the passes, save the choices with `template_save` (`name: tutorial`), in t
 ```json
 {
   "review": "fast",
-  "transcriber": "parakeet",
   "mouthNoises": { "apply": true, "preset": "balanced" },
   "silence": { "apply": true, "preset": "balanced", "microphones": "all" },
   "gaps": { "apply": false, "preset": "balanced" },
-  "fillers": { "apply": true, "review": "auto" },
+  "fillers": { "apply": true },
   "webcam": { "keep": true, "focus": true },
   "zooms": { "apply": true, "settings": { "minHoldMs": 5000, "mergeGapMs": 5000, "clickScale": 1.6 } },
   "graphics": { "apply": false, "brand": "the project's" },
@@ -167,8 +157,8 @@ Tutorials have no captions: if `status` shows them on, `settings` `area: caption
 
 Graphics come after the cuts, on the final timeline: they play full screen over everything and
 no cut goes through one. A full-screen graphic cuts in and out, never eases; only one laid over
-the full-screen camera eases (the app decides, see Graphics in the skill). Ask whether the user wants graphics (default no in automatic mode
-unless the saved answers say yes). If yes:
+the full-screen camera eases (the app decides; `graphics` gives the rules with its list). Ask
+whether the user wants graphics (default no in automatic mode unless the saved answers say yes). If yes:
 
 1. `graphics`: the templates, the user's library and their variables. If the renderer is not
    installed, ask before `graphics_install` (a 200 MB download). `brand_kits`: if the user has
@@ -185,7 +175,7 @@ unless the saved answers say yes). If yes:
    the item's name for a library one), then `graphic_render` and look at one or two with
    `frame_render` inside them. Report one line.
 4. If you wrote a graphic of your own and the user likes it, offer to keep it in their library
-   for later videos; on a yes follow SKILL.md: `graphic_templatize`, rewrite, `graphic_check`
+   for later videos; on a yes follow the graphics rules: `graphic_templatize`, rewrite, `graphic_check`
    until it passes, then `library_save` (ask about a close item it names).
 
 ## 7. Chapters (automatic, last edit)
@@ -198,7 +188,7 @@ own pass (`chapters` without `set`) only if the user asks for it.
 ## 8. Check, status and summary (automatic)
 
 Run `check`. Errors and warnings with a fix: apply them in automatic mode (`fix` with their
-ids), otherwise list them and ask. Notes (loudness, choppy stretches, zoom jumps) are the
+ids), otherwise list them and ask. Notes (such as loudness) are the
 user's call: list them, fix only at the user's word. Then `storyboard`: one image of the whole
 edit; name any tile that looks wrong (by number) and what you would do. Then `status`, and sum
 up the edit. Keep four kinds of claim apart, under these headings, and never let one stand in

@@ -50,13 +50,13 @@ lack it, so we say "we have", not "only we have".
 - **Tutorial signals no transcript-only editor has:** clicks, typing, shortcuts, the front
   window, a resting pointer, the face position. They drive zooms, layouts, window crop and the
   bubble hiding.
-- **Cut accuracy:** wav2vec2 word alignment with guardrails, word-edge refinement, per-source
+- **Cut accuracy:** word-edge refinement, per-source
   vetoes in two-source mode, tagged sounds.
 - **Approve-before-apply:** revision-checked proposals, one undo step per batch.
 - **Verification without a model:** `check` before export, the graphics gate, `storyboard`.
 - **Editable, deterministic graphics:** HyperFrames source the agent can rewrite and the app
   re-renders, so a better composing model shows up as a better edit.
-- **Low running cost:** one line of text per pass, local transcription and alignment.
+- **Low running cost:** one line of text per pass; the rules come once, from `template`.
 - **A typed API instead of computer use:** no OS accessibility permissions, no screen scraping.
 
 ## Features today
@@ -65,8 +65,7 @@ lack it, so we say "we have", not "only we have".
 |---|---|---|
 | Timeline | Tracks of clips (V1…, A1…), linked picture and sound, magnetic ripple, non-destructive, undo/redo | Clocks map recording time ↔ edited time |
 | Import | `.aero` recordings, video, audio, images, folders; any recording or import is just an asset | — |
-| Transcription | Parakeet Unified EN (local) or Verbatim (TDT v3), ElevenLabs Scribe, Scribe via OpenRouter; English and Greek (Greek online only) | Local model or the user's key |
-| Word alignment | wav2vec2 re-times every word to 20 ms; a word moves at most 120 ms; unsure words keep their times | Local model, English only |
+| Transcription | Online by default: Scribe detects the language (ElevenLabs, then OpenRouter); Parakeet Unified EN or Verbatim (TDT v3) locally for English | The user's key, or the local model |
 | Cleanup | Mouth noises (mute), mouth-click repair (`adeclick`), silence (audio), gaps without words (transcript), fillers and retakes (rules + AI review), manual word cuts | Rules; AI review by OpenRouter/OpenAI, local Qwen 4B without a key |
 | Speed | 0.25×–8× on clips or ranges, pitch kept | Manual, or the agent on request |
 | Zooms | Suggested from clicks, dwell, click clusters and typing (caret follow) | Telemetry |
@@ -96,7 +95,6 @@ flowchart LR
     end
     subgraph B["② In-app models (local or the user's keys)"]
       B1[Transcription<br/>Parakeet · Scribe]
-      B2[Alignment<br/>wav2vec2]
       B3[Filler/retake review<br/>OpenRouter · local Qwen 4B]
       B4[Chapters · short suggestions<br/>cloud]
       B5[Face detection<br/>YuNet]
@@ -123,7 +121,7 @@ template:
 
 1. `template("tutorial")` → steps, rules and the user's saved answers ("Same as last time?").
 2. `create` / `status` / `scan` → mics, cameras, mouse data, transcribers, dry-run estimates.
-3. `transcribe` (+ `align`).
+3. `transcribe` (online, the language detected).
 4. For each pass (mouth noises → silence → gaps → fillers → layouts → zooms): dry run
    (`apply: false`), ask the user with real numbers, then run. One line back, one undo step.
 5. Captions off (unless a short). Graphics only if the user wants them: `graphic_add(atWord)` →
@@ -144,7 +142,7 @@ Where judgement sits:
 
 | Step | Who decides |
 |---|---|
-| Transcribe, align, mouth noises, silence, gaps, layouts, zooms | The app (models and rules); the agent relays numbers |
+| Transcribe, mouth noises, silence, gaps, layouts, zooms | The app (models and rules); the agent relays numbers |
 | Fillers and retakes | App rules + the app's AI review; the agent reviews only without a key (`fillers_review`) |
 | Extra cuts (tangents, missed retakes) | **The agent** → `propose_cuts` → the user accepts |
 | Which shorts | **The agent** (`shorts` template) or the app's cloud AI |
@@ -178,7 +176,7 @@ Registered in [`mcp/skill.rs`](../src-tauri/src/mcp/skill.rs) (2),
 | Look | `frame_render`, `timeline_view`, `storyboard` | — |
 | Propose | `propose_cuts`, `propose_edit`, `proposals_list`, `proposal_withdraw`, `undo_batch` | Waits for the user in the Agent panel (unless autopilot) |
 | Project | `status`, `scan`, `open`, `create`, `undo`, `redo`, `settings`, `media_import` | Directly, one undo step each |
-| Speech | `transcribe`, `align`, `mouth_noises`, `silence`, `fillers`, `fillers_review`, `speed`, `transcript_fix` | Directly; `apply: false` is a dry run; word fixes are not undo steps |
+| Speech | `transcribe`, `mouth_noises`, `silence`, `fillers`, `fillers_review`, `speed`, `transcript_fix` | Directly; `apply: false` is a dry run; word fixes are not undo steps |
 | Picture | `layouts`, `zooms` (automatic and single zooms), `faces` | Directly; dry run available |
 | Shorts | `shorts`, `short_create`, `short_footage`, `short_from_take` | Directly |
 | Graphics | `graphics`, `graphics_install`, `graphic_add`, `graphic_set` (incl. move, remove), `graphic_write_file`, `graphic_render`, `graphic_check`, `graphic_templatize`, `library_save`, `library_remove`, `brand_kits`, `brand_kit_set`, `brand_pick` | Directly (source edits, kits and the library have no undo) |

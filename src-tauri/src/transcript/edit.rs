@@ -80,9 +80,6 @@ pub struct TranscriptView {
     pub revision: u64,
     pub word_stamp: String,
     pub words: Vec<TranscriptViewWord>,
-    /// Set once the word times were aligned to the audio.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alignment: Option<super::align::AlignmentInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -202,7 +199,6 @@ pub fn view(transcript: &Transcript, mapper: &TimelineMapper, revision: u64) -> 
         revision,
         word_stamp: transcript.dependency().word_stamp.unwrap_or_default(),
         words,
-        alignment: transcript.alignment.clone(),
     }
 }
 
@@ -335,6 +331,8 @@ pub fn suggestions(
                     .saturating_sub(live[k - 1].source_end_us)
                     >= RESTART_PAUSE_US)
     };
+    // The phrase ends after word `k`: punctuation, a pause, or the end of the words.
+    let breaks_after = |k: usize| k + 1 >= live.len() || restart(k + 1);
     let mut covered_until = 0usize;
     for b in 1..live.len() {
         if !restart(b) {
@@ -369,12 +367,22 @@ pub fn suggestions(
             // did end) barely more than the words said again. Two whole sentences that open
             // alike ("I'm going to ...") are not a retake.
             let finished = ends[b - 1];
+            let extra = length - matched;
             let abandoned = if finished {
-                length <= matched + MAX_FINISHED_EXTRA_WORDS
+                extra <= MAX_FINISHED_EXTRA_WORDS
             } else {
-                length <= matched * 3 + 2
+                // Cut off, it may go past the repeated words by no more words than were
+                // repeated: a long, different continuation is content, not a false start ("you
+                // will be able to see exactly how much money you are going to take and / you
+                // will be able to withdraw ..." lists what you can do).
+                extra <= matched
             };
-            if abandoned {
+            // Parallel phrases are not a retake: when the later one swaps the attempt's last
+            // words for as many others and stops there too, both were meant ("It will not have
+            // a token, it will not have an airdrop."). A false start is either repeated whole
+            // or corrected into something longer.
+            let parallel = extra > 0 && breaks_after(b + matched + extra - 1);
+            if abandoned && !parallel {
                 found = Some(a);
                 break;
             }
@@ -755,5 +763,87 @@ mod tests {
         assert_eq!(s.len(), 1, "{s:?}");
         assert_eq!(s[0].kind, TranscriptSuggestionKind::Retake);
         assert_eq!(s[0].text, "So today we");
+    }
+
+    /// Phrases said one after another, half a second apart; each word 200 ms, 20 ms apart.
+    fn spoken(phrases: &[&str]) -> Transcript {
+        let mut words: Vec<(String, u64, u64)> = Vec::new();
+        let mut at = 0u64;
+        for phrase in phrases {
+            for word in phrase.split_whitespace() {
+                words.push((word.to_string(), at, at + 200));
+                at += 220;
+            }
+            at += 500;
+        }
+        let refs: Vec<(&str, u64, u64)> =
+            words.iter().map(|(w, a, b)| (w.as_str(), *a, *b)).collect();
+        transcript(&refs)
+    }
+
+    fn retakes(phrases: &[&str]) -> Vec<String> {
+        let t = spoken(phrases);
+        let m = mapper(&[(0, 600_000)]);
+        suggestions(&t, &m)
+            .into_iter()
+            .filter(|s| s.kind == TranscriptSuggestionKind::Retake)
+            .map(|s| s.text)
+            .collect()
+    }
+
+    #[test]
+    fn parallel_statements_are_not_retakes() {
+        // From a real edit (21 Oct 2026): both halves are meant, one word apart.
+        let found = retakes(&[
+            "is officially closing down.",
+            "It will not have a token,",
+            "it will not have an airdrop.",
+            "What they will do is distribute stable coins",
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+        // The same without punctuation, as Parakeet often writes it.
+        let found = retakes(&[
+            "It will not have a token",
+            "it will not have an airdrop",
+            "what they will do is distribute stable coins",
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_list_that_opens_alike_is_not_a_retake() {
+        // From the same edit: three things you will be able to do, each said in full.
+        let found = retakes(&[
+            "so in a few days",
+            "you will be able to see exactly how much money you are going to take and",
+            "you will be able to withdraw on Solana or on BNB chain",
+            "you will be able to redeem and sell all of that",
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn false_starts_are_still_retakes() {
+        // Repeated whole, then carried on.
+        assert_eq!(
+            retakes(&[
+                "you will be able to",
+                "you will be able to withdraw on Solana"
+            ]),
+            vec!["you will be able to"]
+        );
+        // Corrected into something longer.
+        assert_eq!(
+            retakes(&["now click the button,", "now click the blue button."]),
+            vec!["now click the button,"]
+        );
+        // Cut off a word or two after the repeated words.
+        assert_eq!(
+            retakes(&[
+                "if you go to the set",
+                "if you go to the settings page and click"
+            ]),
+            vec!["if you go to the set"]
+        );
     }
 }

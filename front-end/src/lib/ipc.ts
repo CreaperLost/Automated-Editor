@@ -2,7 +2,6 @@ import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
   CheckReport,
   Template,
-  Storyboard,
   OpenedProject,
   SegmentPage,
   WaveformOverview,
@@ -406,12 +405,9 @@ export const api = {
       dismissed,
       shortId: editTarget,
     }),
-  /** Downloads the Parakeet model, or with `"aligner"` the word alignment model. */
-  transcriptDownloadModel: (model: "parakeet" | "aligner" | "gpu" | "llm" = "parakeet") =>
+  /** Downloads the Parakeet model, or the NVIDIA GPU pack (`gpu`) or the local review model (`llm`). */
+  transcriptDownloadModel: (model: "parakeet" | "gpu" | "llm" = "parakeet") =>
     invokeTauri<TranscriptSettingsView>("transcript_download_model", { model }),
-  /** Aligns an existing transcript's word times to the audio. */
-  transcriptAlign: (projectHandle: string, trackId: string) =>
-    invokeTauri<TranscriptRunResult>("transcript_align", { projectHandle, trackId }),
   getDefaultProjectsDir: () => invokeTauri<string>("get_default_projects_dir"),
   pickProjectFolder: () => invokeTauri<string | null>("pick_project_folder"),
   pickRecordingFolder: () => invokeTauri<string | null>("pick_recording_folder"),
@@ -559,9 +555,6 @@ export const api = {
   /** Applies the fixes of these findings (or `["all"]`), each as its own undo step. */
   projectCheckFix: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_check_fix", { projectHandle, expectedRevision, ids }),
-  /** A contact sheet of the edit (or a short), a tile per scene: what agents get from `storyboard`. */
-  storyboardRender: (projectHandle: string, shortId?: string, maxTiles?: number) =>
-    invokeTauri<Storyboard>("storyboard_render", { projectHandle, shortId: shortId ?? null, maxTiles: maxTiles ?? null }),
   projectCurrent: () => invokeTauri<OpenedProject | null>("project_current"),
   templatesList: () => invokeTauri<Template[]>("templates_list"),
   /** Saves the project's settings (and the short's look, given one) under `name`; the same name replaces. */

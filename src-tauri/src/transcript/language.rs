@@ -48,9 +48,44 @@ impl Language {
             .unwrap_or_default()
     }
 
-    /// Parakeet and the wav2vec2 aligner are English models.
+    /// Parakeet is an English model.
     pub fn runs_locally(self) -> bool {
         self == Language::English
+    }
+}
+
+/// The language setting: detected by the online transcriber (Scribe hears it), or set. Only
+/// English can be transcribed on this computer.
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
+pub enum SpokenLanguage {
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "el")]
+    Greek,
+}
+
+impl SpokenLanguage {
+    /// The language when it is set, `None` when the transcriber detects it.
+    pub fn fixed(self) -> Option<Language> {
+        match self {
+            SpokenLanguage::Auto => None,
+            SpokenLanguage::English => Some(Language::English),
+            SpokenLanguage::Greek => Some(Language::Greek),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        self.fixed().map_or("Auto (detected)", Language::label)
+    }
+
+    /// Parakeet transcribes English only, so only a language set to English runs locally.
+    pub fn runs_locally(self) -> bool {
+        self.fixed().is_some_and(Language::runs_locally)
     }
 }
 

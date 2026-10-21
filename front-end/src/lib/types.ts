@@ -1312,7 +1312,8 @@ export interface SegmentPage {
 export type TranscriptProvider = "parakeet" | "elevenlabs" | "openrouter";
 
 /** What is spoken. Greek is transcribed online only (Scribe or Scribe via OpenRouter). */
-export type TranscriptLanguage = "en" | "el";
+/** What is spoken: `auto` lets the online transcriber detect it. */
+export type TranscriptLanguage = "auto" | "en" | "el";
 
 /** Which Parakeet transcribes English: the most accurate words, or every um and stutter. */
 export type ParakeetModel = "unified" | "verbatim";
@@ -1324,8 +1325,6 @@ export interface TranscriptSettings {
   scribeModel: string;
   keyterms: string[];
   parakeetModelDir: string;
-  /** Align word times to the audio after transcribing, when the model is downloaded. */
-  alignWords: boolean;
 }
 
 export interface TranscriptSettingsView {
@@ -1348,19 +1347,6 @@ export interface TranscriptSettingsView {
   gpuPackBytes: number;
   /** Why the GPU is not in use, once a model tried it. */
   gpuProblem: string | null;
-  /** Word alignment runs in this build (it shares Parakeet's ONNX Runtime). */
-  alignerAvailable: boolean;
-  alignerModelPresent: boolean;
-  alignerModelDir: string;
-  alignerModelBytes: number;
-}
-
-/** What word alignment did to a transcript. */
-export interface TranscriptAlignment {
-  model: string;
-  version: number;
-  alignedWords: number;
-  keptWords: number;
 }
 
 export interface TranscriptViewWord {
@@ -1391,8 +1377,6 @@ export interface TranscriptView {
   createdAt: string;
   revision: number;
   words: TranscriptViewWord[];
-  /** Set once the word times were aligned to the audio. */
-  alignment?: TranscriptAlignment | null;
 }
 
 export interface TranscriptRunResult {
@@ -1531,40 +1515,6 @@ export interface CheckReport {
   durationUs: number;
   /** Errors first, then warnings, then notes; each in timeline order. */
   findings: CheckFinding[];
-}
-
-/** One scene of a storyboard (`mcp/storyboard.rs`), numbered from 1 as on the sheet. */
-export interface StoryboardTile {
-  n: number;
-  from: string;
-  to: string;
-  fromUs: number;
-  toUs: number;
-  /** The moment the tile's frame shows. */
-  atUs: number;
-  kind: string;
-  /** The zoom in the frame. */
-  zoom?: number;
-  /** Zooms starting within the tile. */
-  zooms?: number;
-  graphic?: string;
-  chapter?: string;
-  say?: string;
-}
-
-/** A contact sheet of the edit, a tile per scene, in rows of `cols` tiles. */
-export interface Storyboard {
-  /** The sheet as a PNG data URL. */
-  image: string;
-  width: number;
-  height: number;
-  cols: number;
-  gap: number;
-  tileWidth: number;
-  /** The frame and its caption strip. */
-  tileHeight: number;
-  revision: number;
-  tiles: StoryboardTile[];
 }
 
 export interface ShortLayout {

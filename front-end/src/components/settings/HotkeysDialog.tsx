@@ -12,14 +12,21 @@ import {
 /** Which binding is waiting for a key press: a slot of an action, or a new one. */
 type Capture = { action: HotkeyAction; index: number | "new" };
 
-/// Keyboard shortcut settings: click a shortcut and press the new keys, + adds another key
-/// for the same action, × removes one. A key taken from another action moves here.
+/** The categories, in the order the actions list them: one tab each. */
+const GROUPS = [...new Set(HOTKEY_ACTIONS.map((a) => a.group))];
+/** Rows in the largest category: every tab is that tall, so switching never moves the dialog. */
+const MOST_ROWS = Math.max(...GROUPS.map((g) => HOTKEY_ACTIONS.filter((a) => a.group === g).length));
+
+/// Keyboard shortcut settings, a tab per category: click a shortcut and press the new keys, +
+/// adds another key for the same action, × removes one. A key taken from another action moves
+/// here.
 export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const bindings = useHotkeyStore((s) => s.bindings);
   const setBindings = useHotkeyStore((s) => s.setBindings);
   const reset = useHotkeyStore((s) => s.reset);
   const [capture, setCapture] = useState<Capture | null>(null);
   const [notice, setNotice] = useState<string>();
+  const [group, setGroup] = useState(GROUPS[0]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -51,7 +58,6 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [capture, bindings, setBindings, onClose]);
 
-  const groups = [...new Set(HOTKEY_ACTIONS.map((a) => a.group))];
   const chip = (active: boolean) =>
     `h-6 px-2 rounded border font-mono text-meta transition-colors ${
       active
@@ -72,7 +78,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
         role="dialog"
         aria-modal="true"
         aria-label="Keyboard shortcuts"
-        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-panel border border-studio-700 bg-studio-900 shadow-dialog"
+        className="w-full max-w-xl flex flex-col rounded-panel border border-studio-700 bg-studio-900 shadow-dialog"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-studio-800">
           <div className="flex items-center gap-2 text-heading text-studio-100">
@@ -109,15 +115,37 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           {notice && <span className="block mt-1 text-suggest-fg">{notice}</span>}
         </p>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
-          {groups.map((group) => (
-            <section key={group}>
-              <h3 className="mb-1.5 text-label font-semibold text-studio-300">{group}</h3>
-              <div className="divide-y divide-studio-800/60">
+        <div role="tablist" aria-label="Shortcut categories" className="flex gap-1 px-4 pt-3">
+          {GROUPS.map((g) => {
+            const count = HOTKEY_ACTIONS.filter((a) => a.group === g).length;
+            return (
+              <button
+                key={g}
+                type="button"
+                role="tab"
+                aria-selected={g === group}
+                onClick={() => {
+                  setGroup(g);
+                  setCapture(null);
+                }}
+                className={`px-3 py-1.5 rounded-control text-label font-medium transition-colors ${
+                  g === group ? "bg-accent text-white" : "text-studio-400 hover:text-white hover:bg-studio-800"
+                }`}
+              >
+                {g}
+                <span className={`ml-1.5 text-meta ${g === group ? "text-white/70" : "text-studio-600"}`}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div role="tabpanel" aria-label={group} className="px-4 py-3">
+          <section>
+              <div className="divide-y divide-studio-800/60" style={{ minHeight: `${MOST_ROWS * 2.25}rem` }}>
                 {HOTKEY_ACTIONS.filter((a) => a.group === group).map(({ action, label }) => {
                   const list = bindings[action];
                   return (
-                    <div key={action} className="flex items-center justify-between gap-3 py-1.5">
+                    <div key={action} className="h-9 flex items-center justify-between gap-3">
                       <span className="text-xs text-studio-300">{label}</span>
                       <div className="flex flex-wrap items-center justify-end gap-1">
                         {list.length === 0 && capture?.action !== action && (
@@ -174,8 +202,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                   );
                 })}
               </div>
-            </section>
-          ))}
+          </section>
         </div>
       </div>
     </div>,

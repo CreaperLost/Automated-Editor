@@ -1,5 +1,5 @@
 //! The NVIDIA GPU pack: CUDA 13 and cuDNN 9 libraries that ONNX Runtime's CUDA provider needs
-//! to run Parakeet and the word aligner on an NVIDIA GPU. They are about 2 GB, so they are not
+//! to run Parakeet on an NVIDIA GPU. They are about 2 GB, so they are not
 //! in the installer: transcription settings download them once from NVIDIA's own
 //! redistributable archives (each checked against NVIDIA's SHA-256), keep only the DLLs, and
 //! load them by full path before the first session is made. Without them ONNX Runtime runs on

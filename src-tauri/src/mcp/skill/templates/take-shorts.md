@@ -13,9 +13,8 @@ the defaults below, report in one message and go on. Export still waits for the 
 ## 1. Project (automatic)
 
 - `status`. The long video needs a transcript (that is how you find its footage): if it has
-  none, ask which transcriber (as in the tutorial template; automatic: the saved one, else
-  Parakeet) and `transcribe` it. The long video should be edited first: footage only comes
-  from what its edit keeps.
+  none, `transcribe` it (online, the language detected; as in the tutorial template). The
+  long video should be edited first: footage only comes from what its edit keeps.
 - `status` says how many shorts are already made.
 
 ## 2. The take (ask only if unclear)

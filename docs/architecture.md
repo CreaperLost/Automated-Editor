@@ -1,7 +1,7 @@
 # Architecture: how AeroEdits is built
 
 The system as it stands on 21 Oct 2026, condensed from the finished plans (Premiere-style
-tracks, word alignment, the 4 Oct performance pass, AI readiness phases 0–3, layouts). Repository
+tracks, the 4 Oct performance pass, AI readiness phases 0–3, layouts). Repository
 layout, build and test commands are in the [root README](../README.md). Why things are the way
 they are is in [decisions.md](decisions.md).
 
@@ -15,7 +15,7 @@ they are is in [decisions.md](decisions.md).
 - **Media:** FFmpeg (bundled sidecar on Windows/Linux) behind `media/ffmpeg.rs`; Swift
   AVFoundation bridges on macOS (`native/macos/`). Compositing in wgpu (`render/composite.wgsl`),
   with a CPU path kept at parity by tests.
-- **Models in the app:** Parakeet and wav2vec2 on ONNX Runtime (CUDA / DirectML / CPU; CUDA needs
+- **Models in the app:** Parakeet on ONNX Runtime (CUDA / DirectML / CPU; CUDA needs
   the downloadable GPU pack), YuNet face detection, Qwen3.5 4B through llama.cpp on Vulkan
   (`local-llm` feature).
 
@@ -50,20 +50,21 @@ mounted at `recordings/<asset id>/`.
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
   from the video under it (`take_short.rs`). Their own layout tracks, captions and graphic slots.
 
-## Transcription and word alignment
+## Transcription
 
-- Providers behind one seam: Parakeet (local EN; Unified by default, TDT v3 as **Verbatim**),
-  ElevenLabs Scribe, Scribe via OpenRouter. Language English or Greek; fillers, retakes, the AI
-  prompts and caption capitals follow it.
-- **Alignment** (`transcript/align.rs`) runs after transcription: split at pauses over 0.5 s
-  (≤ 20 s windows ± 300 ms), wav2vec2-base-960h log-probs at 20 ms, Viterbi CTC over the known
-  letters. Guardrails: a word may shrink anywhere inside its old span but grow at most 120 ms;
-  low-confidence words and failed windows keep their times; order never changes; text and word
-  ids never change. Words the model can't spell ("$20", `[typing]`) keep their old times.
-  Measured on a 26.5 min recording: Parakeet words holding ≥150 ms of quiet went 234 → 6;
-  Parakeet vs Scribe boundary gap (median/p90) 70/220 ms → 0/30 ms.
-- `tighten_loose_words` remains for unaligned transcripts (Parakeet stretches words over pauses
-  on its 80 ms grid).
+- Providers behind one seam: Parakeet (local, English only; Unified by default, TDT v3 as
+  **Verbatim**), ElevenLabs Scribe, Scribe via OpenRouter. The language setting is `auto`
+  (default), `en` or `el`. Online is a chain: the saved route first (ElevenLabs by default), the
+  other when the first has no key or fails (no credits). On `auto` no language is sent and the
+  transcript keeps the one Scribe heard most (by words, over the chunks); fillers, retakes, the AI
+  prompts and caption capitals follow the transcript's language. Agents transcribe with
+  `provider: auto` and never change the app's saved settings.
+- Uploads: ElevenLabs takes 10-minute chunks (~19 MB of 16-bit WAV), OpenRouter 5-minute chunks
+  (~10 MB; its multipart limit is 25 MB and the provider gets about a minute), split at the
+  quietest point near the limit.
+- Word alignment (wav2vec2) was removed on 22 Oct 2026: it did not help in practice.
+  `tighten_loose_words` handles Parakeet's loose words (it stretches words over pauses on its
+  80 ms grid).
 - Filler/retake review: rules flag candidates (`ai/candidates.rs`), then OpenRouter/OpenAI reads
   every word in 300-word chunks, or local Qwen reads only the candidate windows under a JSON
   grammar, greedy. Probe: `ai/review_probe.rs`, labelled cases in [plans/review-eval](plans/review-eval/).
@@ -150,11 +151,15 @@ mounted at `recordings/<asset id>/`.
 ## Check, storyboard, export
 
 - **`check`** (`check.rs`) reads the edit only (no decode, no model, ~3 ms): missing media, black
-  frames, no sound, blips between cuts, words cut partway, choppy stretches, flashing or jumping
-  zooms, captions over the bubble, chapter rules, loudness not normalised, pending proposals. Safe
+  frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
+  bubble, chapter rules, loudness not normalised, pending proposals. Safe
   fixes, each its own undo step.
-- **`storyboard`** (`mcp/storyboard.rs`): a tile per scene (split where camera, zoom, graphic,
-  chapter or a long silence starts; ≤ 48 tiles, ≤ 2048 px) plus a JSON line per tile.
+- **`storyboard`** (`mcp/storyboard.rs`, agents only since 22 Oct 2026): a tile per scene (split
+  where camera, zoom, graphic, chapter or a long silence starts; ≤ 48 tiles, ≤ 2048 px) plus a
+  JSON line per tile.
+- **Zoom glides** are timed on the edited video: `zoom::kept_stretches` gives each zoom the parts
+  of it the edit keeps, and `zoom/eval.rs` eases in and out over those, so a cut through a glide
+  never makes it jump (the old "zoom jumps" check and its fix are gone).
 - **Export** (`export/mod.rs`): decode at the export fps, composite on the GPU, convert to NV12 on
   the GPU, encode with NVENC/AMF/QSV (one-frame test) or libx264; writer thread with a two-frame
   queue; the finished file is checked (duration, first/last frame). 1080p30 export ran at 2.6×

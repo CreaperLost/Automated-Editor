@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 40] = [
+pub static ACTIONS: [ToolDef; 39] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -78,25 +78,15 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "transcribe",
-        description: "Transcribes a sound with `provider` (parakeet: local and free; elevenlabs: \
-            Scribe, cloud, the user's ElevenLabs key; openrouter: the same Scribe through \
-            OpenRouter, the user's OpenRouter key), which becomes the saved choice; default the one in \
-            the transcription settings. Default sound: the speech on the timeline. Skips a sound \
-            already transcribed unless `force`. Takes a while; reports progress.",
+        description: "Transcribes a sound. By default (`provider: auto`) online with Scribe, \
+            which detects the language (English, Greek, ...): ElevenLabs first, OpenRouter when \
+            ElevenLabs has no key or credits. `parakeet` is local and free, English only. The \
+            answer says the language heard; the later passes follow it. Default sound: the \
+            speech on the timeline. Skips a sound already transcribed unless `force`. Takes a \
+            while; reports progress.",
         schema: schema::<TranscribeArgs>,
         read_only: false,
         run: transcribe,
-    },
-    ToolDef {
-        name: "align",
-        description: "Aligns a transcript's word times to the audio (20 ms, local model), so \
-            cuts at word edges stop clipping words or keeping pauses inside them. Transcribing \
-            already does this when the model is downloaded; use it for transcripts made before. \
-            Text and word ids stay; cuts already made stay; suggestions worked out from the old \
-            times go stale. Skips a transcript already aligned unless `force`.",
-        schema: schema::<AlignArgs>,
-        read_only: false,
-        run: align,
     },
     ToolDef {
         name: "mouth_noises",
@@ -165,7 +155,8 @@ pub static ACTIONS: [ToolDef; 40] = [
         description: "Zooms. Automatic ones from the recording's clicks: `op` `add` (default) \
             adds the suggested zooms, `reload` finds them again with the zoom settings \
             (dismissed ones too; manual ones stay), `dismiss` drops the suggestions; `settings` \
-            changes the zoom settings first; `apply: false` with `add` only reports. Single \
+            changes the zoom settings first; `apply: false` only reports what would be added, \
+            with `settings` tried but not saved. Single \
             zooms: `list` (ids, times, scale, centre), `create` (`startUs`, `endUs` on the edited \
             timeline, `scale`, `centerX`/`centerY` 0-1), `update` (`id` with `scale`, centre or \
             `fixed`), `remove` (`ids`). Each change is one undo step.",
@@ -267,7 +258,7 @@ pub static ACTIONS: [ToolDef; 40] = [
     ToolDef {
         name: "check",
         description: "The check before export, the one the export dialog shows: black frames, \
-            blips and words cut partway, choppy stretches, zooms that flash or jump, captions \
+            blips and words cut partway, zooms that flash by, captions \
             over the webcam, chapters YouTube would drop, loudness, missing files, proposals \
             waiting. Each finding has an id, a time and, when one is safe, a fix. Without `fix` \
             it changes nothing; `fix` applies the fixes of those ids (or [\"all\"]), each as its \
@@ -288,8 +279,9 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "export_status",
-        description: "How the export started with `export` is going.",
-        schema: schema::<NoArgs>,
+        description: "How the export started with `export` is going. `waitS` waits for it to \
+            finish (up to 300 s) instead of checking again and again.",
+        schema: schema::<ExportStatusArgs>,
         read_only: true,
         run: export_status,
     },
@@ -788,7 +780,35 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
 
 /// A warning when an agent made chapters and the edit changed after: chapters read the final
 /// edit's words, so they come last, right before export.
+/// The edited length each project's chapters were last set or confirmed at, by project handle.
+/// Setting the same chapters again changes no revision, so the history can't tell it happened.
+static CHAPTERS_AT_LENGTH: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+
+fn chapters_made(open: &Open) {
+    if let Ok(mut made) = CHAPTERS_AT_LENGTH.lock() {
+        made.retain(|(handle, _)| handle != &open.handle);
+        made.push((open.handle.clone(), open.duration));
+    }
+}
+
 fn chapters_stale(ctx: &Ctx) -> Option<String> {
+    let open = current(ctx).ok()?;
+    let made_at = CHAPTERS_AT_LENGTH.lock().ok().and_then(|made| {
+        made.iter()
+            .find(|(h, _)| h == &open.handle)
+            .map(|(_, d)| *d)
+    });
+    if let Some(length) = made_at {
+        // Only cuts move what chapters point at; zooms, layouts or graphics don't.
+        return (length != open.duration).then(|| {
+            format!(
+                "Chapters were set when the edit was {} long and it is {} now: run `chapters` \
+                 again, as the last step before export.",
+                clock(length),
+                clock(open.duration)
+            )
+        });
+    }
     with_reader(ctx.state, |reader| {
         let document = reader.document();
         if document.chapters.is_empty() {
@@ -911,28 +931,23 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         })?;
 
     let view = tc::transcript_settings_get_impl();
-    let ready = |kind, name: &str, about: &str| match not_ready(&view, kind) {
-        None => format!("{name} ready ({about})"),
-        Some(reason) => format!("{name} not ready: {reason}"),
+    let key = |source: &Option<String>| {
+        if source.is_some() {
+            "key set"
+        } else {
+            "no key"
+        }
     };
     lines.push(format!(
-        "Transcribers: {}; {}; {}. Saved choice: {}.",
-        ready(
-            crate::transcript::ProviderKind::Parakeet,
-            "parakeet",
-            "local, free"
-        ),
-        ready(
-            crate::transcript::ProviderKind::ElevenLabs,
-            "elevenlabs",
-            "Scribe, cloud, the user's key"
-        ),
-        ready(
-            crate::transcript::ProviderKind::OpenRouter,
-            "openrouter",
-            "the same Scribe through OpenRouter, the user's OpenRouter key"
-        ),
-        one_line(&view.settings.provider).trim_matches('"'),
+        "Transcribers: online by default (`provider: auto`, Scribe detects the language): \
+         ElevenLabs {}, then OpenRouter {}. Local: parakeet {} (free, English only, when the \
+         user asks).",
+        key(&view.elevenlabs_key_source),
+        key(&view.openrouter_key_source),
+        match not_ready(&view, crate::transcript::ProviderKind::Parakeet) {
+            None => "ready".to_string(),
+            Some(reason) => format!("not ready: {reason}"),
+        },
     ));
     let ai = tc::ai_settings_get_impl();
     let (provider, key) = match ai.settings.provider {
@@ -1238,26 +1253,34 @@ pub struct TranscribeArgs {
     /// Transcribe again even if it already is.
     #[serde(default)]
     pub force: bool,
-    /// parakeet (local, free), elevenlabs (Scribe, cloud, the user's ElevenLabs key) or
-    /// openrouter (Scribe through OpenRouter, the user's OpenRouter key). It becomes the saved
-    /// choice. Default: the one in the transcription settings.
+    /// auto (default): online, ElevenLabs then OpenRouter. parakeet: on this computer, free,
+    /// English only. elevenlabs or openrouter: that online route first. The app's saved
+    /// settings stay as they are.
     #[serde(default)]
-    pub provider: Option<Transcriber>,
+    pub provider: Transcriber,
+    /// auto (default online: Scribe detects it), en or el. Parakeet is always English.
+    #[serde(default)]
+    pub language: Option<crate::transcript::SpokenLanguage>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Transcriber {
+    #[default]
+    Auto,
     Parakeet,
     Elevenlabs,
     Openrouter,
 }
 
 impl Transcriber {
+    /// Parakeet, or the online route tried first.
     fn kind(self) -> crate::transcript::ProviderKind {
         match self {
             Transcriber::Parakeet => crate::transcript::ProviderKind::Parakeet,
-            Transcriber::Elevenlabs => crate::transcript::ProviderKind::ElevenLabs,
+            Transcriber::Auto | Transcriber::Elevenlabs => {
+                crate::transcript::ProviderKind::ElevenLabs
+            }
             Transcriber::Openrouter => crate::transcript::ProviderKind::OpenRouter,
         }
     }
@@ -1274,11 +1297,13 @@ fn not_ready(
         Parakeet if !view.parakeet_model_present => Some(
             "the Parakeet model is not downloaded yet (Transcription settings in the app)".into(),
         ),
-        ElevenLabs if view.elevenlabs_key_source.is_none() => {
-            Some("no ElevenLabs key is set (Transcription settings in the app)".into())
-        }
-        OpenRouter if view.openrouter_key_source.is_none() => {
-            Some("no OpenRouter key is set (Transcription settings in the app)".into())
+        // Online, either route will do: the other is tried when the first has no key.
+        ElevenLabs | OpenRouter
+            if view.elevenlabs_key_source.is_none() && view.openrouter_key_source.is_none() =>
+        {
+            Some(
+                "no ElevenLabs or OpenRouter key is set (Transcription settings in the app)".into(),
+            )
         }
         _ => None,
     }
@@ -1301,24 +1326,27 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         ));
     }
     let view = tc::transcript_settings_get_impl();
-    let provider = args
-        .provider
-        .map_or(view.settings.provider, Transcriber::kind);
+    let provider = args.provider.kind();
     if let Some(reason) = not_ready(&view, provider) {
         return Err(format!("Can't transcribe with {provider:?}: {reason}."));
     }
-    if provider != view.settings.provider {
-        let mut settings = view.settings.clone();
-        settings.provider = provider;
-        tc::transcript_settings_set_impl(settings)?;
-    }
+    use crate::transcript::SpokenLanguage;
+    let language = match provider {
+        crate::transcript::ProviderKind::Parakeet => SpokenLanguage::English,
+        _ => args.language.unwrap_or(SpokenLanguage::Auto),
+    };
     let result = tc::transcript_run_impl(
         ctx.state,
         ctx.host.transcripts(),
         open.handle,
         key.clone(),
+        tc::TranscribeWith {
+            provider: Some(provider),
+            language: Some(language),
+        },
         &mut |p| ctx.progress(p.fraction, &p.message),
     )?;
+    let provider = result.view.provider;
     ctx.host.transcript_changed();
     let kept = result
         .view
@@ -1334,43 +1362,6 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         line.push_str(&format!(" {diagnostic}"));
     }
     Ok(line)
-}
-
-#[derive(Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AlignArgs {
-    /// Sound key such as `rec-1.mic` (see status). Default: the speech on the timeline.
-    #[serde(default)]
-    pub stream: Option<String>,
-    /// Align again even if it already is.
-    #[serde(default)]
-    pub force: bool,
-}
-
-fn align(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: AlignArgs = params(args)?;
-    let open = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Speech)?;
-    let existing = with_reader(ctx.state, |reader| {
-        store::load_transcript(reader.root(), &key)
-    })?
-    .ok_or_else(|| format!("{key} is not transcribed yet: `transcribe` it first."))?;
-    if let (Some(info), false) = (&existing.alignment, args.force) {
-        return text(format!(
-            "{key} is already aligned ({} aligned, {} kept their times); `force: true` aligns \
-             it again.",
-            info.aligned_words, info.kept_words
-        ));
-    }
-    let result = tc::transcript_align_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        open.handle,
-        key.clone(),
-        &mut |p| ctx.progress(p.fraction, &p.message),
-    )?;
-    ctx.host.transcript_changed();
-    text(format!("{key}: {}", result.diagnostics.join(" ")))
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
@@ -2210,7 +2201,7 @@ pub struct ZoomArgs {
     /// Zoom settings to change first, as in `settings zoom`, such as {"clickScale": 1.8}.
     #[serde(default)]
     pub settings: Option<Value>,
-    /// false with `add`: only report the suggestions. Default true.
+    /// false: only report what would be added (with `settings` tried, not saved). Default true.
     #[serde(default)]
     pub apply: Option<bool>,
 }
@@ -2380,17 +2371,37 @@ fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
     }
     let mut lines = Vec::new();
     if args.apply == Some(false) {
-        if args.op != ZoomOp::Add || args.settings.is_some() {
-            return Err("`apply: false` only reports the current suggestions: leave out `op` and `settings`".into());
+        if args.op == ZoomOp::Dismiss {
+            return Err(
+                "`apply: false` previews `add` or `reload`; `dismiss` has nothing to preview"
+                    .into(),
+            );
         }
-        let generation =
-            commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?;
+        // Other settings are tried without saving them: a dry run changes nothing.
+        let generation = match &args.settings {
+            Some(patch) => {
+                let current = with_reader(ctx.state, |reader| {
+                    Ok(reader.document().zoom_settings.clone())
+                })?;
+                let trial = patched("zoom", &current, patch)?;
+                commands::project_zoom_preview_impl(ctx.state, before.handle.clone(), &trial)?
+            }
+            None => {
+                commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?
+            }
+        };
         lines.push(if generation.suggestions.is_empty() {
             "No zoom suggestions to add.".to_string()
         } else {
             format!("Would add {}.", describe_zooms(&generation.suggestions))
         });
         lines.extend(generation.diagnostics);
+        if args.settings.is_some() {
+            lines.push(
+                "Nothing was saved: run it again without `apply: false` to use these settings."
+                    .into(),
+            );
+        }
         return Ok(lines.join("\n"));
     }
     if let Some(patch) = &args.settings {
@@ -2693,7 +2704,11 @@ fn set_chapters(ctx: &Ctx, before: &Open, args: ChaptersArgs) -> Result<Vec<Outp
             c.title
         )
     }));
-    text(applied(ctx, "chapters", before, lines)?)
+    let answer = applied(ctx, "chapters", before, lines)?;
+    if let Ok(now) = current(ctx) {
+        chapters_made(&now);
+    }
+    text(answer)
 }
 
 fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -2721,7 +2736,11 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             c.title
         )
     }));
-    text(applied(ctx, "chapters", &before, lines)?)
+    let answer = applied(ctx, "chapters", &before, lines)?;
+    if let Ok(now) = current(ctx) {
+        chapters_made(&now);
+    }
+    text(answer)
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -3389,14 +3408,13 @@ fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .collect();
     commands::project_check_fix_impl(ctx.state, before.handle.clone(), before.revision, ids)?;
     let after = commands::project_check_impl(ctx.state, before.handle.clone())?;
-    let lines = vec![
-        format!(
-            "Fixed {}, each its own undo step: {}.",
-            plural(fixed.len(), "finding"),
-            fixed.join("; ")
-        ),
-        crate::check::report_text(&after),
-    ];
+    let mut lines = vec![format!(
+        "Fixed {}, each its own undo step: {}.",
+        plural(fixed.len(), "finding"),
+        fixed.join("; ")
+    )];
+    // What is left, briefly: this is the check after the fixes, so no need to run it again.
+    lines.push(crate::check::left_text(&after));
     text(applied(ctx, "check", &before, lines)?)
 }
 
@@ -3455,6 +3473,7 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .map(|w| format!("\n{w}"))
         .unwrap_or_default();
     let started = commands::export_start_impl(ctx.state, open.handle, settings)?;
+    ctx.host.export_started(&started, false);
     if args.wait == Some(false) {
         return text(format!(
             "Export {} started at revision {}; check it with export_status.{stale}",
@@ -3546,6 +3565,7 @@ fn export_shorts(
             id.clone(),
             settings.clone(),
         )?;
+        ctx.host.export_started(&started, true);
         let doing = format!("Exporting short {} of {} ({title})", i + 1, chosen.len());
         let status = wait_for_export(ctx, &started.job_id, &doing)?;
         lines.push(format!(
@@ -3572,10 +3592,30 @@ fn export_failure(status: &crate::export::ExportStatus) -> String {
     format!("The export stopped: {message}")
 }
 
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStatusArgs {
+    /// Seconds to wait for the export to finish before answering, at most 300. Default 0.
+    #[serde(default)]
+    pub wait_s: Option<u64>,
+}
+
 fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
-    let status = commands::export_status_impl(ctx.state, None)?;
+    let args: ExportStatusArgs = params(args)?;
     use crate::export::ExportState::*;
+    let until = std::time::Instant::now()
+        + std::time::Duration::from_secs(args.wait_s.unwrap_or(0).min(300));
+    let status = loop {
+        let status = commands::export_status_impl(ctx.state, None)?;
+        if !matches!(status.state, Queued | Running) || std::time::Instant::now() >= until {
+            break status;
+        }
+        if status.progress_denominator > 0 {
+            let fraction = status.progress_numerator as f64 / status.progress_denominator as f64;
+            ctx.progress(fraction, &format!("Exporting, {:.0}%", fraction * 100.0));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
     text(match status.state {
         Idle => "No export has run since the app started.".to_string(),
         Queued | Running => format!(
@@ -3673,7 +3713,12 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             "render": render_line(&g.graphic.render),
         }))
         .collect::<Vec<_>>());
-    super::tools::pretty(&out)
+    // The rules for graphics come with the list: only edits with graphics need them.
+    let list = serde_json::to_string(&out).map_err(|e| e.to_string())?;
+    text(format!(
+        "{}\n\n{list}",
+        super::skill::GRAPHICS.trim().replace("\r\n", "\n")
+    ))
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -5083,7 +5128,9 @@ mod tests {
         let project = call(&ctx, "brand_pick", json!({ "brand": "none" })).unwrap();
         assert!(project.contains("use no brand kit by default"), "{project}");
         let listed = call(&ctx, "graphics", json!({})).unwrap();
-        assert!(listed.contains("\"brand\": \"none\""), "{listed}");
+        assert!(listed.contains("\"brand\":\"none\""), "{listed}");
+        // The graphics rules come with the list, once, instead of in every edit's rules.
+        assert!(listed.starts_with("# Graphics"), "{listed}");
         let slot = call(
             &ctx,
             "graphic_set",
@@ -5180,7 +5227,7 @@ mod tests {
         has(&format!("Microphones: 1, {key} (transcribed)."));
         has("Cameras: none, so no webcam questions.");
         has("Mouse data: none");
-        has("Transcribers: parakeet ");
+        has("Transcribers: online by default");
         has("AI key: ");
         has("Mouth noises: Found 1 mouth noise");
         has("1 would be muted.");
@@ -5217,7 +5264,26 @@ mod tests {
         );
         let zooms = call(&ctx, "zooms", json!({ "apply": false })).unwrap();
         assert!(zooms.starts_with("No zoom suggestions to add."), "{zooms}");
-        assert!(call(&ctx, "zooms", json!({ "apply": false, "op": "reload" })).is_err());
+        assert!(call(&ctx, "zooms", json!({ "apply": false, "op": "dismiss" })).is_err());
+        // A dry run tries other settings without saving them.
+        let before = call(&ctx, "settings", json!({ "area": "zoom" })).unwrap();
+        let tried = call(
+            &ctx,
+            "zooms",
+            json!({ "apply": false, "settings": { "minHoldMs": 7000, "clickScale": 2.0 } }),
+        )
+        .unwrap();
+        assert!(tried.contains("Nothing was saved"), "{tried}");
+        assert_eq!(
+            call(&ctx, "settings", json!({ "area": "zoom" })).unwrap(),
+            before
+        );
+        assert!(call(
+            &ctx,
+            "zooms",
+            json!({ "apply": false, "settings": { "nope": 1 } })
+        )
+        .is_err());
     }
 
     #[test]

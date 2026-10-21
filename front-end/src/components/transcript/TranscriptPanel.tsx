@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, AudioWaveform, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
+import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
@@ -540,32 +540,6 @@ export const TranscriptPanel: React.FC = () => {
     setEditing({ index, text: words[index].text });
   };
 
-  /** Times every word against the audio; text and cuts already made stay. */
-  const alignWords = async () => {
-    if (!handle || !trackId) return;
-    setRunning(true);
-    setError(null);
-    setNotice(null);
-    setProgress(null);
-    try {
-      const result = await api.transcriptAlign(handle, trackId);
-      bumpCaptions();
-      if (!stillShowing(handle, trackId)) return;
-      setView(result.view);
-      const nextSuggestions = await api.transcriptSuggestions(handle, trackId);
-      if (!stillShowing(handle, trackId)) return;
-      setSuggestions(nextSuggestions);
-      setNotice(result.diagnostics.join(" · "));
-    } catch (err) {
-      const message = errorMessage(err);
-      setError(message);
-      if (message.includes("transcription settings")) setSettingsOpen(true);
-    } finally {
-      setRunning(false);
-      setProgress(null);
-    }
-  };
-
   /** Takes the punctuation off every word; captions follow. */
   const stripPunctuation = async () => {
     if (!handle || !trackId) return;
@@ -693,16 +667,6 @@ export const TranscriptPanel: React.FC = () => {
             >
               .,?<span className="sr-only"> Remove punctuation</span>
             </Button>
-          )}
-          {view && !view.alignment && (
-            <IconButton
-              size="sm"
-              icon={AudioWaveform}
-              label="Align words to the audio"
-              title="Time every word against the audio (to 20 ms), so cuts at word edges keep whole words and drop the pauses beside them. Text and cuts already made stay."
-              disabled={running}
-              onClick={() => void alignWords()}
-            />
           )}
           {view && (
             <IconButton
@@ -981,7 +945,7 @@ export const TranscriptPanel: React.FC = () => {
       )}
       </div>
 
-      {settingsOpen && <TranscriptSettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <TranscriptSettingsModal detected={view?.language ?? null} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 };

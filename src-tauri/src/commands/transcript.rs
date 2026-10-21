@@ -3,15 +3,14 @@
 use super::AppState;
 use crate::project::reader::SegmentSummary;
 use crate::project::OpenedProject;
-use crate::transcript::align;
 use crate::transcript::edit;
 use crate::transcript::elevenlabs::ScribeTranscriber;
 use crate::transcript::parakeet::{self, ParakeetTranscriber};
-use crate::transcript::provider::{transcribe_segments, ChunkTranscriber};
+use crate::transcript::provider::transcribe_segments;
 use crate::transcript::settings::{self, config_dir};
 use crate::transcript::{
-    store, ProviderKind, TranscriptCutSuggestion, TranscriptSettings, TranscriptSettingsView,
-    TranscriptView, TranscriptionProgress,
+    store, Language, ProviderKind, SpokenLanguage, TranscriptCutSuggestion, TranscriptSettings,
+    TranscriptSettingsView, TranscriptView, TranscriptionProgress,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -185,99 +184,83 @@ pub fn transcript_get_impl(
     current_view(state, &project_handle, &track_id, short.as_deref())
 }
 
+/// What a transcription runs with instead of the saved settings (an agent's choice).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TranscribeWith {
+    /// Parakeet, or the online route to try first. `None`: the saved provider.
+    pub provider: Option<ProviderKind>,
+    /// `None`: the saved language.
+    pub language: Option<SpokenLanguage>,
+}
+
 pub fn transcript_run_impl(
     state: &AppState,
     transcripts: &TranscriptState,
     project_handle: String,
     track_id: String,
+    with: TranscribeWith,
     progress: &mut dyn FnMut(TranscriptionProgress),
 ) -> Result<TranscriptRunResult, String> {
     let _run = RunGuard::start(transcripts, format!("transcribing {track_id}"))?;
     let ctx = audio_track(state, &project_handle, &track_id)?;
     let dir = config_dir();
-    let config = settings::load_settings(&dir);
+    let mut config = settings::load_settings(&dir);
+    config.provider = with.provider.unwrap_or(config.provider);
+    config.language = with.language.unwrap_or(config.language);
     config.validate()?;
-    let spoken = config.language;
-    let language = Some(spoken.code().to_string());
-    let mut transcriber: Box<dyn ChunkTranscriber> = match config.provider {
-        ProviderKind::ElevenLabs => {
-            let key = settings::api_key(&dir)
-                .map(|(k, _)| k)
-                .ok_or("Add your ElevenLabs API key in transcription settings first")?;
-            Box::new(
-                ScribeTranscriber::new(
-                    key,
-                    Some(config.scribe_model.clone()),
-                    language,
-                    config.keyterms.clone(),
-                )?
-                .with_cancel(transcripts.cancel.clone()),
-            )
-        }
-        ProviderKind::OpenRouter => {
-            let key = settings::openrouter_key(&dir)
-                .map(|(k, _)| k)
-                .ok_or("Add your OpenRouter API key in transcription settings first")?;
-            Box::new(
-                ScribeTranscriber::via_openrouter(key, language, config.keyterms.clone())?
-                    .with_cancel(transcripts.cancel.clone()),
-            )
-        }
-        ProviderKind::Parakeet => {
-            progress(TranscriptionProgress {
-                track_id: track_id.clone(),
-                fraction: 0.0,
-                message: "Loading the Parakeet model".into(),
-            });
-            Box::new(ParakeetTranscriber::new(
-                config.parakeet_model,
-                &config.parakeet_dir(),
-            )?)
-        }
+    let spoken = config.language.fixed();
+    let mut output = if config.provider == ProviderKind::Parakeet {
+        progress(TranscriptionProgress {
+            track_id: track_id.clone(),
+            fraction: 0.0,
+            message: "Loading the Parakeet model".into(),
+        });
+        let mut transcriber =
+            ParakeetTranscriber::new(config.parakeet_model, &config.parakeet_dir())?;
+        transcribe_segments(
+            &mut transcriber,
+            &ctx.root,
+            &track_id,
+            &ctx.segments,
+            &transcripts.cancel,
+            progress,
+        )?
+    } else {
+        transcribe_online(&dir, &config, &ctx, &track_id, transcripts, progress)?
     };
-    let mut output = transcribe_segments(
-        transcriber.as_mut(),
-        &ctx.root,
-        &track_id,
-        &ctx.segments,
-        &transcripts.cancel,
-        progress,
-    )?;
     // Cancel pressed while the last chunk finished keeps the transcript there was.
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Transcription cancelled".into());
     }
-    // Scribe is told the language, but says what it heard: a mismatch means the setting is
-    // probably wrong for this recording.
+    // Scribe says what it heard. Set, a mismatch means the setting is probably wrong for this
+    // recording; on auto, what it heard is the language.
     let heard = output
         .transcript
         .language
         .as_deref()
-        .and_then(crate::transcript::Language::from_code);
-    if let Some(heard) = heard.filter(|&h| h != spoken) {
-        output.diagnostics.push(format!(
-            "The language is set to {}, but {} heard {}: check the language in transcription settings",
-            spoken.label(),
-            config.provider.label(),
-            heard.label()
-        ));
-    }
-    // Every later pass (fillers, retakes, alignment, AI review) reads the language from here.
-    output.transcript.language = Some(spoken.code().into());
-    // A transcript that could not be aligned is still a transcript: keep it and say why.
-    match align_if_wanted(&mut output.transcript, &ctx, &transcripts.cancel, progress) {
-        Ok(Some(info)) => output.diagnostics.push(format!(
-            "Aligned {} words to the audio ({} kept their times)",
-            info.aligned_words, info.kept_words
-        )),
-        Ok(None) => {}
-        Err(_) if transcripts.cancel.load(Ordering::SeqCst) => {
-            return Err("Transcription cancelled".into());
+        .and_then(Language::from_code);
+    let language = match (spoken, heard) {
+        (Some(spoken), Some(heard)) if heard != spoken => {
+            output.diagnostics.push(format!(
+                "The language is set to {}, but Scribe heard {}: check the language in \
+                 transcription settings",
+                spoken.label(),
+                heard.label()
+            ));
+            Some(spoken.code().to_string())
         }
-        Err(error) => output
-            .diagnostics
-            .push(format!("Words were not aligned to the audio: {error}")),
-    }
+        (Some(spoken), _) => Some(spoken.code().to_string()),
+        (None, Some(heard)) => {
+            output
+                .diagnostics
+                .push(format!("Detected {}.", heard.label()));
+            Some(heard.code().to_string())
+        }
+        // A language the passes have no rules for: kept as Scribe gave it (they use English's).
+        (None, None) => output.transcript.language.clone(),
+    };
+    // Every later pass (fillers, retakes, AI review) reads the language from here.
+    output.transcript.language = language;
     {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();
@@ -297,56 +280,70 @@ pub fn transcript_run_impl(
     })
 }
 
-/// Aligns an existing transcript's words to the audio. Text and ids stay; cuts already made
-/// stay where they are, and suggestions worked out from the old times go stale.
-pub fn transcript_align_impl(
-    state: &AppState,
+/// Transcribes online: the saved route first (ElevenLabs by default), then the other one when
+/// the first has no key or fails, such as when its account is out of credits.
+fn transcribe_online(
+    dir: &std::path::Path,
+    config: &TranscriptSettings,
+    ctx: &TrackContext,
+    track_id: &str,
     transcripts: &TranscriptState,
-    project_handle: String,
-    track_id: String,
     progress: &mut dyn FnMut(TranscriptionProgress),
-) -> Result<TranscriptRunResult, String> {
-    let _run = RunGuard::start(transcripts, format!("aligning words of {track_id}"))?;
-    if !align::compiled_in() {
-        return Err("This build of AeroEdits does not include word alignment".into());
-    }
-    if !align::model_present(&align::default_model_dir()) {
-        return Err("Download the word alignment model in transcription settings first".into());
-    }
-    let ctx = audio_track(state, &project_handle, &track_id)?;
-    let mut transcript = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
-        super::require_handle(reader, &project_handle)?;
-        store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?
+) -> Result<crate::transcript::provider::TranscriptionOutput, String> {
+    let order = match config.provider {
+        ProviderKind::OpenRouter => [ProviderKind::OpenRouter, ProviderKind::ElevenLabs],
+        _ => [ProviderKind::ElevenLabs, ProviderKind::OpenRouter],
     };
-    let before = transcript.dependency();
-    require_alignable(&transcript)?;
-    let info = run_alignment(&mut transcript, &ctx, &transcripts.cancel, progress)?;
-    if transcripts.cancel.load(Ordering::SeqCst) {
-        return Err("Alignment cancelled".into());
-    }
-    {
-        let _guard = state.command_lock.lock();
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
-        super::require_handle(reader, &project_handle)?;
-        // Someone edited the words while the audio was read: theirs win.
-        let now = store::load_transcript(reader.root(), &track_id)?.map(|t| t.dependency());
-        if now.as_ref() != Some(&before) {
-            return Err("The transcript changed while aligning; align it again".into());
+    let language = config.language.fixed().map(|l| l.code().to_string());
+    let mut failed: Vec<String> = Vec::new();
+    for route in order {
+        let transcriber = match route {
+            ProviderKind::ElevenLabs => settings::api_key(dir).map(|(key, _)| {
+                ScribeTranscriber::new(
+                    key,
+                    Some(config.scribe_model.clone()),
+                    language.clone(),
+                    config.keyterms.clone(),
+                )
+            }),
+            _ => settings::openrouter_key(dir).map(|(key, _)| {
+                ScribeTranscriber::via_openrouter(key, language.clone(), config.keyterms.clone())
+            }),
+        };
+        let Some(transcriber) = transcriber else {
+            continue;
+        };
+        let mut transcriber = transcriber?.with_cancel(transcripts.cancel.clone());
+        match transcribe_segments(
+            &mut transcriber,
+            &ctx.root,
+            track_id,
+            &ctx.segments,
+            &transcripts.cancel,
+            progress,
+        ) {
+            Ok(mut output) => {
+                if !failed.is_empty() {
+                    output.diagnostics.insert(
+                        0,
+                        format!(
+                            "{}, so {} transcribed it.",
+                            failed.join("; "),
+                            route.label()
+                        ),
+                    );
+                }
+                return Ok(output);
+            }
+            Err(error) if transcripts.cancel.load(Ordering::SeqCst) => return Err(error),
+            Err(error) => failed.push(format!("{} failed ({error})", route.label())),
         }
-        store::save_transcript(reader.root(), &transcript)?;
     }
-    refresh_playback(state);
-    let view = current_view(state, &project_handle, &track_id, None)?
-        .ok_or("The transcript was saved but could not be read back")?;
-    Ok(TranscriptRunResult {
-        view,
-        diagnostics: vec![format!(
-            "Aligned {} words to the audio ({} kept their times)",
-            info.aligned_words, info.kept_words
-        )],
+    Err(if failed.is_empty() {
+        "Add an ElevenLabs or OpenRouter API key in transcription settings to transcribe online"
+            .into()
+    } else {
+        failed.join("; ")
     })
 }
 
@@ -510,8 +507,8 @@ pub fn transcript_cut_words_checked_impl(
     )
 }
 
-/// Downloads the Parakeet model; with `model` `aligner` the word alignment model, `gpu` the
-/// NVIDIA GPU pack (CUDA and cuDNN).
+/// Downloads the Parakeet model; with `model` `gpu` the NVIDIA GPU pack (CUDA and cuDNN),
+/// `llm` the local review model.
 pub fn transcript_download_model_impl(
     transcripts: &TranscriptState,
     model: Option<&str>,
@@ -520,7 +517,6 @@ pub fn transcript_download_model_impl(
     let model = model.unwrap_or("parakeet");
     let what = match model {
         "parakeet" => "downloading the Parakeet model",
-        "aligner" => "downloading the word alignment model",
         "gpu" => "downloading the NVIDIA GPU pack",
         "llm" => "downloading the local model",
         other => return Err(format!("Unknown model {other}")),
@@ -534,11 +530,6 @@ pub fn transcript_download_model_impl(
         })
     };
     match model {
-        "aligner" => align::download_model(
-            &align::default_model_dir(),
-            &transcripts.cancel,
-            &mut report,
-        )?,
         "gpu" => {
             if !crate::cuda::wanted() {
                 return Err(
@@ -567,67 +558,6 @@ pub fn transcript_download_model_impl(
         }
     }
     Ok(settings::settings_view(&dir))
-}
-
-/// Aligns `transcript`'s words to its track's audio when alignment is on and the model is
-/// there. `Ok(None)` when it did not run (switched off, not downloaded, not in this build).
-fn align_if_wanted(
-    transcript: &mut crate::transcript::Transcript,
-    ctx: &TrackContext,
-    cancel: &std::sync::atomic::AtomicBool,
-    progress: &mut dyn FnMut(TranscriptionProgress),
-) -> Result<Option<align::AlignmentInfo>, String> {
-    let config = settings::load_settings(&config_dir());
-    let model_dir = align::default_model_dir();
-    if !config.align_words || !align::compiled_in() || !align::model_present(&model_dir) {
-        return Ok(None);
-    }
-    // Asked for, but not possible: the caller reports the reason next to the transcript.
-    require_alignable(transcript)?;
-    run_alignment(transcript, ctx, cancel, progress).map(Some)
-}
-
-/// The aligner's wav2vec2 model knows English letters only.
-fn require_alignable(transcript: &crate::transcript::Transcript) -> Result<(), String> {
-    let language = crate::transcript::Language::of(transcript);
-    if language.runs_locally() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Word alignment is English only; {} words keep the times Scribe gave them",
-            language.label()
-        ))
-    }
-}
-
-fn run_alignment(
-    transcript: &mut crate::transcript::Transcript,
-    ctx: &TrackContext,
-    cancel: &std::sync::atomic::AtomicBool,
-    progress: &mut dyn FnMut(TranscriptionProgress),
-) -> Result<align::AlignmentInfo, String> {
-    let track_id = transcript.track_id.clone();
-    progress(TranscriptionProgress {
-        track_id: track_id.clone(),
-        fraction: 0.0,
-        message: "Loading the word alignment model".into(),
-    });
-    let (mut model, vocab) = align::load(&align::default_model_dir())?;
-    align::align_transcript(
-        transcript,
-        model.as_mut(),
-        &vocab,
-        &ctx.root,
-        &ctx.segments,
-        cancel,
-        &mut |fraction| {
-            progress(TranscriptionProgress {
-                track_id: track_id.clone(),
-                fraction,
-                message: "Aligning words to the audio".into(),
-            })
-        },
-    )
 }
 
 #[cfg(test)]

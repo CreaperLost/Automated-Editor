@@ -161,8 +161,8 @@ The research is clear that sound is **placement and art direction, not library b
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| Greek is online-only, and Greek words get no 20 ms alignment | Code: aligner is English wav2vec2 | [LNG-1](roadmap.md#lng-1) |
-| The filler/retake **rules** cut deliberate repetition ("human in the loop. Human in the loop essentially means…", list items) — every review engine inherits these two wrong cuts; restarts, single-word repeats and cut-off words open no candidate window | Log: [local-review-eval](plans/local-review-eval.md) | [LNG-4](roadmap.md#lng-4) |
+| Greek is online-only (Parakeet is English only) | Code: `transcript/language.rs` | — |
+| The filler/retake **rules** cut a deliberate repeat ("human in the loop. Human in the loop essentially means…") — every review engine inherits that wrong cut (parallel statements and lists that open alike are kept since 22 Oct 2026); restarts, single-word repeats and cut-off words open no candidate window | Log: [local-review-eval](plans/local-review-eval.md) | [LNG-4](roadmap.md#lng-4) |
 | The review evaluation has no real Greek recording (the Greek case is scripted) | Log | [LNG-4](roadmap.md#lng-4) |
 | No custom vocabulary (product names, jargon) | Code | [LNG-5](roadmap.md#lng-5) |
 

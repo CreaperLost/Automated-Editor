@@ -117,19 +117,24 @@ fn select_suggestion(suggestions: &[ZoomSuggestion], source_us: u64) -> Option<&
 /// frame (the one that maps the full frame onto the zoomed one), with the scale changing
 /// geometrically: equal times give equal *ratios* of zoom, so going in feels as even as
 /// coming out, and the frame never slides along an edge part-way.
+///
+/// The glide is timed on what the edit keeps of the zoom ([`ZoomSuggestion::kept`]): a cut
+/// inside the glide shortens nothing, the glide plays whole on either side of it.
 fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, f64) {
     let transition = suggestion.transition_us;
-    let hold_start = suggestion.source_start_us.saturating_add(transition);
-    let hold_end = suggestion
-        .source_end_us
-        .saturating_sub(transition)
-        .max(hold_start);
-    let amount = if source_us < hold_start {
-        let span = hold_start.saturating_sub(suggestion.source_start_us).max(1);
-        ease_zoom(source_us.saturating_sub(suggestion.source_start_us) as f64 / span as f64)
-    } else if source_us >= hold_end {
-        let span = suggestion.source_end_us.saturating_sub(hold_end).max(1);
-        1.0 - ease_zoom(source_us.saturating_sub(hold_end) as f64 / span as f64)
+    let elapsed = kept_between(suggestion, suggestion.source_start_us, source_us);
+    let total = kept_between(
+        suggestion,
+        suggestion.source_start_us,
+        suggestion.source_end_us,
+    );
+    let hold_start = transition;
+    let hold_end = total.saturating_sub(transition).max(hold_start);
+    let amount = if elapsed < hold_start {
+        ease_zoom(elapsed as f64 / transition.max(1) as f64)
+    } else if elapsed >= hold_end {
+        let span = total.saturating_sub(hold_end).max(1);
+        1.0 - ease_zoom(elapsed.saturating_sub(hold_end) as f64 / span as f64)
     } else {
         1.0
     };
@@ -150,6 +155,19 @@ fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, 
         fixed * (1.0 - width) + width * 0.5
     };
     (axis(center_x), axis(center_y), scale)
+}
+
+/// How much of `from..to` (source time) the edit keeps of the zoom; all of it without
+/// [`ZoomSuggestion::kept`].
+fn kept_between(suggestion: &ZoomSuggestion, from: u64, to: u64) -> u64 {
+    if suggestion.kept.is_empty() {
+        return to.saturating_sub(from);
+    }
+    suggestion
+        .kept
+        .iter()
+        .map(|&(a, b)| b.min(to).saturating_sub(a.max(from)))
+        .sum()
 }
 
 /// Quintic smootherstep: starts and ends with no speed and no jolt in acceleration.

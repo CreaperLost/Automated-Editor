@@ -18,14 +18,12 @@ import {
   Magnet,
   Mic,
   Monitor,
-  MonitorPlay,
   Music,
   Plus,
   RotateCcw,
   Scissors,
   Trash2,
   Unlink,
-  Video,
   Volume2,
   VolumeX,
   X,
@@ -958,28 +956,6 @@ export const TimelineStudio: React.FC = () => {
   const restoreCut = useRef((_clipId: string) => {});
   restoreCut.current = (clipId) => void edit({ kind: "restoreCuts", clipIds: [clipId] });
 
-  // ---- Layouts over the selection ------------------------------------------------------------
-  const hasCamera = useMemo(
-    () =>
-      (openedProject?.sequence.tracks ?? [])
-        .filter((t) => t.kind === "video")
-        .some((track) => track.clips.some((c) => clipRole(openedProject, track, c) === "webcam")),
-    [openedProject],
-  );
-  /** The camera alone over the selection, or the base kept there. */
-  const layoutOverSelection = (cameraOnly: boolean) => {
-    if (!selection) return;
-    void runEdit((project) =>
-      api.projectLayoutsChange(project.projectHandle, project.revision, project.shortView ?? null, {
-        op: "add",
-        startUs: selection.startUs,
-        endUs: selection.endUs,
-        layout: cameraOnly ? { kind: "cameraOnly", sizePct: 100, punchIn: 1 } : null,
-        name: cameraOnly ? "Camera only" : null,
-      }),
-    );
-  };
-
   // ---- Lanes on top: captions and zooms ------------------------------------------------------
   const zooms = useZoomLane({
     view,
@@ -1739,26 +1715,6 @@ export const TimelineStudio: React.FC = () => {
             Restore {cutCount} cut{cutCount === 1 ? "" : "s"}
           </Button>
         )}
-
-        <ToolbarDivider />
-        <Button
-          variant="ghost"
-          icon={Video}
-          disabled={!openedProject || editing || !selection || !hasCamera}
-          onClick={() => layoutOverSelection(true)}
-          title="Show the camera alone over the selection (a layout section; more layouts in the inspector's Layouts)"
-        >
-          Camera only
-        </Button>
-        <Button
-          variant="ghost"
-          icon={MonitorPlay}
-          disabled={!openedProject || editing || !selection}
-          onClick={() => layoutOverSelection(false)}
-          title="Show the base layout over the selection, and keep picked layouts away from it"
-        >
-          Base layout
-        </Button>
 
         <span className="flex-1 min-w-2" />
         {(pendingCount > 0 || zoomDiagnostics.length > 0 || persistedCount > 0) && (

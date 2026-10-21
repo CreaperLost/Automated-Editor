@@ -1277,6 +1277,8 @@ impl SceneEvaluator {
             .asset(asset)
             .filter(|a| a.is_recording() && settings.follow)
             .map(|a| crate::zoom::recording_cursor_samples(Path::new(&a.path)));
+        // The glides are timed on what the edit keeps, so a cut never makes a zoom jump.
+        let clock = self.document.picture_clock(asset);
         let zooms: Vec<crate::zoom::ZoomSuggestion> = self
             .document
             .zooms
@@ -1284,6 +1286,11 @@ impl SceneEvaluator {
             .filter(|zoom| self.document.clock_asset(zoom.media.as_deref()) == Some(asset))
             .map(|zoom| {
                 let mut suggestion = zoom.as_suggestion();
+                suggestion.kept = crate::zoom::kept_stretches(
+                    &clock,
+                    suggestion.source_start_us,
+                    suggestion.source_end_us,
+                );
                 if let Some(samples) = samples.as_ref().filter(|_| !zoom.fixed) {
                     suggestion.path = crate::zoom::follow_path(
                         samples,

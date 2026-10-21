@@ -389,7 +389,7 @@ mod engine {
     type Loaded = (PathBuf, ParakeetModel, Engine);
     static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
-    /// The execution provider this build asks for; the word aligner runs on it too.
+    /// The execution provider this build asks for.
     pub(crate) fn execution_config() -> ExecutionConfig {
         #[allow(unused_mut)]
         let mut config = ExecutionConfig::new();
@@ -505,8 +505,6 @@ mod engine {
     }
 }
 
-#[cfg(feature = "parakeet")]
-pub(crate) use engine::execution_config;
 #[cfg(feature = "parakeet")]
 pub use engine::ParakeetTranscriber;
 

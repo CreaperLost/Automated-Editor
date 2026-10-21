@@ -120,7 +120,7 @@ export const ChaptersPanel: React.FC = () => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      setError("Could not copy; select the text below and copy it.");
+      setError("Could not copy to the clipboard.");
     }
   };
 
@@ -131,7 +131,7 @@ export const ChaptersPanel: React.FC = () => {
 
   return (
     <div className="h-full overflow-y-auto p-3 space-y-3 bg-studio-900/95 text-label select-none">
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <button
           type="button"
           disabled={!!busy || !speechKey}
@@ -149,6 +149,16 @@ export const ChaptersPanel: React.FC = () => {
         </button>
         <button
           type="button"
+          disabled={placed.length === 0}
+          onClick={() => void copy()}
+          className={`${button} bg-accent border-accent text-white hover:bg-accent-hover`}
+          title="Copy the chapters as a YouTube description list (0:00 Title, one per line)"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+        <button
+          type="button"
           disabled={!!busy}
           onClick={addAtPlayhead}
           className={`${button} bg-studio-850 border-studio-700 text-studio-200 hover:bg-studio-800`}
@@ -156,6 +166,13 @@ export const ChaptersPanel: React.FC = () => {
           <Plus className="w-3.5 h-3.5" /> Add at playhead
         </button>
       </div>
+      {problems.length > 0 &&
+        placed.length > 0 &&
+        problems.map((p) => (
+          <p key={p} className="text-meta text-suggest-fg">
+            {p}
+          </p>
+        ))}
       {!speechKey && <p className="text-meta text-studio-500">Finding chapters needs speech on the timeline, transcribed.</p>}
       {error && (
         <p role="alert" className="text-meta text-danger-fg bg-danger/10 border border-danger/30 rounded p-2">
@@ -210,33 +227,6 @@ export const ChaptersPanel: React.FC = () => {
         </ul>
       )}
 
-      {placed.length > 0 && (
-        <div className="space-y-1.5 pt-2 border-t border-studio-800">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-studio-300">YouTube description</span>
-            <button
-              type="button"
-              onClick={() => void copy()}
-              className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent hover:bg-accent text-white"
-            >
-              {copied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-          <textarea
-            readOnly
-            aria-label="YouTube chapter list"
-            value={youtube}
-            rows={Math.min(10, placed.length + 1)}
-            className="w-full bg-studio-950 border border-studio-800 rounded p-2 font-mono text-meta text-studio-200 select-text"
-          />
-          {problems.map((p) => (
-            <p key={p} className="text-meta text-suggest-fg">
-              {p}
-            </p>
-          ))}
-        </div>
-      )}
     </div>
   );
 };

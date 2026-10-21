@@ -97,6 +97,26 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // An agent started an export: follow it here, and show the Export dialog for the video.
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      listen<{ status: ExportStatus; short: boolean }>("aeroedits-agent-export", (event) => {
+        setExportJob(event.payload.status);
+        if (!event.payload.short) setExportOpen(true);
+      }).then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      }),
+    );
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running")) {
       return;

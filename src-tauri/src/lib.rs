@@ -1122,45 +1122,6 @@ async fn short_preview_frame(
     .map_err(|e| e.to_string())?
 }
 
-/// The storyboard of the open edit (or a short): the sheet as a PNG data URL, with where
-/// each tile sits on it.
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn storyboard_render(
-    app: tauri::AppHandle,
-    project_handle: String,
-    short_id: Option<String>,
-    max_tiles: Option<usize>,
-) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let open = state
-            .opened_project
-            .lock()
-            .as_ref()
-            .map(|reader| reader.summary.project_handle.clone());
-        if open.as_deref() != Some(project_handle.as_str()) {
-            return Err("That project is no longer open".to_string());
-        }
-        let args = mcp::storyboard::StoryboardArgs {
-            short: short_id,
-            max_tiles,
-            ..Default::default()
-        };
-        let board = mcp::storyboard::build(&state, &args, &|_, _| {})?;
-        use base64::Engine;
-        let mut value = serde_json::to_value(&board).map_err(|e| e.to_string())?;
-        value["image"] = format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&board.png)
-        )
-        .into();
-        Ok(value)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 /// The project open in the editor, for windows that open after it (the Shorts Studio).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -1200,6 +1161,14 @@ impl mcp::Host for McpHost {
     fn proposals_changed(&self) {
         use tauri::Emitter;
         let _ = self.0.emit("aeroedits-proposals-updated", ());
+    }
+
+    fn export_started(&self, status: &crate::export::ExportStatus, short: bool) {
+        use tauri::Emitter;
+        // The editor follows the job, and opens its Export dialog for the video
+        // (front-end/src/App.tsx).
+        let payload = serde_json::json!({ "status": status, "short": short });
+        let _ = self.0.emit("aeroedits-agent-export", payload);
     }
 
     fn transcripts(&self) -> &commands::transcript::TranscriptState {
@@ -1445,30 +1414,7 @@ async fn transcript_run(
             &app.state::<commands::transcript::TranscriptState>(),
             project_handle,
             track_id,
-            &mut |progress| {
-                let _ = emitter.emit("transcript-progress", progress);
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn transcript_align(
-    app: tauri::AppHandle,
-    project_handle: String,
-    track_id: String,
-) -> Result<commands::transcript::TranscriptRunResult, String> {
-    use tauri::Emitter;
-    tauri::async_runtime::spawn_blocking(move || {
-        let emitter = app.clone();
-        commands::transcript::transcript_align_impl(
-            &app.state::<AppState>(),
-            &app.state::<commands::transcript::TranscriptState>(),
-            project_handle,
-            track_id,
+            Default::default(),
             &mut |progress| {
                 let _ = emitter.emit("transcript-progress", progress);
             },
@@ -2296,11 +2242,9 @@ pub fn run() {
             project_shorts_generate,
             project_short_export,
             short_preview_frame,
-            storyboard_render,
             project_current,
             transcript_get,
             transcript_run,
-            transcript_align,
             transcript_cancel,
             transcript_delete,
             transcript_suggestions,

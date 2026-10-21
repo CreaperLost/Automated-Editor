@@ -281,7 +281,7 @@ Grouped by area. Order within a group is the suggested order.
   alternatives shown, one proposal batch.
 <a id="ftg-5"></a>
 - **FTG-5 · Import an outside transcript (S).** Deepgram / AssemblyAI / Rev JSON → our word model,
-  then alignment. Not needed (21 Oct); do it only if it stays this small.
+  Not needed (21 Oct); do it only if it stays this small.
 <a id="ftg-6"></a>
 - **FTG-6 · Stock B-roll providers (M).** Pexels / Pixabay with the user's key, licence recorded,
   download only on accept. **Was:** backlog #4.
@@ -353,8 +353,8 @@ Grouped by area. Order within a group is the suggested order.
 ### Languages and transcription
 
 <a id="lng-1"></a>
-- **LNG-1 · Greek word aligner (M).** MMS forced alignment (romanises, so English tech words in
-  Greek speech align too) or a Greek XLSR CTC model on the same ONNX path. **Was:** backlog #2.
+- **LNG-1 · Greek word aligner.** Dropped 22 Oct 2026: word alignment was removed altogether
+  (it did not help in practice).
 <a id="lng-2"></a>
 - **LNG-2 · More languages (S each).** Filler words, question mark and an online provider per language.
 <a id="lng-3"></a>

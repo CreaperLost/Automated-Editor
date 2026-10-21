@@ -280,6 +280,11 @@ pub struct ZoomSuggestion {
     /// Only known while generating; never stored.
     #[serde(default, skip)]
     pub score: f64,
+    /// The stretches of `source_start_us..source_end_us` the edit keeps, in order, so the glide
+    /// in and out is timed on the edited video and a cut never eats it. Empty: all of it.
+    /// Worked out when drawing; never stored.
+    #[serde(default, skip)]
+    pub kept: Vec<(u64, u64)>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,6 +347,7 @@ impl ZoomKeyframe {
         ZoomSuggestion {
             path: Vec::new(),
             score: 0.0,
+            kept: Vec::new(),
             id: self.id.clone(),
             source_start_us: self.source_start_us,
             source_end_us: self.source_end_us,
@@ -502,6 +508,20 @@ pub fn generate_zoom_suggestions(
         suggestions,
         diagnostics,
     })
+}
+
+/// The stretches of `start..end` on `mapper`'s recording that the edit keeps, in order: what
+/// [`ZoomSuggestion::kept`] times a zoom's glide on.
+pub fn kept_stretches(mapper: &TimelineMapper, start: u64, end: u64) -> Vec<(u64, u64)> {
+    let mut kept: Vec<(u64, u64)> = mapper
+        .intervals()
+        .iter()
+        .filter(|i| i.is_recording())
+        .map(|i| (i.start_us.max(start), i.end_us.min(end)))
+        .filter(|(a, b)| a < b)
+        .collect();
+    kept.sort_unstable();
+    kept
 }
 
 pub fn attach_edited_ranges(generation: &mut ZoomGeneration, mapper: &TimelineMapper) {
@@ -687,7 +707,7 @@ fn extract_interest(
                     flush_dwell(&mut dwell, event.t_us, &mut interest);
                     if *inside_source == false
                         && diagnostics.len() < 256
-                        && !diagnostics.iter().any(|d| d.contains("off-source"))
+                        && !diagnostics.iter().any(|d| d.starts_with("Off-source"))
                     {
                         diagnostics.push(
                             "Off-source coordinates ignored; they are not clamped into edge clicks"
@@ -989,6 +1009,7 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
             edited_ranges: Vec::new(),
             media: None,
             score: session.score(),
+            kept: Vec::new(),
         };
         // Overlapping the one before, or so close that the view would pop out and straight
         // back in: one zoom carries on, following the mouse.
@@ -1601,6 +1622,7 @@ mod tests {
         let suggestion = ZoomSuggestion {
             path: Vec::new(),
             score: 0.0,
+            kept: Vec::new(),
             id: "z-1-n1".into(),
             source_start_us: 1_000_000,
             source_end_us: 3_000_000,
@@ -1633,10 +1655,27 @@ mod tests {
         let after_cut =
             evaluate_at_edited(&[suggestion.clone()], &mapper, 1_200_000, &config).unwrap();
         let source_before = evaluate_at_source(&[suggestion.clone()], 1_199_999, &config);
-        let source_after = evaluate_at_source(&[suggestion], 2_000_000, &config);
+        let source_after = evaluate_at_source(&[suggestion.clone()], 2_000_000, &config);
         assert_eq!(before_cut, source_before);
         assert_eq!(after_cut, source_after);
         assert_ne!(before_cut.scale, after_cut.scale);
+
+        // Told what the edit keeps, the glide is timed on the edited video: the same cut
+        // (1.2 s to 2.0 s, through the glide in) no longer makes it jump.
+        let mut kept = suggestion;
+        kept.kept = kept_stretches(&mapper, kept.source_start_us, kept.source_end_us);
+        assert_eq!(
+            kept.kept,
+            vec![(1_000_000, 1_200_000), (2_000_000, 3_000_000)]
+        );
+        let before_cut = evaluate_at_source(&[kept.clone()], 1_199_999, &config);
+        let after_cut = evaluate_at_source(&[kept.clone()], 2_000_000, &config);
+        assert!((before_cut.scale - after_cut.scale).abs() < 1e-3);
+        // It still reaches the full zoom and glides out over the whole last 0.4 s.
+        let held = evaluate_at_source(&[kept.clone()], 2_300_000, &config);
+        assert!((held.scale - 2.0).abs() < 1e-9);
+        let leaving = evaluate_at_source(&[kept], 2_800_000, &config);
+        assert!(leaving.scale > 1.0 && leaving.scale < 2.0);
         assert!((cubic_bezier_unit(0.0) - 0.0).abs() < 1e-12);
         assert!((cubic_bezier_unit(1.0) - 1.0).abs() < 1e-12);
         assert!((cubic_bezier_unit(0.5) - 0.5).abs() < 1e-12);
@@ -1666,6 +1705,7 @@ mod tests {
             suggestions: vec![ZoomSuggestion {
                 path: Vec::new(),
                 score: 0.0,
+                kept: Vec::new(),
                 id: "z-1-n1".into(),
                 source_start_us: 1_000_000,
                 source_end_us: 6_000_000,
@@ -1705,6 +1745,7 @@ mod tests {
         ZoomSuggestion {
             path: Vec::new(),
             score: 0.0,
+            kept: Vec::new(),
             id: id.into(),
             source_start_us: start,
             source_end_us: end,

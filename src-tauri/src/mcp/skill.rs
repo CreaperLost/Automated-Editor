@@ -12,8 +12,20 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// The installed skill: what it is for, and a pointer to `template`, which has the rest.
 const SKILL: &str = include_str!("skill/SKILL.md");
+/// The rules every edit follows, given once with the template.
+const RULES: &str = include_str!("skill/rules.md");
 const EXPORT: &str = include_str!("skill/export.md");
+/// How to work with graphics, given with the `graphics` list (only edits with graphics need it).
+pub const GRAPHICS: &str = include_str!("skill/graphics.md");
+/// Files older versions installed beside SKILL.md; they are taken out so no agent reads them.
+const LEGACY_FILES: [&str; 4] = [
+    "export.md",
+    "templates/tutorial.md",
+    "templates/shorts.md",
+    "templates/take-shorts.md",
+];
 /// The line that makes an installed skill folder AeroEdits' to update.
 const MARKER: &str = "<!-- Installed by AeroEdits";
 
@@ -63,20 +75,6 @@ fn names() -> String {
         .join(", ")
 }
 
-/// The skill's text without its front matter and the install marker.
-fn skill_body() -> String {
-    let body = SKILL
-        .strip_prefix("---")
-        .and_then(|rest| rest.split_once("\n---"))
-        .map_or(SKILL, |(_, body)| body);
-    body.lines()
-        .filter(|line| !line.starts_with(MARKER))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
 // ---------------------------------------------------------------------------------------
 // Saved answers.
 
@@ -95,7 +93,23 @@ fn answers_path(config: &Path, name: &str) -> PathBuf {
 }
 
 fn load_answers(config: &Path, name: &str) -> Option<Saved> {
-    serde_json::from_slice(&fs::read(answers_path(config, name)).ok()?).ok()
+    let mut saved: Saved =
+        serde_json::from_slice(&fs::read(answers_path(config, name)).ok()?).ok()?;
+    forget_review(&mut saved.answers);
+    Some(saved)
+}
+
+/// Who reviews fillers and who transcribes are never saved answers: `review: auto` (the app's
+/// OpenRouter review when a key is set) and `provider: auto` (online, the language detected)
+/// unless the user asks otherwise in the conversation. Answers saved while the in-house review
+/// or Parakeet was the default would otherwise keep them forever.
+fn forget_review(answers: &mut Value) {
+    if let Some(fillers) = answers.get_mut("fillers").and_then(Value::as_object_mut) {
+        fillers.remove("review");
+    }
+    if let Some(answers) = answers.as_object_mut() {
+        answers.remove("transcriber");
+    }
 }
 
 fn save_answers(config: &Path, name: &str, answers: Value) -> Result<(), String> {
@@ -131,7 +145,7 @@ pub fn guide(config: &Path, name: &str) -> Result<String, String> {
     // A checkout with CRLF line ends embeds them.
     Ok(format!(
         "{}\n\n---\n\n{}\n\n---\n\n{}\n\n---\n\n{saved}",
-        skill_body(),
+        RULES.trim(),
         template.text.trim(),
         EXPORT.trim()
     )
@@ -200,7 +214,9 @@ fn template_save(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     if !args.answers.is_object() {
         return Err("`answers` must be a JSON object, in the shape the template gives".into());
     }
-    save_answers(&ctx.host.config_dir(), template.name, args.answers)?;
+    let mut answers = args.answers;
+    forget_review(&mut answers);
+    save_answers(&ctx.host.config_dir(), template.name, answers)?;
     text(format!(
         "Saved the answers for {}; the next edit offers them again.",
         template.name
@@ -317,19 +333,18 @@ fn skill_dir(base: &Path) -> PathBuf {
     base.join("skills").join("aeroedits")
 }
 
-/// The skill folder's files, by their path inside it.
+/// The skill folder's files, by their path inside it: only the pointer to `template`, so an
+/// agent reads the rules once, from the app.
 fn files() -> Vec<(PathBuf, &'static str)> {
-    let mut files = vec![
-        (PathBuf::from("SKILL.md"), SKILL),
-        (PathBuf::from("export.md"), EXPORT),
-    ];
-    files.extend(TEMPLATES.iter().map(|t| {
-        (
-            Path::new("templates").join(format!("{}.md", t.name)),
-            t.text,
-        )
-    }));
-    files
+    vec![(PathBuf::from("SKILL.md"), SKILL)]
+}
+
+/// Takes out what older versions installed beside SKILL.md, and the folder they leave empty.
+fn remove_legacy(dir: &Path) {
+    for path in LEGACY_FILES {
+        let _ = fs::remove_file(dir.join(path));
+    }
+    let _ = fs::remove_dir(dir.join("templates"));
 }
 
 fn state_at(home: SkillHome, base: &Path) -> SkillState {
@@ -338,7 +353,8 @@ fn state_at(home: SkillHome, base: &Path) -> SkillState {
     let current = installed
         && files()
             .iter()
-            .all(|(path, text)| fs::read_to_string(dir.join(path)).is_ok_and(|t| t == *text));
+            .all(|(path, text)| fs::read_to_string(dir.join(path)).is_ok_and(|t| t == *text))
+        && !LEGACY_FILES.iter().any(|path| dir.join(path).exists());
     SkillState {
         home,
         available: base.is_dir(),
@@ -365,6 +381,7 @@ fn install_at(base: &Path) -> Result<(), String> {
         }
         fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     }
+    remove_legacy(&dir);
     Ok(())
 }
 
@@ -382,7 +399,7 @@ fn uninstall_at(base: &Path) -> Result<(), String> {
     for (path, _) in files() {
         let _ = fs::remove_file(dir.join(path));
     }
-    let _ = fs::remove_dir(dir.join("templates"));
+    remove_legacy(&dir);
     let _ = fs::remove_dir(&dir);
     Ok(())
 }
@@ -449,12 +466,12 @@ mod tests {
         save_answers(
             config.path(),
             "tutorial",
-            serde_json::json!({ "transcriber": "parakeet" }),
+            serde_json::json!({ "silence": "tight" }),
         )
         .unwrap();
         let guide = super::guide(config.path(), "tutorial").unwrap();
         assert!(
-            guide.contains("\"transcriber\": \"parakeet\"") && guide.contains("Ask once"),
+            guide.contains("\"silence\": \"tight\"") && guide.contains("Ask once"),
             "{guide}"
         );
         assert!(super::guide(config.path(), "vlog")
@@ -481,7 +498,7 @@ mod tests {
         assert!(guide.contains("None for tutorial yet"), "{guide}");
         let saved = call(
             "template_save",
-            serde_json::json!({ "name": "tutorial", "answers": { "transcriber": "elevenlabs" } }),
+            serde_json::json!({ "name": "tutorial", "answers": { "silence": "gentle", "transcriber": "parakeet" } }),
         )
         .unwrap();
         assert!(
@@ -489,7 +506,21 @@ mod tests {
             "{saved}"
         );
         let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
-        assert!(guide.contains("\"transcriber\": \"elevenlabs\""), "{guide}");
+        assert!(guide.contains("\"silence\": \"gentle\""), "{guide}");
+        // Nor who transcribes: agents transcribe online, the language detected.
+        assert!(!guide.contains("\"transcriber\""), "{guide}");
+        // Who reviews fillers is never kept: the app's review runs unless the user says.
+        call(
+            "template_save",
+            serde_json::json!({ "name": "tutorial",
+                "answers": { "fillers": { "apply": true, "review": "in-house" } } }),
+        )
+        .unwrap();
+        let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
+        assert!(
+            guide.contains("\"apply\": true") && !guide.contains("\"review\": \"in-house\""),
+            "{guide}"
+        );
         assert!(answers_path(host.config.path(), "tutorial").is_file());
         assert!(call(
             "template_save",
@@ -541,13 +572,15 @@ mod tests {
             state.installed && state.current && state.available,
             "{state:?}"
         );
-        assert!(dir.join("templates").join("tutorial.md").is_file());
+        // Only the pointer to `template`: the rules come from the app, once.
+        assert!(!dir.join("templates").exists() && !dir.join("export.md").exists());
 
-        // An older copy is brought up to date at launch...
+        // An older copy (with the files older versions wrote) is brought up to date at launch...
         fs::write(dir.join("export.md"), "old").unwrap();
         assert!(!state_at(SkillHome::Codex, base.path()).current);
         refresh_at(base.path());
         assert!(state_at(SkillHome::Codex, base.path()).current);
+        assert!(!dir.join("export.md").exists());
         // ...unless the user took the marker out to keep their changes.
         let mine = SKILL.replace(MARKER, "<!-- mine");
         fs::write(dir.join("SKILL.md"), &mine).unwrap();

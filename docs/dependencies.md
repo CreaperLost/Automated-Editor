@@ -37,7 +37,7 @@ Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
 |---|---|---|
 | `wgpu` | 27.0.1 | Compositor and preview; parity tests guard updates |
 | `rmcp` | 3.5 | MCP server; protocol version answered by the bridge |
-| `ort` (ONNX Runtime) | `=2.0.0-rc.13` (exact) | Parakeet, wav2vec2, YuNet; ONNX Runtime 1.28 CUDA build |
+| `ort` (ONNX Runtime) | `=2.0.0-rc.13` (exact) | Parakeet, YuNet; ONNX Runtime 1.28 CUDA build |
 | `llama-cpp-2` | `=0.1.160` (exact) | Local filler review on Vulkan; lacks Gemma's chat template |
 | `tokio` | 1.38 | — |
 
@@ -60,7 +60,6 @@ build with exactly the same crates. `cargo update` happens only in a review.
 | Model | Use | Licence |
 |---|---|---|
 | Parakeet Unified EN 0.6B (ONNX) and Parakeet TDT 0.6B v3 (Verbatim) | Local English transcription | See the model cards (recheck at each review) |
-| wav2vec2-base-960h | Word alignment | Apache-2.0 |
 | YuNet | Face detection | MIT |
 | Qwen3.5 4B Q4_K_M (GGUF) | Local filler review | Apache-2.0 |
 
@@ -78,7 +77,7 @@ a needed feature or a measured performance gain points at one component.
    HyperFrames + chrome-headless-shell + its Node; ONNX Runtime + the CUDA pack) at a time.
 3. Run `cargo test`, `npx tsc --noEmit`, the GPU tests, the `perf.rs` benchmark and the parity
    probes on a real `.aero`; for HyperFrames, the gate on every bundled template and a re-render
-   comparison; for models, the relevant probe (`review_probe`, alignment probe).
+   comparison; for models, the relevant probe (`review_probe`).
 4. Keep the update only if nothing regresses, or if the gain is worth a planned migration; then
    write it here with the date.
 5. A major version that needs code changes becomes a roadmap item with its own size, never a

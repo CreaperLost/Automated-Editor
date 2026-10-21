@@ -13,8 +13,8 @@ go.
 
 ## 1. Project (automatic)
 
-- `status`. Shorts need a transcript: if nothing is transcribed, ask which transcriber (as in
-  the tutorial template; automatic: the saved one, else Parakeet) and `transcribe`.
+- `status`. Shorts need a transcript: if nothing is transcribed, `transcribe` (online, the
+  language detected; as in the tutorial template).
 - `status` says how many shorts are already made. Ask whether to keep them
   (default) or start over (remove them in the Shorts Studio; there is no action for it).
 - With a camera, `faces` (it waits until the face is found in every camera; shorts centre

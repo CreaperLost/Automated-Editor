@@ -14,7 +14,6 @@ import {
   Loader2,
   Redo2,
   RotateCcw,
-  Scissors,
   Undo2,
   X,
 } from "lucide-react";
@@ -29,7 +28,6 @@ import {
   LAYOUT_PRESETS,
   WORKSPACES,
   applyPresetToWorkspace,
-  requestPanel,
   resetWorkspaceLayout,
   type LayoutPreset,
 } from "../layout/dockLayout";
@@ -200,14 +198,6 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
       <div className="flex items-center gap-2 shrink-0">
         {project ? (
           <>
-            <Button
-              variant="secondary"
-              icon={Scissors}
-              onClick={() => requestPanel("jumpCuts")}
-              title="Find the silent pauses and cut them out (jump cuts), in Cleanup beside the preview and timeline"
-            >
-              <span className="hidden xl:inline">Jump Cuts</span>
-            </Button>
             <Button
               variant="primary"
               icon={exporting ? Loader2 : Download}

@@ -1036,7 +1036,29 @@ pub fn project_zoom_suggestions_impl(
     }
     // The project's own settings, so every window finds the same zooms.
     let config = reader.history().current.zoom_settings.config();
-    let mut generation = all_zoom_suggestions(reader, &config)?;
+    zoom_suggestions_with(reader, &config)
+}
+
+/// The zooms `settings` would suggest, without saving them: an agent's dry run of other settings.
+pub fn project_zoom_preview_impl(
+    state: &AppState,
+    project_handle: String,
+    settings: &crate::zoom::ZoomSettings,
+) -> Result<crate::zoom::ZoomGeneration, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    if reader.summary.project_handle != project_handle {
+        return Err("Stale project handle".into());
+    }
+    zoom_suggestions_with(reader, &settings.config())
+}
+
+/// The suggestions found with `config`, less the zooms already in the edit or dismissed.
+fn zoom_suggestions_with(
+    reader: &crate::project::ProjectReader,
+    config: &crate::zoom::ZoomConfig,
+) -> Result<crate::zoom::ZoomGeneration, String> {
+    let mut generation = all_zoom_suggestions(reader, config)?;
     let taken: std::collections::BTreeSet<_> = reader
         .summary
         .zooms
@@ -1750,20 +1772,6 @@ fn apply_check_fix(
             None,
         ),
         Fix::DeleteZoom { id } => project_zoom_delete_impl(state, handle, revision, id),
-        Fix::ZoomEase {
-            id,
-            source_start_us,
-            source_end_us,
-        } => {
-            let mut zoom = current()?
-                .zooms
-                .into_iter()
-                .find(|z| z.id == id)
-                .ok_or("That zoom is gone")?;
-            zoom.source_start_us = source_start_us;
-            zoom.source_end_us = source_end_us;
-            project_zoom_update_impl(state, handle, revision, zoom)
-        }
         Fix::CaptionOffset { offset_pct } => {
             let mut captions = current()?.captions;
             captions.offset_pct = offset_pct;
