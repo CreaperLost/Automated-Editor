@@ -1536,4 +1536,67 @@ mod tests {
         }
         println!("PROBE quiet stretches over 120 ms: {}", stretches.len());
     }
+
+    /// The median pitch of voiced 40 ms windows of interleaved stereo `samples`, in Hz.
+    fn median_pitch(samples: &[i16]) -> f64 {
+        let mono: Vec<f64> = samples
+            .chunks_exact(2)
+            .map(|s| (s[0] as f64 + s[1] as f64) / 65536.0)
+            .collect();
+        let (window, lo, hi) = (1920usize, 120usize, 600usize); // 80-400 Hz
+        let mut pitches = Vec::new();
+        for frame in mono.chunks_exact(window) {
+            let energy: f64 = frame.iter().map(|x| x * x).sum();
+            if energy < 1e-3 {
+                continue;
+            }
+            let (mut best, mut lag) = (0.0, 0);
+            for l in lo..hi {
+                let r: f64 = (0..window - l).map(|i| frame[i] * frame[i + l]).sum::<f64>() / energy;
+                if r > best {
+                    best = r;
+                    lag = l;
+                }
+            }
+            if best > 0.5 {
+                pitches.push(SAMPLE_RATE as f64 / lag as f64);
+            }
+        }
+        pitches.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        pitches.get(pitches.len() / 2).copied().unwrap_or(0.0)
+    }
+
+    /// Speech played faster or slower keeps its pitch: the median pitch of a sped stretch of a
+    /// real project against the same speech at normal speed. Set AEROEDITS_SPEED_PROBE to a
+    /// project folder and AEROEDITS_SPEED_RANGE to `edited_from,edited_to,source_from,
+    /// source_to` in seconds. Read only.
+    #[test]
+    #[ignore = "set AEROEDITS_SPEED_PROBE and AEROEDITS_SPEED_RANGE"]
+    fn speed_pitch_probe() {
+        let root = std::path::PathBuf::from(std::env::var("AEROEDITS_SPEED_PROBE").unwrap());
+        let range: Vec<f64> = std::env::var("AEROEDITS_SPEED_RANGE")
+            .unwrap()
+            .split(',')
+            .map(|v| v.trim().parse().unwrap())
+            .collect();
+        let reader = crate::project::ProjectReader::open(&root).unwrap();
+        let sped = reader.document().clone();
+        let mut plain = sped.clone();
+        let asset = plain.assets.iter().find(|a| a.is_recording()).unwrap().id.clone();
+        plain.sequence = crate::sequence::edit::starting_sequence(&plain.assets, &asset).unwrap();
+        let read = |doc: &EditDocument, from: f64, to: f64| {
+            let mixer = AudioMixer::new(reader.root(), doc).unwrap();
+            let (mut at, end) = ((from * 48_000.0) as u64, (to * 48_000.0) as u64);
+            let mut out = Vec::new();
+            while at < end {
+                let n = (end - at).min(CHUNK_FRAMES as u64) as usize;
+                out.extend(mixer.read_frames(at, n).unwrap());
+                at += n as u64;
+            }
+            out
+        };
+        let fast = median_pitch(&read(&sped, range[0], range[1]));
+        let normal = median_pitch(&read(&plain, range[2], range[3]));
+        println!("PROBE pitch sped {fast:.1} Hz, normal {normal:.1} Hz, ratio {:.3}", fast / normal);
+    }
 }

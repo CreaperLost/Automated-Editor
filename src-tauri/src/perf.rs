@@ -303,6 +303,30 @@ fn perf_preview() {
     steps_back(&root, &cut, "jump cuts");
     mix(&root, &cut, "jump cuts");
     edits(&state, &handle, "jump cuts");
+
+    // A minute of it at twice the speed: its sound is stretched keeping its pitch.
+    let end = cut.duration_us().min(70_000_000);
+    if end > 10_000_000 {
+        commands::project_sequence_edit_impl(
+            &state,
+            handle.clone(),
+            revision(&state),
+            crate::sequence::edit::SequenceEdit::SetSpeed {
+                clip_ids: Vec::new(),
+                speed: 2.0,
+                range: Some(crate::zoom::EditedRange {
+                    start_us: 10_000_000,
+                    end_us: end,
+                }),
+                ripple: None,
+            },
+            None,
+        )
+        .unwrap();
+        let fast = document(&state);
+        play(&root, &fast, "jump cuts, a minute at 2x");
+        mix(&root, &fast, "jump cuts, a minute at 2x");
+    }
 }
 
 /// Only the steps back of [`perf_preview`], straight and with jump cuts: quick to repeat.

@@ -805,6 +805,23 @@ mod tests {
         track.validate().unwrap();
     }
 
+    /// A range over a clip at half speed and the normal-speed one after it is one section,
+    /// though half speed maps back a microsecond off.
+    #[test]
+    fn a_range_over_a_slower_clip_is_one_section() {
+        use crate::timeline::SourceInterval;
+        let clock = TimelineMapper::new(vec![
+            SourceInterval::new("a".into(), 0, 10 * S).with_edited_len(Some(20 * S)),
+            SourceInterval::new("b".into(), 10 * S, 20 * S),
+        ]);
+        let made = sections_for(&clock, None, S + 1, 25 * S, &section("n", 0, 1, None));
+        let spans: Vec<(u64, u64)> = made
+            .iter()
+            .map(|s| (s.source_start_us, s.source_end_us))
+            .collect();
+        assert_eq!(spans, vec![(S / 2, 15 * S)]);
+    }
+
     #[test]
     fn a_range_over_a_cut_is_one_section() {
         use crate::timeline::SourceInterval;

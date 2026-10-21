@@ -305,6 +305,9 @@ mod tests {
             vec![(2 * S, 4 * S), (10 * S, 10 * S + S / 2)]
         );
         assert_eq!(mapper.edited_span_of(10 * S, 11 * S), Some((2 * S, 4 * S)));
+        // Kept source time does not shrink at 2x (check counts it so).
+        assert_eq!(mapper.source_kept_us(2 * S, 4 * S), 2 * S);
+        assert_eq!(mapper.source_kept_us(3 * S, 12 * S), 2 * S);
         // A cut keeps each part's speed.
         let mut cut = mapper.clone();
         cut.ripple_cut_edited(S, 2 * S).unwrap();
