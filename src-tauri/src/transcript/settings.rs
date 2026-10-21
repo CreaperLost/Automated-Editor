@@ -148,21 +148,24 @@ pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
         parakeet_accelerator: parakeet::accelerator().into(),
         parakeet_model_present: settings.parakeet_model.present(&model_dir),
         parakeet_model_bytes: settings.parakeet_model.bytes(),
-        parakeet_models: [parakeet::ParakeetModel::Unified, parakeet::ParakeetModel::Verbatim]
-            .into_iter()
-            .map(|model| {
-                let dir = TranscriptSettings {
-                    parakeet_model: model,
-                    ..settings.clone()
-                }
-                .parakeet_dir();
-                ParakeetModelStatus {
-                    model,
-                    present: model.present(&dir),
-                    bytes: model.bytes(),
-                }
-            })
-            .collect(),
+        parakeet_models: [
+            parakeet::ParakeetModel::Unified,
+            parakeet::ParakeetModel::Verbatim,
+        ]
+        .into_iter()
+        .map(|model| {
+            let dir = TranscriptSettings {
+                parakeet_model: model,
+                ..settings.clone()
+            }
+            .parakeet_dir();
+            ParakeetModelStatus {
+                model,
+                present: model.present(&dir),
+                bytes: model.bytes(),
+            }
+        })
+        .collect(),
         parakeet_model_dir: model_dir.to_string_lossy().into_owned(),
         aligner_available: align::compiled_in(),
         aligner_model_present: align::model_present(&align::default_model_dir()),

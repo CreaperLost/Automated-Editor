@@ -1,9 +1,9 @@
 //! Offscreen WGPU compositor. One device, CPU upload + readback (bounded-copy fallback).
+use crate::layouts::arrange::{CameraSlot, Corners, ScreenSlot};
+use crate::layouts::Layout;
 use crate::media::{validate_dim, ColorInfo, PixelFormat, VideoFrame, MAX_FRAME_DIM};
 use crate::project::layout::{validate_wallpaper_relative, MAX_WALLPAPER_BYTES};
 use crate::project::reader::{open_regular, safe_path};
-use crate::layouts::arrange::{CameraSlot, Corners, ScreenSlot};
-use crate::layouts::Layout;
 use crate::project::EditLayout;
 use bytemuck::{Pod, Zeroable};
 use std::io::Read;
@@ -208,8 +208,12 @@ fn camera_layers(
         Corners::Circle => (ClipMode::Circle, 0.0),
         Corners::Squircle => (ClipMode::Squircle, 0.0),
     };
-    let shadow = (style.webcam_shadow && slot.shadow > 0.0)
-        .then(|| (WEBCAM_SHADOW_BLUR_PX * unit, WEBCAM_SHADOW_OPACITY * slot.shadow));
+    let shadow = (style.webcam_shadow && slot.shadow > 0.0).then(|| {
+        (
+            WEBCAM_SHADOW_BLUR_PX * unit,
+            WEBCAM_SHADOW_OPACITY * slot.shadow,
+        )
+    });
     let inset = if style.webcam_border_width > 0 && slot.border > 0.0 {
         let full = ((style.webcam_border_width as f32 * unit).round() as u32).max(1);
         (full as f32 * slot.border.min(1.0)).round() as u32
@@ -680,7 +684,6 @@ impl Scene {
             };
         }
     }
-
 }
 
 struct LayerDraw {
@@ -2438,7 +2441,12 @@ mod tests {
             .find(|l| l.role == LayerRole::Webcam)
             .unwrap();
         // Mirrored: read right to left (the tiny bubble cuts the middle of the picture).
-        assert!(cam.uv_w < 0.0 && cam.uv_x > 0.5, "uv {} {}", cam.uv_x, cam.uv_w);
+        assert!(
+            cam.uv_w < 0.0 && cam.uv_x > 0.5,
+            "uv {} {}",
+            cam.uv_x,
+            cam.uv_w
+        );
         let screen_layer = scene
             .layers
             .iter()
@@ -2475,8 +2483,15 @@ mod tests {
         let mut styled = identity.clone();
         styled.color_start = "#ff0000".into();
         let a = Compositor::composite_cpu(
-            &Scene::from_layout(16, 16, &identity, &screen_only(), Some(screen.clone()), None)
-                .unwrap(),
+            &Scene::from_layout(
+                16,
+                16,
+                &identity,
+                &screen_only(),
+                Some(screen.clone()),
+                None,
+            )
+            .unwrap(),
         )
         .unwrap();
         let b = Compositor::composite_cpu(
@@ -2579,7 +2594,8 @@ mod tests {
         let screen = split_frame(32, 16, [0, 0, 255], [255, 0, 0]);
         let mut layout = solid_layout();
         layout.padding_px = 0;
-        let full = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen.clone()), None).unwrap();
+        let full = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen.clone()), None)
+            .unwrap();
         let full = full
             .layers
             .iter()
@@ -2588,7 +2604,8 @@ mod tests {
         assert_eq!((full.x, full.y, full.width, full.height), (0, 8, 32, 16));
 
         layout.screen_crop_left = 45.0;
-        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen.clone()), None).unwrap();
+        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen.clone()), None)
+            .unwrap();
         let layer = scene
             .layers
             .iter()
@@ -2615,7 +2632,8 @@ mod tests {
         layout.screen_crop_left = 0.0;
         layout.screen_crop_right = 25.0;
         layout.screen_crop_bottom = 25.0;
-        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let layer = scene
             .layers
             .iter()
@@ -2633,7 +2651,8 @@ mod tests {
         let mut layout = solid_layout();
         layout.padding_px = 0;
         layout.screen_scale_pct = 50.0;
-        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let layer = scene
             .layers
             .iter()
@@ -2736,7 +2755,10 @@ mod tests {
         // Cover crop of a 4:3 source into a 4:3 canvas uses the whole frame, mirrored.
         assert!((cam.uv_x - 1.0).abs() < 1e-6 && (cam.uv_w + 1.0).abs() < 1e-6);
         assert!(
-            !full.layers.iter().any(|l| l.role == LayerRole::WebcamBorder),
+            !full
+                .layers
+                .iter()
+                .any(|l| l.role == LayerRole::WebcamBorder),
             "the border is gone"
         );
         assert!(
@@ -2863,7 +2885,8 @@ mod tests {
         let screen = VideoFrame::solid(24, 24, 0, 0, 255, 0).unwrap();
         let mut layout = solid_layout();
         layout.corner_radius_px = 12;
-        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let out = Compositor::composite_cpu(&scene).unwrap();
         let corner = pixel(&out, 4, 4);
         assert!(
@@ -2987,7 +3010,8 @@ mod tests {
         layout.corner_radius_px = 6;
         layout.shadow_blur_px = 8;
         layout.shadow_opacity = 0.8;
-        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let screen_layer = scene
             .layers
             .iter()
@@ -3044,17 +3068,16 @@ mod tests {
             .unwrap()
             .expect("decoded wallpaper");
         let screen = VideoFrame::solid(8, 8, 0, 0, 255, 0).unwrap();
-        let scene =
-            Scene::from_layout_with_wallpaper(
-                16,
-                16,
-                &layout,
-                &screen_only(),
-                Some(screen),
-                None,
-                Some(paper),
-            )
-            .unwrap();
+        let scene = Scene::from_layout_with_wallpaper(
+            16,
+            16,
+            &layout,
+            &screen_only(),
+            Some(screen),
+            None,
+            Some(paper),
+        )
+        .unwrap();
         let out = Compositor::composite_cpu(&scene).unwrap();
         let pad = pixel(&out, 0, 0);
         assert!(
@@ -3226,8 +3249,15 @@ mod tests {
             ..Default::default()
         });
         for (from, to) in [(&circle, &camera), (&circle, &side), (&side, &camera)] {
-            let scene =
-                blended_scene(&style, from, to, 0.5, screen.clone(), webcam.clone(), (64, 48));
+            let scene = blended_scene(
+                &style,
+                from,
+                to,
+                0.5,
+                screen.clone(),
+                webcam.clone(),
+                (64, 48),
+            );
             let cpu = Compositor::composite_cpu(&scene).unwrap();
             let gpu = compositor.composite(&scene).unwrap();
             let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();

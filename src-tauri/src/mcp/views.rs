@@ -370,8 +370,22 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     // Stretches played faster or slower: a bar under the ruler, with the speed.
     for (a, b, speed) in &speeds {
         let (x0, x1) = (x_of(*a).max(0), x_of(*b).min(width as i64));
-        fill(&mut image, x0, RULER_H as i64 - 4, x1.max(x0 + 1), RULER_H as i64, SPEED_MARK);
-        draw_text(&mut image, x0 + 2, film_y as i64 + 2, &speed_label(*speed), 12.0, SPEED_MARK);
+        fill(
+            &mut image,
+            x0,
+            RULER_H as i64 - 4,
+            x1.max(x0 + 1),
+            RULER_H as i64,
+            SPEED_MARK,
+        );
+        draw_text(
+            &mut image,
+            x0 + 2,
+            film_y as i64 + 2,
+            &speed_label(*speed),
+            12.0,
+            SPEED_MARK,
+        );
     }
 
     // Pending cut proposals, shaded over the waveform and the words.
@@ -421,22 +435,29 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let moments: Vec<String> = moments.iter().map(|&t| clock(t)).collect();
     Ok(vec![
         Output::Png(out.into_inner()),
-        Output::Text(format!(
-            "Timeline {}-{} at revision {revision}, {width}x{height}. Frames at {}. Waveform \
+        Output::Text(
+            format!(
+                "Timeline {}-{} at revision {revision}, {width}x{height}. Frames at {}. Waveform \
              and words of {}; {} words, {} pending cut{} shaded red.",
-            clock(from),
-            clock(to),
-            moments.join(", "),
-            stream.as_deref().unwrap_or("no transcribed sound"),
-            spoken.len(),
-            cuts.len(),
-            if cuts.len() == 1 { "" } else { "s" },
-        ) + &speeds
-            .iter()
-            .map(|(a, b, speed)| {
-                format!(" Plays at {} {}-{}.", speed_label(*speed), clock(*a), clock(*b))
-            })
-            .collect::<String>()),
+                clock(from),
+                clock(to),
+                moments.join(", "),
+                stream.as_deref().unwrap_or("no transcribed sound"),
+                spoken.len(),
+                cuts.len(),
+                if cuts.len() == 1 { "" } else { "s" },
+            ) + &speeds
+                .iter()
+                .map(|(a, b, speed)| {
+                    format!(
+                        " Plays at {} {}-{}.",
+                        speed_label(*speed),
+                        clock(*a),
+                        clock(*b)
+                    )
+                })
+                .collect::<String>(),
+        ),
     ])
 }
 

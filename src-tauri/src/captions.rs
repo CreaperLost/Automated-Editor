@@ -740,7 +740,8 @@ mod tests {
     #[test]
     fn the_caption_font_draws_greek() {
         let font = font();
-        for c in "αβγδεζηθικλμνξοπρσςτυφχψωάέήίόύώϊϋΐΰΑΩΆΈΉΊΌΎΏ;·".chars() {
+        for c in "αβγδεζηθικλμνξοπρσςτυφχψωάέήίόύώϊϋΐΰΑΩΆΈΉΊΌΎΏ;·".chars()
+        {
             assert_ne!(font.lookup_glyph_index(c), 0, "no glyph for {c}");
         }
     }

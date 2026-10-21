@@ -620,8 +620,10 @@ fn zooms(out: &mut Builder, document: &EditDocument) {
         }
         // In the zoom's own time: easing played faster is shorter, not cut.
         let kept = |a: u64, b: u64| -> u64 { mapper.source_kept_us(a, b) };
-        let cut_in =
-            transition.saturating_sub(kept(zoom.source_start_us, zoom.source_start_us + transition));
+        let cut_in = transition.saturating_sub(kept(
+            zoom.source_start_us,
+            zoom.source_start_us + transition,
+        ));
         let cut_out =
             transition.saturating_sub(kept(zoom.source_end_us - transition, zoom.source_end_us));
         // A sliver less is rounding at a clip edge, not a visible jump.

@@ -23,13 +23,23 @@ impl Rect {
 
     pub fn lerp(self, to: Rect, t: f32) -> Rect {
         let l = |a: f32, b: f32| a + (b - a) * t;
-        Rect::new(l(self.x, to.x), l(self.y, to.y), l(self.w, to.w), l(self.h, to.h))
+        Rect::new(
+            l(self.x, to.x),
+            l(self.y, to.y),
+            l(self.w, to.w),
+            l(self.h, to.h),
+        )
     }
 
     /// Grown or shrunk by `factor` about its centre.
     pub fn scaled(self, factor: f32) -> Rect {
         let (w, h) = (self.w * factor, self.h * factor);
-        Rect::new(self.x + (self.w - w) / 2.0, self.y + (self.h - h) / 2.0, w, h)
+        Rect::new(
+            self.x + (self.w - w) / 2.0,
+            self.y + (self.h - h) / 2.0,
+            w,
+            h,
+        )
     }
 
     pub fn bottom(&self) -> f32 {
@@ -157,7 +167,12 @@ pub fn available(layout: &Layout, sources: Sources) -> Option<Layout> {
     }
 }
 
-pub fn arrange(layout: &Layout, style: &EditLayout, canvas: Canvas, sources: Sources) -> Arrangement {
+pub fn arrange(
+    layout: &Layout,
+    style: &EditLayout,
+    canvas: Canvas,
+    sources: Sources,
+) -> Arrangement {
     let Some(layout) = available(layout, sources) else {
         return Arrangement::default();
     };
@@ -184,11 +199,19 @@ pub fn arrange(layout: &Layout, style: &EditLayout, canvas: Canvas, sources: Sou
     let full = canvas.rect();
     match &layout {
         Layout::ScreenOnly(s) => Arrangement {
-            screen: Some(screen_in(full, s.screen.fills(canvas.width, canvas.height), 0.0)),
+            screen: Some(screen_in(
+                full,
+                s.screen.fills(canvas.width, canvas.height),
+                0.0,
+            )),
             ..Default::default()
         },
         Layout::Bubble(b) => Arrangement {
-            screen: Some(screen_in(full, b.screen.fills(canvas.width, canvas.height), 0.0)),
+            screen: Some(screen_in(
+                full,
+                b.screen.fills(canvas.width, canvas.height),
+                0.0,
+            )),
             camera: Some(bubble_slot(b, style, canvas, camera_src)),
             seam: None,
         },
@@ -259,7 +282,11 @@ fn side_by_side(
         rect: camera_rect,
         corners: Corners::Round(if s.overlap { style_radius } else { 0.0 }),
         border: if s.overlap && has_border { 1.0 } else { 0.0 },
-        shadow: if s.overlap && style.webcam_shadow { 1.0 } else { 0.0 },
+        shadow: if s.overlap && style.webcam_shadow {
+            1.0
+        } else {
+            0.0
+        },
         opacity: 1.0,
         punch_in: 1.0,
         bubble: false,
@@ -272,7 +299,11 @@ fn side_by_side(
         }
     });
     Arrangement {
-        screen: Some(screen_in(screen_area, fill, if s.overlap { style_radius } else { 0.0 })),
+        screen: Some(screen_in(
+            screen_area,
+            fill,
+            if s.overlap { style_radius } else { 0.0 },
+        )),
         camera: Some(camera),
         seam,
     }
@@ -292,7 +323,10 @@ pub fn fitted_screen(area: Rect, style: &EditLayout, src: (u32, u32), unit: f32)
 
 /// A bubble's size on the canvas, for a camera picture of `src`.
 pub fn bubble_size(b: &Bubble, canvas_w: u32, canvas_h: u32, src: (u32, u32)) -> (u32, u32) {
-    let frac = b.size_pct.clamp(super::MIN_BUBBLE_PCT, super::MAX_BUBBLE_PCT) / 100.0;
+    let frac = b
+        .size_pct
+        .clamp(super::MIN_BUBBLE_PCT, super::MAX_BUBBLE_PCT)
+        / 100.0;
     let target = (((canvas_w.min(canvas_h) as f32) * frac).round() as u32).max(8);
     let (src_w, src_h) = src;
     if src_w == 0 || src_h == 0 {
@@ -358,7 +392,11 @@ fn bubble_slot(b: &Bubble, style: &EditLayout, canvas: Canvas, src: (u32, u32)) 
     CameraSlot {
         rect: Rect::of((x, y, w, h)),
         corners: bubble_corners(b, w, h),
-        border: if style.webcam_border_width > 0 { 1.0 } else { 0.0 },
+        border: if style.webcam_border_width > 0 {
+            1.0
+        } else {
+            0.0
+        },
         shadow: if style.webcam_shadow { 1.0 } else { 0.0 },
         opacity: 1.0,
         punch_in: 1.0,
@@ -372,7 +410,11 @@ const APPEAR_SCALE: f32 = 0.85;
 
 /// `from` moving to `to`, `t` of the way.
 pub fn blend(from: &Arrangement, to: &Arrangement, t: f32) -> Arrangement {
-    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 1.0 };
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     if t <= 0.0 {
         return *from;
     }
@@ -497,7 +539,10 @@ mod tests {
         assert!(screen.rect.h < 1080.0);
         assert_eq!(wide.seam, None);
         let tall = arrange(&layout, &style(), Canvas::new(1080, 1920), BOTH);
-        assert_eq!(tall.camera.unwrap().rect, Rect::new(0.0, 0.0, 1080.0, 576.0));
+        assert_eq!(
+            tall.camera.unwrap().rect,
+            Rect::new(0.0, 0.0, 1080.0, 576.0)
+        );
         let screen = tall.screen.unwrap();
         assert!(screen.fill);
         assert_eq!(screen.rect, Rect::new(0.0, 576.0, 1080.0, 1344.0));
@@ -521,14 +566,22 @@ mod tests {
         };
         let only_camera = arrange(&layout, &style(), canvas, no_screen);
         assert!(only_camera.screen.is_none());
-        assert_eq!(only_camera.camera.unwrap().rect, Rect::new(0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(
+            only_camera.camera.unwrap().rect,
+            Rect::new(0.0, 0.0, 1920.0, 1080.0)
+        );
     }
 
     #[test]
     fn a_move_blends_rects_and_fades_what_only_one_side_has() {
         let canvas = Canvas::new(1920, 1080);
         let bubble = arrange(&Layout::default(), &style(), canvas, BOTH);
-        let camera = arrange(&Layout::CameraOnly(CameraOnly::default()), &style(), canvas, BOTH);
+        let camera = arrange(
+            &Layout::CameraOnly(CameraOnly::default()),
+            &style(),
+            canvas,
+            BOTH,
+        );
         assert_eq!(blend(&bubble, &camera, 0.0), bubble);
         assert_eq!(blend(&bubble, &camera, 1.0), camera);
         let mid = blend(&bubble, &camera, 0.5);
@@ -542,7 +595,12 @@ mod tests {
         // The screen fades out under the growing camera.
         assert_eq!(mid.screen.unwrap().opacity, 0.5);
         // Coming in from nothing, the camera grows from a little smaller, faded.
-        let screen_only = arrange(&Layout::ScreenOnly(ScreenOnly::default()), &style(), canvas, BOTH);
+        let screen_only = arrange(
+            &Layout::ScreenOnly(ScreenOnly::default()),
+            &style(),
+            canvas,
+            BOTH,
+        );
         let appearing = blend(&screen_only, &bubble, 0.0001).camera.unwrap();
         assert!(appearing.opacity < 0.01 && appearing.rect.w < a.w);
     }

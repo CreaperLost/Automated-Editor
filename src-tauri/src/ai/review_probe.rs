@@ -20,9 +20,7 @@ use super::client::JsonModel;
 use super::{candidates, fillers, local};
 use crate::timeline::{SourceInterval, TimelineMapper};
 use crate::transcript::edit::{self, is_punctuation};
-use crate::transcript::{
-    Language, SuggestionSource, Transcript, TranscriptWord, WordKind,
-};
+use crate::transcript::{Language, SuggestionSource, Transcript, TranscriptWord, WordKind};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -90,12 +88,23 @@ fn load(case: &Case) -> (Transcript, TimelineMapper, Language) {
 }
 
 fn kept(t: &Transcript) -> Vec<&TranscriptWord> {
-    t.words.iter().filter(|w| w.kind == WordKind::Word).collect()
+    t.words
+        .iter()
+        .filter(|w| w.kind == WordKind::Word)
+        .collect()
 }
 
 /// The rules' spans as review indexes, which the candidate pass leaves alone.
-fn settled(t: &Transcript, mapper: &TimelineMapper, words: &[&TranscriptWord]) -> Vec<(usize, usize)> {
-    let index: HashMap<&str, usize> = words.iter().enumerate().map(|(i, w)| (w.id.as_str(), i)).collect();
+fn settled(
+    t: &Transcript,
+    mapper: &TimelineMapper,
+    words: &[&TranscriptWord],
+) -> Vec<(usize, usize)> {
+    let index: HashMap<&str, usize> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.id.as_str(), i))
+        .collect();
     edit::suggestions(t, mapper)
         .iter()
         .filter(|s| s.source == SuggestionSource::Rules)
@@ -112,7 +121,14 @@ fn settled(t: &Transcript, mapper: &TimelineMapper, words: &[&TranscriptWord]) -
 fn devices() -> String {
     llama_cpp_2::list_llama_ggml_backend_devices()
         .iter()
-        .map(|d| format!("{} {} ({} MB)", d.backend, d.description, d.memory_total >> 20))
+        .map(|d| {
+            format!(
+                "{} {} ({} MB)",
+                d.backend,
+                d.description,
+                d.memory_total >> 20
+            )
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -161,10 +177,20 @@ fn review(
             let started = Instant::now();
             let mut model = local::LocalModel::load(&local::default_dir()).unwrap();
             let load_s = started.elapsed().as_secs_f64();
-            let mut timed = Timed { inner: &mut model, pages: Vec::new() };
+            let mut timed = Timed {
+                inner: &mut model,
+                pages: Vec::new(),
+            };
             let started = Instant::now();
-            let spans = fillers::detect_candidates(&mut timed, language, &words, &plan, &mut |_| {}, &|| true)
-                .unwrap();
+            let spans = fillers::detect_candidates(
+                &mut timed,
+                language,
+                &words,
+                &plan,
+                &mut |_| {},
+                &|| true,
+            )
+            .unwrap();
             let review_s = started.elapsed().as_secs_f64();
             let info = json!({
                 "model": timed.describe(),
@@ -184,12 +210,18 @@ fn review(
         "cloud" => {
             let dir = crate::transcript::settings::config_dir();
             let settings = super::load_settings(&dir);
-            let (key, _) = crate::secrets::get(&dir, settings.provider.key_spec()).expect("no AI key set");
-            let model = std::env::var("AEROEDITS_REVIEW_CLOUD_MODEL").unwrap_or_else(|_| settings.model());
+            let (key, _) =
+                crate::secrets::get(&dir, settings.provider.key_spec()).expect("no AI key set");
+            let model =
+                std::env::var("AEROEDITS_REVIEW_CLOUD_MODEL").unwrap_or_else(|_| settings.model());
             let mut client = super::client::ChatClient::new(settings.provider, key, model).unwrap();
-            let mut timed = Timed { inner: &mut client, pages: Vec::new() };
+            let mut timed = Timed {
+                inner: &mut client,
+                pages: Vec::new(),
+            };
             let started = Instant::now();
-            let spans = fillers::detect(&mut timed, language, &words, &mut |_| {}, &|| true).unwrap();
+            let spans =
+                fillers::detect(&mut timed, language, &words, &mut |_| {}, &|| true).unwrap();
             let info = json!({
                 "model": timed.describe(),
                 "perPage": timed.pages,
@@ -210,17 +242,37 @@ fn review(
 /// wrong when under half of its words are labelled (optional and alternatives included).
 fn score(t: &Transcript, mapper: &TimelineMapper, all_gold: &[Gold]) -> Value {
     let words = kept(t);
-    let index: HashMap<&str, usize> = words.iter().enumerate().map(|(i, w)| (w.id.as_str(), i)).collect();
+    let index: HashMap<&str, usize> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.id.as_str(), i))
+        .collect();
     let spoken = |i: &usize| !is_punctuation(&words[*i].text);
-    let gold_words: HashSet<usize> = all_gold.iter().flat_map(Gold::ranges).flatten().filter(spoken).collect();
+    let gold_words: HashSet<usize> = all_gold
+        .iter()
+        .flat_map(Gold::ranges)
+        .flatten()
+        .filter(spoken)
+        .collect();
     let gold: Vec<&Gold> = all_gold.iter().filter(|g| !g.optional).collect();
-    let must_words: HashSet<usize> = gold.iter().flat_map(|g| g.from..=g.to).filter(spoken).collect();
-    let cuts: Vec<_> = edit::suggestions(t, mapper).into_iter().filter(|s| !s.dismissed).collect();
+    let must_words: HashSet<usize> = gold
+        .iter()
+        .flat_map(|g| g.from..=g.to)
+        .filter(spoken)
+        .collect();
+    let cuts: Vec<_> = edit::suggestions(t, mapper)
+        .into_iter()
+        .filter(|s| !s.dismissed)
+        .collect();
     let mut cut_words: HashSet<usize> = HashSet::new();
     let mut wrong = Vec::new();
     let mut listed = Vec::new();
     for s in &cuts {
-        let at: Vec<usize> = s.word_ids.iter().filter_map(|id| index.get(id.as_str()).copied()).collect();
+        let at: Vec<usize> = s
+            .word_ids
+            .iter()
+            .filter_map(|id| index.get(id.as_str()).copied())
+            .collect();
         cut_words.extend(at.iter().copied());
         let hit = at.iter().filter(|i| gold_words.contains(i)).count();
         let entry = json!({
@@ -275,7 +327,8 @@ fn sibling(case: &Path, suffix: &str) -> PathBuf {
 #[test]
 #[ignore]
 fn review_probe() {
-    let path = PathBuf::from(std::env::var("AEROEDITS_REVIEW_CASE").expect("set AEROEDITS_REVIEW_CASE"));
+    let path =
+        PathBuf::from(std::env::var("AEROEDITS_REVIEW_CASE").expect("set AEROEDITS_REVIEW_CASE"));
     let mut case: Case = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     // A relative transcript sits beside the case.
     if case.transcript.is_relative() {
@@ -291,7 +344,8 @@ fn review_probe() {
         println!("{} words, {language:?}", words.len());
         return;
     }
-    let engines = std::env::var("AEROEDITS_REVIEW_ENGINES").unwrap_or_else(|_| "rules,local,cloud".into());
+    let engines =
+        std::env::var("AEROEDITS_REVIEW_ENGINES").unwrap_or_else(|_| "rules,local,cloud".into());
     for engine in engines.split(',').map(str::trim) {
         let (spans, info) = review(engine, &t, &mapper, language);
         let ai_spans = spans.len();
@@ -326,7 +380,11 @@ fn review_probe() {
             info["device"].as_str().unwrap_or(""),
         );
         let out = json!({ "engine": engine, "language": language, "run": info, "score": score });
-        std::fs::write(sibling(&path, &format!("{engine}.json")), serde_json::to_string_pretty(&out).unwrap()).unwrap();
+        std::fs::write(
+            sibling(&path, &format!("{engine}.json")),
+            serde_json::to_string_pretty(&out).unwrap(),
+        )
+        .unwrap();
         t.ai_suggestions.clear();
         t.ai_model = None;
     }

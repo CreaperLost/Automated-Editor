@@ -174,7 +174,11 @@ impl TimelineMapper {
         self.intervals
             .iter()
             .filter(|i| i.is_recording())
-            .map(|i| end_us.min(i.end_us).saturating_sub(start_us.max(i.start_us)))
+            .map(|i| {
+                end_us
+                    .min(i.end_us)
+                    .saturating_sub(start_us.max(i.start_us))
+            })
             .sum()
     }
 

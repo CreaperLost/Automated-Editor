@@ -322,7 +322,14 @@ mod tests {
             prompts: Vec::new(),
         };
         let mut seen = Vec::new();
-        let spans = detect(&mut model, Language::English, &refs, &mut |f| seen.push(f), &|| true).unwrap();
+        let spans = detect(
+            &mut model,
+            Language::English,
+            &refs,
+            &mut |f| seen.push(f),
+            &|| true,
+        )
+        .unwrap();
         assert_eq!(model.prompts.len(), 2);
         assert!(model.prompts[1].starts_with("[260]"));
         assert_eq!(spans.len(), 1);

@@ -270,7 +270,10 @@ fn listing(timeline: &EditDocument, label: &str) -> Vec<String> {
         }
         lines.push(line);
     }
-    lines.push(format!("Pick rules: {}", serde_json::to_string(&track.pick).unwrap_or_default()));
+    lines.push(format!(
+        "Pick rules: {}",
+        serde_json::to_string(&track.pick).unwrap_or_default()
+    ));
     lines
 }
 
@@ -352,7 +355,13 @@ pub fn run_pick(
     }];
     lines.extend(found.diagnostics.iter().cloned());
     if apply {
-        commands::layouts_store_impl(ctx.state, before.handle.clone(), before.revision, short, found)?;
+        commands::layouts_store_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            short,
+            found,
+        )?;
     }
     applied(ctx, "layouts", &before, lines)
 }
@@ -536,7 +545,10 @@ fn run(ctx: &Ctx, args: LayoutsArgs) -> Result<String, String> {
         change,
     )?;
     let lines = with_reader(ctx.state, |reader| {
-        Ok(listing(&target(reader.document(), short.as_deref())?, &label))
+        Ok(listing(
+            &target(reader.document(), short.as_deref())?,
+            &label,
+        ))
     })?;
     applied(ctx, "layouts", &before, lines)
 }

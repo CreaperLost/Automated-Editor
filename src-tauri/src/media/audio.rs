@@ -1449,7 +1449,11 @@ mod tests {
         );
         let muted = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
         let frame = |samples: &[f64], us: u64| samples[(us * 48 / 1000) as usize * 2];
-        assert!(frame(&muted, 525_000).abs() < 1e-3, "{}", frame(&muted, 525_000));
+        assert!(
+            frame(&muted, 525_000).abs() < 1e-3,
+            "{}",
+            frame(&muted, 525_000)
+        );
         assert!((frame(&muted, 400_000) - frame(&plain, 400_000)).abs() < 1e-3);
         assert!((frame(&muted, 650_000) - frame(&plain, 650_000)).abs() < 1e-3);
     }
@@ -1552,7 +1556,10 @@ mod tests {
             }
             let (mut best, mut lag) = (0.0, 0);
             for l in lo..hi {
-                let r: f64 = (0..window - l).map(|i| frame[i] * frame[i + l]).sum::<f64>() / energy;
+                let r: f64 = (0..window - l)
+                    .map(|i| frame[i] * frame[i + l])
+                    .sum::<f64>()
+                    / energy;
                 if r > best {
                     best = r;
                     lag = l;
@@ -1582,7 +1589,13 @@ mod tests {
         let reader = crate::project::ProjectReader::open(&root).unwrap();
         let sped = reader.document().clone();
         let mut plain = sped.clone();
-        let asset = plain.assets.iter().find(|a| a.is_recording()).unwrap().id.clone();
+        let asset = plain
+            .assets
+            .iter()
+            .find(|a| a.is_recording())
+            .unwrap()
+            .id
+            .clone();
         plain.sequence = crate::sequence::edit::starting_sequence(&plain.assets, &asset).unwrap();
         let read = |doc: &EditDocument, from: f64, to: f64| {
             let mixer = AudioMixer::new(reader.root(), doc).unwrap();
@@ -1597,6 +1610,9 @@ mod tests {
         };
         let fast = median_pitch(&read(&sped, range[0], range[1]));
         let normal = median_pitch(&read(&plain, range[2], range[3]));
-        println!("PROBE pitch sped {fast:.1} Hz, normal {normal:.1} Hz, ratio {:.3}", fast / normal);
+        println!(
+            "PROBE pitch sped {fast:.1} Hz, normal {normal:.1} Hz, ratio {:.3}",
+            fast / normal
+        );
     }
 }

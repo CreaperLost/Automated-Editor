@@ -876,7 +876,9 @@ impl SceneEvaluator {
             };
             // Between a fitted and a filled screen, each end's view blends into the other's.
             let (rect, uv) = match (from.screen, to.screen) {
-                (Some(a), Some(b)) if a.fill != b.fill && frame.weight > 0.0 && frame.weight < 1.0 => {
+                (Some(a), Some(b))
+                    if a.fill != b.fill && frame.weight > 0.0 && frame.weight < 1.0 =>
+                {
                     let ((ra, ua), (rb, ub), t) = (view(&a), view(&b), frame.weight);
                     let l = |x: f32, y: f32| x + (y - x) * t;
                     (
@@ -894,7 +896,8 @@ impl SceneEvaluator {
             let (focus, offset) = shown
                 .webcam
                 .map_or((None, (0.0, 0.0)), |clip| self.framing_of(clip));
-            let uv = crate::render::camera_uv((picture.width, picture.height), &slot, focus, offset);
+            let uv =
+                crate::render::camera_uv((picture.width, picture.height), &slot, focus, offset);
             scene.push_camera(picture, &slot, uv, style, unit)?;
             // A bubble gets out of the way of work under it.
             let hidden = crate::bubble_hide::hidden_weight(self.bubble_hidden(), edited_us);
@@ -915,7 +918,12 @@ impl SceneEvaluator {
                 // Where the short's layout puts them, moving as the layout changes.
                 Some(short) => {
                     let spot = |parts| {
-                        crate::shorts::caption_y(short.caption_spot, parts, caption.height, self.height)
+                        crate::shorts::caption_y(
+                            short.caption_spot,
+                            parts,
+                            caption.height,
+                            self.height,
+                        )
                     };
                     let (a, b) = (spot(&from), spot(&to));
                     (a + (b - a) * frame.weight).round() as u32
@@ -1382,7 +1390,8 @@ impl SceneEvaluator {
         // Each bubble, with where it shows.
         let resolved = self.layouts();
         let mut bubbles: Vec<(crate::layouts::Bubble, Vec<(u64, u64)>)> = Vec::new();
-        for shown in std::iter::once(&resolved.base).chain(resolved.pieces.iter().map(|p| &p.layout))
+        for shown in
+            std::iter::once(&resolved.base).chain(resolved.pieces.iter().map(|p| &p.layout))
         {
             let Layout::Bubble(bubble) = shown else {
                 continue;

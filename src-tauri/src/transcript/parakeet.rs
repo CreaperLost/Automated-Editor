@@ -37,32 +37,77 @@ pub enum ParakeetModel {
 
 const UNIFIED_REPO: &str = "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx/resolve/09e9060322d99c5f070010724786e6ee090fd51d";
 const UNIFIED_FP32: &[ModelFile] = &[
-    ("tokenizer.model", "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9"),
-    ("decoder_joint.onnx", "64648c91935ea4819e9c31ea8a20f011d3b1c960be3861cb8bc74df0259cd998"),
-    ("encoder.onnx", "50083dd0b2af503b87ea8fcf9fd7d7dc15dda3130e4113017c8b37ed00418ba4"),
-    ("encoder.onnx.data", "c054b2932ee13aa39ed84982a399822f3193311fb6fd8e1e204566722614bd87"),
+    (
+        "tokenizer.model",
+        "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
+    ),
+    (
+        "decoder_joint.onnx",
+        "64648c91935ea4819e9c31ea8a20f011d3b1c960be3861cb8bc74df0259cd998",
+    ),
+    (
+        "encoder.onnx",
+        "50083dd0b2af503b87ea8fcf9fd7d7dc15dda3130e4113017c8b37ed00418ba4",
+    ),
+    (
+        "encoder.onnx.data",
+        "c054b2932ee13aa39ed84982a399822f3193311fb6fd8e1e204566722614bd87",
+    ),
 ];
 const UNIFIED_FP32_BYTES: u64 = 251_056 + 35_779_240 + 41_901_475 + 2_437_091_328;
 const UNIFIED_INT8: &[ModelFile] = &[
-    ("tokenizer.model", "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9"),
-    ("decoder_joint.int8.onnx", "7f76ad5f35035f25630075699c6c942a2c0c05ff42cb398f966f3c256d148e1e"),
-    ("encoder.int8.onnx", "c81adfab77634e00c1668a221a14f244c5fb3409e7c14eeebaf6ac963425910f"),
-    ("encoder.int8.onnx.data", "3d54dd04646c15677bd2844a84df3770b12cc1ce183481f7b6e0def31c92114a"),
+    (
+        "tokenizer.model",
+        "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
+    ),
+    (
+        "decoder_joint.int8.onnx",
+        "7f76ad5f35035f25630075699c6c942a2c0c05ff42cb398f966f3c256d148e1e",
+    ),
+    (
+        "encoder.int8.onnx",
+        "c81adfab77634e00c1668a221a14f244c5fb3409e7c14eeebaf6ac963425910f",
+    ),
+    (
+        "encoder.int8.onnx.data",
+        "3d54dd04646c15677bd2844a84df3770b12cc1ce183481f7b6e0def31c92114a",
+    ),
 ];
 const UNIFIED_INT8_BYTES: u64 = 251_056 + 8_995_064 + 42_606_669 + 611_491_584;
 
 const VERBATIM_REPO: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce";
 const VERBATIM_FP32: &[ModelFile] = &[
-    ("vocab.txt", "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"),
-    ("decoder_joint-model.onnx", "e978ddf6688527182c10fde2eb4b83068421648985ef23f7a86be732be8706c1"),
-    ("encoder-model.onnx", "98a74b21b4cc0017c1e7030319a4a96f4a9506e50f0708f3a516d02a77c96bb1"),
-    ("encoder-model.onnx.data", "9a22d372c51455c34f13405da2520baefb7125bd16981397561423ed32d24f36"),
+    (
+        "vocab.txt",
+        "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+    ),
+    (
+        "decoder_joint-model.onnx",
+        "e978ddf6688527182c10fde2eb4b83068421648985ef23f7a86be732be8706c1",
+    ),
+    (
+        "encoder-model.onnx",
+        "98a74b21b4cc0017c1e7030319a4a96f4a9506e50f0708f3a516d02a77c96bb1",
+    ),
+    (
+        "encoder-model.onnx.data",
+        "9a22d372c51455c34f13405da2520baefb7125bd16981397561423ed32d24f36",
+    ),
 ];
 const VERBATIM_FP32_BYTES: u64 = 93_939 + 72_520_893 + 41_770_866 + 2_435_420_160;
 const VERBATIM_INT8: &[ModelFile] = &[
-    ("vocab.txt", "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"),
-    ("decoder_joint-model.int8.onnx", "eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70"),
-    ("encoder-model.int8.onnx", "6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09"),
+    (
+        "vocab.txt",
+        "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+    ),
+    (
+        "decoder_joint-model.int8.onnx",
+        "eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70",
+    ),
+    (
+        "encoder-model.int8.onnx",
+        "6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09",
+    ),
 ];
 const VERBATIM_INT8_BYTES: u64 = 93_939 + 18_202_004 + 652_183_999;
 
@@ -111,7 +156,9 @@ impl ParakeetModel {
     /// download do not count in a CUDA build: they would run mostly on the CPU (the v3 INT8
     /// model took 110 s for 15 minutes even with CUDA; full precision on the GPU, about 16 s).
     pub fn present(self, dir: &Path) -> bool {
-        self.files().iter().all(|(name, _)| dir.join(name).is_file())
+        self.files()
+            .iter()
+            .all(|(name, _)| dir.join(name).is_file())
     }
 }
 
@@ -180,8 +227,10 @@ pub fn download_files(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
-    let files: Vec<(&str, &str, Option<&str>)> =
-        files.iter().map(|(remote, name)| (*remote, *name, None)).collect();
+    let files: Vec<(&str, &str, Option<&str>)> = files
+        .iter()
+        .map(|(remote, name)| (*remote, *name, None))
+        .collect();
     download_files_checked(dir, repo, &files, cancel, progress)
 }
 
@@ -387,7 +436,8 @@ mod engine {
                 // The one before goes first: two would not both fit some GPUs.
                 *loaded = None;
                 let config = Some(execution_config());
-                let failed = |e: parakeet_rs::Error| format!("Could not load the Parakeet model: {e}");
+                let failed =
+                    |e: parakeet_rs::Error| format!("Could not load the Parakeet model: {e}");
                 let transcriber = match model {
                     ParakeetModel::Unified => Engine::Unified(
                         ParakeetUnified::from_pretrained(model_dir, config).map_err(failed)?,
@@ -571,7 +621,10 @@ mod tests {
             std::fs::remove_file(dir.path().join(model.files()[2].0)).unwrap();
             assert!(!model.present(dir.path()));
         }
-        assert_ne!(ParakeetModel::Unified.default_dir(), ParakeetModel::Verbatim.default_dir());
+        assert_ne!(
+            ParakeetModel::Unified.default_dir(),
+            ParakeetModel::Verbatim.default_dir()
+        );
         let json = serde_json::to_string(&ParakeetModel::Verbatim).unwrap();
         assert_eq!(json, "\"verbatim\"");
     }
@@ -598,7 +651,9 @@ mod tests {
                 let mut stream = stream.unwrap();
                 let mut buf = [0u8; 1024];
                 let _ = std::io::Read::read(&mut stream, &mut buf);
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+                );
             }
         });
         let dir = tempfile::tempdir().unwrap();
@@ -639,7 +694,8 @@ mod tests {
         let n = reader.read_frames(&mut all, len).unwrap();
         all.truncate(n);
         let started = std::time::Instant::now();
-        let mut model = ParakeetTranscriber::new(probe_model(), &probe_model().default_dir()).unwrap();
+        let mut model =
+            ParakeetTranscriber::new(probe_model(), &probe_model().default_dir()).unwrap();
         println!("cuda pack: {:?}", crate::cuda::loaded());
         println!("loaded in {:?}", started.elapsed());
         let started = std::time::Instant::now();
@@ -681,7 +737,8 @@ mod tests {
         let len = all.len();
         let n = reader.read_frames(&mut all, len).unwrap();
         let samples = &all[from..to.min(n)];
-        let mut model = ParakeetTranscriber::new(probe_model(), &probe_model().default_dir()).unwrap();
+        let mut model =
+            ParakeetTranscriber::new(probe_model(), &probe_model().default_dir()).unwrap();
         for chunk_s in parts[3].split(',') {
             let len = (chunk_s.parse::<f64>().unwrap() * 16_000.0) as usize;
             let mut words = Vec::new();
