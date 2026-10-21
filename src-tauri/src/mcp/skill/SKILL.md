@@ -86,8 +86,13 @@ speed. Never speed up waiting or slow parts by yourself: cut them, or ask.
 ## Chapters
 
 Chapters are the last edit, right before export, after every cut: they read the final edit's
-words. Never run `chapters` earlier; if the user asks for them sooner, say why they come last.
-If anything is cut after them, run `chapters` again before exporting.
+words. Never make chapters earlier; if the user asks for them sooner, say why they come last.
+If anything is cut after them, make them again before exporting.
+
+Write them yourself: read `transcript_get`, pick where each topic starts, and send `chapters`
+with `set` (each a `title` and the `atWord` it starts at). YouTube wants at least 3, each 10 s or
+longer, the first at the start. Use the app's own pass (`chapters` without `set`) only if the
+user asks for it.
 
 ## Graphics
 
@@ -168,6 +173,20 @@ and at the end of every template).
 When the user asks for cuts the passes don't make (a tangent, a wrong take the rules missed),
 read `transcript_get`, then `propose_cuts` by word id with a reason. The user accepts it in the
 Agent panel.
+
+## Cleaning up and correcting
+
+You can undo or fix what you made, each change one undo step unless it says otherwise:
+- a graphic: `graphic_set` with `moveToWord` / `moveToUs`, or `remove: true`;
+- a zoom: `zooms` `op: list`, then `update` (`scale`, centre, `fixed`), `remove` (`ids`), or
+  `create` one of your own (`startUs`, `endUs`, `scale`, `centerX`/`centerY`);
+- a short: `shorts` `op: range` (new `fromWord`/`toWord`) or `op: remove`;
+- a word the transcriber got wrong: `transcript_fix` (not an undo step: keep the old text it
+  reports);
+- what an imported file's streams stand for: `media_import` with `roles`;
+- an export you started with `wait: false`: `export` with `cancel`.
+Brand kits (`brand_kit_set`) and the graphics library (`library_remove`) are the user's, shared
+by every project: change them only when the user asks.
 
 ## Stay on the right project
 

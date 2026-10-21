@@ -16,8 +16,9 @@ material ([research/](research/README.md)); creator claims are not measurements.
    didn't know which project they belonged to are all fixed (see section 1). What remains is the
    Tauri `template_save` name (UI-3) and the direct actions' project check moving under the lock
    (AGT-1).
-2. **The agent can create but not clean up or correct.** It can add a graphic but not remove
-   one, can't author a zoom, can't fix a mis-heard word. Every session ends with manual cleanup.
+2. **The agent can now clean up and correct (fixed 21 Oct, AGT-1).** It can move and remove
+   graphics, author zooms, fix mis-heard words, write chapters, edit and remove shorts, set media
+   roles and cancel exports. What stays UI-only is mostly playback (see REV-1).
 3. **Nothing survives a reopen.** Undo is in memory (64 steps), graphic source edits have no
    undo at all, and there are no checkpoints. Every creator in the research duplicates the
    project before letting an agent touch it; we give them nothing to do that with.
@@ -60,10 +61,10 @@ The human UI has 137 Tauri commands; 42 have no agent path. The ones that block 
 
 | The agent cannot… | Human path today | Fix |
 |---|---|---|
-| Remove or move a graphic; remove a short; remove a library item; write a brand kit | Graphics panel, Shorts list, BrandKits | [AGT-1](roadmap.md#agt-1) |
-| Add, edit or delete a zoom (`ZoomOp` is only `add`/`reload`/`dismiss` of telemetry suggestions) | ZoomPanel, zoom lane | [AGT-1](roadmap.md#agt-1) |
-| Fix a mis-transcribed word (`transcript_set_word_text` is UI-only), so neither the agent nor `check` can repair ASR | Transcript panel | [AGT-1](roadmap.md#agt-1) |
-| Edit chapters, edit a short's range, set media roles, cancel its own export | Chapters panel, Shorts, Inspector, export dialog | [AGT-1](roadmap.md#agt-1) |
+| ~~Remove or move a graphic; remove a short; remove a library item; write a brand kit~~ | Graphics panel, Shorts list, BrandKits | Fixed 21 Oct ([AGT-1](roadmap.md#agt-1)) |
+| ~~Add, edit or delete a zoom~~ | ZoomPanel, zoom lane | Fixed 21 Oct ([AGT-1](roadmap.md#agt-1)) |
+| ~~Fix a mis-transcribed word~~ (`transcript_fix`; not an undo step, as in the UI) | Transcript panel | Fixed 21 Oct ([AGT-1](roadmap.md#agt-1)) |
+| ~~Edit chapters, edit a short's range, set media roles, cancel its own export~~ | Chapters panel, Shorts, Inspector, export dialog | Fixed 21 Oct ([AGT-1](roadmap.md#agt-1)) |
 | Move the user's playhead to show them a moment (`playback_*` is UI-only) | Preview bar | [REV-1](roadmap.md#rev-1) |
 
 And the other way round: `scan` and `telemetry_get`, the two best "read the recording" surfaces,
@@ -74,7 +75,7 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| 53 tools' schemas are sent on every connection; cost never measured | Log: backlog #16 | [AGT-4](roadmap.md#agt-4) |
+| 56 tools' schemas are sent on every connection; cost never measured | Log: backlog #16 | [AGT-4](roadmap.md#agt-4) |
 | No readiness report without a project (versions, runtimes, why something is unavailable); "not connected", "no project", "runtime missing" and "failed" look alike | Log; research: Resolve, Premiere MCPs | [AGT-4](roadmap.md#agt-4) |
 | No long-job contract: progress exists, cancellation and resumable analysis don't | Code: actions dispatch blocking work with a progress callback | [AGT-4](roadmap.md#agt-4) |
 | No per-run report of time and cost (0 matches for `cost|usd|token_usage` in `src/ai`) | Code | [EVAL-1](roadmap.md#eval-1) |

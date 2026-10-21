@@ -159,11 +159,11 @@ Claude app and Codex, skill install and the autopilot switch.
 `library_save`; brand kits; saved looks in the Templates menu. Not reusable yet: the user's
 editing *method*, style rules beyond colours, sound choices, a plan of the edit.
 
-## The agent surface: 53 tools
+## The agent surface: 56 tools
 
 Registered in [`mcp/skill.rs`](../src-tauri/src/mcp/skill.rs) (2),
 [`mcp/tools.rs`](../src-tauri/src/mcp/tools.rs) (14) and
-[`mcp/actions.rs`](../src-tauri/src/mcp/actions.rs) (37). Every tool is also a CLI command,
+[`mcp/actions.rs`](../src-tauri/src/mcp/actions.rs) (40). Every tool is also a CLI command,
 `aeroedits do <tool> --key value`. Tools return **text and PNG only**.
 
 | Group | Tools | Applies how |
@@ -173,15 +173,16 @@ Registered in [`mcp/skill.rs`](../src-tauri/src/mcp/skill.rs) (2),
 | Look | `frame_render`, `timeline_view`, `storyboard` | — |
 | Propose | `propose_cuts`, `propose_edit`, `proposals_list`, `proposal_withdraw`, `undo_batch` | Waits for the user in the Agent panel (unless autopilot) |
 | Project | `status`, `scan`, `open`, `create`, `undo`, `redo`, `settings`, `media_import` | Directly, one undo step each |
-| Speech | `transcribe`, `align`, `mouth_noises`, `silence`, `fillers`, `fillers_review`, `speed` | Directly; `apply: false` is a dry run |
-| Picture | `layouts`, `zooms`, `faces` | Directly; dry run available |
+| Speech | `transcribe`, `align`, `mouth_noises`, `silence`, `fillers`, `fillers_review`, `speed`, `transcript_fix` | Directly; `apply: false` is a dry run; word fixes are not undo steps |
+| Picture | `layouts`, `zooms` (automatic and single zooms), `faces` | Directly; dry run available |
 | Shorts | `shorts`, `short_create`, `short_footage`, `short_from_take` | Directly |
-| Graphics | `graphics`, `graphics_install`, `graphic_add`, `graphic_set`, `graphic_write_file`, `graphic_render`, `graphic_check`, `graphic_templatize`, `library_save`, `brand_kits`, `brand_pick` | Directly (source edits have no undo) |
+| Graphics | `graphics`, `graphics_install`, `graphic_add`, `graphic_set` (incl. move, remove), `graphic_write_file`, `graphic_render`, `graphic_check`, `graphic_templatize`, `library_save`, `library_remove`, `brand_kits`, `brand_kit_set`, `brand_pick` | Directly (source edits, kits and the library have no undo) |
 | Finish | `chapters`, `check`, `export`, `export_status` | Directly; export only on the user's go |
 
-The human UI has 137 Tauri commands; 42 have no agent path (manual zooms, chapter and short
-editing, word text fixes, brand kit authoring, library removal, playback, export cancel…). Two
-agent tools have no UI (`scan`, `telemetry_get`). Details in [gaps.md](gaps.md#3-agent-surface).
+The human UI has 137 Tauri commands. Since 21 Oct the agent can also author zooms, edit chapters
+and shorts, fix words, manage brand kits and the library, set media roles and cancel exports;
+what stays UI-only is mostly playback, preview hit-testing and API keys. Every writing tool
+takes the project's `project` id. Two agent tools have no UI (`scan`, `telemetry_get`). Details in [gaps.md](gaps.md#3-agent-surface).
 
 ## Platforms
 

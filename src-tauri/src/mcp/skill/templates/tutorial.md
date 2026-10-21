@@ -155,8 +155,10 @@ unless the saved answers say yes). If yes:
 
 ## 7. Chapters (automatic, last edit)
 
-Chapters come last, once everything else is cut, since they follow the final edit. Run
-`chapters`. If `scan` said there is no AI key, skip this and say so.
+Chapters come last, once everything else is cut, since they follow the final edit. Read
+`transcript_get`, pick where each topic starts (at least 3, each 10 s or longer, the first at the
+start), and send `chapters` with `set`: a `title` and the `atWord` each starts at. Use the app's
+own pass (`chapters` without `set`) only if the user asks for it.
 
 ## 8. Check, status and summary (automatic)
 

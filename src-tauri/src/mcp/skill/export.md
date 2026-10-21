@@ -2,7 +2,7 @@
 
 0. Chapters come right before export, never earlier: they read the final edit's words. Run
    `status`; if chapters were never made (and the user wants them) or it says they are out of
-   date, run `chapters` now and show them to the user.
+   date, make them now (`chapters` with `set`, as SKILL.md says) and show them to the user.
    Then run `check` (it reads the final edit too). Tell the user about any error or warning
    and fix it with their go (`check` with `fix`); an error stops the export.
 1. When the edit is done, ask first: "Export now?" with the choices, default first:

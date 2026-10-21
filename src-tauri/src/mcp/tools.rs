@@ -109,11 +109,14 @@ pub struct ToolDef {
 /// graphic source, the shared library, saved answers. Sent to clients as `destructiveHint`;
 /// every other writing tool only makes changes that are one undo step, or adds new files.
 pub const DESTRUCTIVE: &[&str] = &[
+    "brand_kit_set",
     "export",
     "graphic_set",
     "graphic_write_file",
+    "library_remove",
     "library_save",
     "template_save",
+    "transcript_fix",
 ];
 
 pub fn destructive(name: &str) -> bool {
@@ -952,8 +955,11 @@ mod tests {
                     json!({ "graphic": "g", "path": "index.html", "contents": "" })
                 }
                 // These work without a project open (and installing would download).
+                "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
                 "open" | "create" | "export_status" | "template" | "template_save" | "graphics"
-                | "graphics_install" | "brand_kits" => continue,
+                | "graphics_install" | "brand_kits" | "brand_kit_set" | "library_remove" => {
+                    continue
+                }
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();

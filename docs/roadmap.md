@@ -44,23 +44,6 @@ flowchart LR
 
 ## Now
 
-<a id="agt-1"></a>
-### AGT-1 · Agent parity for cleaning up and correcting — M
-
-- **Why:** every session ends with manual cleanup the agent can't do.
-- **Do:** add operations to **existing** tools rather than new tools (keeps the count flat):
-  `graphic_set` gains `remove` and `moveTo` (word or time); `shorts` gains `remove` and range
-  edit; `library_save` gains `remove`; `brand_kits` gains `set` (colours, font, logo files);
-  `zooms` gains `add` / `update` / `remove` for manual zooms; a `transcript_fix` op for word
-  text (shared with every short, as the UI does); `chapters` gains `set`; `export` gains `cancel`;
-  `media_import` takes optional roles.
-- **Then the templates change:** when an agent is connected it writes the chapters and picks the
-  shorts itself (`chapters set`, `short_create`); the app's cloud passes stay for users without
-  an agent (decided 21 Oct).
-- **Also:** direct actions check `project` before they run, not under the command lock
-  (each action takes the lock itself); move the check inside the lock as the ops are touched.
-- **Depends:** SAFE-1. **Done when:** each new op has a test, one undo step, and appears in the skill.
-
 <a id="agt-2"></a>
 ### AGT-2 · Thorough mode and an honest report (skill only) — S
 
@@ -164,7 +147,7 @@ Rough order; the first four are the foundations the Later tier builds on.
 <a id="agt-4"></a>
 ### AGT-4 · Readiness report, schema cost and long jobs — S/M
 
-- **Do:** measure the 53 tools' schema cost in Claude Code, Codex and the Claude app; if
+- **Do:** measure the 56 tools' schema cost in Claude Code, Codex and the Claude app; if
   material, a small default set plus searchable on-demand schemas (names and CLI unchanged).
   A read-only `readiness` that works without a project (app/bridge versions, project and
   revision, models and runtimes installed, keys present yes/no, what is unavailable and why).
@@ -463,6 +446,18 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **21 Oct 2026 (night)** — <a id="agt-1"></a>**AGT-1** agent parity for cleaning up and
+  correcting: `zooms` `list` / `create` / `update` / `remove`; `graphic_set` `moveToUs` /
+  `moveToWord` / `remove`; `chapters` `set` (agent-written, by word or time); `shorts` `remove`
+  and `range` (a new stretch follows the video again, its own cuts dropped in the same undo
+  step; take shorts refused); `export` `cancel`; `media_import` `roles` (also on media already
+  imported). Three small new tools instead of making read-only listings writable:
+  `transcript_fix` (not an undo step; it reports the old text), `brand_kit_set`,
+  `library_remove` (56 tools now). The tutorial template and skill now have the agent write the
+  chapters itself. The SAFE-1 limit is closed: `opened()` refuses a call bound to another
+  project, and the commands it runs re-check that handle under the command lock. Tested: zooms,
+  graphic move/remove, chapters, shorts, word fixes and roles (`brand_kit_set` and
+  `library_remove` are thin wrappers over the UI's tested commands; not tested through MCP).
 - **21 Oct 2026 (evening)** — the first five Now items:
   - <a id="fix-1"></a>**FIX-1** the graphics render queue now only replaces a waiting render
     for the same graphic *and* the same output (canvas, length, fps, entrance), so the video
