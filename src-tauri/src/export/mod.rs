@@ -266,10 +266,12 @@ pub struct SceneEvaluator {
     nv12_output: bool,
     /// The document is fixed, so the wallpaper or gradient is built once rather than per frame.
     wallpaper: std::cell::OnceCell<Option<VideoFrame>>,
-    /// Enabled webcam focus segments on the timeline, merged.
-    webcam_focus: std::cell::OnceCell<Vec<(u64, u64)>>,
-    /// A short's scenes on its timeline.
-    short_scenes: std::cell::OnceCell<Vec<(u64, u64, crate::short_scenes::SceneMode)>>,
+    /// The timeline's layouts as they play, worked out once.
+    layouts: std::cell::OnceCell<crate::layouts::Resolved>,
+    /// How each camera clip is framed (by clip id), once its face is known.
+    camera_framing: std::cell::RefCell<
+        std::collections::HashMap<String, (Option<crate::face::FocusPoint>, (f32, f32))>,
+    >,
     /// Where the camera fills the frame, for the graphics that ease in over it.
     full_camera: std::cell::OnceCell<Vec<(u64, u64)>>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
@@ -547,8 +549,8 @@ impl SceneEvaluator {
             decode_limit: DecodeLimit::NONE,
             nv12_output: false,
             wallpaper,
-            webcam_focus: std::cell::OnceCell::new(),
-            short_scenes: std::cell::OnceCell::new(),
+            layouts: std::cell::OnceCell::new(),
+            camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
@@ -731,18 +733,83 @@ impl SceneEvaluator {
         shown
     }
 
+    /// The timeline's layouts as they play.
+    fn layouts(&self) -> &crate::layouts::Resolved {
+        self.layouts
+            .get_or_init(|| crate::layouts::resolve::of_document(&self.document))
+    }
+
+    /// How camera clip `clip` is framed: its face, or the hand framing.
+    fn framing_of(&self, clip: &Clip) -> (Option<crate::face::FocusPoint>, (f32, f32)) {
+        if let Some(found) = self.camera_framing.borrow().get(&clip.id) {
+            return *found;
+        }
+        let style = &self.document.layout;
+        let found = crate::shorts::camera_framing(&self.root, style, clip);
+        // A face not found yet may be found while this plays (its track is made in the
+        // background): look again next time.
+        if found.0.is_some() || !style.face_framing || style.camera_clips.contains_key(&clip.id) {
+            self.camera_framing
+                .borrow_mut()
+                .insert(clip.id.clone(), found);
+        }
+        found
+    }
+
+    /// The screen's place and the part of it that shows in a slot that fills: cut to the
+    /// slot's shape, following the zooms (a short's own zoom and pan on top).
+    fn fill_view(
+        &self,
+        asset: &str,
+        local: u64,
+        frame: (u32, u32),
+        rect: crate::layouts::arrange::Rect,
+    ) -> (crate::layouts::arrange::Rect, (f32, f32, f32, f32)) {
+        let short = self.document.short_layout.clone().unwrap_or_default();
+        let crop = self.screen_crop_at(asset, local);
+        let (center, zoom) = if short.follow_zooms {
+            let zooms = self.zooms_for(asset);
+            let config = crate::zoom::eval_config_for(&self.document.zooms);
+            let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
+            (
+                (camera.center_x as f32, camera.center_y as f32),
+                short.screen_zoom * camera.scale.max(1.0) as f32,
+            )
+        } else {
+            (
+                (crop.0 + crop.2 / 2.0, crop.1 + crop.3 / 2.0),
+                short.screen_zoom,
+            )
+        };
+        let (placed, uv) = crate::shorts::screen_placement(
+            frame.0,
+            frame.1,
+            crop,
+            rect.pixels(self.width, self.height),
+            zoom,
+            center,
+            (short.screen_pan_x, short.screen_pan_y),
+        );
+        (crate::layouts::arrange::Rect::of(placed), uv)
+    }
+
     pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
+        use crate::layouts::arrange::{arrange, blend, Canvas, Sources};
         let shown = self.shown(edited_us);
         let at = |clip: &Clip| clip.local_us(edited_us).unwrap_or(clip.in_us);
-        // Screen and camera decode in parallel; each waits on its own FFmpeg process.
+        let layouts = self.layouts();
+        // Screen and camera decode in parallel; each waits on its own FFmpeg process. A picture
+        // that some layout shows keeps decoding while hidden, so a layout change never waits
+        // for a decoder to start.
         let screen_job = shown
             .screen
+            .filter(|_| layouts.shows_screen())
             .map(|(_, clip)| self.picture_job(clip, at(clip)))
             .transpose()?
             .flatten();
         let webcam_job = shown
             .webcam
-            .filter(|_| self.document.layout.webcam_enabled)
+            .filter(|_| layouts.shows_camera())
             .map(|clip| self.picture_job(clip, at(clip)))
             .transpose()?
             .flatten();
@@ -762,22 +829,29 @@ impl SceneEvaluator {
             };
             Ok::<_, String>((screen, webcam))
         })?;
-        if let Some(short) = self.document.short_layout.clone() {
-            return self.split_scene(&short, edited_us, &shown, screen, webcam);
-        }
+        let style = &self.document.layout;
         let unit = crate::render::layout_px_unit(self.width, self.height);
-        let has_screen = screen.is_some();
-        let has_webcam = webcam.is_some();
+        let screen_clip = shown.screen.map(|(_, clip)| clip);
+        let local = screen_clip.map(at);
+        let frame = layouts.frame_at(edited_us);
+        let canvas = Canvas {
+            width: self.width,
+            height: self.height,
+            unit,
+        };
+        let sources = Sources {
+            screen: screen.as_ref().map(|f| (f.width, f.height)),
+            camera: webcam.as_ref().map(|f| (f.width, f.height)),
+        };
+        let from = arrange(frame.from, style, canvas, sources);
+        let to = arrange(frame.to, style, canvas, sources);
+        let parts = blend(&from, &to, frame.weight);
         // Nothing to frame: the canvas is black, with any overlays on it.
-        let mut scene = if has_screen || has_webcam {
-            let mut layout = self.document.layout.clone();
-            layout.webcam_enabled = has_webcam;
-            Scene::from_layout_scaled(
+        let mut scene = if screen.is_some() || webcam.is_some() {
+            Scene::backdrop(
                 self.width,
                 self.height,
-                &layout,
-                screen,
-                webcam,
+                &background_layout(&self.document),
                 self.background()?,
                 unit,
             )?
@@ -789,163 +863,76 @@ impl SceneEvaluator {
                 layers: Vec::new(),
             }
         };
-        if let (Some((_, clip)), true) = (shown.screen, has_screen) {
-            let local = at(clip);
-            let (x, y, w, h) = self.screen_view(&clip.asset, local);
-            scene.apply_screen_uv(x, y, w, h);
+        if let (Some(picture), Some(slot), Some(clip), Some(local)) =
+            (screen, parts.screen, screen_clip, local)
+        {
+            let size = (picture.width, picture.height);
+            let view = |s: &crate::layouts::arrange::ScreenSlot| {
+                if s.fill {
+                    self.fill_view(&clip.asset, local, size, s.rect)
+                } else {
+                    (s.rect, self.screen_view(&clip.asset, local))
+                }
+            };
+            // Between a fitted and a filled screen, each end's view blends into the other's.
+            let (rect, uv) = match (from.screen, to.screen) {
+                (Some(a), Some(b))
+                    if a.fill != b.fill && frame.weight > 0.0 && frame.weight < 1.0 =>
+                {
+                    let ((ra, ua), (rb, ub), t) = (view(&a), view(&b), frame.weight);
+                    let l = |x: f32, y: f32| x + (y - x) * t;
+                    (
+                        ra.lerp(rb, t),
+                        (l(ua.0, ub.0), l(ua.1, ub.1), l(ua.2, ub.2), l(ua.3, ub.3)),
+                    )
+                }
+                _ => view(&slot),
+            };
+            let slot = crate::layouts::arrange::ScreenSlot { rect, ..slot };
+            scene.push_screen(picture, &slot, uv, style, unit);
             self.push_cursor(&mut scene, &clip.asset, local)?;
         }
-        if has_webcam {
-            let focus = &self.document.webcam_focus;
-            let ranges = self
-                .webcam_focus
-                .get_or_init(|| focus.edited_ranges(&self.document.focus_clock()));
-            let weight = crate::webcam_focus::focus_weight(
-                ranges,
-                edited_us,
-                focus.settings.transition_us(),
-            );
-            scene.apply_webcam_focus(
-                &self.document.layout,
-                focus.settings.focus_size_pct,
-                weight,
-                unit,
-            );
-            // Out of the way of work under it (not while it fills the frame on purpose).
+        if let (Some(picture), Some(slot)) = (webcam, parts.camera) {
+            let (focus, offset) = shown
+                .webcam
+                .map_or((None, (0.0, 0.0)), |clip| self.framing_of(clip));
+            let uv =
+                crate::render::camera_uv((picture.width, picture.height), &slot, focus, offset);
+            scene.push_camera(picture, &slot, uv, style, unit)?;
+            // A bubble gets out of the way of work under it.
             let hidden = crate::bubble_hide::hidden_weight(self.bubble_hidden(), edited_us);
             if hidden > 0.0 {
-                scene.fade_webcam(1.0 - hidden * (1.0 - weight));
+                let bubble = frame.share(|l| matches!(l, crate::layouts::Layout::Bubble(_)));
+                scene.fade_webcam(1.0 - hidden * bubble);
             }
         }
         self.push_overlays(&mut scene, &shown, edited_us)?;
-        if let (Some((_, clip)), true) = (shown.screen, has_screen) {
-            self.push_shortcut_badge(&mut scene, &clip.asset, at(clip));
-        }
-        // Captions go over the video, and graphics over everything.
-        if let Some((frame, x, y)) = self.caption_at(edited_us) {
-            scene.push_caption(frame, x, y);
-        }
-        self.push_graphics(&mut scene, &shown, edited_us, false)?;
-        Ok(scene)
-    }
-
-    /// A short's vertical frame: the camera across the top or bottom and the screen in the
-    /// rest, cut to that shape and following the screen's zooms, with captions placed to suit.
-    fn split_scene(
-        &self,
-        short: &crate::shorts::ShortLayout,
-        edited_us: u64,
-        shown: &Shown<'_>,
-        screen: Option<VideoFrame>,
-        webcam: Option<VideoFrame>,
-    ) -> Result<Scene, String> {
-        use crate::render::{Layer, LayerRole};
-        let layout = &self.document.layout;
-        let webcam = webcam.filter(|_| layout.webcam_enabled);
-        let has_camera = webcam.is_some();
-        // Scenes move the seam: all the way down or up for a camera or screen scene.
-        let scenes = self.short_scenes.get_or_init(|| {
-            crate::short_scenes::edited_ranges(&short.scenes, |media| {
-                self.document
-                    .clock_asset(media)
-                    .map(|asset| self.document.asset_clock(asset))
-            })
-        });
-        let base = short.camera_pct / 100.0;
-        let (share, toward_full) = crate::short_scenes::camera_share(
-            scenes,
-            base,
-            short.scene_transition_ms as u64 * 1_000,
-            edited_us,
-        );
-        let rects =
-            crate::shorts::split_rects_at(self.width, self.height, short, has_camera, share);
-        let mut layers = Vec::new();
-        let screen_clip = shown.screen.map(|(_, clip)| clip);
-        let local = screen_clip.map(|clip| clip.local_us(edited_us).unwrap_or(clip.in_us));
-        // A camera scene leaves the screen no room.
-        let screen = screen.filter(|_| rects.screen.3 > 0);
-        if let (Some(screen), Some(clip), Some(local)) = (screen, screen_clip, local) {
-            let crop = self.screen_crop_at(&clip.asset, local);
-            let (center, zoom) = if short.follow_zooms {
-                let zooms = self.zooms_for(&clip.asset);
-                let config = crate::zoom::eval_config_for(&self.document.zooms);
-                let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
-                (
-                    (camera.center_x as f32, camera.center_y as f32),
-                    short.screen_zoom * camera.scale.max(1.0) as f32,
-                )
-            } else {
-                (
-                    (crop.0 + crop.2 / 2.0, crop.1 + crop.3 / 2.0),
-                    short.screen_zoom,
-                )
-            };
-            let ((x, y, w, h), (uv_x, uv_y, uv_w, uv_h)) = crate::shorts::screen_placement(
-                screen.width,
-                screen.height,
-                crop,
-                rects.screen,
-                zoom,
-                center,
-                (short.screen_pan_x, short.screen_pan_y),
-            );
-            let mut layer = Layer::placed(screen, x, y, w, h).with_role(LayerRole::Screen);
-            layer.uv_x = uv_x;
-            layer.uv_y = uv_y;
-            layer.uv_w = uv_w;
-            layer.uv_h = uv_h;
-            layers.push(layer);
-        }
-        if let (Some((x, y, w, h)), Some(webcam)) = (rects.camera, webcam) {
-            let (focus, offset) = shown.webcam.map_or((None, (0.0, 0.0)), |clip| {
-                crate::shorts::camera_framing(&self.root, short, clip, layout.webcam_mirror)
-            });
-            let mut layer = Layer::placed(webcam, x, y, w, h)
-                .with_role(LayerRole::Webcam)
-                .focus_uv(focus, w, h, offset);
-            if layout.webcam_mirror {
-                layer = layer.mirrored();
-            }
-            layers.push(layer);
-        }
-        // The short's background (the video's own unless it chose another), behind everything.
-        let background_layout = crate::shorts::background_layout(layout, short);
-        if let Some(paper) = self.background()? {
-            layers.insert(
-                0,
-                Layer::placed(paper, 0, 0, self.width, self.height)
-                    .with_role(LayerRole::Background)
-                    .cover_uv(self.width, self.height),
-            );
-        }
-        let mut scene = Scene {
-            width: self.width,
-            height: self.height,
-            background: background_layout.background_rgba()?.0,
-            layers,
-        };
-        if let (Some(clip), Some(local)) = (screen_clip, local) {
-            self.push_cursor(&mut scene, &clip.asset, local)?;
-        }
-        self.push_overlays(&mut scene, shown, edited_us)?;
         if let (Some(clip), Some(local)) = (screen_clip, local) {
             self.push_shortcut_badge(&mut scene, &clip.asset, local);
         }
-        // Graphics over the screen go under the captions; the others over everything.
-        self.push_graphics(&mut scene, shown, edited_us, true)?;
-        if let Some((frame, x, _)) = self.caption_at(edited_us) {
-            // Where the split puts them, moving to a fixed spot as a scene fills the frame.
-            let split = crate::shorts::split_rects(self.width, self.height, short, has_camera);
-            let at_split =
-                crate::shorts::caption_y(short.caption_spot, &split, frame.height, self.height);
-            let full = (self.height as f32 * crate::short_scenes::FULL_FRAME_CAPTION_AT
-                - frame.height as f32 / 2.0)
-                .clamp(0.0, self.height.saturating_sub(frame.height) as f32);
-            let y = at_split as f32 + (full - at_split as f32) * toward_full;
-            scene.push_caption(frame, x, y.round() as u32);
+        // A short's graphics over the screen go under the captions; graphics go over
+        // everything else.
+        self.push_graphics(&mut scene, &shown, edited_us, true)?;
+        if let Some((caption, x, y)) = self.caption_at(edited_us) {
+            let y = match &self.document.short_layout {
+                // Where the short's layout puts them, moving as the layout changes.
+                Some(short) => {
+                    let spot = |parts| {
+                        crate::shorts::caption_y(
+                            short.caption_spot,
+                            parts,
+                            caption.height,
+                            self.height,
+                        )
+                    };
+                    let (a, b) = (spot(&from), spot(&to));
+                    (a + (b - a) * frame.weight).round() as u32
+                }
+                None => y,
+            };
+            scene.push_caption(caption, x, y);
         }
-        self.push_graphics(&mut scene, shown, edited_us, false)?;
+        self.push_graphics(&mut scene, &shown, edited_us, false)?;
         Ok(scene)
     }
 
@@ -1002,7 +989,7 @@ impl SceneEvaluator {
                     if (slot == GraphicSlot::OverScreen) != over_screen {
                         continue;
                     }
-                    crate::shorts::graphic_rect(short, &clip.id, self.width, self.height)
+                    crate::shorts::graphic_rect(&self.document, &clip.id, self.width, self.height)
                 }
                 None if over_screen => continue,
                 None => (0, 0, self.width, self.height),
@@ -1103,7 +1090,7 @@ impl SceneEvaluator {
         }
         // A long recording is in segment files one after another: where the next one starts
         // inside a clip playing now, a decoder of that file is needed too.
-        let webcam = self.document.layout.webcam_enabled;
+        let webcam = self.layouts().shows_camera();
         for clip in self.shown(edited_us).pictures(webcam) {
             let Some(local) = clip.local_us(edited_us) else {
                 continue;
@@ -1114,12 +1101,14 @@ impl SceneEvaluator {
             let crate::sequence::sources::StreamSource::Segments(segments) = &*source else {
                 continue;
             };
-            let reach = local.saturating_add(horizon_us).min(clip.out_us());
+            let reach = local
+                .saturating_add(clip.source_offset(horizon_us))
+                .min(clip.out_us());
             for segment in segments
                 .iter()
                 .filter(|s| s.available && s.start_us > local && s.start_us < reach)
             {
-                edges.insert(clip.start_us + (segment.start_us - clip.in_us));
+                edges.insert(clip.timeline_at(segment.start_us));
             }
         }
         let mut prefetched = self.prefetched.borrow_mut();
@@ -1149,7 +1138,7 @@ impl SceneEvaluator {
     /// Starts decoders for the pictures shown at `edge`, other than those a decoder already
     /// playing (`before`, with where it is) reads on to. False when one was turned away.
     fn prefetch_shown(&self, edge: u64, before: &[(&Clip, u64)], yuv: bool) -> bool {
-        let webcam = self.document.layout.webcam_enabled;
+        let webcam = self.layouts().shows_camera();
         let mut accepted = true;
         for clip in self.shown(edge).pictures(webcam) {
             let local = clip.local_us(edge).unwrap_or(clip.in_us);
@@ -1385,21 +1374,37 @@ impl SceneEvaluator {
     }
 
     /// Timeline stretches where clicks, drags, scrolls, a resting pointer or the caret land on
-    /// the webcam bubble, found on the layout's own canvas size (not this evaluator's), so the
-    /// preview and every export size hide it at the same moments.
+    /// the camera bubble showing then, found on the style's own canvas size (not this
+    /// evaluator's), so the preview and every export size hide it at the same moments. Only
+    /// bubbles over a fitted screen: where the screen fills, its view moves with the zooms.
     fn find_bubble_hidden(&self) -> Vec<(u64, u64)> {
         use crate::bubble_hide::{hide_ranges, hits, on_bubble, probes, ENTER_MARGIN, STAY_MARGIN};
+        use crate::layouts::Layout;
         let layout = &self.document.layout;
-        // Only over the screen: a short's split puts the camera beside it.
-        if !layout.webcam_auto_hide
-            || !layout.webcam_enabled
-            || self.document.short_layout.is_some()
-        {
+        if !layout.webcam_auto_hide {
             return Vec::new();
         }
         let Ok((width, height)) = layout.preview_dimensions() else {
             return Vec::new();
         };
+        // Each bubble, with where it shows.
+        let resolved = self.layouts();
+        let mut bubbles: Vec<(crate::layouts::Bubble, Vec<(u64, u64)>)> = Vec::new();
+        for shown in
+            std::iter::once(&resolved.base).chain(resolved.pieces.iter().map(|p| &p.layout))
+        {
+            let Layout::Bubble(bubble) = shown else {
+                continue;
+            };
+            if bubble.screen.fills(width, height) || bubbles.iter().any(|(b, _)| b == bubble) {
+                continue;
+            }
+            let ranges = resolved.ranges_where(|l| l == shown);
+            bubbles.push((bubble.clone(), ranges));
+        }
+        if bubbles.is_empty() {
+            return Vec::new();
+        }
         let unit = crate::render::layout_px_unit(width, height);
         let short_side = width.min(height) as f32;
         let (mut enter, mut stay) = (Vec::new(), Vec::new());
@@ -1415,8 +1420,6 @@ impl SceneEvaluator {
             let screen =
                 crate::render::screen_layer_rect(width, height, layout, source_w, source_h, unit);
             let (camera_w, camera_h) = camera_size(Path::new(&asset.path));
-            let bubble =
-                crate::render::webcam_bubble_rect(width, height, camera_w, camera_h, layout);
             let activity = crate::telemetry::activity::recording_activity(Path::new(&asset.path));
             // Only what plays.
             let probes: Vec<_> = probes(&activity)
@@ -1438,13 +1441,24 @@ impl SceneEvaluator {
                     screen.1 as f32 + v * screen.3 as f32,
                 ))
             };
-            for (margin, out) in [(ENTER_MARGIN, &mut enter), (STAY_MARGIN, &mut stay)] {
-                let found = hits(&probes, |t, x, y| {
-                    canvas_point(t, x, y)
-                        .is_some_and(|(px, py)| on_bubble(bubble, margin * short_side, px, py))
-                });
-                for (a, b) in found {
-                    out.extend(clock.source_range_to_edited(a, b + 1));
+            for (bubble, showing) in &bubbles {
+                let rect = crate::render::webcam_bubble_rect(
+                    width, height, camera_w, camera_h, layout, bubble,
+                );
+                for (margin, out) in [(ENTER_MARGIN, &mut enter), (STAY_MARGIN, &mut stay)] {
+                    let found = hits(&probes, |t, x, y| {
+                        canvas_point(t, x, y)
+                            .is_some_and(|(px, py)| on_bubble(rect, margin * short_side, px, py))
+                    });
+                    let edited: Vec<(u64, u64)> = found
+                        .into_iter()
+                        .flat_map(|(a, b)| clock.source_range_to_edited(a, b + 1))
+                        .collect();
+                    // Only while this bubble is the one showing.
+                    out.extend(crate::layouts::subtract(
+                        &edited,
+                        &crate::layouts::subtract(&[(0, u64::MAX)], showing),
+                    ));
                 }
             }
         }
@@ -1522,8 +1536,14 @@ impl SceneEvaluator {
         let margin = (self.width.min(self.height) as f32 * 0.025).round() as u32;
         let x = (sx + sw).saturating_sub(frame.width + margin).max(sx);
         let captions = &self.document.captions;
-        let below_taken = (captions.enabled && captions.position == "bottom")
-            || (layout.webcam_enabled && layout.webcam_position == "bottom-right");
+        // A camera bubble in the screen's bottom right corner takes the badge's usual place.
+        let bubble_there = scene.layers.iter().any(|l| {
+            l.role == crate::render::LayerRole::Webcam
+                && l.width < self.width / 2
+                && l.x + l.width / 2 > sx + sw / 2
+                && l.y + l.height / 2 > sy + sh / 2
+        });
+        let below_taken = (captions.enabled && captions.position == "bottom") || bubble_there;
         let y = if below_taken {
             sy + margin
         } else {
@@ -3379,6 +3399,7 @@ mod tests {
             source_end_us: 1_200_000,
             reason: String::new(),
             layout: ShortLayout::default(),
+            layouts: crate::layouts::LayoutTrack::for_short(),
             media: None,
             edit: None,
             take: None,
@@ -3393,6 +3414,7 @@ mod tests {
             crate::shorts::slice_sequence(&base.sequence, &base.assets, 300_000, 1_200_000);
         document.layout.aspect_ratio = "9:16".into();
         document.short_layout = Some(short.layout.clone());
+        document.layouts = short.layouts.clone();
 
         // Standard sizes are reshaped to the canvas: 720p becomes 720x1280.
         let output = export(
@@ -3624,8 +3646,8 @@ mod tests {
             decode_limit: DecodeLimit::NONE,
             nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
-            webcam_focus: std::cell::OnceCell::new(),
-            short_scenes: std::cell::OnceCell::new(),
+            layouts: std::cell::OnceCell::new(),
+            camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
@@ -3684,8 +3706,8 @@ mod tests {
             decode_limit: DecodeLimit::NONE,
             nv12_output: false,
             wallpaper: std::cell::OnceCell::new(),
-            webcam_focus: std::cell::OnceCell::new(),
-            short_scenes: std::cell::OnceCell::new(),
+            layouts: std::cell::OnceCell::new(),
+            camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
@@ -3726,6 +3748,7 @@ mod tests {
                 duration_us: 5_000_000,
                 link: None,
                 fit: crate::sequence::Fit::Contain,
+                speed: 1.0,
             });
             document.sequence.tracks.push(track);
         }
@@ -3778,7 +3801,7 @@ mod tests {
             "durationUs": 10_000_000, "streams": []
         }))
         .unwrap()];
-        document.layout.webcam_enabled = false;
+        document.layouts.base = crate::layouts::Layout::ScreenOnly(Default::default());
         let evaluator = scenes(dir.path(), document, 640, 360);
         let screen = || {
             let mut scene = Scene {
@@ -3861,6 +3884,7 @@ mod tests {
             duration_us: 1_000_000,
             link: None,
             fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
         });
         document.sequence.tracks.push(track);
         document.validate().unwrap();
@@ -3928,6 +3952,7 @@ mod tests {
             duration_us: 3_000_000,
             link: None,
             fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
         });
         document.assets.push(graphic);
         document.sequence.tracks.push(track);
@@ -4001,6 +4026,7 @@ mod tests {
             duration_us: 3_000_000,
             link: None,
             fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
         };
         let (card_clip, lower_clip) = (clip("g1", &card.id), clip("g2", &lower_third.id));
         document.assets.push(card.clone());
@@ -4056,10 +4082,8 @@ mod tests {
             entrance(&short_document, &card, &card_clip, &[]),
             Entrance::Cut
         );
-        // Without a camera nothing fills the frame with it.
-        let mut no_camera = document.clone();
-        no_camera.layout.webcam_enabled = false;
-        assert!(crate::graphics::full_camera_ranges(&no_camera).is_empty());
+        // Without a camera-only section nothing fills the frame with the camera.
+        assert!(crate::graphics::full_camera_ranges(&document).is_empty());
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the
@@ -4497,7 +4521,9 @@ mod tests {
         document.sequence =
             crate::shorts::slice_sequence(&base.sequence, &base.assets, 300_000, 1_200_000);
         document.layout.aspect_ratio = "9:16".into();
-        document.short_layout = Some(crate::shorts::ShortLayout {
+        document.short_layout = Some(crate::shorts::ShortLayout::default());
+        document.layouts.base = crate::layouts::Layout::SideBySide(crate::layouts::SideBySide {
+            camera_first: true,
             camera_pct: 70.0,
             ..Default::default()
         });
@@ -4516,9 +4542,8 @@ mod tests {
             .map(|c| c.id.clone())
             .collect();
         assert!(!cameras.is_empty());
-        let layout = manual.short_layout.as_mut().unwrap();
         for id in cameras {
-            layout.camera_clips.insert(id, Default::default());
+            manual.layout.camera_clips.insert(id, Default::default());
         }
         manual
     }

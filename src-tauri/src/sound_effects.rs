@@ -260,19 +260,9 @@ pub fn plan(document: &EditDocument) -> Vec<Effect> {
         return Vec::new();
     }
     let graphics = graphic_ranges(document);
-    // A short's camera scenes show no screen, so its clicks are not heard either.
-    let camera_scenes: Vec<(u64, u64)> = match &document.short_layout {
-        Some(short) => crate::short_scenes::edited_ranges(&short.scenes, |media| {
-            document
-                .clock_asset(media)
-                .map(|asset| document.asset_clock(asset))
-        })
-        .into_iter()
-        .filter(|(_, _, mode)| *mode == crate::short_scenes::SceneMode::Camera)
-        .map(|(a, b, _)| (a, b))
-        .collect(),
-        None => Vec::new(),
-    };
+    let layouts = crate::layouts::resolve::of_document(document);
+    // Where the camera alone shows, the screen is not seen, so its clicks are not heard.
+    let camera_scenes = layouts.ranges_where(|l| !l.shows_screen());
     let mut effects = Vec::new();
     let recordings: Vec<&crate::sequence::Asset> = document
         .assets
@@ -321,27 +311,9 @@ pub fn plan(document: &EditDocument) -> Vec<Effect> {
                 }
             }
         }
-        // The webcam growing to fill the frame and going back.
-        if document.short_layout.is_none() && document.layout.webcam_enabled {
-            for (a, b) in document.webcam_focus.edited_ranges(&document.focus_clock()) {
-                transitions.push((a, 1.0));
-                transitions.push((
-                    b.saturating_sub(document.webcam_focus.settings.transition_us()),
-                    WHOOSH_OUT_GAIN,
-                ));
-            }
-        }
-        // A short's scenes switching.
-        if let Some(short) = &document.short_layout {
-            let scenes = crate::short_scenes::edited_ranges(&short.scenes, |media| {
-                document
-                    .clock_asset(media)
-                    .map(|asset| document.asset_clock(asset))
-            });
-            for (a, b, _) in scenes {
-                transitions.push((a, 1.0));
-                transitions.push((b, WHOOSH_OUT_GAIN));
-            }
+        // The layout changing: into a section, and back to the base.
+        for (at, into) in layouts.changes() {
+            transitions.push((at, if into { 1.0 } else { WHOOSH_OUT_GAIN }));
         }
         let duration = document.duration_us();
         transitions.retain(|&(at, _)| at > 0 && at < duration && !inside(&graphics, at));

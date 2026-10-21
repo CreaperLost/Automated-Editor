@@ -36,7 +36,8 @@ pub static TEMPLATES: [Template; 3] = [
         name: "shorts",
         title: "Shorts from the video",
         description: "Vertical shorts picked by you from the edited video's transcript, with \
-            the split-screen look and scenes picked by the app, then export when the user says.",
+            the split-screen look and layout sections picked by the app, then export when the \
+            user says.",
         text: include_str!("skill/templates/shorts.md"),
     },
     Template {

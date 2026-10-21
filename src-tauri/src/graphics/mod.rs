@@ -528,24 +528,20 @@ pub fn is_overlay(html: &str) -> bool {
     root_has(html, OVERLAY_ATTR)
 }
 
-/// Where the camera fills the frame on `document`'s timeline, sorted and merged: a short's
-/// camera scenes, or the video's webcam focus. Empty when the camera is off.
+/// Where the camera alone takes the frame on `document`'s timeline (a camera-only layout),
+/// sorted and merged. Empty without a camera.
 pub fn full_camera_ranges(document: &crate::project::revision::EditDocument) -> Vec<(u64, u64)> {
-    if !document.layout.webcam_enabled {
+    let has_camera = document.sequence.video_tracks().any(|t| {
+        t.clips.iter().any(|c| {
+            crate::sequence::clip_role(&document.assets, t, c)
+                == Some(crate::sequence::Role::Webcam)
+        })
+    });
+    if !has_camera {
         return Vec::new();
     }
-    let ranges: Vec<(u64, u64)> = match &document.short_layout {
-        Some(short) => crate::short_scenes::edited_ranges(&short.scenes, |media| {
-            document
-                .clock_asset(media)
-                .map(|asset| document.asset_clock(asset))
-        })
-        .into_iter()
-        .filter(|r| r.2 == crate::short_scenes::SceneMode::Camera)
-        .map(|r| (r.0, r.1))
-        .collect(),
-        None => document.webcam_focus.edited_ranges(&document.focus_clock()),
-    };
+    let ranges = crate::layouts::resolve::of_document(document)
+        .ranges_where(|l| matches!(l, crate::layouts::Layout::CameraOnly(_)));
     let mut ranges: Vec<(u64, u64)> = ranges.into_iter().filter(|r| r.1 > r.0).collect();
     ranges.sort();
     let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
@@ -762,6 +758,7 @@ mod tests {
             duration_us,
             link: None,
             fit: Default::default(),
+            speed: 1.0,
         }
     }
 

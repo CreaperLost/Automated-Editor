@@ -20,19 +20,12 @@ interface SettingsStore {
 export const useSettingsStore = create<SettingsStore>((set) => ({
   // Until a project loads its own layout; the same as a new project's (`EditLayout::default`).
   cameraBubble: {
-    enabled: true,
-    shape: "squircle",
-    size: "md",
-    sizePct: 60,
-    roundnessPct: 0,
-    position: "bottom-left",
-    customX: 80,
-    customY: 80,
     borderColor: "#6366f1",
     borderWidth: 8,
     mirror: true,
     shadow: true,
     autoHide: true,
+    faceFraming: true,
   },
 
   canvas: {

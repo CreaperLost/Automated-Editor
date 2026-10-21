@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Check, ClipboardCopy, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import { clipAt, soundSources } from "../../lib/sequence";
+import { clipAt, clipSourceAt, soundSources } from "../../lib/sequence";
 import type { Chapter, OpenedProject } from "../../lib/types";
 
 /** YouTube's rules for description chapters. */
@@ -94,7 +94,7 @@ export const ChaptersPanel: React.FC = () => {
       setError("Move the playhead onto a clip to add a chapter there.");
       return;
     }
-    const sourceUs = Math.round(clip.inUs + (currentTimeUs - clip.startUs));
+    const sourceUs = Math.round(clipSourceAt(clip, currentTimeUs));
     const id = `ch-${sourceUs}-${Date.now().toString(36)}`;
     void save([...chapters, { id, sourceUs, title: "New chapter", media: clip.asset }]);
   };

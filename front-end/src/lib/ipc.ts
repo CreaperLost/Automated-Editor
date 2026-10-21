@@ -29,9 +29,11 @@ import {
   ZoomSettings,
   ProjectZoom,
   ManualZoomInput,
-  WebcamFocus,
-  WebcamFocusDetection,
-  WebcamFocusSettings,
+  FavouriteLayout,
+  Layout,
+  LayoutChange,
+  LayoutPick,
+  PickSettings,
   EditLayout,
   AudioSettings,
   CaptionSettings,
@@ -40,8 +42,8 @@ import {
   Chapter,
   Short,
   ShortLayout,
-  ShortScene,
   AiSettings,
+  FillerEngine,
   AiSettingsView,
   McpApp,
   McpSkillHome,
@@ -170,46 +172,36 @@ export const api = {
       expectedRevision,
       id,
     }),
-  projectWebcamFocusDetect: (
+  /** Changes the layouts of the video, or of short `shortId` (its view comes back). */
+  projectLayoutsChange: (
     projectHandle: string,
     expectedRevision: number,
-    settings: WebcamFocusSettings,
+    shortId: string | null,
+    change: LayoutChange,
   ) =>
-    invokeTauri<WebcamFocusDetection>("project_webcam_focus_detect", {
+    invokeTauri<OpenedProject>("project_layouts_change", {
       projectHandle,
       expectedRevision,
-      settings,
+      shortId,
+      change,
     }),
-  projectWebcamFocusUpdate: (projectHandle: string, expectedRevision: number, focus: WebcamFocus) =>
-    invokeTauri<OpenedProject>("project_webcam_focus_update", {
-      projectHandle,
-      expectedRevision,
-      focus,
-    }),
-  projectWebcamFocusAdd: (
+  /** Picks layout sections from the recording (no AI); sections made by hand stay. */
+  projectLayoutsPick: (
     projectHandle: string,
     expectedRevision: number,
-    editedStartUs: number,
-    editedEndUs: number,
+    shortId: string | null,
+    settings?: PickSettings,
   ) =>
-    invokeTauri<OpenedProject>("project_webcam_focus_add", {
+    invokeTauri<LayoutPick>("project_layouts_pick", {
       projectHandle,
       expectedRevision,
-      editedStartUs,
-      editedEndUs,
+      shortId,
+      settings: settings ?? null,
     }),
-  projectWebcamFocusRemove: (
-    projectHandle: string,
-    expectedRevision: number,
-    editedStartUs: number,
-    editedEndUs: number,
-  ) =>
-    invokeTauri<OpenedProject>("project_webcam_focus_remove", {
-      projectHandle,
-      expectedRevision,
-      editedStartUs,
-      editedEndUs,
-    }),
+  layoutFavouritesList: () => invokeTauri<FavouriteLayout[]>("layout_favourites_list"),
+  layoutFavouriteSave: (name: string, layout: Layout) =>
+    invokeTauri<FavouriteLayout[]>("layout_favourite_save", { name, layout }),
+  layoutFavouriteRemove: (id: string) => invokeTauri<FavouriteLayout[]>("layout_favourite_remove", { id }),
   projectLayoutUpdate: (
     projectHandle: string,
     expectedRevision: number,
@@ -340,8 +332,9 @@ export const api = {
   transcriptSuggestions: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptCutSuggestion[]>("transcript_suggestions", { projectHandle, trackId, shortId: editTarget }),
   /** Sends the kept words to the chosen AI provider; progress arrives as `transcript-progress`. */
-  transcriptAiSuggest: (projectHandle: string, trackId: string) =>
-    invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId }),
+  /** Reviews fillers and retakes with `engine`, or the settings' choice when left out. */
+  transcriptAiSuggest: (projectHandle: string, trackId: string, engine?: FillerEngine) =>
+    invokeTauri<TranscriptCutSuggestion[]>("transcript_ai_suggest", { projectHandle, trackId, engine }),
   mcpStatus: () => invokeTauri<McpStatus>("mcp_status"),
   mcpSetEnabled: (enabled: boolean) => invokeTauri<McpStatus>("mcp_set_enabled", { enabled }),
   /** Adds AeroEdits to (or removes it from) the Claude app's or Codex's MCP settings. */
@@ -414,7 +407,7 @@ export const api = {
       shortId: editTarget,
     }),
   /** Downloads the Parakeet model, or with `"aligner"` the word alignment model. */
-  transcriptDownloadModel: (model: "parakeet" | "aligner" = "parakeet") =>
+  transcriptDownloadModel: (model: "parakeet" | "aligner" | "gpu" | "llm" = "parakeet") =>
     invokeTauri<TranscriptSettingsView>("transcript_download_model", { model }),
   /** Aligns an existing transcript's word times to the audio. */
   transcriptAlign: (projectHandle: string, trackId: string) =>
@@ -583,26 +576,6 @@ export const api = {
       projectHandle,
       expectedRevision,
       shorts: shorts.map(({ editedStartUs: _s, editedEndUs: _e, ...short }) => short),
-    }),
-  /** Picks a short's scenes from its recording; scenes set by hand stay. */
-  projectShortScenesPick: (projectHandle: string, expectedRevision: number, shortId: string) =>
-    invokeTauri<OpenedProject>("project_short_scenes_pick", { projectHandle, expectedRevision, shortId }),
-  /** Adds a scene over `[startUs, endUs)` of the short's own timeline. */
-  projectShortSceneAdd: (
-    projectHandle: string,
-    expectedRevision: number,
-    shortId: string,
-    startUs: number,
-    endUs: number,
-    mode: ShortScene["mode"],
-  ) =>
-    invokeTauri<OpenedProject>("project_short_scene_add", {
-      projectHandle,
-      expectedRevision,
-      shortId,
-      startUs,
-      endUs,
-      mode,
     }),
   /** Asks the AI provider for moments that work as shorts; replaces the shorts list. */
   projectShortsGenerate: (projectHandle: string, trackId: string) =>

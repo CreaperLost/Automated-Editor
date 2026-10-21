@@ -3,7 +3,7 @@
 //! and stored by word id, so they become ordinary `<kind>-<first>-<last>` suggestions that
 //! the review list, "remove all" and rejections already handle.
 use super::client::JsonModel;
-use crate::transcript::{AiSpan, TranscriptSuggestionKind, TranscriptWord};
+use crate::transcript::{AiSpan, Language, TranscriptSuggestionKind, TranscriptWord};
 use serde_json::Value;
 
 /// Words per request, and how many of them repeat the end of the previous chunk so a retake
@@ -29,13 +29,33 @@ Words are written as [index]word. A marker like (pause 1.2s) is a silence betwee
     };
 }
 
-pub const CRITERIA: &str = concat!(
-    criteria!(),
-    "A filler is at most 4 words, a retake at most 60. Be conservative: a wrong cut is worse than a missed one."
-);
+/// Added for Greek transcripts: its fillers, and when they keep their meaning.
+const GREEK: &str = "The transcript is in Greek (tech words may be in English). Greek fillers \
+include the sounds εε, εμ, μμ and the words λοιπόν, δηλαδή, ας πούμε, βασικά, ουσιαστικά, ξέρεις or \
+ξέρετε, κάπως, τέλος πάντων, and εντάξει or οκ opening a sentence. Keep them when they carry \
+meaning, as in \"ας πούμε ότι\", \"δεν ξέρεις\", \"ξέρεις τι\", \"τα βασικά\" or \"είναι εντάξει\". \
+Write \"why\" in English.\n";
 
-pub const SYSTEM_PROMPT: &str = concat!(
-    criteria!(),
+const LIMITS: &str = "A filler is at most 4 words, a retake at most 60. Be conservative: a wrong cut is worse than a missed one.";
+
+/// The criteria for a transcript in `language`, as the in-house review reads them.
+pub fn criteria(language: Language) -> String {
+    [criteria!(), greek_note(language), LIMITS].concat()
+}
+
+/// The system prompt of the app's own review (OpenRouter, OpenAI or the local model).
+pub fn system_prompt(language: Language) -> String {
+    [criteria!(), greek_note(language), ANSWER].concat()
+}
+
+fn greek_note(language: Language) -> &'static str {
+    match language {
+        Language::English => "",
+        Language::Greek => GREEK,
+    }
+}
+
+const ANSWER: &str = concat!(
     "Answer with a JSON object only: {\"cuts\":[{\"type\":\"filler\"|\"retake\",\"from\":<first index>,\"to\":<last index>,\"why\":\"<a few words>\"}]}. \
 Indexes are inclusive. Use {\"cuts\":[]} when nothing should be cut. Be conservative: a wrong cut is worse than a missed one."
 );
@@ -121,10 +141,62 @@ pub fn parse_spans(
         .collect()
 }
 
+/// Leads each page of a candidate review: what the flags are and what to do with them.
+const CANDIDATE_NOTE: &str = "These are windows of the transcript around words the app flagged. \
+Each window lists its flags: cut a flag only when the criteria say so (\"like\" or \"so\" that carry \
+meaning stay, so does a phrase said twice for emphasis), and mark anything else in a window that \
+should go. Filler sounds such as um and uh are cut already. Indexes count over the whole transcript.";
+
+/// Runs the model over the pages of a candidate `plan` of `words` instead of every word: the
+/// small local model reads only the flagged windows, with the flags as hints. Cuts outside a
+/// page's windows are dropped.
+pub fn detect_candidates(
+    model: &mut dyn JsonModel,
+    language: Language,
+    words: &[&TranscriptWord],
+    plan: &super::candidates::Plan,
+    progress: &mut dyn FnMut(f32),
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Vec<AiSpan>, String> {
+    let system = system_prompt(language);
+    let mut spans: Vec<AiSpan> = Vec::new();
+    for (page, windows) in plan.pages.iter().enumerate() {
+        if !keep_going() {
+            return Err("Cancelled".into());
+        }
+        progress(page as f32 / plan.pages.len() as f32);
+        let Some(text) = plan.page_text(words, page) else {
+            continue;
+        };
+        let reply = model.complete_json(&system, &format!("{CANDIDATE_NOTE}\n\n{text}"))?;
+        let shown: Vec<std::ops::Range<usize>> = plan.windows[windows.clone()]
+            .iter()
+            .map(|w| w.words.clone())
+            .collect();
+        for span in parse_spans(&reply, words, 0..words.len()) {
+            let at = |id: &str| words.iter().position(|w| w.id == id);
+            let (Some(from), Some(to)) = (at(&span.first_word_id), at(&span.last_word_id)) else {
+                continue;
+            };
+            let inside = shown.iter().any(|r| r.contains(&from) && r.contains(&to));
+            if inside
+                && !spans.iter().any(|s| {
+                    s.first_word_id == span.first_word_id && s.last_word_id == span.last_word_id
+                })
+            {
+                spans.push(span);
+            }
+        }
+    }
+    progress(1.0);
+    Ok(spans)
+}
+
 /// Runs the model over `words` (kept spoken words, in recording order). `progress` gets the
 /// fraction done; returning false from `keep_going` stops early with an error.
 pub fn detect(
     model: &mut dyn JsonModel,
+    language: Language,
     words: &[&TranscriptWord],
     progress: &mut dyn FnMut(f32),
     keep_going: &dyn Fn() -> bool,
@@ -136,13 +208,14 @@ pub fn detect(
     if ranges.len() > MAX_CHUNKS {
         return Err("This transcript is too long for one AI pass".into());
     }
+    let system = system_prompt(language);
     let mut spans: Vec<AiSpan> = Vec::new();
     for (n, range) in ranges.iter().enumerate() {
         if !keep_going() {
             return Err("Cancelled".into());
         }
         progress(n as f32 / ranges.len() as f32);
-        let reply = model.complete_json(SYSTEM_PROMPT, &chunk_prompt(words, range.clone()))?;
+        let reply = model.complete_json(&system, &chunk_prompt(words, range.clone()))?;
         for span in parse_spans(&reply, words, range.clone()) {
             // The overlap sends some words twice: keep each span once.
             if !spans.iter().any(|s| {
@@ -249,7 +322,14 @@ mod tests {
             prompts: Vec::new(),
         };
         let mut seen = Vec::new();
-        let spans = detect(&mut model, &refs, &mut |f| seen.push(f), &|| true).unwrap();
+        let spans = detect(
+            &mut model,
+            Language::English,
+            &refs,
+            &mut |f| seen.push(f),
+            &|| true,
+        )
+        .unwrap();
         assert_eq!(model.prompts.len(), 2);
         assert!(model.prompts[1].starts_with("[260]"));
         assert_eq!(spans.len(), 1);
@@ -259,7 +339,7 @@ mod tests {
             prompts: Vec::new(),
         };
         assert_eq!(
-            detect(&mut model, &refs, &mut |_| {}, &|| false).unwrap_err(),
+            detect(&mut model, Language::English, &refs, &mut |_| {}, &|| false).unwrap_err(),
             "Cancelled"
         );
     }

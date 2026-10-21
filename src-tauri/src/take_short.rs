@@ -8,11 +8,11 @@
 //! (webcam); then the Voice track (speech) and the Footage sound track (background, ducked
 //! under the voice).
 
+use crate::layouts::{CameraOnly, Layout, LayoutSection, LayoutTrack};
 use crate::project::revision::EditDocument;
 use crate::sequence::{
     clock, Asset, Clip, Role, Sequence, StreamKind, StreamRef, Track, TrackKind,
 };
-use crate::short_scenes::{Scene, SceneMode};
 use crate::shorts::{Short, ShortEdit, ShortLayout, ShortTake};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -332,6 +332,7 @@ pub fn timeline(
         duration_us: length,
         link: Some("l1".into()),
         fit: Default::default(),
+        speed: 1.0,
     };
     voice_track.clips.push(clip("c1", &sources.voice, start));
     if let Some(camera) = &sources.camera {
@@ -361,14 +362,21 @@ pub fn new_short(
     let voice = document
         .asset(&sources.voice.asset)
         .ok_or("The take's voice is not in the project")?;
-    // The look of the shorts made so far, so they match; each short has its own scenes.
+    // The look and base layout of the shorts made so far, so they match; each short has its
+    // own sections.
     let mut layout: ShortLayout = document
         .shorts
         .first()
         .map(|s| s.layout.clone())
         .unwrap_or_default();
-    layout.scenes.clear();
     layout.graphic_slots.clear();
+    layout.camera_clips.clear();
+    let mut layouts = document
+        .shorts
+        .first()
+        .map(|s| s.layouts.clone())
+        .unwrap_or_else(LayoutTrack::for_short);
+    layouts.sections.clear();
     let mut short = Short {
         id,
         title: title.trim().to_string(),
@@ -376,6 +384,7 @@ pub fn new_short(
         source_end_us: voice.duration_us.max(1),
         reason: reason.trim().to_string(),
         layout,
+        layouts,
         media: Some(voice.id.clone()),
         edit: Some(ShortEdit {
             sequence,
@@ -389,7 +398,7 @@ pub fn new_short(
         edited_start_us: None,
         edited_end_us: None,
     };
-    short.layout.scenes = camera_scenes(&short)?;
+    repick_camera(&mut short)?;
     Ok(short)
 }
 
@@ -491,7 +500,7 @@ fn clear_range(track: &mut Track, from: u64, to: u64, next_clip: &mut u64) {
             out.push(Clip {
                 id,
                 start_us: to,
-                in_us: clip.in_us + (to - start),
+                in_us: clip.in_us + clip.source_offset(to - start),
                 duration_us: end - to,
                 ..clip
             });
@@ -599,8 +608,7 @@ pub fn place(document: &EditDocument, short: &mut Short, footage: &Footage) -> R
     let sounds = if footage.sound { sounds } else { Vec::new() };
     lay(sequence, TrackKind::Audio, Role::Background, &sounds);
     crate::sequence::validate_sequence(sequence, &document.assets)?;
-    short.layout.scenes = camera_scenes(short)?;
-    Ok(())
+    repick_camera(short)
 }
 
 /// Takes the footage off `[from, to)` of the short's timeline (all of it without a range).
@@ -618,8 +626,7 @@ pub fn remove(
         }
     }
     crate::sequence::validate_sequence(sequence, &document.assets)?;
-    short.layout.scenes = camera_scenes(short)?;
-    Ok(())
+    repick_camera(short)
 }
 
 /// The footage the short plays, in order, and where each piece is on the video now.
@@ -652,27 +659,25 @@ pub fn placed(document: &EditDocument, short: &Short) -> Result<Vec<PlacedFootag
     Ok(out)
 }
 
-/// The camera-only scenes of a take short: wherever no footage plays, the camera fills the
-/// frame. Scenes set by hand stay; the automatic ones are worked out again.
-pub fn camera_scenes(short: &Short) -> Result<Vec<Scene>, String> {
+/// Picks a take short's sections again: wherever no footage plays, the camera fills the frame
+/// (the no-footage rule). Sections set by hand stay.
+pub fn repick_camera(short: &mut Short) -> Result<(), String> {
+    let picked = camera_sections(short)?;
+    short.layouts.replace_auto(picked);
+    Ok(())
+}
+
+/// Camera-only sections wherever no footage plays on a take short's timeline, in its voice's
+/// time.
+pub fn camera_sections(short: &Short) -> Result<Vec<LayoutSection>, String> {
     let sequence = own(short)?;
     let voice = short
         .media
         .as_deref()
         .ok_or("A take short plays on its voice's clock")?;
     let clock = clock::asset_clock(sequence, voice);
-    let manual: Vec<Scene> = short
-        .layout
-        .scenes
-        .iter()
-        .filter(|s| !s.auto)
-        .cloned()
-        .collect();
-    // Timeline stretches already set by hand, then the footage, are not gaps.
-    let mut covered: Vec<(u64, u64)> = manual
-        .iter()
-        .flat_map(|s| clock.source_range_to_edited(s.source_start_us, s.source_end_us))
-        .collect();
+    // The footage is not a gap.
+    let mut covered: Vec<(u64, u64)> = Vec::new();
     covered.extend(
         sequence
             .tracks
@@ -693,17 +698,23 @@ pub fn camera_scenes(short: &Short) -> Result<Vec<Scene>, String> {
     if end > at {
         gaps.push((at, end));
     }
-    let mut out = manual;
+    let mut out = Vec::new();
     for (a, b) in gaps {
         for (s, e) in clock.edited_range_to_source(a, b) {
-            out.push(Scene {
+            out.push(LayoutSection {
                 auto: true,
-                media: Some(voice.to_string()),
-                ..Scene::new(format!("gap-{}", s / 1000), s, e, SceneMode::Camera)
+                rule: Some("no footage".into()),
+                ..LayoutSection::new(
+                    format!("gap-{}", s / 1000),
+                    Some(voice.to_string()),
+                    s,
+                    e,
+                    Some(Layout::CameraOnly(CameraOnly::default())),
+                )
             });
         }
     }
-    Ok(crate::short_scenes::normalized(out))
+    Ok(out)
 }
 
 /// Where the take's words `from..=to` play on the short's own timeline.
@@ -773,8 +784,8 @@ mod tests {
 
     fn scenes(short: &Short) -> Vec<(u64, u64)> {
         short
-            .layout
-            .scenes
+            .layouts
+            .sections
             .iter()
             .map(|s| (s.source_start_us, s.source_end_us))
             .collect()
@@ -973,6 +984,7 @@ mod tests {
             duration_us: 10_000_000,
             link: None,
             fit: Default::default(),
+            speed: 1.0,
         });
         let mut next = 2;
         clear_range(&mut track, 2_000_000, 5_000_000, &mut next);

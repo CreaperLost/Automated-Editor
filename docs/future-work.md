@@ -9,6 +9,25 @@ Started 20 Oct 2026 from George's list and a review of two competitors, Borumi a
 
 ## Done
 
+- **Greek, local English, the GPU pack and a local AI review** (20 Oct 2026; tasks 2, 3 and 12).
+  - **Language spoken** (English or Greek) in transcription settings. Greek goes online only
+    (Scribe or Scribe via OpenRouter); a mismatch with what Scribe heard is reported. Filler
+    sounds and words (εε, μμ, λοιπόν, δηλαδή, ας πούμε, βασικά, ξέρεις...), accent folding,
+    the Greek `;`, caption capitals without accents and the AI prompts follow it; alignment
+    stays English only.
+  - Local English is now Parakeet Unified EN 0.6B (4.0% FLEURS WER against v3's 4.8%), with
+    TDT v3 kept as **Verbatim** in settings (21 Oct): Unified drops stutters, repeats and
+    most ums, which the filler and retake passes cut. Both download at full precision on
+    CUDA builds.
+  - The NVIDIA GPU pack (CUDA 13, cuDNN 9, 1.9 GB) downloads from settings, so Parakeet and
+    the aligner run on CUDA; the CUDA installer ships ONNX Runtime's CUDA provider.
+  - Fillers and retakes can be reviewed by Qwen3.5 4B inside the app (llama.cpp on Vulkan).
+    Since task 3 (21 Oct) it is only the fallback without a key: the app and MCP `fillers`
+    `review: auto` prefer OpenRouter/OpenAI; `review: local` forces it.
+  - Research behind the choices (20 Oct): Handy's per-language FLEURS tables
+    (models.handy.computer). Greek: Cohere Transcribe 9.0%, Whisper large-v3 11.5%, Canary
+    1B v2 26%, Parakeet v3 35%.
+
 - **Sound effects off by default** (20 Oct 2026). The clicks and whooshes were spammy, so new
   projects start with both off. They stay in the Audio panel and in `settings` (`area: audio`,
   `soundEffects`) for anyone who wants them, and the skill only switches them on when asked.
@@ -48,12 +67,15 @@ The other seven findings were fixed and their file was removed; it is in Git his
 A small set of named layouts that work for both long-form (16:9) and shorts (9:16), changed
 over time on the timeline instead of one look for the whole edit.
 
+**Plan:** [docs/plans/layouts.md](plans/layouts.md). Decided and built 21 Oct 2026; still to
+do: the look-only playback swap (needed by task 10) and a perf measurement.
+
 - **Kinds:**
   - camera bubble (position, size, shape)
   - side by side (camera left or right, or top or bottom in portrait; even or overlapping)
   - camera only (fullscreen, or punched in)
   - screen only
-  - presenter cut out over the screen (needs task 10)
+  - presenter cut out over the screen (needs task 9's matte)
 - **Saved favourites:** your own layouts, reused across projects.
 - **Timed layout sections** that stay attached to their content through cuts. The base layout
   fills every gap, so there is never a flash of a default layout.
@@ -67,29 +89,38 @@ over time on the timeline instead of one look for the whole edit.
 - **Reference:** Tella's layout kinds and auto-layout rules ([notes](#tella)), and Borumi's
   layout pitfalls to avoid ([notes](#borumi)).
 
-### 2. Greek, then more languages
+### 2. More languages
 
-- **First:** transcription, captions, filler and retake rules, and the AI review prompts in
-  Greek.
-- **Then:** a language setting per project (or per sound) that every pass reads, so adding a
-  language means adding its models and word lists, not new code paths.
-- **To check:**
-  - Which passes are English-only today: the filler word lists, retake detection, caption
-    line breaking, and the wav2vec2 word aligner (an English model).
-  - Greek needs its own aligner, or must skip alignment.
-- Ties into task 12 (local Greek transcription).
+English and Greek are done (see Done). Next:
 
-### 3. Local LLM for fillers and retakes
+- A Greek word aligner, so Greek cuts get 20 ms word edges too: MMS forced alignment (it
+  romanises the text, so English tech words inside Greek speech align as well) or a Greek
+  XLSR CTC model, on the same ONNX Runtime path as wav2vec2.
+- Further languages: each needs its filler words, its question mark, and an online provider
+  that knows it.
 
-Run the filler and retake review on a local model instead of OpenRouter: free, private, and
-no key needed.
+### 3. Measure the local review
 
-- **Where it plugs in:** the same slot as the OpenRouter review (`ai/fillers.rs`, the `auto`
-  review mode). `auto` would then pick local when a model is installed.
-- **Budget:** the RTX 3060 has 12 GB, shared with transcription and face detection. Look at
-  small instruction models (around 3-8B, quantized) that can return the same JSON spans.
-- **Measure before switching:** compare against the OpenRouter review on the same
-  transcripts, counting both misses and wrong cuts.
+The local Qwen3.5 4B review is built (see Done). Compare it with the OpenRouter review on the
+same English and Greek transcripts, counting misses and wrong cuts, before trusting it with
+`apply: true` by default. Try Gemma 4 E4B too if Greek is weak.
+
+- **Measured 21 Oct 2026:** [Local vs OpenRouter review](plans/local-review-eval.md). The
+  probe is `ai/review_probe.rs`; the labelled cases are in `plans/review-eval`.
+  - English, 3 recordings and 3,244 words: the local review missed 9 of 18 clear cuts and
+    made 10 wrong cuts of its own (45 words). OpenRouter (`gpt-6-luna`) missed 5 and made 0.
+    The rules alone miss 11 and make 2 wrong retake cuts, which every engine inherits.
+  - Greek (a scripted case; no Greek recording yet): local missed 10 of 19, OpenRouter 1.
+  - Local runs on the GPU through Vulkan (about 3.4 GB VRAM): 2–3 s to load and 3–12 s to
+    review, or about 65 s on the first run after a build. OpenRouter took 12–38 s.
+  - Its wrong cuts are candidate flags it approved as they were: phrases said twice taken
+    as retakes, and "so" meaning "therefore".
+  - **Decided (George, 21 Oct):** OpenRouter/OpenAI is the default, and local runs only when
+    no key is set. This applies to MCP `review: auto` and to the app's Find with AI, whose
+    saved default is now `cloud`. `apply: true` is not the default for either review yet.
+- **Still to do:** a real Greek recording, and the candidate-pass and rules fixes listed in
+  the plan. Gemma 4 E4B (4.98 GB GGUF, needs a Gemma chat format in the probe) is skipped for
+  now.
 
 ### 4. Automatic B-roll from free libraries
 
@@ -188,13 +219,13 @@ automatically. To discuss.
 
 ### 12. More transcription models
 
-- **Local English, better than Parakeet:** must run in about 6-8 GB of VRAM (the PC has an
-  RTX 3060 with 12 GB, and no cuDNN, so check CUDA, DirectML or CPU fallbacks). Compare on
-  word error rate and timing accuracy, because cuts depend on word timings (Parakeet's words
-  swallow pauses).
-- **Local Greek:** a model that transcribes Greek well (task 2).
-- **Online:** ElevenLabs Scribe today, plus Scribe through OpenRouter. Add other providers
-  through OpenRouter later.
+- **Local Greek:** Cohere Transcribe 03-2026 (9% Greek WER on FLEURS, 2.25 GB) once it can
+  run here (transcribe.cpp or an ONNX export) and a Greek aligner exists (task 2): it gives
+  no word times. Test it on Greek speech with English tech words first.
+- **More accurate local English:** Qwen3-ASR 1.7B (3.2% FLEURS WER, about 6x slower than
+  Parakeet), if Parakeet Unified's mistakes show up in practice.
+- **Online:** other OpenRouter speech models (Voxtral, GPT-4o Transcribe) behind the same
+  provider seam.
 
 ### 13. Project version history
 

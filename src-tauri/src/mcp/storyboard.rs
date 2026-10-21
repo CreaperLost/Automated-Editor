@@ -184,33 +184,20 @@ impl Facts {
             vertical: document.short_layout.is_some(),
             ..Default::default()
         };
-        match &document.short_layout {
-            Some(layout) => {
-                facts.scenes = crate::short_scenes::edited_ranges(&layout.scenes, |media| {
-                    document
-                        .clock_asset(media)
-                        .map(|asset| document.asset_clock(asset))
-                })
-                .into_iter()
-                .map(|(a, b, mode)| {
-                    let kind = match mode {
-                        crate::short_scenes::SceneMode::Camera => "camera",
-                        crate::short_scenes::SceneMode::Screen => "screen",
-                    };
-                    (a, b, kind)
-                })
-                .collect();
-            }
-            None if document.layout.webcam_enabled => {
-                facts.scenes = document
-                    .webcam_focus
-                    .edited_ranges(&document.focus_clock())
-                    .into_iter()
-                    .map(|(a, b)| (a, b, "camera"))
-                    .collect();
-            }
-            None => {}
-        }
+        // Layout sections, by what they show; the base is read off the frame.
+        facts.scenes = crate::layouts::resolve::of_document(document)
+            .pieces
+            .iter()
+            .map(|p| {
+                let kind = match &p.layout {
+                    crate::layouts::Layout::CameraOnly(_) => "camera",
+                    crate::layouts::Layout::ScreenOnly(_) => "screen",
+                    crate::layouts::Layout::SideBySide(_) => "split",
+                    crate::layouts::Layout::Bubble(_) => "screen+cam",
+                };
+                (p.start_us, p.end_us, kind)
+            })
+            .collect();
         for zoom in document.zooms_with_ranges() {
             // Cuts inside a zoom leave its pieces back to back: one zoom.
             let mut pieces: Vec<(u64, u64, f64)> = Vec::new();
@@ -319,7 +306,8 @@ impl Facts {
             Some(&(_, _, kind)) => kind,
             None => match (shown(LayerRole::Screen) > 0.0, shown(LayerRole::Webcam)) {
                 (_, cam) if cam > 0.6 => "camera",
-                (true, cam) if cam > 0.0 && self.vertical => "split",
+                // Bigger than any bubble: camera and screen side by side.
+                (true, cam) if cam > 0.25 => "split",
                 (true, cam) if cam > 0.0 => "screen+cam",
                 (true, _) => "screen",
                 (false, cam) if cam > 0.0 => "camera",

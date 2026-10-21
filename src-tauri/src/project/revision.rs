@@ -1,10 +1,10 @@
 //! Versioned edit document (`project.json`). Source media is never rewritten.
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path};
+use crate::layouts::LayoutTrack;
 use crate::sequence::edit::{EditOutcome, SequenceEdit};
 use crate::sequence::{clock, Asset, Role, Sequence, SourceRange, StreamRef};
 use crate::timeline::TimelineMapper;
-use crate::webcam_focus::WebcamFocus;
 use crate::zoom::{
     validate_zooms, ZoomKeyframe, ZoomSource, ZoomSuggestion, MAX_DISMISSED_ZOOMS, MAX_ZOOMS,
 };
@@ -46,9 +46,9 @@ pub struct EditDocument {
     pub zooms: Vec<ZoomKeyframe>,
     #[serde(default)]
     pub dismissed_zoom_ids: Vec<String>,
-    /// Auto webcam layout: when the webcam grows to fill the canvas.
-    #[serde(default, skip_serializing_if = "WebcamFocus::is_default")]
-    pub webcam_focus: WebcamFocus,
+    /// The video's base layout and the sections that change it.
+    #[serde(default, skip_serializing_if = "LayoutTrack::is_default")]
+    pub layouts: LayoutTrack,
     /// Loudness, noise reduction and ducking. Applies to playback and export.
     #[serde(default, skip_serializing_if = "AudioSettings::is_default")]
     pub audio: AudioSettings,
@@ -87,7 +87,7 @@ impl Default for EditDocument {
             layout: EditLayout::default(),
             zooms: Vec::new(),
             dismissed_zoom_ids: Vec::new(),
-            webcam_focus: WebcamFocus::default(),
+            layouts: LayoutTrack::default(),
             audio: AudioSettings::default(),
             noise_mutes: NoiseMutes::new(),
             captions: CaptionSettings::default(),
@@ -178,12 +178,16 @@ impl EditDocument {
         Ok(source)
     }
 
-    /// Where webcam focus lands: its recording's camera clips.
-    pub fn focus_clock(&self) -> TimelineMapper {
-        match self.clock_asset(self.webcam_focus.media.as_deref()) {
-            Some(asset) => clock::role_clock(&self.sequence, &self.assets, asset, Role::Webcam),
-            None => TimelineMapper::new(Vec::new()),
-        }
+    /// The clock something anchored on `media` (`None`: the first recording) plays on.
+    pub fn anchor_clock(&self, media: Option<&str>) -> Option<TimelineMapper> {
+        self.clock_asset(media).map(|asset| self.asset_clock(asset))
+    }
+
+    /// The layouts with where each section plays filled in, for the UI.
+    pub fn layouts_with_ranges(&self) -> LayoutTrack {
+        let mut track = self.layouts.clone();
+        track.attach_edited_ranges(|media| self.anchor_clock(media));
+        track
     }
 
     /// The zooms on `asset`'s clock.
@@ -278,7 +282,7 @@ impl EditDocument {
         validate_layout(&self.layout)?;
         validate_zooms(&self.zooms)?;
         validate_dismissed(&self.dismissed_zoom_ids)?;
-        self.webcam_focus.validate()?;
+        self.layouts.validate()?;
         self.audio.validate()?;
         self.captions.validate()?;
         crate::chapters::validate(&self.chapters)?;
@@ -571,20 +575,41 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
-    pub fn update_webcam_focus(
+    /// Changes the layouts of the video (`short` none) or of a short, in one step: `change`
+    /// gets that timeline (the short's own, in its time) and its layouts.
+    pub fn change_layouts(
         &mut self,
         expected_revision: u64,
-        focus: WebcamFocus,
+        short: Option<&str>,
+        change: impl FnOnce(&EditDocument, &mut LayoutTrack) -> Result<(), String>,
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
-        let focus = focus.normalized();
-        focus.validate()?;
-        if focus == self.current.webcam_focus {
+        let mut next = self.current.clone();
+        let track = match short {
+            None => {
+                let mut track = next.layouts.clone();
+                change(&self.current, &mut track)?;
+                next.layouts = track.normalized();
+                &next.layouts
+            }
+            Some(id) => {
+                let index = next
+                    .shorts
+                    .iter()
+                    .position(|s| s.id == id)
+                    .ok_or("That short no longer exists")?;
+                let timeline = crate::shorts::short_timeline(&self.current, &next.shorts[index])?;
+                let mut track = next.shorts[index].layouts.clone();
+                change(&timeline, &mut track)?;
+                next.shorts[index].layouts = track.normalized();
+                &next.shorts[index].layouts
+            }
+        };
+        track.validate()?;
+        if next == self.current {
             return Ok(&self.current);
         }
-        let mut next = self.current.clone();
-        next.webcam_focus = focus;
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -649,65 +674,6 @@ impl EditHistory {
         crate::shorts::validate(&shorts)?;
         next.shorts = crate::shorts::normalized(shorts);
         self.commit_next(expected_revision, persist_root, next)
-    }
-
-    /// The recording webcam focus is on, and the source ranges of its camera that a timeline
-    /// range covers. Focus stays on one recording; the first edit picks the camera under it.
-    fn focus_pieces(&self, start_us: u64, end_us: u64) -> (Option<String>, Vec<(u64, u64)>) {
-        let document = &self.current;
-        let media = document.webcam_focus.media.clone().or_else(|| {
-            document
-                .top_clip_at(start_us, Role::Webcam)
-                .map(|(_, c)| c.asset.clone())
-                .or_else(|| document.clock_asset(None).map(String::from))
-        });
-        let pieces = media
-            .as_deref()
-            .map(|asset| {
-                clock::role_clock(&document.sequence, &document.assets, asset, Role::Webcam)
-                    .edited_range_to_source(start_us, end_us)
-            })
-            .unwrap_or_default();
-        (media, pieces)
-    }
-
-    /// Adds a webcam focus segment over a timeline range of the camera.
-    pub fn add_webcam_focus(
-        &mut self,
-        expected_revision: u64,
-        edited_start_us: u64,
-        edited_end_us: u64,
-        persist_root: &Path,
-    ) -> Result<&EditDocument, String> {
-        if edited_end_us <= edited_start_us {
-            return Err("Webcam focus must be a range on the timeline".into());
-        }
-        let (media, pieces) = self.focus_pieces(edited_start_us, edited_end_us);
-        if pieces.is_empty() {
-            return Err("Webcam focus needs the recording's camera there".into());
-        }
-        let mut focus = self.current.webcam_focus.clone();
-        focus.media = media;
-        focus.enabled = true;
-        focus.add_focus(&pieces);
-        self.update_webcam_focus(expected_revision, focus, persist_root)
-    }
-
-    /// Switches webcam focus off over a timeline range, whichever segments cover it.
-    pub fn remove_webcam_focus(
-        &mut self,
-        expected_revision: u64,
-        edited_start_us: u64,
-        edited_end_us: u64,
-        persist_root: &Path,
-    ) -> Result<&EditDocument, String> {
-        if edited_end_us <= edited_start_us {
-            return Err("Webcam focus must be a range on the timeline".into());
-        }
-        let (_, pieces) = self.focus_pieces(edited_start_us, edited_end_us);
-        let mut focus = self.current.webcam_focus.clone();
-        focus.remove_focus(&pieces);
-        self.update_webcam_focus(expected_revision, focus, persist_root)
     }
 
     pub fn update_audio(
@@ -978,8 +944,9 @@ impl EditHistory {
         next.captions.validate()?;
         template.zoom_settings.validate()?;
         with_zoom_settings(&mut next, template.zoom_settings.clone());
-        next.webcam_focus.settings = template.webcam_focus.clone();
-        next.webcam_focus.validate()?;
+        next.layouts.base = template.base.clone();
+        next.layouts.pick = template.pick.clone();
+        next.layouts.validate()?;
         next.graphics_brand = template.graphics_brand.clone();
         if let Some(id) = short {
             let look = template
@@ -992,6 +959,9 @@ impl EditHistory {
                 .find(|s| s.id == id)
                 .ok_or("That short is gone")?;
             own.layout = short_look_onto(look, &own.layout);
+            if let Some(base) = &template.short_base {
+                own.layouts.base = base.clone();
+            }
             crate::shorts::validate(&next.shorts)?;
         }
         if next == self.current {
@@ -1543,67 +1513,66 @@ mod tests {
     }
 
     #[test]
-    fn webcam_focus_maps_through_the_camera_clips_and_undoes() {
+    fn layout_sections_map_through_cuts_and_undo() {
+        use crate::layouts::{CameraOnly, Layout, LayoutSection};
         let dir = tempdir().unwrap();
         let mut history = EditHistory::new(doc(10 * S));
         history
             .ripple_cuts(0, &[(4 * S, 6 * S)], dir.path())
             .unwrap();
-        // Timeline 3 s to 5 s spans the cut: source 3 s to 4 s and 6 s to 7 s.
+        let camera = Layout::CameraOnly(CameraOnly::default());
+        // Timeline 3 s to 5 s spans the cut: one section, 3 s to 7 s of the recording.
         history
-            .add_webcam_focus(1, 3 * S, 5 * S, dir.path())
+            .change_layouts(
+                1,
+                None,
+                |timeline, track| {
+                    let template = LayoutSection::new(track.new_id(), None, 0, 1, Some(camera));
+                    track.add(crate::layouts::sections_on(
+                        timeline,
+                        3 * S,
+                        5 * S,
+                        &template,
+                    )?);
+                    Ok(())
+                },
+                dir.path(),
+            )
             .unwrap();
-        let focus = &history.current.webcam_focus;
-        assert!(focus.enabled);
-        assert_eq!(focus.media.as_deref(), Some("rec"));
-        let sources = |focus: &WebcamFocus| {
-            focus
-                .segments
+        let sources = |track: &LayoutTrack| {
+            track
+                .sections
                 .iter()
-                .map(|s| (s.source_start_us, s.source_end_us))
+                .map(|s| (s.media.clone(), s.source_start_us, s.source_end_us))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(sources(focus), vec![(3 * S, 4 * S), (6 * S, 7 * S)]);
         assert_eq!(
-            focus.edited_ranges(&history.current.focus_clock()),
-            vec![(3 * S, 5 * S)]
+            sources(&history.current.layouts),
+            vec![(Some("rec".to_string()), 3 * S, 7 * S)]
         );
-        history
-            .remove_webcam_focus(2, 4_500_000, 5 * S, dir.path())
-            .unwrap();
+        let shown = history.current.layouts_with_ranges();
         assert_eq!(
-            sources(&history.current.webcam_focus),
-            vec![(3 * S, 4 * S), (6 * S, 6_500_000)]
+            shown.sections[0].edited_ranges,
+            vec![crate::zoom::EditedRange {
+                start_us: 3 * S,
+                end_us: 5 * S
+            }]
         );
-        history.undo(3, dir.path()).unwrap();
-        assert_eq!(
-            sources(&history.current.webcam_focus),
-            vec![(3 * S, 4 * S), (6 * S, 7 * S)]
-        );
-        // Without the camera on the timeline there is nothing to focus.
-        let camera = history.current.sequence.tracks[1].clips[0].id.clone();
-        history
-            .edit_sequence(
-                4,
-                &SequenceEdit::Unlink {
-                    clip_ids: vec![camera.clone()],
+        // Too short, or nothing there: refused, and nothing changes.
+        assert!(history
+            .change_layouts(
+                2,
+                None,
+                |timeline, track| {
+                    let template = LayoutSection::new(track.new_id(), None, 0, 1, None);
+                    track.add(crate::layouts::sections_on(timeline, 0, S / 2, &template)?);
+                    Ok(())
                 },
                 dir.path(),
             )
-            .unwrap();
-        let camera_track = history.current.sequence.tracks[1].clone();
-        let all: Vec<String> = camera_track.clips.iter().map(|c| c.id.clone()).collect();
-        history
-            .edit_sequence(
-                5,
-                &SequenceEdit::Delete {
-                    clip_ids: all,
-                    ripple: Some(false),
-                },
-                dir.path(),
-            )
-            .unwrap();
-        assert!(history.add_webcam_focus(6, 0, S, dir.path()).is_err());
+            .is_err());
+        history.undo(2, dir.path()).unwrap();
+        assert!(history.current.layouts.sections.is_empty());
     }
 
     #[test]

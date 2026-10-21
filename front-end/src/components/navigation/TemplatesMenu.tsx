@@ -3,12 +3,12 @@ import { Bookmark, BookmarkPlus, Check, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
 import type { Template } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
-import { sceneOp, useSelectedShort } from "../../stores/shortsStore";
+import { shortOp, useSelectedShort } from "../../stores/shortsStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { Button, Menu, MenuButton, type MenuEntry } from "../ui";
 
-/// Saved settings any project can take on: the video's look, captions, zooms and auto webcam,
-/// and in Shorts the picked short's look too. Applying one is one undo step.
+/// Saved settings any project can take on: the video's look and base layout, captions, zooms
+/// and how layouts are picked, and in Shorts the picked short's look too. Applying one is one undo step.
 export const TemplatesMenu: React.FC<{ onError: (message: string) => void }> = ({ onError }) => {
   const project = useProjectStore((s) => s.openedProject);
   const inShorts = useWorkspaceStore((s) => s.workspace === "shorts");
@@ -35,7 +35,7 @@ export const TemplatesMenu: React.FC<{ onError: (message: string) => void }> = (
     const done = () => setNotice(`Applied "${template.name}"`);
     if (inShorts) {
       // After any look change of the short still waiting to be saved, so it can't undo this.
-      sceneOp("Applying a template", async (p) => {
+      shortOp("Applying a template", async (p) => {
         const next = await api.templateApply(p.projectHandle, p.revision, template.id, withShort);
         done();
         return next;
@@ -163,7 +163,7 @@ const SaveTemplateDialog: React.FC<{
       >
         <h2 className="text-body font-semibold text-studio-100">Save as a template</h2>
         <p className="text-label text-studio-400 leading-relaxed">
-          Keeps the canvas, camera bubble, captions, zoom and auto webcam settings
+          Keeps the canvas and camera style, the base layout, captions, zoom and layout picking settings
           {withShort ? ", and this short's look," : ""} for any project. Pick it from Templates to use it again.
         </p>
         <input

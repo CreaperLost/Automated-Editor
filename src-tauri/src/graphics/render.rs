@@ -94,7 +94,7 @@ impl Spec {
             whole_frame =
                 crate::shorts::graphic_slot(short, &clip.id) == crate::shorts::GraphicSlot::Full;
             let (_, _, w, h) =
-                crate::shorts::graphic_rect(short, &clip.id, spec.width, spec.height);
+                crate::shorts::graphic_rect(document, &clip.id, spec.width, spec.height);
             spec.width = (w & !1).max(2);
             spec.height = (h & !1).max(2);
         }

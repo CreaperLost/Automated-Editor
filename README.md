@@ -39,19 +39,30 @@ exporting an MP4.
 - **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
   `telemetry/keys.jsonl` ([format](docs/keyboard-telemetry.md)): typing stretches with a key
   count (never the text) and shortcuts pressed. Typing counts as screen activity, so the
-  auto webcam stays in its bubble and short scenes keep the screen while you type with a
+  picked layouts keep the screen in view while you type with a
   resting mouse. Long typing gets a zoom on the text caret (or the click into the field), and
   the zoom follows the caret. Shortcuts show as a badge ("Ctrl + S") in a corner of the screen,
   switched by **Show shortcut badges** in the canvas settings (`shortcutBadges` for agents),
   and `telemetry_get` lists both. Recordings without the file behave as before.
-- **Layout:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows
-  and a styled webcam bubble.
+- **Style:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows,
+  and the camera's border, shadow and mirror. Every camera clip is centred on the face (found
+  once per recording on this computer, YuNet) unless framed by hand or switched off.
+- **Layouts** ([plan](docs/plans/layouts.md)): camera bubble (a 3x3 grid of spots or anywhere,
+  Small/Medium/Large or any size, rect/circle/squircle), side by side (camera left or right,
+  top or bottom in 9:16, any share, an even split or a card over the screen, the screen fitted
+  or filled), camera only (with a punch-in) and screen only. Each timeline (the video, every
+  short) has a base layout and sections that change it, anchored in the recording's time so
+  cuts never move them; the base shows everywhere else. Changes cut between full-frame shots
+  and on cuts, and move otherwise (or as each section says). Favourites are kept for every
+  project. **Pick from the recording** fills sections in, no AI: the camera while the mouse
+  rests as you talk, and in shorts the opening line and the screen while you click a lot;
+  sections you set yourself stay. The timeline's Layouts lane shows them; agents use `layouts`.
 - **Bubble out of the way:** when a click, drag, scroll, resting pointer or the typing caret
   lands where the webcam bubble sits (after layout, window crop and zoom), the bubble fades
   out for that stretch and back in afterwards; it never jumps to another corner. Activity near
   it keeps it hidden, and minimum hidden and shown times stop it flickering. On by default:
   **Hide while you work under it** in the Camera settings (`webcamAutoHide` for agents). Only
-  where the bubble sits over the screen, not in a short's split.
+  while a bubble layout sits over a fitted screen.
 - **Crop to the active window:** recordings from AeroShoot with window recording on carry
   `telemetry/windows.jsonl` ([format](docs/window-telemetry.md)). When the window in front is
   clearly smaller than the recorded display, the screen shows just that window with room
@@ -73,14 +84,10 @@ exporting an MP4.
   Requires FFmpeg with `adeclick`, including on macOS. Strong settings can soften consonants;
   this is general click repair, not a classifier for every mouth noise.
 - **Export:** H.264 video with AAC stereo audio at 720p, 1080p or 4K.
-- **Shorts scenes:** in the Shorts Studio a short is split (camera above or below the screen)
-  by default, and scenes switch it to only the camera or only the screen, easing between
-  them (or a hard cut). Pick scenes fills them in from the recording, no AI: the camera for
-  the opening line and while the mouse rests as you talk, the screen while clicks and scrolls
-  come thick and fast; scenes you add or change yourself stay when picking again. Scenes are
-  anchored in the recording's time, so they follow the video's cuts and the short's own edits.
-  Agents use the `short_create` (a short from two word ids), `short_scenes` and `export`
-  `short` actions, and a `shorts` template where they pick the moments themselves.
+- **Shorts layouts:** in the Shorts Studio a short is split (camera above the screen) by
+  default, with its own sections on its own timeline, as above. Agents use the `short_create`
+  (a short from two word ids), `layouts` with `short` and `export` `short` actions, and a
+  `shorts` template where they pick the moments themselves.
 - **Check before export:** the export dialog lists what a viewer would notice, read from the
   edit itself (nothing is decoded): missing files, black frames, no sound, blips left between
   two cuts, words cut partway (beyond what word-edge refinement trims), many cuts close
@@ -187,7 +194,7 @@ The VibeRunner **Build** action calls a builder for the current platform:
 
 | Platform | Command from the repository root | Installer output |
 |---|---|---|
-| Windows | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1` | `src-tauri/target/release/bundle/nsis/` |
+| Windows | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1` | `C:\aeb\release\bundle\nsis\` (the short target folder the local model needs; with `-NoLocalLlm`, `src-tauri/target/release/bundle/nsis/`) |
 | macOS | `bash scripts/build-macos.sh` | `src-tauri/target/release/bundle/dmg/` |
 | Linux | `bash scripts/build-linux.sh` | `src-tauri/target/release/bundle/deb/` and `appimage/` |
 
@@ -229,25 +236,57 @@ then Intel Quick Sync, each checked with a one-frame test encode), otherwise lib
 ### Transcription
 
 Transcripts drive word-based editing: delete words to cut them, remove filler sounds, and
-drop abandoned retakes. Two providers are supported, chosen in transcription settings:
+drop abandoned retakes. The language is English or Greek (**Language spoken** in
+transcription settings); filler words, retakes, the AI review and caption capitals follow it.
+Three providers are supported:
 
-- **Parakeet (local):** NVIDIA Parakeet TDT 0.6B v3 through ONNX Runtime. It is opt-in at
-  build time, with one feature per accelerator:
+- **Parakeet (local, English only):** NVIDIA
+  [Parakeet Unified EN 0.6B](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) (an
+  RNN-T) through ONNX Runtime. On FLEURS it makes 4.0% word errors where the multilingual
+  Parakeet TDT 0.6B v3 used before made 4.8%, at the same speed. It is opt-in at build time,
+  with one feature per accelerator:
 
   ```bash
-  cargo tauri dev --features tauri-app,parakeet-cuda      # NVIDIA GPU (needs CUDA 12 and cuDNN 9)
+  cargo tauri dev --features tauri-app,parakeet-cuda      # NVIDIA GPU (with the GPU pack below)
   cargo tauri dev --features tauri-app,parakeet-directml  # any DirectX 12 GPU on Windows, no extra installs
   cargo tauri dev --features tauri-app,parakeet-webgpu    # Metal on macOS
   cargo tauri dev --features tauri-app,parakeet           # CPU only
   ```
 
-  The model (about 670 MB, INT8) downloads from Hugging Face from the settings dialog, or
-  can be placed by hand in any folder holding `vocab.txt`, `encoder-model*.onnx` and
-  `decoder_joint-model*.onnx` from
+  Unified tidies speech, though: on a 15-minute tutorial it dropped stutters and repeats
+  ("see see", "we can can") and six of nine "uh"s, which the filler and retake passes would
+  have cut. So settings also offer **Verbatim**: Parakeet TDT 0.6B v3, which writes them down.
+
+  Each model downloads from transcription settings (checked against its SHA-256): full
+  precision (about 2.5 GB, fastest on the GPU) in CUDA builds, INT8 (about 0.7 GB) otherwise.
+  Unified comes from
+  [bobNight/parakeet-unified-en-0.6b-onnx](https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx),
+  Verbatim from
   [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx).
 - **ElevenLabs Scribe (cloud):** enter an API key in settings. It is stored in Windows
   Credential Manager or the macOS Keychain, never in the project; `ELEVENLABS_API_KEY`
   overrides it for development.
+- **Scribe via OpenRouter (cloud):** the same Scribe v2, billed to the OpenRouter key.
+
+Greek is transcribed online only: no local model is good enough yet (Parakeet v3 gets about a
+third of Greek words wrong on FLEURS, Whisper large-v3 about 12%, Cohere Transcribe 9% but
+without word times).
+
+**NVIDIA GPU pack:** ONNX Runtime's CUDA provider (shipped with CUDA builds) needs CUDA 13 and
+cuDNN 9. They are about 1.9 GB, so they are not in the installer: **Download** next to the
+accelerator in transcription settings fetches NVIDIA's redistributable archives (each checked
+against NVIDIA's SHA-256), keeps only the 14 DLLs into `%APPDATA%/AeroEdits/runtime`, and
+loads them by full path before the first session. Without them everything runs on the CPU.
+
+**Local AI review (fillers and retakes):** Qwen3.5 4B (Q4_K_M, 2.7 GB, Apache-2.0) runs inside
+the app through llama.cpp on the GPU via Vulkan (the `local-llm` feature, on by default in
+`scripts/build-windows.ps1`). It reads only the windows around what the rules flagged, in
+English or Greek, answers under a JSON grammar and decodes greedily, so the same words always
+give the same cuts. Building it needs the [Vulkan SDK](https://vulkan.lunarg.com/)
+(`VULKAN_SDK`), LLVM (`LIBCLANG_PATH`), Ninja (`CMAKE_GENERATOR=Ninja`) in the Visual Studio
+developer environment, and a short `CARGO_TARGET_DIR` such as `C:\aeb`: under
+`src-tauri\target` llama.cpp's nested shader-generator build passes Windows' path limit. The
+build script sets all of that up. Users need nothing, since Vulkan comes with GPU drivers. Choose it or OpenRouter / OpenAI under **Filler and retake review**.
 
 Transcripts are saved per audio track in `<project>.aero/transcripts/<track id>.json`, with
 word times in source time, so they stay valid across cuts and undo.

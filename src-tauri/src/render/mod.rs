@@ -1,4 +1,6 @@
 //! Offscreen WGPU compositor. One device, CPU upload + readback (bounded-copy fallback).
+use crate::layouts::arrange::{CameraSlot, Corners, ScreenSlot};
+use crate::layouts::Layout;
 use crate::media::{validate_dim, ColorInfo, PixelFormat, VideoFrame, MAX_FRAME_DIM};
 use crate::project::layout::{validate_wallpaper_relative, MAX_WALLPAPER_BYTES};
 use crate::project::reader::{open_regular, safe_path};
@@ -187,66 +189,101 @@ pub struct Scene {
     pub layers: Vec<Layer>,
 }
 
-/// The webcam bubble for `layout`: its border ring (if any), then the camera picture.
-fn webcam_layers(
+/// The camera in `slot`: its border ring (if any), then the picture, showing `uv` of it
+/// (before mirroring).
+fn camera_layers(
     width: u32,
     height: u32,
-    webcam: VideoFrame,
-    layout: &EditLayout,
+    camera: VideoFrame,
+    slot: &CameraSlot,
+    uv: (f32, f32, f32, f32),
+    style: &EditLayout,
     unit: f32,
 ) -> Result<Vec<Layer>, String> {
-    let px = |value: u32| (value as f32 * unit).round() as u32;
     let mut layers = Vec::new();
-    let (bw, bh) = webcam_bubble_size(width, height, webcam.width, webcam.height, layout);
-    let (x, y) = webcam_origin(width, height, bw, bh, layout, unit);
-    let (cam_clip, cam_radius) = webcam_clip(layout, bw, bh);
-    let cam_shadow = if layout.webcam_shadow {
-        Some((WEBCAM_SHADOW_BLUR_PX * unit, WEBCAM_SHADOW_OPACITY))
-    } else {
-        None
+    let (x, y, w, h) = slot.rect.pixels(width, height);
+    let (clip, radius) = match slot.corners {
+        Corners::Round(r) if r > 0.0 => (ClipMode::RoundedRect, r.min(w.min(h) as f32 / 2.0)),
+        Corners::Round(_) => (ClipMode::None, 0.0),
+        Corners::Circle => (ClipMode::Circle, 0.0),
+        Corners::Squircle => (ClipMode::Squircle, 0.0),
     };
-    let inset = if layout.webcam_border_width > 0 {
-        px(layout.webcam_border_width).max(1)
+    let shadow = (style.webcam_shadow && slot.shadow > 0.0).then(|| {
+        (
+            WEBCAM_SHADOW_BLUR_PX * unit,
+            WEBCAM_SHADOW_OPACITY * slot.shadow,
+        )
+    });
+    let inset = if style.webcam_border_width > 0 && slot.border > 0.0 {
+        let full = ((style.webcam_border_width as f32 * unit).round() as u32).max(1);
+        (full as f32 * slot.border.min(1.0)).round() as u32
     } else {
         0
     };
+    let opacity = slot.opacity.clamp(0.0, 1.0);
     if inset > 0 {
         let bx = x.saturating_sub(inset);
         let by = y.saturating_sub(inset);
-        let bwidth = (bw + inset * 2).min(width.saturating_sub(bx)).max(1);
-        let bheight = (bh + inset * 2).min(height.saturating_sub(by)).max(1);
-        let [r, g, b] = crate::project::layout::parse_hex_rgb(&layout.webcam_border_color)?;
+        let bwidth = (w + inset * 2).min(width.saturating_sub(bx)).max(1);
+        let bheight = (h + inset * 2).min(height.saturating_sub(by)).max(1);
+        let [r, g, b] = crate::project::layout::parse_hex_rgb(&style.webcam_border_color)?;
         let border = VideoFrame::solid(8, 8, b, g, r, 0)?;
-        // The ring stays concentric with the rounded bubble inside it.
-        let border_radius = if cam_radius > 0.0 {
-            cam_radius + inset as f32
+        // The ring stays concentric with the rounded camera inside it.
+        let border_radius = if radius > 0.0 {
+            radius + inset as f32
         } else {
             0.0
         };
         let mut border_layer = Layer::placed(border, bx, by, bwidth, bheight)
             .with_role(LayerRole::WebcamBorder)
-            .with_clip(cam_clip, border_radius);
-        if let Some((blur, opacity)) = cam_shadow {
+            .with_clip(clip, border_radius);
+        if let Some((blur, opacity)) = shadow {
             border_layer = border_layer.with_shadow(blur, opacity);
         }
+        // The ring sits under the whole camera: faded faster, it hardly shows through.
+        border_layer.opacity = opacity * opacity;
         layers.push(border_layer);
     }
-    let mut bubble = Layer::placed(webcam, x, y, bw, bh)
+    let mut picture = Layer::placed(camera, x, y, w, h)
         .with_role(LayerRole::Webcam)
-        .with_clip(cam_clip, cam_radius);
-    if matches!(layout.webcam_shape.as_str(), "circle" | "squircle") {
-        bubble = bubble.cover_uv(bw, bh);
-    }
+        .with_clip(clip, radius);
+    (picture.uv_x, picture.uv_y, picture.uv_w, picture.uv_h) = uv;
     if inset == 0 {
-        if let Some((blur, opacity)) = cam_shadow {
-            bubble = bubble.with_shadow(blur, opacity);
+        if let Some((blur, opacity)) = shadow {
+            picture = picture.with_shadow(blur, opacity);
         }
     }
-    if layout.webcam_mirror {
-        bubble = bubble.mirrored();
+    if style.webcam_mirror {
+        picture = picture.mirrored();
     }
-    layers.push(bubble);
+    picture.opacity = opacity;
+    layers.push(picture);
     Ok(layers)
+}
+
+/// The part of a camera picture a slot shows: cut to the slot's shape around the face (or the
+/// middle), then `punch_in` times closer.
+pub fn camera_uv(
+    frame: (u32, u32),
+    slot: &CameraSlot,
+    focus: Option<crate::face::FocusPoint>,
+    offset: (f32, f32),
+) -> (f32, f32, f32, f32) {
+    let (w, h) = (slot.rect.w.max(1.0) as u32, slot.rect.h.max(1.0) as u32);
+    let (x, y, uw, uh) = focus_uv(focus, frame.0, frame.1, w, h, offset);
+    let punch = slot.punch_in.max(1.0);
+    if punch <= 1.0 {
+        return (x, y, uw, uh);
+    }
+    let (pw, ph) = (uw / punch, uh / punch);
+    // Closer around the face's eye line, else the middle.
+    let (cx, cy) = match focus {
+        Some(face) => (face.x, face.eye_y + ph * (0.5 - 1.0 / 3.0)),
+        None => (x + uw / 2.0, y + uh / 2.0),
+    };
+    let px = (cx - pw / 2.0).clamp(x, x + uw - pw);
+    let py = (cy - ph / 2.0).clamp(y, y + uh - ph);
+    (px, py, pw, ph)
 }
 
 impl Scene {
@@ -267,50 +304,105 @@ impl Scene {
     pub fn from_layout(
         width: u32,
         height: u32,
-        layout: &EditLayout,
+        style: &EditLayout,
+        layout: &Layout,
         screen: Option<VideoFrame>,
         webcam: Option<VideoFrame>,
     ) -> Result<Self, String> {
-        Self::from_layout_with_wallpaper(width, height, layout, screen, webcam, None)
+        Self::from_layout_with_wallpaper(width, height, style, layout, screen, webcam, None)
     }
 
     pub fn from_layout_with_wallpaper(
         width: u32,
         height: u32,
-        layout: &EditLayout,
+        style: &EditLayout,
+        layout: &Layout,
         screen: Option<VideoFrame>,
         webcam: Option<VideoFrame>,
         wallpaper: Option<VideoFrame>,
     ) -> Result<Self, String> {
-        Self::from_layout_scaled(width, height, layout, screen, webcam, wallpaper, 1.0)
+        Self::from_layout_scaled(width, height, style, layout, screen, webcam, wallpaper, 1.0)
     }
 
-    /// Build the scene with layout pixel values multiplied by `unit`; see [`layout_px_unit`].
+    /// `layout` drawn in `style`, with style pixel values multiplied by `unit` (see
+    /// [`layout_px_unit`]): the screen showing its crop, the camera its middle.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_layout_scaled(
         width: u32,
         height: u32,
-        layout: &EditLayout,
+        style: &EditLayout,
+        layout: &Layout,
         screen: Option<VideoFrame>,
         webcam: Option<VideoFrame>,
         wallpaper: Option<VideoFrame>,
         unit: f32,
     ) -> Result<Self, String> {
-        validate_dim(width, height)?;
-        layout.validate()?;
         let unit = if unit.is_finite() && unit > 0.0 {
             unit
         } else {
             1.0
         };
-        let px = |value: u32| (value as f32 * unit).round() as u32;
-        let padding = px(layout.padding_px);
+        let parts = crate::layouts::arrange::arrange(
+            layout,
+            style,
+            crate::layouts::arrange::Canvas {
+                width,
+                height,
+                unit,
+            },
+            crate::layouts::arrange::Sources {
+                screen: screen.as_ref().map(|f| (f.width, f.height)),
+                camera: webcam.as_ref().map(|f| (f.width, f.height)),
+            },
+        );
+        let mut scene = Self::backdrop(width, height, style, wallpaper, unit)?;
+        if let (Some(frame), Some(slot)) = (screen, parts.screen) {
+            let uv = if slot.fill {
+                let (w, h) = (slot.rect.w.max(1.0) as u32, slot.rect.h.max(1.0) as u32);
+                crate::shorts::screen_placement(
+                    frame.width,
+                    frame.height,
+                    style.screen_crop_uv(),
+                    (0, 0, w, h),
+                    1.0,
+                    (0.5, 0.5),
+                    (0.0, 0.0),
+                )
+                .1
+            } else {
+                style.screen_crop_uv()
+            };
+            scene.push_screen(frame, &slot, uv, style, unit);
+        }
+        if let (Some(frame), Some(slot)) = (webcam, parts.camera) {
+            let uv = camera_uv((frame.width, frame.height), &slot, None, (0.0, 0.0));
+            scene.push_camera(frame, &slot, uv, style, unit)?;
+        }
+        if scene.layers.len() > MAX_LAYERS {
+            return Err("Compositor layer count exceeds the F2 bound".into());
+        }
+        Ok(scene)
+    }
+
+    /// The canvas with only its background: the wallpaper, the built-in background or the
+    /// gradient, else the plain colour.
+    pub fn backdrop(
+        width: u32,
+        height: u32,
+        style: &EditLayout,
+        wallpaper: Option<VideoFrame>,
+        unit: f32,
+    ) -> Result<Self, String> {
+        validate_dim(width, height)?;
+        style.validate()?;
+        let padding = (style.padding_px as f32 * unit).round() as u32;
         if padding.saturating_mul(2) >= width || padding.saturating_mul(2) >= height {
             return Err("Export padding leaves no content rectangle".into());
         }
-        let (background, background_end) = layout.background_rgba()?;
+        let (background, background_end) = style.background_rgba()?;
         let mut layers = Vec::new();
-        let generated = match (&wallpaper, layout.background_type.as_str()) {
-            (None, "preset") => Some(preset_frame(width, height, &layout.background_preset)?),
+        let generated = match (&wallpaper, style.background_type.as_str()) {
+            (None, "preset") => Some(preset_frame(width, height, &style.background_preset)?),
             _ => None,
         };
         if let Some(paper) = wallpaper.or(generated) {
@@ -325,43 +417,78 @@ impl Scene {
                 Layer::placed(gradient, 0, 0, width, height).with_role(LayerRole::Background),
             );
         }
-        if let Some(screen) = screen {
-            let (crop_x, crop_y, crop_w, crop_h) = layout.screen_crop_uv();
-            let (x, y, w, h) =
-                screen_layer_rect(width, height, layout, screen.width, screen.height, unit);
-            let radius = layout.corner_radius_px as f32 * unit;
-            let clip = if radius > 0.0 {
-                ClipMode::RoundedRect
-            } else {
-                ClipMode::None
-            };
-            let mut layer = Layer::placed(screen, x, y, w, h)
-                .with_role(LayerRole::Screen)
-                .with_clip(clip, radius);
-            layer.uv_x = crop_x;
-            layer.uv_y = crop_y;
-            layer.uv_w = crop_w;
-            layer.uv_h = crop_h;
-            if layout.shadow_blur_px > 0 && layout.shadow_opacity > 0.0 {
-                layer =
-                    layer.with_shadow(layout.shadow_blur_px as f32 * unit, layout.shadow_opacity);
-            }
-            layers.push(layer);
-        }
-        if layout.webcam_enabled {
-            if let Some(webcam) = webcam {
-                layers.extend(webcam_layers(width, height, webcam, layout, unit)?);
-            }
-        }
-        if layers.len() > MAX_LAYERS {
-            return Err("Compositor layer count exceeds the F2 bound".into());
-        }
         Ok(Self {
             width,
             height,
             background,
             layers,
         })
+    }
+
+    /// The screen in `slot`, showing `uv` of the picture, with the style's corners and shadow
+    /// as far as the slot has them.
+    pub fn push_screen(
+        &mut self,
+        frame: VideoFrame,
+        slot: &ScreenSlot,
+        uv: (f32, f32, f32, f32),
+        style: &EditLayout,
+        unit: f32,
+    ) {
+        if self.layers.len() >= MAX_LAYERS || slot.opacity <= 0.0 {
+            return;
+        }
+        let (x, y, w, h) = slot.rect.pixels(self.width, self.height);
+        let radius = slot.radius.min(w.min(h) as f32 / 2.0);
+        let clip = if radius > 0.0 {
+            ClipMode::RoundedRect
+        } else {
+            ClipMode::None
+        };
+        let mut layer = Layer::placed(frame, x, y, w, h)
+            .with_role(LayerRole::Screen)
+            .with_clip(clip, radius);
+        (layer.uv_x, layer.uv_y, layer.uv_w, layer.uv_h) = uv;
+        if style.shadow_blur_px > 0 && style.shadow_opacity > 0.0 && slot.shadow > 0.0 {
+            layer = layer.with_shadow(
+                style.shadow_blur_px as f32 * unit,
+                style.shadow_opacity * slot.shadow,
+            );
+        }
+        layer.opacity = slot.opacity.min(1.0);
+        // Over the background, under everything else.
+        let at = self
+            .layers
+            .iter()
+            .position(|l| l.role != LayerRole::Background)
+            .unwrap_or(self.layers.len());
+        self.layers.insert(at, layer);
+    }
+
+    /// The camera in `slot`, showing `uv` of the picture (before mirroring), under the
+    /// captions.
+    pub fn push_camera(
+        &mut self,
+        frame: VideoFrame,
+        slot: &CameraSlot,
+        uv: (f32, f32, f32, f32),
+        style: &EditLayout,
+        unit: f32,
+    ) -> Result<(), String> {
+        if frame.width == 0 || frame.height == 0 || slot.opacity <= 0.0 {
+            return Ok(());
+        }
+        let layers = camera_layers(self.width, self.height, frame, slot, uv, style, unit)?;
+        if self.layers.len() + layers.len() > MAX_LAYERS {
+            return Ok(());
+        }
+        let at = self
+            .layers
+            .iter()
+            .position(|l| l.role == LayerRole::Caption)
+            .unwrap_or(self.layers.len());
+        self.layers.splice(at..at, layers);
+        Ok(())
     }
 
     /// Adds a caption on top of everything else, if the scene has room for one more layer.
@@ -375,32 +502,6 @@ impl Scene {
         layer.uv_w = width as f32 / layer.frame.width as f32;
         layer.uv_h = height as f32 / layer.frame.height as f32;
         self.layers.push(layer);
-    }
-
-    /// A track clip over the whole canvas, under the captions: fitted inside it (`cover` false)
-    /// or filling it with the picture's edges cropped.
-    /// A camera clip from a track above V1, drawn in the webcam bubble of `layout`, under
-    /// the captions.
-    pub fn push_webcam_bubble(
-        &mut self,
-        frame: VideoFrame,
-        layout: &EditLayout,
-        unit: f32,
-    ) -> Result<(), String> {
-        if frame.width == 0 || frame.height == 0 {
-            return Ok(());
-        }
-        let layers = webcam_layers(self.width, self.height, frame, layout, unit)?;
-        if self.layers.len() + layers.len() > MAX_LAYERS {
-            return Ok(());
-        }
-        let at = self
-            .layers
-            .iter()
-            .position(|l| l.role == LayerRole::Caption)
-            .unwrap_or(self.layers.len());
-        self.layers.splice(at..at, layers);
-        Ok(())
     }
 
     /// Moves the layers added since `from` (a track below V1) to just above the background.
@@ -581,111 +682,6 @@ impl Scene {
                 LayerRole::WebcamBorder => opacity * opacity,
                 _ => opacity,
             };
-        }
-    }
-
-    /// Grows the webcam from its bubble towards a centered rectangle covering `size_pct` of
-    /// the canvas. `weight` is the eased progress: 0 leaves the bubble untouched, 1 is the
-    /// enlarged webcam. Position, size, corner radius and the source crop all interpolate, so
-    /// the move is continuous; the border thins out and the shadow fades as it grows.
-    pub fn apply_webcam_focus(
-        &mut self,
-        layout: &EditLayout,
-        size_pct: f32,
-        weight: f32,
-        unit: f32,
-    ) {
-        let t = if weight.is_finite() {
-            weight.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        if t <= 0.0 {
-            return;
-        }
-        let Some(index) = self.layers.iter().position(|l| l.role == LayerRole::Webcam) else {
-            return;
-        };
-        let (canvas_w, canvas_h) = (self.width as f32, self.height as f32);
-        let frac = size_pct.clamp(40.0, 100.0) / 100.0;
-        let (target_w, target_h) = (
-            (canvas_w * frac).round().max(1.0),
-            (canvas_h * frac).round().max(1.0),
-        );
-        let target_x = ((canvas_w - target_w) / 2.0).round();
-        let target_y = ((canvas_h - target_h) / 2.0).round();
-        // Full bleed has square corners; a smaller focus matches the screen's rounding.
-        let target_radius = if frac < 1.0 {
-            layout.corner_radius_px as f32 * unit
-        } else {
-            0.0
-        };
-        let lerp = |a: f32, b: f32| a + (b - a) * t;
-
-        let cam = &self.layers[index];
-        let (bx, by, bw, bh) = (
-            cam.x as f32,
-            cam.y as f32,
-            cam.width as f32,
-            cam.height as f32,
-        );
-        let bubble_radius = match cam.clip {
-            ClipMode::None => 0.0,
-            ClipMode::RoundedRect => cam.radius_px,
-            ClipMode::Circle => bw.min(bh) / 2.0,
-            // The closest rounded rectangle; the shapes differ by a hair at the first frame.
-            ClipMode::Squircle => bw.min(bh) * 0.3,
-        };
-        let (mut tu_x, tu_y, mut tu_w, tu_h) = cover_uv(
-            cam.frame.width,
-            cam.frame.height,
-            target_w as u32,
-            target_h as u32,
-        );
-        if layout.webcam_mirror {
-            tu_x += tu_w;
-            tu_w = -tu_w;
-        }
-        let x = lerp(bx, target_x).round().clamp(0.0, canvas_w - 1.0);
-        let y = lerp(by, target_y).round().clamp(0.0, canvas_h - 1.0);
-        let w = lerp(bw, target_w).round().clamp(1.0, canvas_w - x);
-        let h = lerp(bh, target_h).round().clamp(1.0, canvas_h - y);
-        let radius = lerp(bubble_radius, target_radius).min(w.min(h) / 2.0);
-        let clip = if radius > 0.0 {
-            ClipMode::RoundedRect
-        } else {
-            ClipMode::None
-        };
-        let fade = 1.0 - t;
-
-        let cam = &mut self.layers[index];
-        cam.uv_x = lerp(cam.uv_x, tu_x);
-        cam.uv_y = lerp(cam.uv_y, tu_y);
-        cam.uv_w = lerp(cam.uv_w, tu_w);
-        cam.uv_h = lerp(cam.uv_h, tu_h);
-        cam.x = x as u32;
-        cam.y = y as u32;
-        cam.width = w as u32;
-        cam.height = h as u32;
-        cam.clip = clip;
-        cam.radius_px = radius;
-        cam.shadow_opacity *= fade;
-
-        if let Some(border) = self
-            .layers
-            .iter_mut()
-            .find(|l| l.role == LayerRole::WebcamBorder)
-        {
-            let inset = (border.width as f32 - bw).max(0.0) / 2.0 * fade;
-            let bx = (x - inset).round().max(0.0);
-            let by = (y - inset).round().max(0.0);
-            border.x = bx as u32;
-            border.y = by as u32;
-            border.width = (w + inset * 2.0).round().clamp(1.0, canvas_w - bx) as u32;
-            border.height = (h + inset * 2.0).round().clamp(1.0, canvas_h - by) as u32;
-            border.clip = clip;
-            border.radius_px = if radius > 0.0 { radius + inset } else { 0.0 };
-            border.shadow_opacity *= fade;
         }
     }
 }
@@ -1579,33 +1575,6 @@ fn fit_inside(
     (x, y, w, h)
 }
 
-fn webcam_bubble_size(
-    canvas_w: u32,
-    canvas_h: u32,
-    src_w: u32,
-    src_h: u32,
-    layout: &EditLayout,
-) -> (u32, u32) {
-    let frac = layout.webcam_size_fraction();
-    let target = ((canvas_w.min(canvas_h) as f32) * frac).round() as u32;
-    let target = target.max(8);
-    if src_w == 0 || src_h == 0 {
-        return (target, target);
-    }
-    let (w, h) = if src_w >= src_h {
-        let h = ((target as f64 * src_h as f64 / src_w as f64).round() as u32).max(8);
-        (target.min(canvas_w).max(1), h.min(canvas_h).max(1))
-    } else {
-        let w = ((target as f64 * src_w as f64 / src_h as f64).round() as u32).max(8);
-        (w.min(canvas_w).max(1), target.min(canvas_h).max(1))
-    };
-    if matches!(layout.webcam_shape.as_str(), "circle" | "squircle") {
-        let side = w.min(h).max(8);
-        return (side.min(canvas_w).max(1), side.min(canvas_h).max(1));
-    }
-    (w, h)
-}
-
 /// Where the screen sits on the canvas, (x, y, width, height), for a screen picture of
 /// `src_w` x `src_h` under `layout` (pixel values times `unit`).
 pub fn screen_layer_rect(
@@ -1640,20 +1609,22 @@ pub fn screen_layer_rect(
     (padding + (area_w - w) / 2, padding + (area_h - h) / 2, w, h)
 }
 
-/// The canvas rectangle the webcam bubble covers, border included, as (x, y, width, height)
-/// for a camera picture of `src_w` x `src_h`.
+/// The canvas rectangle `bubble` covers, border included, as (x, y, width, height) for a
+/// camera picture of `src_w` x `src_h`.
 pub fn webcam_bubble_rect(
     canvas_w: u32,
     canvas_h: u32,
     src_w: u32,
     src_h: u32,
-    layout: &EditLayout,
+    style: &EditLayout,
+    bubble: &crate::layouts::Bubble,
 ) -> (u32, u32, u32, u32) {
+    use crate::layouts::arrange::{bubble_origin, bubble_size};
     let unit = layout_px_unit(canvas_w, canvas_h);
-    let (w, h) = webcam_bubble_size(canvas_w, canvas_h, src_w, src_h, layout);
-    let (x, y) = webcam_origin(canvas_w, canvas_h, w, h, layout, unit);
-    let inset = if layout.webcam_border_width > 0 {
-        ((layout.webcam_border_width as f32 * unit).round() as u32).max(1)
+    let (w, h) = bubble_size(bubble, canvas_w, canvas_h, (src_w, src_h));
+    let (x, y) = bubble_origin(bubble, canvas_w, canvas_h, w, h, unit);
+    let inset = if style.webcam_border_width > 0 {
+        ((style.webcam_border_width as f32 * unit).round() as u32).max(1)
     } else {
         0
     };
@@ -1665,32 +1636,6 @@ pub fn webcam_bubble_rect(
         (w + inset * 2).min(canvas_w.saturating_sub(bx)),
         (h + inset * 2).min(canvas_h.saturating_sub(by)),
     )
-}
-
-fn webcam_origin(
-    canvas_w: u32,
-    canvas_h: u32,
-    bubble_w: u32,
-    bubble_h: u32,
-    layout: &EditLayout,
-    unit: f32,
-) -> (u32, u32) {
-    let max_x = canvas_w.saturating_sub(bubble_w);
-    let max_y = canvas_h.saturating_sub(bubble_h);
-    let margin = ((8.0 * unit).round() as u32).min(max_x / 2).min(max_y / 2);
-    match layout.webcam_position.as_str() {
-        "top-left" => (margin.min(max_x), margin.min(max_y)),
-        "top-right" => (max_x.saturating_sub(margin), margin.min(max_y)),
-        "bottom-left" => (margin.min(max_x), max_y.saturating_sub(margin)),
-        "custom" => {
-            let x =
-                (layout.webcam_custom_x.clamp(0.0, 100.0) / 100.0 * max_x as f32).round() as u32;
-            let y =
-                (layout.webcam_custom_y.clamp(0.0, 100.0) / 100.0 * max_y as f32).round() as u32;
-            (x.min(max_x), y.min(max_y))
-        }
-        _ => (max_x.saturating_sub(margin), max_y.saturating_sub(margin)),
-    }
 }
 
 fn gradient_frame(
@@ -1721,22 +1666,6 @@ fn gradient_frame(
         }
     }
     Ok(frame)
-}
-
-fn webcam_clip(layout: &EditLayout, bubble_w: u32, bubble_h: u32) -> (ClipMode, f32) {
-    match layout.webcam_shape.as_str() {
-        "circle" => (ClipMode::Circle, 0.0),
-        "squircle" => (ClipMode::Squircle, 0.0),
-        _ => {
-            let radius = layout.webcam_roundness_pct.clamp(0.0, 50.0) / 100.0
-                * bubble_w.min(bubble_h) as f32;
-            if radius > 0.0 {
-                (ClipMode::RoundedRect, radius)
-            } else {
-                (ClipMode::None, 0.0)
-            }
-        }
-    }
 }
 
 /// Multiplier for layout pixel values on a canvas of this size, so padding, radii, shadows and
@@ -2461,9 +2390,11 @@ mod tests {
         let mut landscape = EditLayout::plain();
         landscape.background_type = "solid".into();
         landscape.color_start = "#000000".into();
-        landscape.webcam_enabled = false;
         landscape.padding_px = 0;
-        let wide = Scene::from_layout(16, 8, &landscape, Some(screen.clone()), None).unwrap();
+        let fit = Layout::ScreenOnly(crate::layouts::ScreenOnly {
+            screen: crate::layouts::ScreenFit::Fit,
+        });
+        let wide = Scene::from_layout(16, 8, &landscape, &fit, Some(screen.clone()), None).unwrap();
         let screen_layer = wide
             .layers
             .iter()
@@ -2473,7 +2404,7 @@ mod tests {
 
         let mut portrait = landscape.clone();
         portrait.aspect_ratio = "9:16".into();
-        let tall = Scene::from_layout(8, 16, &portrait, Some(screen), None).unwrap();
+        let tall = Scene::from_layout(8, 16, &portrait, &fit, Some(screen), None).unwrap();
         let placed = tall
             .layers
             .iter()
@@ -2496,19 +2427,26 @@ mod tests {
         layout.background_type = "solid".into();
         layout.color_start = "#000000".into();
         layout.padding_px = 0;
-        layout.webcam_enabled = true;
         layout.webcam_mirror = true;
-        layout.webcam_position = "top-left".into();
-        layout.webcam_size = "xl".into();
         layout.webcam_border_width = 0;
-        let scene = Scene::from_layout(16, 16, &layout, Some(screen), Some(webcam)).unwrap();
+        let top_left = bubble(|b| {
+            b.spot = crate::layouts::BubbleSpot::TopLeft;
+            b.size_pct = 36.0;
+        });
+        let scene =
+            Scene::from_layout(16, 16, &layout, &top_left, Some(screen), Some(webcam)).unwrap();
         let cam = scene
             .layers
             .iter()
             .find(|l| l.role == LayerRole::Webcam)
             .unwrap();
-        assert_eq!(cam.uv_x, 1.0);
-        assert_eq!(cam.uv_w, -1.0);
+        // Mirrored: read right to left (the tiny bubble cuts the middle of the picture).
+        assert!(
+            cam.uv_w < 0.0 && cam.uv_x > 0.5,
+            "uv {} {}",
+            cam.uv_x,
+            cam.uv_w
+        );
         let screen_layer = scene
             .layers
             .iter()
@@ -2542,15 +2480,22 @@ mod tests {
         identity.background_type = "solid".into();
         identity.color_start = "#000000".into();
         identity.padding_px = 2;
-        identity.webcam_enabled = false;
         let mut styled = identity.clone();
         styled.color_start = "#ff0000".into();
         let a = Compositor::composite_cpu(
-            &Scene::from_layout(16, 16, &identity, Some(screen.clone()), None).unwrap(),
+            &Scene::from_layout(
+                16,
+                16,
+                &identity,
+                &screen_only(),
+                Some(screen.clone()),
+                None,
+            )
+            .unwrap(),
         )
         .unwrap();
         let b = Compositor::composite_cpu(
-            &Scene::from_layout(16, 16, &styled, Some(screen), None).unwrap(),
+            &Scene::from_layout(16, 16, &styled, &screen_only(), Some(screen), None).unwrap(),
         )
         .unwrap();
         assert_ne!(a.data[0..4], b.data[0..4], "padding should show background");
@@ -2590,10 +2535,57 @@ mod tests {
         layout.background_type = "solid".into();
         layout.color_start = "#00ff00".into();
         layout.padding_px = 4;
-        layout.webcam_enabled = false;
         layout.corner_radius_px = 0;
         layout.shadow_blur_px = 0;
         layout
+    }
+
+    /// A bubble layout: the plain one, changed by `change`.
+    fn bubble(change: impl FnOnce(&mut crate::layouts::Bubble)) -> Layout {
+        let mut bubble = crate::layouts::Bubble::plain();
+        change(&mut bubble);
+        Layout::Bubble(bubble)
+    }
+
+    fn screen_only() -> Layout {
+        Layout::ScreenOnly(Default::default())
+    }
+
+    /// `from` moving to `to`, `t` of the way, as the evaluator draws it: the screen showing
+    /// its crop, the camera its middle.
+    fn blended_scene(
+        style: &EditLayout,
+        from: &Layout,
+        to: &Layout,
+        t: f32,
+        screen: VideoFrame,
+        webcam: VideoFrame,
+        (width, height): (u32, u32),
+    ) -> Scene {
+        use crate::layouts::arrange::{arrange, blend, Canvas, Sources};
+        let canvas = Canvas {
+            width,
+            height,
+            unit: 1.0,
+        };
+        let sources = Sources {
+            screen: Some((screen.width, screen.height)),
+            camera: Some((webcam.width, webcam.height)),
+        };
+        let parts = blend(
+            &arrange(from, style, canvas, sources),
+            &arrange(to, style, canvas, sources),
+            t,
+        );
+        let mut scene = Scene::backdrop(width, height, style, None, 1.0).unwrap();
+        if let Some(slot) = parts.screen {
+            scene.push_screen(screen, &slot, style.screen_crop_uv(), style, 1.0);
+        }
+        if let Some(slot) = parts.camera {
+            let uv = camera_uv((webcam.width, webcam.height), &slot, None, (0.0, 0.0));
+            scene.push_camera(webcam, &slot, uv, style, 1.0).unwrap();
+        }
+        scene
     }
 
     #[test]
@@ -2602,7 +2594,8 @@ mod tests {
         let screen = split_frame(32, 16, [0, 0, 255], [255, 0, 0]);
         let mut layout = solid_layout();
         layout.padding_px = 0;
-        let full = Scene::from_layout(32, 32, &layout, Some(screen.clone()), None).unwrap();
+        let full = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen.clone()), None)
+            .unwrap();
         let full = full
             .layers
             .iter()
@@ -2611,7 +2604,8 @@ mod tests {
         assert_eq!((full.x, full.y, full.width, full.height), (0, 8, 32, 16));
 
         layout.screen_crop_left = 45.0;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen.clone()), None).unwrap();
+        let scene = Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen.clone()), None)
+            .unwrap();
         let layer = scene
             .layers
             .iter()
@@ -2638,7 +2632,8 @@ mod tests {
         layout.screen_crop_left = 0.0;
         layout.screen_crop_right = 25.0;
         layout.screen_crop_bottom = 25.0;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let layer = scene
             .layers
             .iter()
@@ -2656,7 +2651,8 @@ mod tests {
         let mut layout = solid_layout();
         layout.padding_px = 0;
         layout.screen_scale_pct = 50.0;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let layer = scene
             .layers
             .iter()
@@ -2680,12 +2676,14 @@ mod tests {
         let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
         let webcam = VideoFrame::solid(16, 16, 255, 0, 0, 0).unwrap();
         let mut layout = solid_layout();
-        layout.webcam_enabled = true;
         layout.webcam_mirror = false;
-        layout.webcam_size_pct = Some(50.0);
-        layout.webcam_roundness_pct = 50.0;
         layout.webcam_border_width = 2;
-        let scene = Scene::from_layout(64, 64, &layout, Some(screen), Some(webcam)).unwrap();
+        let round = bubble(|b| {
+            b.size_pct = 50.0;
+            b.roundness_pct = 50.0;
+        });
+        let scene =
+            Scene::from_layout(64, 64, &layout, &round, Some(screen), Some(webcam)).unwrap();
         let cam = scene
             .layers
             .iter()
@@ -2713,32 +2711,39 @@ mod tests {
         assert_eq!(pixel(&out, cx + 16, cy + 16)[0], 255);
     }
 
-    fn focus_scene(layout: &EditLayout) -> Scene {
-        let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
-        let webcam = VideoFrame::solid(16, 12, 255, 0, 0, 0).unwrap();
-        Scene::from_layout(64, 48, layout, Some(screen), Some(webcam)).unwrap()
+    /// The circle bubble and camera-only (at `size_pct`) layouts the move tests blend.
+    fn move_layouts(size_pct: f32) -> (EditLayout, Layout, Layout) {
+        let mut style = solid_layout();
+        style.webcam_border_width = 2;
+        style.webcam_shadow = true;
+        let circle = bubble(|b| {
+            b.shape = crate::layouts::CameraShape::Circle;
+            b.size_pct = 30.0;
+        });
+        let camera = Layout::CameraOnly(crate::layouts::CameraOnly {
+            size_pct,
+            punch_in: 1.0,
+        });
+        (style, circle, camera)
     }
 
-    fn focus_layout() -> EditLayout {
-        let mut layout = solid_layout();
-        layout.webcam_enabled = true;
-        layout.webcam_shape = "circle".into();
-        layout.webcam_size_pct = Some(30.0);
-        layout.webcam_border_width = 2;
-        layout.webcam_shadow = true;
-        layout
+    fn move_scene(size_pct: f32, t: f32) -> Scene {
+        let (style, circle, camera) = move_layouts(size_pct);
+        let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
+        let webcam = VideoFrame::solid(16, 12, 255, 0, 0, 0).unwrap();
+        blended_scene(&style, &circle, &camera, t, screen, webcam, (64, 48))
     }
 
     #[test]
-    fn webcam_focus_leaves_bubble_at_zero_and_fills_canvas_at_one() {
-        let layout = focus_layout();
-        let bubble = focus_scene(&layout);
-        let mut untouched = bubble.clone();
-        untouched.apply_webcam_focus(&layout, 100.0, 0.0, 1.0);
-        assert_eq!(untouched, bubble);
+    fn a_move_leaves_the_bubble_at_zero_and_fills_the_canvas_at_one() {
+        let (style, circle, _) = move_layouts(100.0);
+        let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
+        let webcam = VideoFrame::solid(16, 12, 255, 0, 0, 0).unwrap();
+        let plain =
+            Scene::from_layout(64, 48, &style, &circle, Some(screen), Some(webcam)).unwrap();
+        assert_eq!(move_scene(100.0, 0.0), plain);
 
-        let mut full = bubble.clone();
-        full.apply_webcam_focus(&layout, 100.0, 1.0, 1.0);
+        let full = move_scene(100.0, 1.0);
         let cam = full
             .layers
             .iter()
@@ -2749,22 +2754,25 @@ mod tests {
         assert_eq!(cam.shadow_opacity, 0.0);
         // Cover crop of a 4:3 source into a 4:3 canvas uses the whole frame, mirrored.
         assert!((cam.uv_x - 1.0).abs() < 1e-6 && (cam.uv_w + 1.0).abs() < 1e-6);
-        let ring = full
-            .layers
-            .iter()
-            .find(|l| l.role == LayerRole::WebcamBorder)
-            .unwrap();
-        assert_eq!((ring.width, ring.height), (64, 48), "the border thins away");
+        assert!(
+            !full
+                .layers
+                .iter()
+                .any(|l| l.role == LayerRole::WebcamBorder),
+            "the border is gone"
+        );
+        assert!(
+            !full.layers.iter().any(|l| l.role == LayerRole::Screen),
+            "the screen is covered and dropped"
+        );
         let out = Compositor::composite_cpu(&full).unwrap();
         assert_eq!(pixel(&out, 0, 0)[0], 255, "webcam covers the corner");
         assert_eq!(pixel(&out, 32, 24)[0], 255, "webcam covers the screen");
     }
 
     #[test]
-    fn webcam_focus_interpolates_size_position_and_radius() {
-        let layout = focus_layout();
-        let bubble = focus_scene(&layout);
-        let start = bubble
+    fn a_move_interpolates_size_position_and_radius() {
+        let start = move_scene(80.0, 0.0)
             .layers
             .iter()
             .find(|l| l.role == LayerRole::Webcam)
@@ -2772,30 +2780,26 @@ mod tests {
             .clone();
         let mut previous = (start.width, start.x);
         for step in 1..=10 {
-            let mut scene = bubble.clone();
-            scene.apply_webcam_focus(&layout, 80.0, step as f32 / 10.0, 1.0);
+            let scene = move_scene(80.0, step as f32 / 10.0);
             let cam = scene
                 .layers
                 .iter()
                 .find(|l| l.role == LayerRole::Webcam)
                 .unwrap();
             assert!(cam.width >= previous.0, "grows monotonically");
-            assert!(cam.x <= previous.1, "slides towards the center");
             assert!(cam.radius_px <= cam.width.min(cam.height) as f32 / 2.0 + 1e-3);
             previous = (cam.width, cam.x);
         }
-        let mut focused = bubble.clone();
-        focused.apply_webcam_focus(&layout, 80.0, 1.0, 1.0);
+        let focused = move_scene(80.0, 1.0);
         let cam = focused
             .layers
             .iter()
             .find(|l| l.role == LayerRole::Webcam)
             .unwrap();
-        // 80% of 64x48, centered.
-        assert_eq!((cam.x, cam.y, cam.width, cam.height), (7, 5, 51, 38));
+        // 80% of 64x48, centred.
+        assert_eq!((cam.x, cam.y, cam.width, cam.height), (6, 5, 51, 38));
         // The circle opens up as a rounded rectangle on the first frame.
-        let mut first = bubble.clone();
-        first.apply_webcam_focus(&layout, 80.0, 0.01, 1.0);
+        let first = move_scene(80.0, 0.01);
         let cam = first
             .layers
             .iter()
@@ -2810,7 +2814,7 @@ mod tests {
         let mut layout = solid_layout();
         layout.background_type = "preset".into();
         layout.background_preset = "sunset".into();
-        let scene = Scene::from_layout(48, 27, &layout, None, None).unwrap();
+        let scene = Scene::from_layout(48, 27, &layout, &screen_only(), None, None).unwrap();
         assert_eq!(scene.layers[0].role, LayerRole::Background);
         let out = Compositor::composite_cpu(&scene).unwrap();
         assert_ne!(
@@ -2830,6 +2834,7 @@ mod tests {
             640,
             360,
             &layout,
+            &screen_only(),
             Some(screen.clone()),
             None,
             None,
@@ -2840,6 +2845,7 @@ mod tests {
             1920,
             1080,
             &layout,
+            &screen_only(),
             Some(screen),
             None,
             None,
@@ -2879,7 +2885,8 @@ mod tests {
         let screen = VideoFrame::solid(24, 24, 0, 0, 255, 0).unwrap();
         let mut layout = solid_layout();
         layout.corner_radius_px = 12;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let out = Compositor::composite_cpu(&scene).unwrap();
         let corner = pixel(&out, 4, 4);
         assert!(
@@ -2899,14 +2906,25 @@ mod tests {
         let webcam = VideoFrame::solid(16, 16, 0, 255, 0, 0).unwrap();
         let mut layout = solid_layout();
         layout.padding_px = 0;
-        layout.webcam_enabled = true;
-        layout.webcam_shape = "circle".into();
-        layout.webcam_position = "top-left".into();
-        layout.webcam_size = "xl".into();
         layout.webcam_border_width = 0;
         layout.webcam_mirror = false;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen.clone()), Some(webcam.clone()))
-            .unwrap();
+        let shaped = |shape| {
+            bubble(|b| {
+                b.shape = shape;
+                b.spot = crate::layouts::BubbleSpot::TopLeft;
+                b.size_pct = 36.0;
+            })
+        };
+        let circle = shaped(crate::layouts::CameraShape::Circle);
+        let scene = Scene::from_layout(
+            32,
+            32,
+            &layout,
+            &circle,
+            Some(screen.clone()),
+            Some(webcam.clone()),
+        )
+        .unwrap();
         let cam = scene
             .layers
             .iter()
@@ -2930,8 +2948,15 @@ mod tests {
         let screen_far = pixel(&out, 30, 30);
         assert!(screen_far[2] > 200, "screen layer is not circle-clipped");
 
-        layout.webcam_shape = "squircle".into();
-        let squircle = Scene::from_layout(32, 32, &layout, Some(screen), Some(webcam)).unwrap();
+        let squircle = Scene::from_layout(
+            32,
+            32,
+            &layout,
+            &shaped(crate::layouts::CameraShape::Squircle),
+            Some(screen),
+            Some(webcam),
+        )
+        .unwrap();
         let cam = squircle
             .layers
             .iter()
@@ -2952,13 +2977,15 @@ mod tests {
         let webcam = VideoFrame::solid(32, 16, 0, 255, 0, 0).unwrap();
         let mut layout = solid_layout();
         layout.padding_px = 0;
-        layout.webcam_enabled = true;
-        layout.webcam_shape = "circle".into();
-        layout.webcam_position = "top-left".into();
-        layout.webcam_size = "xl".into();
         layout.webcam_border_width = 0;
         layout.webcam_mirror = false;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen), Some(webcam)).unwrap();
+        let circle = bubble(|b| {
+            b.shape = crate::layouts::CameraShape::Circle;
+            b.spot = crate::layouts::BubbleSpot::TopLeft;
+            b.size_pct = 36.0;
+        });
+        let scene =
+            Scene::from_layout(32, 32, &layout, &circle, Some(screen), Some(webcam)).unwrap();
         let cam = scene
             .layers
             .iter()
@@ -2983,7 +3010,8 @@ mod tests {
         layout.corner_radius_px = 6;
         layout.shadow_blur_px = 8;
         layout.shadow_opacity = 0.8;
-        let scene = Scene::from_layout(32, 32, &layout, Some(screen), None).unwrap();
+        let scene =
+            Scene::from_layout(32, 32, &layout, &screen_only(), Some(screen), None).unwrap();
         let screen_layer = scene
             .layers
             .iter()
@@ -3040,9 +3068,16 @@ mod tests {
             .unwrap()
             .expect("decoded wallpaper");
         let screen = VideoFrame::solid(8, 8, 0, 0, 255, 0).unwrap();
-        let scene =
-            Scene::from_layout_with_wallpaper(16, 16, &layout, Some(screen), None, Some(paper))
-                .unwrap();
+        let scene = Scene::from_layout_with_wallpaper(
+            16,
+            16,
+            &layout,
+            &screen_only(),
+            Some(screen),
+            None,
+            Some(paper),
+        )
+        .unwrap();
         let out = Compositor::composite_cpu(&scene).unwrap();
         let pad = pixel(&out, 0, 0);
         assert!(
@@ -3127,20 +3162,21 @@ mod tests {
         layout.corner_radius_px = 8;
         layout.shadow_blur_px = 6;
         layout.shadow_opacity = 0.6;
-        layout.webcam_enabled = true;
-        layout.webcam_shape = "circle".into();
-        layout.webcam_position = "bottom-right".into();
-        layout.webcam_size = "lg".into();
         layout.webcam_border_width = 0;
         layout.webcam_shadow = true;
         layout.webcam_mirror = false;
         let paper = VideoFrame::solid(16, 8, 180, 40, 40, 0).unwrap();
         layout.background_type = "wallpaper".into();
         layout.wallpaper_asset = Some("assets/unused.png".into());
+        let circle = bubble(|b| {
+            b.shape = crate::layouts::CameraShape::Circle;
+            b.size_pct = 28.0;
+        });
         let scene = Scene::from_layout_with_wallpaper(
             32,
             32,
             &layout,
+            &circle,
             Some(screen),
             Some(webcam),
             Some(paper),
@@ -3180,12 +3216,14 @@ mod tests {
         layout.screen_crop_top = 10.0;
         layout.screen_scale_pct = 80.0;
         layout.corner_radius_px = 6;
-        layout.webcam_enabled = true;
         layout.webcam_mirror = false;
-        layout.webcam_size_pct = Some(40.0);
-        layout.webcam_roundness_pct = 30.0;
         layout.webcam_border_width = 2;
-        let scene = Scene::from_layout(48, 32, &layout, Some(screen), Some(webcam)).unwrap();
+        let round = bubble(|b| {
+            b.size_pct = 40.0;
+            b.roundness_pct = 30.0;
+        });
+        let scene =
+            Scene::from_layout(48, 32, &layout, &round, Some(screen), Some(webcam)).unwrap();
         let cpu = Compositor::composite_cpu(&scene).unwrap();
         let gpu = compositor.composite(&scene).unwrap();
         let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
@@ -3201,19 +3239,33 @@ mod tests {
         not(target_os = "macos"),
         ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
     )]
-    fn gpu_cpu_webcam_focus_mid_transition_within_tolerance() {
+    fn gpu_cpu_moves_mid_transition_within_tolerance() {
         let compositor = Compositor::new().expect("GPU compositor required for contract tests");
-        let mut layout = focus_layout();
-        layout.webcam_mirror = false;
-        let mut scene = focus_scene(&layout);
-        scene.apply_webcam_focus(&layout, 90.0, 0.5, 1.0);
-        let cpu = Compositor::composite_cpu(&scene).unwrap();
-        let gpu = compositor.composite(&scene).unwrap();
-        let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
-        assert!(
-            mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE
-                && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
-            "GPU vs CPU mean {mean} max {max}"
-        );
+        let screen = VideoFrame::solid(32, 32, 0, 0, 255, 0).unwrap();
+        let webcam = VideoFrame::solid(16, 12, 255, 0, 0, 0).unwrap();
+        let (style, circle, camera) = move_layouts(90.0);
+        let side = Layout::SideBySide(crate::layouts::SideBySide {
+            overlap: true,
+            ..Default::default()
+        });
+        for (from, to) in [(&circle, &camera), (&circle, &side), (&side, &camera)] {
+            let scene = blended_scene(
+                &style,
+                from,
+                to,
+                0.5,
+                screen.clone(),
+                webcam.clone(),
+                (64, 48),
+            );
+            let cpu = Compositor::composite_cpu(&scene).unwrap();
+            let gpu = compositor.composite(&scene).unwrap();
+            let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
+            assert!(
+                mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE
+                    && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
+                "GPU vs CPU mean {mean} max {max}"
+            );
+        }
     }
 }

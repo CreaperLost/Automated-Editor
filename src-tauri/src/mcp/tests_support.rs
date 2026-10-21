@@ -136,6 +136,10 @@ impl super::Host for BareHost {
         false
     }
 
+    fn local_review_ready(&self) -> bool {
+        false
+    }
+
     fn config_dir(&self) -> std::path::PathBuf {
         self.config.path().to_path_buf()
     }

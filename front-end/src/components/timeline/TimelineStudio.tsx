@@ -46,10 +46,14 @@ import {
   assetById,
   clipEnd,
   clipName,
+  clipOut,
   clipRole,
+  clipSourceAt,
+  clipSpeed,
   cutJoins,
   defaultClipUs,
   formatRulerLabel,
+  formatSpeed,
   rulerStepUs,
   sequenceEdges,
   snapStart,
@@ -60,7 +64,6 @@ import {
   withPartners,
 } from "../../lib/sequence";
 import {
-  DEFAULT_WEBCAM_FOCUS,
   type Clip,
   type EditedSpan,
   type OpenedProject,
@@ -87,8 +90,7 @@ import {
 import { useZoomLane } from "./useZoomLane";
 import { useCaptionLane } from "./useCaptionLane";
 import { useSoundEffectsLane } from "./useSoundEffectsLane";
-
-type SourceRange = [start: number, end: number];
+import { useLayoutLane } from "./useLayoutLane";
 
 /** The playhead now, read when needed: the timeline itself does not re-render as it moves. */
 const nowUs = () => useProjectStore.getState().currentTimeUs;
@@ -122,21 +124,6 @@ const FollowPlayhead: React.FC<{ scrollRef: React.RefObject<HTMLDivElement | nul
   }, [timeUs, pxPerUs, zoom, scrollRef]);
   return null;
 };
-
-/** `ranges` minus `cut`, both as [start, end) ranges. */
-function subtractRanges(ranges: SourceRange[], cut: SourceRange[]): SourceRange[] {
-  return ranges.flatMap(([start, end]) => {
-    let pieces: SourceRange[] = [[start, end]];
-    for (const [cutStart, cutEnd] of cut) {
-      pieces = pieces.flatMap(([a, b]): SourceRange[] =>
-        cutEnd <= a || cutStart >= b
-          ? [[a, b]]
-          : [...(cutStart > a ? [[a, cutStart] as SourceRange] : []), ...(cutEnd < b ? [[cutEnd, b] as SourceRange] : [])],
-      );
-    }
-    return pieces;
-  });
-}
 
 /** A row a clip or media can be dropped on: a track, or a new track at the top or bottom. */
 type Row = { kind: "track"; trackId: string } | { kind: "new"; audio: boolean };
@@ -274,6 +261,13 @@ const ClipBlock = React.memo(function ClipBlock({
   const showContents = widthPx >= 40;
   const showTrimHandles = widthPx >= 24;
   const { name, role, missing } = info;
+  const speed = clipSpeed(clip);
+  // Played faster or slower: the speed, by its name.
+  const speedTag = speed !== 1 && (
+    <span className="shrink-0 px-1 rounded-sm bg-studio-950/70 text-[10px] leading-4 font-semibold text-zoom-fg" aria-label={`Plays at ${formatSpeed(speed)}`}>
+      {formatSpeed(speed)}
+    </span>
+  );
   const Icon = audio ? (role === "mic" ? Mic : AudioLines) : info.graphic ? Sparkles : info.image ? ImageIcon : role === "webcam" ? Camera : Film;
   const tint = missing
     ? "bg-danger/15 border-danger/50"
@@ -318,7 +312,7 @@ const ClipBlock = React.memo(function ClipBlock({
         // Padding/borders must not widen a short clip over its neighbours. Subpixel
         // clips show their fill alone; zooming in reveals their border and trim handles.
         style={{ left: pct(clip.startUs), width: pct(clip.durationUs), borderWidth: widthPx < 2 ? 0 : undefined }}
-        title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${
+        title={`${name}${missing ? " (missing)" : ""}: ${(clip.durationUs / 1e6).toFixed(2)}s${speed !== 1 ? ` at ${formatSpeed(speed)}` : ""}${
           info.roleLabel ? ` · ${info.roleLabel}` : ""
         }. Click to select (with what it is linked to; Alt+click alone, Shift/Ctrl+click to add or remove), drag to move, drag an edge to trim. Drag over empty space to select several.`}
         onClick={click}
@@ -337,24 +331,26 @@ const ClipBlock = React.memo(function ClipBlock({
               >
                 <ClipWaveform
                   overview={waveform}
-                  fromUs={clip.inUs + (waveFromUs - clip.startUs)}
-                  toUs={clip.inUs + (waveToUs - clip.startUs)}
+                  fromUs={clipSourceAt(clip, waveFromUs)}
+                  toUs={clipSourceAt(clip, waveToUs)}
                   speech={role === "mic"}
                 />
               </div>
             )}
             {/* Muted moments: a mark over the waveform where the sound is silenced. */}
             {mutes
-              ?.filter((m) => m.endUs > clip.inUs && m.startUs < clip.inUs + clip.durationUs)
+              ?.filter((m) => m.endUs > clip.inUs && m.startUs < clipOut(clip))
               .map((m) => {
+                // In the sound's own time: the same share of the clip at any speed.
+                const sourceUs = clipOut(clip) - clip.inUs;
                 const from = Math.max(m.startUs, clip.inUs) - clip.inUs;
-                const to = Math.min(m.endUs, clip.inUs + clip.durationUs) - clip.inUs;
+                const to = Math.min(m.endUs, clipOut(clip)) - clip.inUs;
                 return (
                   <div
                     key={m.startUs}
                     aria-hidden
                     className="absolute inset-y-0 bg-danger/60 pointer-events-none"
-                    style={{ left: `${(from / clip.durationUs) * 100}%`, width: `max(1px, ${((to - from) / clip.durationUs) * 100}%)` }}
+                    style={{ left: `${(from / sourceUs) * 100}%`, width: `max(1px, ${((to - from) / sourceUs) * 100}%)` }}
                   />
                 );
               })}
@@ -362,6 +358,7 @@ const ClipBlock = React.memo(function ClipBlock({
               <span className="absolute top-0.5 left-1 max-w-[calc(100%-0.5rem)] flex items-center gap-1 px-1 rounded-sm bg-studio-950/55 text-[10px] leading-4 font-medium text-white/85 truncate pointer-events-none">
                 {info.unlinked && <Unlink className="w-2.5 h-2.5 shrink-0" aria-label="Unlinked" />}
                 <span className="truncate">{name}</span>
+                {speedTag}
               </span>
             )}
           </>
@@ -370,6 +367,7 @@ const ClipBlock = React.memo(function ClipBlock({
             <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
             {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
             <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
+            {speedTag && <span className="relative pointer-events-none">{speedTag}</span>}
           </>
         ) : null}
         {!locked && showTrimHandles &&
@@ -960,51 +958,25 @@ export const TimelineStudio: React.FC = () => {
   const restoreCut = useRef((_clipId: string) => {});
   restoreCut.current = (clipId) => void edit({ kind: "restoreCuts", clipIds: [clipId] });
 
-  // ---- Webcam focus and normal view ---------------------------------------------------------
-  const focus = openedProject?.webcamFocus ?? DEFAULT_WEBCAM_FOCUS;
-  const focusAsset = focus.media ?? openedProject?.assets.find((a) => a.kind === "recording")?.id;
-  const cameraClips = useMemo(
+  // ---- Layouts over the selection ------------------------------------------------------------
+  const hasCamera = useMemo(
     () =>
       (openedProject?.sequence.tracks ?? [])
         .filter((t) => t.kind === "video")
-        .flatMap((track) =>
-          track.clips.filter((c) => c.asset === focusAsset && clipRole(openedProject, track, c) === "webcam").map((clip) => ({ track, clip })),
-        ),
-    [openedProject, focusAsset],
+        .some((track) => track.clips.some((c) => clipRole(openedProject, track, c) === "webcam")),
+    [openedProject],
   );
-  const normalView: SourceRange[] = (focus.normalView ?? []).map((r) => [r.sourceStartUs, r.sourceEndUs]);
-  const selectionSource: SourceRange[] = selection
-    ? cameraClips.flatMap(({ clip }): SourceRange[] => {
-        const start = Math.max(selection.startUs, clip.startUs);
-        const end = Math.min(selection.endUs, clipEnd(clip));
-        if (end <= start) return [];
-        const offset = clip.inUs - clip.startUs;
-        return [[start + offset, end + offset]];
-      })
-    : [];
-  const selectionInNormalView = selectionSource.length > 0 && subtractRanges(selectionSource, normalView).length === 0;
-  const toggleNormalView = () => {
-    if (selectionSource.length === 0) return;
-    const next = selectionInNormalView ? subtractRanges(normalView, selectionSource) : [...normalView, ...selectionSource];
-    void runEdit((project) =>
-      api.projectWebcamFocusUpdate(project.projectHandle, project.revision, {
-        ...(project.webcamFocus ?? DEFAULT_WEBCAM_FOCUS),
-        media: focusAsset,
-        normalView: next.map(([sourceStartUs, sourceEndUs]) => ({ sourceStartUs, sourceEndUs })),
-      }),
-    );
-  };
-  const focusEdited: SourceRange[] = focus.enabled
-    ? (focus.segments ?? []).filter((s) => s.enabled).flatMap((s) => (s.editedRanges ?? []).map((r): SourceRange => [r.startUs, r.endUs]))
-    : [];
-  const selectionFocused = !!selection && subtractRanges([[selection.startUs, selection.endUs]], focusEdited).length === 0;
-  const toggleCamFocus = () => {
+  /** The camera alone over the selection, or the base kept there. */
+  const layoutOverSelection = (cameraOnly: boolean) => {
     if (!selection) return;
-    const { startUs, endUs } = selection;
     void runEdit((project) =>
-      selectionFocused
-        ? api.projectWebcamFocusRemove(project.projectHandle, project.revision, startUs, endUs)
-        : api.projectWebcamFocusAdd(project.projectHandle, project.revision, startUs, endUs),
+      api.projectLayoutsChange(project.projectHandle, project.revision, project.shortView ?? null, {
+        op: "add",
+        startUs: selection.startUs,
+        endUs: selection.endUs,
+        layout: cameraOnly ? { kind: "cameraOnly", sizePct: 100, punchIn: 1 } : null,
+        name: cameraOnly ? "Camera only" : null,
+      }),
     );
   };
 
@@ -1036,6 +1008,7 @@ export const TimelineStudio: React.FC = () => {
     hint,
   });
   const soundEffects = useSoundEffectsLane({ view, onError: setEditError });
+  const layoutLane = useLayoutLane({ view });
 
   // ---- Keyboard -----------------------------------------------------------------------------
   const actions = useRef<Partial<Record<HotkeyAction, () => void>>>({});
@@ -1666,7 +1639,6 @@ export const TimelineStudio: React.FC = () => {
     const audio = track.kind === "audio";
     const trackNo = trackNumber(sequence, track.id);
     const trackJoins = joinsByTrack.get(track.id);
-    const hasCamera = cameraClips.some((c) => c.track.id === track.id);
     return (
       <div
         key={track.id}
@@ -1679,38 +1651,6 @@ export const TimelineStudio: React.FC = () => {
         {trackJoins && trackJoins.length > 0 && (
           <CutMarks joins={joinsInView(trackJoins)} spanUs={spanUs} pxPerUs={pxPerUs} editing={editing} restore={restoreCut} />
         )}
-        {/* Auto webcam layout: where the camera fills the frame, and where it keeps its bubble */}
-        {hasCamera &&
-          (focus.segments ?? []).flatMap((segment) =>
-            (segment.editedRanges ?? []).map((r, i) => (
-              <div
-                key={`${segment.id}-${i}`}
-                role="button"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  selectRange(r.startUs, r.endUs);
-                }}
-                className={cn(
-                  "absolute top-0 h-2 rounded-b z-10 cursor-pointer",
-                  segment.enabled && focus.enabled ? "bg-zoom/80 hover:bg-zoom-fg" : "bg-studio-500/50",
-                )}
-                style={{ left: pct(r.startUs), width: pct(r.endUs - r.startUs) }}
-                title={`Camera ${segment.enabled ? "fills the frame" : "focus off"} (${segment.source}). Click to select it; Cam Focus removes it.`}
-              />
-            )),
-          )}
-        {hasCamera &&
-          (focus.normalView ?? []).flatMap((r) =>
-            (r.editedRanges ?? []).map((edited, i) => (
-              <div
-                key={`normal-${r.sourceStartUs}-${i}`}
-                className="absolute bottom-0 h-1.5 rounded-t bg-studio-300/60 z-10 pointer-events-none"
-                style={{ left: pct(edited.startUs), width: pct(edited.endUs - edited.startUs) }}
-                title="Normal view: the camera stays in its bubble here"
-              />
-            )),
-          )}
         {ghostsOn({ kind: "track", trackId: track.id })}
       </div>
     );
@@ -1804,28 +1744,20 @@ export const TimelineStudio: React.FC = () => {
         <Button
           variant="ghost"
           icon={Video}
-          aria-pressed={selectionFocused}
-          className={cn(selectionFocused && "!bg-accent/15 !text-accent-fg !border-accent/40")}
-          disabled={!openedProject || editing || !selection || !!openedProject?.shortView || cameraClips.length === 0}
-          onClick={toggleCamFocus}
-          title={selectionFocused ? "Remove Cam Focus from the selection" : "Make the camera fill the frame over the selection (turns Auto Webcam on)"}
+          disabled={!openedProject || editing || !selection || !hasCamera}
+          onClick={() => layoutOverSelection(true)}
+          title="Show the camera alone over the selection (a layout section; more layouts in the inspector's Layouts)"
         >
-          Cam Focus
+          Camera only
         </Button>
         <Button
           variant="ghost"
           icon={MonitorPlay}
-          aria-pressed={selectionInNormalView}
-          className={cn(selectionInNormalView && "!bg-accent/15 !text-accent-fg !border-accent/40")}
-          disabled={!openedProject || editing || selectionSource.length === 0 || !!openedProject?.shortView}
-          onClick={toggleNormalView}
-          title={
-            selectionInNormalView
-              ? "Here the camera keeps its bubble. Click to let Auto Webcam go full frame again."
-              : "Keep the camera in its bubble over the selection, even when Auto Webcam would go full frame"
-          }
+          disabled={!openedProject || editing || !selection}
+          onClick={() => layoutOverSelection(false)}
+          title="Show the base layout over the selection, and keep picked layouts away from it"
         >
-          Normal view
+          Base layout
         </Button>
 
         <span className="flex-1 min-w-2" />
@@ -1901,6 +1833,7 @@ export const TimelineStudio: React.FC = () => {
             <div className="flex-1 space-y-2 py-2">
               {captions.header}
               {zooms.header}
+              {layoutLane.header}
               {addTrackButton(false)}
               {[...videoTracks].reverse().map(trackHeader)}
               {audioTracks.map(trackHeader)}
@@ -2036,6 +1969,7 @@ export const TimelineStudio: React.FC = () => {
                 <div data-lanes-stack className="space-y-2">
                   {captions.lane}
                   {zooms.lane}
+                  {layoutLane.lane}
                   {newTrackRow(false)}
                   {[...videoTracks].reverse().map(trackLane)}
                   {audioTracks.map(trackLane)}

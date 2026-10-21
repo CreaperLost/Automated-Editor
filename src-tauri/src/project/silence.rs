@@ -8,7 +8,7 @@ use crate::dsp::silence::{
     LevelBlock, SilenceConfig, SilenceCutInterval, SilenceDetectionResult, SoundThreshold,
     StreamingSilenceDetector,
 };
-use crate::timeline::{SourceInterval, TimelineMapper};
+use crate::timeline::TimelineMapper;
 use std::fs;
 
 const MAX_DIAGNOSTICS: usize = 32;
@@ -291,10 +291,7 @@ pub(crate) fn detect_track_silence_with_words(
         ctx.retained
             .iter()
             .enumerate()
-            .map(|(i, interval)| {
-                SourceInterval::new(format!("ret-{i}"), interval.start_us, interval.end_us)
-                    .with_media(interval.media.clone())
-            })
+            .map(|(i, interval)| interval.interval(format!("ret-{i}")))
             .collect(),
     )?;
 
@@ -509,6 +506,7 @@ mod tests {
                 start_us: 0,
                 end_us: 5_000_000,
                 media: None,
+                edited_len_us: None,
             }],
             edited_duration_us: 5_000_000,
             muted: Vec::new(),
@@ -519,7 +517,7 @@ mod tests {
         };
         let scan = scan_track_silence(&ctx, &config).unwrap();
         assert_eq!(scan.covered, vec![(0, 5_000_000)]);
-        let speech = crate::webcam_focus::speech_ranges(&scan.covered, &scan.source_ranges);
+        let speech = crate::layouts::pick::speech_ranges(&scan.covered, &scan.source_ranges);
         assert_eq!(speech.len(), 2, "{speech:?}");
         assert!(speech[0].1.abs_diff(2_000_000) < 60_000, "{speech:?}");
         assert!(speech[1].0.abs_diff(3_000_000) < 60_000, "{speech:?}");

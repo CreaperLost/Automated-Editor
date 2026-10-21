@@ -7,7 +7,7 @@ description: Edit videos in AeroEdits (screen-recorded tutorials first) with its
 # Editing in AeroEdits
 
 AeroEdits runs the editing passes itself: transcription, mouth noises, silence, fillers and
-retakes, webcam focus, zooms, captions, chapters, export. You run them in the right order, ask
+retakes, layouts, zooms, captions, chapters, export. You run them in the right order, ask
 the user what they want, and report back. A pass costs you a line of text. Reading a transcript
 or rendering frames costs far more, so do that only when a step fails or the user asks.
 
@@ -77,6 +77,12 @@ tools or edits unless the user says so.
 Each change is its own undo step and is listed in the app's Agent panel, where the user can
 undo it. `undo` takes back the latest change.
 
+## Speed
+
+`speed` plays clips or a stretch of the timeline faster or slower (0.25x to 8x); the sound
+keeps its pitch, and zooms, cursor and captions follow. Use it only when the user asks for a
+speed. Never speed up waiting or slow parts by yourself: cut them, or ask.
+
 ## Chapters
 
 Chapters are the last edit, right before export, after every cut: they read the final edit's
@@ -91,7 +97,7 @@ never go through a graphic, so add them after the cuts are done and checked, bef
 
 A graphic that fills the whole screen never eases in or out: it appears and disappears with a
 hard cut. The only graphics that ease in and out are those laid over the full-screen camera (a
-lower third or callout during webcam focus, or a short's camera scene). The app decides this
+lower third or callout during a camera-only layout section). The app decides this
 from where each graphic plays and sets `data-entrance` (`cut` or `ease`) on its root when it
 renders; `graphic_render` says which each one got. Never add your own fade to a full-screen
 graphic. In a composition you write, show the card whole from the first frame to the last and

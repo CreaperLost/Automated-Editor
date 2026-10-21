@@ -1,9 +1,10 @@
 # Template: shorts
 
 Vertical shorts (9:16) cut from the edited video: you read the transcript and pick the moments
-yourself (no AI key needed), the app builds each short with the split-screen look and picks
-its scenes (camera only for the opening line and while the speaker talks without the mouse,
-screen only while the clicking is busy, split otherwise). Run it after the video's own edit, so
+yourself (no AI key needed), the app builds each short with the look of the others (a
+split-screen base layout by default) and picks its layout sections (camera only for the
+opening line and while the speaker talks without the mouse, screen only while the clicking is
+busy, the base otherwise). Run it after the video's own edit, so
 the shorts come from the cleaned-up talk.
 
 Step by step by default; automatic when the user says so ("auto", "no questions"): then use
@@ -14,7 +15,7 @@ go.
 
 - `status`. Shorts need a transcript: if nothing is transcribed, ask which transcriber (as in
   the tutorial template; automatic: the saved one, else Parakeet) and `transcribe`.
-- `short_scenes` without `short` lists the shorts already made. Ask whether to keep them
+- `status` says how many shorts are already made. Ask whether to keep them
   (default) or start over (remove them in the Shorts Studio; there is no action for it).
 - With a camera, `faces` (it waits until the face is found in every camera; shorts centre
   each camera clip on it). Pass on a camera with little or no face found.
@@ -38,12 +39,14 @@ it is also the file name) and one line on why it works. Ask for an OK or changes
 ## 4. Make (automatic)
 
 For each pick, `short_create` with `title`, `fromWord`, `toWord` and `reason`. It copies the
-look of the shorts already made and picks the scenes. Report one line per short with its
-scenes. To change a short's scenes: `short_scenes` with `op: set` (seconds on the short's own
-timeline) or `op: clear`. Graphics in a short's stretch play over its whole frame; a title or
+look of the shorts already made and picks its layout sections. Report one line per short with
+its sections (`layouts` with `short`). To change them: `layouts` with `short` and `op: add`
+(`sections` [{fromS, toS, layout}], seconds on the short's own timeline; layouts like "Camera
+only", "Screen only", "Side by side"), `update`, `remove` or `clear`; `op: base` changes the
+split itself (e.g. {"kind": "sideBySide", "cameraFirst": false, "cameraPct": 40}). Graphics in a short's stretch play over its whole frame; a title or
 step card often reads better in the screen's part (`graphic_set` with `short` and `slot:
 screen`), or `overScreen` for one meant to sit on the screen picture. Then look at each short
-once with `storyboard` and `short` (its id): a tile per scene of its 9:16 frame. Fix a scene
+once with `storyboard` and `short` (its id): a tile per scene of its 9:16 frame. Fix a section
 that shows the wrong part, then report.
 
 ## 5. Export (ask)

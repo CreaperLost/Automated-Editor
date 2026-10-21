@@ -1,6 +1,7 @@
-//! Cloud language models for transcript work (filler and retake detection, later chapters
-//! and shorts). OpenAI and OpenRouter both speak the OpenAI chat-completions API, so one
-//! client covers them; only the base URL, key and model names differ.
+//! Language models for transcript work: filler and retake detection, chapters and shorts.
+//! OpenAI and OpenRouter both speak the OpenAI chat-completions API, so one client covers
+//! them; only the base URL, key and model names differ. Fillers and retakes can also run on
+//! the built-in local model (`local`), which needs no key and sends nothing anywhere.
 //!
 //! Only transcript text (words and pause lengths) is sent, never audio or video, and only
 //! when the user asks for an AI pass.
@@ -8,6 +9,9 @@ pub mod candidates;
 pub mod chapters;
 pub mod client;
 pub mod fillers;
+pub mod local;
+#[cfg(test)]
+mod review_probe;
 pub mod shorts;
 
 use crate::secrets::KeySpec;
@@ -61,9 +65,24 @@ impl AiProvider {
     }
 }
 
+/// Who reviews fillers and retakes when the app does it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FillerEngine {
+    /// The built-in model on this computer (Qwen3.5 4B): free and private.
+    Local,
+    /// The OpenRouter or OpenAI model below, on the user's key; the local model stands in
+    /// while no key is set. The default: it misses fewer cuts and makes fewer wrong ones
+    /// (docs/plans/local-review-eval.md).
+    #[default]
+    Cloud,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AiSettings {
+    /// Who reviews fillers and retakes. Chapters and shorts always use `provider`.
+    pub filler_engine: FillerEngine,
     pub provider: AiProvider,
     /// Model id for OpenAI; empty uses the default.
     pub openai_model: String,
@@ -74,6 +93,7 @@ pub struct AiSettings {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
+            filler_engine: FillerEngine::Cloud,
             provider: AiProvider::OpenAi,
             openai_model: String::new(),
             openrouter_model: String::new(),
@@ -114,6 +134,11 @@ pub struct AiSettingsView {
     pub openrouter_key_source: Option<String>,
     pub openai_default_model: String,
     pub openrouter_default_model: String,
+    /// The local model is in this build, and downloaded.
+    pub local_available: bool,
+    pub local_present: bool,
+    /// Download size of the local model, in bytes.
+    pub local_model_bytes: u64,
 }
 
 pub fn load_settings(dir: &Path) -> AiSettings {
@@ -145,6 +170,9 @@ pub fn settings_view(dir: &Path) -> AiSettingsView {
         openrouter_key_source: source(AiProvider::OpenRouter),
         openai_default_model: AiProvider::OpenAi.default_model().into(),
         openrouter_default_model: AiProvider::OpenRouter.default_model().into(),
+        local_available: local::compiled_in(),
+        local_present: local::present(&local::default_dir()),
+        local_model_bytes: local::MODEL_BYTES,
     }
 }
 
@@ -171,6 +199,7 @@ mod tests {
         assert_eq!(load_settings(dir.path()), AiSettings::default());
         assert_eq!(AiSettings::default().model(), "gpt-4.1-mini");
         let settings = AiSettings {
+            filler_engine: FillerEngine::Cloud,
             provider: AiProvider::OpenRouter,
             openai_model: String::new(),
             openrouter_model: "anthropic/claude-sonnet-4.5".into(),

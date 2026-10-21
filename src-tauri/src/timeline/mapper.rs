@@ -53,8 +53,7 @@ impl TimelineMapper {
                 if !interval.is_recording() {
                     return None;
                 }
-                let offset_in_interval = edited_us - accumulated_us;
-                return Some(interval.start_us + offset_in_interval);
+                return Some(interval.source_at(edited_us - accumulated_us));
             }
             accumulated_us += dur;
         }
@@ -69,7 +68,7 @@ impl TimelineMapper {
             let dur = interval.duration_us();
             if edited_us < accumulated_us + dur {
                 let media = interval.media.as_deref()?;
-                return Some((media, interval.start_us + (edited_us - accumulated_us)));
+                return Some((media, interval.source_at(edited_us - accumulated_us)));
             }
             accumulated_us += dur;
         }
@@ -87,8 +86,8 @@ impl TimelineMapper {
             let a = start_us.max(edited_cursor);
             let b = end_us.min(interval_end);
             if a < b && interval.is_recording() {
-                let source_a = interval.start_us + (a - edited_cursor);
-                let source_b = interval.start_us + (b - edited_cursor);
+                let source_a = interval.source_at(a - edited_cursor);
+                let source_b = interval.source_at(b - edited_cursor);
                 ranges.push((source_a, source_b));
             }
             edited_cursor = interval_end;
@@ -120,8 +119,8 @@ impl TimelineMapper {
                 kept.push(interval.clone());
             } else {
                 kept.extend(interval.exclude_range(
-                    interval.start_us + local_start,
-                    interval.start_us + local_end,
+                    interval.source_at(local_start),
+                    interval.source_at(local_end),
                 ));
             }
             cursor += duration;
@@ -159,13 +158,28 @@ impl TimelineMapper {
             let a = start_us.max(interval.start_us);
             let b = end_us.min(interval.end_us);
             if a < b && interval.is_recording() {
-                let edited_a = edited_cursor + (a - interval.start_us);
-                let edited_b = edited_cursor + (b - interval.start_us);
+                let edited_a = edited_cursor + interval.edited_offset(a);
+                let edited_b = edited_cursor + interval.edited_offset(b);
                 ranges.push((edited_a, edited_b));
             }
             edited_cursor += duration;
         }
         ranges
+    }
+
+    /// How much of source range `[start_us, end_us)` plays, in source time (a moment played
+    /// twice counts twice). Unlike the edited length of [`Self::source_range_to_edited`], it
+    /// does not shrink where a clip plays faster.
+    pub fn source_kept_us(&self, start_us: u64, end_us: u64) -> u64 {
+        self.intervals
+            .iter()
+            .filter(|i| i.is_recording())
+            .map(|i| {
+                end_us
+                    .min(i.end_us)
+                    .saturating_sub(start_us.max(i.start_us))
+            })
+            .sum()
     }
 
     /// The edited span of a short source range (a word), taken from the clip that holds its
@@ -180,8 +194,8 @@ impl TimelineMapper {
                 let a = start_us.max(interval.start_us);
                 let b = end_us.min(interval.end_us);
                 return Some((
-                    accumulated_us + (a - interval.start_us),
-                    accumulated_us + (b - interval.start_us),
+                    accumulated_us + interval.edited_offset(a),
+                    accumulated_us + interval.edited_offset(b),
                 ));
             }
             accumulated_us += interval.duration_us();
@@ -196,8 +210,7 @@ impl TimelineMapper {
 
         for interval in &self.intervals {
             if interval.is_recording() && interval.contains_source_us(source_us) {
-                let offset = source_us - interval.start_us;
-                return Some(accumulated_us + offset);
+                return Some(accumulated_us + interval.edited_offset(source_us));
             }
             accumulated_us += interval.duration_us();
         }
@@ -268,6 +281,43 @@ mod tests {
             mapper.source_range_to_edited(1_000_000, 6_000_000),
             vec![(1_000_000, 2_000_000), (2_000_000, 3_000_000)]
         );
+    }
+
+    #[test]
+    fn intervals_played_faster_or_slower_map_at_their_speed() {
+        const S: u64 = 1_000_000;
+        // Source [0, 4s) plays in 2 s (twice as fast), then source [10s, 11s) in 2 s.
+        let mapper = TimelineMapper::try_new(vec![
+            SourceInterval::new("a".into(), 0, 4 * S).with_edited_len(Some(2 * S)),
+            SourceInterval::new("b".into(), 10 * S, 11 * S).with_edited_len(Some(2 * S)),
+        ])
+        .unwrap();
+        assert_eq!(mapper.total_edited_duration_us(), 4 * S);
+        assert_eq!(mapper.edited_to_source_us(S), Some(2 * S));
+        assert_eq!(mapper.edited_to_source_us(3 * S), Some(10 * S + S / 2));
+        assert_eq!(mapper.source_to_edited_us(3 * S), Some(S + S / 2));
+        assert_eq!(
+            mapper.source_to_edited_us(10 * S + S / 4),
+            Some(2 * S + S / 2)
+        );
+        assert_eq!(
+            mapper.source_range_to_edited(2 * S, 4 * S),
+            vec![(S, 2 * S)]
+        );
+        assert_eq!(
+            mapper.edited_range_to_source(S, 3 * S),
+            vec![(2 * S, 4 * S), (10 * S, 10 * S + S / 2)]
+        );
+        assert_eq!(mapper.edited_span_of(10 * S, 11 * S), Some((2 * S, 4 * S)));
+        // Kept source time does not shrink at 2x (check counts it so).
+        assert_eq!(mapper.source_kept_us(2 * S, 4 * S), 2 * S);
+        assert_eq!(mapper.source_kept_us(3 * S, 12 * S), 2 * S);
+        // A cut keeps each part's speed.
+        let mut cut = mapper.clone();
+        cut.ripple_cut_edited(S, 2 * S).unwrap();
+        assert_eq!(cut.total_edited_duration_us(), 3 * S);
+        assert_eq!(cut.edited_to_source_us(S), Some(10 * S));
+        assert_eq!(cut.intervals()[0].end_us, 2 * S);
     }
 
     #[test]

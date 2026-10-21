@@ -12,6 +12,7 @@ pub mod cli;
 pub mod clients;
 pub(crate) mod frames;
 pub mod ipc;
+mod layouts;
 mod propose;
 pub mod skill;
 pub mod storyboard;
@@ -54,6 +55,10 @@ pub trait Host: Send + Sync + 'static {
     /// The app's AI review can run (a key is set): fillers use it unless told not to.
     fn ai_review_ready(&self) -> bool {
         actions::ai_key_ready()
+    }
+    /// The built-in local model is downloaded: fillers use it when no AI key is set.
+    fn local_review_ready(&self) -> bool {
+        crate::ai::local::ready()
     }
     /// The app's settings folder; the user's answers to templates are kept in it.
     fn config_dir(&self) -> std::path::PathBuf {
@@ -347,7 +352,7 @@ before the user says go. Run the cleanup one pass at a time: a dry run (`apply: 
 user's OK with its numbers, then the pass, unless the user said to do it automatically. \
 Chapters are the last edit, right before export. The routine work is the app's own actions, which run its built-in \
 passes and cost you almost nothing: status, scan, transcribe, mouth_noises, silence, fillers, \
-webcam_focus, zooms, settings, chapters, shorts, export; each applies as one undo step and \
+layouts, zooms, settings, chapters, shorts, export; each applies as one undo step and \
 answers in a line or two to pass on to the user. Times are microseconds on the edited \
 timeline (after every cut). Read transcripts (transcript_get) and frames (frame_render) only \
 for judgment calls or when a step fails; then propose_cuts and propose_edit store a batch with \
@@ -599,6 +604,10 @@ mod tests {
         }
 
         fn ai_review_ready(&self) -> bool {
+            false
+        }
+
+        fn local_review_ready(&self) -> bool {
             false
         }
 

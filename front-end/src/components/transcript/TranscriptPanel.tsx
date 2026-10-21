@@ -455,17 +455,31 @@ export const TranscriptPanel: React.FC = () => {
 
   const runAiReview = async () => {
     if (!handle || !trackId) return;
-    // Without a key the request cannot start: say so and open the settings instead.
+    // Without the local model or a key the review cannot start: say so and open the settings.
     try {
       const ai = await api.aiSettingsGet();
-      const source = ai.settings.provider === "openAi" ? ai.openaiKeySource : ai.openrouterKeySource;
-      if (!source) {
-        setError(null);
-        setNotice(
-          `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under OpenRouter review, then press Find with OpenRouter again. Or ask your connected agent to review them in-house.`,
-        );
-        setSettingsOpen(true);
-        return;
+      if (ai.settings.fillerEngine === "local") {
+        if (!ai.localAvailable || !ai.localPresent) {
+          setError(null);
+          setNotice(
+            ai.localAvailable
+              ? "Download the local model under Filler and retake review, then press Find with AI again."
+              : "This build has no local model: choose OpenRouter / OpenAI under Filler and retake review.",
+          );
+          setSettingsOpen(true);
+          return;
+        }
+      } else {
+        const source = ai.settings.provider === "openAi" ? ai.openaiKeySource : ai.openrouterKeySource;
+        // Without a key the app runs the local model instead, when it is downloaded.
+        if (!source && !(ai.localAvailable && ai.localPresent)) {
+          setError(null);
+          setNotice(
+            `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under OpenRouter review, then press Find with AI again. Or choose the local model, or ask your connected agent to review them in-house.`,
+          );
+          setSettingsOpen(true);
+          return;
+        }
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -482,7 +496,7 @@ export const TranscriptPanel: React.FC = () => {
       // Another track, or the words moved (a cut, undo) while the AI read them: its answer is
       // about words no longer shown as they were.
       if (!stillShowing(handle, trackId) || generation !== refreshGeneration.current) {
-        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Find with OpenRouter again.");
+        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Find with AI again.");
         return;
       }
       setSuggestions(next);
@@ -787,6 +801,7 @@ export const TranscriptPanel: React.FC = () => {
       <div
         tabIndex={0}
         onKeyDown={onKeyDown}
+        lang={view?.language === "el" ? "el" : "en"}
         className="flex-1 min-w-0 overflow-y-auto px-3 py-3 space-y-1 text-reading text-studio-200 outline-none select-none"
       >
         {!view && !running && (
@@ -854,9 +869,9 @@ export const TranscriptPanel: React.FC = () => {
               className="w-full"
               disabled={running}
               onClick={() => void runAiReview()}
-              title="Ask OpenRouter or OpenAI (Transcription and AI settings, your key) to find filler words and retakes in context. Sends the transcript text."
+              title="Ask the local model, or OpenRouter / OpenAI (chosen in Transcription and AI settings), to find filler words and retakes in context. The local model sends nothing anywhere."
             >
-              Find with OpenRouter
+              Find with AI
             </Button>
             <p className="text-meta text-studio-500">
               Or in-house: ask your connected agent to review the fillers and retakes. It reads the transcript itself
@@ -881,6 +896,10 @@ export const TranscriptPanel: React.FC = () => {
                     (s.reviewer?.startsWith("in-house") ? (
                       <Badge tone="accent" title={`Found by the in-house review: ${s.reviewer}`}>
                         In-house
+                      </Badge>
+                    ) : s.reviewer?.startsWith("local/") ? (
+                      <Badge tone="accent" title={`Found by the local model: ${s.reviewer.slice("local/".length)}`}>
+                        Local AI
                       </Badge>
                     ) : (
                       <Badge title={`Found by the OpenRouter review${s.reviewer ? `: ${s.reviewer}` : ""}`}>AI</Badge>

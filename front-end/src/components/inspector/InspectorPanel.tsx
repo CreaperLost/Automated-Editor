@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Palette, Camera, Monitor } from "lucide-react";
 import { InspectorSection, NumberGrid, RangeRow } from "./InspectorSection";
-import { WebcamFocusSection } from "./WebcamFocusSection";
+import { LayoutsSection } from "../layouts/LayoutsSection";
+import { CameraFramingControl } from "../shorts/CameraFraming";
 import { TrackClipSection } from "./TrackClipSection";
 import { GraphicSection } from "./GraphicSection";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -11,16 +12,7 @@ import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { AudioSection } from "../audio/AudioSection";
 import { CaptionsSection } from "../captions/CaptionsSection";
 import { Button, Field, Notice, Segmented, Switch, Tabs, cn } from "../ui";
-import {
-  BACKGROUND_PRESETS,
-  CameraBubblePosition,
-  CameraBubbleSize,
-  LAYOUT_UNSUPPORTED,
-  ScreenCrop,
-  WEBCAM_SIZE_PRESET_PCT,
-  layoutFromSettings,
-  presetBackgroundCss,
-} from "../../lib/types";
+import { BACKGROUND_PRESETS, ScreenCrop, layoutFromSettings, presetBackgroundCss } from "../../lib/types";
 
 type InspectorTab = "clip" | "video" | "audio" | "captions";
 const TAB_KEY = "aeroedits.inspectorTab.v1";
@@ -83,11 +75,7 @@ export const InspectorPanel: React.FC = () => {
 
   const persistLayout = (nextCanvas = canvas, nextCamera = cameraBubble) => {
     layoutSave.schedule((opened) => {
-      const layout = layoutFromSettings(
-        nextCanvas,
-        nextCamera,
-        opened.layout?.wallpaperAsset,
-      );
+      const layout = layoutFromSettings(nextCanvas, nextCamera, opened.layout);
       void api
         .projectLayoutUpdate(opened.projectHandle, opened.revision, layout)
         .then((updated) => {
@@ -108,6 +96,20 @@ export const InspectorPanel: React.FC = () => {
     persistLayout(canvas, { ...cameraBubble, ...patch });
   };
 
+  /** The camera clips framed by hand. */
+  const setCameraClips = (cameraClips: Record<string, { offsetX: number; offsetY: number }> | undefined) => {
+    const opened = openedRef.current;
+    if (!opened) return;
+    const layout = layoutFromSettings(canvas, cameraBubble, { ...opened.layout, aspectRatio: canvas.aspectRatio, paddingPx: 0, cameraClips });
+    void api
+      .projectLayoutUpdate(opened.projectHandle, opened.revision, layout)
+      .then((updated) => {
+        applyOpenedProject(updated);
+        setPersistError(undefined);
+      })
+      .catch((err) => setPersistError(String(err)));
+  };
+
   /** Copies a chosen image into the project's assets/ and switches the background to it. */
   const pickWallpaper = () => {
     const opened = openedRef.current;
@@ -119,7 +121,7 @@ export const InspectorPanel: React.FC = () => {
       .pickWallpaperSource()
       .then((source) => {
         if (!source) return;
-        const layout = layoutFromSettings(canvas, cameraBubble, opened.layout?.wallpaperAsset);
+        const layout = layoutFromSettings(canvas, cameraBubble, opened.layout);
         layout.backgroundType = "wallpaper";
         return api
           .projectLayoutUpdate(opened.projectHandle, opened.revision, layout, source)
@@ -405,109 +407,34 @@ export const InspectorPanel: React.FC = () => {
               )}
             </InspectorSection>
 
-            <InspectorSection
-              id="webcam"
-              title="Camera"
-              icon={Camera}
-              extra={
+            <LayoutsSection />
+
+            <InspectorSection id="webcam" title="Camera" icon={Camera}>
+              <p className="text-meta text-studio-500">How the camera looks wherever a layout puts it.</p>
+              <Field label="Framing">
                 <Switch
-                  checked={cameraBubble.enabled}
-                  onChange={(enabled) => setCamera({ enabled })}
-                  title={cameraBubble.enabled ? "Hide the camera" : "Show the camera"}
+                  checked={cameraBubble.faceFraming}
+                  onChange={(faceFraming) => setCamera({ faceFraming })}
+                  label="Centre on my face"
+                  title="Line every camera clip up with the face in it (found on this computer, once per recording). Off keeps the middle of the picture."
                 />
-              }
-            >
-              {!cameraBubble.enabled && <p className="text-label text-studio-500">The camera is hidden.</p>}
-              {cameraBubble.enabled && (
-                <>
-                  <Field label="Shape" hint={cameraBubble.shape === "rect_16_9" ? LAYOUT_UNSUPPORTED.rect169 : undefined}>
-                    <Segmented
-                      label="Camera shape"
-                      size="sm"
-                      className="w-full"
-                      value={cameraBubble.shape}
-                      onChange={(shape) => setCamera({ shape })}
-                      options={[
-                        { value: "rect", label: "Rect" },
-                        { value: "circle", label: "Circle" },
-                        { value: "squircle", label: "Squircle" },
-                        { value: "rect_16_9", label: "16:9", disabled: true, title: LAYOUT_UNSUPPORTED.rect169 },
-                      ]}
-                    />
-                  </Field>
-
-                  {cameraBubble.shape === "rect" && (
-                    <RangeRow
-                      label="Roundness"
-                      value={cameraBubble.roundnessPct}
-                      min={0}
-                      max={50}
-                      unit="%"
-                      onChange={(roundnessPct) => setCamera({ roundnessPct })}
-                    />
-                  )}
-
-                  <RangeRow
-                    label="Size"
-                    value={cameraBubble.sizePct}
-                    min={5}
-                    max={60}
-                    step={0.5}
-                    unit="%"
-                    onChange={(sizePct) => setCamera({ sizePct })}
-                  />
-                  <Field label="">
-                    <Segmented<CameraBubbleSize | "custom">
-                      label="Camera size preset"
-                      size="sm"
-                      className="w-full"
-                      value={
-                        ((["sm", "md", "lg", "xl"] as const).find((size) => cameraBubble.sizePct === WEBCAM_SIZE_PRESET_PCT[size]) ??
-                          "custom") as CameraBubbleSize | "custom"
-                      }
-                      onChange={(size) => {
-                        if (size !== "custom") setCamera({ size, sizePct: WEBCAM_SIZE_PRESET_PCT[size] });
-                      }}
-                      options={(["sm", "md", "lg", "xl"] as const).map((size) => ({ value: size, label: size.toUpperCase() }))}
-                    />
-                  </Field>
-
-                  <Field label="Position">
-                    <select
-                      aria-label="Camera position"
-                      value={cameraBubble.position}
-                      onChange={(e) => setCamera({ position: e.target.value as CameraBubblePosition })}
-                      className="ui-field w-full"
-                    >
-                      <option value="bottom-right">Bottom right</option>
-                      <option value="bottom-left">Bottom left</option>
-                      <option value="top-right">Top right</option>
-                      <option value="top-left">Top left</option>
-                      <option value="custom">Custom</option>
-                    </select>
-                  </Field>
-
-                  {cameraBubble.position === "custom" && (
-                    <>
-                      <RangeRow
-                        label="Across"
-                        value={Math.round(cameraBubble.customX)}
-                        min={0}
-                        max={100}
-                        unit="%"
-                        onChange={(customX) => setCamera({ customX })}
-                      />
-                      <RangeRow
-                        label="Down"
-                        value={Math.round(cameraBubble.customY)}
-                        min={0}
-                        max={100}
-                        unit="%"
-                        onChange={(customY) => setCamera({ customY })}
-                      />
-                    </>
-                  )}
-
+              </Field>
+              {openedProject && !openedProject.shortView && (
+                <CameraFramingControl
+                  project={openedProject}
+                  layout={{ cameraClips: openedProject.layout?.cameraClips ?? {} }}
+                  onChange={(patch) => setCameraClips(patch.cameraClips)}
+                  segmented={(active) =>
+                    cn(
+                      "flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-[5px] text-label font-medium transition-colors",
+                      active
+                        ? "bg-accent/20 text-accent-fg shadow-[inset_0_0_0_1px_rgb(var(--accent-hover)/0.55)]"
+                        : "text-studio-400 hover:text-studio-100 hover:bg-studio-800",
+                    )
+                  }
+                />
+              )}
+              <>
                   <RangeRow
                     label="Border"
                     value={cameraBubble.borderWidth}
@@ -558,14 +485,11 @@ export const InspectorPanel: React.FC = () => {
                       checked={cameraBubble.autoHide}
                       onChange={(autoHide) => setCamera({ autoHide })}
                       label="Hide while you work under it"
-                      title="Fade the camera out while you click, drag, scroll, rest the pointer or type where it sits, and back in afterwards. It never moves to another corner."
+                      title="Fade the camera bubble out while you click, drag, scroll, rest the pointer or type where it sits, and back in afterwards. It never moves to another corner."
                     />
                   </Field>
-                </>
-              )}
+              </>
             </InspectorSection>
-
-            <WebcamFocusSection webcamShown={cameraBubble.enabled} />
           </>
         )}
 

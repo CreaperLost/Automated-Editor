@@ -7,8 +7,14 @@ use std::collections::HashSet;
 
 /// Filler sounds cut by "Remove filler words", with repeated letters folded so every spelling
 /// a transcriber writes counts ("ummm", "uhh", "errm", "hmmm"). Real words such as "like" or
-/// "so" are left alone: whether they are filler depends on the sentence.
-const FILLERS: &[&str] = &["um", "uh", "uhm", "er", "erm", "ehm", "ah", "hm"];
+/// "so" are left alone: whether they are filler depends on the sentence. Greek ones (εμ, χμ)
+/// sit in the same list: no English word is spelled in Greek letters.
+const FILLERS: &[&str] = &[
+    "um", "uh", "uhm", "er", "erm", "ehm", "ah", "hm", "εμ", "χμ", "αχμ",
+];
+/// Sounds that fold to one letter, so count only when drawn out ("mm", "εεε", "μμ"): "ε" or
+/// "α" alone can be a word.
+const DRAWN_OUT: &[&str] = &["m", "ε", "α", "μ"];
 
 /// A filler sound such as um or uh; `normalized` as `normalize` gives it.
 pub(crate) fn is_filler_sound(normalized: &str) -> bool {
@@ -18,7 +24,8 @@ pub(crate) fn is_filler_sound(normalized: &str) -> bool {
             folded.push(c);
         }
     }
-    FILLERS.contains(&folded.as_str()) || (folded == "m" && normalized.len() >= 2)
+    FILLERS.contains(&folded.as_str())
+        || (DRAWN_OUT.contains(&folded.as_str()) && normalized.chars().count() >= 2)
 }
 
 /// Gaps at least this long end a phrase for retake detection.
@@ -133,10 +140,12 @@ pub enum SuggestionSource {
     Agent,
 }
 
+/// Lowercase letters and digits, with Greek accents folded (λοιπόν and λοιπον match).
 pub(crate) fn normalize(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric() || *c == '\'')
         .flat_map(char::to_lowercase)
+        .map(super::language::fold_greek_accent)
         .collect()
 }
 
@@ -583,6 +592,16 @@ mod tests {
         assert_eq!(cuts, vec![(50_000, 850_000)]);
         let cuts = word_cuts(&t, &["w-2".into()], &m).unwrap();
         assert_eq!(cuts, vec![(850_000, 1_250_000)]);
+    }
+
+    #[test]
+    fn greek_filler_sounds_count_when_drawn_out() {
+        for sound in ["Εεε", "εμ", "Μμμ", "χμμ", "έεε"] {
+            assert!(is_filler_sound(&normalize(sound)), "{sound}");
+        }
+        for word in ["ε", "α", "και", "μα"] {
+            assert!(!is_filler_sound(&normalize(word)), "{word}");
+        }
     }
 
     #[test]

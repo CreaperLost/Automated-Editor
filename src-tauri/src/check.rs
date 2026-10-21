@@ -551,7 +551,8 @@ fn clipped_words(out: &mut Builder, speech: &[(Transcript, TimelineMapper)]) {
             }
             let kept_ranges =
                 mapper.source_range_to_edited(word.source_start_us, word.source_end_us);
-            let kept: u64 = kept_ranges.iter().map(|(a, b)| b - a).sum();
+            // In the word's own time: a word played faster is shorter, not cut.
+            let kept = mapper.source_kept_us(word.source_start_us, word.source_end_us);
             let removed = length - kept.min(length);
             if kept == 0
                 || removed < CLIPPED_REMOVED_MIN_US
@@ -617,15 +618,14 @@ fn zooms(out: &mut Builder, document: &EditDocument) {
         if transition == 0 {
             continue;
         }
-        let kept = |a: u64, b: u64| -> u64 {
-            mapper
-                .source_range_to_edited(a, b)
-                .iter()
-                .map(|(x, y)| y - x)
-                .sum()
-        };
-        let cut_in = transition - kept(zoom.source_start_us, zoom.source_start_us + transition);
-        let cut_out = transition - kept(zoom.source_end_us - transition, zoom.source_end_us);
+        // In the zoom's own time: easing played faster is shorter, not cut.
+        let kept = |a: u64, b: u64| -> u64 { mapper.source_kept_us(a, b) };
+        let cut_in = transition.saturating_sub(kept(
+            zoom.source_start_us,
+            zoom.source_start_us + transition,
+        ));
+        let cut_out =
+            transition.saturating_sub(kept(zoom.source_end_us - transition, zoom.source_end_us));
         // A sliver less is rounding at a clip edge, not a visible jump.
         let visible = transition / 4;
         let (jumps_in, jumps_out) = (cut_in > visible, cut_out > visible);
@@ -729,9 +729,6 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
         return;
     };
     let layout = &document.layout;
-    if !layout.webcam_enabled {
-        return;
-    }
     let Ok(mapper) = document.transcript_clock(&transcript.track_id) else {
         return;
     };
@@ -739,19 +736,16 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
         return;
     };
     let cues = crate::captions::build_cues(&transcript, &mapper, settings);
-    let focus = document.webcam_focus.edited_ranges(&document.focus_clock());
+    let layouts = crate::layouts::resolve::of_document(document);
     let mut sizes = std::collections::HashMap::<(String, String), (u32, u32)>::new();
     // (cue start, cue end, the bubble's top and bottom) of each caption over the bubble.
     let mut covered: Vec<(u64, u64, u32, u32)> = Vec::new();
     for cue in &cues {
-        // While webcam focus grows the camera, the bubble is not where it usually is.
-        if focus
-            .iter()
-            .any(|&(a, b)| a < cue.end_us && cue.start_us < b)
-        {
-            continue;
-        }
         let mid = cue.start_us + (cue.end_us - cue.start_us) / 2;
+        // Only while a bubble shows (another layout puts the camera elsewhere).
+        let crate::layouts::Layout::Bubble(bubble) = layouts.layout_at(mid) else {
+            continue;
+        };
         let Some((_, clip)) = document.top_clip_at(mid, Role::Webcam) else {
             continue;
         };
@@ -762,7 +756,7 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
             .entry((clip.asset.clone(), clip.stream.clone()))
             .or_insert_with(|| camera_size(asset, &clip.stream));
         let (bx, by, bw, bh) =
-            crate::render::webcam_bubble_rect(canvas_w, canvas_h, src_w, src_h, layout);
+            crate::render::webcam_bubble_rect(canvas_w, canvas_h, src_w, src_h, layout, bubble);
         let Some((w, h)) = crate::captions::cue_size(cue, settings, canvas_w, canvas_h) else {
             continue;
         };

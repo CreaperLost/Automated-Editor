@@ -4,7 +4,18 @@ import { InspectorSection } from "./InspectorSection";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { api } from "../../lib/ipc";
-import { assetById, clipName, clipRole, findClip, streamOf, trackNumber } from "../../lib/sequence";
+import {
+  MAX_SPEED,
+  MIN_SPEED,
+  assetById,
+  clipName,
+  clipRole,
+  clipSpeed,
+  findClip,
+  formatSpeed,
+  streamOf,
+  trackNumber,
+} from "../../lib/sequence";
 import { layoutFromSettings } from "../../lib/types";
 import type { Fit, OpenedProject, Role, SequenceEdit } from "../../lib/types";
 import { cropOffFor, setCropFor } from "../../lib/windowCrop";
@@ -14,6 +25,9 @@ const FITS: { value: Fit; label: string }[] = [
   { value: "contain", label: "Fit inside the frame" },
   { value: "cover", label: "Fill the frame (crop edges)" },
 ];
+
+/** Speeds one click away; any other is typed in. */
+const SPEEDS = [0.5, 1, 1.5, 2, 4];
 
 const PICTURE_ROLES: { value: Role; label: string }[] = [
   { value: "screen", label: "Screen: canvas layout, zooms, cursor" },
@@ -73,6 +87,13 @@ export const TrackClipSection: React.FC = () => {
     );
   };
   const roles = stream?.kind === "sound" ? SOUND_ROLES : PICTURE_ROLES;
+  const speed = clipSpeed(clip);
+  const setSpeed = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    const clamped = Math.min(MAX_SPEED, Math.max(MIN_SPEED, next));
+    if (Math.abs(clamped - speed) < 0.0005) return;
+    void edit({ kind: "setSpeed", clipIds: selectedIds.length ? selectedIds : [clip.id], speed: clamped });
+  };
 
   // The window crop for this clip's stretch of the recording.
   const firstRecording = openedProject.assets.find((a) => a.kind === "recording")?.id;
@@ -81,7 +102,7 @@ export const TrackClipSection: React.FC = () => {
   const cropOff = cropOffFor(canvas.windowCropOff, clip.asset, clipFrom, clipTo, firstRecording);
   const setClipCrop = (on: boolean) => {
     const windowCropOff = setCropFor(canvas.windowCropOff, clip.asset, clipFrom, clipTo, on, firstRecording);
-    const layout = layoutFromSettings({ ...canvas, windowCropOff }, cameraBubble, openedProject.layout?.wallpaperAsset);
+    const layout = layoutFromSettings({ ...canvas, windowCropOff }, cameraBubble, openedProject.layout);
     void run(() => api.projectLayoutUpdate(openedProject.projectHandle, openedProject.revision, layout));
   };
 
@@ -89,7 +110,9 @@ export const TrackClipSection: React.FC = () => {
     <InspectorSection id="track-clip" title={`Clip · ${trackNumber(openedProject.sequence, track.id)}`} icon={Layers}>
       <div className="text-label text-studio-200 truncate" title={asset?.path}>
         {clipName(openedProject, clip)}
-        <span className="ml-1.5 text-studio-500 font-mono">{(clip.durationUs / 1e6).toFixed(2)}s</span>
+        <span className="ml-1.5 text-studio-500 font-mono">
+          {(clip.durationUs / 1e6).toFixed(2)}s{speed !== 1 && ` at ${formatSpeed(speed)}`}
+        </span>
       </div>
       <div className="text-meta text-studio-400">
         {partners > 0
@@ -146,6 +169,47 @@ export const TrackClipSection: React.FC = () => {
             ))}
           </select>
         </label>
+      )}
+      {asset?.kind !== "image" && asset?.kind !== "graphic" && (
+        <div className="space-y-1">
+          <label className="flex items-center justify-between text-label text-studio-300">
+            <span>Speed (%)</span>
+            <input
+              key={`${clip.id}-${speed}`}
+              aria-label="Clip speed in percent"
+              type="number"
+              min={MIN_SPEED * 100}
+              max={MAX_SPEED * 100}
+              step={5}
+              defaultValue={Number((speed * 100).toFixed(1))}
+              disabled={busy || track.locked}
+              onBlur={(event) => setSpeed(Number(event.target.value) / 100)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") setSpeed(Number((event.target as HTMLInputElement).value) / 100);
+              }}
+              className="w-24 bg-studio-950 px-2 py-1 rounded border border-studio-700 text-right"
+            />
+          </label>
+          <div className="flex gap-1" role="group" aria-label="Clip speed">
+            {SPEEDS.map((preset) => (
+              <button
+                key={preset}
+                aria-pressed={Math.abs(speed - preset) < 0.0005}
+                disabled={busy || track.locked}
+                onClick={() => setSpeed(preset)}
+                className="flex-1 px-1 py-0.5 rounded border border-studio-700 text-label font-mono text-studio-200 hover:bg-studio-800 aria-pressed:bg-accent/25 aria-pressed:border-accent-hover aria-pressed:text-white disabled:opacity-40"
+              >
+                {formatSpeed(preset)}
+              </button>
+            ))}
+          </div>
+          <p className="text-meta text-studio-500">
+            Plays the same media faster or slower{partners > 0 ? ", with what it is linked to" : ""}; sound keeps its pitch.{" "}
+            {openedProject.sequence.magnetic
+              ? "What follows moves up or along."
+              : "Magnetic is off: faster leaves a gap, slower stops at the next clip."}
+          </p>
+        </div>
       )}
       <label className="flex items-center justify-between text-label text-studio-300">
         <span>Starts at (s)</span>

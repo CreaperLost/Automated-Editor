@@ -57,6 +57,19 @@ const KIND_MEANT_AFTER: &str = "a an the this that these those what which some a
     different one other another each no my your our their his her its whatever all certain \
     specific new right wrong first last best";
 
+// Greek, written as `normalize` gives it: lowercase, accents folded.
+/// Before "βασικά" or "ουσιαστικά", these make it a word ("τα βασικά", the basics).
+const GR_BASIC_MEANT_AFTER: &str = "τα τις τους πιο πολυ";
+/// After "ας πούμε", these make it "let's say that".
+const GR_LETS_SAY_MEANT_BEFORE: &str = "οτι πως";
+/// Before "ξέρεις" or "ξέρετε", these keep its meaning: "δεν ξέρεις", "αν ξέρετε".
+const GR_KNOW_MEANT_AFTER: &str = "δεν το τα τον την τη αν μας με σε τους πια ηδη";
+/// After "ξέρεις" or "ξέρετε", these keep its meaning: "ξέρεις τι", "ξέρετε πώς".
+const GR_KNOW_MEANT_BEFORE: &str = "τι πως οτι να αν που ποιος ποια ποιο ποτε γιατι το τα τον \
+    την τη πολλα ποσο ποσα";
+/// "εντάξει" or "οκ" opening a sentence is a filler; inside one ("είναι εντάξει") a word.
+const GR_OKAY: &str = "ενταξει οκ οκει";
+
 /// `word` is one of the space-separated words in `list`.
 fn among(list: &str, word: &str) -> bool {
     list.split_whitespace().any(|w| w == word)
@@ -99,7 +112,9 @@ struct Spoken {
 /// What the punctuation ending `text` says: (it ends a sentence, it ends or breaks one off).
 fn halts(text: &str) -> (bool, bool) {
     let text = text.trim_end();
-    let stop = text.ends_with(['.', '?', '!', '\u{2026}']);
+    // Greek asks with ";" (or its own U+037E). Scribe writes it on the word ("γιατί;").
+    let stop = text.ends_with(['.', '?', '!', '\u{2026}', '\u{037e}'])
+        || (text.ends_with(';') && crate::transcript::language::has_greek(text));
     (stop, stop || text.ends_with(['-', '\u{2013}', '\u{2014}']))
 }
 
@@ -216,6 +231,17 @@ fn fillers(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
                 (2, among(KIND_MEANT_AFTER, before(k)))
             }
             "kinda" | "sorta" => (1, among(KIND_MEANT_AFTER, before(k))),
+            "λοιπον" | "δηλαδη" | "καπως" => (1, false),
+            "βασικα" | "ουσιαστικα" => (1, among(GR_BASIC_MEANT_AFTER, before(k))),
+            "ας" if norm(k + 1) == "πουμε" && joined(k + 1) => {
+                (2, among(GR_LETS_SAY_MEANT_BEFORE, after(k + 1)))
+            }
+            "τελος" if norm(k + 1) == "παντων" && joined(k + 1) => (2, false),
+            "ξερεις" | "ξερετε" => (
+                1,
+                among(GR_KNOW_MEANT_AFTER, before(k)) || among(GR_KNOW_MEANT_BEFORE, after(k)),
+            ),
+            w if among(GR_OKAY, w) => (1, !s[k].after_break),
             _ => (0, true),
         };
         if !meant {
@@ -460,6 +486,32 @@ mod tests {
             .into_iter()
             .map(|c| (c.flag, c.from, c.to))
             .collect()
+    }
+
+    #[test]
+    fn greek_sounds_fillers_and_their_meanings() {
+        use Flag::*;
+        // "Εεε" is a sound; "λοιπόν" and "ξέρεις," fillers; "ξέρεις τι" keeps its meaning.
+        assert_eq!(
+            flags("Εεε λοιπόν σήμερα, ξέρεις, φτιάχνουμε κάτι. |Ξέρεις τι θέλω;"),
+            vec![(Sound, 0, 0), (Filler, 1, 1), (Filler, 3, 3)]
+        );
+        // "τα βασικά" is "the basics"; "βασικά" alone is a filler, accents or none.
+        assert_eq!(flags("Μάθαμε τα βασικά."), vec![]);
+        assert_eq!(flags("Βασικα είναι απλό."), vec![(Filler, 0, 0)]);
+        // "εντάξει" opening a sentence, not inside one; "ας πούμε ότι" means it.
+        assert_eq!(flags("Εντάξει, πάμε. Είναι εντάξει."), vec![(Filler, 0, 0)]);
+        assert_eq!(
+            flags("Ας πούμε ότι τρέχει. Τρέχει, ας πούμε, γρήγορα."),
+            vec![(Filler, 5, 6)]
+        );
+    }
+
+    #[test]
+    fn a_greek_question_ends_its_sentence() {
+        // "Τι κάνει;" is a whole question: said again it is no retake.
+        assert!(halts("κάνει;").0);
+        assert!(!halts("what;").0);
     }
 
     #[test]
