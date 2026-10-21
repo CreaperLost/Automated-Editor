@@ -44,21 +44,6 @@ flowchart LR
 
 ## Now
 
-<a id="agt-2"></a>
-### AGT-2 · Thorough mode and an honest report (skill only) — S
-
-Decided ([Q-THOROUGH](decisions.md#q-thorough)): asked once per video and saved; fast when there
-is no saved answer; revisit the default after EVAL-1.
-
-
-- **Do:** the `tutorial` template asks *fast* (today) or *thorough*: thorough reads every kept
-  transcript page for contextual retakes and tangents (`fillers_review` thorough pages, then
-  `propose_cuts`), reviews residual gaps and joins with `timeline_view`, then `check` and
-  `storyboard`. Every final report separates **executed**, **inspected** (looked at),
-  **listened** and **approved by the user**, and lists unresolved decisions.
-- **Done when:** on one real recording with an abandoned sentence outside the candidate windows,
-  thorough mode finds it and the report never claims listening from a contact sheet.
-
 <a id="eval-1"></a>
 ### EVAL-1 · A baseline evaluation set and a run report — S/M
 
@@ -446,6 +431,16 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **21 Oct 2026 (night)** — <a id="agt-2"></a>**AGT-2** thorough mode and an honest report
+  (skill only): the tutorial template asks "fast or thorough" with the first questions and saves
+  it (`review` in the saved answers; automatic uses it, else fast). Thorough reads every kept
+  word in two-minute stretches for abandoned sentences, restarts in other words, tangents and
+  repeats (keeping deliberate repeats, lists and waits), proposes those cuts in one batch, runs
+  the in-house thorough review when the local model did the fillers, views every retake join and
+  long gap with `timeline_view`, and gives the user a listening list. The closing summary keeps
+  **Done / Looked at / Not heard / Approved by you / Still open** apart; SKILL.md and the server
+  instructions say the same. **Not verified yet** with a real agent run on a recording with an
+  abandoned sentence outside the rule windows (needs EVAL-1's recordings).
 - **21 Oct 2026 (night)** — <a id="agt-1"></a>**AGT-1** agent parity for cleaning up and
   correcting: `zooms` `list` / `create` / `update` / `remove`; `graphic_set` `moveToUs` /
   `moveToWord` / `remove`; `chapters` `set` (agent-written, by word or time); `shorts` `remove`

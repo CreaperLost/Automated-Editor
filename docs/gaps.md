@@ -88,8 +88,8 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 |---|---|---|
 | Every review tool is a still (`frame_render`, `timeline_view`, `storyboard`); MCP output is text and PNG only. Easing, pacing, overlaps, joins and the mix are invisible | Code: `mcp/tools.rs` | [REV-1](roadmap.md#rev-1) |
 | `check` reads the edit without decoding media: a clean report can't certify clean audio or footage (frozen or black frames inside clips, measured loudness) | Code: `check.rs` | [REV-1](roadmap.md#rev-1) (encoded-output pass) |
-| Reports blur what was *executed*, *inspected*, *listened to* and *approved*; nothing records which joins anyone actually heard, and edits don't invalidate that | Research: Astra Premiere skill | [AGT-2](roadmap.md#agt-2), [REV-1](roadmap.md#rev-1) |
-| Speed over coverage: the filler review reads only candidate windows and the skill discourages reading transcripts, so an unflagged tangent or abandoned sentence may never be considered | Code: `ai/candidates.rs`, `SKILL.md`; Log: local-review eval missed restarts outside windows | [AGT-2](roadmap.md#agt-2) |
+| Reports blur what was *executed*, *inspected*, *listened to* and *approved*; nothing records which joins anyone actually heard, and edits don't invalidate that | Research: Astra Premiere skill | Report: fixed in the skill 21 Oct ([AGT-2](roadmap.md#agt-2)). Records that survive edits: [REV-1](roadmap.md#rev-1) |
+| Speed over coverage: the filler review reads only candidate windows and the skill discouraged reading transcripts, so an unflagged tangent or abandoned sentence may never be considered | Code: `ai/candidates.rs`, `SKILL.md`; Log: local-review eval missed restarts outside windows | Thorough mode added to the skill 21 Oct ([AGT-2](roadmap.md#agt-2)); not yet measured on a real recording |
 
 ## 5. Intent: notes, plans and the user's method
 

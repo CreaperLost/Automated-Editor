@@ -28,6 +28,7 @@ The project's own words, as used in the docs and the code.
 | Graphics library | App-level saved graphics with `useWhen`, versions, and the gate's result (Template vs As is) |
 | Gate | `graphic_check`: lint, layout overflow, contrast, long text, 16:9 and 9:16, first/last frames. No model |
 | Take short | A short built from a new camera take, with footage from the long video under it |
+| Thorough review | The tutorial template's slower review: reads every kept word for unflagged retakes and tangents and checks the joins, instead of the rule windows only ([AGT-2](roadmap.md#agt-2)) |
 | **Proposed terms (not built)** | |
 | Style kit | Rules for using the brand: caption style, motion, density, banned list, references ([STY-1](roadmap.md#sty-1)) |
 | Beat plan | Per-moment intent anchored to words: purpose, treatment, reason, locks, status ([PLAN-1](roadmap.md#plan-1)) |
@@ -37,7 +38,6 @@ The project's own words, as used in the docs and the code.
 | Motion preview | Short low-res full-rate clip with sound, so agent and user can watch, not sample ([REV-1](roadmap.md#rev-1)) |
 | Checkpoint | Named restorable snapshot of edit + graphic source + caption marks ([SAFE-2](roadmap.md#safe-2)) |
 | Selection reference | A serialised pointer to what the user selected, sent to the agent ("Ask AI about this") ([NOTE-1](roadmap.md#note-1)) |
-| Thorough mode | A tutorial-template option that reads every kept transcript page and reviews joins, instead of candidate windows only ([AGT-2](roadmap.md#agt-2)) |
 | Review record | Per-revision evidence of which ranges were inspected, listened to, or decided by the user; made stale by later edits ([REV-1](roadmap.md#rev-1)) |
 | Join audition queue | A list of cuts to play a few seconds around and mark keep or refine ([REV-1](roadmap.md#rev-1)) |
 | Project rules | Editing rules the agent suggests and the user accepts, scoped to a project or to all videos; the "self-improving skill" ([AGT-3](roadmap.md#agt-3)) |

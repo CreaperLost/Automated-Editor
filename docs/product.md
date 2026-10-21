@@ -135,6 +135,11 @@ template:
 pass, and stops when a pass would cut more than a quarter of the video, all passes more than a
 third, or the numbers are far from `scan`.
 
+**Fast or thorough review** is asked once per video (and saved). Fast looks only where the
+rules flagged something; thorough also reads every kept word for abandoned sentences,
+restarts and tangents, proposes those cuts, and checks the joins. Either way the closing
+summary keeps what was done, looked at, heard and approved apart.
+
 Where judgement sits:
 
 | Step | Who decides |

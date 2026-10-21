@@ -9,7 +9,8 @@ description: Edit videos in AeroEdits (screen-recorded tutorials first) with its
 AeroEdits runs the editing passes itself: transcription, mouth noises, silence, fillers and
 retakes, layouts, zooms, captions, chapters, export. You run them in the right order, ask
 the user what they want, and report back. A pass costs you a line of text. Reading a transcript
-or rendering frames costs far more, so do that only when a step fails or the user asks.
+or rendering frames costs far more, so do that only when a step fails, the user asks, or the
+user chose a thorough review (the template says what it reads).
 
 The actions are MCP tools (`aeroedits` server) and shell commands:
 `aeroedits do <action> --option value` (`aeroedits do <action> --help` lists the options).
@@ -66,6 +67,11 @@ user can switch either way at any point.
 
 After each action, one line: what it did and the length before → after. The actions answer in
 a line or two; pass that on without padding it.
+
+Say only what you checked, and how. Keep apart what you **did**, what you **looked at** (and
+how much of it), what was **heard** (you can't listen: nothing, unless the user did), and what
+the user **approved**. "Reviewed" from a contact sheet or a windowed read is not a review of the
+whole edit; say what it covered.
 
 ## When something fails
 

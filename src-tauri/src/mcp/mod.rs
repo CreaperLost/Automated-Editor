@@ -355,7 +355,8 @@ passes and cost you almost nothing: status, scan, transcribe, mouth_noises, sile
 layouts, zooms, settings, chapters, shorts, export; each applies as one undo step and \
 answers in a line or two to pass on to the user. Times are microseconds on the edited \
 timeline (after every cut). Read transcripts (transcript_get) and frames (frame_render) only \
-for judgment calls or when a step fails; then propose_cuts and propose_edit store a batch with \
+for judgment calls, a thorough review the user chose, or when a step fails; then propose_cuts \
+and propose_edit store a batch with \
 your reason for the user to accept in the Agent panel. status and project_info give the open \
 project's `project` id: pass it on every call that changes something (propose_cuts, \
 propose_edit and undo_batch need it), and if a call says the project changed, read again \
