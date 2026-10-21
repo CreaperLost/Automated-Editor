@@ -11,6 +11,10 @@ and delete its details here. Keep IDs stable; never renumber.
 
 ## The logic of the order
 
+**Milestones (decided 21 Oct):** (1) a great long-form tutorial, (2) tutorial shorts, (3) gaming
+shorts and gaming videos. Everything in Now and Next serves milestone 1; shorts work (SHT-*)
+follows; gaming work is not scheduled yet.
+
 1. **Now: make what exists safe, complete and measured.** Small fixes, project binding, the
    missing agent operations, and a baseline to measure everything after against.
 2. **Next: durability, a place for intent, and sight.** History that survives reopening, notes
@@ -85,10 +89,17 @@ flowchart LR
   `zooms` gains `add` / `update` / `remove` for manual zooms; a `transcript_fix` op for word
   text (shared with every short, as the UI does); `chapters` gains `set`; `export` gains `cancel`;
   `media_import` takes optional roles.
+- **Then the templates change:** when an agent is connected it writes the chapters and picks the
+  shorts itself (`chapters set`, `short_create`); the app's cloud passes stay for users without
+  an agent (decided 21 Oct).
 - **Depends:** SAFE-1. **Done when:** each new op has a test, one undo step, and appears in the skill.
 
 <a id="agt-2"></a>
 ### AGT-2 · Thorough mode and an honest report (skill only) — S
+
+Decided ([Q-THOROUGH](decisions.md#q-thorough)): asked once per video and saved; fast when there
+is no saved answer; revisit the default after EVAL-1.
+
 
 - **Do:** the `tutorial` template asks *fast* (today) or *thorough*: thorough reads every kept
   transcript page for contextual retakes and tangents (`fillers_review` thorough pages, then
@@ -122,6 +133,20 @@ flowchart LR
 - **Do:** `React.lazy` the panels `DockWorkspace.tsx` imports eagerly; compare first-bundle size
   and cold start. **Was:** audit F06.
 
+<a id="dep-1"></a>
+### DEP-1 · Pin the toolchains and start dependency reviews — S
+
+- **Why:** we want the speed and quality gains of updates without surprise migrations
+  (decided 21 Oct). Today Rust isn't pinned (CI uses whatever `stable` is), Node differs between
+  the README (18+), CI (20) and this machine (22), and FFmpeg is fetched from BtbN's moving
+  `latest` 8.1 release.
+- **Do:** add `rust-toolchain.toml` with the version we build with; one Node version in
+  `package.json` `engines`, `.nvmrc`, CI and the README; pin the FFmpeg build to a dated release
+  with its checksum; then run the first review from [dependencies.md](dependencies.md) and record
+  the results there.
+- **Done when:** a clean checkout builds with the pinned toolchains on Windows and in CI, and
+  `dependencies.md` lists every pinned version with its next review date.
+
 ---
 
 ## Next
@@ -151,6 +176,9 @@ Rough order; the first four are the foundations the Later tier builds on.
   context-menu "Note…" / "Ask AI about this" (copies a reference token the agent resolves).
   MCP: `notes` with `list` / `add` / `resolve`; `proposals_list` shows the user's reject note.
   Notes left by the agent ("unsure about this cut") show in the Agent panel.
+- **Decided:** this is the one shared record for every "note about a moment" feature
+  ([Q-PLAN](decisions.md#q-plan)): design `kind` and `status` so plan beats (PLAN-1), review
+  marks (REV-1), spoken editor directions and short ideas (SHT-1) fit without new storage.
 - **Depends:** SAFE-1. **Done when:** "move this away from the button" resolves to the selected
   graphic; a note survives cuts, and is flagged orphaned when its words are cut away.
 
@@ -199,11 +227,12 @@ Rough order; the first four are the foundations the Later tier builds on.
 - **Done when:** a 4K/60 export of a fast text graphic is visibly sharper and smoother than today.
 
 <a id="gfx-2"></a>
-### GFX-2 · Settle the animation ceiling (spike) — S
+### GFX-2 · GSAP in the graphics runtime — S/M
 
-- **Do:** render one GSAP and one three.js composition, vendored locally, under the gate in the
-  pinned runtime. If they pass and render deterministically, add a sanctioned local-library path
-  to `graphic_write_file`; if not, state the ceiling plainly in the skill.
+- **Decided (21 Oct): GSAP first**, as HyperFrames' default runtime. Vendor a pinned GSAP into
+  the graphics runtime (no network, so the gate still holds), render one composition under the
+  gate, check it seeks and renders deterministically, then allow it in `graphic_write_file`, the
+  skill and the templates. Other runtimes (Lottie, three.js) only when a template needs one.
 - **Decision:** [Q-ANIM](decisions.md#q-anim).
 
 <a id="cap-1"></a>
@@ -223,8 +252,9 @@ Rough order; the first four are the foundations the Later tier builds on.
 - **Do:** clip gain and fade in/out on any audio clip (the `Clip` model has neither); SFX and
   music as their own audio tracks with roles; a speech-relative music level and a loudness
   target per project; a licence/provenance field on imported audio assets; agent ops through
-  `propose_edit` + `settings`. No library, no generation, no beat grid yet.
-- **Decision:** [Q-SOUND](decisions.md#q-sound). **Was:** backlog #5 (first half).
+  `propose_edit` + `settings`. No generation, no beat grid. Both libraries (SND-3) build on this.
+- **Decision:** [Q-SOUND](decisions.md#q-sound): this comes first, then the SFX starter set, then
+  music (SND-3). **Was:** backlog #5 (first half).
 
 <a id="ftg-1"></a>
 ### FTG-1 · Search the source transcripts, including what was cut — M
@@ -271,7 +301,7 @@ Grouped by area. Order within a group is the suggested order.
   ownership, sound intensity), reason, user locks, status (draft → approved → built → stale).
   A transcript-row panel; `plan` op on `notes`. Then a **style trial**: build 2–3 beats on a
   5–10 s range, approve the look, then scale. Graphics keep their word anchor (fixes C3).
-  Decision: [Q-PLAN](decisions.md#q-plan).
+  Plan beats are NOTE-1 records with `kind: beat` (decided, [Q-PLAN](decisions.md#q-plan)).
 <a id="sty-1"></a>
 - **STY-1 · Style kit (M).** Beside the brand kit, referencing it: caption rules, motion
   character, graphic density and placement, sound policy, a few reference images and files;
@@ -302,6 +332,17 @@ Grouped by area. Order within a group is the suggested order.
   imported files; a deterministic cue compiler (`cueStart = visualPeak − soundPeakOffset`,
   density limits, ducking); the agent picks which events deserve sound; sound style in words
   from STY-1. Depends on SND-1. **Was:** backlog #5 (second half).
+<a id="snd-3"></a>
+- **SND-3 · Sound and music libraries the user extends (M/L).** First an SFX starter set of
+  ~15–20 hand-picked, licence-clean sounds (a few whooshes, UI clicks and pops, two risers, two
+  hits), tagged and auditioned; then a copyright-free music library. Each has browse, preview,
+  search by tag and one-click placement, and takes the user's own files. **Music must never need
+  credit (enforced):** every track stores its licence; the built-in library holds only tracks
+  allowed for monetised use without attribution (CC0 / public domain or equivalent); a track that
+  requires credit, forbids monetisation or has an unknown licence is refused for the library, and
+  a user import like that is flagged in the project and by `check` before export. Comes after
+  the project rules and style kit (decided order). Depends on SND-1.
+  Decision: [Q-SOUND](decisions.md#q-sound).
 
 ### Footage
 
@@ -319,7 +360,7 @@ Grouped by area. Order within a group is the suggested order.
   alternatives shown, one proposal batch.
 <a id="ftg-5"></a>
 - **FTG-5 · Import an outside transcript (S).** Deepgram / AssemblyAI / Rev JSON → our word model,
-  then alignment.
+  then alignment. Not needed (21 Oct); do it only if it stays this small.
 <a id="ftg-6"></a>
 - **FTG-6 · Stock B-roll providers (M).** Pexels / Pixabay with the user's key, licence recorded,
   download only on accept. **Was:** backlog #4.
@@ -369,7 +410,8 @@ Grouped by area. Order within a group is the suggested order.
 <a id="fx-4"></a>
 - **FX-4 · Audio seam fades (S).** Short fades at cuts where source handles allow, speech timing intact.
 <a id="fx-5"></a>
-- **FX-5 · Colour: LUT import and a simple grade (M).** Per clip, preview/export parity, `clip_grade` op.
+- **FX-5 · Colour: LUT import and a simple grade (M). Parked 21 Oct: not needed now.** Per clip,
+  preview/export parity, `clip_grade` op.
 
 ### Delivery
 
@@ -409,8 +451,11 @@ Grouped by area. Order within a group is the suggested order.
 ### Automation
 
 <a id="auto-1"></a>
-- **AUTO-1 · Folder watch (S/M).** New recordings become projects and run a saved workflow up to
-  the first question.
+- **AUTO-1 · Run a template on request after opening (S).** Replaces folder watch, which was
+  turned down: nothing starts when a recording finishes. After opening a project the user picks a
+  template (tutorial, shorts, take-shorts…) and the saved method runs up to its first question,
+  with only free local steps unless the user confirms. Builds on AGT-3's rules and the existing
+  saved answers. Decision: [Q-WATCH](decisions.md#q-watch).
 <a id="auto-2"></a>
 - **AUTO-2 · Speech matching across takes (M).** Measured speech-level matching (then gentle EQ)
   so a re-recorded sentence doesn't jump.
@@ -426,6 +471,14 @@ Grouped by area. Order within a group is the suggested order.
 <a id="ui-3"></a>
 - **UI-3 · Templates (saved looks): save over, remove, add (S).** Decide what a look holds
   (layout, audio, captions, zooms, cleanup choices, brand kit). **Was:** backlog #6.
+
+### Dependencies
+
+<a id="dep-2"></a>
+- **DEP-2 · Recurring dependency review (S each).** Follow the cadence in
+  [dependencies.md](dependencies.md): read changelogs, update on a branch, run tests, `perf.rs`
+  and the parity probes, record the result. Candidates already visible: React 18 → 19,
+  Vite 5 → current, Tailwind 3 → 4, `ort` leaving release candidates, HyperFrames past 0.8.162.
 
 ### Performance
 

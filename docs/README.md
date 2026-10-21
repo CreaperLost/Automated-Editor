@@ -12,6 +12,7 @@ one place; other docs link to it instead of restating it.
 | 3 | [roadmap.md](roadmap.md) | **The plan:** Now / Next / Later, with what "done" means for each item. The backlog lives here |
 | 4 | [decisions.md](decisions.md) | What George has decided, what we are not doing, and the open questions with recommendations |
 | 5 | [architecture.md](architecture.md) | How it is built: the sequence model and clocks, MCP, graphics, layouts, performance rules, working notes |
+| — | [dependencies.md](dependencies.md) | Every pinned toolchain, library, runtime and model, and how we review updates |
 | — | [glossary.md](glossary.md) | The project's own words |
 
 ## Folders

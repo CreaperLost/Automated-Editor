@@ -125,7 +125,7 @@ The research is clear that sound is **placement and art direction, not library b
 | Gap | Evidence | Fix |
 |---|---|---|
 | Graphics render at **30 fps and 1920 px long side** whatever the export: a 4K/60 export gets no extra detail or motion samples | Code: `graphics/render.rs` (`RENDER_FPS`, `RENDER_LONG_SIDE`) | [GFX-1](roadmap.md#gfx-1) |
-| The animation ceiling is undecided: authoring rules allow Web Animations/CSS and no network; GSAP or three.js under our gate is untested | Code: `graphic_write_file` rules, `graphics/gate.rs` | [GFX-2](roadmap.md#gfx-2) |
+| Graphics can't use GSAP yet: authoring rules allow Web Animations/CSS and no network. Decided 21 Oct: vendor GSAP locally (HyperFrames' default runtime) | Code: `graphic_write_file` rules, `graphics/gate.rs` | [GFX-2](roadmap.md#gfx-2) |
 | Six full-screen 4–6 s cards. No template for the most common tutorial jobs: highlight real UI, a word-timed emphasis, a sequence of steps, before/after | Code: `src-tauri/graphics/templates/` | [GFX-3](roadmap.md#gfx-3) |
 | No variants: a revision overwrites; no Compare / Use; ~20 s re-render with no draft preview | Code; log | [GFX-4](roadmap.md#gfx-4) |
 | A graphic can't dim or blur the footage under it (a transparent HTML clip can't sample what is composited later); that is compositor work | Research | [FX-2](roadmap.md#fx-2) |
@@ -139,13 +139,13 @@ The research is clear that sound is **placement and art direction, not library b
 | A short is still one continuous stretch (`Short.source_start_us..source_end_us` or a copied `ShortEdit`): it can't combine a setup at minute 3 with the payoff at minute 17 | Code: `shorts.rs` | [SHT-1](roadmap.md#sht-1) |
 | Caption text, breaks and emphasis can't be shaped inside a short | Code | [SHT-2](roadmap.md#sht-2) |
 | Take shorts: footage is placed only by the agent (no picker in the UI), no speed/freeze fit modes, no per-short ducking amount | Log: `plans/shorts.md` | [SHT-4](roadmap.md#sht-4) |
-| No outside-transcript import, no ordered take assembly, no script-guided assembly, no folder watch | Code | [FTG-4](roadmap.md#ftg-4), [FTG-5](roadmap.md#ftg-5), [AUTO-1](roadmap.md#auto-1) |
+| No outside-transcript import, no ordered take assembly, no script-guided assembly; no one-step "run this template now" after opening a project (automatic folder watch is turned down) | Code | [FTG-4](roadmap.md#ftg-4), [FTG-5](roadmap.md#ftg-5), [AUTO-1](roadmap.md#auto-1) |
 
 ## 10. Finishing and delivery: absent from the app, not just the agent
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| No colour grade or LUT (0 matches for `lut|grade|temperature`) | Code | [FX-5](roadmap.md#fx-5) |
+| No colour grade or LUT (0 matches for `lut|grade|temperature`) | Code | [FX-5](roadmap.md#fx-5), parked: not needed now |
 | No NLE handoff (0 matches for `otio|fcpxml|aaf|edl`); no standalone alpha graphic export | Code | [DLV-3](roadmap.md#dlv-3) |
 | Export is H.264/AAC only; fps from a closed set (10, 15, 24, 25, 30, 60) | Code: `export/mod.rs` | Fine for now; revisit with [DLV-3](roadmap.md#dlv-3) |
 | No tutorial effects: spotlight, redaction/blur of a region (an email, a key), magnifier | Code | [FX-2](roadmap.md#fx-2) |

@@ -30,6 +30,19 @@ settled table with the date and update the roadmap item it blocks.
 | Layouts: one shared style per timeline, layouts only arrange; sections anchored in recording time; favourites copied when applied; default transition Auto; moves play inside the section; face centring on every camera slot; shorts keep their own base and sections; bubble on a 3×3 grid with S/M/L; side by side has fit and fill; layouts bound to keys by the user, no fixed slots | 21 Oct | [plans/layouts.md](plans/layouts.md#decisions-21-oct-2026) |
 | Re-voicing and lip sync paused until a local, commercially licensed stack is good enough | 18 Oct | [research/revoice.md](research/revoice.md) |
 | Licence rule for any bundled model: MIT, Apache-2.0, GPL-3.0 (as a separate component), OpenRAIL. Never non-commercial, research-only or revenue-capped | 18 Oct | research/revoice.md |
+| **Milestones, in order:** (1) a great long-form tutorial, (2) tutorial shorts, (3) gaming shorts and gaming videos. Later tiers are ordered by this | 21 Oct | Q-FOCUS |
+| **User-owned artefacts, in order:** project rules first, then the style kit, then the sound library | 21 Oct | Q-RULES |
+| **Chapters and short suggestions:** without an agent the app's own passes run; when an agent is connected, the agent writes them (it is usually smarter), accepting the higher cost | 21 Oct | Q-AI-OWNER |
+| **Verification keeps a human in the loop:** the agent shows its results (previews, findings, what it changed); the user reads, watches and adjusts. No autonomous fix-and-retry loops; never export without the user's go | 21 Oct | Q-VERIFY |
+| **Animation:** GSAP first, since it is HyperFrames' default runtime, vendored locally so the no-network gate still holds; other runtimes (Lottie, three.js…) only when a template needs one | 21 Oct | Q-ANIM, [GFX-2](roadmap.md#gfx-2) |
+| **Sound needs two libraries the user can extend:** a built-in SFX library of specific, licence-clean sounds, and an open-source, copyright-free music library, both open to the user's own files and imports. Scope and order still to discuss ([Q-SOUND](#q-sound)) | 21 Oct | Q-SOUND |
+| **HyperFrames stays pinned** (0.8.162); recheck it at each dependency review | 21 Oct | Q-HYPERFRAMES |
+| **Dependencies are kept current on purpose:** toolchains (Rust, Node, TypeScript) and key libraries are pinned, reviewed on a schedule, and updated only after a compatibility check, so we get speed and quality gains without surprise migrations | 21 Oct | [dependencies.md](dependencies.md), [DEP-1](roadmap.md#dep-1) |
+| **One anchored-note type** (decided by Claude at George's request): comments, agent notes, plan beats, review marks, spoken editor directions and short ideas are all one record, `{anchor (word ids or a recording time range, mapped through clocks), kind, text, author, status, revision}`, with one timeline lane and one MCP tool. Features add a `kind`, not a new system | 21 Oct | Q-PLAN, [NOTE-1](roadmap.md#note-1) |
+| **Fast or thorough cleanup review** (decided by Claude at George's request): in step mode the agent asks once per video and saves the answer; auto mode uses the saved answer, fast if there is none. Thorough = read the whole kept transcript for unflagged retakes and tangents, inspect the remaining gaps and joins, and report what was only read vs actually listened to. Revisit the default after EVAL-1: if fast mode misses cuts George cares about on the long-form baseline, thorough becomes the default for long-form | 21 Oct | Q-THOROUGH, [AGT-2](roadmap.md#agt-2) |
+| **Sound order:** clip gain, fades and separate SFX/music tracks first ([SND-1](roadmap.md#snd-1)), then a small SFX starter set (~15–20 hand-picked, licence-clean sounds: whooshes, UI clicks and pops, two risers, two hits), then the music library. Both libraries take the user's own files | 21 Oct | Q-SOUND, [SND-3](roadmap.md#snd-3) |
+| **Music must never need credit.** Only tracks whose licence allows monetised use with no attribution (e.g. CC0 / public domain or an equivalent no-attribution licence) enter the built-in library. The app enforces it: every track carries its licence, and a track that requires credit, forbids monetisation or has an unknown licence is refused (user imports are flagged instead of silently accepted) | 21 Oct | Q-SOUND |
+| **No automatic folder watch.** Nothing runs when a recording finishes: each video may be a tutorial or something else. Instead, after opening a project, the user can pick a template (tutorial, shorts…) and have its saved method run, on request ([AUTO-1](roadmap.md#auto-1)) | 21 Oct | Q-WATCH |
 
 ### Not doing
 
@@ -47,79 +60,31 @@ ones (the second opinion softened several).
 | Borrowed style bans as defaults (no holds over 1 s, no blur-ins) | No | Tutorials need reading time; ship bans only as a user's own style rules |
 | Avatars, live co-editing, a big model catalogue, cloud rendering | Deferred | Scope before proving tutorial outcomes |
 | Gaze-aware cutaways, 3D scenes | Only when a chosen style needs them | — |
+| Colour grading and LUTs | Not now (21 Oct) | Not needed for the channel today ([FX-5](roadmap.md#fx-5) parked) |
+| Automatic folder watch (start editing when a recording lands) | No (21 Oct) | Each video may be a different kind; the user starts a template after opening instead |
+| Importing an outside transcript | Only if it stays trivially small (21 Oct) | Not needed; our own transcription covers it ([FTG-5](roadmap.md#ftg-5)) |
 
 ## Waiting for George
 
-Ordered by what they block. Each has a recommendation; a one-word "yes" adopts it.
+Nothing is waiting. Add new questions here with a recommendation.
 
-<a id="q-focus"></a>
-**Q-FOCUS · What is the next milestone: a great long-form tutorial, a great tutorial short, or both?**
-The research is heavy on short-form reels; the vision says tutorials first.
-*Recommendation:* the long-form tutorial first, measured by EVAL-1 (accurate cuts, readable UI
-and captions, cost per accepted video). Shorts improve as a side effect (captions, sound, search
-are shared) and get their own push with SHT-1. Blocks: the order inside Next.
+### Answered 21 Oct
 
-<a id="q-rules"></a>
-**Q-RULES · Which user-owned artefact first: project rules, a style kit, or a sound library?**
-All three are the same shape: a file the user owns that the agent reads and proposes edits to.
-*Recommendation:* **project rules first** (AGT-3): cheapest, covers method and taste in words,
-and the style kit (STY-1) later becomes structured fields in the same store. Read the three
-published skills before designing it (a day). Rules at two scopes (project, all projects); the
-agent only proposes, the user accepts; the installed `SKILL.md` stays app-owned.
-
-<a id="q-plan"></a>
-**Q-PLAN · One plan model or several?** The beat plan, the idea-first short, production tasks
-(editor directions, asset requests), review records and timeline comments all store "intent or
-evidence anchored to words / source time".
-*Recommendation:* **one anchored-note primitive** (NOTE-1) with a `kind`, and build the beat plan,
-review records and short ideas on it. Blocks: NOTE-1's data model.
-
-<a id="q-sound"></a>
-**Q-SOUND · How small is "minimal sound", and does music come first?**
-*Recommendation:* SND-1 = clip gain + fades, SFX and music as their own tracks, a
-speech-relative music level and a loudness target, a licence field. No library browser, no
-generation, no beat grid. Cue placement at graphic events (SND-2) only after captions and the
-render policy. Music is a user-supplied track until a tutorial proves it needs more.
-
-<a id="q-anim"></a>
-**Q-ANIM · The animation ceiling: vendor a pinned GSAP into the graphics runtime, or keep
-Web Animations/CSS and say so?**
-*Recommendation:* run the GFX-2 spike (half a day) and decide on its result. WAAPI/CSS already
-does easing and squash-and-stretch; only adopt GSAP if a real template needs it and it passes
-the gate deterministically.
-
-<a id="q-ai-owner"></a>
-**Q-AI-OWNER · Who owns chapters and short suggestions when an agent is connected?**
-Both call the app's cloud model today; the agent could do both from the transcript at no extra cost.
-*Recommendation:* keep the app's passes for users without an agent; when an agent is
-connected, the templates let the agent write them (chapters through the AGT-1 `chapters set` op).
-
-<a id="q-thorough"></a>
-**Q-THOROUGH · Fast or thorough by default?**
-*Recommendation:* ask every time in step mode ("fast or thorough?"), remember the answer as a
-saved answer, default to fast in auto mode. (AGT-2.)
-
-<a id="q-verify"></a>
-**Q-VERIFY · How autonomous should verification be?** Some creators loop "until the cut is
-clean"; others warn against autonomous loops.
-*Recommendation:* bounded: the agent may apply `check`'s safe fixes and re-check **once**, must
-report what it changed, and always stops for the user before export.
-
-<a id="q-scope"></a>
-**Q-SCOPE · Colour/LUT, folder watch, outside-transcript import: in scope for your channel?**
-*Recommendation:* outside-transcript import is small (FTG-5) and fine any time; folder watch
-(AUTO-1) after AGT-3 so it can run a saved method; colour (FX-5) only if your camera footage
-needs it. All stay in Later.
-
-<a id="q-hyperframes"></a>
-**Q-HYPERFRAMES · Track HyperFrames upstream?** The runtime we pin (0.8.162) is HeyGen's public repo.
-*Recommendation:* stay pinned; review the upstream changelog at each deliberate bump; keep our
-gate and templates in this repo (they encode our product rules, not the engine's).
+<a id="q-focus"></a>**Q-FOCUS** long-form tutorial → tutorial shorts → gaming shorts and videos ·
+<a id="q-rules"></a>**Q-RULES** project rules → style kit → sound library ·
+<a id="q-anim"></a>**Q-ANIM** GSAP first, vendored locally ·
+<a id="q-ai-owner"></a>**Q-AI-OWNER** the agent writes chapters and short picks when connected ·
+<a id="q-verify"></a>**Q-VERIFY** human in the loop, no autonomous loops ·
+<a id="q-scope"></a>**Q-SCOPE** colour not now; outside transcripts only if trivial ·
+<a id="q-hyperframes"></a>**Q-HYPERFRAMES** pinned, rechecked at dependency reviews ·
+<a id="q-plan"></a>**Q-PLAN** one anchored-note type (Claude's call) ·
+<a id="q-thorough"></a>**Q-THOROUGH** ask once per video, fast by default until EVAL-1 says otherwise (Claude's call) ·
+<a id="q-sound"></a>**Q-SOUND** knobs → SFX starter set → music; music never needs credit ·
+<a id="q-watch"></a>**Q-WATCH** no automatic folder watch; run a template on request after opening.
+All recorded in [Settled](#settled).
 
 ### Old question numbers
 
-Q1 → Q-RULES (style kit part) · Q2 → Q-PLAN · Q3, Q16 → Q-SOUND · Q4 → Q-ANIM · Q5 (where to
-approve a plan) → answered by Q-PLAN: the Notes lane and the Agent panel · Q6 → Q-FOCUS ·
-Q7 → Q-AI-OWNER · Q8 (evaluation set) → adopted as EVAL-1 in Now · Q9 (organise the docs) →
-done 21 Oct · Q10 → Q-THOROUGH · Q11, Q14, Q15 → Q-RULES · Q12 → Q-VERIFY · Q13 → Q-SCOPE ·
-Q17 → Q-HYPERFRAMES.
+Q1, Q11, Q14, Q15 → Q-RULES · Q2, Q5 → Q-PLAN · Q3, Q16 → Q-SOUND · Q4 → Q-ANIM · Q6 → Q-FOCUS ·
+Q7 → Q-AI-OWNER · Q8 → adopted as EVAL-1 · Q9 → done 21 Oct · Q10 → Q-THOROUGH · Q12 → Q-VERIFY ·
+Q13 → Q-SCOPE and Q-WATCH · Q17 → Q-HYPERFRAMES.
