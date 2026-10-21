@@ -4,6 +4,8 @@ The strongest opportunity is a reusable short-form directing workflow connected 
 
 This is a research and source-code assessment. No application or skill implementation was changed, and no output-quality or cost benchmark was run.
 
+Follow-up: [three additional video references and updated findings](short-form-reference-review-part-2-2026-10-21.md). The inventory below was refreshed for the unified `layouts` implementation at `fbc06da`; older scene/focus action names have been superseded. Part 2 also records the current graphics render-quality limits and procedural-audio opportunities.
+
 ## Evidence and limits
 
 - Read the complete English transcripts of all three requested YouTube videos, their descriptions and chapters, and sampled their finished reels in the browser.
@@ -32,7 +34,7 @@ Their use of “training” describes studying examples and saving instructions 
 | --- | --- | --- |
 | Transcription, alignment, silence/filler/retake cleanup | [tutorial workflow](../src-tauri/src/mcp/skill/templates/tutorial.md), [transcript implementation](../src-tauri/src/transcript/) | Existing pipeline. Reuse it instead of asking the agent to invent cutting scripts. Provider and language limitations still apply. |
 | Short selection and word-range creation | [AI short suggestions](../src-tauri/src/ai/shorts.rs), [short creation](../src-tauri/src/mcp/actions.rs) | Already present. The built-in suggestion prompt is brief; editorial judgment can improve through examples and a focused skill. |
-| Camera/screen/split scenes, face framing, graphic slots | [shorts](../src-tauri/src/shorts.rs), [scene selection](../src-tauri/src/short_scenes.rs) | Useful for presenter-only, full-screen, and split graphic treatments. Default scene intelligence is strongly oriented toward recorded screen activity. |
+| Camera/screen/split layouts, face framing, graphic slots | [shorts](../src-tauri/src/shorts.rs), [layout sections](../src-tauri/src/layouts/mod.rs), [layout MCP action](../src-tauri/src/mcp/layouts.rs) | Useful for presenter-only, full-screen, and split graphic treatments. The unified action supports per-short sections, favourites, transitions and punch-ins. Automatic selection remains strongly oriented toward recorded screen activity. |
 | Take-based shorts and footage from an existing recording | [take workflow](../src-tauri/src/mcp/skill/templates/take-shorts.md), [take implementation](../src-tauri/src/take_short.rs) | Existing useful foundation. The skill assumes a long-video/take relationship and lacks a dedicated standalone talking-head workflow. |
 | Editable HyperFrames source, cached renders, graphics library, brand kits | [graphics](../src-tauri/src/graphics/mod.rs), [rendering](../src-tauri/src/graphics/render.rs), [library](../src-tauri/src/graphics/library.rs), [brands](../src-tauri/src/graphics/brands.rs) | Strong reuse foundation. The bundled designs are six tutorial templates plus a blank composition; short-form scene coverage is limited. |
 | Caption timing, word highlighting, wrapping and positioning | [captions](../src-tauri/src/captions.rs) | Present. The renderer embeds Liberation Sans Bold and does not expose a font family, paired fonts, or per-word style/animation runs. |
@@ -132,6 +134,8 @@ The following are proposed interface shapes, not existing tool names:
 | `preview_range` | Short audiovisual preview plus event/cue timing and mix measurements |
 
 Extend existing actions when their scope fits. Reuse `propose_edit`, revision validation, proposals, undo, `graphics`, `graphic_check`, `storyboard`, and `check`. Do not introduce another generic timeline-edit API simply to batch calls: batching already exists.
+
+Current-code clarification from the follow-up: `layouts` already exposes layout changes scoped to a short. Use it directly; the proposed settings interface should fill remaining caption/audio/style gaps rather than duplicate layout control.
 
 The shipped tool descriptions should describe their individual purpose briefly. Shared workflow belongs in server instructions and the skill; template details and exemplars should be loaded on demand. Measure tool-schema and response sizes across clients before choosing further consolidation.
 
