@@ -662,7 +662,10 @@ pub fn sections_for(
     let in_order = pieces.windows(2).all(|p| p[0].1 <= p[1].0);
     let hull = (pieces[0].0, pieces[pieces.len() - 1].1);
     let back = merge(clock.source_range_to_edited(hull.0, hull.1), 0);
-    let whole = in_order && back == merge(vec![(start, end)], 0);
+    // Clips played faster or slower map back to within rounding.
+    let slack = crate::sequence::join_slack(crate::sequence::MAX_SPEED);
+    let whole = in_order
+        && matches!(back.as_slice(), [(a, b)] if a.abs_diff(start) <= slack && b.abs_diff(end) <= slack);
     let spans = if whole { vec![hull] } else { pieces };
     spans
         .into_iter()
@@ -839,6 +842,23 @@ mod tests {
         track.replace_auto(picked);
         assert_eq!(track.sections.iter().filter(|s| s.auto).count(), 2);
         track.validate().unwrap();
+    }
+
+    /// A range over a clip at half speed and the normal-speed one after it is one section,
+    /// though half speed maps back a microsecond off.
+    #[test]
+    fn a_range_over_a_slower_clip_is_one_section() {
+        use crate::timeline::SourceInterval;
+        let clock = TimelineMapper::new(vec![
+            SourceInterval::new("a".into(), 0, 10 * S).with_edited_len(Some(20 * S)),
+            SourceInterval::new("b".into(), 10 * S, 20 * S),
+        ]);
+        let made = sections_for(&clock, None, S + 1, 25 * S, &section("n", 0, 1, None));
+        let spans: Vec<(u64, u64)> = made
+            .iter()
+            .map(|s| (s.source_start_us, s.source_end_us))
+            .collect();
+        assert_eq!(spans, vec![(S / 2, 15 * S)]);
     }
 
     #[test]

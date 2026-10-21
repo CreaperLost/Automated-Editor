@@ -185,16 +185,7 @@ pub fn detect_non_speech_gaps_for(
             clips.iter().map(move |clip| {
                 let mapped = gaps
                     .iter()
-                    .filter_map(|&(a, b)| {
-                        let start = a.max(clip.in_us);
-                        let end = b.min(clip.out_us());
-                        (end > start).then(|| {
-                            (
-                                clip.start_us + start - clip.in_us,
-                                clip.start_us + end - clip.in_us,
-                            )
-                        })
-                    })
+                    .filter_map(|&(a, b)| clip.timeline_range(a, b))
                     .collect();
                 (vec![(clip.start_us, clip.end_us())], mapped)
             })
@@ -570,8 +561,8 @@ mod tests {
                                 continue;
                             }
                             let (sa, sb) = (
-                                clip.in_us + a - clip.start_us,
-                                clip.in_us + b - clip.start_us,
+                                clip.in_us + clip.source_offset(a - clip.start_us),
+                                clip.in_us + clip.source_offset(b - clip.start_us),
                             );
                             let over: u64 = truth
                                 .words

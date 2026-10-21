@@ -332,6 +332,7 @@ pub fn timeline(
         duration_us: length,
         link: Some("l1".into()),
         fit: Default::default(),
+        speed: 1.0,
     };
     voice_track.clips.push(clip("c1", &sources.voice, start));
     if let Some(camera) = &sources.camera {
@@ -499,7 +500,7 @@ fn clear_range(track: &mut Track, from: u64, to: u64, next_clip: &mut u64) {
             out.push(Clip {
                 id,
                 start_us: to,
-                in_us: clip.in_us + (to - start),
+                in_us: clip.in_us + clip.source_offset(to - start),
                 duration_us: end - to,
                 ..clip
             });
@@ -983,6 +984,7 @@ mod tests {
             duration_us: 10_000_000,
             link: None,
             fit: Default::default(),
+            speed: 1.0,
         });
         let mut next = 2;
         clear_range(&mut track, 2_000_000, 5_000_000, &mut next);

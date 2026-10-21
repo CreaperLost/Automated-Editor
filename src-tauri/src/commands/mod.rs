@@ -414,16 +414,7 @@ fn detect_combined_silence(
                 let silent = result
                     .suggestions
                     .iter()
-                    .filter_map(|pause| {
-                        let start = pause.start_us.max(clip.in_us);
-                        let end = pause.end_us.min(clip.out_us());
-                        (end > start).then(|| {
-                            (
-                                clip.start_us + start - clip.in_us,
-                                clip.start_us + end - clip.in_us,
-                            )
-                        })
-                    })
+                    .filter_map(|pause| clip.timeline_range(pause.start_us, pause.end_us))
                     .collect();
                 (vec![(clip.start_us, clip.end_us())], silent)
             })

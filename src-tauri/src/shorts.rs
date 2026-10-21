@@ -478,7 +478,7 @@ pub fn slice_sequence(
                     in_us: if still(&clip.asset) {
                         0
                     } else {
-                        clip.in_us + skip
+                        clip.in_us + clip.source_offset(skip)
                     },
                     duration_us: b - a,
                     ..clip

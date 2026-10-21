@@ -570,6 +570,8 @@ fn timeline_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                             "stream": format!("{}.{}", clip.asset, clip.stream),
                             "media": asset.map(|a| a.name.as_str()),
                             "inUs": clip.in_us,
+                            "outUs": clip.out_us(),
+                            "speed": clip.speed,
                             "linkedTo": clip.link,
                         })
                     })

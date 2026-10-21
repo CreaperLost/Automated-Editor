@@ -551,7 +551,8 @@ fn clipped_words(out: &mut Builder, speech: &[(Transcript, TimelineMapper)]) {
             }
             let kept_ranges =
                 mapper.source_range_to_edited(word.source_start_us, word.source_end_us);
-            let kept: u64 = kept_ranges.iter().map(|(a, b)| b - a).sum();
+            // In the word's own time: a word played faster is shorter, not cut.
+            let kept = mapper.source_kept_us(word.source_start_us, word.source_end_us);
             let removed = length - kept.min(length);
             if kept == 0
                 || removed < CLIPPED_REMOVED_MIN_US
@@ -617,15 +618,14 @@ fn zooms(out: &mut Builder, document: &EditDocument) {
         if transition == 0 {
             continue;
         }
-        let kept = |a: u64, b: u64| -> u64 {
-            mapper
-                .source_range_to_edited(a, b)
-                .iter()
-                .map(|(x, y)| y - x)
-                .sum()
-        };
-        let cut_in = transition - kept(zoom.source_start_us, zoom.source_start_us + transition);
-        let cut_out = transition - kept(zoom.source_end_us - transition, zoom.source_end_us);
+        // In the zoom's own time: easing played faster is shorter, not cut.
+        let kept = |a: u64, b: u64| -> u64 { mapper.source_kept_us(a, b) };
+        let cut_in = transition.saturating_sub(kept(
+            zoom.source_start_us,
+            zoom.source_start_us + transition,
+        ));
+        let cut_out =
+            transition.saturating_sub(kept(zoom.source_end_us - transition, zoom.source_end_us));
         // A sliver less is rounding at a clip edge, not a visible jump.
         let visible = transition / 4;
         let (jumps_in, jumps_out) = (cut_in > visible, cut_out > visible);

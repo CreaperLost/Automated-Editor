@@ -77,6 +77,12 @@ tools or edits unless the user says so.
 Each change is its own undo step and is listed in the app's Agent panel, where the user can
 undo it. `undo` takes back the latest change.
 
+## Speed
+
+`speed` plays clips or a stretch of the timeline faster or slower (0.25x to 8x); the sound
+keeps its pitch, and zooms, cursor and captions follow. Use it only when the user asks for a
+speed. Never speed up waiting or slow parts by yourself: cut them, or ask.
+
 ## Chapters
 
 Chapters are the last edit, right before export, after every cut: they read the final edit's
