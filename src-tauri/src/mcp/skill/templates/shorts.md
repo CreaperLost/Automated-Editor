@@ -1,56 +1,91 @@
-# Template: shorts
+# Template: shorts from a take
 
-Vertical shorts (9:16) cut from the edited video: you read the transcript and pick the moments
-yourself (no AI key needed), the app builds each short with the look of the others (a
-split-screen base layout by default) and picks its layout sections (camera only for the
-opening line and while the speaker talks without the mouse, screen only while the clicking is
-busy, the base otherwise). Run it after the video's own edit, so
-the shorts come from the cleaned-up talk.
+A vertical short (9:16) told again for shorts: the user recorded a new take, a camera video
+(often with its own microphone), maybe a separate microphone file, or an AeroEdits recording,
+retelling one part of the long video (one myth, one tip, one step). The take is the short's
+camera, voice and captions. It goes through the same process as any recording (transcribe,
+clean), then you pick the footage from the long video that shows what each sentence talks
+about, so the action comes from the video while the take does the talking. Then graphics.
 
 Step by step by default; automatic when the user says so ("auto", "no questions"): then use
-the defaults below, show the picks in one message and go on. Export still waits for the user's
-go.
+the defaults below, report in one message and go on. Export still waits for the user's go.
 
 ## 1. Project (automatic)
 
-- `status`. Shorts need a transcript: if nothing is transcribed, `transcribe` (online, the
-  language detected; as in the tutorial template).
-- `status` says how many shorts are already made. Ask whether to keep them
-  (default) or start over (remove them in the Shorts Studio; there is no action for it).
-- With a camera, `faces` (it waits until the face is found in every camera; shorts centre
-  each camera clip on it). Pass on a camera with little or no face found.
+- `status`. The long video needs a transcript (that is how you find its footage): if it has
+  none, `transcribe` it (online, the language detected; as in the tutorial template). The
+  long video should be edited first: footage only comes from what its edit keeps.
+- `status` says how many shorts are already made.
 
-## 2. Read (automatic)
+## 2. The take (ask only if unclear)
 
-`transcript_get` for the speech. It is the edited video's words with their ids and times.
+- If the user gave file paths, `media_import` them (all the take's files at once) into the
+  project that is open. A .aero recording folder is a take too (its camera and microphone come
+  in together): import it, never `open` it or `create` a project from it.
+  Otherwise the take is already in Media: `project_info` lists the media; the take is what
+  the user names, else the newest imported files.
+- `short_from_take` with a `title` (under 60 characters, also the file name), `media` (the
+  take's file ids: the app tells the camera from the microphone; a separate microphone wins
+  over the camera's own) and `idea` (one line: what the user said the take is about). With no
+  title given, make one from that. Pass on what it says about lining the camera
+  up with the voice; if the match was weak, tell the user to check the lip sync.
+- `faces`, so the camera is framed on the face (it waits until it is found).
 
-## 3. Pick (ask)
+## 3. Transcribe and clean the take (automatic)
 
-Ask how many (default 3, at most 5). Pick moments that:
-- make sense on their own, with no "as I said", "like before", "this one" pointing elsewhere;
-- open with a hook in the first sentence: a question, a bold claim, a result, "here's how to";
-- run 20 to 60 seconds and start and end on whole sentences, ending on the payoff;
-- show something on screen while they talk, when there is a choice;
-- don't overlap each other or the shorts already made.
+The same passes as the long video's cleanup, on the take short's own timeline:
 
-Show them as a numbered list: time in the video, length, a catchy title (under 60 characters,
-it is also the file name) and one line on why it works. Ask for an OK or changes (automatic: go).
+- `transcribe` with the take's voice as `stream`.
+- `mouth_noises` with that `stream`.
+- `silence` with `short` (the short's id), `mode: gaps` and `preset: tight`: the pauses
+  between the take's words. A short is cut tighter than a long video: Balanced leaves a
+  pause you hear at every cut.
+- `fillers` with that `stream` (after `fillers_review` if the user wants a careful pass).
 
-## 4. Make (automatic)
+Report one line per pass. The user can review each in the Shorts tab (Transcript, Jump cuts,
+Mouth noises) and undo.
 
-For each pick, `short_create` with `title`, `fromWord`, `toWord` and `reason`. It copies the
-look of the shorts already made and picks its layout sections. Report one line per short with
-its sections (`layouts` with `short`). To change them: `layouts` with `short` and `op: add`
-(`sections` [{fromS, toS, layout}], seconds on the short's own timeline; layouts like "Camera
-only", "Screen only", "Side by side"), `update`, `remove` or `clear`; `op: base` changes the
-split itself (e.g. {"kind": "sideBySide", "cameraFirst": false, "cameraPct": 40}). Graphics in a short's stretch play over its whole frame; a title or
-step card often reads better in the screen's part (`graphic_set` with `short` and `slot:
-screen`), or `overScreen` for one meant to sit on the screen picture. Then look at each short
-once with `storyboard` and `short` (its id): a tile per scene of its 9:16 frame. Fix a section
-that shows the wrong part, then report.
+## 4. Read (automatic)
 
-## 5. Export (ask)
+- `transcript_get` with the take's voice as `stream`: the take's words with ids, at their
+  times on the short.
+- `transcript_get` for the long video, and `chapters` if it has them, to find where it
+  talks about the same thing. Its times are the video's timeline (what `videoS` means).
 
-Ask "Export the shorts now?" (all, or which). On the go: `export` with `short: "all"` (or a
-short's id). They are written next to the project as "<project> - <title>.mp4", 1080x1920.
-Answer with the paths.
+## 5. Pick the footage (ask)
+
+Split the take into beats: the hook, each claim or step, the verdict or payoff. For each beat
+find the stretch of the long video that **shows** it:
+
+- Search the video's transcript for the same names and things (a place, a mission, a menu, a
+  setting). Where the video talked about it is usually where it was on screen.
+- Look before you pick: `frame_render` at a few seconds of the candidate (or `storyboard`) to
+  check the screen shows the thing, and favour action over menus, loading screens and still
+  desktop.
+- Each beat gets footage as long as its words; 3 to 8 s pieces read well, and a new piece every
+  sentence or two keeps a short moving. Don't reuse the same seconds twice in one short.
+- The hook may stay on the camera alone (the user's face sells the claim): leave it without
+  footage unless the user wants otherwise.
+
+Show the plan as a list: the take's words (a few), the video time picked and what it shows.
+Ask for an OK or changes (automatic: go).
+
+## 6. Place (automatic)
+
+`short_footage` with `op: add` and all the items at once: `fromWord`/`toWord` from the take,
+and `sourceWord` (a word id from the video's transcript where the footage starts; it must be
+one the video keeps) or `videoS`. The footage's game or desktop sound plays ducked under the
+voice; `sound: false` for footage where it distracts. Report the list it answers. Fix a piece
+with `op: remove` (`fromS`/`toS`) and add again.
+
+## 7. Dress (ask)
+
+Graphics go on the take's words, through HyperFrames, as in the clips template: a title card
+on the hook, a label per beat ("MYTH #1", "TRUE"/"FALSE" stamp, a name), in the screen's part
+(`graphic_set` with `short` and `slot: screen`) or over the whole frame. Then `storyboard`
+with `short` to look at the frames, and fix what reads badly.
+
+## 8. Export (ask)
+
+Ask "Export the short now?". On the go: `export` with `short` (its id). It is written next to
+the project as "<project> - <title>.mp4", 1080x1920. Answer with the path.

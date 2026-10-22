@@ -46,17 +46,20 @@ pub static TEMPLATES: [Template; 3] = [
     },
     Template {
         name: "shorts",
-        title: "Shorts from the video",
-        description: "Vertical shorts picked by you from the edited video's transcript, with \
-            the split-screen look and layout sections picked by the app, then export when the \
-            user says.",
+        title: "Shorts from a take",
+        description: "A vertical short the user recorded in a new take (camera and microphone, \
+            made outside the app): the take talks, you put under it the long video's footage and \
+            graphics that show each sentence, then new graphics, then export when the user says. \
+            The app's Shorts tab.",
         text: include_str!("skill/templates/shorts.md"),
     },
     Template {
-        name: "take-shorts",
-        title: "Shorts from a take",
-        description: "A vertical short told again by the user in a new take (camera and             microphone): the take talks, you pick the footage from the long video that shows             each sentence, then graphics, then export when the user says.",
-        text: include_str!("skill/templates/take-shorts.md"),
+        name: "clips",
+        title: "Clips from the video",
+        description: "Vertical clips cut from the edited video: you pick the best moments from \
+            its transcript, the app gives them the split-screen look and layout sections, then \
+            export when the user says. The app's Clips tab.",
+        text: include_str!("skill/templates/clips.md"),
     },
 ];
 

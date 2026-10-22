@@ -269,12 +269,6 @@ recorded outside the app (camera and voice); everything else goes under it. **Cl
 moments out of the long video (what the Shorts tab does today besides takes). Shorts from a take
 come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) after.
 
-<a id="sht-5"></a>
-- **SHT-5 · Split into a Shorts tab and a Clips tab (S/M).** Shorts opens on "new from a take"
-  (import the recording, then transcribe → clean → footage → graphics → export); Clips opens on
-  "find moments in the video". One `Short` model and the same panels (timeline, look, captions,
-  export) behind both: reused, not copied ([QUAL-1](#qual-1)). The agent's templates follow the
-  names (`take-shorts` → `shorts`, today's `shorts` → `clips`).
 <a id="sht-6"></a>
 - **SHT-6 · Everything under a take (M).** Today a take short gets only stretches of the long
   video. Add, each placed at the take's words and reviewable as a batch: **the long video's
@@ -474,6 +468,12 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — <a id="sht-5"></a>**SHT-5** Shorts and Clips are two tabs over one `Short`
+  model and the same panels: **Shorts** lists the shorts made from a take and opens on the take
+  form; **Clips** lists the stretches cut from the video, with New clip and Find with AI. The
+  store knows the tab showing (`kind`), so the picked short, the preview and exports stay in it.
+  The agent's templates follow: `shorts` is the take-first one, `clips` the old `shorts`.
+  Checked in the app: each tab lists only its kind, a clip made in Clips doesn't show in Shorts.
 - **23 Oct 2026** — <a id="gfx-2"></a>**GFX-2** GSAP in graphics: GSAP 3.15.0 (the version
   HyperFrames 0.8.162 links from its CDN) is fetched from npm onto the user's computer once
   (sha256-pinned, at runtime install or when a graphic first loads it; never in the repo or

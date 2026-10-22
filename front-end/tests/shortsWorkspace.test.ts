@@ -5,7 +5,7 @@ import { workspacePanels } from "../src/components/layout/dockLayout";
 import { api } from "../src/lib/ipc";
 import type { OpenedProject, Short } from "../src/lib/types";
 import { useProjectStore } from "../src/stores/projectStore";
-import { changeLayout, removeShort, resetShorts, selectShort, useShortsStore } from "../src/stores/shortsStore";
+import { changeLayout, pickShort, removeShort, resetShorts, selectShort, setShortKind, useShortsStore } from "../src/stores/shortsStore";
 
 const shortOf = (id: string) => ({ id, title: id, sourceStartUs: 0, sourceEndUs: 1, layout: { cameraPct: 35 } }) as unknown as Short;
 const project = (revision: number, shorts: Short[], shortView?: string): OpenedProject => ({
@@ -27,6 +27,24 @@ test("Shorts has its own panels and the editor's workspaces don't show them", ()
   }
 });
 
+test("Clips shows the same panels as Shorts", () => {
+  assert.deepEqual(workspacePanels("clips"), workspacePanels("shorts"));
+});
+
+test("each tab picks only its own kind: Shorts the ones made from a take, Clips the rest", () => {
+  const take = { ...shortOf("t"), take: { camera: "cam" } } as unknown as Short;
+  const clip = shortOf("c");
+  assert.equal(pickShort([clip, take], undefined, "shorts")?.id, "t");
+  assert.equal(pickShort([clip, take], undefined, "clips")?.id, "c");
+  // A pick from the other tab is not shown: the tab's first one is.
+  assert.equal(pickShort([clip, take], "c", "shorts")?.id, "t");
+  assert.equal(pickShort([clip], undefined, "shorts"), undefined);
+  // The tab showing survives forgetting the project's shorts.
+  setShortKind("clips");
+  resetShorts();
+  assert.equal(useShortsStore.getState().kind, "clips");
+});
+
 test("opening another project forgets the short on show", () => {
   useProjectStore.setState({ openedProject: project(1, [shortOf("s1")], "s1"), viewShort: "s1", playbackShortId: "s1" });
   useProjectStore.getState().loadOpenedProject(project(1, []), "C:/other");
@@ -37,6 +55,7 @@ test("opening another project forgets the short on show", () => {
 
 test("a look change lands on the short it was made on, even if another is picked meanwhile", async () => {
   resetShorts();
+  setShortKind("clips");
   useProjectStore.setState({ openedProject: project(1, [shortOf("a"), shortOf("b")]), viewShort: undefined, isPlaying: false });
   const saved: Short[][] = [];
   api.projectShortsSet = async (_handle, revision, shorts) => {
@@ -56,6 +75,7 @@ test("a look change lands on the short it was made on, even if another is picked
 
 test("removing the picked short clears the pick and saves the list without it", async () => {
   resetShorts();
+  setShortKind("clips");
   useProjectStore.setState({ openedProject: project(1, [shortOf("a"), shortOf("b")]), viewShort: undefined });
   let saved: Short[] = [];
   api.projectShortsSet = async (_handle, revision, shorts) => {

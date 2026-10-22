@@ -17,6 +17,7 @@ import { StagePanel } from "./StagePanel";
 import { useShortsWorkspace } from "../shorts/useShortsWorkspace";
 import { useProjectStore } from "../../stores/projectStore";
 import {
+  isShortsWorkspace,
   restoreLayout,
   saveLayout,
   setActiveDockApi,
@@ -96,7 +97,7 @@ const Tab: React.FC<IDockviewPanelHeaderProps> = (props) => <DockviewDefaultTab 
 /// onto its middle to share a tab group; drag the gaps between panels to resize them.
 export const DockWorkspace: React.FC = () => {
   const workspace = useWorkspaceStore((s) => s.workspace);
-  useShortsWorkspace(workspace === "shorts");
+  useShortsWorkspace(isShortsWorkspace(workspace) ? workspace : null);
   const apiRef = useRef<DockviewApi | null>(null);
   // The workspace whose layout is showing, and a pending save of it.
   const shown = useRef(workspace);
@@ -121,6 +122,8 @@ export const DockWorkspace: React.FC = () => {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     apiRef.current?.getPanel("agent")?.api.setTitle(waiting > 0 ? `Agent (${waiting})` : "Agent");
+    // One list panel, named after the tab it is in.
+    apiRef.current?.getPanel("shorts")?.api.setTitle(workspace === "clips" ? "Clips" : "Shorts");
   }, [waiting, ready, workspace]);
 
   const onReady = (event: DockviewReadyEvent) => {

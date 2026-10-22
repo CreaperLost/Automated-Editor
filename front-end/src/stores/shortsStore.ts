@@ -29,6 +29,8 @@ export type ExportRow = { state: "waiting" | "running" | "completed" | "failed";
 interface ShortsState {
   /** The short picked in the list; the first one when none is (or it was removed). */
   selectedId?: string;
+  /** The tab showing: Shorts (made from a take) or Clips (cut from the video). */
+  kind: ShortKind;
   /** A look change shown at once, saved shortly after. */
   draft: ShortLayout | null;
   /** The whole video (new shorts are placed on it); the project store holds the short's view. */
@@ -46,6 +48,7 @@ interface ShortsState {
 
 const INITIAL: ShortsState = {
   selectedId: undefined,
+  kind: "shorts",
   draft: null,
   main: null,
   busy: null,
@@ -70,15 +73,29 @@ function errorMessage(err: unknown): string {
 export const setShortsError = (err: unknown) => set({ error: err === undefined ? undefined : errorMessage(err) });
 
 /** The picked short of `shorts`. */
-export function pickShort(shorts: Short[] | undefined, selectedId: string | undefined): Short | undefined {
-  return shorts?.find((s) => s.id === selectedId) ?? shorts?.[0];
+export function pickShort(shorts: Short[] | undefined, selectedId: string | undefined, kind?: ShortKind): Short | undefined {
+  const list = kind ? shorts?.filter((s) => ofKind(s, kind)) : shorts;
+  return list?.find((s) => s.id === selectedId) ?? list?.[0];
 }
 
-/** The picked short, followed. */
+/** Two tabs over one model: Shorts are made from a take, Clips are cut from the video. */
+export type ShortKind = "shorts" | "clips";
+
+export function ofKind(short: Short, kind: ShortKind): boolean {
+  return kind === "shorts" ? !!short.take : !short.take;
+}
+
+/** The tab showing (the dock sets it when Shorts or Clips opens). */
+export function setShortKind(kind: ShortKind) {
+  if (useShortsStore.getState().kind !== kind) set({ kind });
+}
+
+/** The picked short of the tab showing, followed. */
 export function useSelectedShort(): Short | undefined {
   const shorts = useProjectStore((s) => s.openedProject?.shorts);
   const selectedId = useShortsStore((s) => s.selectedId);
-  return pickShort(shorts, selectedId);
+  const kind = useShortsStore((s) => s.kind);
+  return pickShort(shorts, selectedId, kind);
 }
 
 /** A short's look with the newer settings older shorts lack filled from the defaults. */
@@ -93,7 +110,8 @@ let saveQueue: Promise<void> = Promise.resolve();
 export function resetShorts() {
   window.clearTimeout(saveTimer);
   saveTimer = undefined;
-  set({ ...INITIAL, checked: new Set(), exports: {} });
+  // The tab showing stays.
+  set({ ...INITIAL, kind: useShortsStore.getState().kind, checked: new Set(), exports: {} });
 }
 
 export function selectShort(id: string | undefined) {
@@ -154,7 +172,8 @@ function patchShort(id: string, patch: Partial<Short>) {
 }
 
 function selected(): Short | undefined {
-  return pickShort(useProjectStore.getState().openedProject?.shorts, useShortsStore.getState().selectedId);
+  const { selectedId, kind } = useShortsStore.getState();
+  return pickShort(useProjectStore.getState().openedProject?.shorts, selectedId, kind);
 }
 
 /** The picked short's look, with any change not saved yet. */
@@ -242,7 +261,7 @@ export function newShort() {
   selectShort(id);
   void saveShorts((list) => [
     ...list,
-    { id, title: `Short ${list.length + 1}`, layout: DEFAULT_SHORT_LAYOUT, media: range.media, sourceStartUs: range.startUs, sourceEndUs: range.endUs },
+    { id, title: `Clip ${list.filter((s) => !s.take).length + 1}`, layout: DEFAULT_SHORT_LAYOUT, media: range.media, sourceStartUs: range.startUs, sourceEndUs: range.endUs },
   ]);
 }
 

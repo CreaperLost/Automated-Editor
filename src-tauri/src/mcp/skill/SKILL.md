@@ -12,11 +12,11 @@ it returns: the rules, the steps, what to ask the user, the export steps and the
 answers. `template` without a name lists the kinds:
 
 - `tutorial`: a tutorial, a screen recording, a course lesson.
-- `shorts`: vertical shorts cut from the edited video.
-- `take-shorts`: a short the user recorded a new take for ("make a short from my take", from a
-  camera video, a microphone file or a .aero folder), with footage from the video. Those files
-  go into the open project with `media_import`; never `open` them or `create` a project from
-  them.
+- `shorts`: a short the user recorded a new take for ("make a short from my take", from a
+  camera video, a microphone file or a .aero folder), with the video's footage and graphics
+  under it. Those files go into the open project with `media_import`; never `open` them or
+  `create` a project from them.
+- `clips`: the best moments cut out of the edited video (no new recording).
 
 If none fits, say so and ask which is closest. The user's own instructions win over the
 template. Never export before the user says go.

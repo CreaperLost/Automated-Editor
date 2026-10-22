@@ -11,7 +11,7 @@ import { Button, Menu, MenuButton, type MenuEntry } from "../ui";
 /// and how layouts are picked, and in Shorts the picked short's look too. Applying one is one undo step.
 export const TemplatesMenu: React.FC<{ onError: (message: string) => void }> = ({ onError }) => {
   const project = useProjectStore((s) => s.openedProject);
-  const inShorts = useWorkspaceStore((s) => s.workspace === "shorts");
+  const inShorts = useWorkspaceStore((s) => s.workspace === "shorts" || s.workspace === "clips");
   const short = useSelectedShort();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [naming, setNaming] = useState(false);

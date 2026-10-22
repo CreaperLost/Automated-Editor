@@ -28,6 +28,7 @@ import {
   LAYOUT_PRESETS,
   WORKSPACES,
   applyPresetToWorkspace,
+  isShortsWorkspace,
   resetWorkspaceLayout,
   type LayoutPreset,
 } from "../layout/dockLayout";
@@ -119,7 +120,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     { kind: "separator" },
     { kind: "heading", label: `Layout · ${WORKSPACES[workspace].label}` },
     // Shorts has one arrangement of its own: only Reset applies there.
-    ...(workspace === "shorts" ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
+    ...(isShortsWorkspace(workspace) ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
       (preset): MenuEntry => ({
         label: LAYOUT_PRESETS[preset].label,
         icon: LayoutGrid,
@@ -190,7 +191,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             items={[
               { value: "edit", label: "Edit", title: "Edit the video on the timeline" },
               { value: "cleanup", label: "Cleanup", title: "Clean up: jump cuts, mouth noises and the transcript beside the preview and the timeline" },
-              { value: "shorts", label: "Shorts", title: "Shorts: vertical clips from this video, each with its own timeline and look" },
+              { value: "shorts", label: "Shorts", title: "Shorts from a take: your camera and voice, with footage and graphics from this video under it" },
+              { value: "clips", label: "Clips", title: "Clips: the best moments cut out of this video, each with its own timeline and look" },
             ]}
           />
         )}
