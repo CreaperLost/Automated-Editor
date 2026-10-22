@@ -4,6 +4,7 @@ A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, the w
 where they help, no captions, chapters at the end. Run the steps in order, with one line to the
 user after each action.
 
+<!-- steps -->
 Two ways to run it:
 
 - **Step by step (the default).** Before each cleanup pass, show its dry run and get the
@@ -23,6 +24,13 @@ answer, else fast):
 - **Thorough.** Also reads the whole kept transcript for those, proposes cuts for them, and
   looks at the joins (step 3b). Takes minutes and more of your tokens; worth it for a video
   that matters. Ask: "Review: fast / thorough (reads every word and checks the joins, slower)".
+<!-- /steps -->
+<!-- auto -->
+You are running it automatically: make each choice yourself (the saved answers, else the
+defaults below), report one line per pass, stop and ask when a pass says "Not applied" or a
+result looks wrong (step 4). The review is fast unless the saved answers say thorough. Export
+still waits for the user's go.
+<!-- /auto -->
 
 ## 1. Project (automatic)
 
@@ -39,17 +47,20 @@ answer, else fast):
   no key or credits. Its answer says what it heard; the later passes follow it. Use
   `provider: parakeet` (on this computer, free, English only) only when the user asks for a
   local or free transcription of an English video.
+<!-- steps -->
 - With these questions, ask the review depth: fast (default) or thorough (see the top).
 - Two or more microphones: ask which to transcribe: the presenter's (default), or all of
   them (needed to cut gaps between words across all of them).
+<!-- /steps -->
 - `transcribe` (with `stream` for each microphone). It can take a few minutes, so tell the
   user, and pass on the language it heard.
 
 ## 3. Cleanup, one pass at a time
 
 The passes below, in this order: each changes what the next finds (muted noises count as
-silence; cut silence changes the gaps), so each is measured right before it runs. For every
-pass:
+silence; cut silence changes the gaps), so each is measured right before it runs.
+<!-- steps -->
+For every pass:
 
 1. Dry run: the action with `apply: false` and the default (or saved) settings.
 2. Ask one question with its numbers and choices, default first, for example: "Silence
@@ -57,6 +68,7 @@ pass:
    Always offer "do the rest automatically". If the user picks other settings, dry-run those
    and ask again in one line, unless they said to just do it.
 3. Run the pass with the chosen settings, then one line: what it did, length before → after.
+<!-- /steps -->
 
 Automatic: step 3 only, with the saved answers or the defaults and `guard: true` on
 `mouth_noises`, `silence` and `fillers` (the app checks section 4's first and last rules and
@@ -107,6 +119,7 @@ The passes:
    "shorter" lowers them; how far in is `clickScale` (1.6 default). Then `zooms` with the
    same `settings`. A cut never makes a zoom jump: its glide plays whole on the edited video.
 
+<!-- thorough -->
 ### 3b. Thorough review (only when the user chose thorough)
 
 After the passes, on the cut edit:
@@ -126,7 +139,8 @@ After the passes, on the cut edit:
    left at the join, a jump in loudness. You can see the waveform; you cannot hear it.
 4. **Make a listening list** for the user: the joins you looked at that might sound wrong,
    each with its time and why, at most ten, worst first.
-
+<!-- /thorough -->
+<!-- steps -->
 After the passes, save the choices with `template_save` (`name: tutorial`), in this shape:
 
 ```json
@@ -142,6 +156,7 @@ After the passes, save the choices with `template_save` (`name: tutorial`), in t
   "export": { "resolution": "1080p", "quality": "high" }
 }
 ```
+<!-- /steps -->
 
 ## 4. When a result looks wrong (also in automatic)
 
@@ -214,4 +229,5 @@ history.
 
 ## 9. Export (ask)
 
-Ask before exporting, then follow the export steps below.
+Ask before exporting; on the go, `template` with this `name` and `part: "export"` gives the
+export steps.

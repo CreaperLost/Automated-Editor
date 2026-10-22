@@ -548,12 +548,16 @@ pub(crate) fn server_info() -> rmcp::model::ServerConfig {
     .with_instructions(INSTRUCTIONS)
 }
 
-/// Every tool as `tools/list` lists it.
+/// Every tool as `tools/list` lists it: all but those behind `more`.
 pub(crate) fn tool_list() -> Vec<rmcp::model::Tool> {
-    tools::all().iter().map(tool_entry).collect()
+    tools::all()
+        .iter()
+        .filter(|tool| !tools::MORE.contains(&tool.name))
+        .map(tool_entry)
+        .collect()
 }
 
-fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
+pub(crate) fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
     let mut schema = match (tool.schema)() {
         serde_json::Value::Object(map) => map,
         _ => Default::default(),
@@ -1329,8 +1333,50 @@ mod tests {
     }
 
     #[test]
+    fn rarely_needed_tools_are_reached_through_more() {
+        let listed: Vec<String> = tool_list().iter().map(|t| t.name.to_string()).collect();
+        let more = tools::find("more").unwrap();
+        for name in tools::MORE {
+            assert!(tools::find(name).is_some(), "{name} is a tool");
+            assert!(!listed.contains(&name.to_string()), "{name} is listed");
+            assert!(
+                more.description.contains(name),
+                "`more` doesn't name {name}"
+            );
+        }
+        assert!(listed.contains(&"more".to_string()));
+        let host = tests_support::BareHost::default();
+        let mut ctx = tools::Ctx::new(&host, "agent", false);
+        let mut run = |args: serde_json::Value| {
+            tools::call(more, &mut ctx, args).map(|out| match &out[0] {
+                tools::Output::Text(text) => text.clone(),
+                tools::Output::Png(_) => String::new(),
+            })
+        };
+        // Without `args`: what the tool does and takes.
+        let help = run(serde_json::json!({ "tool": "template_save" })).unwrap();
+        assert!(
+            help.starts_with("template_save: Saves") && help.contains("\"answers\""),
+            "{help}"
+        );
+        // With them: it runs as if called directly.
+        let saved = run(serde_json::json!({ "tool": "template_save",
+            "args": { "name": "tutorial", "answers": { "silence": "gentle" } } }))
+        .unwrap();
+        assert!(
+            saved.starts_with("Saved the answers for tutorial"),
+            "{saved}"
+        );
+        // Only the tools behind it.
+        assert!(run(serde_json::json!({ "tool": "status", "args": {} }))
+            .unwrap_err()
+            .contains("they are: redo"));
+    }
+
+    #[test]
     fn the_tool_list_stays_small() {
-        // Agents read it on every connection: 84,414 characters before 23 Oct 2026, 72,722 after.
+        // Agents read it on every connection: 84,414 characters before 23 Oct 2026, 72,722
+        // after, 53,828 with the rarely needed tools behind `more`.
         let list = tool_list();
         if std::env::var("TOOL_SIZES").is_ok() {
             for tool in &list {
@@ -1342,6 +1388,6 @@ mod tests {
             }
         }
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 75_000, "the tool list grew to {size} characters");
+        assert!(size < 60_000, "the tool list grew to {size} characters");
     }
 }

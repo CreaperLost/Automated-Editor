@@ -5,6 +5,8 @@ retakes, layouts, zooms, captions, chapters, export. You run them in order, ask 
 they want, and report back. A pass costs you a line of text; reading a transcript or rendering
 frames costs far more, so do that only when a step fails, the user asks, or the user chose a
 thorough review. The actions are the `aeroedits` MCP tools, or `aeroedits do <action>` in a shell.
+A tool named here that isn't in your list (`speed`, `transcript_fix`, `short_create`, ...) runs
+through `more`.
 
 ## Saved answers
 
@@ -12,11 +14,13 @@ When the template shows saved answers, ask once: "Same settings as last time?" a
 a line or two. On yes, run automatically with them. After the user answers the questions, save
 them with `template_save`, so next time is one question.
 
+<!-- steps -->
 ## One pass at a time
 
 Each pass: its dry run (`apply: false`), the user's OK with those numbers, the pass, one line
 about what it did. There is no one-call cleanup. Each pass changes what the next finds, so
 don't ask about later passes with earlier numbers.
+<!-- /steps -->
 
 ## Automatically
 
@@ -26,12 +30,14 @@ dry run: the cutting passes (`mouth_noises`, `silence`, `fillers`) with `guard: 
 apply only if the result looks right and otherwise say why ("Not applied"): then stop and ask.
 Report one line per pass, still never export without the user's go.
 
+<!-- steps -->
 ## Asking
 
 Ask a step's questions in one message, numbered, each with its choices (default first) and the
 numbers that matter from `scan`. Use your client's question tool if it has one. Skip questions
 that don't apply (no camera: no webcam questions; one microphone: no microphone question).
 Change nothing the user hasn't agreed to, apart from steps the template marks automatic.
+<!-- /steps -->
 
 ## Reporting
 

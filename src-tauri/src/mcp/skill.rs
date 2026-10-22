@@ -129,10 +129,24 @@ fn save_answers(config: &Path, name: &str, answers: Value) -> Result<(), String>
 }
 
 /// Everything an agent needs for an edit of this kind: the rules, the template, the export
-/// steps and the user's saved answers.
+/// steps and the user's saved answers (a prompt's whole guide, for a run step by step).
 pub fn guide(config: &Path, name: &str) -> Result<String, String> {
+    compose(config, name, false, true)
+}
+
+/// The guide `template` gives: for an automatic run (`auto`) without what only a run step by
+/// step needs (dry runs to ask about, the questions, saving answers) nor the thorough review
+/// unless the saved answers chose it; the export steps only with `export` (asked for at the
+/// end). Agents pay for every word of it, on every edit.
+fn compose(config: &Path, name: &str, auto: bool, export: bool) -> Result<String, String> {
     let template = find(name)?;
-    let saved = match load_answers(config, template.name) {
+    let loaded = load_answers(config, template.name);
+    let thorough = loaded
+        .as_ref()
+        .and_then(|s| s.answers.get("review"))
+        .and_then(Value::as_str)
+        == Some("thorough");
+    let saved = match loaded {
         Some(saved) => format!(
             "## Saved answers ({}, saved {})\n\nAsk once whether to use them again.\n\n```json\n{}\n```",
             template.name,
@@ -145,14 +159,62 @@ pub fn guide(config: &Path, name: &str) -> Result<String, String> {
             template.name
         ),
     };
+    let export = if export {
+        format!("{}\n\n---\n\n", EXPORT.trim())
+    } else {
+        String::new()
+    };
     // A checkout with CRLF line ends embeds them.
-    Ok(format!(
-        "{}\n\n---\n\n{}\n\n---\n\n{}\n\n---\n\n{saved}",
+    let whole = format!(
+        "{}\n\n---\n\n{}\n\n---\n\n{export}{saved}",
         RULES.trim(),
         template.text.trim(),
-        EXPORT.trim()
     )
-    .replace("\r\n", "\n"))
+    .replace("\r\n", "\n");
+    Ok(for_mode(&whole, auto, thorough))
+}
+
+/// `text` without the blocks this run doesn't need: `<!-- steps -->` (a run step by step only),
+/// `<!-- auto -->` (an automatic run only), `<!-- thorough -->` (a thorough review only, kept
+/// step by step since the user is asked). The marker lines themselves never reach agents.
+fn for_mode(text: &str, auto: bool, thorough: bool) -> String {
+    let mut out = Vec::new();
+    let mut dropping: Option<&str> = None;
+    for line in text.lines() {
+        let marker = line.trim();
+        if let Some(kind) = marker
+            .strip_prefix("<!-- /")
+            .and_then(|m| m.strip_suffix(" -->"))
+        {
+            if dropping == Some(kind) {
+                dropping = None;
+            }
+            continue;
+        }
+        if let Some(kind) = marker
+            .strip_prefix("<!-- ")
+            .and_then(|m| m.strip_suffix(" -->"))
+            .filter(|k| matches!(*k, "steps" | "auto" | "thorough"))
+        {
+            let drop = match kind {
+                "steps" => auto,
+                "auto" => !auto,
+                _ => auto && !thorough,
+            };
+            if drop && dropping.is_none() {
+                dropping = Some(kind);
+            }
+            continue;
+        }
+        if dropping.is_none() {
+            out.push(line);
+        }
+    }
+    let mut text = out.join("\n");
+    while text.contains("\n\n\n") {
+        text = text.replace("\n\n\n", "\n\n");
+    }
+    text
 }
 
 // ---------------------------------------------------------------------------------------
@@ -163,8 +225,9 @@ pub static TOOLS: [ToolDef; 2] = [
         name: "template",
         description:
             "How to run a whole edit: the plan for a kind of video (the steps, what to ask \
-            the user, the defaults), the general rules, the export steps and the user's saved \
-            answers. Call it first when the user asks for an edit. Without `name`, the list.",
+            the user, the defaults), the general rules and the user's saved answers. Call it \
+            first when the user asks for an edit, with `auto: true` when they want it done \
+            automatically; `part: export` gives the export steps. Without `name`, the list.",
         schema: schema::<TemplateArgs>,
         read_only: true,
         run: template,
@@ -185,6 +248,12 @@ pub struct TemplateArgs {
     /// The template, such as `tutorial`. Without it, the list of templates.
     #[serde(default)]
     pub name: Option<String>,
+    /// The user wants it done automatically: the guide without the questions.
+    #[serde(default)]
+    pub auto: bool,
+    /// `export`: only the export steps.
+    #[serde(default)]
+    pub part: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -198,7 +267,14 @@ pub struct SaveArgs {
 fn template(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: TemplateArgs = params(args)?;
     match args.name.filter(|n| !n.trim().is_empty()) {
-        Some(name) => text(guide(&ctx.host.config_dir(), &name)?),
+        Some(name) => match args.part.as_deref().map(str::trim) {
+            None | Some("") => text(compose(&ctx.host.config_dir(), &name, args.auto, false)?),
+            Some("export") => {
+                find(&name)?;
+                text(EXPORT.trim().replace("\r\n", "\n"))
+            }
+            Some(other) => Err(format!("No part {other}: `part` is `export`")),
+        },
         None => {
             let mut lines = vec!["Templates (`template` with a name gives one):".to_string()];
             lines.extend(
@@ -499,6 +575,46 @@ mod tests {
         );
         let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
         assert!(guide.contains("None for tutorial yet"), "{guide}");
+        // Step by step: the questions and the thorough review, no export steps yet.
+        assert!(
+            guide.contains("## Asking") && guide.contains("### 3b."),
+            "{guide}"
+        );
+        assert!(
+            !guide.contains("# Export") && !guide.contains("<!--"),
+            "{guide}"
+        );
+        assert!(
+            !guide.contains("You are running it automatically"),
+            "{guide}"
+        );
+        // Automatic: none of the asking, nor the thorough review it didn't choose.
+        let auto = call(
+            "template",
+            serde_json::json!({ "name": "tutorial", "auto": true }),
+        )
+        .unwrap();
+        assert!(auto.contains("You are running it automatically"), "{auto}");
+        assert!(
+            !auto.contains("## Asking") && !auto.contains("### 3b."),
+            "{auto}"
+        );
+        assert!(
+            !auto.contains("1. Dry run:") && !auto.contains("<!--"),
+            "{auto}"
+        );
+        assert!(
+            auto.len() * 5 < guide.len() * 4,
+            "{} vs {}",
+            auto.len(),
+            guide.len()
+        );
+        let export = call(
+            "template",
+            serde_json::json!({ "name": "tutorial", "part": "export" }),
+        )
+        .unwrap();
+        assert!(export.starts_with("# Export"), "{export}");
         let saved = call(
             "template_save",
             serde_json::json!({ "name": "tutorial", "answers": { "silence": "gentle", "transcriber": "parakeet" } }),

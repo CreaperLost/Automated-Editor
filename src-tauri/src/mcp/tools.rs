@@ -140,6 +140,74 @@ pub fn find(name: &str) -> Option<&'static ToolDef> {
     all().iter().find(|tool| tool.name == name)
 }
 
+/// Tools an edit rarely needs, left out of the list agents are sent on every connection (each
+/// one's schema is paid for on every edit); `more` names them, gives their parameters and runs
+/// them. The CLI and direct calls reach them as before. Name each in `more`'s description.
+pub const MORE: &[&str] = &[
+    "redo",
+    "playhead_get",
+    "layout_get",
+    "telemetry_get",
+    "speed",
+    "transcript_fix",
+    "propose_edit",
+    "proposal_withdraw",
+    "short_create",
+    "template_save",
+    "graphics_install",
+    "brand_pick",
+    "brand_kit_set",
+    "graphic_write_file",
+    "graphic_templatize",
+    "graphic_check",
+    "library_save",
+    "library_remove",
+];
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MoreArgs {
+    /// One of the tools named in the description.
+    pub tool: String,
+    /// Its arguments, as if called directly. Without them: its description and parameters.
+    #[serde(default)]
+    pub args: Option<Value>,
+}
+
+/// `more`: a tool behind it, run as if called directly (a `project` beside `tool` goes to it),
+/// or, without `args`, what it does and takes.
+fn more(ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output>, String> {
+    let project = args.as_object_mut().and_then(|a| a.remove("project"));
+    let args: MoreArgs = params(args)?;
+    let name = args.tool.trim();
+    let tool = MORE
+        .iter()
+        .find(|n| **n == name)
+        .and_then(|n| find(n))
+        .ok_or_else(|| {
+            format!(
+                "No tool {name} behind `more`; they are: {}",
+                MORE.join(", ")
+            )
+        })?;
+    let Some(mut inner) = args.args else {
+        let entry = super::tool_entry(tool);
+        let schema = serde_json::to_string(&entry.input_schema).unwrap_or_default();
+        return text(format!(
+            "{}: {}\nArguments (JSON schema): {schema}\nCall `more` with `tool: \"{}\"` and \
+             `args`.",
+            tool.name, tool.description, tool.name
+        ));
+    };
+    if inner.is_null() {
+        inner = json!({});
+    }
+    if let (Some(project), Some(map)) = (project, inner.as_object_mut()) {
+        map.entry("project").or_insert(project);
+    }
+    call(tool, ctx, inner)
+}
+
 /// Tools whose change rests on what the agent read before (a revision, a batch id): they must
 /// say which project that was, so a project switch can't send them to another one.
 pub const NEEDS_PROJECT: &[&str] = &["propose_cuts", "propose_edit", "undo_batch"];
@@ -155,6 +223,9 @@ pub fn takes_project(tool: &ToolDef) -> bool {
 /// [`NEEDS_PROJECT`] refuse to run without one. Proposals check the id again under the
 /// command lock, as the UI's commands do.
 pub fn call(tool: &ToolDef, ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output>, String> {
+    if tool.name == "more" {
+        return more(ctx, args);
+    }
     let project = match args.as_object_mut().and_then(|args| args.remove("project")) {
         None | Some(Value::Null) => None,
         Some(Value::String(id)) => Some(id),
@@ -182,7 +253,25 @@ pub fn call(tool: &ToolDef, ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output
     (tool.run)(ctx, args)
 }
 
-static TOOLS: [ToolDef; 14] = [
+static TOOLS: [ToolDef; 15] = [
+    ToolDef {
+        name: "more",
+        description: "Tools an edit rarely needs, left out of this list to save tokens: `tool` \
+            alone gives one's description and arguments; with `args` it runs, as if called \
+            directly. redo (the undo taken back); playhead_get (where the user's playhead is); \
+            layout_get (a layout's details); telemetry_get (mouse and keys at a time); speed \
+            (play a stretch faster or slower, only when asked); transcript_fix (a misheard \
+            word); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
+            (take back your batch); short_create (a clip from the video's words); \
+            template_save (keep the user's answers); graphics_install (the graphics renderer, \
+            ask first); brand_pick (the project's brand kit); brand_kit_set (make or change a \
+            kit); graphic_write_file, graphic_templatize, graphic_check, library_save, \
+            library_remove (writing a graphic of your own and keeping it in the library).",
+        schema: schema::<MoreArgs>,
+        read_only: false,
+        // Runs through `call`, which hands the call to the tool named.
+        run: |_, _| Err("`more` runs through `tools::call`".into()),
+    },
     ToolDef {
         name: "project_info",
         description: "The open project: name, revision, length, canvas size, tracks (V1 is the \
@@ -957,9 +1046,8 @@ mod tests {
                 // These work without a project open (and installing would download).
                 "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
                 "open" | "create" | "export_status" | "template" | "template_save" | "graphics"
-                | "graphics_install" | "brand_kits" | "brand_kit_set" | "library_remove" => {
-                    continue
-                }
+                | "graphics_install" | "brand_kits" | "brand_kit_set" | "library_remove"
+                | "more" => continue,
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();
