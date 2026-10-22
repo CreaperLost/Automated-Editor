@@ -30,6 +30,7 @@ pub mod telemetry;
 pub mod templates;
 pub mod timeline;
 pub mod transcript;
+pub mod under_take;
 pub mod window_crop;
 pub mod zoom;
 

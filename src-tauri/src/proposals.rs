@@ -76,6 +76,13 @@ pub enum Change {
     },
     /// Timeline edits applied in order, all or nothing.
     Edits { edits: Vec<SequenceEdit> },
+    /// Footage, graphics and files put under take short `short`, all or nothing. It holds
+    /// while the short and the video's timeline are as they were (`stamp`).
+    Under {
+        short: String,
+        stamp: String,
+        items: Vec<crate::under_take::Under>,
+    },
     /// One of the app's own actions the agent ran (jump cuts, fillers, zooms, ...), applied
     /// at once like a click; kept so the user sees it and can undo it.
     Action { action: String },
@@ -706,6 +713,39 @@ pub fn propose_edits(
     })
 }
 
+/// Proposes putting `items` under take short `short`, checked on a copy of the edit.
+pub fn propose_under(
+    reader: &ProjectReader,
+    proposals: &mut Proposals,
+    agent: &str,
+    short: &str,
+    items: Vec<crate::under_take::Under>,
+    reason: &str,
+) -> Result<String, String> {
+    if items.len() > MAX_EDITS {
+        return Err(format!("At most {MAX_EDITS} items in one batch"));
+    }
+    let document = reader.document();
+    let summary = crate::under_take::check(reader.root(), document, short, &items)?;
+    proposals.add(Batch {
+        id: String::new(),
+        agent: agent.to_string(),
+        reason: check_reason(reason)?,
+        created_at: now(),
+        base_revision: document.revision,
+        change: Change::Under {
+            short: short.to_string(),
+            stamp: crate::under_take::stamp(document, short),
+            items,
+        },
+        status: Status::Pending,
+        decided_at: None,
+        auto: false,
+        applied_revision: None,
+        summary,
+    })
+}
+
 // ---------------------------------------------------------------------------------------
 // Deciding.
 
@@ -774,6 +814,29 @@ pub fn accept(
                 Vec::new(),
             )
         }
+        Change::Under {
+            short,
+            stamp,
+            items,
+        } => {
+            if batch.status != Status::Pending {
+                return Err(format!("{id} is already decided"));
+            }
+            if crate::under_take::stamp(document, short) != *stamp {
+                return Err(format!(
+                    "{id} was made before {short} or the video changed. Ask the agent to                      propose it again."
+                ));
+            }
+            let root = reader.root().to_path_buf();
+            let done = crate::under_take::put(&root, &root, document, short, items)?;
+            match reader.commit_document(expected_revision, done.document.clone()) {
+                Ok(project) => (Some(project), Vec::new()),
+                Err(error) => {
+                    done.discard();
+                    return Err(error);
+                }
+            }
+        }
         Change::Cuts {
             stream,
             words,
@@ -833,7 +896,7 @@ pub fn accept(
     }
     match &mut batch.change {
         Change::Action { .. } => {}
-        Change::Edits { .. } => {
+        Change::Edits { .. } | Change::Under { .. } => {
             batch.status = Status::Accepted;
             batch.decided_at = Some(now());
         }
@@ -867,7 +930,7 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } => match (batch.status, rejected) {
+        Change::Edits { .. } | Change::Under { .. } => match (batch.status, rejected) {
             (Status::Pending, true) => {
                 batch.status = Status::Rejected;
                 batch.decided_at = Some(now());
@@ -950,7 +1013,7 @@ pub fn undo(
     batch.auto = false;
     match &mut batch.change {
         Change::Action { .. } => batch.status = Status::Undone,
-        Change::Edits { .. } => batch.status = Status::Pending,
+        Change::Edits { .. } | Change::Under { .. } => batch.status = Status::Pending,
         Change::Cuts { items, .. } => {
             for item in items.iter_mut() {
                 if item.state == ItemState::Accepted && item.revision == Some(applied) {
@@ -1004,7 +1067,8 @@ pub struct BatchView {
     pub reason: String,
     pub created_at: String,
     pub base_revision: u64,
-    /// `cuts`, `edits`, or `action` (one of the app's actions the agent ran).
+    /// `cuts`, `edits`, `under` (things put under a take short), or `action` (one of the
+    /// app's actions the agent ran).
     pub kind: &'static str,
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1019,6 +1083,9 @@ pub struct BatchView {
     /// For an action the agent ran: which (`silence`, `fillers`, ...).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// For `under`: the take short it goes under.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short: Option<String>,
     pub items: Vec<ItemView>,
     /// Made for an older revision and can no longer be accepted as it is.
     pub stale: bool,
@@ -1064,6 +1131,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                 stream: None,
                 edits: None,
                 action: None,
+                short: None,
                 items: Vec::new(),
                 stale: false,
                 can_undo: batch.applied_revision == Some(document.revision),
@@ -1077,6 +1145,12 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                     out.edits = Some(edits.clone());
                     out.stale =
                         batch.status == Status::Pending && batch.base_revision != document.revision;
+                }
+                Change::Under { short, stamp, .. } => {
+                    out.kind = "under";
+                    out.short = Some(short.clone());
+                    out.stale = batch.status == Status::Pending
+                        && crate::under_take::stamp(document, short) != *stamp;
                 }
                 Change::Cuts {
                     stream,

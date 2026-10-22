@@ -1445,10 +1445,13 @@ export interface ProposalBatch {
   reason: string;
   createdAt: string;
   baseRevision: number;
-  /** `action`: one of the app's own actions the agent ran, applied at once. */
-  kind: "cuts" | "edits" | "action";
+  /** `action`: one of the app's own actions the agent ran, applied at once; `under`: footage,
+   *  graphics and files under a take short. */
+  kind: "cuts" | "edits" | "under" | "action";
   /** For an action: which (`silence`, `fillers`, ...). */
   action?: string;
+  /** For `under`: the take short it goes under. */
+  short?: string;
   status: ProposalStatus;
   decidedAt?: string;
   /** Accepted by autopilot. */

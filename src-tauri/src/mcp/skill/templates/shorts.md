@@ -73,24 +73,27 @@ find the stretch of the long video that **shows** it:
 Show the plan as a list: the take's words (a few), the video time picked and what it shows.
 Ask for an OK or changes (automatic: go).
 
-## 6. Place (automatic)
+## 6. Dress (ask)
 
-`short_footage` with `op: add` and all the items at once: `fromWord`/`toWord` from the take,
-and `sourceWord` (a word id from the video's transcript where the footage starts; it must be
-one the video keeps) or `videoS`. The footage's game or desktop sound plays ducked under the
-voice; `sound: false` for footage where it distracts. Report the list it answers. Fix a piece
-with `op: remove` (`fromS`/`toS`) and add again.
+Pick graphics for the take's words too. First the **long video's own graphics** (`graphics`
+lists them with where they play): where a beat retells a part of the video that had a graphic,
+reuse it (`graphic`, its id: a copy made for 9:16, its text changeable without touching the
+video's). Then new ones (`template` or `library`): a title card on the hook, a label per beat
+("MYTH #1", "TRUE"/"FALSE" stamp, a name), news or a new feature the video lacks. Add them to
+the plan; ask for an OK (automatic: go).
 
-## 7. Dress (ask)
+## 7. Propose (automatic)
 
-Graphics go on the take's words: `graphic_add` with `short` and `atWord` (a word of the
-take). First the **long video's own graphics** (`graphics` lists them with where they play):
-where a beat retells a part of the video that had a graphic, reuse it with `graphic` (its id;
-a copy made for 9:16, its text changeable without touching the video's). Then new ones
-(`template` or `library`): a title card on the hook, a label per beat ("MYTH #1",
-"TRUE"/"FALSE" stamp, a name), news or a new feature the video lacks. Each plays over the whole
-frame, or in the screen's part (`graphic_set` with `short` and `slot: screen`). Then `storyboard`
-with `short` to look at the frames, and fix what reads badly.
+One `short_footage` call with `op: add`, a `reason`, and every item at once; the user accepts
+the batch in the Agent panel (under autopilot it lands at once). Footage: `fromWord`/`toWord`
+from the take, and `sourceWord` (a word id from the video's transcript where the footage
+starts; it must be one the video keeps) or `videoS`; its game or desktop sound plays ducked
+under the voice, `sound: false` where it distracts. Graphics: `fromWord` (and `toWord`, else
+its own length) with `template`, `library` or `graphic`, plus `name` and `variables`. Report
+the summary it answers and wait for the user's decision (`proposals_list`). Once accepted:
+each graphic plays over the whole frame, or in the screen's part (`graphic_set` with `short`
+and `slot: screen`); `storyboard` with `short` to look at the frames, and fix what reads badly
+(`op: remove` with `fromS`/`toS` takes footage off).
 
 ## 8. Export (ask)
 

@@ -99,28 +99,7 @@ pub fn project_graphic_from_library_impl(
     )
 }
 
-/// Where a graphic for a short comes from (`{"kind": "template" | "library" | "video", ...}` from
-/// the Shorts tab).
-#[derive(Clone, Debug, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ShortGraphicFrom {
-    /// A bundled template, with a name and variable values.
-    Template {
-        template: String,
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        variables: Map<String, Value>,
-    },
-    /// A copy of a library item.
-    Library { id: String },
-    /// A copy of one of the video's graphics (its look and text), made for the short.
-    Video { graphic: String },
-}
+pub use crate::under_take::GraphicFrom as ShortGraphicFrom;
 
 /// Makes a graphic and places it on take short `short_id`'s own timeline at `at_us` (on the
 /// short), one undo step. A graphic of the video is copied, so changing it in the short leaves
@@ -139,61 +118,18 @@ pub fn project_short_graphic_add_impl(
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
     let root = reader.root().to_path_buf();
-    let (asset, length) = match &from {
-        ShortGraphicFrom::Template {
-            template,
-            name,
-            variables,
-        } => (
-            graphics::create(&root, template, name.as_deref(), variables)?,
-            length_us.unwrap_or(templates::find(template)?.length_us),
-        ),
-        ShortGraphicFrom::Library { id } => {
-            let lib = library::dir();
-            let item = library::view(&lib, id)?;
-            let folder = library::find(&lib, id)?;
-            (
-                graphics::create_from_folder(&root, &folder, None)?,
-                length_us.unwrap_or(item.item.length_us),
-            )
-        }
-        ShortGraphicFrom::Video { graphic } => {
-            let source = graphic_asset(reader, graphic)?;
-            // As long as it plays on the video, by default.
-            let played = reader
-                .document()
-                .sequence
-                .clips()
-                .find(|(_, c)| c.asset == source.id)
-                .map(|(_, c)| c.duration_us);
-            (
-                graphics::create_from_folder(
-                    &root,
-                    &graphics::folder(&root, &source.id),
-                    Some(&source.name),
-                )?,
-                length_us.or(played).unwrap_or(4_000_000),
-            )
-        }
+    let item = crate::under_take::Under::Graphic {
+        from,
+        at_us,
+        length_us,
+        name: None,
+        variables: Map::new(),
     };
-    let dir = graphics::folder(&root, &asset.id);
-    let placed = (|| {
-        let mut next = reader.document().clone();
-        next.assets.push(asset.clone());
-        let mut shorts = next.shorts.clone();
-        let short = shorts
-            .iter_mut()
-            .find(|s| s.id == short_id)
-            .ok_or("That short no longer exists")?;
-        let clip_id = crate::take_short::place_graphic(&next, short, &asset.id, at_us, length)?;
-        next.shorts = shorts;
-        let project = reader.commit_document(expected_revision, next)?;
-        Ok::<_, String>((project, clip_id))
-    })();
-    let (project, clip_id) = match placed {
-        Ok(done) => done,
+    let done = crate::under_take::put(&root, &root, reader.document(), &short_id, &[item])?;
+    let project = match reader.commit_document(expected_revision, done.document.clone()) {
+        Ok(project) => project,
         Err(error) => {
-            let _ = std::fs::remove_dir_all(&dir);
+            done.discard();
             return Err(error);
         }
     };
@@ -201,9 +137,10 @@ pub fn project_short_graphic_add_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
+    let (asset_id, clip_id) = done.graphics[0].clone();
     Ok(GraphicCreated {
         project,
-        asset_id: asset.id,
+        asset_id,
         clip_id,
     })
 }
@@ -698,7 +635,7 @@ pub(crate) mod tests {
         ));
         assert!(matches!(
             from(r#"{"kind":"template","template":"key-point"}"#),
-            ShortGraphicFrom::Template { template, name: None, variables } if template == "key-point" && variables.is_empty()
+            ShortGraphicFrom::Template { template } if template == "key-point"
         ));
     }
 

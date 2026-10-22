@@ -71,7 +71,7 @@ pub struct UndoParams {
 
 /// Stores a batch with `propose`, accepts it at once under autopilot, and tells the agent
 /// what happened.
-fn propose(
+pub(crate) fn propose(
     ctx: &Ctx,
     propose: impl FnOnce(&ProjectReader, &mut Proposals) -> Result<String, String>,
 ) -> Result<Vec<Output>, String> {

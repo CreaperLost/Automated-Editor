@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from "react";
-import { Bot, Check, Loader2, Play, Scissors, Settings2, Undo2, X } from "lucide-react";
+import { Bot, Check, Clapperboard, Loader2, Play, Scissors, Settings2, Undo2, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import type { ProposalBatch, ProposalItem, ProposalOutcome } from "../../lib/types";
 import { useAgentStore } from "../../stores/agentStore";
 import { useProjectStore } from "../../stores/projectStore";
+import { selectShort } from "../../stores/shortsStore";
+import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { formatTimeUs } from "../../hooks/useTimeline";
 import { Badge, Button, IconButton, Notice, PanelHeader, Segmented, Switch, cn, type Tone } from "../ui";
 
@@ -46,6 +48,7 @@ const ACTION_LABEL: Record<string, string> = {
 function kindLabel(batch: ProposalBatch) {
   if (batch.kind === "cuts") return "Cuts";
   if (batch.kind === "edits") return "Edits";
+  if (batch.kind === "under") return "Under a take";
   return ACTION_LABEL[batch.action ?? ""] ?? batch.action ?? "Action";
 }
 
@@ -163,8 +166,10 @@ const BatchCard: React.FC<{
         )}
         {batch.stale && waiting && (
           <p className="text-meta text-danger-fg">
-            The edit changed after revision {batch.baseRevision}, so this can no longer be applied as proposed. Ask the agent to
-            propose it again.
+            {batch.kind === "under"
+              ? "The short or the video changed since, so this can no longer be applied as proposed."
+              : `The edit changed after revision ${batch.baseRevision}, so this can no longer be applied as proposed.`}{" "}
+            Ask the agent to propose it again.
           </p>
         )}
       </div>
@@ -209,6 +214,21 @@ const BatchCard: React.FC<{
           {waiting && (
             <Button size="sm" variant="ghost" icon={X} disabled={busy} onClick={() => onReject(batch)}>
               Reject{batch.kind === "cuts" && batch.status === "pending" && chosen.length < choosable.length ? " all" : ""}
+            </Button>
+          )}
+          {batch.short && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Clapperboard}
+              className={batch.canUndo ? undefined : "ml-auto"}
+              title="Open the short in the Shorts tab"
+              onClick={() => {
+                useWorkspaceStore.getState().setWorkspace("shorts");
+                selectShort(batch.short);
+              }}
+            >
+              Show the short
             </Button>
           )}
           {batch.canUndo && (

@@ -269,10 +269,6 @@ recorded outside the app (camera and voice); everything else goes under it. **Cl
 moments out of the long video (what the Shorts tab does today besides takes). Shorts from a take
 come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) after.
 
-<a id="sht-6b"></a>
-- **SHT-6b · Under a take as a review batch (S).** The agent and the user can both place footage,
-  graphics and files under a take (SHT-6, SHT-4 picker, done 23 Oct), but the agent's picks apply
-  at once; propose them as one batch to accept or reject in the Agent panel, like cuts.
 <a id="sht-1"></a>
 - **SHT-1 · Idea-first clips (L).** A clip is an idea plus pieces gathered from anywhere in the
   video. Depends on FTG-1. Comes after the take-first Shorts work.
@@ -462,6 +458,15 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — <a id="sht-6b"></a>**SHT-6b** the agent's picks under a take are one batch:
+  `short_footage` `op: add` takes footage, files and graphics (`template`, `library`, or
+  `graphic`, a copy of one of the video's) in one call and proposes them; the app checks them
+  on a copy (graphics made in a scratch folder) and the user accepts or rejects the batch in the
+  Agent panel ("Under a take", with "Show the short"), applied as one undo step; autopilot
+  accepts at once. It goes stale only when the short or the video's timeline changes.
+  `graphic_add` no longer takes `short`. One routine places for the Shorts tab and the batch
+  (`under_take.rs`). Tested: agent-level (propose changes nothing, accept is one step, stale,
+  autopilot); live in the dev app.
 - **23 Oct 2026** — **SHT-4 picker and SHT-6b in the app**: the Shorts tab's "Take and what plays
   under it" puts things under a take by hand, at the timeline's selection or from the playhead:
   **Video** (search the video's lines, click one: its footage), **Graphic** (a copy of one of the
