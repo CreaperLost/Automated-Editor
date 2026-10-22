@@ -248,7 +248,8 @@ pub static ACTIONS: [ToolDef; 39] = [
             or seconds `atS`..`toS` on the short, showing the video as edited (only what it \
             keeps, its cuts included) from its word `sourceWord` (an id from the video's \
             transcript) or from `videoS` seconds on its timeline; the footage's game or \
-            desktop sound plays ducked under the voice (`sound: false` mutes it). Where no \
+            desktop sound plays ducked under the voice (`sound: false` mutes it); or B-roll \
+            from an imported file (`media`, from `mediaS` seconds in). Where no \
             footage plays, the camera fills the frame. `op: remove` takes it off \
             `fromS`..`toS` (all without them); `op: list` (default) lists it.",
         schema: schema::<ShortFootageArgs>,
@@ -305,7 +306,9 @@ pub static ACTIONS: [ToolDef; 39] = [
             from transcript_get), on a Graphics track above the video, one undo step. It plays \
             for `lengthUs` (the template's or item's own by default) and renders in the \
             background; `graphic_render` waits for it. `blank` starts an empty composition to \
-            write with graphic_write_file.",
+            write with graphic_write_file. With `short` (a short made from a take) it goes on \
+            that short's timeline at a word of the take or `atUs` on the short, and `graphic` \
+            copies one of the video's graphics there (made for 9:16, its text changeable apart).",
         schema: schema::<GraphicAddArgs>,
         read_only: false,
         run: graphic_add,
@@ -345,10 +348,10 @@ pub static ACTIONS: [ToolDef; 39] = [
     },
     ToolDef {
         name: "graphic_render",
-        description: "Renders the graphics (or one) for the video's canvas now, waiting, and \
-            reports each one's lint, render and whether it cuts in and out or eases (only an \
-            overlay over the full-screen camera eases). Look at the result with frame_render at \
-            a time inside the graphic.",
+        description: "Renders the graphics (or one) for the video's canvas now, or with `short` \
+            a short's for its 9:16 frame, waiting, and reports each one's lint, render and \
+            whether it cuts in and out or eases (only an overlay over the full-screen camera \
+            eases). Look at the result with frame_render (or storyboard) inside the graphic.",
         schema: schema::<GraphicRenderArgs>,
         // Writes renders into the project's graphics cache.
         read_only: false,
@@ -3184,9 +3187,15 @@ pub struct FootageItemArgs {
     /// The sound whose transcript `sourceWord` is from; default the video's speech.
     #[serde(default)]
     pub source_stream: Option<String>,
-    /// ...or from `videoS` seconds on the video's timeline (the times `transcript_get` shows).
+    /// ...or from `videoS` seconds on the video's timeline (the times `transcript_get` shows)...
     #[serde(default)]
     pub video_s: Option<f64>,
+    /// ...or B-roll from outside the video: an imported file's id (`media_import`, `status`),
+    /// from `mediaS` seconds into it (default 0).
+    #[serde(default)]
+    pub media: Option<String>,
+    #[serde(default)]
+    pub media_s: Option<f64>,
     /// Play the footage's game or desktop sound, ducked under the voice. Default true.
     #[serde(default)]
     pub sound: Option<bool>,
@@ -3215,28 +3224,40 @@ fn to_us(seconds: f64) -> Result<u64, String> {
     Ok((seconds * 1e6).round() as u64)
 }
 
-fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: ShortFootageArgs = params(args)?;
-    let before = opened(ctx)?;
-    let short = with_reader(ctx.state, |reader| {
+/// A short by its id or title.
+fn short_named(ctx: &Ctx, wanted: &str) -> Result<crate::shorts::Short, String> {
+    with_reader(ctx.state, |reader| {
         let shorts = &reader.document().shorts;
         shorts
             .iter()
-            .find(|s| s.id == args.short)
+            .find(|s| s.id == wanted)
             .or_else(|| {
                 shorts
                     .iter()
-                    .find(|s| s.title.eq_ignore_ascii_case(args.short.trim()))
+                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
             })
             .cloned()
-            .ok_or_else(|| format!("No short {}", args.short))
-    })?;
+            .ok_or_else(|| format!("No short {wanted}"))
+    })
+}
+
+/// A take short by its id or title: footage and graphics go on its own timeline.
+fn take_short_named(ctx: &Ctx, wanted: &str) -> Result<crate::shorts::Short, String> {
+    let short = short_named(ctx, wanted)?;
     if short.take.is_none() {
         return Err(format!(
-            "{} is cut from the video; footage goes under shorts made from a take (`short_from_take`)",
+            "{} is a clip cut from the video; footage and graphics of their own go on shorts made \
+             from a take (`short_from_take`)",
             short.id
         ));
     }
+    Ok(short)
+}
+
+fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: ShortFootageArgs = params(args)?;
+    let before = opened(ctx)?;
+    let short = take_short_named(ctx, &args.short)?;
     let list = |short: &crate::shorts::Short| -> Result<Vec<String>, String> {
         let placed = with_reader(ctx.state, |reader| {
             crate::take_short::placed(reader.document(), short)
@@ -3250,10 +3271,13 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Ok(placed
             .iter()
             .map(|f| {
-                let from = f
-                    .video_us
-                    .map(|v| format!("the video at {}", clock(v)))
-                    .unwrap_or_else(|| "a part of the video cut since".into());
+                let from = if f.outside {
+                    format!("{} at {}", f.media, clock(f.in_us))
+                } else {
+                    f.video_us
+                        .map(|v| format!("the video at {}", clock(v)))
+                        .unwrap_or_else(|| "a part of the video cut since".into())
+                };
                 format!(
                     "{}-{}: {from}{}",
                     clock(f.at_us),
@@ -3291,6 +3315,7 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                         }
                     };
                     let video_us = match (&item.source_word, item.video_s) {
+                        _ if item.media.is_some() => to_us(item.media_s.unwrap_or(0.0))?,
                         (Some(word), _) => {
                             let key = match &item.source_stream {
                                 Some(key) => key.clone(),
@@ -3313,12 +3338,13 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                                 })?
                         }
                         (None, Some(seconds)) => to_us(seconds)?,
-                        _ => return Err("Each item needs `sourceWord` or `videoS`".into()),
+                        _ => return Err("Each item needs `sourceWord`, `videoS` or `media`".into()),
                     };
                     out.push(crate::take_short::Footage {
                         at_us,
                         to_us: to,
                         video_us,
+                        media: item.media.clone(),
                         sound: item.sound.unwrap_or(true),
                     });
                 }
@@ -3344,27 +3370,16 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(applied(ctx, "short_footage", &before, lines)?)
 }
 
-/// The id of the take short `wanted` names (its id or title).
+/// The id of the take short `wanted` names (its id or title), for cleaning its take.
 fn take_short_id(ctx: &Ctx, wanted: &str) -> Result<String, String> {
-    with_reader(ctx.state, |reader| {
-        let shorts = &reader.document().shorts;
-        let short = shorts
-            .iter()
-            .find(|s| s.id == wanted)
-            .or_else(|| {
-                shorts
-                    .iter()
-                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
-            })
-            .ok_or_else(|| format!("No short {wanted}"))?;
-        if short.take.is_none() {
-            return Err(format!(
-                "{} is cut from the video: clean the video itself, and the short follows",
-                short.id
-            ));
-        }
-        Ok(short.id.clone())
-    })
+    let short = short_named(ctx, wanted)?;
+    if short.take.is_none() {
+        return Err(format!(
+            "{} is cut from the video: clean the video itself, and the short follows",
+            short.id
+        ));
+    }
+    Ok(short.id)
 }
 
 /// The video's transcribed speech: the first transcribed sound on the main timeline that is
@@ -3728,6 +3743,14 @@ pub struct GraphicAddArgs {
     /// Or: a library item's id or name from `graphics` (copied into the project).
     #[serde(default)]
     pub library: Option<String>,
+    /// Or, with `short`: one of the video's graphics (its id from `graphics`), copied into the
+    /// short and made for its 9:16.
+    #[serde(default)]
+    pub graphic: Option<String>,
+    /// A short made from a take (id or title): the graphic goes on its own timeline, `atWord`
+    /// a word of the take and `atUs` time on the short.
+    #[serde(default)]
+    pub short: Option<String>,
     /// Where it starts on the edited timeline, in microseconds.
     #[serde(default)]
     pub at_us: Option<u64>,
@@ -3749,6 +3772,14 @@ pub struct GraphicAddArgs {
 
 fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicAddArgs = params(args)?;
+    if args.short.is_some() {
+        return short_graphic_add(ctx, args);
+    }
+    if args.graphic.is_some() {
+        return Err(
+            "`graphic` copies one of the video's graphics into a short: give `short` too".into(),
+        );
+    }
     let before = opened(ctx)?;
     let at = match (args.at_us, &args.at_word) {
         (Some(at), None) => at,
@@ -3819,6 +3850,82 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     } else {
         "The renderer is not installed, so it shows as a placeholder: ask the user, then graphics_install.".into()
     });
+    text(applied(ctx, "graphic_add", &before, lines)?)
+}
+
+/// `graphic_add` with `short`: the graphic goes on a take short's own timeline.
+fn short_graphic_add(ctx: &Ctx, args: GraphicAddArgs) -> Result<Vec<Output>, String> {
+    let before = opened(ctx)?;
+    let short = take_short_named(ctx, args.short.as_deref().unwrap_or_default())?;
+    let at = match (args.at_us, &args.at_word) {
+        (Some(at), None) => at,
+        (None, Some(word)) => with_reader(ctx.state, |reader| {
+            let voice = &short.take.as_ref().ok_or("No take")?.voice;
+            let transcript = store::load_transcript(reader.root(), voice)?.ok_or_else(|| {
+                format!("The take is not transcribed: `transcribe` with stream {voice}")
+            })?;
+            Ok(crate::take_short::words_at(&short, &transcript, word, word)?.0)
+        })?,
+        _ => {
+            return Err("Give one of `atUs` (on the short) or `atWord` (a word of the take)".into())
+        }
+    };
+    use commands::graphics::ShortGraphicFrom;
+    let (from, said) = match (&args.template, &args.library, &args.graphic) {
+        (Some(template), None, None) => (
+            ShortGraphicFrom::Template {
+                template: template.clone(),
+                name: args.name.clone(),
+                variables: args.variables.clone(),
+            },
+            template.clone(),
+        ),
+        (None, Some(item), None) => (
+            ShortGraphicFrom::Library(item.clone()),
+            format!("library {item}"),
+        ),
+        (None, None, Some(graphic)) => (
+            ShortGraphicFrom::Video(graphic.clone()),
+            format!("a copy of the video's {graphic}"),
+        ),
+        _ => return Err("Give one of `template`, `library` or `graphic`".into()),
+    };
+    let created = commands::graphics::project_short_graphic_add_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        short.id.clone(),
+        from,
+        at,
+        args.length_us,
+    )?;
+    // A template's values were given above; a copied one's are changed after.
+    if args.template.is_none() && (args.name.is_some() || !args.variables.is_empty()) {
+        commands::graphics::project_graphic_set_impl(
+            ctx.state,
+            before.handle.clone(),
+            created.project.revision,
+            created.asset_id.clone(),
+            args.variables,
+            args.name,
+            None,
+        )?;
+    }
+    let lines = vec![
+        format!(
+            "Added graphic {} ({said}) to short {} at {} on its timeline, clip {}. Its slot is \
+             the whole frame (`graphic_set` with `short` and `slot` changes it).",
+            created.asset_id,
+            short.id,
+            clock(at),
+            created.clip_id
+        ),
+        if crate::graphics::runtime::status().installed {
+            "It renders in the background at 9:16; graphic_render waits for it.".into()
+        } else {
+            "The renderer is not installed, so it shows as a placeholder: ask the user, then graphics_install.".into()
+        },
+    ];
     text(applied(ctx, "graphic_add", &before, lines)?)
 }
 
@@ -4081,12 +4188,32 @@ pub struct GraphicRenderArgs {
     /// One graphic's id; default every graphic on the timeline.
     #[serde(default)]
     pub graphic: Option<String>,
+    /// A short (id or title): its graphics, rendered for its 9:16 frame.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicRenderArgs = params(args)?;
+    let short = args
+        .short
+        .as_deref()
+        .map(|s| short_named(ctx, s))
+        .transpose()?;
     let (root, specs) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
+        // A short's graphics render on its own timeline at its own size, as its export does.
+        let shown;
+        let document = match &short {
+            Some(short) => {
+                shown = crate::shorts::short_document(
+                    reader.document(),
+                    short,
+                    commands::has_speech_transcript(reader),
+                )?;
+                &shown
+            }
+            None => reader.document(),
+        };
         let canvas = document.layout.preview_dimensions()?;
         let specs: Vec<_> = crate::graphics::render::specs_for(reader.root(), document, canvas)
             .into_iter()
@@ -5011,6 +5138,117 @@ mod tests {
         assert!(removed.starts_with("Removed short \"Whole\""), "{removed}");
         let shorts = with_reader(ctx.state, |r| Ok(r.document().shorts.len())).unwrap();
         assert_eq!(shorts, 0);
+    }
+
+    #[test]
+    fn an_agent_puts_graphics_under_a_take() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        // A graphic on the video, and a short made from a take (here the voice file alone).
+        call(
+            &ctx,
+            "graphic_add",
+            json!({ "template": "step", "atUs": 0, "lengthUs": 1_000_000 }),
+        )
+        .unwrap();
+        let (video_graphic, voice) = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let graphic = document
+                .assets
+                .iter()
+                .find(|a| a.is_graphic())
+                .unwrap()
+                .id
+                .clone();
+            let voice = document
+                .assets
+                .iter()
+                .find(|a| !a.is_graphic())
+                .unwrap()
+                .id
+                .clone();
+            Ok((graphic, voice))
+        })
+        .unwrap();
+        call(
+            &ctx,
+            "short_from_take",
+            json!({ "title": "Take", "media": [voice] }),
+        )
+        .unwrap();
+        // Graphics from anywhere: a template, and a copy of the video's own.
+        let new = call(
+            &ctx,
+            "graphic_add",
+            json!({ "short": "Take", "template": "title", "atUs": 500_000, "lengthUs": 1_000_000 }),
+        )
+        .unwrap();
+        assert!(new.contains("to short") && new.contains("(title)"), "{new}");
+        let copied = call(
+            &ctx,
+            "graphic_add",
+            json!({ "short": "take", "graphic": video_graphic, "atUs": 2_000_000,
+                    "variables": { "title": "In the short" } }),
+        )
+        .unwrap();
+        assert!(copied.contains("a copy of the video's"), "{copied}");
+        let (on_video, in_short, copy_title) = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let graphics = |clips: Vec<&crate::sequence::Clip>| {
+                clips
+                    .iter()
+                    .filter(|c| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+                    .count()
+            };
+            let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+            let own = &short.edit.as_ref().unwrap().sequence;
+            // The copy is the one placed at 2 s.
+            let copy = own
+                .clips()
+                .find(|(_, c)| c.start_us == 2_000_000)
+                .map(|(_, c)| c.asset.clone())
+                .unwrap();
+            assert_ne!(copy, video_graphic);
+            let source =
+                crate::graphics::read_source(&crate::graphics::folder(reader.root(), &copy)).ok();
+            Ok((
+                graphics(document.sequence.clips().map(|(_, c)| c).collect()),
+                graphics(own.clips().map(|(_, c)| c).collect()),
+                source.and_then(|s| s.variables.get("title").cloned()),
+            ))
+        })
+        .unwrap();
+        assert_eq!(on_video, 1, "the video keeps its one graphic");
+        assert_eq!(in_short, 2);
+        // The copy took the new text; the video's graphic is its own.
+        assert_eq!(copy_title, Some(json!("In the short")));
+        // A clip cut from the video takes neither.
+        call(
+            &ctx,
+            "short_create",
+            json!({ "title": "Clip", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
+        )
+        .unwrap();
+        let refused = call(
+            &ctx,
+            "graphic_add",
+            json!({ "short": "Clip", "template": "title", "atUs": 0 }),
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains("is a clip cut from the video"),
+            "{refused}"
+        );
+        assert!(call(
+            &ctx,
+            "graphic_add",
+            json!({ "graphic": video_graphic, "atUs": 0 })
+        )
+        .is_err());
     }
 
     #[test]

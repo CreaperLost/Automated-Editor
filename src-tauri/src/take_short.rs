@@ -410,8 +410,11 @@ pub struct Footage {
     /// Where it plays on the short's own timeline.
     pub at_us: u64,
     pub to_us: u64,
-    /// Where it starts on the video's timeline.
+    /// Where it starts on the video's timeline, or in `media` when it comes from there.
     pub video_us: u64,
+    /// An imported file (or recording) to play instead of the video: B-roll from outside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
     /// Also play the footage's own background sound (game, desktop), ducked under the voice.
     #[serde(default = "yes")]
     pub sound: bool,
@@ -430,6 +433,10 @@ pub struct PlacedFootage {
     pub to_us: u64,
     pub media: String,
     pub stream: String,
+    /// Footage from a file outside the video (B-roll), not the video itself.
+    pub outside: bool,
+    /// Where it starts in its media.
+    pub in_us: u64,
     /// Where it is on the video's timeline now; `None` once the video cut it.
     pub video_us: Option<u64>,
     pub sound: bool,
@@ -550,6 +557,84 @@ fn video_stretch(document: &EditDocument, from: u64, to: u64) -> (Vec<Clip>, Vec
     (pictures, sounds)
 }
 
+/// What `duration` of file `media` from `from_us` on plays, from 0: its picture, and its sounds
+/// (heard ducked under the voice like the video's background).
+fn media_stretch(
+    document: &EditDocument,
+    media: &str,
+    from_us: u64,
+    duration: u64,
+) -> Result<(Vec<Clip>, Vec<Clip>), String> {
+    let asset = document
+        .asset(media)
+        .filter(|a| !a.is_graphic())
+        .ok_or_else(|| format!("No file {media} in the project (`media_import` brings one in)"))?;
+    if !asset.is_still() && from_us + duration > asset.duration_us {
+        return Err(format!(
+            "{} has no {:.1} s from {:.1} s (it is {:.1} s long)",
+            asset.name,
+            duration as f64 / 1e6,
+            from_us as f64 / 1e6,
+            asset.duration_us as f64 / 1e6
+        ));
+    }
+    let clip = |stream: &str| Clip {
+        id: String::new(),
+        asset: asset.id.clone(),
+        stream: stream.to_string(),
+        start_us: 0,
+        in_us: if asset.is_still() { 0 } else { from_us },
+        duration_us: duration,
+        link: None,
+        fit: Default::default(),
+        speed: 1.0,
+    };
+    let picture = asset
+        .streams
+        .iter()
+        .find(|s| s.kind == StreamKind::Picture)
+        .ok_or_else(|| format!("{} has no picture to show", asset.name))?;
+    let sounds = asset
+        .streams
+        .iter()
+        .filter(|s| s.kind == StreamKind::Sound)
+        .map(|s| clip(&s.id))
+        .collect();
+    Ok((vec![clip(&picture.id)], sounds))
+}
+
+/// Puts graphic `asset_id` (in `document`'s assets) on the short's own timeline at `at_us` for
+/// `length_us`, over everything, the way graphics go on the video. Returns the clip's id.
+pub fn place_graphic(
+    document: &EditDocument,
+    short: &mut Short,
+    asset_id: &str,
+    at_us: u64,
+    length_us: u64,
+) -> Result<String, String> {
+    let taken: Vec<String> = document.track_ids_in_use().map(String::from).collect();
+    let sequence = own_mut(short)?;
+    let end = length(sequence).max(sequence.duration_us());
+    if at_us >= end {
+        return Err(format!(
+            "{:.1} s is past the end of the short ({:.1} s)",
+            at_us as f64 / 1e6,
+            end as f64 / 1e6
+        ));
+    }
+    let (placed, clip_id) = crate::graphics::place_on(
+        sequence,
+        &document.assets,
+        &taken,
+        asset_id,
+        at_us,
+        length_us.min(end - at_us),
+    )?;
+    crate::sequence::validate_sequence(&placed, &document.assets)?;
+    *sequence = placed;
+    Ok(clip_id)
+}
+
 /// Plays `footage` under the take, over whatever footage was there.
 pub fn place(document: &EditDocument, short: &mut Short, footage: &Footage) -> Result<(), String> {
     let mut taken = next_number('t', document.track_ids_in_use());
@@ -565,16 +650,21 @@ pub fn place(document: &EditDocument, short: &mut Short, footage: &Footage) -> R
         ));
     }
     let duration = to - at;
-    let video_end = document.duration_us();
-    if footage.video_us + duration > video_end {
-        return Err(format!(
-            "The video has no {:.1} s from {:.1} s (it is {:.1} s long)",
-            duration as f64 / 1e6,
-            footage.video_us as f64 / 1e6,
-            video_end as f64 / 1e6
-        ));
-    }
-    let (pictures, sounds) = video_stretch(document, footage.video_us, footage.video_us + duration);
+    let (pictures, sounds) = match &footage.media {
+        Some(media) => media_stretch(document, media, footage.video_us, duration)?,
+        None => {
+            let video_end = document.duration_us();
+            if footage.video_us + duration > video_end {
+                return Err(format!(
+                    "The video has no {:.1} s from {:.1} s (it is {:.1} s long)",
+                    duration as f64 / 1e6,
+                    footage.video_us as f64 / 1e6,
+                    video_end as f64 / 1e6
+                ));
+            }
+            video_stretch(document, footage.video_us, footage.video_us + duration)
+        }
+    };
     if pictures.is_empty() {
         return Err(format!(
             "No screen plays at {:.1} s of the video",
@@ -649,6 +739,8 @@ pub fn placed(document: &EditDocument, short: &Short) -> Result<Vec<PlacedFootag
             to_us: c.end_us(),
             media: c.asset.clone(),
             stream: c.stream.clone(),
+            outside: !document.sequence.clips().any(|(_, v)| v.asset == c.asset),
+            in_us: c.in_us,
             video_us: document
                 .picture_clock(&c.asset)
                 .source_to_edited_us(c.in_us),
@@ -890,6 +982,7 @@ mod tests {
             at_us: 5 * S,
             to_us: 10 * S,
             video_us: 18 * S,
+            media: None,
             sound: true,
         };
         place(&document, &mut short, &footage).unwrap();
@@ -938,6 +1031,7 @@ mod tests {
             at_us: 12 * S,
             to_us: 14 * S,
             video_us: 30 * S,
+            media: None,
             sound: false,
         };
         place(&document, &mut short, &quiet).unwrap();
@@ -970,6 +1064,65 @@ mod tests {
         remove(&document, &mut short, None).unwrap();
         assert!(placed(&document, &short).unwrap().is_empty());
         assert_eq!(scenes(&short), vec![(0, 40 * S)]);
+    }
+
+    #[test]
+    fn outside_video_and_graphics_go_under_a_take() {
+        use crate::sequence::tests::video;
+        let mut document = document();
+        document.assets.push(video("broll", 20 * S));
+        let mut graphic = video("g1", 4 * S);
+        graphic.kind = crate::sequence::AssetKind::Graphic;
+        graphic.streams.retain(|s| s.kind == StreamKind::Picture);
+        document.assets.push(graphic);
+        let sources = resolve(&document, Some("cam"), None).unwrap();
+        let sync = TakeSync {
+            offset_us: 0,
+            score: None,
+        };
+        let mut short = new_short(&document, "t1".into(), "Myth", "", &sources, &sync).unwrap();
+        // B-roll from a file: 3 s of it from 5 s in, under 2-5 s of the short, its sound along.
+        let broll = Footage {
+            at_us: 2 * S,
+            to_us: 5 * S,
+            video_us: 5 * S,
+            media: Some("broll".into()),
+            sound: true,
+        };
+        place(&document, &mut short, &broll).unwrap();
+        let listed = placed(&document, &short).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].outside && listed[0].sound);
+        assert_eq!(
+            (
+                listed[0].media.as_str(),
+                listed[0].in_us,
+                listed[0].at_us,
+                listed[0].to_us
+            ),
+            ("broll", 5 * S, 2 * S, 5 * S)
+        );
+        // The camera fills the frame around it.
+        assert_eq!(scenes(&short), vec![(0, 2 * S), (5 * S, 40 * S)]);
+        // More than the file holds: refused.
+        let too_long = Footage {
+            video_us: 18 * S,
+            ..broll.clone()
+        };
+        assert!(place(&document, &mut short, &too_long).is_err());
+        // A graphic goes on the short's own timeline; the video's stays as it was.
+        let before = document.sequence.clone();
+        let clip = place_graphic(&document, &mut short, "g1", S, 3 * S).unwrap();
+        let sequence = &short.edit.as_ref().unwrap().sequence;
+        let (_, placed_graphic) = sequence.clip(&clip).unwrap();
+        assert_eq!(
+            (placed_graphic.start_us, placed_graphic.duration_us),
+            (S, 3 * S)
+        );
+        assert_eq!(document.sequence, before);
+        crate::sequence::validate_sequence(sequence, &document.assets).unwrap();
+        // Past the end of the take: refused.
+        assert!(place_graphic(&document, &mut short, "g1", 41 * S, 3 * S).is_err());
     }
 
     #[test]

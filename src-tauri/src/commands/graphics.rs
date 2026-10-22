@@ -99,6 +99,106 @@ pub fn project_graphic_from_library_impl(
     )
 }
 
+/// Where a graphic for a short comes from.
+pub enum ShortGraphicFrom {
+    /// A bundled template, with a name and variable values.
+    Template {
+        template: String,
+        name: Option<String>,
+        variables: Map<String, Value>,
+    },
+    /// A copy of a library item.
+    Library(String),
+    /// A copy of one of the video's graphics (its look and text), made for the short.
+    Video(String),
+}
+
+/// Makes a graphic and places it on take short `short_id`'s own timeline at `at_us` (on the
+/// short), one undo step. A graphic of the video is copied, so changing it in the short leaves
+/// the video's alone; it renders at the short's 9:16 like any graphic there.
+pub fn project_short_graphic_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    from: ShortGraphicFrom,
+    at_us: u64,
+    length_us: Option<u64>,
+) -> Result<GraphicCreated, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let root = reader.root().to_path_buf();
+    let (asset, length) = match &from {
+        ShortGraphicFrom::Template {
+            template,
+            name,
+            variables,
+        } => (
+            graphics::create(&root, template, name.as_deref(), variables)?,
+            length_us.unwrap_or(templates::find(template)?.length_us),
+        ),
+        ShortGraphicFrom::Library(id) => {
+            let lib = library::dir();
+            let item = library::view(&lib, id)?;
+            let folder = library::find(&lib, id)?;
+            (
+                graphics::create_from_folder(&root, &folder, None)?,
+                length_us.unwrap_or(item.item.length_us),
+            )
+        }
+        ShortGraphicFrom::Video(id) => {
+            let source = graphic_asset(reader, id)?;
+            // As long as it plays on the video, by default.
+            let played = reader
+                .document()
+                .sequence
+                .clips()
+                .find(|(_, c)| c.asset == source.id)
+                .map(|(_, c)| c.duration_us);
+            (
+                graphics::create_from_folder(
+                    &root,
+                    &graphics::folder(&root, &source.id),
+                    Some(&source.name),
+                )?,
+                length_us.or(played).unwrap_or(4_000_000),
+            )
+        }
+    };
+    let dir = graphics::folder(&root, &asset.id);
+    let placed = (|| {
+        let mut next = reader.document().clone();
+        next.assets.push(asset.clone());
+        let mut shorts = next.shorts.clone();
+        let short = shorts
+            .iter_mut()
+            .find(|s| s.id == short_id)
+            .ok_or("That short no longer exists")?;
+        let clip_id = crate::take_short::place_graphic(&next, short, &asset.id, at_us, length)?;
+        next.shorts = shorts;
+        let project = reader.commit_document(expected_revision, next)?;
+        Ok::<_, String>((project, clip_id))
+    })();
+    let (project, clip_id) = match placed {
+        Ok(done) => done,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok(GraphicCreated {
+        project,
+        asset_id: asset.id,
+        clip_id,
+    })
+}
+
 /// Makes a graphic in the project's folder with `make` and places it, one undo step; the
 /// folder goes again if placing fails.
 fn add_graphic(

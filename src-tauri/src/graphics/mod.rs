@@ -371,9 +371,6 @@ pub fn place(
     at_us: u64,
     length_us: u64,
 ) -> Result<(crate::project::revision::EditDocument, String), String> {
-    use crate::sequence::edit::{apply_reserving, SequenceEdit};
-    use crate::sequence::{SourceRange, TrackKind};
-    let length = length_us.clamp(MIN_LENGTH_US, MAX_LENGTH_US);
     let at = at_us.min(document.duration_us());
     let mut next = document.clone();
     let asset_id = asset.id.clone();
@@ -381,10 +378,37 @@ pub fn place(
         next.assets.push(asset);
     }
     let taken: Vec<String> = next.track_ids_in_use().map(String::from).collect();
-    let graphic = |id: &str| next.assets.iter().any(|a| a.id == id && a.is_graphic());
+    let (sequence, clip_id) = place_on(
+        &next.sequence,
+        &next.assets,
+        &taken,
+        &asset_id,
+        at,
+        length_us,
+    )?;
+    next.sequence = sequence;
+    Ok((next, clip_id))
+}
+
+/// `sequence` with graphic `asset_id` (one of `assets`) placed at `at` for `length_us`: on a
+/// graphics track free there (a new one on top when none is), never pushing anything along.
+/// `taken` are the track ids in use project-wide. The video's timeline and a short's own
+/// timeline place graphics alike. Returns the sequence and the clip's id.
+pub fn place_on(
+    sequence: &crate::sequence::Sequence,
+    assets: &[Asset],
+    taken: &[String],
+    asset_id: &str,
+    at: u64,
+    length_us: u64,
+) -> Result<(crate::sequence::Sequence, String), String> {
+    use crate::sequence::edit::{apply_reserving, SequenceEdit};
+    use crate::sequence::{SourceRange, TrackKind};
+    let length = length_us.clamp(MIN_LENGTH_US, MAX_LENGTH_US);
+    let asset_id = asset_id.to_string();
+    let graphic = |id: &str| assets.iter().any(|a| a.id == id && a.is_graphic());
     // A track that holds only graphics (or is named for them) and is free for the whole span.
-    let free = next
-        .sequence
+    let free = sequence
         .video_tracks()
         .rev()
         .find(|t| {
@@ -394,13 +418,13 @@ pub fn place(
                 && t.is_free(at, at + length)
         })
         .map(|t| t.id.clone());
-    let mut sequence = next.sequence.clone();
+    let mut sequence = sequence.clone();
     let track_id = match free {
         Some(id) => id,
         None => {
             let (added, _) = apply_reserving(
                 &sequence,
-                &next.assets,
+                assets,
                 &SequenceEdit::AddTrack {
                     track_kind: TrackKind::Video,
                 },
@@ -413,7 +437,7 @@ pub fn place(
                 .ok_or("Could not add a track for the graphic")?;
             let (named, _) = apply_reserving(
                 &added,
-                &next.assets,
+                assets,
                 &SequenceEdit::SetTrack {
                     track_id: id.clone(),
                     name: TRACK_NAME.into(),
@@ -431,7 +455,7 @@ pub fn place(
     let before: Vec<String> = sequence.clips().map(|(_, c)| c.id.clone()).collect();
     let (placed, _) = apply_reserving(
         &sequence,
-        &next.assets,
+        assets,
         &SequenceEdit::PlaceAsset {
             asset_id: asset_id.clone(),
             at_us: at,
@@ -452,8 +476,7 @@ pub fn place(
         .find(|(_, c)| c.asset == asset_id && !before.contains(&c.id))
         .map(|(_, c)| c.id.clone())
         .ok_or("The graphic was not placed")?;
-    next.sequence = placed;
-    Ok((next, clip_id))
+    Ok((placed, clip_id))
 }
 
 /// Writes `contents` to `relative` inside a graphic's folder, for agents without a shell.

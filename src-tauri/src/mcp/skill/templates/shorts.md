@@ -66,6 +66,9 @@ find the stretch of the long video that **shows** it:
   sentence or two keeps a short moving. Don't reuse the same seconds twice in one short.
 - The hook may stay on the camera alone (the user's face sells the claim): leave it without
   footage unless the user wants otherwise.
+- Not only the video: the user may give outside clips (a trailer, a news clip, B-roll). They
+  go into the project with `media_import`; place them with `media` (and `mediaS`) instead of
+  `sourceWord`.
 
 Show the plan as a list: the take's words (a few), the video time picked and what it shows.
 Ask for an OK or changes (automatic: go).
@@ -80,9 +83,13 @@ with `op: remove` (`fromS`/`toS`) and add again.
 
 ## 7. Dress (ask)
 
-Graphics go on the take's words, through HyperFrames, as in the clips template: a title card
-on the hook, a label per beat ("MYTH #1", "TRUE"/"FALSE" stamp, a name), in the screen's part
-(`graphic_set` with `short` and `slot: screen`) or over the whole frame. Then `storyboard`
+Graphics go on the take's words: `graphic_add` with `short` and `atWord` (a word of the
+take). First the **long video's own graphics** (`graphics` lists them with where they play):
+where a beat retells a part of the video that had a graphic, reuse it with `graphic` (its id;
+a copy made for 9:16, its text changeable without touching the video's). Then new ones
+(`template` or `library`): a title card on the hook, a label per beat ("MYTH #1",
+"TRUE"/"FALSE" stamp, a name), news or a new feature the video lacks. Each plays over the whole
+frame, or in the screen's part (`graphic_set` with `short` and `slot: screen`). Then `storyboard`
 with `short` to look at the frames, and fix what reads badly.
 
 ## 8. Export (ask)

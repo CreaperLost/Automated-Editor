@@ -269,15 +269,11 @@ recorded outside the app (camera and voice); everything else goes under it. **Cl
 moments out of the long video (what the Shorts tab does today besides takes). Shorts from a take
 come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) after.
 
-<a id="sht-6"></a>
-- **SHT-6 · Everything under a take (M).** Today a take short gets only stretches of the long
-  video. Add, each placed at the take's words and reviewable as a batch: **the long video's
-  graphics**, listed for the agent with what they say and where they play, picked by it and
-  re-rendered for the short's slot (the most important source for tutorial shorts); **new
-  graphics** (news, a new feature, filler cards) from the library or written for the short;
-  **outside video** as B-roll (imported files, sound ducked like footage). The user's camera stays
-  the default where nothing else plays. Gaming shorts use the same flow (mostly the long video's
-  footage or an outside video).
+<a id="sht-6b"></a>
+- **SHT-6b · Under a take, in the app and as a review batch (S/M).** The agent can place it all
+  (SHT-6, done 23 Oct); the user can't yet from the Shorts tab (a graphic or a file onto the
+  short's timeline by hand) and nothing is proposed as a reviewable batch. Pairs with the footage
+  picker (SHT-4).
 <a id="sht-1"></a>
 - **SHT-1 · Idea-first clips (L).** A clip is an idea plus pieces gathered from anywhere in the
   video. Depends on FTG-1. Comes after the take-first Shorts work.
@@ -468,6 +464,15 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — <a id="sht-6"></a>**SHT-6** everything under a take, for agents: graphics go
+  on a take short's own timeline (`graphic_add` with `short`, at a word of the take): a new one
+  from a template or the library, or **a copy of one of the long video's graphics**
+  (`graphic`), re-rendered at 9:16 with its text changeable apart from the video's;
+  `graphic_render` takes `short`. Footage can come from an imported file as B-roll
+  (`short_footage` items with `media`/`mediaS`, sound ducked like the video's). One placement
+  routine for the video and shorts (`graphics::place_on`), and one short lookup in the agent
+  tools (QUAL-1). Tested: unit and agent-level tests; live on the 21 Oct recording, its storyboard
+  shows the footage, the copied "Standex closes down" card and a new key point at 9:16.
 - **23 Oct 2026** — <a id="sht-5"></a>**SHT-5** Shorts and Clips are two tabs over one `Short`
   model and the same panels: **Shorts** lists the shorts made from a take and opens on the take
   form; **Clips** lists the stretches cut from the video, with New clip and Find with AI. The
