@@ -142,6 +142,25 @@
         border-radius: var(--look-radius);
         box-shadow: var(--look-shadow);
       }
+      /* Over a picture that shows through (over the face in a short, data-mode="over"): no
+         background of its own; the content sits on a panel in the lower part of the frame. */
+      [data-mode="over"] #card-back {
+        display: none;
+      }
+      [data-mode="over"] .layout {
+        inset: auto 6% 8% 6%;
+        padding: calc(var(--look-pad) * 1.6) calc(var(--look-pad) * 1.8);
+        border-radius: calc(var(--look-radius) * 1.3);
+        background: var(--background, #ffffff);
+        box-shadow: var(--look-shadow), 0 2vmin 6vmin color-mix(in srgb, var(--text, #1d1d1f) 22%, transparent);
+      }
+      [data-mode="over"] .layout > * {
+        zoom: 0.8;
+      }
+      [data-mode="over"] .layout .card {
+        border: none;
+        box-shadow: none;
+      }
       @media (orientation: portrait) {
         .layout {
           padding: 0 calc(var(--look-margin) * 0.8);

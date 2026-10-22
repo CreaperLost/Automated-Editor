@@ -65,6 +65,11 @@ find the stretch of the long video that **shows** it:
   desktop.
 - Each beat gets footage as long as its words; 3 to 8 s pieces read well, and a new piece every
   sentence or two keeps a short moving. Don't reuse the same seconds twice in one short.
+- Fit the footage to its words your way, per piece: `speed` (1.25-2 when the action runs longer
+  than the words, 0.75 when it runs a little short), a shorter stretch (trim), or several pieces
+  in a row (a jump cut through a long action). Where the footage ends before the words, the
+  camera comes back by itself: don't stretch a piece to fill a gap. Footage sound is only the
+  video's game or desktop sound, never its microphone.
 - The hook may stay on the camera alone (the user's face sells the claim): leave it without
   footage unless the user wants otherwise.
 - Not only the video: the user may give outside clips (a trailer, a news clip, B-roll). They
@@ -79,9 +84,17 @@ Ask for an OK or changes (automatic: go).
 Pick graphics for the take's words too. First the **long video's own graphics** (`graphics`
 lists them with where they play): where a beat retells a part of the video that had a graphic,
 reuse it (`graphic`, its id: a copy made for 9:16, its text changeable without touching the
-video's). Then new ones (`template` or `library`): a title card on the hook, a label per beat
-("MYTH #1", "TRUE"/"FALSE" stamp, a name), news or a new feature the video lacks. Add them to
-the plan; ask for an OK (automatic: go).
+video's). Then new ones (`template` or `library`), or one of your own: a title card on the
+hook, a label per beat ("MYTH #1", "TRUE"/"FALSE" stamp, a name), news or a new feature the
+video lacks.
+
+Pick how each one shows, with its kind, before it is made (it renders once, for that):
+`full` when the graphic is the point (a title card, a list to read, an end card); `screen`
+(split: the face above, the graphic below) when it explains while the face keeps talking;
+`overFace` (the face fills the frame, the graphic drawn over it) for a label, a stamp, a
+callout or arrows: then write it as an overlay (no full background; the templates do this for
+you as a panel at the bottom). Don't cover the face with full-frame graphics for long: keep
+them short, or split. Add them to the plan with their mode; ask for an OK (automatic: go).
 
 ## 7. Propose (automatic)
 
@@ -89,12 +102,13 @@ One `short_footage` call with `op: add`, a `reason`, and every item at once; the
 the batch in the Agent panel (under autopilot it lands at once). Footage: `fromWord`/`toWord`
 from the take, and `sourceWord` (a word id from the video's transcript where the footage
 starts; it must be one the video keeps) or `videoS`; its game or desktop sound plays ducked
-under the voice, `sound: false` where it distracts. Graphics: `fromWord` (and `toWord`, else
-its own length) with `template`, `library` or `graphic`, plus `name` and `variables`. Report
+under the voice, `sound: false` where it distracts; `speed` as planned. Graphics: `fromWord`
+(and `toWord`, else its own length) with `template`, `library` or `graphic`, `mode`, plus
+`name` and `variables`. Report
 the summary it answers and wait for the user's decision (`proposals_list`). Graphics play one at
 a time: the app refuses a batch whose graphics would overlap, and says where. Once accepted:
-each graphic plays over the whole frame, or in the screen's part (`graphic_set` with `short`
-and `slot: screen`); `storyboard` with `short` to look at the frames, and fix what reads badly:
+`storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
+later with `graphic_set` `short` and `slot` renders that graphic again):
 `graphic_set` with `short` moves (`moveToWord`, a word of the take) or lengthens (`lengthUs`) a
 graphic on the short's timeline, `op: remove` with `fromS`/`toS` takes footage off.
 

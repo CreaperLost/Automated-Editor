@@ -25,7 +25,8 @@ import { Switch } from "../ui";
 const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
   ["full", "Full", "The whole frame, over everything"],
   ["camera", "Camera", "The camera's part of the base layout, over everything there"],
-  ["screen", "Screen", "The screen's part of the base layout, over everything there"],
+  ["screen", "Split", "Your face above, the graphic in the screen's part (the split shows while it plays)"],
+  ["overFace", "Over face", "Your face fills the frame and the graphic is drawn over it, see-through"],
   ["overScreen", "Over screen", "Over the screen's part, under the captions; its see-through parts show the screen"],
 ];
 

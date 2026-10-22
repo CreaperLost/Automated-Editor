@@ -11,6 +11,10 @@
     font, radius or duration of your own: graphic_check flags them. Classes .pill, .title,
     .muted and .card below are the look's building blocks.
   - Keep the page transparent and draw your own background (#card-back below).
+  - How it shows: AeroEdits sets data-mode on the root. "full": the whole frame. "split": a
+    part of a short's frame beside the face. "over": drawn over a picture that shows through
+    (over the face in a short), so leave the background out and keep to a part of the frame
+    (the [data-mode="over"] rules below show one way).
   - In and out: a graphic that fills the frame never eases in or out; it cuts. Only a graphic
     laid over the full-screen camera eases. AeroEdits decides which from where the graphic
     plays and sets data-entrance on the root to "cut" or "ease": show the card whole from the
@@ -171,6 +175,25 @@
         border: var(--look-border) solid var(--look-line);
         border-radius: var(--look-radius);
         box-shadow: var(--look-shadow);
+      }
+      /* Over a picture that shows through (over the face in a short, data-mode="over"): no
+         background of its own; the content sits on a panel in the lower part of the frame. */
+      [data-mode="over"] #card-back {
+        display: none;
+      }
+      [data-mode="over"] .layout {
+        inset: auto 6% 8% 6%;
+        padding: calc(var(--look-pad) * 1.6) calc(var(--look-pad) * 1.8);
+        border-radius: calc(var(--look-radius) * 1.3);
+        background: var(--background, #ffffff);
+        box-shadow: var(--look-shadow), 0 2vmin 6vmin color-mix(in srgb, var(--text, #1d1d1f) 22%, transparent);
+      }
+      [data-mode="over"] .layout > * {
+        zoom: 0.8;
+      }
+      [data-mode="over"] .layout .card {
+        border: none;
+        box-shadow: none;
       }
       @media (orientation: portrait) {
         .layout {

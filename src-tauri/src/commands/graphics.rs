@@ -204,6 +204,7 @@ pub use crate::under_take::GraphicFrom as ShortGraphicFrom;
 /// Makes a graphic and places it on take short `short_id`'s own timeline at `at_us` (on the
 /// short), one undo step. A graphic of the video is copied, so changing it in the short leaves
 /// the video's alone; it renders at the short's 9:16 like any graphic there.
+#[allow(clippy::too_many_arguments)]
 pub fn project_short_graphic_add_impl(
     state: &AppState,
     project_handle: String,
@@ -212,6 +213,7 @@ pub fn project_short_graphic_add_impl(
     from: ShortGraphicFrom,
     at_us: u64,
     length_us: Option<u64>,
+    mode: Option<crate::shorts::GraphicSlot>,
 ) -> Result<GraphicCreated, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
@@ -224,6 +226,7 @@ pub fn project_short_graphic_add_impl(
         length_us,
         name: None,
         variables: Map::new(),
+        mode,
     };
     let done = crate::under_take::put(&root, &root, reader.document(), &short_id, &[item])?;
     let project = match reader.commit_document(expected_revision, done.document.clone()) {

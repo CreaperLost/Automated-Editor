@@ -45,6 +45,9 @@ settled table with the date and update the roadmap item it blocks.
 | **Clips and Shorts are two features, two tabs** sharing their parts (the short's timeline, look, captions, export). **Clips** cut the best moments out of the long video. **Shorts** start from a take recorded outside the app (the user's camera and voice) and put under it whatever helps: the user's camera, the long video's graphics the agent picks (re-made for 9:16; very important for tutorials), new graphics (news, a new feature, filler), the long video's footage, and B-roll, including outside video files. Gaming shorts follow the same process, usually with the long video's footage or an outside video. **Shorts from a take come first;** Clips stay as they are for now | 22 Oct | [plans/shorts.md](plans/shorts.md), [SHT-5](roadmap.md#sht-5) |
 | **Agent cost rule: aim for 99 % of the quality at 10 % of the price.** A cheaper path (smaller model, lower effort, fewer or smaller images, fewer tool schemas) is kept only when the measured result stays as good ([COST-1..3](roadmap.md#cost-1), [EVAL-1](roadmap.md#eval-1)). Long-term aim: the user and the agent improve the app, its material and its taste together ([LOOP-1](roadmap.md#loop-1)) | 23 Oct | discussion |
 | **One look for every graphic in a video, very important and brought forward.** A video's graphics share one set of style tokens (type, shape, colour roles, motion) beside the brand kit. Changing the kit or the look restyles every graphic, and small adjustments (roundness, speed, size) reach all of them at once. This moves the visual half of the style kit ahead of the project rules file; the written style rules keep the decided order | 22 Oct | George, [GFX-5](roadmap.md#gfx-5) |
+| **Graphics start app-like:** the default brand colours and every template take the light style of George's library graphics (white, #1D1D1F text, #0071E3 accent, rounded cards, hairlines, soft shadows); the old navy and yellow kit is gone. Dark AeroEdits-UI colours were offered and turned down | 22 Oct | George, [GFX-5](roadmap.md#done) |
+| **Shorts graphic modes come after GFX-5, and each graphic renders once for its mode:** a graphic in a short shows over the whole frame (fine when it is the point), split beside the face, or as a card over the face. The mode is picked before the first render, since re-rendering per mode costs; changing it later is on request | 22 Oct | George, [SHT-4](roadmap.md#sht-4) |
+| **Fit modes for take shorts need a design talk first** (speed or freeze to fit footage under a take) | 22 Oct | George, [SHT-4](roadmap.md#sht-4) |
 | **No automatic folder watch.** Nothing runs when a recording finishes: each video may be a tutorial or something else. Instead, after opening a project, the user can pick a template (tutorial, shorts…) and have its saved method run, on request ([AUTO-1](roadmap.md#auto-1)) | 21 Oct | Q-WATCH |
 
 ### Not doing
@@ -70,6 +73,15 @@ ones (the second opinion softened several).
 ## Waiting for George
 
 Nothing is waiting. Add new questions here with a recommendation.
+
+### Answered 23 Oct
+
+<a id="q-short-gfx"></a>**Q-SHORT-GFX** Graphics in shorts show **full**, **split** beside the
+face, or **over the face**, where the graphic can be anything drawn over it (not just a card).
+The agent picks each graphic's mode and kind as it adds it, so it renders once. Footage has no
+fixed fit rule: speed up, slow down, trim or jump-cut as each beat needs, so each piece gets a
+speed; where footage runs out the camera comes back. Footage sound is the video's background
+(or sound effects), never its microphone. ([SHT-4](roadmap.md#sht-4))
 
 ### Answered 21 Oct
 

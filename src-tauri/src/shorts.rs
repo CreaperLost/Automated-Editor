@@ -90,6 +90,86 @@ pub enum GraphicSlot {
     /// Over the screen's part, under the captions; the graphic's see-through parts show the
     /// screen.
     OverScreen,
+    /// Over the face: the camera fills the frame while it plays and the graphic is drawn over
+    /// the whole of it, its see-through parts showing the face (callouts, labels, arrows).
+    OverFace,
+}
+
+impl GraphicSlot {
+    /// How it shows, for the user.
+    pub fn describe(self) -> &'static str {
+        match self {
+            GraphicSlot::Full => "over the whole frame",
+            GraphicSlot::Camera => "in the camera's part of the split",
+            GraphicSlot::Screen => "split: the face above, the graphic below",
+            GraphicSlot::OverScreen => "over the screen's part, under the captions",
+            GraphicSlot::OverFace => "over the face, which fills the frame",
+        }
+    }
+
+    /// What the graphic is told of it (`data-mode` on its root): `full`, `split` (a part of the
+    /// frame beside the face) or `over` (drawn over a picture that shows through).
+    pub fn data_mode(self) -> &'static str {
+        match self {
+            GraphicSlot::Full => "full",
+            GraphicSlot::Camera | GraphicSlot::Screen => "split",
+            GraphicSlot::OverScreen | GraphicSlot::OverFace => "over",
+        }
+    }
+}
+
+/// The split a graphic in the camera's or screen's part plays in: the short's base layout when
+/// that is a split, else the shorts' default one.
+pub fn split_layout(layouts: &crate::layouts::LayoutTrack) -> crate::layouts::Layout {
+    match &layouts.base {
+        base @ crate::layouts::Layout::SideBySide(_) => base.clone(),
+        _ => crate::layouts::LayoutTrack::for_short().base,
+    }
+}
+
+/// While a graphic shows split or over the face, the layout it needs: the split, or the camera
+/// filling the frame. Sections in the short's anchor media's time (the take's voice, or the
+/// recording), made fresh each time the short is played or exported, never stored.
+fn graphic_sections(timeline: &EditDocument, short: &Short) -> Vec<crate::layouts::LayoutSection> {
+    use crate::layouts::{CameraOnly, Layout, LayoutSection};
+    let anchor = match &short.media {
+        Some(media) => Some(media.clone()),
+        None => timeline
+            .assets
+            .iter()
+            .find(|a| a.is_recording())
+            .map(|a| a.id.clone()),
+    };
+    let Some(anchor) = anchor else {
+        return Vec::new();
+    };
+    let clock = crate::sequence::clock::asset_clock(&timeline.sequence, &anchor);
+    let mut out = Vec::new();
+    for track in timeline.sequence.video_tracks().filter(|t| !t.hidden) {
+        for clip in &track.clips {
+            let layout = match graphic_slot(&short.layout, &clip.id) {
+                GraphicSlot::Camera | GraphicSlot::Screen => split_layout(&timeline.layouts),
+                GraphicSlot::OverFace => Layout::CameraOnly(CameraOnly::default()),
+                _ => continue,
+            };
+            if !timeline.asset(&clip.asset).is_some_and(|a| a.is_graphic()) {
+                continue;
+            }
+            for (s, e) in clock.edited_range_to_source(clip.start_us, clip.end_us()) {
+                out.push(LayoutSection {
+                    rule: Some("graphic".into()),
+                    ..LayoutSection::new(
+                        format!("graphic-{}", clip.id),
+                        short.media.clone(),
+                        s,
+                        e,
+                        Some(layout.clone()),
+                    )
+                });
+            }
+        }
+    }
+    out
 }
 
 /// At most this many graphics have a slot in one short.
@@ -118,11 +198,11 @@ pub fn graphic_rect(
         return whole;
     };
     let slot = graphic_slot(short, clip_id);
-    if slot == GraphicSlot::Full {
+    if matches!(slot, GraphicSlot::Full | GraphicSlot::OverFace) {
         return whole;
     }
     let parts = arrange(
-        &document.layouts.base,
+        &split_layout(&document.layouts),
         &document.layout,
         Canvas::new(width, height),
         Sources {
@@ -528,6 +608,11 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
             slice_sequence(&base.sequence, &base.assets, start, end)
         }
     };
+    // A graphic split beside the face or over it sets the layout while it plays.
+    let sections = graphic_sections(&timeline, short);
+    if !sections.is_empty() {
+        timeline.layouts.add(sections);
+    }
     Ok(timeline)
 }
 

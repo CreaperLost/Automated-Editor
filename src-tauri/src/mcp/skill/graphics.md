@@ -47,6 +47,9 @@ unset; a composition of your own can use `var(--brand-accent)`, `var(--brand-bac
 copies a library item in. Items marked "as is" fail the check: look at one with `frame_render`
 before relying on it.
 
-In a short, a graphic plays over the whole frame unless it has a slot there (`graphic_set` with
-`short` and `slot`): `camera`, `screen`, or `overScreen` (over the screen part, under the
-captions). It renders for that space, so the templates fit any slot.
+In a short, a graphic shows one of three ways: `full` (the whole frame), `screen` (split: the
+face above, the graphic in the screen's part, footage or not) or `overFace` (the face fills the
+frame and the graphic is drawn over it, see-through); also `camera` and `overScreen`. Pick it
+when the graphic is added (`mode` in `short_footage` items) so it renders once; `graphic_set`
+with `short` and `slot` changes it later. The graphic's root gets `data-mode` (`full`, `split`
+or `over`): a composition of your own for `over` leaves its background out.

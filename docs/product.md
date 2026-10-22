@@ -39,7 +39,8 @@ the agent's output more checkable without the user watching every frame?*
    transcript.
 5. **Pin to meaning, not to time.** Things hang off words, clicks and recording time, so cuts
    don't knock them out of place.
-6. **One source for the look.** A brand kit feeds every graphic (captions not yet; see
+6. **One source for the look.** A brand kit (colours, font, logo) and the video's look (type,
+   corners, spacing, motion) feed every graphic (captions not yet; see
    [gaps.md](gaps.md#6-captions)).
 
 ## Where AeroEdits wins, and must keep winning
@@ -73,9 +74,9 @@ lack it, so we say "we have", not "only we have".
 | Camera | Face centring on every camera slot (YuNet, found once per recording), hand framing per clip | Local model |
 | Telemetry polish | Window crop to the front window, bubble hides under activity, shortcut badges, click/whoosh lane (off by default) | `windows.jsonl`, `keys.jsonl`, `events.jsonl` |
 | Captions | Word-highlighted captions, style sliders, one embedded font (Liberation Sans Bold) | Transcript |
-| Audio | Track gain, denoise, speech ducking, loudness normalisation | DSP |
-| Graphics | HyperFrames compositions: 6 tutorial templates + blank, brand kits, an app-level library behind a no-model quality gate, short slots | Pinned runtime (200 MB download on first use) |
-| Shorts | A Shorts workspace tab; word-range shorts that follow the video's edits or get their own timeline; **take shorts** (a new camera take with footage from the long video under it); own layouts | Agent or the app's cloud AI picks moments |
+| Audio | Track gain, denoise, speech ducking, loudness normalisation to -14 LUFS by default with a peak leveller, crossfades at cuts | DSP |
+| Graphics | HyperFrames compositions: 6 tutorial templates + blank in a light app style, one look per video (presets, five controls, preview), brand kits, an app-level library behind a no-model quality gate, short slots; exports render them at their fps and 2× density above 1080p | Pinned runtime (200 MB download on first use) |
+| Shorts | A Shorts workspace tab; word-range shorts that follow the video's edits or get their own timeline; **take shorts** (a new camera take with footage from the long video under it, each piece at its own speed; graphics full frame, split beside the face or over it); own layouts | Agent or the app's cloud AI picks moments |
 | Chapters | YouTube chapters from the transcript, checked before export | The app's cloud AI |
 | Review | `check` (≈12 defect classes, one-click fixes, each its own undo step) and `storyboard` (one contact sheet of the edit) | No model |
 | Export | H.264/AAC, 720p–4K, GPU encoders (NVENC, AMF, QSV, else x264); shorts at 1080×1920 | FFmpeg (Windows/Linux), AVFoundation (macOS) |

@@ -319,9 +319,9 @@ pub static ACTIONS: [ToolDef; 40] = [
         description: "Changes a graphic: its variables (checked against what it declares; \
             null puts one back to its default), its name, its length on the timeline, its \
             brand kit (`default` for the project's, `none`, or a kit from brand_kits), and with \
-            `short` the slot it plays in that short (`full` frame, the `camera` or `screen` \
-            part of the split, or `overScreen`: over the screen part, under the captions, its \
-            see-through parts showing the screen). It renders again by itself. `moveToUs` or \
+            `short` how it shows there (`slot`: `full` frame, `screen` split beside the face, \
+            `overFace` over the face filling the frame, `camera`, or `overScreen` under the \
+            captions). It renders again by itself. `moveToUs` or \
             `moveToWord` moves it; `remove: true` takes it out of the project with its clips \
             (one undo step).",
         schema: schema::<GraphicSetArgs>,
@@ -3331,9 +3331,21 @@ pub struct FootageItemArgs {
     pub media: Option<String>,
     #[serde(default)]
     pub media_s: Option<f64>,
-    /// Play the footage's game or desktop sound, ducked under the voice. Default true.
+    /// Play the footage's game or desktop sound, ducked under the voice (never its microphone).
+    /// Default true.
     #[serde(default)]
     pub sound: Option<bool>,
+    /// How fast the footage plays, 0.25-4 (default 1): 1.5 fits 1.5x the footage into the
+    /// gap, 0.75 stretches less to fill it. Trim by choosing a shorter stretch; jump-cut with
+    /// several items in a row.
+    #[serde(default)]
+    pub speed: Option<f64>,
+    /// For a graphic: how it shows. `full` (the whole frame: the graphic is the point),
+    /// `screen` (split: the face above, the graphic in the screen's part, footage or not) or
+    /// `overFace` (the face fills the frame and the graphic is drawn over it, see-through:
+    /// callouts, labels, arrows). Picked before it renders, so it renders once. Default full.
+    #[serde(default)]
+    pub mode: Option<crate::shorts::GraphicSlot>,
     /// Or a graphic: a template name, a library item, or one of the video's graphics (its id
     /// from `graphics`), with its `name` and `variables`.
     #[serde(default)]
@@ -3513,6 +3525,7 @@ fn propose_under(
                     length_us: to.map(|t| t.saturating_sub(at_us)).filter(|l| *l > 0),
                     name: item.name.clone(),
                     variables: item.variables.clone(),
+                    mode: item.mode,
                 });
                 continue;
             }
@@ -3555,6 +3568,7 @@ fn propose_under(
                 video_us,
                 media: item.media.clone(),
                 sound: item.sound.unwrap_or(true),
+                speed: item.speed.unwrap_or(1.0),
             }));
         }
         Ok(out)
@@ -4273,13 +4287,7 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
                 lines.push(format!(
                     "In short \"{title}\" it plays {}.",
-                    match slot {
-                        crate::shorts::GraphicSlot::Full => "over the whole frame",
-                        crate::shorts::GraphicSlot::Camera => "in the camera's part",
-                        crate::shorts::GraphicSlot::Screen => "in the screen's part",
-                        crate::shorts::GraphicSlot::OverScreen =>
-                            "over the screen, under the captions",
-                    }
+                    slot.describe()
                 ));
             }
             _ => {}
@@ -5544,7 +5552,7 @@ mod tests {
             "short_footage",
             json!({ "short": "Take", "op": "add", "reason": "Graphics for the take",
                     "items": [
-                        { "atS": 0.5, "toS": 1.5, "template": "title" },
+                        { "atS": 0.5, "toS": 1.5, "template": "title", "mode": "overFace" },
                         { "atS": 2.0, "graphic": video_graphic,
                           "variables": { "title": "In the short" } }
                     ] }),
@@ -5553,7 +5561,8 @@ mod tests {
         assert!(
             proposed.contains("Proposed b-")
                 && proposed.contains("(template title)")
-                && proposed.contains("a copy of the video's"),
+                && proposed.contains("a copy of the video's")
+                && proposed.contains("over the face, which fills the frame"),
             "{proposed}"
         );
         assert_eq!(revision(&ctx), before, "proposing changes nothing");
@@ -5579,6 +5588,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(revision(&ctx), before + 1, "accepted as one undo step");
+        // The title's mode came with it, set before it ever rendered.
+        let modes = with_reader(ctx.state, |r| {
+            Ok(r.document().shorts[0]
+                .layout
+                .graphic_slots
+                .values()
+                .copied()
+                .collect::<Vec<_>>())
+        })
+        .unwrap();
+        assert_eq!(modes, vec![crate::shorts::GraphicSlot::OverFace]);
         let (on_video, in_short, copy_title) = with_reader(ctx.state, |reader| {
             let document = reader.document();
             let graphics = |clips: Vec<&crate::sequence::Clip>| {

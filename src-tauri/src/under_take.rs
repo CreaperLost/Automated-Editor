@@ -49,6 +49,10 @@ pub enum Under {
         /// Values for its variables, by id.
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         variables: Map<String, Value>,
+        /// How it shows in the short (whole frame, split beside the face, over the face), set
+        /// as it is placed so it renders once, for that.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<crate::shorts::GraphicSlot>,
     },
 }
 
@@ -129,9 +133,14 @@ fn put_all(
                     None => format!("the video from {}", clock(footage.video_us)),
                 };
                 done.lines.push(format!(
-                    "{}-{}: {what}{}",
+                    "{}-{}: {what}{}{}",
                     clock(footage.at_us),
                     clock(footage.to_us),
+                    if footage.speed == 1.0 {
+                        String::new()
+                    } else {
+                        format!(" at {}x", footage.speed)
+                    },
                     if footage.sound { "" } else { ", muted" }
                 ));
             }
@@ -141,6 +150,7 @@ fn put_all(
                 length_us,
                 name,
                 variables,
+                mode,
             } => {
                 let (asset, length, said) = make_graphic(
                     root,
@@ -162,11 +172,19 @@ fn put_all(
                     length,
                 )
                 .map_err(at)?;
+                let mode = mode.unwrap_or_default();
+                if mode != crate::shorts::GraphicSlot::Full {
+                    shorts[index]
+                        .layout
+                        .graphic_slots
+                        .insert(clip.clone(), mode);
+                }
                 done.lines.push(format!(
-                    "{}-{}: graphic \"{}\" ({said})",
+                    "{}-{}: graphic \"{}\" ({said}), {}",
                     clock(*at_us),
                     clock(at_us + length),
-                    asset.name
+                    asset.name,
+                    mode.describe()
                 ));
                 done.graphics.push((asset.id, clip));
             }

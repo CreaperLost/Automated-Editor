@@ -59,6 +59,7 @@ import {
   SoundEffect,
   GraphicCreated,
   GraphicListed,
+  GraphicSlot,
   GraphicsRuntimeStatus,
   GraphicTemplate,
   GraphicUpdated,
@@ -560,6 +561,7 @@ export const api = {
     from: ShortGraphicFrom,
     atUs: number,
     lengthUs: number | null,
+    mode: GraphicSlot | null = null,
   ) =>
     invokeTauri<GraphicCreated>("project_short_graphic_add", {
       projectHandle,
@@ -568,6 +570,7 @@ export const api = {
       from,
       atUs: Math.max(0, Math.round(atUs)),
       lengthUs: lengthUs === null ? null : Math.round(lengthUs),
+      mode,
     }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),

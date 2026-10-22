@@ -48,7 +48,11 @@ mounted at `recordings/<asset id>/`.
   memory only** (gap: [SAFE-2](roadmap.md#safe-2)).
 - **Shorts** are windows anchored in source time that follow the video's edits until edited on
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
-  from the video under it (`take_short.rs`). Their own layout tracks, captions and graphic slots.
+  from the video under it (`take_short.rs`), each piece at its own speed. Their own layout
+  tracks, captions and graphic slots. A graphic split beside the face (`screen`) or over it
+  (`overFace`) adds a layout section for its time when the short's timeline is built
+  (`shorts::graphic_sections`, never stored), and its render gets `data-mode`
+  (`full`/`split`/`over`) on the root.
 
 ## Transcription
 

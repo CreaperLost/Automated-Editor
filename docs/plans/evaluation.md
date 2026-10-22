@@ -118,10 +118,12 @@ step. Same inputs, same first messages, a fresh project.
 - ~~A graphic on a short can't be moved or lengthened~~: fixed 23 Oct (below).
 - **The take short keeps its placeholder title** ("Take short") until asked, although the
   template says to rename it after the transcript.
-- **Graphics in a short cover the face 22 of 31.6 s** (full frame) and mix two looks (white
-  library graphics, navy key points): a style kit (STY-1) and a "keep the face" rule for
-  shorts are the fix, not a code change.
-- **The key-point card is plain** (a navy slide, much empty space): GFX-3.
+- **Graphics in a short cover the face 22 of 31.6 s** (full frame): graphic modes in shorts
+  ([SHT-4](../roadmap.md#sht-4)). They also mixed two looks (white library graphics, navy key
+  points); fixed 22 Oct: every template now has the light app look and every graphic in a
+  video takes one look (GFX-5).
+- **The key-point card was plain** (a navy slide, much empty space); fixed 22 Oct: a white
+  card with a label and the statement large (GFX-5). New kinds of templates: GFX-3.
 - **Undo history does not survive a restart** (SAFE-2).
 - **No in-app run report** of time and provider spend (the other half of the old EVAL-1).
 

@@ -1693,6 +1693,7 @@ async fn project_graphic_create(
 /// on take short `short_id`'s own timeline at `at_us`, one undo step.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn project_short_graphic_add(
     app: tauri::AppHandle,
     project_handle: String,
@@ -1701,6 +1702,7 @@ async fn project_short_graphic_add(
     from: commands::graphics::ShortGraphicFrom,
     at_us: u64,
     length_us: Option<u64>,
+    mode: Option<shorts::GraphicSlot>,
 ) -> Result<commands::graphics::GraphicCreated, String> {
     tauri::async_runtime::spawn_blocking(move || {
         commands::graphics::project_short_graphic_add_impl(
@@ -1711,6 +1713,7 @@ async fn project_short_graphic_add(
             from,
             at_us,
             length_us,
+            mode,
         )
     })
     .await

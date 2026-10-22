@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api } from "../lib/ipc";
 import { GAP_PRESETS } from "../lib/jumpCutConfig";
 import { clipEnd, clipSourceAt, soundSources } from "../lib/sequence";
-import type { ExportStatus, Footage, OpenedProject, Short, ShortGraphicFrom, ShortLayout } from "../lib/types";
+import type { ExportStatus, Footage, GraphicSlot, OpenedProject, Short, ShortGraphicFrom, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 
 export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
@@ -379,10 +379,19 @@ export function addFootage(shortId: string, items: Footage[]) {
   );
 }
 
-/** Makes a graphic and places it under a take at `atUs`; `lengthUs` null keeps its own. */
-export function addShortGraphic(shortId: string, from: ShortGraphicFrom, atUs: number, lengthUs: number | null) {
+/** Makes a graphic and places it under a take at `atUs`, showing as `mode` (so it renders once,
+ *  for that); `lengthUs` null keeps its own. */
+export function addShortGraphic(
+  shortId: string,
+  from: ShortGraphicFrom,
+  atUs: number,
+  lengthUs: number | null,
+  mode: GraphicSlot = "full",
+) {
   void runShorts("Adding a graphic", (p) =>
-    api.projectShortGraphicAdd(p.projectHandle, p.revision, shortId, from, atUs, lengthUs).then((made) => made.project),
+    api
+      .projectShortGraphicAdd(p.projectHandle, p.revision, shortId, from, atUs, lengthUs, mode)
+      .then((made) => made.project),
   );
 }
 

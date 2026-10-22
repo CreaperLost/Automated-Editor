@@ -970,7 +970,7 @@ export interface GraphicLibrarySaved {
 }
 
 /** Where a graphic plays in a short. */
-export type GraphicSlot = "full" | "camera" | "screen" | "overScreen";
+export type GraphicSlot = "full" | "camera" | "screen" | "overScreen" | "overFace";
 
 export interface GraphicListed extends GraphicView {
   /** [clip id, start, length] on the timeline. */
@@ -1658,6 +1658,8 @@ export interface Footage {
   sound?: boolean;
   /** An imported file instead of the video (`videoUs` is then where in the file). */
   media?: string;
+  /** How fast it plays, 0.25 to 4 (default 1): what it takes from the video is the gap times this. */
+  speed?: number;
 }
 
 /** Where a graphic placed under a take comes from. */

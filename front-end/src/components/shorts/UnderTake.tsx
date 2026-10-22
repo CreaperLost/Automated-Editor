@@ -2,7 +2,15 @@ import React from "react";
 import { FilePlus2, Search } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { soundSources } from "../../lib/sequence";
-import type { Asset, GraphicLibraryItem, GraphicListed, GraphicTemplate, OpenedProject, Short } from "../../lib/types";
+import type {
+  Asset,
+  GraphicLibraryItem,
+  GraphicListed,
+  GraphicSlot,
+  GraphicTemplate,
+  OpenedProject,
+  Short,
+} from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import {
   addFootage,
@@ -18,6 +26,16 @@ type Source = "video" | "graphic" | "file";
 
 /** A file's stretch when nothing is selected: a still or a clip's first seconds. */
 const FILE_US = 4_000_000;
+
+/** How fast footage from the video plays under the take: more fits faster, less fills slower. */
+const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
+
+/** How a graphic shows in a short, chosen before it is made so it renders once. */
+const MODES: { value: GraphicSlot; label: string; title: string }[] = [
+  { value: "full", label: "Full", title: "The whole frame: the graphic is the point" },
+  { value: "screen", label: "Split", title: "Your face above, the graphic below" },
+  { value: "overFace", label: "Over face", title: "Your face fills the frame, the graphic over it" },
+];
 
 const ROW =
   "w-full flex items-baseline gap-2 rounded-control px-1.5 py-1 text-left text-meta hover:bg-studio-800 disabled:opacity-40 disabled:hover:bg-transparent";
@@ -68,6 +86,7 @@ const FromVideo: React.FC<{ shortId: string; at: At; disabled: boolean }> = ({ s
   const main = useShortsStore((s) => s.main);
   const [lines, setLines] = React.useState<VideoLine[] | null>(null);
   const [query, setQuery] = React.useState("");
+  const [speed, setSpeed] = React.useState<number>(1);
   // The video's speech: what plays on its timeline, spoken first.
   const speech = React.useMemo(() => {
     const placed = soundSources(main).filter((s) => s.placed);
@@ -92,6 +111,18 @@ const FromVideo: React.FC<{ shortId: string; at: At; disabled: boolean }> = ({ s
   const shown = words ? lines.filter((l) => l.text.toLowerCase().includes(words)) : lines;
   return (
     <>
+      <Segmented<number>
+        label="How fast the footage plays"
+        size="sm"
+        className="w-full [&>button]:flex-1"
+        value={speed}
+        onChange={setSpeed}
+        options={SPEEDS.map((s) => ({
+          value: s,
+          label: `${s}×`,
+          title: s === 1 ? "As recorded" : s > 1 ? "Faster: more footage fits" : "Slower: less footage fills more",
+        }))}
+      />
       <div className="relative">
         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-studio-500 pointer-events-none" />
         <input
@@ -112,8 +143,11 @@ const FromVideo: React.FC<{ shortId: string; at: At; disabled: boolean }> = ({ s
               disabled={disabled}
               title="Put the video from here under the take"
               onClick={() => {
-                const range = at(line.endUs - line.startUs);
-                if (range) addFootage(shortId, [{ atUs: range.atUs, toUs: range.toUs, videoUs: line.startUs }]);
+                const range = at((line.endUs - line.startUs) / speed);
+                if (range)
+                  addFootage(shortId, [
+                    { atUs: range.atUs, toUs: range.toUs, videoUs: line.startUs, ...(speed !== 1 ? { speed } : {}) },
+                  ]);
               }}
             >
               <span className="font-mono tabular-nums text-studio-500 shrink-0">{formatTime(line.startUs)}</span>
@@ -140,6 +174,7 @@ const FromGraphics: React.FC<{ project: OpenedProject; shortId: string; at: At; 
   disabled,
 }) => {
   const [choices, setChoices] = React.useState<GraphicChoices | null>(null);
+  const [mode, setMode] = React.useState<GraphicSlot>("full");
   const main = useShortsStore((s) => s.main);
   React.useEffect(() => {
     let live = true;
@@ -159,7 +194,7 @@ const FromGraphics: React.FC<{ project: OpenedProject; shortId: string; at: At; 
   // Its own length unless a stretch is selected.
   const place = (from: Parameters<typeof addShortGraphic>[1]) => {
     const range = at(1_000_000);
-    if (range) addShortGraphic(shortId, from, range.atUs, range.selected ? range.toUs - range.atUs : null);
+    if (range) addShortGraphic(shortId, from, range.atUs, range.selected ? range.toUs - range.atUs : null, mode);
   };
   const group = (title: string, items: React.ReactNode[]) =>
     items.length > 0 && (
@@ -170,6 +205,14 @@ const FromGraphics: React.FC<{ project: OpenedProject; shortId: string; at: At; 
     );
   return (
     <div className="max-h-72 overflow-y-auto">
+      <Segmented<GraphicSlot>
+        label="How the graphic shows"
+        size="sm"
+        className="w-full [&>button]:flex-1 mb-1"
+        value={mode}
+        onChange={setMode}
+        options={MODES}
+      />
       {group(
         "The video's (a copy, made 9:16)",
         choices.video.map((g) => (

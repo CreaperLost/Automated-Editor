@@ -287,8 +287,8 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
 <a id="sht-3"></a>
 - **SHT-3 · Dress step (S/M).** Graphics into the short's slots as the last step, as a review batch.
 <a id="sht-4"></a>
-- **SHT-4 · Take-short follow-ups (S).** Speed/freeze fit modes, per-short ducking amount. (The
-  picker is done, 23 Oct.)
+- **SHT-4 · Take-short follow-ups (S).** Per-short ducking amount. (The picker, graphic modes
+  and footage speed are done, 23 Oct: see [Done](#done).)
 
 ### Layouts — plan: [plans/layouts.md](plans/layouts.md)
 
@@ -465,6 +465,17 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **23 Oct 2026** — **Shorts: graphic modes and footage speed (SHT-4, decided with George,
+  [Q-SHORT-GFX](decisions.md#q-short-gfx)).** A graphic in a short shows **full** (the whole
+  frame), **split** (`screen`: the face above, the graphic below, footage or not) or **over
+  face** (`overFace`: the camera fills the frame, the graphic drawn over it, see-through). The
+  agent (or the Shorts tab) picks the mode as it adds the graphic, so it renders once; while a
+  split or over-face graphic plays the short gets the layout for it (sections made when its
+  timeline is built, never stored). Renders get `data-mode` on the root; the templates show an
+  over-face version as a panel at the bottom. Footage under a take plays at its own `speed`
+  (0.25-4x), so the agent fits it by speed, trimming or several pieces; where it ends the camera
+  comes back. Checked in the dev app on a take short with all three modes and 1.5x footage.
 
 - **22 Oct 2026** — **GFX-5: one look for every graphic, and app-like templates.** A video has one
   look in its edit document (`graphics/look.rs`): a preset (App, Calm, Bold) scaled by five

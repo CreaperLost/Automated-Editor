@@ -699,6 +699,18 @@ pub fn size_composition(
     html
 }
 
+/// `html` with attribute `name` set to `value` on the root composition element.
+pub fn with_root_attribute(html: &str, name: &str, value: &str) -> String {
+    let mut html = html.to_string();
+    if let Some(at) = root_at(&html) {
+        let start = html[..at].rfind('<').unwrap_or(0);
+        let end = html[at..].find('>').map_or(html.len(), |e| at + e);
+        let tag = set_attribute(&html[start..end], name, value);
+        html.replace_range(start..end, &tag);
+    }
+    html
+}
+
 /// `tag` (an element's opening tag without its `>`) with attribute `name` set to `value`.
 fn set_attribute(tag: &str, name: &str, value: &str) -> String {
     let needle = format!(" {name}=");
@@ -772,6 +784,23 @@ pub fn placeholder_frame(width: u32, height: u32, label: &str) -> crate::media::
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_root_is_found_past_the_looks_selector() {
+        let html = "<style>[data-composition-id] { --look-radius: 1vmin; }</style>\n\
+                    <div id=\"root\" data-composition-id=\"graphic\" data-overlay>";
+        let marked = with_root_attribute(html, "data-mode", "over");
+        assert!(marked.contains("data-composition-id=\"graphic\" data-overlay data-mode=\"over\""));
+        assert!(
+            marked.starts_with("<style>[data-composition-id] {"),
+            "{marked}"
+        );
+        assert!(root_has(&marked, "data-overlay"));
+        assert!(root_has(
+            &with_root_attribute(&marked, "data-mode", "split"),
+            "data-mode"
+        ));
+    }
 
     #[test]
     fn declarations_are_read_from_the_html_attribute() {

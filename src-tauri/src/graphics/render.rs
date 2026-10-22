@@ -63,6 +63,9 @@ pub struct Spec {
     pub default_brand: Option<String>,
     /// The look's style for this graphic: the video's, with the graphic's own tokens over it.
     pub look: String,
+    /// How it shows (`data-mode` on its root): `full`, `split` beside the face in a short, or
+    /// `over` a picture that shows through.
+    pub mode: &'static str,
 }
 
 /// The size a graphic renders at for a canvas of `width` x `height` (preview canvases are
@@ -112,6 +115,7 @@ impl Spec {
             brands: super::brands::dir(),
             default_brand: None,
             look: super::look::Look::default().css(&Default::default()),
+            mode: "full",
         }
     }
 
@@ -133,8 +137,9 @@ impl Spec {
         let mut spec = Self::new(root, asset, shared, clip.duration_us);
         let mut whole_frame = true;
         if let Some(short) = &document.short_layout {
-            whole_frame =
-                crate::shorts::graphic_slot(short, &clip.id) == crate::shorts::GraphicSlot::Full;
+            let slot = crate::shorts::graphic_slot(short, &clip.id);
+            whole_frame = slot == crate::shorts::GraphicSlot::Full;
+            spec.mode = slot.data_mode();
             let (_, _, w, h) =
                 crate::shorts::graphic_rect(document, &clip.id, spec.width, spec.height);
             spec.width = (w & !1).max(2);
@@ -232,9 +237,10 @@ impl Spec {
             }
             None => hasher.update(b"no brand\0"),
         }
-        // The look, so changing it renders every graphic again.
+        // The look, so changing it renders every graphic again; and how it shows.
         hasher.update(b"look\0");
         hasher.update(self.look.as_bytes());
+        hasher.update(self.mode.as_bytes());
         let digest = hasher.finalize();
         Ok(digest.iter().take(8).map(|b| format!("{b:02x}")).collect())
     }
@@ -806,6 +812,7 @@ fn stage_render(
     );
     // The video's look, after the composition's own defaults for the same tokens.
     let sized = super::look::inject_css(&sized, &spec.look);
+    let sized = super::with_root_attribute(&sized, "data-mode", spec.mode);
     std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
     // GSAP, when the composition loads it, beside it (fetched once).
     super::gsap::stage(stage, cancel)?;
@@ -1122,6 +1129,7 @@ mod tests {
             brands: dir.join("brands"),
             default_brand: None,
             look: String::new(),
+            mode: "full",
         }
     }
 
