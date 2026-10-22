@@ -53,6 +53,17 @@ pub fn render_size(width: u32, height: u32) -> (u32, u32) {
     (even(w), even(h))
 }
 
+/// The canvas a graphic renders for: the edit's own when the view has its shape. Views of the
+/// edit (the preview at the window's size, storyboard tiles, the export) round its shape a
+/// pixel or two differently, and each rounding would be a render of its own.
+pub fn shared_canvas(edit: Option<(u32, u32)>, view: (u32, u32)) -> (u32, u32) {
+    let same_shape = |(a, b): (u32, u32)| {
+        let (a, b, w, h) = (a as f64, b as f64, view.0.max(1) as f64, view.1.max(1) as f64);
+        ((a / b) / (w / h) - 1.0).abs() < 0.02
+    };
+    edit.filter(|edit| same_shape(*edit)).unwrap_or(view)
+}
+
 impl Spec {
     pub fn new(
         root: &Path,
@@ -88,6 +99,7 @@ impl Spec {
         canvas: (u32, u32),
         full_camera: &[(u64, u64)],
     ) -> Self {
+        let canvas = shared_canvas(document.layout.preview_dimensions().ok(), canvas);
         let mut spec = Self::new(root, asset, canvas, clip.duration_us);
         let mut whole_frame = true;
         if let Some(short) = &document.short_layout {
@@ -1024,6 +1036,23 @@ mod tests {
         assert_ne!(none, plain, "graphic.json changed");
         a.default_brand = None;
         assert_eq!(a.hash().unwrap(), none);
+    }
+
+    #[test]
+    fn every_view_of_the_edit_asks_for_one_render() {
+        // A short's storyboard tile (176 x 312) used to render at 1082 x 1920 and its export
+        // at 1080 x 1920: the same graphic twice.
+        let short = Some((1080, 1920));
+        for view in [(176, 312), (176, 313), (607, 1080), (1080, 1920), (2160, 3840)] {
+            assert_eq!(render_size_of(shared_canvas(short, view)), (1080, 1920), "{view:?}");
+        }
+        // A view of another shape keeps its own.
+        assert_eq!(shared_canvas(short, (1920, 1080)), (1920, 1080));
+        assert_eq!(shared_canvas(None, (176, 312)), (176, 312));
+    }
+
+    fn render_size_of(canvas: (u32, u32)) -> (u32, u32) {
+        render_size(canvas.0, canvas.1)
     }
 
     #[test]

@@ -48,12 +48,13 @@ flowchart LR
 ### EVAL-1 · A baseline evaluation set and a run report — S/M
 
 - **Why:** every research doc asks for it, and without it no later item can prove it helped.
-- **Do:** fix three inputs: a 10–15 min English tutorial with camera and telemetry, a real Greek
-  tutorial clip, a 30–60 s talking-head short. Run today's workflow on each and record wall time,
-  agent time, human corrections, wrong cuts and misses, and spend (subscriptions, keys,
-  generation). Add a per-run report to the Agent panel / `status`: duration per pass and any
-  provider cost the app knows.
-- **Needs from George:** the three recordings. **Output:** `plans/evaluation.md` with the numbers.
+- **Do (decided 23 Oct):** two English inputs, the milestones in order: a long-form tutorial
+  (`Untitled 22 Oct 2026 2.aero`, camera and telemetry) edited with the `tutorial` template, and
+  a short from a take recorded for it (`Untitled 22 Oct 2026 3.aero`) with the `shorts`
+  template, footage and graphics from the edited tutorial. Run each with a real agent and record
+  wall time, agent tokens and cost, tool calls, human corrections, wrong cuts and misses, and
+  provider spend (transcription, reviews). Greek is future work (LNG-4).
+- **Output:** `plans/evaluation.md` with the numbers, rerun after each cost or quality change.
 
 ---
 

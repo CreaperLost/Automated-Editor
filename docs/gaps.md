@@ -141,7 +141,6 @@ The research is clear that sound is **placement and art direction, not library b
 | A short is still one continuous stretch (`Short.source_start_us..source_end_us` or a copied `ShortEdit`): it can't combine a setup at minute 3 with the payoff at minute 17 | Code: `shorts.rs` | [SHT-1](roadmap.md#sht-1) |
 | Caption text, breaks and emphasis can't be shaped inside a short | Code | [SHT-2](roadmap.md#sht-2) |
 | Take shorts: no speed/freeze fit modes, no per-short ducking amount | Log: `plans/shorts.md` | [SHT-4](roadmap.md#sht-4) |
-| A short's storyboard renders graphics at 1082x1920 while its export uses 1080x1920, so each graphic renders twice (found 23 Oct) | Log: SHT-6 live check | — |
 | No outside-transcript import, no ordered take assembly, no script-guided assembly; no one-step "run this template now" after opening a project (automatic folder watch is turned down) | Code | [FTG-4](roadmap.md#ftg-4), [FTG-5](roadmap.md#ftg-5), [AUTO-1](roadmap.md#auto-1) |
 
 ## 10. Finishing and delivery: absent from the app, not just the agent
