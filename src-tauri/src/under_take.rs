@@ -61,6 +61,8 @@ pub struct Put {
     pub lines: Vec<String>,
     /// The graphic folders made; remove them if the edit is not kept.
     pub folders: Vec<PathBuf>,
+    /// Graphics placed here that play at the same time as another one, one line each.
+    pub overlaps: Vec<String>,
 }
 
 impl Put {
@@ -87,6 +89,7 @@ pub fn put(
         graphics: Vec::new(),
         lines: Vec::new(),
         folders: Vec::new(),
+        overlaps: Vec::new(),
     };
     match put_all(root, into, &mut done, short_id, items) {
         Ok(()) => Ok(done),
@@ -169,8 +172,50 @@ fn put_all(
             }
         }
     }
+    done.overlaps = overlaps(&done.document, &shorts[index], &done.graphics);
     done.document.shorts = shorts;
     Ok(())
+}
+
+/// Where a graphic just placed (`placed`) plays at the same time as another graphic on the
+/// short's own timeline: two over the whole frame hide each other.
+fn overlaps(
+    document: &EditDocument,
+    short: &crate::shorts::Short,
+    placed: &[(String, String)],
+) -> Vec<String> {
+    let Some(sequence) = short.edit.as_ref().map(|e| &e.sequence) else {
+        return Vec::new();
+    };
+    let graphics: Vec<(&str, &str, u64, u64)> = sequence
+        .clips()
+        .filter(|(_, c)| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+        .map(|(_, c)| {
+            (
+                c.id.as_str(),
+                c.asset.as_str(),
+                c.start_us,
+                c.start_us + c.duration_us,
+            )
+        })
+        .collect();
+    let new = |clip: &str| placed.iter().any(|(_, id)| id == clip);
+    let mut out = Vec::new();
+    for (i, a) in graphics.iter().enumerate() {
+        for b in &graphics[i + 1..] {
+            let (from, to) = (a.2.max(b.2), a.3.min(b.3));
+            if to > from && (new(a.0) || new(b.0)) {
+                out.push(format!(
+                    "\"{}\" and \"{}\" play together at {}-{}",
+                    asset_name(document, a.1),
+                    asset_name(document, b.1),
+                    clock(from),
+                    clock(to)
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn asset_name(document: &EditDocument, id: &str) -> String {
@@ -279,7 +324,16 @@ pub fn check(
         "aeroedits-under-{}",
         crate::sequence::sources::new_asset_id(false)
     ));
-    let checked = put(root, &scratch, document, short_id, items).map(|done| done.lines);
+    let checked = put(root, &scratch, document, short_id, items);
     let _ = std::fs::remove_dir_all(&scratch);
-    checked
+    let done = checked?;
+    // One graphic at a time over the frame: an agent's batch fixes its times before the user sees it.
+    if !done.overlaps.is_empty() {
+        return Err(format!(
+            "Graphics would overlap: {}. End one earlier or start the next later (`toS` / \
+             `toWord`), or remove the one already there.",
+            done.overlaps.join("; ")
+        ));
+    }
+    Ok(done.lines)
 }

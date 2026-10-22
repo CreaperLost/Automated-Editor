@@ -115,9 +115,7 @@ step. Same inputs, same first messages, a fresh project.
 ## Open findings (not fixed)
 
 - **ElevenLabs rejected its API key** on this PC: check the key in Settings > Transcription.
-- **A graphic on a short can't be moved or lengthened** (`graphic_set` works on the video's
-  timeline only); the agent removes and re-proposes instead. The proposal check could also
-  flag graphics that overlap.
+- ~~A graphic on a short can't be moved or lengthened~~: fixed 23 Oct (below).
 - **The take short keeps its placeholder title** ("Take short") until asked, although the
   template says to rename it after the transcript.
 - **Graphics in a short cover the face 22 of 31.6 s** (full frame) and mix two looks (white
@@ -126,6 +124,22 @@ step. Same inputs, same first messages, a fresh project.
 - **The key-point card is plain** (a navy slide, much empty space): GFX-3.
 - **Undo history does not survive a restart** (SAFE-2).
 - **No in-app run report** of time and provider spend (the other half of the old EVAL-1).
+
+## After run 2 (23 Oct): a smaller context, short graphics
+
+George's call: $1-2 a video is fine, so the cost work stops here; no third run.
+
+- **Rarely needed tools behind `more`:** 18 tools an edit rarely needs leave the list agents
+  are sent on every connection; `more` names them, gives a tool's arguments and runs it. The
+  list goes from 75,260 to 53,828 characters (about 5,300 tokens less per session). Not
+  `tools/list_changed`: Codex doesn't refresh a tool list mid-session.
+- **A shorter automatic guide:** `template` with `auto: true` leaves out the questions and dry
+  runs a step-by-step run needs, and the thorough review unless chosen; export steps come on
+  request. 20,440 → 14,025 characters for the tutorial.
+- **The transcript** was already compact (lines with the first and last word id), so it stays.
+- **Short graphics:** `graphic_set` with a take short moves (`moveToWord` from the take) and
+  lengthens graphics on the short's own timeline, so the 23-call detour of run 2's S2 is one
+  call; the app refuses an under-take batch whose graphics would overlap, with the times.
 
 ## Rerun
 

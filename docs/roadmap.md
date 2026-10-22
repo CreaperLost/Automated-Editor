@@ -459,6 +459,13 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — **A smaller agent context, and graphics on a take short that move**: 18
+  rarely needed tools sit behind `more` (the tool list 75,260 → 53,828 characters; works in
+  Codex, which ignores `tools/list_changed`); `template` with `auto: true` drops the questions
+  (20,440 → 14,025 characters for the tutorial) and gives export steps on request;
+  `graphic_set` with a take short moves and lengthens its graphics on the short's timeline;
+  an under-take batch whose graphics overlap is refused with the times. George: $1-2 a video
+  is fine, so cost work pauses here.
 - **23 Oct 2026** — **Fewer agent calls**, measured by rerunning EVAL-1: automatic mode passes
   `guard: true` to `mouth_noises`, `silence` and `fillers` and the app applies its own
   "looks wrong" check instead of a dry run first (takes not guarded); `graphic_add` takes

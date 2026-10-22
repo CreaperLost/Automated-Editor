@@ -4060,7 +4060,8 @@ pub struct GraphicSetArgs {
     /// Its brand kit: `default` (the project's), `none`, or a kit's name from brand_kits.
     #[serde(default)]
     pub brand: Option<String>,
-    /// A short (id or title) to set the graphic's `slot` in.
+    /// A short (id or title): set the graphic's `slot` in it; for a short made from a take,
+    /// moves and lengths are on its own timeline too (`moveToWord` a word of the take).
     #[serde(default)]
     pub short: Option<String>,
     /// Where it plays in that short.
@@ -4114,23 +4115,56 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         return text(applied(ctx, "graphic_set", &before, vec![line])?);
     }
     let mut lines = Vec::new();
-    let target = match (args.move_to_us, &args.move_to_word) {
-        (Some(at), None) => Some(at),
-        (None, Some(word)) => Some(word_edited_us(ctx, args.stream.clone(), word)?),
-        (None, None) => None,
+    // A take short's graphics are on its own timeline: moves and lengths happen there, at its
+    // words. A clip's graphics are the video's.
+    let take = match &args.short {
+        Some(wanted) => Some(short_named(ctx, wanted)?).filter(|s| s.take.is_some()),
+        None => None,
+    };
+    let on_take = take.as_ref().map(|s| s.id.clone());
+    let clip_of = |ctx: &Ctx| {
+        with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let found = match &on_take {
+                Some(id) => document
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .and_then(|s| s.edit.as_ref())
+                    .and_then(|e| {
+                        e.sequence
+                            .clips()
+                            .find(|(_, c)| c.asset == args.graphic)
+                            .map(|(_, c)| (c.id.clone(), c.start_us))
+                    }),
+                None => document
+                    .sequence
+                    .clips()
+                    .find(|(_, c)| c.asset == args.graphic)
+                    .map(|(_, c)| (c.id.clone(), c.start_us)),
+            };
+            found.ok_or_else(|| match &on_take {
+                Some(id) => format!("Graphic {} does not play in short {id}", args.graphic),
+                None => format!("Graphic {} is not on the timeline", args.graphic),
+            })
+        })
+    };
+    let target = match (args.move_to_us, &args.move_to_word, &take) {
+        (Some(at), None, _) => Some(at),
+        (None, Some(word), Some(short)) => Some(with_reader(ctx.state, |reader| {
+            let voice = &short.take.as_ref().ok_or("No take")?.voice;
+            let transcript = store::load_transcript(reader.root(), voice)?.ok_or_else(|| {
+                format!("The take is not transcribed: `transcribe` with stream {voice}")
+            })?;
+            Ok(crate::take_short::words_at(short, &transcript, word, word)?.0)
+        })?),
+        (None, Some(word), None) => Some(word_edited_us(ctx, args.stream.clone(), word)?),
+        (None, None, _) => None,
         _ => return Err("Give one of `moveToUs` or `moveToWord`".into()),
     };
     if let Some(target) = target {
         let now = current(ctx)?;
-        let (clip, start) = with_reader(ctx.state, |reader| {
-            reader
-                .document()
-                .sequence
-                .clips()
-                .find(|(_, c)| c.asset == args.graphic)
-                .map(|(_, c)| (c.id.clone(), c.start_us))
-                .ok_or_else(|| format!("Graphic {} is not on the timeline", args.graphic))
-        })?;
+        let (clip, start) = clip_of(ctx)?;
         commands::project_sequence_edit_impl(
             ctx.state,
             now.handle,
@@ -4141,7 +4175,7 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 track_id: None,
                 anchor_id: None,
             },
-            None,
+            on_take.clone(),
         )?;
         lines.push(format!(
             "Moved graphic {} to {}.",
@@ -4213,20 +4247,12 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 }
             ));
         }
-        (None, None) => {}
-        _ => return Err("Give `short` and `slot` together".into()),
+        (_, None) => {}
+        (None, Some(_)) => return Err("`slot` needs `short`".into()),
     }
     if let Some(length) = args.length_us {
         let now = current(ctx)?;
-        let clip = with_reader(ctx.state, |reader| {
-            reader
-                .document()
-                .sequence
-                .clips()
-                .find(|(_, c)| c.asset == args.graphic)
-                .map(|(_, c)| (c.id.clone(), c.start_us))
-                .ok_or_else(|| "That graphic is not on the timeline".to_string())
-        })?;
+        let clip = clip_of(ctx)?;
         let length = length.clamp(
             crate::graphics::MIN_LENGTH_US,
             crate::graphics::MAX_LENGTH_US,
@@ -4241,12 +4267,16 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 to_us: clip.1 + length,
                 ripple: None,
             },
-            None,
+            on_take.clone(),
         )?;
         lines.push(format!("It plays for {:.1} s.", length as f64 / 1e6));
     }
     if lines.is_empty() {
-        return Err("Give `variables`, `name`, `lengthUs`, `brand` or `short` and `slot`".into());
+        return Err(
+            "Give `variables`, `name`, `lengthUs`, `moveToUs`/`moveToWord`, `brand`, or `short` \
+             with `slot`"
+                .into(),
+        );
     }
     lines.push("It renders again by itself.".into());
     text(applied(ctx, "graphic_set", &before, lines)?)
@@ -5398,7 +5428,7 @@ mod tests {
                 &ctx,
                 "short_footage",
                 json!({ "short": "Take", "op": "add",
-                        "items": [{ "atS": 1.0, "template": "key-point" }] }),
+                        "items": [{ "atS": 1.5, "toS": 2.0, "template": "key-point" }] }),
             )
             .unwrap(),
         );
@@ -5454,6 +5484,53 @@ mod tests {
             json!({ "graphic": video_graphic, "atUs": 0 })
         )
         .is_err());
+
+        // A graphic under the take moves and lengthens on the short's own timeline.
+        let under = |ctx: &Ctx| {
+            with_reader(ctx.state, |reader| {
+                let document = reader.document();
+                let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+                Ok(short
+                    .edit
+                    .as_ref()
+                    .unwrap()
+                    .sequence
+                    .clips()
+                    .find(|(_, c)| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+                    .map(|(_, c)| (c.asset.clone(), c.start_us, c.duration_us))
+                    .unwrap())
+            })
+            .unwrap()
+        };
+        let (key_point, ..) = under(&ctx);
+        let on_video = with_reader(ctx.state, |r| Ok(r.document().sequence.clone())).unwrap();
+        let set = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": key_point, "short": "Take", "moveToUs": 300_000,
+                    "lengthUs": 800_000 }),
+        )
+        .unwrap();
+        assert!(
+            set.contains("Moved graphic") && set.contains("0.8 s"),
+            "{set}"
+        );
+        assert_eq!(under(&ctx), (key_point.clone(), 300_000, 800_000));
+        let after = with_reader(ctx.state, |r| Ok(r.document().sequence.clone())).unwrap();
+        assert_eq!(after, on_video, "the video's timeline is left alone");
+        // A batch whose graphic would play over that one is refused, with the times.
+        let overlap = call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "add",
+                    "items": [{ "atS": 0.5, "toS": 1.0, "template": "title" }] }),
+        )
+        .unwrap_err();
+        assert!(
+            overlap.contains("would overlap")
+                && overlap.contains("play together at 0:00.50-0:01.00"),
+            "{overlap}"
+        );
     }
 
     #[test]
