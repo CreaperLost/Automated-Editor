@@ -848,9 +848,26 @@ impl SceneEvaluator {
             height: self.height,
             unit,
         };
+        // A graphic in a part of a short's split fills that part: without it a take (no screen
+        // recording) would turn the split into the camera alone, cropped to the whole frame
+        // behind the graphic, rather than framed into its own part.
+        let split_graphic = |part: crate::shorts::GraphicSlot| {
+            self.document.short_layout.as_ref().is_some_and(|short| {
+                shown
+                    .graphics
+                    .iter()
+                    .any(|clip| crate::shorts::graphic_slot(short, &clip.id) == part)
+            })
+        };
+        let filled = |picture: &Option<crate::media::VideoFrame>, part| {
+            picture
+                .as_ref()
+                .map(|f| (f.width, f.height))
+                .or_else(|| split_graphic(part).then_some((1920, 1080)))
+        };
         let sources = Sources {
-            screen: screen.as_ref().map(|f| (f.width, f.height)),
-            camera: webcam.as_ref().map(|f| (f.width, f.height)),
+            screen: filled(&screen, crate::shorts::GraphicSlot::Screen),
+            camera: filled(&webcam, crate::shorts::GraphicSlot::Camera),
         };
         let from = arrange(frame.from, style, canvas, sources);
         let to = arrange(frame.to, style, canvas, sources);
@@ -4619,6 +4636,58 @@ mod tests {
             ..Default::default()
         });
         (root, document)
+    }
+
+    /// A take short (a camera, no screen recording) with a graphic in the split's screen part:
+    /// the camera keeps its own part as it does beside a screen, rather than filling the frame
+    /// behind the graphic.
+    #[test]
+    fn a_graphic_in_the_split_keeps_the_camera_in_its_part() {
+        use crate::shorts::GraphicSlot;
+        let dir = tempfile::tempdir().unwrap();
+        let (root, mut document) = off_centre_face_short(dir.path());
+        for track in &mut document.sequence.tracks {
+            track.clips.retain(|c| c.stream != "screen");
+        }
+        document.layouts.base = crate::layouts::Layout::SideBySide(crate::layouts::SideBySide {
+            camera_first: true,
+            camera_pct: 35.0,
+            ..Default::default()
+        });
+        let graphic =
+            crate::graphics::create(&root, "title", None, &serde_json::Map::new()).unwrap();
+        let mut track =
+            crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
+        track.clips.push(Clip {
+            id: "g1".into(),
+            asset: graphic.id.clone(),
+            stream: "picture".into(),
+            start_us: 0,
+            in_us: 0,
+            duration_us: 800_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        });
+        document.assets.push(graphic);
+        document.sequence.tracks.push(track);
+        let camera_rect = |document: &EditDocument| {
+            let scene = scenes(&root, document.clone(), 1080, 1920)
+                .scene_at(400_000)
+                .unwrap();
+            let layer = scene
+                .layers
+                .iter()
+                .find(|l| l.role == crate::render::LayerRole::Webcam)
+                .expect("a camera layer")
+                .clone();
+            (layer.x, layer.y, layer.width, layer.height)
+        };
+        // Over the whole frame the camera has no screen to share it with.
+        assert_eq!(camera_rect(&document), (0, 0, 1080, 1920));
+        let layout = document.short_layout.as_mut().unwrap();
+        layout.graphic_slots.insert("g1".into(), GraphicSlot::Screen);
+        assert_eq!(camera_rect(&document), (0, 0, 1080, 672));
     }
 
     /// The document with its camera clips framed by hand, in the middle.

@@ -180,11 +180,16 @@ fn put_all(
                         .insert(clip.clone(), mode);
                 }
                 done.lines.push(format!(
-                    "{}-{}: graphic \"{}\" ({said}), {}",
+                    "{}-{}: graphic \"{}\" ({said}), {}, in {}",
                     clock(*at_us),
                     clock(at_us + length),
                     asset.name,
-                    mode.describe()
+                    mode.describe(),
+                    crate::shorts::describe_box(crate::shorts::graphic_box(
+                        &done.document,
+                        &shorts[index],
+                        mode
+                    ))
                 ));
                 done.graphics.push((asset.id, clip));
             }

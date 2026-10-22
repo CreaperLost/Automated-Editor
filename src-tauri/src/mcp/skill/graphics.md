@@ -1,8 +1,9 @@
 # Graphics
 
 Motion graphics are HyperFrames compositions the app renders and plays full screen over
-everything (screen, camera, captions); in a 9:16 short the same graphic renders at 9:16. Cuts
-never go through a graphic, so add them after the cuts are done and checked, before chapters.
+everything (screen, camera, captions); in a 9:16 short the same graphic renders at 9:16, or at
+its part of the split. Cuts never go through a graphic, so add them after the cuts are done and
+checked, before chapters.
 
 A graphic that fills the whole screen never eases in or out: it appears and disappears with a
 hard cut. Only graphics laid over the full-screen camera (a lower third or callout during a
@@ -52,4 +53,8 @@ face above, the graphic in the screen's part, footage or not) or `overFace` (the
 frame and the graphic is drawn over it, see-through); also `camera` and `overScreen`. Pick it
 when the graphic is added (`mode` in `short_footage` items) so it renders once; `graphic_set`
 with `short` and `slot` changes it later. The graphic's root gets `data-mode` (`full`, `split`
-or `over`): a composition of your own for `over` leaves its background out.
+or `over`): a composition of your own for `over` leaves its background out. A split graphic
+renders into its own box, the screen's part: the reply that places it says the box's size (`a
+1080x1248 box (portrait)`), and the root's `data-width`/`data-height` hold it. The user can move
+the split, so the box can turn about square or landscape; it renders again at the new size. Write
+for the box you are told, in vw/vh/vmin, never for the 9:16 frame.

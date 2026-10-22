@@ -4255,7 +4255,7 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         match (&args.short, args.slot) {
             (Some(wanted), Some(slot)) => {
                 let now = current(ctx)?;
-                let (title, shorts) = with_reader(ctx.state, |reader| {
+                let (title, shorts, size) = with_reader(ctx.state, |reader| {
                     let document = reader.document();
                     let mut shorts = document.shorts.clone();
                     let short = shorts
@@ -4282,12 +4282,14 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                             short.layout.graphic_slots.insert(clip, slot);
                         }
                     }
-                    Ok((short.title.clone(), shorts))
+                    let size = crate::shorts::graphic_box(document, short, slot);
+                    Ok((short.title.clone(), shorts, size))
                 })?;
                 commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
                 lines.push(format!(
-                    "In short \"{title}\" it plays {}.",
-                    slot.describe()
+                    "In short \"{title}\" it plays {}, in {}.",
+                    slot.describe(),
+                    crate::shorts::describe_box(size)
                 ));
             }
             _ => {}
@@ -4384,7 +4386,8 @@ pub struct GraphicRenderArgs {
     /// One graphic's id; default every graphic on the timeline.
     #[serde(default)]
     pub graphic: Option<String>,
-    /// A short (id or title): its graphics, rendered for its 9:16 frame.
+    /// A short (id or title): its graphics, rendered for its 9:16 frame or their part of its
+    /// split.
     #[serde(default)]
     pub short: Option<String>,
 }
@@ -4436,10 +4439,13 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     for spec in &specs {
         lines.push(format!(
-            "{} \"{}\" ({:.1} s): {}",
+            "{} \"{}\" ({:.1} s): {} x {} (data-mode {}), {}",
             spec.asset_id,
             spec.name,
             spec.length_us as f64 / 1e6,
+            spec.width,
+            spec.height,
+            spec.mode,
             match spec.entrance {
                 crate::graphics::Entrance::Cut => "cuts in and out",
                 crate::graphics::Entrance::Ease => "eases in and out over the full-screen camera",
@@ -4452,10 +4458,8 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ctx.progress(fraction, label)
     })?;
     lines.push(format!(
-        "{} rendered for the {}x{} canvas in {:.0} s; check them with frame_render inside each.",
+        "{} rendered, each at its box's size, in {:.0} s; check them with frame_render inside each.",
         plural(specs.len(), "graphic"),
-        specs[0].width,
-        specs[0].height,
         started.elapsed().as_secs_f64()
     ));
     text(lines.join("\n"))

@@ -276,7 +276,7 @@ Grouped by area. Order within a group is the suggested order.
 **Decided 22 Oct:** two features in two tabs that share their parts. **Shorts** start from a take
 recorded outside the app (camera and voice); everything else goes under it. **Clips** cut the best
 moments out of the long video (what the Shorts tab does today besides takes). Shorts from a take
-come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) after.
+come first, in this order: SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2; Clips (SHT-1) after.
 
 <a id="sht-1"></a>
 - **SHT-1 · Idea-first clips (L).** A clip is an idea plus pieces gathered from anywhere in the
@@ -289,6 +289,12 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
 <a id="sht-4"></a>
 - **SHT-4 · Take-short follow-ups (S).** Per-short ducking amount. (The picker, graphic modes
   and footage speed are done, 23 Oct: see [Done](#done).)
+<a id="sht-7"></a>
+- **SHT-7 · A split graphic knows its box (S/M).** Built and checked 23 Oct: see [Done](#done).
+  Follow-ups left: `graphic_check` checks templates only at 16:9 and 9:16, and the bundled
+  templates' landscape block is made for 1920x1080, so in a short landscape box (1080x864 at a
+  55 % camera) the step card turns small with empty space around it; and `frame_render` ignores
+  `short`, so an agent can't look at a short's frame after `graphic_render`.
 
 ### Layouts — plan: [plans/layouts.md](plans/layouts.md)
 
@@ -340,15 +346,9 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
 
 ### Languages and transcription
 
-<a id="lng-1"></a>
-- **LNG-1 · Greek word aligner.** Dropped 22 Oct 2026: word alignment was removed altogether
-  (it did not help in practice).
-<a id="lng-2"></a>
-- **LNG-2 · More languages (S each).** Filler words, question mark and an online provider per language.
-<a id="lng-3"></a>
-- **LNG-3 · More transcription models (M).** Local Greek (Cohere Transcribe once it runs here and
-  LNG-1 exists), Qwen3-ASR 1.7B if Parakeet's mistakes show, other OpenRouter speech models.
-  **Was:** backlog #12.
+LNG-1 (Greek word aligner), LNG-2 (more languages) and LNG-3 (more transcription models) were
+removed 23 Oct 2026: not needed.
+
 <a id="lng-4"></a>
 - **LNG-4 · Filler/retake rules fixes and a real Greek eval (S/M).** Rules stop treating
   "X. X essentially means" as a retake (list items and parallel statements: done 22 Oct); flag
@@ -466,6 +466,19 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — <a id="sht-7-done"></a>**SHT-7 a split graphic knows its box.** The render
+  already sized a split graphic to its part of the split (`data-width`/`data-height` on its root,
+  from `shorts::graphic_rect`); now the agent is told it too. Placing a graphic under a take,
+  `graphic_set` with `slot`, and `graphic_render` say the box (`a 1080x1248 box (portrait)`,
+  `shorts::graphic_box`), and the graphics skill says to write for that box, not the 9:16 frame.
+  Moving the split: a waiting render at the older size is dropped (dragging asks for every size on
+  the way), and the newest render at the same width stands in until the new size is ready, instead
+  of the placeholder. Checked in the dev app on a take short with the step card in split: placed
+  "in a 1080x1248 box (portrait)"; moving the camera 45 → 50 → 55 % rendered 1056 and 864, skipped
+  960, and the old render stood in meanwhile. Also fixed (George): on a take short (no screen
+  recording) a split graphic's part counted as empty, so the split fell back to the camera alone,
+  cropped to the whole 9:16 frame behind the graphic; now the graphic fills its part and the
+  camera is framed into its own part, scaling with the split as beside a screen.
 - **23 Oct 2026** — **Shorts: graphic modes and footage speed (SHT-4, decided with George,
   [Q-SHORT-GFX](decisions.md#q-short-gfx)).** A graphic in a short shows **full** (the whole
   frame), **split** (`screen`: the face above, the graphic below, footage or not) or **over
@@ -661,8 +674,8 @@ For anything (memory notes, commit messages, old chats) that still says "task N"
 | Old | New | Old | New |
 |---|---|---|---|
 | #1 More layouts | Done; follow-ups LAY-1…LAY-4 | #10 Number keys | LAY-2 |
-| #2 More languages | LNG-1, LNG-2 | #11 Auto layouts | LAY-3 |
-| #3 Measure local review | Done; LNG-4 | #12 Transcription models | LNG-3 |
+| #2 More languages | Removed (was LNG-1, LNG-2) | #11 Auto layouts | LAY-3 |
+| #3 Measure local review | Done; LNG-4 | #12 Transcription models | Removed (was LNG-3) |
 | #4 B-roll | FTG-2, FTG-6 | #13 Version history | SAFE-2 |
 | #5 Music and SFX | SND-1, SND-2 | #14 Source search | FTG-1, FTG-3 |
 | #6 Templates | UI-3 | #15 NLE handoff | DLV-3 |

@@ -200,8 +200,15 @@ impl Spec {
     /// Whether a newer request for `self` makes a waiting render of `other` pointless: the same
     /// graphic rendered for the same output, from older source. The same graphic at another
     /// length (the video and a short) or canvas is a different render and must stay queued.
+    /// A split graphic at another size is the split moved (dragging it asks for every size on the
+    /// way): only the newest size is worth making.
     fn supersedes(&self, other: &Spec) -> bool {
-        self.asset_id == other.asset_id && self.stem() == other.stem()
+        let resized = self.mode == "split"
+            && other.mode == "split"
+            && self.length_us == other.length_us
+            && self.fps == other.fps
+            && self.entrance == other.entrance;
+        self.asset_id == other.asset_id && (resized || self.stem() == other.stem())
     }
 
     /// What names this render: the source files and everything about the output.
@@ -468,21 +475,34 @@ fn latest_cached(spec: &Spec) -> Option<(PathBuf, u64)> {
     }
 }
 
-/// The newest render for `spec`'s canvas, with its length.
+/// The newest render for `spec`'s canvas, with its length. A split graphic whose split moved has
+/// none at its new size yet: the newest at its width (the split's part spans the short's width)
+/// stands in, stretched a little, rather than the placeholder.
 fn latest(spec: &Spec) -> Option<(PathBuf, u64)> {
-    let prefix = spec.prefix();
-    std::fs::read_dir(&spec.cache)
-        .ok()?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let rest = name.strip_prefix(&prefix)?.strip_suffix(".webm")?;
-            let length_ms: u64 = rest.split('-').next()?.parse().ok()?;
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, entry.path(), length_ms * 1000))
-        })
-        .max_by_key(|(modified, _, _)| *modified)
-        .map(|(_, path, length)| (path, length))
+    let newest = |prefix: &str, same_height: bool| {
+        std::fs::read_dir(&spec.cache)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let rest = name.strip_prefix(prefix)?.strip_suffix(".webm")?;
+                // `{height}-{length}-...` when only the width was matched.
+                let rest = match same_height {
+                    true => rest,
+                    false => rest.split_once('-')?.1,
+                };
+                let length_ms: u64 = rest.split('-').next()?.parse().ok()?;
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, entry.path(), length_ms * 1000))
+            })
+            .max_by_key(|(modified, _, _)| *modified)
+            .map(|(_, path, length)| (path, length))
+    };
+    newest(&spec.prefix(), true).or_else(|| {
+        (spec.mode == "split")
+            .then(|| newest(&format!("{}x", spec.width * spec.density), false))
+            .flatten()
+    })
 }
 
 fn request(spec: &Spec, hash: &str) {
@@ -1146,6 +1166,15 @@ mod tests {
         other_canvas.width = 1080;
         other_canvas.height = 1920;
         assert!(!video.supersedes(&other_canvas));
+        // A split graphic at a new size is the split moved: the older size is dropped.
+        let split = |height| Spec {
+            width: 1080,
+            height,
+            mode: "split",
+            ..spec(dir.path(), &cache, 4_000_000)
+        };
+        assert!(split(1248).supersedes(&split(1152)));
+        assert!(!split(1248).supersedes(&other_canvas));
         let mut eased = spec(dir.path(), &cache, 4_000_000);
         eased.entrance = super::super::Entrance::Ease;
         assert!(!video.supersedes(&eased));

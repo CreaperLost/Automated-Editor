@@ -192,18 +192,57 @@ pub fn graphic_rect(
     width: u32,
     height: u32,
 ) -> (u32, u32, u32, u32) {
+    match &document.short_layout {
+        Some(short) => slot_rect(
+            graphic_slot(short, clip_id),
+            &document.layouts,
+            &document.layout,
+            width,
+            height,
+        ),
+        None => (0, 0, width, height),
+    }
+}
+
+/// The box a graphic in `slot` of `short` lays itself out in (its root's `data-width` x
+/// `data-height`): the graphic render size of the 9:16 frame, or of its part of the split as the
+/// short's split is set now. What the agent is told so it writes for that box.
+pub fn graphic_box(base: &EditDocument, short: &Short, slot: GraphicSlot) -> (u32, u32) {
+    let (width, height) = crate::graphics::render::render_size(1080, 1920);
+    let (_, _, w, h) = slot_rect(slot, &short.layouts, &base.layout, width, height);
+    ((w & !1).max(2), (h & !1).max(2))
+}
+
+/// `graphic_box` for the agent: "a 1080x1248 box (portrait)".
+pub fn describe_box((width, height): (u32, u32)) -> String {
+    let ratio = width as f64 / height.max(1) as f64;
+    let shape = if (ratio - 1.0).abs() < 0.1 {
+        "about square"
+    } else if ratio < 1.0 {
+        "portrait"
+    } else {
+        "landscape"
+    };
+    format!("a {width}x{height} box ({shape})")
+}
+
+/// Where a graphic in `slot` plays in a `width` x `height` frame of a short with `layouts` (its
+/// base layout is the split) and `style`.
+fn slot_rect(
+    slot: GraphicSlot,
+    layouts: &crate::layouts::LayoutTrack,
+    style: &crate::project::EditLayout,
+    width: u32,
+    height: u32,
+) -> (u32, u32, u32, u32) {
     use crate::layouts::arrange::{arrange, Canvas, Sources};
     let whole = (0, 0, width, height);
-    let Some(short) = &document.short_layout else {
-        return whole;
-    };
-    let slot = graphic_slot(short, clip_id);
     if matches!(slot, GraphicSlot::Full | GraphicSlot::OverFace) {
         return whole;
     }
     let parts = arrange(
-        &split_layout(&document.layouts),
-        &document.layout,
+        &split_layout(layouts),
+        style,
         Canvas::new(width, height),
         Sources {
             screen: Some((1920, 1080)),
@@ -933,6 +972,26 @@ mod tests {
             graphic_rect(&document, "g-over", 1080, 1920),
             (0, 0, 1080, 960)
         );
+        // The box a split graphic is told follows the short's split as it is set now.
+        let mut moved = short(0, 10 * S);
+        moved.layouts.base = bottom.clone();
+        assert_eq!(
+            graphic_box(&document, &moved, GraphicSlot::Screen),
+            (1080, 960)
+        );
+        assert_eq!(
+            graphic_box(&document, &moved, GraphicSlot::OverFace),
+            (1080, 1920)
+        );
+        if let Layout::SideBySide(split) = &mut moved.layouts.base {
+            split.camera_pct = 30.0;
+        }
+        assert_eq!(
+            graphic_box(&document, &moved, GraphicSlot::Screen),
+            (1080, 1344)
+        );
+        assert_eq!(describe_box((1080, 960)), "a 1080x960 box (landscape)");
+        assert_eq!(describe_box((1080, 1040)), "a 1080x1040 box (about square)");
         let json = serde_json::to_value(&slotted).unwrap();
         assert_eq!(json["graphicSlots"]["g-over"], "overScreen");
         assert!(serde_json::to_value(&layout)
