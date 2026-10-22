@@ -459,6 +459,13 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — **EVAL-1 baseline** ([plans/evaluation.md](plans/evaluation.md)): a real
+  agent (Claude Code headless, Sonnet 5.5, the app's MCP server only) edited George's 7-min
+  tutorial for $0.41 in 34 calls and made a short from a take for about $0.30 in a clean run.
+  Fixed from it: quiet microphones' word tails cut by the tight pass (edges stay 24 dB below
+  the speech level), take words looked up by their kept part, `shorts` `op: rename`, the
+  first chapter reported at 0:00, and one graphic render per graphic (storyboard and export
+  asked for 1082 and 1080 wide).
 - **23 Oct 2026** — <a id="sht-6b"></a>**SHT-6b** the agent's picks under a take are one batch:
   `short_footage` `op: add` takes footage, files and graphics (`template`, `library`, or
   `graphic`, a copy of one of the video's) in one call and proposes them; the app checks them

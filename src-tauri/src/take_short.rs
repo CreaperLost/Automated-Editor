@@ -828,13 +828,19 @@ pub fn words_at(
             .ok_or_else(|| format!("No word {id} in the take's transcript"))
     };
     let (first, last) = (word(from)?, word(to)?);
-    let start = clock
-        .source_to_edited_us(first.source_start_us)
-        .ok_or_else(|| format!("Word {from} is outside the short"))?;
-    let end = clock
-        .source_to_edited_us(last.source_end_us.saturating_sub(1))
-        .ok_or_else(|| format!("Word {to} is outside the short"))?
-        + 1;
+    // The part of a word the short keeps: a cut pause often takes a loosely timed word's
+    // first or last few milliseconds, and the word is still there.
+    let kept = |word: &crate::transcript::TranscriptWord, id: &str| {
+        clock
+            .edited_span_of(word.source_start_us, word.source_end_us)
+            .or_else(|| {
+                let pieces = clock.source_range_to_edited(word.source_start_us, word.source_end_us);
+                Some((pieces.first()?.0, pieces.last()?.1))
+            })
+            .ok_or_else(|| format!("Word {id} was cut from the short"))
+    };
+    let start = kept(first, from)?.0;
+    let end = kept(last, to)?.1;
     if end <= start {
         return Err("`toWord` must come after `fromWord`".into());
     }
@@ -906,6 +912,62 @@ mod tests {
         crate::shorts::validate(std::slice::from_ref(&short)).unwrap();
         let timeline = crate::shorts::short_timeline(&document, &short).unwrap();
         assert_eq!(timeline.captions.track_id.as_deref(), Some("cam.sound0"));
+    }
+
+    #[test]
+    fn a_word_whose_first_moments_were_cut_is_still_in_the_short() {
+        use crate::sequence::edit::{apply_reserving, SequenceEdit};
+        use crate::transcript::{ProviderKind, Transcript, TranscriptWord, WordKind};
+        let document = document();
+        let sources = resolve(&document, Some("cam"), None).unwrap();
+        let sync = TakeSync {
+            offset_us: 0,
+            score: None,
+        };
+        let mut short = new_short(&document, "t1".into(), "Take", "", &sources, &sync).unwrap();
+        // A tight pause cut takes 10.0-10.3 s: the loosely timed "define" (10.2-10.8 s)
+        // loses its first 0.1 s and is still heard.
+        let sequence = &mut short.edit.as_mut().unwrap().sequence;
+        let edit: SequenceEdit = serde_json::from_value(serde_json::json!({
+            "kind": "deleteRange", "ranges": [{ "startUs": 10_000_000, "endUs": 10_300_000 }],
+            "ripple": true
+        }))
+        .unwrap();
+        *sequence = apply_reserving(
+            sequence,
+            &document.assets,
+            &edit,
+            document.track_ids_in_use(),
+        )
+        .unwrap()
+        .0;
+        let word = |text: &str, from: u64, to: u64| TranscriptWord {
+            id: String::new(),
+            text: text.into(),
+            kind: WordKind::Word,
+            source_start_us: from,
+            source_end_us: to,
+            confidence: None,
+            speaker: None,
+        };
+        let transcript = Transcript::new(
+            "cam.sound0".into(),
+            ProviderKind::ElevenLabs,
+            "scribe".into(),
+            None,
+            vec![
+                word("to", 9_500_000, 9_900_000),
+                word("define", 10_200_000, 10_800_000),
+            ],
+        );
+        assert_eq!(
+            words_at(&short, &transcript, "w-1", "w-1").unwrap(),
+            (10_000_000, 10_500_000)
+        );
+        assert_eq!(
+            words_at(&short, &transcript, "w-0", "w-1").unwrap().0,
+            9_500_000
+        );
     }
 
     #[test]

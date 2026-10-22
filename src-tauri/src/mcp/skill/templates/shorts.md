@@ -27,7 +27,8 @@ the defaults below, report in one message and go on. Export still waits for the 
 - `short_from_take` with a `title` (under 60 characters, also the file name), `media` (the
   take's file ids: the app tells the camera from the microphone; a separate microphone wins
   over the camera's own) and `idea` (one line: what the user said the take is about). With no
-  title given, make one from that. Pass on what it says about lining the camera
+  title given, make one from that; when the user said nothing about it, name it after the
+  transcript (`shorts` with `op: rename`), never after the video. Pass on what it says about lining the camera
   up with the voice; if the match was weak, tell the user to check the lip sync.
 - `faces`, so the camera is framed on the face (it waits until it is found).
 

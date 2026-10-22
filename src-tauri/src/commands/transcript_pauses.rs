@@ -9,6 +9,10 @@ use crate::project::silence::{
 use crate::sequence::StreamRef;
 use crate::transcript::{pauses, store};
 
+/// Word edges are refined at the edge threshold, but never closer than this to the speech
+/// level: a quiet microphone's word tails fade out below a fixed -42 dB.
+const EDGE_BELOW_SPEECH_DB: f32 = 24.0;
+
 pub fn detect_transcript_pauses_impl(
     state: &AppState,
     project_handle: String,
@@ -132,6 +136,8 @@ pub fn detect_non_speech_gaps_for(
                                 padding_ms: 0,
                                 window_ms: Some(5),
                                 step_ms: Some(5),
+                                // A quiet microphone's word tails sit near -42 dB.
+                                below_speech_db: Some(EDGE_BELOW_SPEECH_DB),
                                 ..SilenceConfig::default()
                             }
                         },

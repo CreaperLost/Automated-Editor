@@ -196,8 +196,8 @@ pub static ACTIONS: [ToolDef; 39] = [
         description: "Vertical shorts. `op` `find` (default): the app's AI pass finds moments \
             and saves them for the Shorts tab (when you can read the transcript, pick them \
             yourself with `short_create` instead). `remove` with `short` (id or title) removes \
-            one; `range` with `short`, `fromWord` and `toWord` sets the stretch it plays. One \
-            undo step each.",
+            one; `range` with `short`, `fromWord` and `toWord` sets the stretch it plays; \
+            `rename` with `short` and `title`. One undo step each.",
         schema: schema::<ShortsArgs>,
         read_only: false,
         run: shorts,
@@ -1605,6 +1605,7 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
                 window_ms: None,
                 step_ms: None,
                 channel_policy: None,
+                below_speech_db: None,
             };
             let key = match args.stream {
                 Some(key) if key == ALL_SPEECH => key,
@@ -2699,18 +2700,29 @@ fn set_chapters(ctx: &Ctx, before: &Open, args: ChaptersArgs) -> Result<Vec<Outp
         "Set {}:",
         plural(project.chapters.len(), "chapter")
     )];
-    lines.extend(project.chapters.iter().map(|c| {
-        format!(
-            "{} {}",
-            c.edited_us.map_or("(cut)".to_string(), clock),
-            c.title
-        )
-    }));
+    lines.extend(chapter_lines(&project.chapters));
     let answer = applied(ctx, "chapters", before, lines)?;
     if let Ok(now) = current(ctx) {
         chapters_made(&now);
     }
     text(answer)
+}
+
+/// One line per chapter, as the export writes them: the first plays from 0:00 (YouTube's rule),
+/// wherever its word starts.
+fn chapter_lines(chapters: &[crate::chapters::Chapter]) -> Vec<String> {
+    let first = chapters.iter().filter_map(|c| c.edited_us).min();
+    chapters
+        .iter()
+        .map(|c| {
+            let at = match c.edited_us {
+                Some(at) if Some(at) == first => clock(0),
+                Some(at) => clock(at),
+                None => "(cut)".to_string(),
+            };
+            format!("{at} {}", c.title)
+        })
+        .collect()
 }
 
 fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -2731,13 +2743,7 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         "Made {}:",
         plural(project.chapters.len(), "chapter")
     )];
-    lines.extend(project.chapters.iter().map(|c| {
-        format!(
-            "{} {}",
-            c.edited_us.map_or("(cut)".to_string(), clock),
-            c.title
-        )
-    }));
+    lines.extend(chapter_lines(&project.chapters));
     let answer = applied(ctx, "chapters", &before, lines)?;
     if let Ok(now) = current(ctx) {
         chapters_made(&now);
@@ -2755,17 +2761,22 @@ pub enum ShortsOp {
     Remove,
     /// Set `short` to play from `fromWord` to `toWord`.
     Range,
+    /// Give `short` the title `title`.
+    Rename,
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortsArgs {
-    /// find (default), remove or range.
+    /// find (default), remove, range or rename.
     #[serde(default)]
     pub op: ShortsOp,
-    /// remove, range: the short's id or title.
+    /// remove, range, rename: the short's id or title.
     #[serde(default)]
     pub short: Option<String>,
+    /// rename: the new title (under 60 characters, also the file name).
+    #[serde(default)]
+    pub title: Option<String>,
     /// range: the first and last word, ids from `transcript_get`.
     #[serde(default)]
     pub from_word: Option<String>,
@@ -2802,6 +2813,17 @@ fn change_short(ctx: &Ctx, before: &Open, args: ShortsArgs) -> Result<Vec<Output
         if args.op == ShortsOp::Remove {
             let gone = shorts.remove(index);
             return Ok((shorts, format!("Removed short \"{}\".", gone.title)));
+        }
+        if args.op == ShortsOp::Rename {
+            let title = args
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .ok_or("`rename` needs `title`")?;
+            let was = std::mem::replace(&mut shorts[index].title, title.chars().take(60).collect());
+            let line = format!("Renamed short \"{was}\" to \"{}\".", shorts[index].title);
+            return Ok((shorts, line));
         }
         let short = &mut shorts[index];
         if short.take.is_some() {
@@ -5118,8 +5140,20 @@ mod tests {
                 .unwrap_err()
                 .contains("needs `fromWord`")
         );
-        let removed = call(&ctx, "shorts", json!({ "op": "remove", "short": "whole" })).unwrap();
-        assert!(removed.starts_with("Removed short \"Whole\""), "{removed}");
+        let renamed = call(
+            &ctx,
+            "shorts",
+            json!({ "op": "rename", "short": "whole", "title": "The whole lesson" }),
+        )
+        .unwrap();
+        assert!(renamed.contains("to \"The whole lesson\""), "{renamed}");
+        let removed = call(
+            &ctx,
+            "shorts",
+            json!({ "op": "remove", "short": "The whole lesson" }),
+        )
+        .unwrap();
+        assert!(removed.starts_with("Removed short \"The whole lesson\""), "{removed}");
         let shorts = with_reader(ctx.state, |r| Ok(r.document().shorts.len())).unwrap();
         assert_eq!(shorts, 0);
     }

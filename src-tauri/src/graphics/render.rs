@@ -58,7 +58,12 @@ pub fn render_size(width: u32, height: u32) -> (u32, u32) {
 /// pixel or two differently, and each rounding would be a render of its own.
 pub fn shared_canvas(edit: Option<(u32, u32)>, view: (u32, u32)) -> (u32, u32) {
     let same_shape = |(a, b): (u32, u32)| {
-        let (a, b, w, h) = (a as f64, b as f64, view.0.max(1) as f64, view.1.max(1) as f64);
+        let (a, b, w, h) = (
+            a as f64,
+            b as f64,
+            view.0.max(1) as f64,
+            view.1.max(1) as f64,
+        );
         ((a / b) / (w / h) - 1.0).abs() < 0.02
     };
     edit.filter(|edit| same_shape(*edit)).unwrap_or(view)
@@ -1043,8 +1048,18 @@ mod tests {
         // A short's storyboard tile (176 x 312) used to render at 1082 x 1920 and its export
         // at 1080 x 1920: the same graphic twice.
         let short = Some((1080, 1920));
-        for view in [(176, 312), (176, 313), (607, 1080), (1080, 1920), (2160, 3840)] {
-            assert_eq!(render_size_of(shared_canvas(short, view)), (1080, 1920), "{view:?}");
+        for view in [
+            (176, 312),
+            (176, 313),
+            (607, 1080),
+            (1080, 1920),
+            (2160, 3840),
+        ] {
+            assert_eq!(
+                render_size_of(shared_canvas(short, view)),
+                (1080, 1920),
+                "{view:?}"
+            );
         }
         // A view of another shape keeps its own.
         assert_eq!(shared_canvas(short, (1920, 1080)), (1920, 1080));
