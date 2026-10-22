@@ -304,12 +304,12 @@ pub static ACTIONS: [ToolDef; 39] = [
     },
     ToolDef {
         name: "graphic_add",
-        description: "Adds a graphic from a template (or a copy of a library item, `library`) \
-            at a time on the edited timeline (`atUs`) or at a transcript word (`atWord`, an id \
-            from transcript_get), on a Graphics track above the video, one undo step. It plays \
-            for `lengthUs` (the template's or item's own by default) and renders in the \
-            background; `graphic_render` waits for it. `blank` starts an empty composition to \
-            write with graphic_write_file. Graphics under a take go in `short_footage` items.",
+        description: "Adds graphics, all `items` in one call and one undo step: each from a \
+            template or a copy of a library item (`library`), at `atUs` on the edited timeline \
+            or at `atWord` (an id from transcript_get), on a Graphics track over the video, for \
+            `lengthUs` (default its own). They render in the background; `graphic_render` \
+            waits. `blank` starts an empty composition for graphic_write_file. Graphics under a \
+            take go in `short_footage` items.",
         schema: schema::<GraphicAddArgs>,
         read_only: false,
         run: graphic_add,
@@ -1388,6 +1388,9 @@ pub struct NoiseArgs {
     /// false: only report what was found. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// Automatic mode: apply only if it looks right, else say why (no dry run first).
+    #[serde(default)]
+    pub guard: bool,
     /// A short (id or title): its own timeline and muted noises. Default: the take short the
     /// sound is the voice of, else the video.
     #[serde(default)]
@@ -1396,6 +1399,72 @@ pub struct NoiseArgs {
 
 fn mouth_noises(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(run_noises(ctx, params(args)?)?)
+}
+
+/// Automatic mode's check before a pass cuts `cut_us` from the video (`guard: true`): why it
+/// waits for the user instead, if it should. A pass cutting more than a quarter of the video,
+/// or the cleanup coming to more than a third of what was recorded for it (pauses aside), looks
+/// wrong. A take (`key` the voice of a take short) is cut much tighter: it is not guarded.
+fn cut_looks_wrong(
+    ctx: &Ctx,
+    before: &Open,
+    cut_us: u64,
+    key: Option<&str>,
+) -> Result<Option<String>, String> {
+    let (take, recorded) = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let take = key.is_some_and(|key| {
+            document
+                .shorts
+                .iter()
+                .any(|s| s.take.as_ref().is_some_and(|t| t.voice == key))
+        });
+        let on_video: std::collections::HashSet<&str> = document
+            .sequence
+            .clips()
+            .map(|(_, c)| c.asset.as_str())
+            .collect();
+        let recorded: u64 = reader
+            .recordings()
+            .filter(|a| on_video.contains(a.id.as_str()))
+            .map(|a| {
+                let paused: u64 = a
+                    .pauses
+                    .iter()
+                    .map(|p| p.end_us.saturating_sub(p.start_us))
+                    .sum();
+                a.duration_us.saturating_sub(paused)
+            })
+            .sum();
+        Ok((take, recorded))
+    })?;
+    if take {
+        return Ok(None);
+    }
+    let after = before.duration.saturating_sub(cut_us);
+    Ok(if cut_us.saturating_mul(4) > before.duration {
+        Some(format!(
+            "it would cut {} of {} (more than a quarter)",
+            clock(cut_us),
+            clock(before.duration)
+        ))
+    } else if recorded > 0 && recorded.saturating_sub(after).saturating_mul(3) > recorded {
+        Some(format!(
+            "the cleanup would come to {} of the {} recorded (more than a third)",
+            clock(recorded.saturating_sub(after)),
+            clock(recorded)
+        ))
+    } else {
+        None
+    })
+}
+
+/// The line that says a guarded pass waits for the user.
+fn held(reason: &str) -> String {
+    format!(
+        "Not applied: {reason}. Ask the user with these numbers; on their go, run it again \
+         without `guard`."
+    )
 }
 
 fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
@@ -1449,7 +1518,12 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
                 .into(),
         );
     }
-    if args.apply.unwrap_or(true) && !chosen.is_empty() {
+    let hold = (args.guard && !scan.guarded && !chosen.is_empty())
+        .then(|| held("no transcript guards the words"));
+    if let Some(line) = &hold {
+        lines.push(line.clone());
+    }
+    if args.apply.unwrap_or(true) && hold.is_none() && !chosen.is_empty() {
         let ranges = chosen.iter().flat_map(|n| n.parts.clone()).collect();
         commands::noises::project_noise_mutes_impl(
             ctx.state,
@@ -1572,6 +1646,9 @@ pub struct SilenceArgs {
     /// false: only report what was found. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// Automatic mode: apply only if it looks right, else say why (no dry run first).
+    #[serde(default)]
+    pub guard: bool,
     /// A short made from a take (its id): clean its own timeline, the take, instead of the
     /// video's. Its speech is listened to unless `stream` says otherwise.
     #[serde(default)]
@@ -1707,7 +1784,15 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
         plural(chosen.len(), noun),
         total as f64 / 1e6
     )];
-    if args.apply.unwrap_or(true) && !chosen.is_empty() {
+    // A short's take is cut much tighter than a video: the guard is for the video.
+    let hold = match args.guard && short.is_none() && !chosen.is_empty() {
+        true => cut_looks_wrong(ctx, &before, total, None)?.map(|reason| held(&reason)),
+        false => None,
+    };
+    if let Some(line) = &hold {
+        lines.push(line.clone());
+    }
+    if args.apply.unwrap_or(true) && hold.is_none() && !chosen.is_empty() {
         let ranges = chosen
             .iter()
             .map(|s| crate::zoom::EditedRange {
@@ -1756,6 +1841,9 @@ pub struct FillerArgs {
     /// false: only list them. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// Automatic mode: apply only if it looks right, else say why (no dry run first).
+    #[serde(default)]
+    pub guard: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -2064,7 +2152,20 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     if !examples.is_empty() {
         lines.push(format!("For example: {}.", examples.join("; ")));
     }
-    if args.apply.unwrap_or(true) && !chosen.is_empty() {
+    let hold = match args.guard && !chosen.is_empty() {
+        true => {
+            let cut: u64 = chosen
+                .iter()
+                .map(|s| s.edited_end_us.saturating_sub(s.edited_start_us))
+                .sum();
+            cut_looks_wrong(ctx, &before, cut, Some(&key))?.map(|reason| held(&reason))
+        }
+        false => None,
+    };
+    if let Some(line) = &hold {
+        lines.push(line.clone());
+    }
+    if args.apply.unwrap_or(true) && hold.is_none() && !chosen.is_empty() {
         let mut ids: Vec<String> = chosen.iter().flat_map(|s| s.word_ids.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -3822,27 +3923,22 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     ))
 }
 
-#[derive(Deserialize, JsonSchema)]
+/// One graphic to add: from a template or the library, where and how long it plays.
+#[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct GraphicAddArgs {
+pub struct GraphicItem {
     /// A template name from `graphics` (title, step, shortcut, key-point, recap, end-card, blank).
     #[serde(default)]
     pub template: Option<String>,
     /// Or: a library item's id or name from `graphics` (copied into the project).
     #[serde(default)]
     pub library: Option<String>,
-    /// Not here: graphics under a take short go in `short_footage` items.
-    #[serde(default)]
-    pub short: Option<String>,
     /// Where it starts on the edited timeline, in microseconds.
     #[serde(default)]
     pub at_us: Option<u64>,
     /// Or: the transcript word it starts at (an id from transcript_get).
     #[serde(default)]
     pub at_word: Option<String>,
-    /// The sound whose transcript `atWord` is from; default the transcribed speech.
-    #[serde(default)]
-    pub stream: Option<String>,
     /// How long it plays; default the template's.
     #[serde(default)]
     pub length_us: Option<u64>,
@@ -3851,6 +3947,24 @@ pub struct GraphicAddArgs {
     /// Values for its variables, by id.
     #[serde(default)]
     pub variables: serde_json::Map<String, Value>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicAddArgs {
+    /// The old one-graphic shape (its fields at the top level), still read; not published.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub one: GraphicItem,
+    /// The graphics to add, in one undo step: send them all in one call.
+    #[serde(default)]
+    pub items: Vec<GraphicItem>,
+    /// The sound whose transcript `atWord` is from; default the transcribed speech.
+    #[serde(default)]
+    pub stream: Option<String>,
+    /// Not here: graphics under a take short go in `short_footage` items.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -3863,74 +3977,69 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         );
     }
     let before = opened(ctx)?;
-    let at = match (args.at_us, &args.at_word) {
-        (Some(at), None) => at,
-        (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word)?,
-        _ => return Err("Give one of `atUs` or `atWord`".into()),
-    };
-    let (created, from) = match (&args.template, &args.library) {
-        (Some(template), None) => (
-            commands::graphics::project_graphic_create_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                template.clone(),
-                args.name,
-                args.variables,
-                at,
-                args.length_us,
-            )?,
-            template.clone(),
-        ),
-        (None, Some(item)) => {
-            let created = commands::graphics::project_graphic_from_library_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                item.clone(),
-                at,
-                args.length_us,
-            )?;
-            if args.name.is_some() || !args.variables.is_empty() {
-                commands::graphics::project_graphic_set_impl(
-                    ctx.state,
-                    before.handle.clone(),
-                    created.project.revision,
-                    created.asset_id.clone(),
-                    args.variables,
-                    args.name,
-                    None,
-                )?;
+    let single = args.one.template.is_some() || args.one.library.is_some();
+    let items: Vec<GraphicItem> = single
+        .then_some(args.one)
+        .into_iter()
+        .chain(args.items)
+        .collect();
+    if items.is_empty() {
+        return Err("Give `template` or `library` (or `items`)".into());
+    }
+    let several = items.len() > 1;
+    let mut graphics = Vec::with_capacity(items.len());
+    for (n, item) in items.into_iter().enumerate() {
+        let at = |error: String| {
+            if several {
+                format!("Graphic {}: {error}", n + 1)
+            } else {
+                error
             }
-            (created, format!("library {item}"))
-        }
-        _ => return Err("Give one of `template` or `library`".into()),
-    };
-    let (name, length) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        Ok((
-            document
-                .asset(&created.asset_id)
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            document
-                .sequence
-                .clip(&created.clip_id)
-                .map_or(0, |(_, c)| c.duration_us),
-        ))
-    })?;
-    let mut lines = vec![format!(
-        "Added graphic {} \"{name}\" ({}) at {} for {:.1} s, clip {}.",
-        created.asset_id,
-        from,
-        clock(at),
-        length as f64 / 1e6,
-        created.clip_id
-    )];
+        };
+        let at_us = match (item.at_us, &item.at_word) {
+            (Some(at), None) => at,
+            (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word).map_err(at)?,
+            _ => return Err(at("give one of `atUs` or `atWord`".into())),
+        };
+        let from = match (item.template, item.library) {
+            (Some(template), None) => commands::graphics::ShortGraphicFrom::Template { template },
+            (None, Some(id)) => commands::graphics::ShortGraphicFrom::Library { id },
+            _ => return Err(at("give one of `template` or `library`".into())),
+        };
+        graphics.push(commands::graphics::VideoGraphic {
+            from,
+            at_us,
+            length_us: item.length_us,
+            name: item.name,
+            variables: item.variables,
+        });
+    }
+    let starts: Vec<u64> = graphics.iter().map(|g| g.at_us).collect();
+    let (_, placed) = commands::graphics::project_graphics_add_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        graphics,
+    )?;
+    let mut lines: Vec<String> = placed
+        .iter()
+        .zip(&starts)
+        .map(|(g, at)| {
+            format!(
+                "Added graphic {} \"{}\" ({}) at {} for {:.1} s, clip {}.",
+                g.asset_id,
+                g.name,
+                g.said,
+                clock(*at),
+                g.length_us as f64 / 1e6,
+                g.clip_id
+            )
+        })
+        .collect();
     lines.push(if crate::graphics::runtime::status().installed {
-        "It renders in the background; graphic_render waits for it.".into()
+        "They render in the background; graphic_render waits for them.".into()
     } else {
-        "The renderer is not installed, so it shows as a placeholder: ask the user, then graphics_install.".into()
+        "The renderer is not installed, so they show as placeholders: ask the user, then graphics_install.".into()
     });
     text(applied(ctx, "graphic_add", &before, lines)?)
 }
@@ -5153,7 +5262,10 @@ mod tests {
             json!({ "op": "remove", "short": "The whole lesson" }),
         )
         .unwrap();
-        assert!(removed.starts_with("Removed short \"The whole lesson\""), "{removed}");
+        assert!(
+            removed.starts_with("Removed short \"The whole lesson\""),
+            "{removed}"
+        );
         let shorts = with_reader(ctx.state, |r| Ok(r.document().shorts.len())).unwrap();
         assert_eq!(shorts, 0);
     }
@@ -5410,7 +5522,10 @@ mod tests {
                     "variables": { "title": "Install" } }),
         )
         .unwrap();
-        assert!(added.contains("(step) at 0:00.00 for 1.0 s"), "{added}");
+        assert!(
+            added.contains("(template step) at 0:00.00 for 1.0 s"),
+            "{added}"
+        );
         assert_eq!(history(&ctx)[0].action.as_deref(), Some("graphic_add"));
         let id = with_reader(ctx.state, |reader| {
             Ok(reader
@@ -5479,6 +5594,66 @@ mod tests {
         let refused = call(&ctx, "fillers", json!({})).unwrap_err();
         assert!(refused.contains("A graphic plays here"), "{refused}");
         assert_eq!(length(&ctx), before);
+    }
+
+    #[test]
+    fn automatic_passes_hold_what_looks_wrong_and_graphics_go_in_one_call() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "codex", false);
+        let before = length(&ctx);
+        // Everything quieter than -10 dB "is silence": far more than a quarter, held.
+        let held = call(
+            &ctx,
+            "silence",
+            json!({ "guard": true, "thresholdDb": -10.0, "minDurationMs": 50 }),
+        )
+        .unwrap();
+        assert!(held.contains("Not applied: it would cut"), "{held}");
+        assert!(held.contains("more than a quarter"), "{held}");
+        assert_eq!(length(&ctx), before, "a held pass changes nothing");
+        // A pass that looks right applies in the same one call: muting, guarded by the words.
+        let muted = call(&ctx, "mouth_noises", json!({ "guard": true })).unwrap();
+        assert!(muted.contains("Muted 1."), "{muted}");
+
+        // Two graphics in one call are one undo step.
+        let revision = |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
+        let at = revision(&ctx);
+        let added = call(
+            &ctx,
+            "graphic_add",
+            json!({ "items": [
+                { "template": "title", "atWord": "w-0", "lengthUs": 1_000_000 },
+                { "template": "key-point", "atUs": 1_500_000, "lengthUs": 1_000_000 }
+            ] }),
+        )
+        .unwrap();
+        assert_eq!(added.matches("Added graphic").count(), 2, "{added}");
+        assert_eq!(revision(&ctx), at + 1, "{added}");
+        let graphics = with_reader(ctx.state, |r| {
+            Ok(r.document()
+                .assets
+                .iter()
+                .filter(|a| a.is_graphic())
+                .count())
+        })
+        .unwrap();
+        assert_eq!(graphics, 2);
+        // One bad item places none of them.
+        let bad = call(
+            &ctx,
+            "graphic_add",
+            json!({ "items": [
+                { "template": "title", "atUs": 0 },
+                { "template": "no-such-template", "atUs": 0 }
+            ] }),
+        )
+        .unwrap_err();
+        assert!(bad.starts_with("Graphic 2:"), "{bad}");
+        assert_eq!(revision(&ctx), at + 1);
     }
 
     #[test]

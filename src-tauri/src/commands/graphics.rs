@@ -52,6 +52,106 @@ pub struct GraphicCreated {
     pub clip_id: String,
 }
 
+/// One graphic for the video's timeline: where it comes from, where and how long it plays.
+pub struct VideoGraphic {
+    pub from: ShortGraphicFrom,
+    pub at_us: u64,
+    /// Default: the template's or library item's own.
+    pub length_us: Option<u64>,
+    pub name: Option<String>,
+    pub variables: Map<String, Value>,
+}
+
+/// A graphic `project_graphics_add_impl` placed.
+pub struct VideoGraphicPlaced {
+    pub asset_id: String,
+    pub clip_id: String,
+    pub name: String,
+    pub length_us: u64,
+    /// Where it came from, for the agent ("template key-point", "library hub").
+    pub said: String,
+}
+
+/// Makes `graphics` (templates or library copies) and places each on the video's timeline,
+/// all as one undo step; on an error nothing is placed and the folders made go again.
+pub fn project_graphics_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    graphics: Vec<VideoGraphic>,
+) -> Result<(OpenedProject, Vec<VideoGraphicPlaced>), String> {
+    if graphics.is_empty() {
+        return Err("Name a graphic to add".into());
+    }
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let root = reader.root().to_path_buf();
+    let mut folders = Vec::new();
+    let made = (|| {
+        let mut next = reader.document().clone();
+        let mut placed = Vec::new();
+        for (n, graphic) in graphics.iter().enumerate() {
+            let at = |error: String| {
+                if graphics.len() > 1 {
+                    format!("Graphic {}: {error}", n + 1)
+                } else {
+                    error
+                }
+            };
+            if matches!(graphic.from, ShortGraphicFrom::Video { .. }) {
+                return Err(at(
+                    "`graphic` copies one of the video's graphics into a take short \
+                     (`short_footage`)"
+                        .into(),
+                ));
+            }
+            let (asset, length, said) = crate::under_take::make_graphic(
+                &root,
+                &root,
+                &next,
+                &graphic.from,
+                graphic.length_us,
+                &graphic.name,
+                &graphic.variables,
+            )
+            .map_err(at)?;
+            folders.push(graphics::folder(&root, &asset.id));
+            let (document, clip_id) =
+                graphics::place(&next, asset.clone(), graphic.at_us, length).map_err(at)?;
+            next = document;
+            let length_us = next
+                .sequence
+                .clip(&clip_id)
+                .map_or(length, |(_, c)| c.duration_us);
+            placed.push(VideoGraphicPlaced {
+                asset_id: asset.id,
+                clip_id,
+                name: asset.name,
+                length_us,
+                said,
+            });
+        }
+        let project = reader.commit_document(expected_revision, next)?;
+        Ok::<_, String>((project, placed))
+    })();
+    let (project, placed) = match made {
+        Ok(done) => done,
+        Err(error) => {
+            for dir in &folders {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok((project, placed))
+}
+
 /// Makes a graphic from `template` and places it at `at_us`, one undo step. `length_us`
 /// defaults to the template's.
 #[allow(clippy::too_many_arguments)]

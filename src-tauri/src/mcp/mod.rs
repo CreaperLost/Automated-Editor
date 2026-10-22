@@ -1331,7 +1331,17 @@ mod tests {
     #[test]
     fn the_tool_list_stays_small() {
         // Agents read it on every connection: 84,414 characters before 23 Oct 2026, 72,722 after.
-        let size = serde_json::to_string(&tool_list()).unwrap().len();
+        let list = tool_list();
+        if std::env::var("TOOL_SIZES").is_ok() {
+            for tool in &list {
+                eprintln!(
+                    "TOOL {} {}",
+                    tool.name,
+                    serde_json::to_string(tool).unwrap().len()
+                );
+            }
+        }
+        let size = serde_json::to_string(&list).unwrap().len();
         assert!(size < 75_000, "the tool list grew to {size} characters");
     }
 }

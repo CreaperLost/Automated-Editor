@@ -459,6 +459,11 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — **Fewer agent calls**, measured by rerunning EVAL-1: automatic mode passes
+  `guard: true` to `mouth_noises`, `silence` and `fillers` and the app applies its own
+  "looks wrong" check instead of a dry run first (takes not guarded); `graphic_add` takes
+  `items`, one call and one undo step. Tutorial: 34 → 20 calls, $0.41 → $0.36. Cost is now
+  mostly writing the context (tool list, template, transcript), the case for COST-2.
 - **23 Oct 2026** — **EVAL-1 baseline** ([plans/evaluation.md](plans/evaluation.md)): a real
   agent (Claude Code headless, Sonnet 5.5, the app's MCP server only) edited George's 7-min
   tutorial for $0.41 in 34 calls and made a short from a take for about $0.30 in a clean run.

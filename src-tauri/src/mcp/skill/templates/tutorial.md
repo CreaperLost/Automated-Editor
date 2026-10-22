@@ -58,7 +58,9 @@ pass:
    and ask again in one line, unless they said to just do it.
 3. Run the pass with the chosen settings, then one line: what it did, length before → after.
 
-Automatic: steps 1 and 3 only, with the saved answers or the defaults.
+Automatic: step 3 only, with the saved answers or the defaults and `guard: true` on
+`mouth_noises`, `silence` and `fillers` (the app checks section 4's first and last rules and
+applies nothing when one fails); layouts and zooms apply directly.
 
 The passes:
 
@@ -171,8 +173,8 @@ whether the user wants graphics (default no in automatic mode unless the saved a
    a rule worth remembering, `recap` near the end, `end-card` last. Few and short (about one a
    minute at most, 3–5 s each), never over a part where the screen must be seen. Ask: add them
    all / pick / skip.
-3. `graphic_add` each with `atWord` (the word it starts at) and its `variables` (`library` with
-   the item's name for a library one), then `graphic_render` and look at one or two with
+3. One `graphic_add` with `items`, each with `atWord` (the word it starts at) and its
+   `variables` (`library` with the item's name for a library one), then `graphic_render` and look at one or two with
    `frame_render` inside them. Report one line.
 4. If you wrote a graphic of your own and the user likes it, offer to keep it in their library
    for later videos; on a yes follow the graphics rules: `graphic_templatize`, rewrite, `graphic_check`

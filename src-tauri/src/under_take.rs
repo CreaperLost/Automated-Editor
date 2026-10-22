@@ -181,7 +181,7 @@ fn asset_name(document: &EditDocument, id: &str) -> String {
 
 /// Makes graphic `from` in `into` with its name and values; returns it, how long it plays and
 /// where it came from.
-fn make_graphic(
+pub(crate) fn make_graphic(
     root: &Path,
     into: &Path,
     document: &EditDocument,

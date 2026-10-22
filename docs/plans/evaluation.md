@@ -77,13 +77,49 @@ template, then a short from a take with the `shorts` template. Greek is later (L
   1080x1920): one render per graphic now. Checked in S4: every short graphic has a single
   1080x1920 render (a second only for the one whose text changed).
 
+## Run 2 (23 Oct): fewer calls
+
+What changed: in automatic mode the cutting passes take `guard: true` and the app applies its
+own "looks wrong" check (a pass cutting more than a quarter of the video, the cleanup more
+than a third of what was recorded, mouth noises with no transcript), so there is no separate
+dry run; a take is not guarded. `graphic_add` takes `items`, all in one call and one undo
+step. Same inputs, same first messages, a fresh project.
+
+| | Run 1 | Run 2 | |
+|---|---|---|---|
+| T1 tutorial edit | 19 calls, 3:11, $0.285 | 13 calls, 2:33, $0.264 | −32 % calls |
+| T2 graphics | 15 calls, 2:46, $0.122 | 7 calls, 2:29, $0.094 | −53 % calls |
+| **Tutorial** | **34 calls, 5:57, $0.407** | **20 calls, 5:02, $0.358** | **−41 % calls, −12 % cost** |
+| Short (all turns) | 49 calls, $0.55 (with a restart Claude caused) | 42 calls, $0.48 | not like for like |
+
+- **Same edit:** 70 s of pauses cut, 28 fillers and retakes (30 in run 1; the AI review varies),
+  12 zooms, six graphics added in one call. The first chapter now reads 0:00, so the agent no
+  longer raises it.
+- **Calls fell 41 %, cost only 12 %.** Each extra call costs little: it re-reads the cached
+  context at a tenth of the price. Most of a turn's cost is **writing** the context once: about
+  52k tokens in T1 (Claude Code's own prompt, the 18k-token tool list, the template, the
+  transcript). The next saving is a smaller context: tools on demand (COST-2), shorter
+  templates, reading the transcript once.
+- **The short varies with the agent's choices**, so it is not like for like: run 2 went
+  straight to proposing the Hermes library graphics (S1), but its own proposal overlapped two
+  graphics, and fixing that took 23 calls ($0.26) because **a graphic's time or length on a
+  short can't be changed**: the agent removed both and proposed them again. That is the next
+  capability gap for shorts. The last turn fixed leftover template text on all three library
+  graphics.
+- Found in the rerun and fixed: the guard held `fillers` on the take (it counted the take's
+  recording against the long video). A take is not guarded now; recorded length counts only
+  recordings on the video's timeline.
+- These runs use George's Claude plan: run 2's last turn hit the session limit and ran again
+  after the reset.
+
 ## Open findings (not fixed)
 
 - **ElevenLabs rejected its API key** on this PC: check the key in Settings > Transcription.
-- **Dry runs in automatic mode** (T1): 5 of 19 calls are `apply: false` before each pass, by
-  design (the "stop if it looks wrong" guard). Moving that guard into the app (apply unless it
-  would cut more than a quarter...) would save those calls, about 10 % of T1's cost.
-- **One graphic per call** (T2: 7 `graphic_add`): a list in one call would save 6 calls.
+- **A graphic on a short can't be moved or lengthened** (`graphic_set` works on the video's
+  timeline only); the agent removes and re-proposes instead. The proposal check could also
+  flag graphics that overlap.
+- **The take short keeps its placeholder title** ("Take short") until asked, although the
+  template says to rename it after the transcript.
 - **Graphics in a short cover the face 22 of 31.6 s** (full frame) and mix two looks (white
   library graphics, navy key points): a style kit (STY-1) and a "keep the face" rule for
   shorts are the fix, not a code change.

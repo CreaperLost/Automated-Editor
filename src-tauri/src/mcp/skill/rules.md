@@ -21,9 +21,10 @@ don't ask about later passes with earlier numbers.
 ## Automatically
 
 When the user says so ("auto", "no questions", "just do it", yes to "same as last time?"), make
-each choice yourself: the saved answers, else the template's defaults. Still dry-run each pass
-and report one line per pass, still stop when a dry run looks wrong (the template says when),
-still never export without the user's go.
+each choice yourself: the saved answers, else the template's defaults. Run each pass once, no
+dry run: the cutting passes (`mouth_noises`, `silence`, `fillers`) with `guard: true`, which
+apply only if the result looks right and otherwise say why ("Not applied"): then stop and ask.
+Report one line per pass, still never export without the user's go.
 
 ## Asking
 
