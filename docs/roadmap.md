@@ -168,13 +168,6 @@ the foundations the Later tier builds on.
   timeline + inspector at one moment), a time budget per stage that stops and asks, a diagnose
   action for a broken timeline. **Was:** backlog #16.
 
-<a id="gfx-1"></a>
-### GFX-1 · Graphics render policy: draft for preview, final for export — M
-
-- **Do:** keep 30 fps / 1920 px for preview; at export, render graphics at the export's fps and
-  slot size; both in the cache key; export never silently uses a draft.
-- **Done when:** a 4K/60 export of a fast text graphic is visibly sharper and smoother than today.
-
 <a id="cap-1"></a>
 ### CAP-1 · Captions as typography — M
 
@@ -190,8 +183,8 @@ the foundations the Later tier builds on.
 ### SND-1 · Minimal sound surface — M
 
 - **Do:** clip gain and fade in/out on any audio clip (the `Clip` model has neither); SFX and
-  music as their own audio tracks with roles; a speech-relative music level and a loudness
-  target per project; a licence/provenance field on imported audio assets; agent ops through
+  music as their own audio tracks with roles; a speech-relative music level (the loudness
+  target itself is done, 22 Oct); a licence/provenance field on imported audio assets; agent ops through
   `propose_edit` + `settings`. No generation, no beat grid. Both libraries (SND-3) build on this.
 - **Decision:** [Q-SOUND](decisions.md#q-sound): this comes first, then the SFX starter set, then
   music (SND-3). **Was:** backlog #5 (first half).
@@ -353,8 +346,6 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
 <a id="fx-3"></a>
 - **FX-3 · Camera push-ins (M).** Start/end scale, pivot, easing, hold, return; matched framing
   across jump cuts; separate from screen zooms.
-<a id="fx-4"></a>
-- **FX-4 · Audio seam fades (S).** Short fades at cuts where source handles allow, speech timing intact.
 <a id="fx-5"></a>
 - **FX-5 · Colour: LUT import and a simple grade (M). Parked 21 Oct: not needed now.** Per clip,
   preview/export parity, `clip_grade` op.
@@ -388,8 +379,9 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
   **Was:** backlog #12.
 <a id="lng-4"></a>
 - **LNG-4 · Filler/retake rules fixes and a real Greek eval (S/M).** Rules stop treating
-  "X. X essentially means" as a retake (list items and parallel statements: done 22 Oct); flag single-word repeats, cut-off words and
-  short restarts; label one more real English recording and a real Greek one; then decide whether
+  "X. X essentially means" as a retake (list items and parallel statements: done 22 Oct); flag
+  single-word repeats and cut-off words (done 22 Oct, small words only: "very very" is meant);
+  label one more real English recording and a real Greek one; then decide whether
   cloud review may default to `apply: true` for fillers. **Was:** task 3 leftovers.
 <a id="lng-5"></a>
 - **LNG-5 · Custom vocabulary (S/M).** Product names and jargon passed to providers that accept them.
@@ -502,6 +494,16 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **22 Oct 2026** — **Quick wins for how videos sound and look.** **FX-4:** a cut between
+  two clips with sound to spare crossfades over 16 ms at equal power instead of dipping to
+  silence. **Loudness:** a leveller turns down only the 100 ms blocks whose peaks would reach
+  the limiter, so normalization reaches its target (two real edits asked for -14 LUFS reached
+  -18.4 and -19.4 before, -14.3 and -14.7 after, peaks at -1 dBFS; probe:
+  `media::audio::tests::loudness_probe`); new projects normalize to -14 LUFS by default.
+  **GFX-1:** an export renders graphics at its own frame rate, and 1440p and 4K exports at
+  twice the density (HyperFrames `--resolution`, the same layout); the preview keeps the draft
+  (a 3 s card: 17 s draft, 47 s at 4K/60). **LNG-4 (part):** the rules cut small words said twice
+  ("we we", "it's a it's a") and broken-off words ("j- just").
 - **22 Oct 2026** — **An audit's findings fixed** (each in [gaps.md](gaps.md), fixed 22 Oct).
   The **shorts preview freeze** George reported was a deadlock between the playback engine and
   the window thread; reproduced in the dev app, stacks read with `cdb`, fixed, and the same test

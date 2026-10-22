@@ -87,7 +87,7 @@ deterministic graphics. Resolve's native MCP is the most direct threat.
   streams; an empty `PlaceAsset.streams` places **all** streams including unwanted audio; avoid
   occupied magnetic tracks) ([FTG-2](../roadmap.md#ftg-2)), save-this-workflow
   ([AUTO-3](../roadmap.md#auto-3)), spotlight/redaction/magnifier ([FX-2](../roadmap.md#fx-2)),
-  seam fades ([FX-4](../roadmap.md#fx-4)), translated subtitles ([DLV-4](../roadmap.md#dlv-4)),
+  seam fades (FX-4, [done 22 Oct](../roadmap.md#done)), translated subtitles ([DLV-4](../roadmap.md#dlv-4)),
   delivery list ([DLV-2](../roadmap.md#dlv-2)).
 - **Pricing (homepage, monthly):** 200 credits $45, 400 $88, 800 $160; manual editing,
   transcription and export use no credits. Pages disagreed with an older $25/100 offer.

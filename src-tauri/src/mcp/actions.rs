@@ -4385,10 +4385,11 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             None => reader.document(),
         };
         let canvas = document.layout.preview_dimensions()?;
-        let specs: Vec<_> = crate::graphics::render::specs_for(reader.root(), document, canvas)
-            .into_iter()
-            .filter(|s| args.graphic.as_ref().is_none_or(|g| &s.asset_id == g))
-            .collect();
+        let specs: Vec<_> =
+            crate::graphics::render::specs_for(reader.root(), document, canvas, Default::default())
+                .into_iter()
+                .filter(|s| args.graphic.as_ref().is_none_or(|g| &s.asset_id == g))
+                .collect();
         Ok((reader.root().to_path_buf(), specs))
     })?;
     if specs.is_empty() {

@@ -43,6 +43,116 @@ const MAX_RETAKE_SPAN_US: u64 = 12_000_000;
 const MAX_FINISHED_EXTRA_WORDS: usize = 2;
 /// Padding at the very start or end of the transcript, where there is no neighbour word.
 const EDGE_PAD_US: u64 = 50_000;
+/// Small words that said twice in a row are a stutter ("we we", "and and", "it's a it's a").
+/// Words said twice for weight ("very very", "pretty pretty", "really really") are meant, so
+/// only these count; "that that" and "had had" are left out, as both can be meant. Written as
+/// `normalize` gives them (Greek without accents).
+const STUTTER_WORDS: &[&str] = &[
+    "i",
+    "i'm",
+    "i've",
+    "i'll",
+    "i'd",
+    "we",
+    "we're",
+    "we've",
+    "we'll",
+    "you",
+    "you're",
+    "you've",
+    "you'll",
+    "they",
+    "they're",
+    "he",
+    "she",
+    "it",
+    "it's",
+    "its",
+    "that's",
+    "there's",
+    "what's",
+    "let's",
+    "this",
+    "these",
+    "those",
+    "the",
+    "a",
+    "an",
+    "and",
+    "but",
+    "or",
+    "to",
+    "of",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+    "from",
+    "by",
+    "as",
+    "if",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "can",
+    "will",
+    "would",
+    "could",
+    "should",
+    "do",
+    "does",
+    "did",
+    "don't",
+    "have",
+    "has",
+    "not",
+    "my",
+    "your",
+    "our",
+    "their",
+    "his",
+    "her",
+    "και",
+    "να",
+    "θα",
+    "το",
+    "τα",
+    "τον",
+    "την",
+    "της",
+    "του",
+    "των",
+    "ο",
+    "η",
+    "οι",
+    "σε",
+    "με",
+    "για",
+    "απο",
+    "που",
+    "δεν",
+    "ειναι",
+];
+
+/// The sentence ends after `text` (". ? !"), not just a clause.
+fn ends_sentence(text: &str) -> bool {
+    text.trim_end()
+        .ends_with(['.', '?', '!', '\u{2026}', '\u{037e}'])
+}
+
+/// A word broken off and said again whole: written with one trailing hyphen ("j-", "t-",
+/// "inst-"), and either a letter or two or the start of the next word. A double dash ("like--")
+/// breaks off a sentence, not a word.
+fn broken_off(text: &str, normalized: &str, next: &str) -> bool {
+    let text = text.trim_end();
+    text.ends_with('-')
+        && !text.ends_with("--")
+        && !normalized.is_empty()
+        && (normalized.chars().count() <= 2 || next.starts_with(normalized))
+}
 
 /// Punctuation on its own, as some providers give it ("." or ",").
 pub(crate) fn is_punctuation(text: &str) -> bool {
@@ -276,18 +386,21 @@ pub fn suggestions(
     // word before, so phrases and sentence ends read as they were said.
     let mut live: Vec<&TranscriptWord> = Vec::new();
     let mut ends: Vec<bool> = Vec::new();
+    let mut stops: Vec<bool> = Vec::new();
     for word in transcript
         .words
         .iter()
         .filter(|w| w.kind == WordKind::Word && kept(w, mapper))
     {
         if is_punctuation(&word.text) {
-            if let Some(last) = ends.last_mut() {
-                *last |= ends_clause(&word.text);
+            if let (Some(end), Some(stop)) = (ends.last_mut(), stops.last_mut()) {
+                *end |= ends_clause(&word.text);
+                *stop |= ends_sentence(&word.text);
             }
             continue;
         }
         ends.push(ends_clause(&word.text));
+        stops.push(ends_sentence(&word.text));
         live.push(word);
     }
     let normalized: Vec<String> = live.iter().map(|w| normalize(&w.text)).collect();
@@ -397,6 +510,60 @@ pub fn suggestions(
             );
             covered_until = b;
         }
+    }
+
+    // Stutters: a small word said twice in a row ("we we used", "it's a it's a"), and a word
+    // broken off and said whole ("j- just"). The first go is cut.
+    let mut stutters: Vec<(usize, usize)> = Vec::new();
+    let mut k = 0;
+    while k + 1 < live.len() {
+        let same = |a: usize, b: usize| normalized.get(b).is_some_and(|n| *n == normalized[a]);
+        let small = |k: usize| STUTTER_WORDS.contains(&normalized[k].as_str());
+        // Two words count only if both are small: "one by one by one" is meant.
+        let span = if small(k) && !stops[k] && same(k, k + 1) {
+            Some((k, k))
+        } else if small(k)
+            && small(k + 1)
+            && !stops[k]
+            && !stops[k + 1]
+            && same(k, k + 2)
+            && same(k + 1, k + 3)
+        {
+            Some((k, k + 1))
+        } else if broken_off(&live[k].text, &normalized[k], &normalized[k + 1]) {
+            Some((k, k))
+        } else {
+            None
+        };
+        match span {
+            Some((a, b)) => {
+                stutters.push((a, b));
+                k = b + 1;
+            }
+            None => k += 1,
+        }
+    }
+    let position_of = |id: &str| live.iter().position(|w| w.id == id);
+    let retaken: Vec<(usize, usize)> = out
+        .iter()
+        .filter_map(|s| {
+            Some((
+                position_of(s.word_ids.first()?)?,
+                position_of(s.word_ids.last()?)?,
+            ))
+        })
+        .collect();
+    for (a, b) in stutters {
+        if retaken.iter().any(|&(x, y)| a <= y && x <= b) {
+            continue;
+        }
+        push_suggestion(
+            &mut out,
+            TranscriptSuggestionKind::Retake,
+            &live[a..=b],
+            transcript,
+            mapper,
+        );
     }
 
     // AI spans whose words are all still kept, skipping any that overlap a rule-based one.
@@ -845,5 +1012,47 @@ mod tests {
             ]),
             vec!["if you go to the set"]
         );
+    }
+
+    #[test]
+    fn small_words_said_twice_are_stutters() {
+        // From real edits (16-22 Oct 2026).
+        assert_eq!(retakes(&["We we used 17% of it"]), vec!["We"]);
+        assert_eq!(retakes(&["It's a it's a clear win"]), vec!["It's a"]);
+        assert_eq!(retakes(&["I'm not I'm not going"]), vec!["I'm not"]);
+        assert_eq!(
+            retakes(&["That's that's completely completely obvious."]),
+            vec!["That's"]
+        );
+        assert_eq!(
+            retakes(&["a problem with with previous models"]),
+            vec!["with"]
+        );
+    }
+
+    #[test]
+    fn words_said_twice_for_weight_are_meant() {
+        for phrase in [
+            "this is pretty, pretty amazing",
+            "very very important",
+            "really, really low",
+            "blah blah blah",
+            "I know that that works",
+        ] {
+            assert!(retakes(&[phrase]).is_empty(), "{phrase}");
+        }
+        // Across a sentence end both are meant.
+        assert!(retakes(&["be honest with you. You should take a look"]).is_empty());
+    }
+
+    #[test]
+    fn a_broken_off_word_is_cut() {
+        assert_eq!(retakes(&["So we j- just like that"]), vec!["j-"]);
+        assert_eq!(retakes(&["very important t- for speed"]), vec!["t-"]);
+        assert_eq!(retakes(&["now inst- install it"]), vec!["inst-"]);
+        // A sentence broken off with a double dash keeps its words.
+        assert!(retakes(&["this is amazing. Like-- And if you"]).is_empty());
+        // A hyphen ending a longer word that does not start the next is left alone.
+        assert!(retakes(&["self- and peer review"]).is_empty());
     }
 }

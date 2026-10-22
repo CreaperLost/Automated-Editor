@@ -421,7 +421,7 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   mouthClicks: false,
   mouthClickStrength: 35,
   normalize: false,
-  targetLufs: -16,
+  targetLufs: -14,
   noiseReduction: false,
   noiseReductionDb: 12,
   duckSystemAudio: false,

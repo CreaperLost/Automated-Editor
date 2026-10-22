@@ -274,6 +274,8 @@ pub struct SceneEvaluator {
     >,
     /// Where the camera fills the frame, for the graphics that ease in over it.
     full_camera: std::cell::OnceCell<Vec<(u64, u64)>>,
+    /// The graphics renders it plays: the draft, or an export's final ones.
+    graphics_quality: crate::graphics::render::Quality,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The last cue drawn and its colored frame for the active word.
@@ -552,6 +554,7 @@ impl SceneEvaluator {
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
+            graphics_quality: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -592,6 +595,12 @@ impl SceneEvaluator {
     /// Decodes sources no larger or faster than `limit`, for preview.
     pub fn with_decode_limit(mut self, limit: DecodeLimit) -> Self {
         self.decode_limit = limit;
+        self
+    }
+
+    /// Plays graphics from the renders `quality` names (an export's final ones).
+    pub fn with_graphics_quality(mut self, quality: crate::graphics::render::Quality) -> Self {
+        self.graphics_quality = quality;
         self
     }
 
@@ -1038,9 +1047,10 @@ impl SceneEvaluator {
             clip,
             (self.width, self.height),
             full_camera,
+            self.graphics_quality,
         );
         // Never past a render's last frame.
-        let last_frame = 1_000_000 / render::RENDER_FPS as u64;
+        let last_frame = 1_000_000 / spec.fps as u64;
         match render::lookup(&spec) {
             Lookup::Ready(path) => Some(PictureJob::Video(
                 path,
@@ -2330,11 +2340,16 @@ fn export_to_temp(
     };
     let duration_us = captured.document.duration_us();
     let frames = frame_count(duration_us, captured.settings.fps)?;
-    // Every graphic's render must be there before the first frame.
+    // Every graphic's final render must be there before the first frame: at the export's
+    // frame rate, and sharper than the preview's draft when the export is larger.
+    let graphics_quality = crate::graphics::render::Quality::Final {
+        fps: captured.settings.fps,
+    };
     let graphics = crate::graphics::render::specs_for(
         &captured.root,
         &captured.document,
         (captured.settings.width, captured.settings.height),
+        graphics_quality,
     );
     crate::graphics::render::ensure(&graphics, cancel, &mut |_, _| on_progress(0, frames))
         .map_err(|message| {
@@ -2363,6 +2378,7 @@ fn export_to_temp(
         captured.settings.height,
         captured.settings.fps,
     ))
+    .with_graphics_quality(graphics_quality)
     // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
     // pipe, and no conversion on the CPU.
     .with_nv12_output(ExportWriter::takes_nv12());
@@ -3674,6 +3690,7 @@ mod tests {
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
+            graphics_quality: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -3734,6 +3751,7 @@ mod tests {
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
+            graphics_quality: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
@@ -4003,7 +4021,12 @@ mod tests {
             let last = scene.layers.last().unwrap();
             assert_eq!((last.x, last.y, last.width, last.height), rect, "{slot:?}");
             // It renders for that space, at the render scale (1080 wide).
-            let spec = crate::graphics::render::specs_for(dir.path(), &short_document, (90, 160));
+            let spec = crate::graphics::render::specs_for(
+                dir.path(),
+                &short_document,
+                (90, 160),
+                Default::default(),
+            );
             assert_eq!(spec.len(), 1);
             let expected_h = (rect.3 as f64 * 1920.0 / 160.0).round() as u32 & !1;
             assert_eq!(
@@ -4065,6 +4088,7 @@ mod tests {
                 clip,
                 (160, 90),
                 full_camera,
+                Default::default(),
             )
             .entrance
         };
@@ -4109,6 +4133,46 @@ mod tests {
         );
         // Without a camera-only section nothing fills the frame with the camera.
         assert!(crate::graphics::full_camera_ranges(&document).is_empty());
+    }
+
+    #[test]
+    fn an_export_plays_final_graphics_at_its_frame_rate_and_size() {
+        use crate::graphics::render::{Quality, Spec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let clip = Clip {
+            id: "g1".into(),
+            asset: card.id.clone(),
+            stream: "picture".into(),
+            start_us: 1_000_000,
+            in_us: 0,
+            duration_us: 3_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        };
+        document.assets.push(card.clone());
+        let spec = |canvas, quality| {
+            Spec::for_clip(dir.path(), &document, &card, &clip, canvas, &[], quality)
+        };
+        let draft = spec((1920, 1080), Quality::Draft);
+        assert_eq!(
+            (draft.width, draft.height, draft.density, draft.fps),
+            (1920, 1080, 1, 30)
+        );
+        // A 1080p export at 30 fps plays the preview's own render.
+        assert_eq!(spec((1920, 1080), Quality::Final { fps: 30 }), draft);
+        // At 60 fps, and at twice the density for 1440p and 4K: the same layout, sharper.
+        let smooth = spec((1920, 1080), Quality::Final { fps: 60 });
+        assert_eq!((smooth.density, smooth.fps), (1, 60));
+        for canvas in [(2560, 1440), (3840, 2160)] {
+            let sharp = spec(canvas, Quality::Final { fps: 30 });
+            assert_eq!((sharp.width, sharp.height, sharp.density), (1920, 1080, 2));
+        }
+        // The preview of a 4K project still plays the draft.
+        assert_eq!(spec((3840, 2160), Quality::Draft).density, 1);
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the
@@ -4468,6 +4532,8 @@ mod tests {
             ],
         );
         document.audio.sound_effects.clicks = true;
+        // The click's own level, not raised by a new project's loudness normalization.
+        document.audio.normalize = false;
         let effects = crate::sound_effects::plan(&document);
         // Two presses 50 ms apart: one click sound.
         assert_eq!(effects.len(), 1, "{effects:?}");

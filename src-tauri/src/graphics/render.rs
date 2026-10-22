@@ -23,6 +23,21 @@ pub const RENDER_FPS: u32 = 30;
 /// The long side of the canvas a graphic renders at; export scales it to the output.
 pub const RENDER_LONG_SIDE: u32 = 1920;
 
+/// The fastest a graphic renders for an export.
+const MAX_FINAL_FPS: u32 = 60;
+
+/// Which render a view plays: the draft the preview and storyboard use, or the final one an
+/// export of `fps` frames a second needs (at its frame rate, and twice as sharp when the
+/// export is larger than the draft). An export never plays a draft.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    #[default]
+    Draft,
+    Final {
+        fps: u32,
+    },
+}
+
 /// One graphic, as it plays on one canvas for one length.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Spec {
@@ -32,8 +47,12 @@ pub struct Spec {
     pub dir: PathBuf,
     /// Where its renders go.
     pub cache: PathBuf,
+    /// The composition's size: what the graphic lays itself out in.
     pub width: u32,
     pub height: u32,
+    /// Pixels per composition pixel: 2 renders the same layout at twice the size, as Chrome
+    /// draws a page on a high-density screen.
+    pub density: u32,
     pub fps: u32,
     pub length_us: u64,
     /// How it comes on and goes off where it plays: a cut, or an ease over the camera.
@@ -84,6 +103,7 @@ impl Spec {
             cache: super::cache_folder(root, &asset.id),
             width,
             height,
+            density: 1,
             fps: RENDER_FPS,
             length_us: length_us.max(100_000),
             entrance: super::Entrance::Cut,
@@ -95,7 +115,8 @@ impl Spec {
     /// The same graphic and length rendered for a canvas of its own: `document`'s render size
     /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), the
     /// document's brand kit, and how it comes on and goes off there. `full_camera` is where the
-    /// camera fills the frame ([`super::full_camera_ranges`] of `document`).
+    /// camera fills the frame ([`super::full_camera_ranges`] of `document`). `quality` picks
+    /// the draft or an export's final render.
     pub fn for_clip(
         root: &Path,
         document: &crate::project::revision::EditDocument,
@@ -103,9 +124,10 @@ impl Spec {
         clip: &crate::sequence::Clip,
         canvas: (u32, u32),
         full_camera: &[(u64, u64)],
+        quality: Quality,
     ) -> Self {
-        let canvas = shared_canvas(document.layout.preview_dimensions().ok(), canvas);
-        let mut spec = Self::new(root, asset, canvas, clip.duration_us);
+        let shared = shared_canvas(document.layout.preview_dimensions().ok(), canvas);
+        let mut spec = Self::new(root, asset, shared, clip.duration_us);
         let mut whole_frame = true;
         if let Some(short) = &document.short_layout {
             whole_frame =
@@ -120,6 +142,14 @@ impl Spec {
         spec.entrance =
             super::entrance_for(full_camera, clip, || whole_frame && !overlay_of(&spec.dir));
         spec.default_brand = document.graphics_brand.clone();
+        if let Quality::Final { fps } = quality {
+            spec.fps = fps.clamp(1, MAX_FINAL_FPS);
+            // Larger than the draft: twice as sharp, where HyperFrames can (a whole 16:9 or
+            // 9:16 frame; it renders only at its own sizes).
+            if canvas.0.max(canvas.1) > RENDER_LONG_SIDE && density_preset(&spec).is_some() {
+                spec.density = 2;
+            }
+        }
         spec
     }
 
@@ -130,8 +160,13 @@ impl Spec {
         super::brands::load(&self.brands, name).ok()
     }
 
+    /// Renders are named by their size in pixels.
     fn prefix(&self) -> String {
-        format!("{}x{}-", self.width, self.height)
+        format!(
+            "{}x{}-",
+            self.width * self.density,
+            self.height * self.density
+        )
     }
 
     /// The file name up to the source hash: everything about the output (canvas, length, fps,
@@ -162,9 +197,10 @@ impl Spec {
         let mut hasher = Sha256::new();
         hasher.update(runtime::HYPERFRAMES_VERSION.as_bytes());
         hasher.update(format!(
-            "{}x{}@{}:{}:{}",
+            "{}x{}x{}@{}:{}:{}",
             self.width,
             self.height,
+            self.density,
             self.fps,
             self.length_us,
             self.entrance.as_str()
@@ -535,12 +571,22 @@ pub fn state_of(asset_id: &str) -> RenderState {
     }
 }
 
+/// HyperFrames' name for rendering `spec`'s composition at twice its size, if it has one.
+fn density_preset(spec: &Spec) -> Option<&'static str> {
+    match (spec.width, spec.height) {
+        (1920, 1080) => Some("landscape-4k"),
+        (1080, 1920) => Some("portrait-4k"),
+        _ => None,
+    }
+}
+
 /// The renders `document` needs on a canvas of `canvas` (width, height): one per graphic clip
-/// on a shown video track, in the slot it plays in.
+/// on a shown video track, in the slot it plays in, at `quality`.
 pub fn specs_for(
     root: &Path,
     document: &crate::project::revision::EditDocument,
     canvas: (u32, u32),
+    quality: Quality,
 ) -> Vec<Spec> {
     let mut specs: Vec<Spec> = Vec::new();
     let full_camera = super::full_camera_ranges(document);
@@ -549,7 +595,7 @@ pub fn specs_for(
             let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
                 continue;
             };
-            let spec = Spec::for_clip(root, document, asset, clip, canvas, &full_camera);
+            let spec = Spec::for_clip(root, document, asset, clip, canvas, &full_camera, quality);
             if !specs.contains(&spec) {
                 specs.push(spec);
             }
@@ -724,8 +770,10 @@ fn render_now(
         )
         .map_err(|e| e.to_string())?;
         let part = work.join("out.webm");
+        let resolution = (spec.density > 1).then(|| density_preset(spec)).flatten();
         run_hyperframes(
-            &paths, ffmpeg, ffprobe, &stage, &part, &variables, spec.fps, cancel, progress,
+            &paths, ffmpeg, ffprobe, &stage, &part, &variables, spec.fps, resolution, cancel,
+            progress,
         )?;
         // Into the project under a temporary name first, so a render is whole or absent.
         let target = spec.cache.join(name);
@@ -812,6 +860,7 @@ fn run_hyperframes(
     output: &Path,
     variables: &Path,
     fps: u32,
+    resolution: Option<&str>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f64),
 ) -> Result<(), String> {
@@ -822,7 +871,12 @@ fn run_hyperframes(
         .arg(project)
         .arg("--output")
         .arg(output)
-        .args(["--format", "webm", "--fps", &fps.to_string()])
+        .args(["--format", "webm", "--fps", &fps.to_string()]);
+    // The same layout at a larger size: Chrome draws at a higher device pixel ratio.
+    if let Some(resolution) = resolution {
+        command.args(["--resolution", resolution]);
+    }
+    command
         .arg("--variables-file")
         .arg(variables)
         .arg("--frames-cache-dir")
@@ -992,6 +1046,7 @@ mod tests {
             cache: cache.to_path_buf(),
             width: 1920,
             height: 1080,
+            density: 1,
             fps: 30,
             length_us,
             entrance: super::super::Entrance::Cut,
@@ -1264,8 +1319,20 @@ mod tests {
             super::super::create(root.path(), "title", None, variables.as_object().unwrap())
                 .unwrap();
         let cancel = AtomicBool::new(false);
-        for canvas in [(1280, 720), (540, 960)] {
-            let spec = Spec::new(root.path(), &asset, canvas, 3_000_000);
+        // The draft for two canvases, then a 4K export's final render: the 1080p layout at
+        // twice the density, 60 frames a second.
+        // Easing in, so the first frame is see-through (a cut shows the card at once).
+        let draft = |canvas| Spec {
+            entrance: super::super::Entrance::Ease,
+            ..Spec::new(root.path(), &asset, canvas, 3_000_000)
+        };
+        let final_4k = Spec {
+            density: 2,
+            fps: 60,
+            ..draft((1920, 1080))
+        };
+        for spec in [draft((1280, 720)), draft((540, 960)), final_4k] {
+            let canvas = (spec.width * spec.density, spec.height * spec.density);
             let started = std::time::Instant::now();
             ensure(std::slice::from_ref(&spec), &cancel, &mut |f, label| {
                 eprintln!("{label}: {:.0}%", f * 100.0)
@@ -1279,7 +1346,12 @@ mod tests {
                 panic!("no render for {canvas:?}");
             };
             let probe = crate::media::ffmpeg::probe_video(&path).unwrap();
-            assert_eq!((probe.width, probe.height), (spec.width, spec.height));
+            assert_eq!((probe.width, probe.height), canvas);
+            eprintln!("{canvas:?} at {} fps: {}", spec.fps, path.display());
+            if let Some(out) = std::env::var_os("AEROEDITS_GRAPHICS_OUT") {
+                let out = Path::new(&out).join(path.file_name().unwrap());
+                std::fs::copy(&path, out).unwrap();
+            }
             let frame = crate::media::ffmpeg::decode_bgra_limited(
                 &path,
                 1_500_000,

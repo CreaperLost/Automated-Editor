@@ -138,8 +138,9 @@ mounted at `recordings/<asset id>/`.
 - **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.162 with its own
   Node 22 and chrome-headless-shell (`runtime.rs`, hash-checked, ~200 MB download, ~500 MB on
   disk); WebM VP9 alpha decoded with `libvpx-vp9` forced; cache key over source files, canvas,
-  length, fps, brand and version; **30 fps, 1920 px long side** today
-  ([GFX-1](roadmap.md#gfx-1)). Renders stage in `<runtime>/work/<hash12>/` (long project paths
+  length, fps, density, brand and version. The preview plays a **draft** (30 fps, 1920 px long
+  side); an export renders **final** ones at its own fps, and at twice the density (HyperFrames
+  `--resolution landscape-4k` / `portrait-4k`, same layout) when larger than 1080p. Renders stage in `<runtime>/work/<hash12>/` (long project paths
   broke Windows' 260-char limit). Export waits for pending renders. A render takes ~16–28 s.
 - **Brand kits** (`brands.rs`): app-level `<config>/AeroEdits/brands/<name>/brand.json` (+ logo,
   font file) → a `<style id="aeroedits-brand">` with `--brand-*` variables at render time.

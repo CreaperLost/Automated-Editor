@@ -608,7 +608,10 @@ impl ProjectReader {
     /// recording keeps its id (transcripts are kept under it).
     fn starting_document(root: &Path, file: &ProjectFile) -> Result<EditDocument, String> {
         let Some(recording) = &file.recording else {
-            return Ok(EditDocument::default());
+            return Ok(EditDocument {
+                audio: crate::project::AudioSettings::for_new_project(),
+                ..EditDocument::default()
+            });
         };
         let folder = dunce::canonicalize(recording).map_err(|_| {
             format!(
@@ -623,7 +626,8 @@ impl ProjectReader {
             &folder,
             crate::sequence::sources::new_asset_id(true),
         )?;
-        let document = EditDocument::from_recording(asset)?;
+        let mut document = EditDocument::from_recording(asset)?;
+        document.audio = crate::project::AudioSettings::for_new_project();
         revision::save_edit_document(root, &document)?;
         Ok(document)
     }
@@ -1258,7 +1262,10 @@ mod tests {
         let manifest = fs::read(bundle.root_path().join("manifest.json")).unwrap();
         let project = project_for(bundle.root_path(), &dir.path().join("Projects"));
         let reader = ProjectReader::open(&project).unwrap();
-        let mixer = crate::media::audio::AudioMixer::new(reader.root(), reader.document()).unwrap();
+        // The samples as recorded, without a new project's loudness normalization.
+        let mut document = reader.document().clone();
+        document.audio.normalize = false;
+        let mixer = crate::media::audio::AudioMixer::new(reader.root(), &document).unwrap();
         // 998,000 us = frame 47,904. The old file ends and the new file starts there.
         let samples = mixer.read_frames(47_894, 30).unwrap();
         for (i, stereo) in samples.chunks_exact(2).enumerate() {
