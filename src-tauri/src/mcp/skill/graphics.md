@@ -24,7 +24,7 @@ Look first at what exists: the list below has the bundled templates and the user
 each library item with a `useWhen` line; pick one whose `useWhen` fits and fill in its
 variables. Write a composition of your own (`graphic_add` with `blank`, then
 `graphic_write_file`) only when nothing there does the job. Ask before `graphics_install`.
-After adding, `graphic_render`, then look with `frame_render`.
+After adding, `graphic_render`, then look with `frame_render` (with `short` for a short's).
 
 When the user likes a graphic you wrote, offer to keep it. On a yes: `graphic_templatize` (its
 source and the rules: text as variables, brand kit colours, timing from `data-duration`, a
@@ -56,5 +56,7 @@ with `short` and `slot` changes it later. The graphic's root gets `data-mode` (`
 or `over`): a composition of your own for `over` leaves its background out. A split graphic
 renders into its own box, the screen's part: the reply that places it says the box's size (`a
 1080x1248 box (portrait)`), and the root's `data-width`/`data-height` hold it. The user can move
-the split, so the box can turn about square or landscape; it renders again at the new size. Write
-for the box you are told, in vw/vh/vmin, never for the 9:16 frame.
+the split, so the box can turn about square or landscape; it renders again at the new size. Up to
+3:2 wide the box takes your `@media (orientation: portrait)` rules, as a part of a phone frame;
+wider, your landscape ones. Write for the box you are told, in vw/vh/vmin, never for the 9:16
+frame.

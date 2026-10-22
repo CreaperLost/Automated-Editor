@@ -324,7 +324,7 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let mut moments = Vec::new();
     for i in 0..count {
         let at = from + ((span * (i as f64 + 0.5)) / count as f64) as u64;
-        let (frame, _) = super::frames::render(ctx.state, at, thumb_w)?;
+        let (frame, _) = super::frames::render(ctx.state, None, at, thumb_w)?;
         blit_bgra(&mut image, &frame, (i * thumb_w) as i64, film_y as i64);
         moments.push(at);
     }

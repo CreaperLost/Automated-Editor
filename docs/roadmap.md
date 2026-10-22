@@ -290,11 +290,9 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2; Clips (SHT-
 - **SHT-4 · Take-short follow-ups (S).** Per-short ducking amount. (The picker, graphic modes
   and footage speed are done, 23 Oct: see [Done](#done).)
 <a id="sht-7"></a>
-- **SHT-7 · A split graphic knows its box (S/M).** Built and checked 23 Oct: see [Done](#done).
-  Follow-ups left: `graphic_check` checks templates only at 16:9 and 9:16, and the bundled
-  templates' landscape block is made for 1920x1080, so in a short landscape box (1080x864 at a
-  55 % camera) the step card turns small with empty space around it; and `frame_render` ignores
-  `short`, so an agent can't look at a short's frame after `graphic_render`.
+- **SHT-7 · A split graphic knows its box (S/M).** Built and checked 23 Oct, with its
+  follow-ups (split parts take the portrait rules, `graphic_check` renders one, `frame_render`
+  takes `short`): see [Done](#done).
 
 ### Layouts — plan: [plans/layouts.md](plans/layouts.md)
 
@@ -465,6 +463,15 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **23 Oct 2026** — **SHT-7 follow-ups: a split part is a phone frame.** A graphic in a part of a
+  short's split up to 3:2 wide (the camera up to about 55 %) renders with its `@media
+  (orientation: portrait)` rules on and its landscape ones off (`graphics::as_split_part`, on
+  the render's copy only), so every template, library item and agent-written graphic lays out as
+  in the 9:16 frame instead of its 16:9 layout set small. The box line says so (`landscape,
+  portrait rules`), and the render's name includes its mode. `graphic_check` adds a render in a
+  1080x864 split part ("Fits a short's split part") and a tile on the sheet. `frame_render`
+  takes `short`, so an agent can look at a short's frame after `graphic_render`.
 
 - **23 Oct 2026** — <a id="sht-7-done"></a>**SHT-7 a split graphic knows its box.** The render
   already sized a split graphic to its part of the split (`data-width`/`data-height` on its root,

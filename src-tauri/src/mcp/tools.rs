@@ -783,6 +783,9 @@ pub struct FrameParams {
     /// Image width in pixels, 240 to 1920. Default 960.
     #[serde(default)]
     pub width: Option<u32>,
+    /// A short (id or title): its 9:16 frame at `atUs` on the short's own timeline.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -795,8 +798,12 @@ pub struct AtParams {
 fn frame_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let state = ctx.state;
     let args: FrameParams = params(args)?;
-    let width = args.width.unwrap_or(960).clamp(240, 1920);
-    let (frame, at) = super::frames::render(state, args.at_us, width)?;
+    // A 9:16 short is narrow: its default width keeps about the same pixel count.
+    let width = args
+        .width
+        .unwrap_or(if args.short.is_some() { 540 } else { 960 })
+        .clamp(240, 1920);
+    let (frame, at) = super::frames::render(state, args.short.as_deref(), args.at_us, width)?;
     let png = super::frames::png(&frame)?;
     Ok(vec![
         Output::Png(png),

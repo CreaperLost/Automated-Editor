@@ -91,32 +91,39 @@ pub fn with_document_evaluator<T>(
     use_it(evaluator, &document)
 }
 
-/// Runs `use_it` on an evaluator of the open project's current edit at `width` (the height
-/// follows the canvas shape), with `at_us` clamped into the edit. Returns its result, the
-/// moment used, and the full canvas size.
+/// Runs `use_it` on an evaluator of the open project's current edit (or `short`'s) at `width`
+/// (the height follows the canvas shape), with `at_us` clamped into the edit. Returns its
+/// result, the moment used, and the full canvas size.
 fn with_evaluator<T>(
     state: &AppState,
+    short: Option<&str>,
     at_us: u64,
     width: u32,
     use_it: impl FnOnce(&mut SceneEvaluator, u64) -> Result<T, String>,
 ) -> Result<(T, u64, (u32, u32)), String> {
-    with_document_evaluator(state, None, width, |evaluator, document| {
+    with_document_evaluator(state, short, width, |evaluator, document| {
         let at = at_us.min(document.sequence.duration_us() - 1);
         let canvas = document.layout.preview_dimensions()?;
         Ok((use_it(evaluator, at)?, at, canvas))
     })
 }
 
-/// The finished frame at `at_us`, `width` pixels wide.
-pub fn render(state: &AppState, at_us: u64, width: u32) -> Result<(VideoFrame, u64), String> {
-    let (frame, at, _) = with_evaluator(state, at_us, width, |e, at| e.preview_at(at))?;
+/// The finished frame at `at_us`, `width` pixels wide: of the edit, or of `short` (an id or
+/// title) on its own timeline.
+pub fn render(
+    state: &AppState,
+    short: Option<&str>,
+    at_us: u64,
+    width: u32,
+) -> Result<(VideoFrame, u64), String> {
+    let (frame, at, _) = with_evaluator(state, short, at_us, width, |e, at| e.preview_at(at))?;
     Ok((frame, at))
 }
 
 /// The layers at `at_us`, at a small size (only their places are wanted), with the full
 /// canvas size to scale them to.
 pub fn scene(state: &AppState, at_us: u64) -> Result<(Scene, u64, (u32, u32)), String> {
-    with_evaluator(state, at_us, 480, |e, at| e.scene_at(at))
+    with_evaluator(state, None, at_us, 480, |e, at| e.scene_at(at))
 }
 
 pub fn png(frame: &VideoFrame) -> Result<Vec<u8>, String> {

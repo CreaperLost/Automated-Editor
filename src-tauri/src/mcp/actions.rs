@@ -4487,7 +4487,9 @@ from color-mix() or opacity, not new hex colours.
 1000) and place every animation as a share of it: when it eases, in over about 300 ms and out \
 over the last 450 ms; nothing at fixed end times, so it fits any clip length.
 4. Layout: vw/vh/vmin with flex or grid, no px sizes; text wraps (max-width, never nowrap) and \
-long text still fits; an @media (orientation: portrait) block re-flows it for 9:16 shorts.
+long text still fits; an @media (orientation: portrait) block re-flows it for 9:16 shorts. \
+The same block lays it out in a part of a short's split up to 3:2 wide (1080x864 at most), so it \
+must fit there too.
 5. In and out: the page is transparent, with a card (var(--background)). A graphic that fills \
 the frame never eases in or out: the app sets data-entrance=\"cut\" on the root and the card \
 shows whole from the first frame to the last. Only a graphic over the full-screen camera eases: \
@@ -4498,7 +4500,7 @@ without it the app treats it as full screen and always cuts it. A graphic meant 
 end of its clip (an end card) puts data-holds-end on the root and, when it eases, fades in only.
 6. No network: no CDN scripts, web fonts or http(s) URLs; images and fonts go beside index.html.
 7. The look: copy the [data-composition-id] block of --look-* tokens from the blank template \n(graphic_add blank) and take type, corners, borders, shadows, gaps and motion from it: \nvar(--look-font), var(--look-title), var(--look-body), var(--look-radius), var(--look-shadow), \nvar(--look-line), var(--look-muted), var(--look-gap)...; durations and easing from \ngetComputedStyle(root) (--look-duration, --look-stagger, --look-ease, --look-gsap-ease for \nGSAP). No font, radius or timing of its own, so one change to the video's look restyles it.
-Then graphic_check, which renders it at 16:9 and 9:16, 3 s and 8 s, eased and cut, with long \
+Then graphic_check, which renders it at 16:9, 9:16 and a split part, 3 s and 8 s, eased and cut, with long \
 text and with each text variable changed, and says what fails. Fix and check again until it passes; then ask \
 the user to keep it and call library_save with a label, a one-line useWhen and lengthUs.";
 

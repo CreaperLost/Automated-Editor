@@ -361,7 +361,7 @@ pub fn project_frame_thumbnail_impl(
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
     }
-    let (frame, _) = crate::mcp::frames::render(state, at_us, width.clamp(120, 640))?;
+    let (frame, _) = crate::mcp::frames::render(state, None, at_us, width.clamp(120, 640))?;
     use base64::Engine;
     Ok(format!(
         "data:image/png;base64,{}",

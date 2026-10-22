@@ -213,13 +213,16 @@ pub fn graphic_box(base: &EditDocument, short: &Short, slot: GraphicSlot) -> (u3
     ((w & !1).max(2), (h & !1).max(2))
 }
 
-/// `graphic_box` for the agent: "a 1080x1248 box (portrait)".
+/// `graphic_box` for the agent: "a 1080x1248 box (portrait)", and which of its layouts it
+/// takes when that is not its own shape's (see [`crate::graphics::as_split_part`]).
 pub fn describe_box((width, height): (u32, u32)) -> String {
     let ratio = width as f64 / height.max(1) as f64;
     let shape = if (ratio - 1.0).abs() < 0.1 {
-        "about square"
+        "about square, portrait rules"
     } else if ratio < 1.0 {
         "portrait"
+    } else if ratio <= crate::graphics::SPLIT_PORTRAIT_MAX {
+        "landscape, portrait rules"
     } else {
         "landscape"
     };
@@ -990,8 +993,15 @@ mod tests {
             graphic_box(&document, &moved, GraphicSlot::Screen),
             (1080, 1344)
         );
-        assert_eq!(describe_box((1080, 960)), "a 1080x960 box (landscape)");
-        assert_eq!(describe_box((1080, 1040)), "a 1080x1040 box (about square)");
+        assert_eq!(
+            describe_box((1080, 864)),
+            "a 1080x864 box (landscape, portrait rules)"
+        );
+        assert_eq!(
+            describe_box((1080, 1040)),
+            "a 1080x1040 box (about square, portrait rules)"
+        );
+        assert_eq!(describe_box((1080, 384)), "a 1080x384 box (landscape)");
         let json = serde_json::to_value(&slotted).unwrap();
         assert_eq!(json["graphicSlots"]["g-over"], "overScreen");
         assert!(serde_json::to_value(&layout)

@@ -4,7 +4,8 @@
 //! its clip, takes the brand kit's colours and needs no network. The gate looks at the graphic's
 //! files, then at staged copies of it rendered through the pinned HyperFrames:
 //! - `hyperframes check` (lint, runtime errors, layout overflow, contrast) at 16:9 and 9:16,
-//!   with the graphic's own values and again with long test values for every string variable;
+//!   with the graphic's own values and again with long test values for every string variable,
+//!   and in a short's split part (1080x864, its portrait rules on, as the app renders it there);
 //! - stills of a 3 s copy and an 8 s copy, eased in and out as over the full-screen camera: the
 //!   first and last see-through, the card shown in between, so its timing follows the length;
 //! - stills of a 3 s copy the app cuts in and out (`data-entrance="cut"`, as everywhere else):
@@ -36,6 +37,8 @@ pub const SHORT_US: u64 = 3_000_000;
 pub const LONG_US: u64 = 8_000_000;
 const WIDE: (u32, u32) = (1920, 1080);
 const TALL: (u32, u32) = (1080, 1920);
+/// The screen's part of a 9:16 short split with the camera at 55 %.
+const SPLIT: (u32, u32) = (1080, 864);
 /// Chrome instances at once.
 const PARALLEL: usize = 3;
 const RUN_TIMEOUT: Duration = Duration::from_secs(180);
@@ -85,7 +88,8 @@ pub struct Report {
     pub source_hash: String,
     pub checked_at: String,
     pub seconds: f64,
-    /// The contact sheet (PNG): 16:9 with its values and with long ones, then 9:16 the same.
+    /// The contact sheet (PNG): 16:9 with its values and with long ones, then 9:16 the same,
+    /// then a short's split part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheet: Option<String>,
 }
@@ -699,6 +703,8 @@ struct Run {
     contrast: bool,
     /// How the app brings it on and off in this run.
     entrance: super::Entrance,
+    /// As a part of a short's split (`data-mode="split"`, laid out as a phone frame).
+    split: bool,
     /// Stills to take, in seconds.
     at: Vec<f64>,
 }
@@ -784,7 +790,8 @@ pub fn run(
             check: true,
             contrast: true,
             entrance: super::Entrance::Ease,
-            at: times(SHORT_US, &[0.0, 0.5, 0.75], true),
+            split: false,
+            at:times(SHORT_US, &[0.0, 0.5, 0.75], true),
         },
         Run {
             key: "t".into(),
@@ -794,7 +801,8 @@ pub fn run(
             check: true,
             contrast: true,
             entrance: super::Entrance::Ease,
-            at: times(LONG_US, &[0.0, 0.5, 0.75], true),
+            split: false,
+            at:times(LONG_US, &[0.0, 0.5, 0.75], true),
         },
         Run {
             key: "wl".into(),
@@ -804,7 +812,8 @@ pub fn run(
             check: true,
             contrast: false,
             entrance: super::Entrance::Ease,
-            at: times(SHORT_US, &[0.5], false),
+            split: false,
+            at:times(SHORT_US, &[0.5], false),
         },
         Run {
             key: "tl".into(),
@@ -814,7 +823,8 @@ pub fn run(
             check: true,
             contrast: false,
             entrance: super::Entrance::Ease,
-            at: times(LONG_US, &[0.5], false),
+            split: false,
+            at:times(LONG_US, &[0.5], false),
         },
     ];
     for (n, decl) in strings.iter().enumerate() {
@@ -829,7 +839,8 @@ pub fn run(
             check: false,
             contrast: false,
             entrance: super::Entrance::Ease,
-            at: times(SHORT_US, &[0.5, 0.75], false),
+            split: false,
+            at:times(SHORT_US, &[0.5, 0.75], false),
         });
     }
     // As the app places it everywhere but over the full-screen camera: cut in and out.
@@ -841,7 +852,21 @@ pub fn run(
         check: false,
         contrast: false,
         entrance: super::Entrance::Cut,
+        split: false,
         at: times(SHORT_US, &[0.0, 0.5], true),
+    });
+    // In the screen's part of a short's split, as the app lays it out there (the camera at
+    // 55 %: the widest part that still takes the portrait rules is close to this).
+    runs.push(Run {
+        key: "s".into(),
+        size: SPLIT,
+        length_us: SHORT_US,
+        values: values.clone(),
+        check: true,
+        contrast: false,
+        entrance: super::Entrance::Cut,
+        split: true,
+        at: times(SHORT_US, &[0.5], false),
     });
 
     let work = runtime::runtime_dir()
@@ -860,6 +885,7 @@ pub fn run(
             .expect("every run has a result")
     };
     let (wide, tall, wide_long, tall_long) = (result("w"), result("t"), result("wl"), result("tl"));
+    let split = result("s");
 
     // HyperFrames' own check.
     let mut errors = Vec::new();
@@ -957,6 +983,33 @@ pub fn run(
             )
         });
     }
+    let problems = match (&split.check, &split.error) {
+        (Some(report), _) => overflows(report),
+        (None, error) => vec![error.clone().unwrap_or_else(|| "not checked".into())],
+    };
+    checks.push(if problems.is_empty() {
+        check(
+            "fitsSplit",
+            "Fits a short's split part (1080x864)",
+            Status::Pass,
+            "its portrait layout fits beside the camera",
+        )
+    } else {
+        check(
+            "fitsSplit",
+            "Fits a short's split part (1080x864)",
+            Status::Fail,
+            format!(
+                "in a part of a 9:16 short its portrait rules apply: {}",
+                problems
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        )
+    });
 
     // Follows the clip's length. A graphic that holds to the end (an end card) may stay shown.
     let holds = holds_end(&html);
@@ -1025,6 +1078,7 @@ pub fn run(
         "hyperframes",
         "fitsWide",
         "fitsTall",
+        "fitsSplit",
         "lengthShort",
         "lengthLong",
         "cut",
@@ -1052,6 +1106,7 @@ pub fn run(
         ("16:9 long text", wide_long.frames.first()),
         ("9:16", tall.frames.get(1)),
         ("9:16 long", tall_long.frames.first()),
+        ("Split part", split.frames.first()),
     ];
     let sheet_path = results_dir.join(format!("{hash}.png"));
     contact_sheet(&tiles)
@@ -1310,7 +1365,11 @@ fn one_run(
             run.length_us as f64 / 1e6,
             run.entrance,
         );
-        let html = super::with_defaults(&sized, &run.values)?;
+        let mut html = super::with_defaults(&sized, &run.values)?;
+        if run.split {
+            let marked = super::with_root_attribute(&html, "data-mode", "split");
+            html = super::as_split_part(&marked, run.size.0, run.size.1);
+        }
         std::fs::write(stage.join(super::ENTRY), html).map_err(|e| e.to_string())?;
         // GSAP, when the composition loads it, beside it (fetched once).
         super::gsap::stage(&stage, cancel)

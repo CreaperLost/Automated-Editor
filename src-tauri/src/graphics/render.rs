@@ -224,6 +224,11 @@ impl Spec {
             self.length_us,
             self.entrance.as_str()
         ));
+        // A part of a short's split lays out as a phone frame; over a picture, without its
+        // background. (Left out for the whole frame, so those renders keep their names.)
+        if self.mode != "full" {
+            hasher.update(format!("mode {}", self.mode));
+        }
         let mut files = Vec::new();
         list_files(&self.dir, &self.dir, &mut files)?;
         files.sort();
@@ -833,7 +838,22 @@ fn stage_render(
     // The video's look, after the composition's own defaults for the same tokens.
     let sized = super::look::inject_css(&sized, &spec.look);
     let sized = super::with_root_attribute(&sized, "data-mode", spec.mode);
-    std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
+    let split = |css: &str| match spec.mode {
+        "split" => super::as_split_part(css, spec.width, spec.height),
+        _ => css.to_string(),
+    };
+    std::fs::write(&entry, split(&sized)).map_err(|e| e.to_string())?;
+    // Its own style sheets beside it lay out for the split part the same way.
+    if spec.mode == "split" {
+        for sheet in std::fs::read_dir(stage).map_err(|e| e.to_string())?.flatten() {
+            let path = sheet.path();
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("css")) {
+                if let Ok(css) = std::fs::read_to_string(&path) {
+                    std::fs::write(&path, split(&css)).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
     // GSAP, when the composition loads it, beside it (fetched once).
     super::gsap::stage(stage, cancel)?;
     let source = super::read_source(&spec.dir)?;

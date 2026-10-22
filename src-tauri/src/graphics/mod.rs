@@ -711,6 +711,41 @@ pub fn with_root_attribute(html: &str, name: &str, value: &str) -> String {
     html
 }
 
+/// A part of a short's split up to this wide (width over height) is laid out as a phone frame.
+pub const SPLIT_PORTRAIT_MAX: f64 = 1.5;
+
+/// `css` (a style sheet, or a page with its styles) for a `width` x `height` part of a short's
+/// split: a part of a portrait phone frame, so up to [`SPLIT_PORTRAIT_MAX`] wide its
+/// `(orientation: portrait)` rules apply and its landscape ones don't, as in the whole 9:16
+/// frame. The 16:9 layout would set it small, sized for a whole video frame. Wider parts keep
+/// their own orientation.
+pub fn as_split_part(css: &str, width: u32, height: u32) -> String {
+    if width as f64 / height.max(1) as f64 > SPLIT_PORTRAIT_MAX {
+        return css.to_string();
+    }
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(open) = rest.find('(') {
+        out.push_str(&rest[..open]);
+        let query = &rest[open..];
+        let close = query.find(')').map_or(query.len(), |c| c + 1);
+        let inside: String = query[1..close.saturating_sub(1).max(1)]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        // Always true, never true: both compose with `and` in a longer query.
+        match inside.as_str() {
+            "orientation:portrait" => out.push_str("(min-width: 0px)"),
+            "orientation:landscape" => out.push_str("(max-width: 0px)"),
+            _ => out.push_str(&query[..close]),
+        }
+        rest = &query[close..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `tag` (an element's opening tag without its `>`) with attribute `name` set to `value`.
 fn set_attribute(tag: &str, name: &str, value: &str) -> String {
     let needle = format!(" {name}=");
@@ -800,6 +835,22 @@ mod tests {
             &with_root_attribute(&marked, "data-mode", "split"),
             "data-mode"
         ));
+    }
+
+    #[test]
+    fn a_split_part_of_a_short_takes_the_portrait_rules() {
+        let css = "a { width: calc(1vw * (2)); } @media (orientation: portrait) { b {} } \
+                   @media (Orientation:landscape) and (min-height: 10px) { c {} }";
+        let part = as_split_part(css, 1080, 864);
+        assert_eq!(
+            part,
+            "a { width: calc(1vw * (2)); } @media (min-width: 0px) { b {} } \
+             @media (max-width: 0px) and (min-height: 10px) { c {} }"
+        );
+        // A part wider than 3:2 keeps its own orientation.
+        assert_eq!(as_split_part(css, 1080, 384), css);
+        // No closing bracket: left as it is.
+        assert_eq!(as_split_part("x (orientation", 1080, 864), "x (orientation");
     }
 
     #[test]
