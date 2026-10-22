@@ -270,10 +270,9 @@ moments out of the long video (what the Shorts tab does today besides takes). Sh
 come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) after.
 
 <a id="sht-6b"></a>
-- **SHT-6b · Under a take, in the app and as a review batch (S/M).** The agent can place it all
-  (SHT-6, done 23 Oct); the user can't yet from the Shorts tab (a graphic or a file onto the
-  short's timeline by hand) and nothing is proposed as a reviewable batch. Pairs with the footage
-  picker (SHT-4).
+- **SHT-6b · Under a take as a review batch (S).** The agent and the user can both place footage,
+  graphics and files under a take (SHT-6, SHT-4 picker, done 23 Oct), but the agent's picks apply
+  at once; propose them as one batch to accept or reject in the Agent panel, like cuts.
 <a id="sht-1"></a>
 - **SHT-1 · Idea-first clips (L).** A clip is an idea plus pieces gathered from anywhere in the
   video. Depends on FTG-1. Comes after the take-first Shorts work.
@@ -283,9 +282,8 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
 <a id="sht-3"></a>
 - **SHT-3 · Dress step (S/M).** Graphics into the short's slots as the last step, as a review batch.
 <a id="sht-4"></a>
-- **SHT-4 · Take-short follow-ups (S/M).** Footage picker in the UI (choose or change what plays
-  under a sentence yourself, not only through the agent), speed/freeze fit modes, per-short
-  ducking amount.
+- **SHT-4 · Take-short follow-ups (S).** Speed/freeze fit modes, per-short ducking amount. (The
+  picker is done, 23 Oct.)
 
 ### Layouts — plan: [plans/layouts.md](plans/layouts.md)
 
@@ -464,6 +462,13 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — **SHT-4 picker and SHT-6b in the app**: the Shorts tab's "Take and what plays
+  under it" puts things under a take by hand, at the timeline's selection or from the playhead:
+  **Video** (search the video's lines, click one: its footage), **Graphic** (a copy of one of the
+  video's, a library item or a template; `project_short_graphic_add`, the agent's placement) and
+  **File** (imported videos and pictures, Import files…). One list of everything placed, each
+  with go-to and remove. Tested: line grouping and placement (front-end), the command's JSON
+  shape (Rust); live in the dev app.
 - **23 Oct 2026** — <a id="sht-6"></a>**SHT-6** everything under a take, for agents: graphics go
   on a take short's own timeline (`graphic_add` with `short`, at a word of the take): a new one
   from a template or the library, or **a copy of one of the long video's graphics**

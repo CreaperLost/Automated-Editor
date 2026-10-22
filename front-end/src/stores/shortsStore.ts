@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api } from "../lib/ipc";
 import { GAP_PRESETS } from "../lib/jumpCutConfig";
 import { clipEnd, clipSourceAt, soundSources } from "../lib/sequence";
-import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../lib/types";
+import type { ExportStatus, Footage, OpenedProject, Short, ShortGraphicFrom, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 
 export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
@@ -355,7 +355,7 @@ export async function cleanTake(shortId: string, voice: string, before = "") {
       notice:
         `${before}Cleaned the take: cut ${ranges.length} pause${ranges.length === 1 ? "" : "s"} ` +
         `(${(cutUs / 1e6).toFixed(1)} s) and muted ${noises.length} mouth noise${noises.length === 1 ? "" : "s"}; ` +
-        "Undo takes either back. Next: ask the agent to pick footage from the video.",
+        "Undo takes either back. Next: put footage, graphics or files under it (below, or ask the agent).",
     });
   } catch (err) {
     setShortsError(`Couldn't clean the take: ${errorMessage(err)}`);
@@ -363,6 +363,33 @@ export async function cleanTake(shortId: string, voice: string, before = "") {
   } finally {
     set({ busy: null });
   }
+}
+
+/** Puts footage (the video's, or an imported file's) under a take, one undo step. */
+export function addFootage(shortId: string, items: Footage[]) {
+  void runShorts("Adding footage", (p) =>
+    api.projectShortFootage(p.projectHandle, p.revision, shortId, { op: "add", items }),
+  );
+}
+
+/** Makes a graphic and places it under a take at `atUs`; `lengthUs` null keeps its own. */
+export function addShortGraphic(shortId: string, from: ShortGraphicFrom, atUs: number, lengthUs: number | null) {
+  void runShorts("Adding a graphic", (p) =>
+    api.projectShortGraphicAdd(p.projectHandle, p.revision, shortId, from, atUs, lengthUs).then((made) => made.project),
+  );
+}
+
+/** Takes clips off the short on show (its graphics), leaving the gap. */
+export function removeShortClips(clipIds: string[]) {
+  void runShorts("Removing", (p) =>
+    api.projectSequenceEdit(p.projectHandle, p.revision, { kind: "delete", clipIds, ripple: false }),
+  );
+}
+
+/** Brings files into the project, to go under a take. */
+export function importForShort(paths: string[]) {
+  if (paths.length === 0) return;
+  void runShorts("Importing", (p) => api.projectMediaImport(p.projectHandle, p.revision, paths));
 }
 
 /** Takes the footage off `[fromUs, toUs)` of a take short's timeline. */

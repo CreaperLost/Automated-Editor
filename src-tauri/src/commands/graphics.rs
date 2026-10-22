@@ -99,18 +99,27 @@ pub fn project_graphic_from_library_impl(
     )
 }
 
-/// Where a graphic for a short comes from.
+/// Where a graphic for a short comes from (`{"kind": "template" | "library" | "video", ...}` from
+/// the Shorts tab).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ShortGraphicFrom {
     /// A bundled template, with a name and variable values.
     Template {
         template: String,
+        #[serde(default)]
         name: Option<String>,
+        #[serde(default)]
         variables: Map<String, Value>,
     },
     /// A copy of a library item.
-    Library(String),
+    Library { id: String },
     /// A copy of one of the video's graphics (its look and text), made for the short.
-    Video(String),
+    Video { graphic: String },
 }
 
 /// Makes a graphic and places it on take short `short_id`'s own timeline at `at_us` (on the
@@ -139,7 +148,7 @@ pub fn project_short_graphic_add_impl(
             graphics::create(&root, template, name.as_deref(), variables)?,
             length_us.unwrap_or(templates::find(template)?.length_us),
         ),
-        ShortGraphicFrom::Library(id) => {
+        ShortGraphicFrom::Library { id } => {
             let lib = library::dir();
             let item = library::view(&lib, id)?;
             let folder = library::find(&lib, id)?;
@@ -148,8 +157,8 @@ pub fn project_short_graphic_add_impl(
                 length_us.unwrap_or(item.item.length_us),
             )
         }
-        ShortGraphicFrom::Video(id) => {
-            let source = graphic_asset(reader, id)?;
+        ShortGraphicFrom::Video { graphic } => {
+            let source = graphic_asset(reader, graphic)?;
             // As long as it plays on the video, by default.
             let played = reader
                 .document()
@@ -675,6 +684,23 @@ pub fn graphics_library_remove_impl(id: String) -> Result<(), String> {
 pub(crate) mod tests {
     use super::*;
     use crate::sequence::edit::SequenceEdit;
+
+    #[test]
+    fn the_shorts_tab_names_where_a_graphic_comes_from() {
+        let from = |json: &str| serde_json::from_str::<ShortGraphicFrom>(json).unwrap();
+        assert!(matches!(
+            from(r#"{"kind":"video","graphic":"g-1"}"#),
+            ShortGraphicFrom::Video { graphic } if graphic == "g-1"
+        ));
+        assert!(matches!(
+            from(r#"{"kind":"library","id":"lib-2"}"#),
+            ShortGraphicFrom::Library { id } if id == "lib-2"
+        ));
+        assert!(matches!(
+            from(r#"{"kind":"template","template":"key-point"}"#),
+            ShortGraphicFrom::Template { template, name: None, variables } if template == "key-point" && variables.is_empty()
+        ));
+    }
 
     /// A project with a 4 s sound on the timeline (needs FFmpeg for the import); returns its
     /// handle and revision, or `None` without FFmpeg.

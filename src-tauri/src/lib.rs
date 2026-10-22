@@ -1688,6 +1688,34 @@ async fn project_graphic_create(
     .map_err(|e| e.to_string())?
 }
 
+/// Makes a graphic (a template, a library item, or a copy of one of the video's) and places it
+/// on take short `short_id`'s own timeline at `at_us`, one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_short_graphic_add(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    from: commands::graphics::ShortGraphicFrom,
+    at_us: u64,
+    length_us: Option<u64>,
+) -> Result<commands::graphics::GraphicCreated, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_short_graphic_add_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            short_id,
+            from,
+            at_us,
+            length_us,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_graphic_get(
@@ -2135,6 +2163,7 @@ pub fn run() {
             graphics_templates,
             graphics_render_again,
             project_graphic_create,
+            project_short_graphic_add,
             project_graphic_get,
             project_graphics_list,
             project_frame_thumbnail,

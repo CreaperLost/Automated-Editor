@@ -72,6 +72,7 @@ import {
   GateReport,
   TakeShortMade,
   FootageChange,
+  ShortGraphicFrom,
 } from "./types";
 
 declare global {
@@ -323,6 +324,9 @@ export const api = {
     invokeTauri<TranscriptSettingsView>("transcript_set_api_key", { key }),
   transcriptGet: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptView | null>("transcript_get", { projectHandle, trackId, shortId: editTarget }),
+  /** The video's own transcript (edited times on the video), whatever this window shows. */
+  transcriptGetVideo: (projectHandle: string, trackId: string) =>
+    invokeTauri<TranscriptView | null>("transcript_get", { projectHandle, trackId, shortId: null }),
   transcriptRun: (projectHandle: string, trackId: string) =>
     invokeTauri<TranscriptRunResult>("transcript_run", { projectHandle, trackId }),
   transcriptCancel: () => invokeTauri<void>("transcript_cancel"),
@@ -537,6 +541,23 @@ export const api = {
     }),
   projectShortFootage: (projectHandle: string, expectedRevision: number, shortId: string, change: FootageChange) =>
     invokeTauri<OpenedProject>("project_short_footage", { projectHandle, expectedRevision, shortId, change }),
+  /** Makes a graphic and places it on take short `shortId`'s own timeline, one undo step. */
+  projectShortGraphicAdd: (
+    projectHandle: string,
+    expectedRevision: number,
+    shortId: string,
+    from: ShortGraphicFrom,
+    atUs: number,
+    lengthUs: number | null,
+  ) =>
+    invokeTauri<GraphicCreated>("project_short_graphic_add", {
+      projectHandle,
+      expectedRevision,
+      shortId,
+      from,
+      atUs: Math.max(0, Math.round(atUs)),
+      lengthUs: lengthUs === null ? null : Math.round(lengthUs),
+    }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>

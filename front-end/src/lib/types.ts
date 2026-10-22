@@ -1609,7 +1609,16 @@ export interface Footage {
   videoUs: number;
   /** Its game or desktop sound, ducked under the voice; default on. */
   sound?: boolean;
+  /** An imported file instead of the video (`videoUs` is then where in the file). */
+  media?: string;
 }
+
+/** Where a graphic placed under a take comes from. */
+export type ShortGraphicFrom =
+  | { kind: "template"; template: string; name?: string | null; variables?: Record<string, unknown> }
+  | { kind: "library"; id: string }
+  /** A copy of one of the video's graphics, its text changeable apart from the video's. */
+  | { kind: "video"; graphic: string };
 
 export type FootageChange =
   | { op: "add"; items: Footage[] }

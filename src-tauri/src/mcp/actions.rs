@@ -3881,11 +3881,13 @@ fn short_graphic_add(ctx: &Ctx, args: GraphicAddArgs) -> Result<Vec<Output>, Str
             template.clone(),
         ),
         (None, Some(item), None) => (
-            ShortGraphicFrom::Library(item.clone()),
+            ShortGraphicFrom::Library { id: item.clone() },
             format!("library {item}"),
         ),
         (None, None, Some(graphic)) => (
-            ShortGraphicFrom::Video(graphic.clone()),
+            ShortGraphicFrom::Video {
+                graphic: graphic.clone(),
+            },
             format!("a copy of the video's {graphic}"),
         ),
         _ => return Err("Give one of `template`, `library` or `graphic`".into()),

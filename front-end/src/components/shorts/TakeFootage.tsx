@@ -1,18 +1,13 @@
 import React from "react";
-import { Film, Sparkles, Trash2 } from "lucide-react";
+import { Film, Shapes, Sparkles, Trash2 } from "lucide-react";
 import { seekPlayback } from "../../lib/playbackControl";
 import { assetById } from "../../lib/sequence";
 import type { OpenedProject, Short } from "../../lib/types";
-import { cleanTake, removeFootage, useShortsStore } from "../../stores/shortsStore";
+import { cleanTake, removeFootage, removeShortClips, useShortsStore } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
 import { Button } from "../ui";
-
-function formatTime(us: number): string {
-  const total = Math.max(0, us) / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
+import { UnderTake } from "./UnderTake";
+import { formatTime } from "./underTakeParts";
 
 /** "Recording · Microphone" for a stream key, else the key. */
 function streamName(project: OpenedProject, key: string | undefined): string {
@@ -24,8 +19,8 @@ function streamName(project: OpenedProject, key: string | undefined): string {
   return asset.kind === "recording" && stream ? `${asset.name} · ${stream.name}` : asset.name;
 }
 
-/// A take short's take and the footage under it: what plays in the screen part while the
-/// take talks. The agent picks it (the take-shorts template); here it is listed and removed.
+/// A take short's take and what plays under it while the take talks: footage from the video,
+/// graphics and outside files. The agent places them (the "shorts" template), or the user here.
 export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewing: boolean }> = ({
   project,
   short,
@@ -33,15 +28,18 @@ export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewi
 }) => {
   const busy = useShortsStore((s) => s.busy);
   const take = short.take!;
-  // While the short is on show, the store holds its own timeline.
-  const footage = viewing
+  // While the short is on show, the store holds its own timeline. A footage stretch is one or
+  // two clips (picture and its sound): list the pictures.
+  const placed = viewing
     ? project.sequence.tracks
-        .filter((track) => track.kind === "video" && track.role === "screen")
+        .filter((track) => track.kind === "video" && track.role !== "webcam")
         .flatMap((track) => track.clips)
-        .sort((a, b) => a.startUs - b.startUs)
+        .filter((clip) => `${clip.asset}.${clip.stream}` !== take.camera && clip.asset !== take.camera)
+        .map((clip) => ({ clip, asset: assetById(project, clip.asset) }))
+        .sort((a, b) => a.clip.startUs - b.clip.startUs)
     : [];
   return (
-    <InspectorSection id="short-take" title="Take and footage" icon={Film}>
+    <InspectorSection id="short-take" title="Take and what plays under it" icon={Film}>
       <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-meta">
         <dt className="text-studio-500">Camera</dt>
         <dd className="truncate text-studio-200">{streamName(project, take.camera)}</dd>
@@ -51,7 +49,7 @@ export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewi
       <ol className="list-decimal pl-4 space-y-0.5 text-meta text-studio-400">
         <li>Transcribe the take (Transcript, beside Shorts).</li>
         <li>Clean it: pauses and mouth noises, or by hand in Jump cuts and Mouth noises.</li>
-        <li>Footage: the agent picks it from the video for each sentence.</li>
+        <li>Put footage, graphics or files under it: below, or ask the agent.</li>
       </ol>
       <Button
         size="sm"
@@ -64,38 +62,49 @@ export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewi
       >
         {busy === "Cleaning the take" ? "Cleaning…" : "Clean the take"}
       </Button>
-      {footage.length === 0 ? (
-        <p className="text-meta text-studio-500 leading-relaxed">
-          No footage yet: the camera fills the frame. Ask the agent to pick footage from the video for each sentence
-          (the “take-shorts” template).
-        </p>
+      {viewing && <UnderTake project={project} short={short} />}
+      {placed.length === 0 ? (
+        <p className="text-meta text-studio-500 leading-relaxed">Nothing under the take yet: the camera fills the frame.</p>
       ) : (
-        <ul className="space-y-1">
-          {footage.map((clip) => (
-            <li key={clip.id} className="flex items-center gap-1.5 text-meta">
-              <button
-                type="button"
-                onClick={() => seekPlayback(clip.startUs)}
-                className="font-mono tabular-nums text-studio-300 hover:text-white w-[7.5rem] text-left shrink-0"
-                title="Go to the footage"
-              >
-                {formatTime(clip.startUs)}–{formatTime(clip.startUs + clip.durationUs)}
-              </button>
-              <span className="flex-1 truncate text-studio-200" title={`From ${formatTime(clip.inUs)} of it`}>
-                {assetById(project, clip.asset)?.name ?? clip.asset} · {formatTime(clip.inUs)}
-              </span>
-              <button
-                type="button"
-                aria-label="Remove the footage"
-                title="Remove (the camera fills the frame there)"
-                disabled={!!busy}
-                onClick={() => removeFootage(short.id, clip.startUs, clip.startUs + clip.durationUs)}
-                className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded-control text-studio-500 hover:text-danger-fg hover:bg-danger/15 disabled:opacity-40"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </li>
-          ))}
+        <ul className="space-y-1" aria-label="Under the take">
+          {placed.map(({ clip, asset }) => {
+            const graphic = asset?.kind === "graphic";
+            const Icon = graphic ? Shapes : Film;
+            return (
+              <li key={clip.id} className="flex items-center gap-1.5 text-meta">
+                <Icon className="w-3.5 h-3.5 shrink-0 text-studio-500" aria-hidden />
+                <button
+                  type="button"
+                  onClick={() => seekPlayback(clip.startUs)}
+                  className="font-mono tabular-nums text-studio-300 hover:text-white w-[7.5rem] text-left shrink-0"
+                  title="Go there"
+                >
+                  {formatTime(clip.startUs)}–{formatTime(clip.startUs + clip.durationUs)}
+                </button>
+                <span
+                  className="flex-1 truncate text-studio-200"
+                  title={graphic ? asset?.name : `${asset?.name ?? clip.asset}, from ${formatTime(clip.inUs)} of it`}
+                >
+                  {asset?.name ?? clip.asset}
+                  {graphic || asset?.kind === "image" ? "" : ` · ${formatTime(clip.inUs)}`}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${asset?.name ?? "it"}`}
+                  title="Remove (the camera fills the frame there)"
+                  disabled={!!busy}
+                  onClick={() =>
+                    graphic
+                      ? removeShortClips([clip.id])
+                      : removeFootage(short.id, clip.startUs, clip.startUs + clip.durationUs)
+                  }
+                  className="h-6 w-6 shrink-0 inline-flex items-center justify-center rounded-control text-studio-500 hover:text-danger-fg hover:bg-danger/15 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </InspectorSection>
