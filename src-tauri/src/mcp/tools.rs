@@ -157,6 +157,7 @@ pub const MORE: &[&str] = &[
     "graphics_install",
     "brand_pick",
     "brand_kit_set",
+    "graphics_look",
     "graphic_write_file",
     "graphic_templatize",
     "graphic_check",
@@ -265,7 +266,8 @@ static TOOLS: [ToolDef; 15] = [
             (take back your batch); short_create (a clip from the video's words); \
             template_save (keep the user's answers); graphics_install (the graphics renderer, \
             ask first); brand_pick (the project's brand kit); brand_kit_set (make or change a \
-            kit); graphic_write_file, graphic_templatize, graphic_check, library_save, \
+            kit); graphics_look (one style for every graphic: sizes, corners, motion); \
+            graphic_write_file, graphic_templatize, graphic_check, library_save, \
             library_remove (writing a graphic of your own and keeping it in the library).",
         schema: schema::<MoreArgs>,
         read_only: false,

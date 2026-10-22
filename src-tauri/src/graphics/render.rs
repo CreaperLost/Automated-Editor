@@ -61,6 +61,8 @@ pub struct Spec {
     pub brands: PathBuf,
     /// The project's brand kit, for a graphic that has not picked its own.
     pub default_brand: Option<String>,
+    /// The look's style for this graphic: the video's, with the graphic's own tokens over it.
+    pub look: String,
 }
 
 /// The size a graphic renders at for a canvas of `width` x `height` (preview canvases are
@@ -109,6 +111,7 @@ impl Spec {
             entrance: super::Entrance::Cut,
             brands: super::brands::dir(),
             default_brand: None,
+            look: super::look::Look::default().css(&Default::default()),
         }
     }
 
@@ -142,6 +145,10 @@ impl Spec {
         spec.entrance =
             super::entrance_for(full_camera, clip, || whole_frame && !overlay_of(&spec.dir));
         spec.default_brand = document.graphics_brand.clone();
+        let own = super::read_source(&spec.dir)
+            .map(|s| s.look)
+            .unwrap_or_default();
+        spec.look = document.graphics_look.css(&own);
         if let Quality::Final { fps } = quality {
             spec.fps = fps.clamp(1, MAX_FINAL_FPS);
             // Larger than the draft: twice as sharp, where HyperFrames can (a whole 16:9 or
@@ -225,6 +232,9 @@ impl Spec {
             }
             None => hasher.update(b"no brand\0"),
         }
+        // The look, so changing it renders every graphic again.
+        hasher.update(b"look\0");
+        hasher.update(self.look.as_bytes());
         let digest = hasher.finalize();
         Ok(digest.iter().take(8).map(|b| format!("{b:02x}")).collect())
     }
@@ -411,6 +421,18 @@ pub fn lookup(spec: &Spec) -> Lookup {
     match latest_cached(spec) {
         Some((path, length)) => Lookup::Stale(path, length),
         None => Lookup::Pending,
+    }
+}
+
+/// Asks for the render of every graphic in `document` that is missing one for the preview
+/// (after a change that restyles them all: the look, the brand kit), so they render now rather
+/// than when the playhead reaches each.
+pub fn request_all(root: &Path, document: &crate::project::revision::EditDocument) {
+    let Ok(canvas) = document.layout.preview_dimensions() else {
+        return;
+    };
+    for spec in specs_for(root, document, canvas, Quality::Draft) {
+        lookup(&spec);
     }
 }
 
@@ -737,38 +759,8 @@ fn render_now(
     ));
     let _ = std::fs::remove_dir_all(&work);
     let stage = work.join("s");
-    copy_dir(&spec.dir, &stage)?;
     let result = (|| {
-        // The render's own copy takes the canvas and length; the source keeps its own.
-        let entry = stage.join(super::ENTRY);
-        let html =
-            std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
-        let sized = super::size_composition(
-            &html,
-            spec.width,
-            spec.height,
-            spec.length_us as f64 / 1e6,
-            spec.entrance,
-        );
-        std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
-        // GSAP, when the composition loads it, beside it (fetched once).
-        super::gsap::stage(&stage, cancel)?;
-        let source = super::read_source(&spec.dir)?;
-        // The brand kit fills the colours the graphic left to it and sets the font.
-        let values = match spec.brand() {
-            Some(kit) => {
-                super::brands::stage(&spec.brands, &kit, &stage)?;
-                let declared = super::declarations(&stage).unwrap_or_default();
-                super::brands::fill_variables(&source.variables, &declared, &kit)
-            }
-            None => source.variables,
-        };
-        let variables = stage.join(".aeroedits-variables.json");
-        std::fs::write(
-            &variables,
-            serde_json::to_string(&values).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        let (_, variables) = stage_render(spec, &stage, cancel)?;
         let part = work.join("out.webm");
         let resolution = (spec.density > 1).then(|| density_preset(spec)).flatten();
         run_hyperframes(
@@ -788,6 +780,83 @@ fn render_now(
         std::fs::rename(&landing, &target).map_err(|e| format!("{}: {e}", target.display()))?;
         remove_superseded(spec, name);
         Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+/// Copies `spec`'s graphic into `stage` as it renders: sized to its canvas and length, with
+/// the video's look, GSAP beside it when it loads it, and its brand kit. Returns the values of
+/// its variables (the kit's colours where the graphic left them) and the file they are in.
+fn stage_render(
+    spec: &Spec,
+    stage: &Path,
+    cancel: &AtomicBool,
+) -> Result<(serde_json::Map<String, serde_json::Value>, PathBuf), String> {
+    copy_dir(&spec.dir, stage)?;
+    // The render's own copy takes the canvas and length; the source keeps its own.
+    let entry = stage.join(super::ENTRY);
+    let html = std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
+    let sized = super::size_composition(
+        &html,
+        spec.width,
+        spec.height,
+        spec.length_us as f64 / 1e6,
+        spec.entrance,
+    );
+    // The video's look, after the composition's own defaults for the same tokens.
+    let sized = super::look::inject_css(&sized, &spec.look);
+    std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
+    // GSAP, when the composition loads it, beside it (fetched once).
+    super::gsap::stage(stage, cancel)?;
+    let source = super::read_source(&spec.dir)?;
+    // The brand kit fills the colours the graphic left to it and sets the font.
+    let values = match spec.brand() {
+        Some(kit) => {
+            super::brands::stage(&spec.brands, &kit, stage)?;
+            let declared = super::declarations(stage).unwrap_or_default();
+            super::brands::fill_variables(&source.variables, &declared, &kit)
+        }
+        None => source.variables,
+    };
+    let variables = stage.join(".aeroedits-variables.json");
+    std::fs::write(
+        &variables,
+        serde_json::to_string(&values).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((values, variables))
+}
+
+/// One still of `spec`'s graphic `at_s` seconds in, as a PNG: what it would look like with its
+/// look and kit, without rendering it (a look's preview). Takes a few seconds.
+pub fn still(spec: &Spec, at_s: f64, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
+    let paths = runtime::paths()?;
+    static STILLS: AtomicU64 = AtomicU64::new(0);
+    let work = runtime::runtime_dir().join("work").join(format!(
+        "still-{}-{}",
+        std::process::id(),
+        STILLS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&work);
+    let stage = work.join("s");
+    let result = (|| {
+        let (values, _) = stage_render(spec, &stage, cancel)?;
+        // A snapshot takes no variables file: they go in as the declarations' defaults.
+        let entry = stage.join(super::ENTRY);
+        let html =
+            std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
+        std::fs::write(&entry, super::with_defaults(&html, &values)?).map_err(|e| e.to_string())?;
+        let shots = work.join("shots");
+        let at = format!("{:.2}", at_s.clamp(0.0, spec.length_us as f64 / 1e6));
+        super::gate::snapshot(&paths, &stage, &at, &shots, cancel)?;
+        let png = std::fs::read_dir(&shots)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "png"))
+            .ok_or("The graphic did not draw")?;
+        std::fs::read(&png).map_err(|e| e.to_string())
     })();
     let _ = std::fs::remove_dir_all(&work);
     result
@@ -1052,6 +1121,7 @@ mod tests {
             entrance: super::super::Entrance::Cut,
             brands: dir.join("brands"),
             default_brand: None,
+            look: String::new(),
         }
     }
 

@@ -31,6 +31,9 @@ pub struct Template {
     pub pick: PickSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphics_brand: Option<String>,
+    /// The graphics' look; none in templates saved before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphics_look: Option<crate::graphics::look::Look>,
     /// A short's look and base layout; none when it was saved without a short.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_look: Option<ShortLayout>,
@@ -112,6 +115,7 @@ pub fn capture(
         base: document.layouts.base.clone(),
         pick: document.layouts.pick.clone(),
         graphics_brand: document.graphics_brand.clone(),
+        graphics_look: Some(document.graphics_look.clone()),
         short_look: short.map(|s| bare_short_look(&s.layout)),
         short_base: short.map(|s| s.layouts.base.clone()),
     })

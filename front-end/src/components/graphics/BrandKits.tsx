@@ -63,9 +63,9 @@ export const BrandKits: React.FC<{ onError: (error: string) => void }> = ({ onEr
           onClick={() =>
             setEditing({
               name: "",
-              background: "#0F172A",
-              text: "#F8FAFC",
-              accent: "#FACC15",
+              background: "#FFFFFF",
+              text: "#1D1D1F",
+              accent: "#0071E3",
               font: "",
               fontFile: null,
               logo: null,

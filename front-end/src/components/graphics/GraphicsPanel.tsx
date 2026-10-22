@@ -13,6 +13,7 @@ import type {
   GraphicsRuntimeStatus,
 } from "../../lib/types";
 import { BrandKits } from "./BrandKits";
+import { LookPanel } from "./LookPanel";
 import { formatSeconds, libraryChanged, useGraphicsLibrary, useGraphicsUpdates } from "./graphicsEvents";
 
 const MB = 1024 * 1024;
@@ -260,6 +261,8 @@ export const GraphicsPanel: React.FC = () => {
           ))}
         </section>
       )}
+
+      <LookPanel onError={setError} hasGraphics={graphics.some((g) => g.clips.length > 0)} ready={ready} />
 
       <BrandKits onError={setError} />
 

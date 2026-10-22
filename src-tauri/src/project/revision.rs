@@ -75,6 +75,12 @@ pub struct EditDocument {
     /// The brand kit graphics use unless they pick another (see `graphics::brands`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphics_brand: Option<String>,
+    /// One look for every graphic in the video (see `graphics::look`).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::graphics::look::Look::is_default"
+    )]
+    pub graphics_look: crate::graphics::look::Look,
 }
 
 impl Default for EditDocument {
@@ -96,6 +102,7 @@ impl Default for EditDocument {
             short_layout: None,
             zoom_settings: Default::default(),
             graphics_brand: None,
+            graphics_look: Default::default(),
         }
     }
 }
@@ -291,6 +298,7 @@ impl EditDocument {
         if let Some(brand) = &self.graphics_brand {
             crate::graphics::brands::check_name(brand)?;
         }
+        self.graphics_look.validate()?;
         Ok(())
     }
 }
@@ -948,6 +956,10 @@ impl EditHistory {
         next.layouts.pick = template.pick.clone();
         next.layouts.validate()?;
         next.graphics_brand = template.graphics_brand.clone();
+        if let Some(look) = &template.graphics_look {
+            look.validate()?;
+            next.graphics_look = look.clone();
+        }
         if let Some(id) = short {
             let look = template
                 .short_look

@@ -61,48 +61,20 @@ flowchart LR
 
 ## Next
 
-Rough order. GFX-5 comes first (George, 22 Oct: "very, very important"); the four after it are
+Rough order. GFX-5's look shipped 22 Oct; what is left of it comes first, and the four after it are
 the foundations the Later tier builds on.
 
 <a id="gfx-5"></a>
-### GFX-5 · One look for every graphic in a video, changed in one place — M/L
+### GFX-5 · Looks: saved app-wide and proposed by the agent — S/M
 
-- **Why:** each graphic carries its own sizes, corners, spacing and motion. The brand kit gives
-  only three colours, a font and a logo, and nothing makes a graphic use even those. So graphics
-  in one video drift apart, and a small change (rounder cards, slower entrances) means editing
-  every graphic by hand.
-- **Do:**
-  1. **The video's look:** design tokens beside the brand kit. Type scale (title / body / label
-     sizes, weights, spacing); shape (corner radius, border, shadow, padding); layout (margins,
-     alignment, card width); colour roles beyond the kit's three (surface, muted text, highlight);
-     motion (entry and exit style, duration, stagger, easing, overall speed). A project has one
-     look, stored in the edit document, so choosing or adjusting it is one undo step. Looks are
-     saved app-wide like brand kits, with a few presets, and long-form and shorts values may
-     differ (graphics re-made for 9:16 keep the same look).
-  2. **Every graphic reads it:** the render injects the tokens as `--look-*` CSS properties and
-     GSAP defaults (easing, duration scale), the way `brand.css` does for the kit today. The
-     bundled templates and library items use tokens for these properties, never fixed values.
-     The look and the kit are part of the render hash, so changing either re-renders every
-     graphic that uses them.
-  3. **Adjust everything at once:** a Look page in the Graphics panel with a few global controls
-     (size, roundness, speed, energy, density), previewed on two or three of the video's own
-     graphics before applying. A graphic can still override a token; overrides are shown as such.
-  4. **The agent keeps it consistent:** `graphic_check` flags a graphic that hard-codes a token's
-     property (a colour, font, radius or duration) instead of using the look;
-     `graphic_templatize` turns hard-coded values into tokens; new graphics are written against
-     the look; a "bring in line" proposal lists the outliers as one batch. MCP: `look` get / set.
-     A request in words ("make everything a bit calmer") becomes a proposed token change that the
-     user accepts in the Agent panel.
-  5. **AI-built looks:** the agent proposes two or three looks from the brand kit, a
-     description or a reference (with [STY-2](#sty-2) later), each rendered on the video's own
-     graphics, and the user picks one.
-- **Done when:** on a tutorial with about eight graphics from different templates, switching the
-  brand kit or the look re-renders all of them and they match. One "roundness" or "speed" change
-  reaches all of them in one undo step. `graphic_check` fails a graphic with a hard-coded accent
-  colour.
-- **Relation:** the visual half of [STY-1](#sty-1), brought forward (decided 22 Oct); STY-1 keeps
-  the written rules. [CAP-1](#cap-1) takes caption type and colours from the same look.
-  [GFX-4](#gfx-4) variants later let a look change be compared before it is used.
+The look itself shipped 22 Oct (see [Done](#done)). Left:
+- **Saved looks:** keep a look app-wide like a brand kit (name it, use it in another project);
+  today a project has its own and three presets.
+- **AI-built looks:** the agent proposes two or three looks from the brand kit, a description or
+  a reference (with [STY-2](#sty-2) later), each previewed on the video's own graphics, and the
+  user picks one. The `graphics_look` preview is the building block.
+- **Shorts:** long-form and shorts values may differ; today a short takes the video's look.
+- **Bring in line:** one proposal batch that rewrites the graphics `graphic_check` warns about.
 
 <a id="safe-2"></a>
 ### SAFE-2 · Persistent history and named checkpoints — M/L
@@ -493,6 +465,21 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **22 Oct 2026** — **GFX-5: one look for every graphic, and app-like templates.** A video has one
+  look in its edit document (`graphics/look.rs`): a preset (App, Calm, Bold) scaled by five
+  controls (size, roundness, speed, energy, density) and tokens set by hand, injected into every
+  render as `--look-*` properties on the composition element (colour roles mixed from the kit's
+  colours), part of the render hash. A graphic may override tokens (`graphic.json` `look`). The
+  Graphics panel's Look section previews a change on up to three of the video's graphics
+  (HyperFrames snapshots) before Apply (one undo step); a change or a kit switch queues every
+  graphic's render at once. The seven templates were rewritten in George's light library style
+  (white, #1D1D1F, #0071E3, rounded cards, hairlines, soft shadows) with every size, corner, gap
+  and timing from the tokens; new kits default to those colours. `graphic_check` fails a
+  graphic's own colours and warns on its own fonts, radii and CSS timings; `graphics_look`
+  (behind `more`) reads, previews and sets the look or a graphic's own tokens. Checked in the dev
+  app on four graphics: Bold, Calm and undo. Shorts graphic modes (whole frame, split, card over
+  the face) come next, designed with George so each graphic renders once for its mode.
 
 - **22 Oct 2026** — **Quick wins for how videos sound and look.** **FX-4:** a cut between
   two clips with sound to spare crossfades over 16 ms at equal power instead of dipping to

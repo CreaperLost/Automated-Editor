@@ -6,9 +6,9 @@
     {"id":"call","type":"string","label":"Call to action","default":"Subscribe for the next part"},
     {"id":"handle","type":"string","label":"Channel or link","default":"@yourchannel"},
     {"id":"next","type":"string","label":"Up next (optional)","default":""},
-    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
-    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
-    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+    {"id":"background","type":"color","label":"Background","default":"#FFFFFF"},
+    {"id":"text","type":"color","label":"Text","default":"#1D1D1F"},
+    {"id":"accent","type":"color","label":"Accent","default":"#0071E3"}
   ]'
 >
   <head>
@@ -20,84 +20,203 @@
       body {
         margin: 0;
         background: transparent;
-        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      /* The look: AeroEdits sets these for the whole video after this block (the defaults here
+         are its "App" look). Sizes, corners, gaps and motion come from them, colours from the
+         background, text and accent variables (the brand kit's). */
+      [data-composition-id] {
+        --look-font: var(--brand-font, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif);
+        --look-align: center;
+        --look-body: 3.8vmin;
+        --look-border: 0.12vmin;
+        --look-distance: 1.8vmin;
+        --look-duration: 700;
+        --look-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --look-entry: rise;
+        --look-gap: 2.2vmin;
+        --look-gsap-ease: expo.out;
+        --look-heading: 5.2vmin;
+        --look-label: 3vmin;
+        --look-label-case: none;
+        --look-label-tracking: 0em;
+        --look-leading: 1.15;
+        --look-line-mix: 8%;
+        --look-margin: 8vw;
+        --look-muted-mix: 62%;
+        --look-out: 350;
+        --look-pad: 2.6vmin;
+        --look-radius: 2.6vmin;
+        --look-radius-small: 1.4vmin;
+        --look-shadow-mix: 5%;
+        --look-stagger: 90;
+        --look-tint-mix: 10%;
+        --look-title: 8vmin;
+        --look-title-tracking: -0.035em;
+        --look-title-weight: 650;
+        --look-wash-mix: 5%;
+        --look-muted: color-mix(in srgb, var(--text, #1D1D1F) var(--look-muted-mix), var(--background, #FFFFFF));
+        --look-line: color-mix(in srgb, var(--text, #1D1D1F) var(--look-line-mix), var(--background, #FFFFFF));
+        --look-tint: color-mix(in srgb, var(--accent, #0071E3) var(--look-tint-mix), var(--background, #FFFFFF));
+        --look-wash: color-mix(in srgb, var(--accent, #0071E3) var(--look-wash-mix), transparent);
+        --look-shadow: 0 1vmin 3vmin color-mix(in srgb, var(--text, #1D1D1F) var(--look-shadow-mix), transparent);
       }
       #root {
         position: relative;
         width: 100%;
         height: 100%;
         overflow: hidden;
-        color: var(--text, #f8fafc);
+        color: var(--text, #1d1d1f);
+        font-family: var(--look-font);
+        -webkit-font-smoothing: antialiased;
       }
       #card-back {
         position: absolute;
         inset: 0;
-        overflow: hidden;
-        background: var(--background, #0f172a);
+        background: var(--background, #ffffff);
       }
-      .ring {
+      #card-back::after {
+        content: "";
         position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 120vmin;
-        height: 120vmin;
-        margin: -60vmin 0 0 -60vmin;
-        border-radius: 50%;
-        border: 0.5vmin solid var(--accent, #facc15);
-        opacity: 0.18;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 15% 90%, var(--look-wash), transparent 60%),
+          radial-gradient(ellipse at 90% 5%, var(--look-wash), transparent 55%);
       }
       .layout {
         position: absolute;
         inset: 0;
+        box-sizing: border-box;
         display: flex;
         flex-direction: column;
-        align-items: center;
         justify-content: center;
-        gap: 3vmin;
-        padding: 0 8vw;
+        align-items: center;
+        gap: var(--look-gap);
+        padding: 0 var(--look-margin);
         text-align: center;
       }
-      h1 {
-        margin: 0;
-        font-size: 10vmin;
-        font-weight: 800;
-        line-height: 1.05;
+      [data-align="left"] .layout {
+        align-items: flex-start;
+        text-align: left;
       }
-      .call {
-        font-size: 4.6vmin;
-        opacity: 0.8;
-      }
-      .handle {
-        margin-top: 1.5vmin;
-        padding: 1.6vmin 4vmin;
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 1vmin;
+        padding: 0.7vmin 1.8vmin;
         border-radius: 99vmin;
-        background: var(--accent, #facc15);
-        color: var(--background, #0f172a);
-        font-size: 4.2vmin;
-        font-weight: 800;
+        background: var(--look-tint);
+        color: var(--accent, #0071e3);
+        font-size: var(--look-label);
+        font-weight: 600;
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
       }
-      .next {
-        margin-top: 3vmin;
-        font-size: 3.4vmin;
-        opacity: 0.65;
-      }
-      .next:empty,
-      .handle:empty {
+      .pill:empty {
         display: none;
       }
+      .title {
+        margin: 0;
+        font-size: var(--look-title);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: var(--look-leading);
+        max-width: 80vw;
+        max-height: calc(var(--look-title) * var(--look-leading) * 3);
+        overflow-wrap: anywhere;
+      }
+      .muted {
+        margin: 0;
+        font-size: var(--look-body);
+        line-height: 1.35;
+        color: var(--look-muted);
+        max-width: 70vw;
+        max-height: calc(var(--look-body) * 1.35 * 2);
+        overflow-wrap: anywhere;
+      }
+      .muted:empty {
+        display: none;
+      }
+      .card {
+        box-sizing: border-box;
+        background: var(--background, #ffffff);
+        border: var(--look-border) solid var(--look-line);
+        border-radius: var(--look-radius);
+        box-shadow: var(--look-shadow);
+      }
       @media (orientation: portrait) {
-        h1 {
-          font-size: 13vw;
+        .layout {
+          padding: 0 calc(var(--look-margin) * 0.8);
+          gap: calc(var(--look-gap) * 1.2);
         }
-        .call {
-          font-size: 6vw;
+        .pill {
+          font-size: calc(var(--look-label) * 1.35);
+          padding: 1vmin 2.4vmin;
         }
-        .handle {
-          font-size: 5.6vw;
-          padding: 2.4vw 6vw;
+        .title {
+          font-size: calc(var(--look-title) * 1.35);
+          max-width: none;
+          max-height: calc(var(--look-title) * 1.35 * var(--look-leading) * 4);
+        }
+        .muted {
+          font-size: calc(var(--look-body) * 1.4);
+          max-width: none;
+          max-height: calc(var(--look-body) * 1.4 * 1.35 * 3);
+        }
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        gap: 1.4vmin;
+        padding: 1.8vmin 3.6vmin;
+        border-radius: 99vmin;
+        background: var(--accent, #0071e3);
+        color: var(--background, #ffffff);
+        font-size: var(--look-body);
+        font-weight: 600;
+        box-shadow: var(--look-shadow);
+      }
+      .button:empty {
+        display: none;
+      }
+      .next {
+        display: flex;
+        align-items: center;
+        gap: 1.6vmin;
+        margin-top: calc(var(--look-gap) * 0.6);
+        padding: calc(var(--look-pad) * 0.7) calc(var(--look-pad) * 1.1);
+        font-size: var(--look-body);
+        font-weight: 500;
+        max-width: 70vw;
+      }
+      .next .play {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 4.4vmin;
+        height: 4.4vmin;
+        border-radius: var(--look-radius-small);
+        background: var(--look-tint);
+        color: var(--accent, #0071e3);
+      }
+      .next svg {
+        width: 2.2vmin;
+        height: 2.2vmin;
+      }
+      .next small {
+        display: block;
+        font-size: var(--look-label);
+        color: var(--look-muted);
+      }
+      @media (orientation: portrait) {
+        .button,
+        .next {
+          font-size: calc(var(--look-body) * 1.4);
         }
         .next {
-          font-size: 4.6vw;
+          max-width: none;
+        }
+        .next small {
+          font-size: calc(var(--look-label) * 1.35);
         }
       }
     </style>
@@ -105,61 +224,81 @@
   <body>
     <div
       id="root"
-      data-composition-id="graphic"
-      data-no-timeline
+      data-composition-id="graphic" data-no-timeline data-holds-end
       data-start="0"
       data-width="1920"
       data-height="1080"
       data-duration="6"
-      data-holds-end
     >
-      <div id="card-back"><div class="ring" id="ring"></div></div>
+      <div id="card-back"></div>
       <div class="layout" id="layout">
-        <h1 id="title" data-var-text="title">Thanks for watching</h1>
-        <div class="call" id="call" data-var-text="call">Subscribe for the next part</div>
-        <div class="handle" id="handle" data-var-text="handle">@yourchannel</div>
-        <div class="next" id="next" data-var-text="next"></div>
+        <h1 class="title" id="title" data-var-text="title">Thanks for watching</h1>
+        <p class="muted" id="call" data-var-text="call">Subscribe for the next part</p>
+        <div class="button" id="handle" data-var-text="handle">@yourchannel</div>
+        <div class="next card" id="next">
+          <span class="play"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg></span>
+          <span><small>Up next</small><span id="next-text"></span></span>
+        </div>
       </div>
     </div>
     <script>
-      const vars = window.__hyperframes.getVariables();
-      if (vars.next) {
-        document.getElementById("next").textContent = `Up next: ${vars.next}`;
-      }
       const root = document.getElementById("root");
+      const vars = window.__hyperframes?.getVariables?.() || {};
+      document.querySelectorAll("[data-var-text]").forEach((el) => {
+        const value = vars[el.dataset.varText];
+        if (value != null) el.textContent = String(value);
+      });
+      // The video's look (see the style above).
+      const style = getComputedStyle(root);
+      const token = (name, fallback) => style.getPropertyValue(`--look-${name}`).trim() || fallback;
+      const look = {
+        duration: parseFloat(token("duration", "700")),
+        stagger: parseFloat(token("stagger", "90")),
+        out: parseFloat(token("out", "350")),
+        ease: token("ease", "cubic-bezier(0.22, 1, 0.36, 1)"),
+        distance: token("distance", "1.8vmin"),
+        entry: token("entry", "rise"),
+      };
+      root.dataset.align = token("align", "center");
       const length = (parseFloat(root.dataset.duration) || 6) * 1000;
-      const ease = "cubic-bezier(0.2, 0, 0, 1)";
-      // The end card holds to the end of the video, so it never goes out. It fills the frame,
-      // so it cuts in; only when AeroEdits asks for an ease (in a short's slot over the
-      // full-screen camera) does it fade in.
-      function play(id, frames, delay, duration, easing = ease) {
-        document
-          .getElementById(id)
+      const eases = root.dataset.entrance === "ease";
+      const outAt = Math.max(1200, length - look.out - 100);
+      // Text a long value would push out of its box (its max-height) gets smaller until it
+      // fits. It wraps anywhere, so only its height can overflow.
+      function fit(el) {
+        const unit = Math.min(innerWidth, innerHeight) / 100;
+        let size = parseFloat(getComputedStyle(el).fontSize);
+        // Glyphs reach a little past tight lines; only a real extra line counts.
+        for (let n = 0; n < 40 && el.scrollHeight - el.clientHeight > size * 0.25; n++) {
+          size *= 0.93;
+          el.style.fontSize = `${size / unit}vmin`;
+        }
+      }
+      function play(el, frames, delay, duration = look.duration, easing = look.ease) {
+        (typeof el === "string" ? document.getElementById(el) : el)
           .animate(frames, { duration, delay, easing, fill: "both", iterations: 1 })
           .pause();
       }
-      if (root.dataset.entrance === "ease") {
-        play("card-back", [{ opacity: 0 }, { opacity: 1 }], 0, 400, "linear");
+      // How things come in, by the look: rise, fade, scale or blur, over its distance.
+      function enter(el, delay, opacity = 1) {
+        const from = { opacity: 0, transform: "none", filter: "none" };
+        if (look.entry === "rise") from.transform = `translateY(${look.distance})`;
+        if (look.entry === "scale") from.transform = `translateY(${look.distance}) scale(0.92)`;
+        if (look.entry === "blur") {
+          from.transform = `translateY(${look.distance})`;
+          from.filter = "blur(1.2vmin)";
+        }
+        play(el, [from, { opacity, transform: "none", filter: "none" }], delay);
       }
-      play("ring", [
-        { transform: "scale(0.6)", opacity: 0 },
-        { transform: "scale(1)", opacity: 0.18 },
-      ], 0, Math.min(length, 2400));
-      const rise = [
-        { transform: "translateY(4vmin)", opacity: 0 },
-        { transform: "translateY(0)", opacity: 1 },
-      ];
-      play("title", rise, 200, 700);
-      play("call", [
-        { transform: "translateY(4vmin)", opacity: 0 },
-        { transform: "translateY(0)", opacity: 0.8 },
-      ], 420, 700);
-      play("handle", [
-        { transform: "scale(0.7)", opacity: 0 },
-        { transform: "scale(1.05)", opacity: 1, offset: 0.7 },
-        { transform: "scale(1)", opacity: 1 },
-      ], 650, 600);
-      play("next", [{ opacity: 0 }, { opacity: 0.65 }], 1000, 600);
+      const next = String(vars.next ?? "").trim();
+      if (next) document.getElementById("next-text").textContent = next;
+      else document.getElementById("next").style.display = "none";
+      fit(document.getElementById("title"));
+      // The end card holds to the end of the video, so it never goes out. It fills the frame,
+      // so it cuts in; only when AeroEdits asks for an ease (in a short's slot over the
+      // full-screen camera) does it fade in.
+      if (eases) play("card-back", [{ opacity: 0 }, { opacity: 1 }], 0, 400, "linear");
+      ["title", "call", "handle", "next"].forEach((id, i) => enter(id, 200 + i * look.stagger * 1.8));
     </script>
   </body>
 </html>

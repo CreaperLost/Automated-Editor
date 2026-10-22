@@ -66,6 +66,9 @@ import {
   BrandKit,
   BrandKitInput,
   BrandsView,
+  GraphicsLook,
+  LookStill,
+  LookView,
   GraphicLibraryItem,
   GraphicLibrarySave,
   GraphicLibrarySaved,
@@ -503,6 +506,14 @@ export const api = {
   /** Sets the project's default brand kit (null for none), one undo step. */
   projectGraphicsBrandSet: (projectHandle: string, expectedRevision: number, brand: string | null) =>
     invokeTauri<OpenedProject>("project_graphics_brand_set", { projectHandle, expectedRevision, brand }),
+  /** The video's look, the presets, its tokens and the graphics with tokens of their own. */
+  graphicsLook: (projectHandle: string) => invokeTauri<LookView>("graphics_look", { projectHandle }),
+  /** Sets the video's look, one undo step; its graphics render again. */
+  projectGraphicsLookSet: (projectHandle: string, expectedRevision: number, look: GraphicsLook) =>
+    invokeTauri<OpenedProject>("project_graphics_look_set", { projectHandle, expectedRevision, look }),
+  /** Stills of up to three of the video's graphics with `look`, changing nothing (a few seconds). */
+  graphicsLookPreview: (projectHandle: string, look: GraphicsLook) =>
+    invokeTauri<LookStill[]>("graphics_look_preview", { projectHandle, look }),
   graphicsLibrary: () => invokeTauri<GraphicLibraryItem[]>("graphics_library"),
   graphicsLibraryRemove: (id: string) => invokeTauri<void>("graphics_library_remove", { id }),
   /** A library item's contact sheet from the gate, as a data URL. */

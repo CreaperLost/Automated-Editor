@@ -12,6 +12,7 @@ pub mod brands;
 pub mod gate;
 pub mod gsap;
 pub mod library;
+pub mod look;
 pub mod render;
 pub mod runtime;
 pub mod templates;
@@ -43,6 +44,9 @@ pub struct GraphicSource {
     /// The brand kit it uses: absent for the project's default, `none` for no kit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brand: Option<String>,
+    /// Look tokens of its own over the video's (`radius`, `ease`...): shown as overrides.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub look: std::collections::BTreeMap<String, String>,
 }
 
 /// One variable a composition declares in `data-composition-variables`.
@@ -236,6 +240,9 @@ pub struct GraphicView {
     pub render: render::RenderState,
     /// Its own brand kit choice: absent for the project's default, `none` for no kit.
     pub brand: Option<String>,
+    /// Look tokens of its own over the video's.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub look: std::collections::BTreeMap<String, String>,
 }
 
 pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
@@ -253,6 +260,7 @@ pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
         brand: source
             .brand
             .map(|b| brands::current_name(&brands::dir(), &b)),
+        look: source.look,
     })
 }
 
@@ -300,6 +308,7 @@ pub fn create(
                 template: Some(found.name.to_string()),
                 variables,
                 brand: None,
+                look: Default::default(),
             },
         )
     })();
@@ -580,9 +589,21 @@ impl Entrance {
 /// may ease in and out over the full-screen camera. Without it a graphic fills the frame.
 pub const OVERLAY_ATTR: &str = "data-overlay";
 
+/// Where the root composition element's `data-composition-id` attribute is: the first one
+/// given a value, so a `[data-composition-id]` selector in a style (the look's) is passed by.
+pub fn root_at(html: &str) -> Option<usize> {
+    html.match_indices("data-composition-id")
+        .map(|(at, _)| at)
+        .find(|&at| {
+            html[at + "data-composition-id".len()..]
+                .trim_start()
+                .starts_with('=')
+        })
+}
+
 /// Whether the root composition element's opening tag has attribute `name`.
 pub fn root_has(html: &str, name: &str) -> bool {
-    let Some(at) = html.find("data-composition-id") else {
+    let Some(at) = root_at(html) else {
         return false;
     };
     let start = html[..at].rfind('<').unwrap_or(0);
@@ -655,7 +676,7 @@ pub fn size_composition(
     entrance: Entrance,
 ) -> String {
     let mut html = html.to_string();
-    if let Some(at) = html.find("data-composition-id") {
+    if let Some(at) = root_at(&html) {
         let start = html[..at].rfind('<').unwrap_or(0);
         let end = html[at..].find('>').map_or(html.len(), |e| at + e);
         let mut tag = html[start..end].to_string();

@@ -239,6 +239,7 @@ pub fn static_checks(
             )
         },
     );
+    out.push(look_check(html));
     let fixed = fixed_text(html);
     out.push(if fixed.is_empty() {
         check(
@@ -301,6 +302,170 @@ fn network_refs(files: &[(String, String)]) -> Vec<String> {
         }
     }
     found
+}
+
+/// Whether the graphic takes the video's look: a colour of its own fails (the brand kit must
+/// reach every colour); a font, corner radius or animation timing of its own is a warning (the
+/// look sets them for every graphic at once; `graphic_templatize` turns them into tokens).
+fn look_check(html: &str) -> Check {
+    let (colours, others) = hard_coded(html);
+    let list = |found: &[String]| {
+        found
+            .iter()
+            .take(4)
+            .map(|f| format!("\"{f}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if !colours.is_empty() {
+        check(
+            "look",
+            "The video's look",
+            Status::Fail,
+            format!(
+                "colours of its own ({}): use var(--background), var(--text), var(--accent) \
+                 or the roles var(--look-muted), var(--look-line), var(--look-tint), \
+                 var(--look-wash), var(--look-shadow)",
+                list(&colours)
+            ),
+        )
+    } else if !others.is_empty() {
+        check(
+            "look",
+            "The video's look",
+            Status::Warn,
+            format!(
+                "fixed where the look should decide ({}): use var(--look-font), \
+                 var(--look-radius), var(--look-duration) and the other --look-* tokens",
+                list(&others)
+            ),
+        )
+    } else {
+        check(
+            "look",
+            "The video's look",
+            Status::Pass,
+            "colours from the brand kit, type, corners and motion from the look",
+        )
+    }
+}
+
+/// Colours, and fonts, corner radii and CSS timings, written into `html`'s styles and scripts
+/// rather than taken from variables (anything inside `var(...)` counts as taken, so a
+/// fallback is fine).
+pub fn hard_coded(html: &str) -> (Vec<String>, Vec<String>) {
+    // Comments first: a guide in one may show a `<script>` tag.
+    let mut html = html.to_string();
+    while let Some(at) = html.find("<!--") {
+        let end = html[at..].find("-->").map_or(html.len(), |e| at + e + 3);
+        html.replace_range(at..end, "");
+    }
+    let html = html.as_str();
+    let code = strip_vars(&format!(
+        "{}\n{}\n{}",
+        blocks(html, "style"),
+        blocks(html, "script"),
+        inline_styles(html)
+    ));
+    let mut colours: Vec<String> = Vec::new();
+    let mut others: Vec<String> = Vec::new();
+    let push = |list: &mut Vec<String>, found: String| {
+        if !list.contains(&found) {
+            list.push(found);
+        }
+    };
+    for (at, _) in code.match_indices('#') {
+        let hex: String = code[at + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
+        // A colour in a value, not an id selector (`#card-back`, `#fade {`).
+        let next = code[at + 1 + hex.len()..].chars().next();
+        if matches!(hex.len(), 3 | 4 | 6 | 8)
+            && !next.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            && after_colon(&code, at)
+        {
+            push(&mut colours, format!("#{hex}"));
+        }
+    }
+    let lower = code.to_ascii_lowercase();
+    for function in ["rgb(", "rgba(", "hsl(", "hsla("] {
+        for (at, _) in lower.match_indices(function) {
+            let end = lower[at..].find(')').map_or(lower.len(), |e| at + e + 1);
+            push(&mut colours, code[at..end].to_string());
+        }
+    }
+    for property in [
+        "font-family:",
+        "border-radius:",
+        "transition:",
+        "animation:",
+    ] {
+        for (at, _) in lower.match_indices(property) {
+            let end = lower[at..]
+                .find([';', '}', '"', '\n'])
+                .map_or(lower.len(), |e| at + e);
+            let value = lower[at + property.len()..end].trim();
+            // Taken from the look, or a shape no look sets: a circle or a pill, square corners.
+            let fine = value.is_empty()
+                || value.contains("var(")
+                || value == "inherit"
+                || value == "none"
+                || (property == "border-radius:"
+                    && (value == "0" || value == "50%" || value.starts_with("99")));
+            if !fine {
+                push(&mut others, code[at..end].trim().to_string());
+            }
+        }
+    }
+    (colours, others)
+}
+
+/// Whether `at` is in a declaration's value (after a `:` since the last `;`, `{` or `}`), as
+/// opposed to a selector.
+fn after_colon(code: &str, at: usize) -> bool {
+    let before = &code[..at];
+    let boundary = before.rfind([';', '{', '}']).map_or(0, |b| b + 1);
+    before[boundary..].contains(':')
+}
+
+/// `code` without its `var(...)` expressions.
+fn strip_vars(code: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(at) = rest.find("var(") {
+        out.push_str(&rest[..at]);
+        let mut depth = 0;
+        let mut end = rest.len();
+        for (i, c) in rest[at..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = at + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push_str("var()");
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every `style="..."` attribute's value in `html`, joined.
+fn inline_styles(html: &str) -> String {
+    html.match_indices("style=\"")
+        .filter_map(|(at, m)| {
+            let start = at + m.len();
+            html[start..].find('"').map(|e| &html[start..start + e])
+        })
+        .collect::<Vec<_>>()
+        .join(";\n")
 }
 
 const VOID: [&str; 10] = [
@@ -902,7 +1067,7 @@ pub fn run(
 /// Whether the root composition element says the graphic holds to the end of its clip
 /// (`data-holds-end`, as an end card does): its last frame may stay covered.
 pub fn holds_end(html: &str) -> bool {
-    let Some(at) = html.find("data-composition-id") else {
+    let Some(at) = super::root_at(html) else {
         return false;
     };
     let start = html[..at].rfind('<').unwrap_or(0);
@@ -1259,6 +1424,35 @@ fn tail(stderr: &str, stdout: &str) -> String {
 }
 
 /// Runs the pinned HyperFrames with `args`: (succeeded, stdout, stderr).
+/// Stills of the composition staged in `stage` at `at` (seconds, comma-separated) as PNGs in
+/// `output`.
+pub fn snapshot(
+    paths: &runtime::RuntimePaths,
+    stage: &Path,
+    at: &str,
+    output: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let args: Vec<OsString> = vec![
+        "snapshot".into(),
+        stage.into(),
+        "--output".into(),
+        output.into(),
+        "--at".into(),
+        at.into(),
+        "--no-end".into(),
+        // Never send frames to a vision model, whatever is in the environment.
+        "--describe".into(),
+        "false".into(),
+    ];
+    let (ok, stdout, stderr) = run_cli(paths, args, cancel)?;
+    if ok {
+        Ok(())
+    } else {
+        Err(tail(&stderr, &stdout))
+    }
+}
+
 fn run_cli(
     paths: &runtime::RuntimePaths,
     args: Vec<OsString>,
@@ -1435,6 +1629,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_graphic_of_its_own_colours_fails_the_look_and_fixed_style_warns() {
+        let check = |style: &str| {
+            look_check(&format!(
+                "<html><head><style>{style}</style></head><body><div id=\"card-back\"></div></body></html>"
+            ))
+        };
+        // Kit colours and the look's tokens (with fallbacks) pass; selectors are no colours.
+        let fine = check(
+            "#card-back { background: var(--background, #fff); color: var(--look-muted); \
+             border-radius: var(--look-radius); font-family: var(--look-font); } \
+             #fade { border-radius: 99vmin; } .dot { border-radius: 50%; }",
+        );
+        assert_eq!(fine.status, Status::Pass, "{}", fine.reason);
+        let accent = check(".title { color: #FACC15; }");
+        assert_eq!(accent.status, Status::Fail);
+        assert!(accent.reason.contains("#FACC15"), "{}", accent.reason);
+        assert_eq!(
+            check(".a { background: rgba(0, 0, 0, 0.4); }").status,
+            Status::Fail
+        );
+        let fixed = check(".card { border-radius: 24px; font-family: Inter; }");
+        assert_eq!(fixed.status, Status::Warn);
+        assert!(fixed.reason.contains("24px") && fixed.reason.contains("Inter"));
+        // In a script too.
+        let html = "<html><body><script>gsap.to('#t', { color: '#ff0000' })</script></body></html>";
+        assert_eq!(look_check(html).status, Status::Fail);
     }
 
     #[test]

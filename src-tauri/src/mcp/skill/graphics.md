@@ -33,6 +33,12 @@ portrait block, a cut unless `data-entrance` is `ease`, no network), rewrite the
 item (`update`) or keep both (`asNew`). Never save without the user's yes; save a failing
 graphic (`asIs`) only at their word.
 
+Every graphic in a video shares one look (`graphics_look`, behind `more`): type sizes, corners,
+spacing and motion as `--look-*` tokens, beside the brand kit's colours. Changing it restyles every
+graphic. When the user asks for a change in words ("calmer", "rounder"), try it with `preview:
+true`, show them, and apply on their yes. A composition you write takes its sizes, corners and
+motion from the tokens (`blank` shows how); `graphic_check` warns about any it fixes itself.
+
 Brand kits (`brand_kits`) are the user's colours, font and logo. The project has a default kit
 (`brand_pick`) and a graphic may pick another (`graphic_set` `brand`). A kit fills the
 `background`, `text` and `accent` variables a graphic has not set, so with a kit leave those

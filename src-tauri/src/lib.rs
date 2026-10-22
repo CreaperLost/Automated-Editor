@@ -1789,6 +1789,50 @@ fn graphics_brands(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn graphics_look(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<commands::graphics::LookView, String> {
+    commands::graphics::graphics_look_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphics_look_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    look: graphics::look::Look,
+) -> Result<project::OpenedProject, String> {
+    commands::graphics::project_graphics_look_set_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        look,
+    )
+}
+
+/// Stills of a few of the video's graphics with another look (a few seconds).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn graphics_look_preview(
+    app: tauri::AppHandle,
+    project_handle: String,
+    look: graphics::look::Look,
+) -> Result<Vec<commands::graphics::LookStill>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::graphics_look_preview_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            look,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn graphics_brand_save(
     kit: graphics::brands::BrandKitInput,
 ) -> Result<graphics::brands::BrandKitView, String> {
@@ -2173,6 +2217,9 @@ pub fn run() {
             graphics_brand_save,
             graphics_brand_remove,
             project_graphics_brand_set,
+            graphics_look,
+            project_graphics_look_set,
+            graphics_look_preview,
             pick_brand_file,
             graphics_library,
             graphics_library_remove,

@@ -432,6 +432,33 @@ pub fn project_graphic_set_impl(
     })
 }
 
+/// Sets look tokens of a graphic's own over the video's (`None` takes one back to the video's).
+/// Like its variables, its source changes in place (no undo step); it renders again.
+pub fn project_graphic_look_set_impl(
+    state: &AppState,
+    project_handle: String,
+    asset_id: String,
+    tokens: std::collections::BTreeMap<String, Option<String>>,
+) -> Result<graphics::GraphicView, String> {
+    let _guard = state.command_lock.lock();
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let asset = graphic_asset(reader, &asset_id)?;
+    let dir = graphics::folder(reader.root(), &asset.id);
+    let mut source = graphics::read_source(&dir)?;
+    for (name, value) in tokens {
+        match value {
+            Some(value) => source.look.insert(name, value.trim().to_string()),
+            None => source.look.remove(&name),
+        };
+    }
+    graphics::look::check_tokens(&source.look)?;
+    graphics::write_source(&dir, &source)?;
+    render::sources_changed();
+    graphics::view(reader.root(), &asset)
+}
+
 /// Forgets failed renders and looks at the graphics' files again (after a hand edit).
 pub fn graphics_render_again_impl() {
     render::sources_changed();
@@ -516,7 +543,176 @@ pub fn project_graphics_brand_set_impl(
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
+    // Every graphic restyles: render them all now, not as the playhead reaches each.
+    render::request_all(reader.root(), &reader.history().current);
     Ok(project)
+}
+
+/// The video's look, the presets, every token's value, and the graphics with tokens of their
+/// own.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookView {
+    pub look: graphics::look::Look,
+    pub presets: Vec<graphics::look::PresetView>,
+    pub tokens: std::collections::BTreeMap<&'static str, String>,
+    /// Graphics of this video that override tokens: (name, the tokens).
+    pub overrides: Vec<(String, Vec<String>)>,
+}
+
+pub fn graphics_look_impl(state: &AppState, project_handle: String) -> Result<LookView, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let document = reader.document();
+    let overrides = document
+        .assets
+        .iter()
+        .filter(|a| a.is_graphic())
+        .filter_map(|asset| {
+            let source = graphics::read_source(&graphics::folder(reader.root(), &asset.id)).ok()?;
+            (!source.look.is_empty()).then(|| (source.name, source.look.into_keys().collect()))
+        })
+        .collect();
+    Ok(LookView {
+        look: document.graphics_look.clone(),
+        presets: graphics::look::presets(),
+        tokens: document.graphics_look.values(),
+        overrides,
+    })
+}
+
+/// Sets the video's look, one undo step; every graphic that uses it renders again.
+pub fn project_graphics_look_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    look: graphics::look::Look,
+) -> Result<OpenedProject, String> {
+    look.validate()?;
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    if reader.document().graphics_look == look {
+        return Ok(reader.view_or_summary(None));
+    }
+    let mut next = reader.document().clone();
+    next.graphics_look = look;
+    let project = reader.commit_document(expected_revision, next)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    // Every graphic restyles: render them all now, not as the playhead reaches each.
+    render::request_all(reader.root(), &reader.history().current);
+    Ok(project)
+}
+
+/// How a graphic of the video would look with another look.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookStill {
+    pub asset_id: String,
+    pub name: String,
+    /// A PNG data URL, 640 px wide.
+    pub image: String,
+}
+
+/// The most graphics a look's preview draws.
+const LOOK_PREVIEW_GRAPHICS: usize = 3;
+
+/// Stills of up to three of the video's graphics (the first of each, by where they play) with
+/// `look` instead of the video's, without changing anything. Takes a few seconds.
+pub fn graphics_look_preview_impl(
+    state: &AppState,
+    project_handle: String,
+    look: graphics::look::Look,
+) -> Result<Vec<LookStill>, String> {
+    look.validate()?;
+    let specs: Vec<(String, render::Spec)> = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let mut document = reader.document().clone();
+        document.graphics_look = look;
+        let canvas = document.layout.preview_dimensions()?;
+        let mut clips: Vec<&crate::sequence::Clip> = document
+            .sequence
+            .video_tracks()
+            .filter(|t| !t.hidden)
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+            .collect();
+        clips.sort_by_key(|c| c.start_us);
+        let mut seen = Vec::new();
+        clips.retain(|c| {
+            let new = !seen.contains(&c.asset);
+            seen.push(c.asset.clone());
+            new
+        });
+        clips
+            .into_iter()
+            .take(LOOK_PREVIEW_GRAPHICS)
+            .filter_map(|clip| {
+                let asset = document.asset(&clip.asset)?;
+                let spec = render::Spec::for_clip(
+                    reader.root(),
+                    &document,
+                    asset,
+                    clip,
+                    canvas,
+                    &[],
+                    Default::default(),
+                );
+                Some((asset.name.clone(), spec))
+            })
+            .collect()
+    };
+    if specs.is_empty() {
+        return Err("This video has no graphics to show the look on".into());
+    }
+    let cancel = AtomicBool::new(false);
+    let stills: Vec<Result<LookStill, String>> = std::thread::scope(|scope| {
+        let jobs: Vec<_> = specs
+            .iter()
+            .map(|(name, spec)| {
+                let cancel = &cancel;
+                scope.spawn(move || {
+                    // Past the entrance, before any exit.
+                    let at = (spec.length_us as f64 / 1e6 * 0.6).min(2.5);
+                    let png = render::still(spec, at, cancel)?;
+                    let small = image::load_from_memory(&png)
+                        .map_err(|e| e.to_string())?
+                        .thumbnail(640, 640);
+                    let mut out = std::io::Cursor::new(Vec::new());
+                    small
+                        .write_to(&mut out, image::ImageFormat::Png)
+                        .map_err(|e| e.to_string())?;
+                    use base64::Engine;
+                    Ok(LookStill {
+                        asset_id: spec.asset_id.clone(),
+                        name: name.clone(),
+                        image: format!(
+                            "data:image/png;base64,{}",
+                            base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+                        ),
+                    })
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .unwrap_or_else(|_| Err("The preview stopped".into()))
+            })
+            .collect()
+    });
+    let mut out = Vec::new();
+    for still in stills {
+        out.push(still?);
+    }
+    Ok(out)
 }
 
 pub fn graphics_library_impl() -> Vec<library::LibraryView> {

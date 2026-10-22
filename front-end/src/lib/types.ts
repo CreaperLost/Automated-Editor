@@ -848,6 +848,50 @@ export interface BrandsView {
   folder: string;
 }
 
+/** The video's look: one set of design tokens every graphic takes (src-tauri graphics/look.rs). */
+export interface GraphicsLook {
+  /** app, calm or bold. */
+  preset: string;
+  /** Multiples of the preset's: type size, corner radius, speed, travel, spacing. */
+  size: number;
+  roundness: number;
+  speed: number;
+  energy: number;
+  density: number;
+  /** Tokens set by hand, by name without `--look-`. */
+  tokens?: Record<string, string>;
+}
+
+export const LOOK_CONTROLS = [
+  { id: "size", label: "Size", min: 0.75, max: 1.35, hint: "Type sizes" },
+  { id: "roundness", label: "Roundness", min: 0, max: 2.5, hint: "Corner radii (0 is square)" },
+  { id: "speed", label: "Speed", min: 0.5, max: 2, hint: "How fast things come in" },
+  { id: "energy", label: "Energy", min: 0, max: 2, hint: "How far things travel as they come in (0 only fades)" },
+  { id: "density", label: "Density", min: 0.7, max: 1.4, hint: "Padding, gaps and margins" },
+] as const;
+
+export interface LookPreset {
+  name: string;
+  label: string;
+  description: string;
+}
+
+export interface LookView {
+  look: GraphicsLook;
+  presets: LookPreset[];
+  /** Every token's value for the look as it is. */
+  tokens: Record<string, string>;
+  /** Graphics with tokens of their own: [name, the tokens]. */
+  overrides: [string, string[]][];
+}
+
+export interface LookStill {
+  assetId: string;
+  name: string;
+  /** A PNG data URL. */
+  image: string;
+}
+
 /** A graphic saved to the app's library to use in other projects. */
 export interface GraphicLibraryItem {
   id: string;

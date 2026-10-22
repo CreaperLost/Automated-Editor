@@ -142,6 +142,11 @@ mounted at `recordings/<asset id>/`.
   side); an export renders **final** ones at its own fps, and at twice the density (HyperFrames
   `--resolution landscape-4k` / `portrait-4k`, same layout) when larger than 1080p. Renders stage in `<runtime>/work/<hash12>/` (long project paths
   broke Windows' 260-char limit). Export waits for pending renders. A render takes ~16–28 s.
+- **The look** (`look.rs`): one per video in the edit document (preset, five global controls,
+  hand-set tokens), injected into every render after the composition's own defaults as `--look-*`
+  properties on `[data-composition-id]`, where HyperFrames puts the colour variables the roles
+  mix from; part of the render hash. Find the root by `graphics::root_at` (the attribute with a
+  value), never the first `data-composition-id` in the file: the look's selector comes first.
 - **Brand kits** (`brands.rs`): app-level `<config>/AeroEdits/brands/<name>/brand.json` (+ logo,
   font file) → a `<style id="aeroedits-brand">` with `--brand-*` variables at render time.
   Projects and graphics store a kit's **name**, so a rename is recorded in `brands/renamed.json`

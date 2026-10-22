@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 39] = [
+pub static ACTIONS: [ToolDef; 40] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -454,6 +454,17 @@ pub static ACTIONS: [ToolDef; 39] = [
         schema: schema::<BrandPickArgs>,
         read_only: false,
         run: brand_pick,
+    },
+    ToolDef {
+        name: "graphics_look",
+        description: "The video's look: one style every graphic takes (type sizes, corners, \
+            spacing, motion) beside the brand kit's colours. No arguments: the look and its \
+            tokens. A `preset`, the five controls or `tokens` change it for every graphic (one \
+            undo step; for a request in words, `preview: true` first and show the user); \
+            `graphic` with `tokens` sets that graphic's own.",
+        schema: schema::<GraphicsLookArgs>,
+        read_only: false,
+        run: graphics_look,
     },
 ];
 
@@ -3899,7 +3910,8 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     );
     out["graphics"] = json!(in_project
         .iter()
-        .map(|g| json!({
+        .map(|g| {
+            let mut listed = json!({
             "id": g.graphic.asset_id,
             "name": g.graphic.name,
             "template": g.graphic.template,
@@ -3913,7 +3925,13 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 "lengthUs": length,
             })).collect::<Vec<_>>(),
             "render": render_line(&g.graphic.render),
-        }))
+            });
+            // Look tokens of its own, only when it has some.
+            if !g.graphic.look.is_empty() {
+                listed["look"] = json!(g.graphic.look);
+            }
+            listed
+        })
         .collect::<Vec<_>>());
     // The rules for graphics come with the list: only edits with graphics need them.
     let list = serde_json::to_string(&out).map_err(|e| e.to_string())?;
@@ -4445,7 +4463,7 @@ pub struct GraphicOnlyArgs {
 /// How to turn a graphic into a template for the library. The gate (graphic_check) tests each
 /// point without a model.
 const TEMPLATE_RULES: &str = "Rewrite the files (graphic_write_file, or the folder directly), \
-keeping its look and motion, so it takes any text and fits anywhere:
+keeping its design and motion, so it takes any text, fits anywhere and takes the video's look:
 1. Text: every visible text and number becomes a variable in data-composition-variables on \
 <html> (type string, or number for counts), shown with data-var-text or set by the script from \
 window.__hyperframes.getVariables(). Defaults are good example text; a list is one string with \
@@ -4467,6 +4485,7 @@ that covers only part of the frame (a lower third, a callout) puts data-overlay 
 without it the app treats it as full screen and always cuts it. A graphic meant to hold to the \
 end of its clip (an end card) puts data-holds-end on the root and, when it eases, fades in only.
 6. No network: no CDN scripts, web fonts or http(s) URLs; images and fonts go beside index.html.
+7. The look: copy the [data-composition-id] block of --look-* tokens from the blank template \n(graphic_add blank) and take type, corners, borders, shadows, gaps and motion from it: \nvar(--look-font), var(--look-title), var(--look-body), var(--look-radius), var(--look-shadow), \nvar(--look-line), var(--look-muted), var(--look-gap)...; durations and easing from \ngetComputedStyle(root) (--look-duration, --look-stagger, --look-ease, --look-gsap-ease for \nGSAP). No font, radius or timing of its own, so one change to the video's look restyles it.
 Then graphic_check, which renders it at 16:9 and 9:16, 3 s and 8 s, eased and cut, with long \
 text and with each text variable changed, and says what fails. Fix and check again until it passes; then ask \
 the user to keep it and call library_save with a label, a one-line useWhen and lengthUs.";
@@ -4726,6 +4745,146 @@ fn brand_kits(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         "folder": view.folder,
     });
     super::tools::pretty(&out)
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicsLookArgs {
+    /// app, calm or bold.
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// Multiples of the preset's (1 leaves it): type size 0.75-1.35, corner roundness 0-2.5,
+    /// speed 0.5-2, energy (travel as things come in) 0-2, density (padding, gaps) 0.7-1.4.
+    #[serde(default)]
+    pub size: Option<f32>,
+    #[serde(default)]
+    pub roundness: Option<f32>,
+    #[serde(default)]
+    pub speed: Option<f32>,
+    #[serde(default)]
+    pub energy: Option<f32>,
+    #[serde(default)]
+    pub density: Option<f32>,
+    /// Tokens by name (without `--look-`) set by hand; null takes one back.
+    #[serde(default)]
+    pub tokens: std::collections::BTreeMap<String, Option<String>>,
+    /// A graphic's id: `tokens` become its own, over the video's look.
+    #[serde(default)]
+    pub graphic: Option<String>,
+    /// Draw up to three of the video's graphics with the look asked for, changing nothing.
+    #[serde(default)]
+    pub preview: bool,
+}
+
+fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: GraphicsLookArgs = params(args)?;
+    let before = opened(ctx)?;
+    if let Some(graphic) = &args.graphic {
+        let view = commands::graphics::project_graphic_look_set_impl(
+            ctx.state,
+            before.handle.clone(),
+            graphic.clone(),
+            args.tokens.clone(),
+        )?;
+        return text(format!(
+            "Graphic {graphic} \"{}\" has its own {}. It renders again by itself.",
+            view.name,
+            if view.look.is_empty() {
+                "look no more: it takes the video's".to_string()
+            } else {
+                format!(
+                    "look tokens: {}",
+                    serde_json::to_string(&view.look).unwrap_or_default()
+                )
+            }
+        ));
+    }
+    let view = commands::graphics::graphics_look_impl(ctx.state, before.handle.clone())?;
+    let mut look = view.look.clone();
+    if let Some(preset) = &args.preset {
+        look.preset = preset.trim().to_string();
+    }
+    for (field, value) in [
+        (&mut look.size, args.size),
+        (&mut look.roundness, args.roundness),
+        (&mut look.speed, args.speed),
+        (&mut look.energy, args.energy),
+        (&mut look.density, args.density),
+    ] {
+        if let Some(value) = value {
+            *field = value;
+        }
+    }
+    for (name, value) in &args.tokens {
+        match value {
+            Some(value) => look.tokens.insert(name.clone(), value.trim().to_string()),
+            None => look.tokens.remove(name),
+        };
+    }
+    look.validate()?;
+    if args.preview {
+        let stills =
+            commands::graphics::graphics_look_preview_impl(ctx.state, before.handle.clone(), look)?;
+        let mut out = vec![Output::Text(format!(
+            "Not applied. {}: call again without `preview` to apply.",
+            stills
+                .iter()
+                .map(|s| format!("\"{}\"", s.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))];
+        use base64::Engine;
+        for still in stills {
+            let data = still.image.trim_start_matches("data:image/png;base64,");
+            out.push(Output::Png(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| e.to_string())?,
+            ));
+        }
+        return Ok(out);
+    }
+    if look == view.look {
+        let out = json!({
+            "look": view.look,
+            "presets": view.presets,
+            "tokens": view.tokens,
+            "ownLook": view.overrides,
+        });
+        return super::tools::pretty(&out);
+    }
+    commands::graphics::project_graphics_look_set_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        look.clone(),
+    )?;
+    text(applied(
+        ctx,
+        "graphics_look",
+        &before,
+        vec![
+            format!(
+                "The video's look: {} (size ×{}, roundness ×{}, speed ×{}, energy ×{}, density \
+                 ×{}){}.",
+                look.preset,
+                look.size,
+                look.roundness,
+                look.speed,
+                look.energy,
+                look.density,
+                if look.tokens.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", tokens {}",
+                        serde_json::to_string(&look.tokens).unwrap_or_default()
+                    )
+                }
+            ),
+            "Every graphic renders again by itself.".into(),
+        ],
+    )?)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -5741,6 +5900,31 @@ mod tests {
         assert!(listed.contains("\"brand\":\"none\""), "{listed}");
         // The graphics rules come with the list, once, instead of in every edit's rules.
         assert!(listed.starts_with("# Graphics"), "{listed}");
+
+        // The video's look: read, changed in one undo step, and a graphic's own tokens.
+        let look = call(&ctx, "graphics_look", json!({})).unwrap();
+        assert!(look.contains("app") && look.contains("radius"), "{look}");
+        let bad = call(&ctx, "graphics_look", json!({ "speed": 9 })).unwrap_err();
+        assert!(bad.contains("speed"), "{bad}");
+        let set = call(
+            &ctx,
+            "graphics_look",
+            json!({ "preset": "calm", "speed": 1.5 }),
+        )
+        .unwrap();
+        assert!(set.contains("calm") && set.contains("speed ×1.5"), "{set}");
+        assert_eq!(history(&ctx)[0].action.as_deref(), Some("graphics_look"));
+        let preset = with_reader(ctx.state, |r| Ok(r.document().graphics_look.preset.clone()));
+        assert_eq!(preset.unwrap(), "calm");
+        let own = call(
+            &ctx,
+            "graphics_look",
+            json!({ "graphic": id, "tokens": { "radius": "0" } }),
+        )
+        .unwrap();
+        assert!(own.contains("\"radius\":\"0\""), "{own}");
+        let listed = call(&ctx, "graphics", json!({})).unwrap();
+        assert!(listed.contains("\"look\":{\"radius\":\"0\"}"), "{listed}");
         let slot = call(
             &ctx,
             "graphic_set",

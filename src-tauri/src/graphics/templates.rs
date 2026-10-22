@@ -63,7 +63,7 @@ static TEMPLATES: &[Template] = &[
         "key-point",
         "Key point",
         5000,
-        "One statement to remember, with an accent rule and an optional detail."
+        "One statement to remember on a card, with a label and an optional detail."
     ),
     template!(
         "recap",
