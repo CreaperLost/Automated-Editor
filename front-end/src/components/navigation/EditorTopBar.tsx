@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { Suspense, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   AlertCircle,
@@ -31,11 +31,13 @@ import {
   resetWorkspaceLayout,
   type LayoutPreset,
 } from "../layout/dockLayout";
-import { AgentsDialog } from "../settings/AgentsDialog";
 import { useAgentStore } from "../../stores/agentStore";
-import { HotkeysDialog } from "../settings/HotkeysDialog";
 import { TemplatesMenu } from "./TemplatesMenu";
 import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
+
+// Loaded when first opened.
+const AgentsDialog = React.lazy(() => import("../settings/AgentsDialog").then((m) => ({ default: m.AgentsDialog })));
+const HotkeysDialog = React.lazy(() => import("../settings/HotkeysDialog").then((m) => ({ default: m.HotkeysDialog })));
 
 interface EditorTopBarProps {
   onOpenExport: () => void;
@@ -220,8 +222,10 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
           </>
         )}
       </div>
-      {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
-      {agentsOpen && <AgentsDialog onClose={() => setAgentsOpen(false)} />}
+      <Suspense fallback={null}>
+        {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
+        {agentsOpen && <AgentsDialog onClose={() => setAgentsOpen(false)} />}
+      </Suspense>
     </header>
   );
 };

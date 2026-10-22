@@ -170,8 +170,6 @@ The research is clear that sound is **placement and art direction, not library b
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| The transcript panel runs `findIndex` over every word and line on each playback update and keeps every line mounted | Code: `TranscriptPanel.tsx` | [PERF-1](roadmap.md#perf-1) |
-| Every panel is in the first JS bundle (no lazy loading) | Code: no `lazy(` in `front-end/src` | [PERF-2](roadmap.md#perf-2) |
 | A layout edit rebuilds the playback evaluator *and* the audio mixer; fine for occasional edits, wrong for dragging a section edge or live layout keys | Log: `plans/layouts.md` | [LAY-1](roadmap.md#lay-1) |
 | With the whole timeline in view, every clip is a separate element (8,000 clips: ~1.5 s per shifting edit in dev) | Log: O01 | [PERF-3](roadmap.md#perf-3) |
 | The JPEG preview transport (non-wgpu fallback path) is near budget at 1080p (~30 ms per detailed frame) | Log: O02 | [PERF-3](roadmap.md#perf-3) |

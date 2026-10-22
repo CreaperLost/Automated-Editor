@@ -55,19 +55,6 @@ flowchart LR
   provider cost the app knows.
 - **Needs from George:** the three recordings. **Output:** `plans/evaluation.md` with the numbers.
 
-<a id="perf-1"></a>
-### PERF-1 · Transcript panel: index once, virtualise — S
-
-- **Do:** a time-sorted index built when the transcript changes; binary search or an advancing
-  cursor during playback; virtualise lines keeping selection and active-word scrolling.
-- **Done when:** measured on a one-hour transcript before and after. **Was:** audit F05.
-
-<a id="perf-2"></a>
-### PERF-2 · Lazy-load optional panels and dialogs — S
-
-- **Do:** `React.lazy` the panels `DockWorkspace.tsx` imports eagerly; compare first-bundle size
-  and cold start. **Was:** audit F06.
-
 ---
 
 ## Next
@@ -363,7 +350,7 @@ Grouped by area. Order within a group is the suggested order.
   **Was:** backlog #12.
 <a id="lng-4"></a>
 - **LNG-4 · Filler/retake rules fixes and a real Greek eval (S/M).** Rules stop treating
-  "X. X essentially means" and list items as retakes; flag single-word repeats, cut-off words and
+  "X. X essentially means" as a retake (list items and parallel statements: done 22 Oct); flag single-word repeats, cut-off words and
   short restarts; label one more real English recording and a real Greek one; then decide whether
   cloud review may default to `apply: true` for fillers. **Was:** task 3 leftovers.
 <a id="lng-5"></a>
@@ -431,6 +418,19 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **22 Oct 2026** — <a id="perf-1"></a>**PERF-1** transcript panel: words and lines are indexed
+  once per transcript (`lib/transcriptIndex.ts`, binary search for the playing word and line) and
+  only the lines on screen are drawn (`useLineWindow`, measured heights, spacers; a hidden panel
+  draws nothing). Measured in the dev build on 9,500 words (an hour of speech) packed into an
+  11-minute recording, old and new back to back in the same page: reload 583 → 310 ms until drawn
+  and 350 → 186 ms of main-thread blocking; DOM 12,344 → 517 nodes; playback 13.0 → 6.5 ms of
+  script per playhead move, frames over 1/60 s 28 → 1 of 300. Seeking far ahead or back still
+  brings the playing word into view; selection across lines and scrolling to the end work.
+  <a id="perf-2"></a>**PERF-2** lazy loading: the editor (`DockWorkspace`) loads only once a
+  project is open (fetched in the background once the start screen is up), panels outside the
+  Edit layout and every dialog when first shown. Production build: the start-up script 966 →
+  236 KB (262 → 74 KB gzipped), start-up CSS 184 → 48 KB; cold start in headless Chrome (median of
+  15, cache off) 142 → 110 ms until the start screen shows, 284 → 86 KB fetched.
 - **21 Oct 2026 (night)** — <a id="agt-2"></a>**AGT-2** thorough mode and an honest report
   (skill only): the tutorial template asks "fast or thorough" with the first questions and saves
   it (`review` in the saved answers; automatic uses it, else fast). Thorough reads every kept

@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
 import { startAgentSync } from "./stores/agentStore";
 import { ChevronRight, Clock, FilePlus2, Film, Folder, FolderOpen, X } from "lucide-react";
@@ -9,11 +9,17 @@ import { Button, Notice } from "./components/ui";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
-import { DockWorkspace } from "./components/layout/DockWorkspace";
 import { api, isTauriEnvironment } from "./lib/ipc";
 import { ExportSettings, ExportStatus, OpenedProject } from "./lib/types";
-import { ExportDialog } from "./components/export/ExportDialog";
-import { NewProjectDialog } from "./components/project/NewProjectDialog";
+
+// The start screen needs none of the editor: it and the dialogs load when first needed (the
+// editor in the background once the start screen is up, so opening a project does not wait).
+const loadWorkspace = () => import("./components/layout/DockWorkspace");
+const DockWorkspace = React.lazy(() => loadWorkspace().then((m) => ({ default: m.DockWorkspace })));
+const ExportDialog = React.lazy(() => import("./components/export/ExportDialog").then((m) => ({ default: m.ExportDialog })));
+const NewProjectDialog = React.lazy(() =>
+  import("./components/project/NewProjectDialog").then((m) => ({ default: m.NewProjectDialog })),
+);
 
 function getProjectFolderName(fullPath: string): string {
   const parts = fullPath.split(/[/\\]/).filter(Boolean);
@@ -95,6 +101,17 @@ export const App: React.FC = () => {
       disposed = true;
       unlisten?.();
     };
+  }, []);
+
+  // Once the start screen is up, fetch the editor so opening a project does not wait for it.
+  useEffect(() => {
+    const preload = () => void loadWorkspace().catch(() => undefined);
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(preload, { timeout: 2000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = setTimeout(preload, 500);
+    return () => clearTimeout(id);
   }, []);
 
   // An agent started an export: follow it here, and show the Export dialog for the video.
@@ -249,7 +266,9 @@ export const App: React.FC = () => {
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         {project ? (
           <div className="flex-1 min-h-0 overflow-hidden p-1.5">
-            <DockWorkspace />
+            <Suspense fallback={null}>
+              <DockWorkspace />
+            </Suspense>
           </div>
         ) : (
           <Welcome
@@ -272,29 +291,32 @@ export const App: React.FC = () => {
       />
 
       {newProject && (
-        <NewProjectDialog
-          startWithRecording={newProject.withRecording}
-          onClose={() => setNewProject(null)}
-          onCreated={(opened) => {
-            setNewProject(null);
-            loadOpenedProject(opened, opened.projectPath ?? "");
-            setExportDestination("");
-          }}
-        />
+        <Suspense fallback={null}>
+          <NewProjectDialog
+            startWithRecording={newProject.withRecording}
+            onClose={() => setNewProject(null)}
+            onCreated={(opened) => {
+              setNewProject(null);
+              loadOpenedProject(opened, opened.projectPath ?? "");
+              setExportDestination("");
+            }}
+          />
+        </Suspense>
       )}
 
-
       {project && exportOpen && (
-        <ExportDialog
-          aspectRatio={canvas.aspectRatio}
-          editedDurationUs={project.durationUs}
-          destination={exportDestination || defaultExportPath || ""}
-          exportJob={exportJob}
-          onChooseDestination={() => void chooseExportDestination()}
-          onStart={(settings) => void startExport(settings)}
-          onCancel={() => void cancelExport()}
-          onClose={() => setExportOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <ExportDialog
+            aspectRatio={canvas.aspectRatio}
+            editedDurationUs={project.durationUs}
+            destination={exportDestination || defaultExportPath || ""}
+            exportJob={exportJob}
+            onChooseDestination={() => void chooseExportDestination()}
+            onStart={(settings) => void startExport(settings)}
+            onCancel={() => void cancelExport()}
+            onClose={() => setExportOpen(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
@@ -10,9 +10,15 @@ import {
   TranscriptionProgress,
   TranscriptView,
 } from "../../lib/types";
-import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
 import { soundSources } from "../../lib/sequence";
+import { buildTimeIndex, findAt } from "../../lib/transcriptIndex";
 import { Badge, Button, IconButton, Notice, Segmented, cn } from "../ui";
+import { useLineWindow } from "./useLineWindow";
+
+// Loaded when first opened.
+const TranscriptSettingsModal = React.lazy(() =>
+  import("./TranscriptSettingsModal").then((m) => ({ default: m.TranscriptSettingsModal })),
+);
 
 /** Every sound in the project, speech first, as `{ id, label, placed }`; in a short, only the
  *  sounds its own timeline plays. */
@@ -232,6 +238,7 @@ export const TranscriptPanel: React.FC = () => {
   const [showRejected, setShowRejected] = useState(false);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const activeRef = useRef<HTMLSpanElement | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   const handle = openedProject?.projectHandle;
   const captionsVersion = useProjectStore((s) => s.captionsVersion);
@@ -386,19 +393,37 @@ export const TranscriptPanel: React.FC = () => {
   );
   const rejectedCount = suggestions.length - pending.length;
 
+  // Indexed once per transcript, so the playhead finds its word and line by binary search
+  // instead of walking every word on every frame.
+  const wordTimes = useMemo(() => buildTimeIndex(words.map((w) => ({ start: w.editedStartUs, end: w.editedEndUs }))), [words]);
+  const lineTimes = useMemo(() => buildTimeIndex(lines.map((l) => ({ start: l.startUs, end: l.endUs }))), [lines]);
+  const lineOfWord = useMemo(() => {
+    const of = new Int32Array(words.length).fill(-1);
+    lines.forEach((line, n) => line.words.forEach(({ i }) => (of[i] = n)));
+    return of;
+  }, [words, lines]);
+
   // The word and line under the playhead: the panel re-renders when they change, not on
   // every tick of the playhead.
-  const activeIndex = useProjectStore((s) =>
-    words.findIndex(
-      (w) => w.editedStartUs !== null && w.editedEndUs !== null && s.currentTimeUs >= w.editedStartUs && s.currentTimeUs < w.editedEndUs,
-    ),
-  );
-  const playingLine = useProjectStore((s) =>
-    lines.findIndex((line) => line.startUs !== null && line.endUs !== null && s.currentTimeUs >= line.startUs && s.currentTimeUs < line.endUs),
-  );
+  const activeIndex = useProjectStore((s) => findAt(wordTimes, s.currentTimeUs));
+  const playingLine = useProjectStore((s) => findAt(lineTimes, s.currentTimeUs));
+
+  // Only the lines on screen are drawn.
+  const lineKeys = useMemo(() => lines.map((line) => line.words[0].w.id), [lines]);
+  const lineWindow = useLineWindow(lineKeys, scrollerRef);
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: "nearest" });
+    if (activeIndex < 0) return;
+    if (activeRef.current) {
+      activeRef.current.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    // Its line is not drawn: scroll to where it is, then to the word once it is drawn.
+    lineWindow.scrollToLine(lineOfWord[activeIndex] ?? -1);
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => activeRef.current?.scrollIntoView({ block: "nearest" })),
+    );
+    return () => cancelAnimationFrame(frame);
   }, [activeIndex]);
 
   const selectedIds = useMemo(() => {
@@ -763,10 +788,11 @@ export const TranscriptPanel: React.FC = () => {
 
       <div className="flex-1 min-h-0 flex">
       <div
+        ref={scrollerRef}
         tabIndex={0}
         onKeyDown={onKeyDown}
         lang={view?.language === "el" ? "el" : "en"}
-        className="flex-1 min-w-0 overflow-y-auto px-3 py-3 space-y-1 text-reading text-studio-200 outline-none select-none"
+        className="flex-1 min-w-0 overflow-y-auto px-3 py-3 text-reading text-studio-200 outline-none select-none"
       >
         {!view && !running && (
           <p className="text-body text-studio-500 max-w-prose">
@@ -776,29 +802,34 @@ export const TranscriptPanel: React.FC = () => {
             you can keep or cut each one.
           </p>
         )}
-        {lines.map((line, lineIndex) => {
+        {lines.length > 0 && <div style={{ height: lineWindow.above }} aria-hidden />}
+        {lines.slice(lineWindow.first, lineWindow.last).map((line, k) => {
+          const lineIndex = lineWindow.first + k;
           // Each line gets only what concerns it, so a change elsewhere leaves it alone.
           const first = line.words[0].i;
           const last = line.words[line.words.length - 1].i;
           const lo = selectionRange ? Math.max(selectionRange[0], first) : -1;
           const hi = selectionRange ? Math.min(selectionRange[1], last) : -1;
           const inLine = lo <= hi && lo >= 0;
+          const key = lineKeys[lineIndex];
           return (
-            <TranscriptLineRow
-              key={line.words[0].w.id}
-              line={line}
-              lineIndex={lineIndex}
-              playing={lineIndex === playingLine}
-              active={activeIndex >= first && activeIndex <= last ? activeIndex : -1}
-              selFrom={inLine ? lo : -1}
-              selTo={inLine ? hi : -1}
-              editing={editing && editing.index >= first && editing.index <= last ? editing : null}
-              suggestionKind={suggestionKind}
-              activeRef={activeRef}
-              actions={lineActions}
-            />
+            <div key={key} ref={lineWindow.measure(key)} className="pb-1">
+              <TranscriptLineRow
+                line={line}
+                lineIndex={lineIndex}
+                playing={lineIndex === playingLine}
+                active={activeIndex >= first && activeIndex <= last ? activeIndex : -1}
+                selFrom={inLine ? lo : -1}
+                selTo={inLine ? hi : -1}
+                editing={editing && editing.index >= first && editing.index <= last ? editing : null}
+                suggestionKind={suggestionKind}
+                activeRef={activeRef}
+                actions={lineActions}
+              />
+            </div>
           );
         })}
+        {lines.length > 0 && <div style={{ height: lineWindow.below }} aria-hidden />}
       </div>
       {reviewOpen && view && (
         <aside className="w-80 shrink-0 border-l border-studio-800 flex flex-col min-h-0 bg-studio-900" aria-label="Suggestion review">
@@ -945,7 +976,11 @@ export const TranscriptPanel: React.FC = () => {
       )}
       </div>
 
-      {settingsOpen && <TranscriptSettingsModal detected={view?.language ?? null} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <TranscriptSettingsModal detected={view?.language ?? null} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 };
