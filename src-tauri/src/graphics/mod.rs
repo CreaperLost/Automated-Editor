@@ -10,6 +10,7 @@
 //! into (see `sequence::edit`).
 pub mod brands;
 pub mod gate;
+pub mod gsap;
 pub mod library;
 pub mod render;
 pub mod runtime;
@@ -480,6 +481,13 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    // A page written the HyperFrames way links GSAP from a CDN: it gets the local copy instead.
+    let localized = relative
+        .to_ascii_lowercase()
+        .ends_with(".html")
+        .then(|| std::str::from_utf8(contents).ok().and_then(gsap::localize))
+        .flatten();
+    let contents = localized.as_ref().map_or(contents, |html| html.as_bytes());
     std::fs::write(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
     render::sources_changed();
     Ok(())

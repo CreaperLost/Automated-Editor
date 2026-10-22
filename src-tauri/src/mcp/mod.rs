@@ -558,6 +558,7 @@ fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
         serde_json::Value::Object(map) => map,
         _ => Default::default(),
     };
+    lean(&mut schema);
     if tools::takes_project(tool) {
         bind_to_project(&mut schema, tools::NEEDS_PROJECT.contains(&tool.name));
     }
@@ -566,6 +567,56 @@ fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
         .destructive(tools::destructive(tool.name));
     rmcp::model::Tool::new(tool.name, tool.description, Arc::new(schema))
         .with_annotations(annotations)
+}
+
+/// What agents are sent of a tool's schema, without what changes nothing about a call: the
+/// `$schema` and `title` labels, `format` hints, `default: null`; and "a string or null" said
+/// the short way (`type: ["string", "null"]`, the same thing). Agents read every tool's schema
+/// on each connection, so this is paid again and again. The `aeroedits do --help` text keeps
+/// the full schema.
+fn lean(schema: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+    schema.remove("$schema");
+    schema.remove("title");
+    schema.remove("format");
+    if schema.get("default") == Some(&Value::Null) {
+        schema.remove("default");
+    }
+    for (key, value) in schema.iter_mut() {
+        match (key.as_str(), value) {
+            // Maps of names to schemas: the names stay, each schema is made lean.
+            ("properties" | "$defs" | "definitions", Value::Object(named)) => {
+                for value in named.values_mut() {
+                    if let Value::Object(inner) = value {
+                        lean(inner);
+                    }
+                }
+            }
+            ("items" | "additionalProperties" | "not", Value::Object(inner)) => lean(inner),
+            ("anyOf" | "oneOf" | "allOf" | "prefixItems", Value::Array(list)) => {
+                for value in list {
+                    if let Value::Object(inner) = value {
+                        lean(inner);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Then: anyOf [{type: X}, {type: null}] → type [X, null].
+    if let Some(Value::Array(options)) = schema.get("anyOf") {
+        let null = serde_json::json!({ "type": "null" });
+        if options.len() == 2 && options.contains(&null) {
+            let other = options.iter().find(|o| **o != null).cloned();
+            if let Some(Value::Object(other)) = other {
+                if let (1, Some(Value::String(kind))) = (other.len(), other.get("type")) {
+                    let kind = kind.clone();
+                    schema.remove("anyOf");
+                    schema.insert("type".into(), serde_json::json!([kind, "null"]));
+                }
+            }
+        }
+    }
 }
 
 /// Adds the `project` argument [`tools::call`] takes out before a tool sees its arguments.
@@ -580,9 +631,7 @@ fn bind_to_project(schema: &mut serde_json::Map<String, serde_json::Value>, requ
             "project".into(),
             json!({
                 "type": "string",
-                "description": "The `project` id from project_info or status. The call is \
-                    refused if another project is open now, so a project switch can't redirect \
-                    it.",
+                "description": "The open project's id, from status.",
             }),
         );
     }
@@ -1235,5 +1284,54 @@ mod tests {
         let back = ask(call(6));
         assert!(text(&back).contains("Hello there."), "{back}");
         running.stop.cancel();
+    }
+
+    #[test]
+    fn lean_schemas_keep_what_a_call_can_be() {
+        let mut schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Args",
+            "type": "object",
+            "properties": {
+                // Parameters named like schema words stay.
+                "title": { "type": "string", "description": "kept" },
+                "format": { "anyOf": [{ "type": "integer", "format": "uint64" }, { "type": "null" }],
+                            "default": null, "minimum": 0 },
+                "kind": { "anyOf": [{ "$ref": "#/$defs/Kind" }, { "type": "null" }], "default": null },
+            },
+            "required": ["title"],
+            "$defs": { "Kind": { "title": "Kind", "enum": ["a", "b"], "default": "a" } },
+        });
+        let Value::Object(ref mut map) = schema else {
+            unreachable!()
+        };
+        lean(map);
+        assert_eq!(
+            schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "kept" },
+                    "format": { "type": ["integer", "null"], "minimum": 0 },
+                    "kind": { "anyOf": [{ "$ref": "#/$defs/Kind" }, { "type": "null" }] },
+                },
+                "required": ["title"],
+                "$defs": { "Kind": { "enum": ["a", "b"], "default": "a" } },
+            })
+        );
+        let mut simple =
+            json!({ "anyOf": [{ "type": "string" }, { "type": "null" }], "default": null });
+        let Value::Object(ref mut map) = simple else {
+            unreachable!()
+        };
+        lean(map);
+        assert_eq!(simple, json!({ "type": ["string", "null"] }));
+    }
+
+    #[test]
+    fn the_tool_list_stays_small() {
+        // Agents read it on every connection: 84,414 characters before 23 Oct 2026, 72,722 after.
+        let size = serde_json::to_string(&tool_list()).unwrap().len();
+        assert!(size < 75_000, "the tool list grew to {size} characters");
     }
 }

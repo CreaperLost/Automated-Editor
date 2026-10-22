@@ -75,7 +75,7 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| 56 tools' schemas are sent on every connection; cost never measured | Log: backlog #16 | [AGT-4](roadmap.md#agt-4) |
+| 55 tools' schemas are sent on every connection: 72,722 characters after the 23 Oct trim; a further cut would mean shorter descriptions or on-demand schemas | Code: `mcp/mod.rs` `lean` | [AGT-4](roadmap.md#agt-4) |
 | No readiness report without a project (versions, runtimes, why something is unavailable); "not connected", "no project", "runtime missing" and "failed" look alike | Log; research: Resolve, Premiere MCPs | [AGT-4](roadmap.md#agt-4) |
 | No long-job contract: progress exists, cancellation and resumable analysis don't | Code: actions dispatch blocking work with a progress callback | [AGT-4](roadmap.md#agt-4) |
 | No per-run report of time and cost (0 matches for `cost|usd|token_usage` in `src/ai`) | Code | [EVAL-1](roadmap.md#eval-1) |
@@ -128,7 +128,6 @@ The research is clear that sound is **placement and art direction, not library b
 | Gap | Evidence | Fix |
 |---|---|---|
 | Graphics render at **30 fps and 1920 px long side** whatever the export: a 4K/60 export gets no extra detail or motion samples | Code: `graphics/render.rs` (`RENDER_FPS`, `RENDER_LONG_SIDE`) | [GFX-1](roadmap.md#gfx-1) |
-| Graphics can't use GSAP yet: authoring rules allow Web Animations/CSS and no network. Decided 21 Oct: vendor GSAP locally (HyperFrames' default runtime) | Code: `graphic_write_file` rules, `graphics/gate.rs` | [GFX-2](roadmap.md#gfx-2) |
 | Six full-screen 4–6 s cards. No template for the most common tutorial jobs: highlight real UI, a word-timed emphasis, a sequence of steps, before/after | Code: `src-tauri/graphics/templates/` | [GFX-3](roadmap.md#gfx-3) |
 | No variants: a revision overwrites; no Compare / Use; ~20 s re-render with no draft preview | Code; log | [GFX-4](roadmap.md#gfx-4) |
 | A graphic can't dim or blur the footage under it (a transparent HTML clip can't sample what is composited later); that is compositor work | Research | [FX-2](roadmap.md#fx-2) |
@@ -190,7 +189,7 @@ performance on a real `.aero` with `perf.rs`. → [VER-1](roadmap.md#ver-1).
 | C2 | "No keystroke capture" vs keyboard telemetry v1 | **Fixed** in [ai-readiness.md](plans/ai-readiness.md#decisions-2026-10-13): no typed text is ever captured |
 | C3 | Graphics v1 says a placement stores a word anchor; the code resolves the word to a time once | **Fixed** in the plan text; storing the anchor is part of [PLAN-1](roadmap.md#plan-1) |
 | C4 | "A brand kit feeds every caption" | Marked not yet true; [CAP-1](roadmap.md#cap-1) |
-| C5 | Research said our HyperFrames skills cover "3D, shaders"; our gate and authoring rules allow only WAAPI/CSS | Open → [GFX-2](roadmap.md#gfx-2) |
+| C5 | Research said our HyperFrames skills cover "3D, shaders"; our gate and authoring rules allowed only WAAPI/CSS | GSAP allowed 23 Oct ([GFX-2](roadmap.md#gfx-2)); 3D and shaders still not |
 | C6 | Phase 2 handoff still said "nothing is committed" | Removed (historical doc deleted) |
 | C7 | Backlog said the cut-out layout needs task 10; it needs the matte | Fixed: [LAY-4](roadmap.md#lay-4) depends on [FX-1](roadmap.md#fx-1) |
 | C8–C10 | Factual errors in the video research (Tao's 49 min is a first draft, 3–4 h total; "106 SFX", "12 hours / 4.5B tokens" not in the captions; two taxonomies conflated; tools named that don't exist; Convex is really Mike Cann's Tandem) | Fixed: [research/creator-workflows.md](research/creator-workflows.md) uses only the corrected facts |

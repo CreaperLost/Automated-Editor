@@ -13,6 +13,12 @@ whole from the first frame to the last and fade or slide it only when
 `root.dataset.entrance === "ease"`; mark one that covers only part of the frame with
 `data-overlay` on the root (without it the app treats it as full screen and always cuts it).
 
+Motion: GSAP 3.15 (HyperFrames' own) works offline: load it by file name, `<script
+src="gsap.min.js">` (a plugin as `SplitText.min.js`, `CustomEase.min.js`...; a CDN link to GSAP is
+turned into that name), build one paused timeline as long as the clip and register it as
+`window.__timelines["graphic"]`. `blank` starts that way. The Web Animations API works too, with
+`data-no-timeline` on the root. Nothing else may reach the network.
+
 Look first at what exists: the list below has the bundled templates and the user's library,
 each library item with a `useWhen` line; pick one whose `useWhen` fits and fill in its
 variables. Write a composition of your own (`graphic_add` with `blank`, then

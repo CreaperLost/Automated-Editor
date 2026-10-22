@@ -7,6 +7,13 @@ search, [FTG-1](../roadmap.md#ftg-1).
 
 ## The goal
 
+**22 Oct: two features.** **Shorts** start from a take recorded outside the app and put anything
+under it: the user's camera, the long video's graphics the agent picks (re-made for 9:16), new
+graphics (news, a new feature, filler), the long video's footage, outside video as B-roll. This
+comes first ([SHT-5](../roadmap.md#sht-5), [SHT-6](../roadmap.md#sht-6)). **Clips** cut the best
+moments out of the long video (the idea-first model below, [SHT-1](../roadmap.md#sht-1)). Both use
+the one `Short` model and the same panels.
+
 Start from an **idea**, gather every part of the video that serves it, cut it down to what is
 essential, then dress it with graphics. And: make a short from a **new take** (camera + mic,
 30–60 s) that retells one part of a long video, with the matching footage from the long video

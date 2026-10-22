@@ -117,11 +117,9 @@ Rough order; the first four are the foundations the Later tier builds on.
 - **Decision:** [Q-RULES](decisions.md#q-rules).
 
 <a id="agt-4"></a>
-### AGT-4 · Readiness report, schema cost and long jobs — S/M
+### AGT-4 · Readiness report and long jobs — S/M
 
-- **Do:** measure the 56 tools' schema cost in Claude Code, Codex and the Claude app; if
-  material, a small default set plus searchable on-demand schemas (names and CLI unchanged).
-  A read-only `readiness` that works without a project (app/bridge versions, project and
+- **Schema cost: done 23 Oct** (see Done). **Left:** a read-only `readiness` that works without a project (app/bridge versions, project and
   revision, models and runtimes installed, keys present yes/no, what is unavailable and why).
   Cancellation for long jobs. Smaller candidates to weigh here: a "state screenshot" (canvas +
   timeline + inspector at one moment), a time budget per stage that stops and asks, a diagnose
@@ -133,15 +131,6 @@ Rough order; the first four are the foundations the Later tier builds on.
 - **Do:** keep 30 fps / 1920 px for preview; at export, render graphics at the export's fps and
   slot size; both in the cache key; export never silently uses a draft.
 - **Done when:** a 4K/60 export of a fast text graphic is visibly sharper and smoother than today.
-
-<a id="gfx-2"></a>
-### GFX-2 · GSAP in the graphics runtime — S/M
-
-- **Decided (21 Oct): GSAP first**, as HyperFrames' default runtime. Vendor a pinned GSAP into
-  the graphics runtime (no network, so the gate still holds), render one composition under the
-  gate, check it seeks and renders deterministically, then allow it in `graphic_write_file`, the
-  skill and the templates. Other runtimes (Lottie, three.js) only when a template needs one.
-- **Decision:** [Q-ANIM](decisions.md#q-anim).
 
 <a id="cap-1"></a>
 ### CAP-1 · Captions as typography — M
@@ -275,17 +264,38 @@ Grouped by area. Order within a group is the suggested order.
 
 ### Shorts — plan: [plans/shorts.md](plans/shorts.md)
 
+**Decided 22 Oct:** two features in two tabs that share their parts. **Shorts** start from a take
+recorded outside the app (camera and voice); everything else goes under it. **Clips** cut the best
+moments out of the long video (what the Shorts tab does today besides takes). Shorts from a take
+come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) after.
+
+<a id="sht-5"></a>
+- **SHT-5 · Split into a Shorts tab and a Clips tab (S/M).** Shorts opens on "new from a take"
+  (import the recording, then transcribe → clean → footage → graphics → export); Clips opens on
+  "find moments in the video". One `Short` model and the same panels (timeline, look, captions,
+  export) behind both: reused, not copied ([QUAL-1](#qual-1)). The agent's templates follow the
+  names (`take-shorts` → `shorts`, today's `shorts` → `clips`).
+<a id="sht-6"></a>
+- **SHT-6 · Everything under a take (M).** Today a take short gets only stretches of the long
+  video. Add, each placed at the take's words and reviewable as a batch: **the long video's
+  graphics**, listed for the agent with what they say and where they play, picked by it and
+  re-rendered for the short's slot (the most important source for tutorial shorts); **new
+  graphics** (news, a new feature, filler cards) from the library or written for the short;
+  **outside video** as B-roll (imported files, sound ducked like footage). The user's camera stays
+  the default where nothing else plays. Gaming shorts use the same flow (mostly the long video's
+  footage or an outside video).
 <a id="sht-1"></a>
-- **SHT-1 · Idea-first shorts (L).** A short is an idea plus pieces gathered from anywhere in the
-  video (and, for take shorts, a spine recording with footage under its words). Depends on FTG-1.
+- **SHT-1 · Idea-first clips (L).** A clip is an idea plus pieces gathered from anywhere in the
+  video. Depends on FTG-1. Comes after the take-first Shorts work.
 <a id="sht-2"></a>
 - **SHT-2 · Caption shaping in shorts (M).** Breaks, emphasis and hidden words per short; text
   fixes shared with the video.
 <a id="sht-3"></a>
 - **SHT-3 · Dress step (S/M).** Graphics into the short's slots as the last step, as a review batch.
 <a id="sht-4"></a>
-- **SHT-4 · Take-short follow-ups (S/M).** Footage picker in the UI, speed/freeze fit modes,
-  per-short ducking amount.
+- **SHT-4 · Take-short follow-ups (S/M).** Footage picker in the UI (choose or change what plays
+  under a sentence yourself, not only through the agent), speed/freeze fit modes, per-short
+  ducking amount.
 
 ### Layouts — plan: [plans/layouts.md](plans/layouts.md)
 
@@ -397,6 +407,17 @@ Grouped by area. Order within a group is the suggested order.
   per track at full view (O01); two alternating encoder threads for the non-wgpu preview path
   (O02).
 
+### Code health
+
+<a id="qual-1"></a>
+- **QUAL-1 · Code reuse check (M), later.** Asked for 22 Oct: the same logic is often written
+  again instead of shared, which costs time and causes bugs that are fixed in one copy only.
+  Sweep the Rust passes, the MCP actions vs the UI commands, and the front-end panels and dialogs
+  for repeated logic; move it into shared helpers with tests; note the patterns to reuse in
+  `architecture.md` so new work starts from them. Seen so far: the same Tauri event-listener
+  effect written out in `App.tsx` and several panels; line-ending-safe edits; Clips and Shorts
+  must share one set of short panels (SHT-5).
+
 ### Ideas not yet scheduled
 
 Kept so they aren't lost; promote one into a numbered item when a real edit needs it.
@@ -418,6 +439,22 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — <a id="gfx-2"></a>**GFX-2** GSAP in graphics: GSAP 3.15.0 (the version
+  HyperFrames 0.8.162 links from its CDN) is fetched from npm onto the user's computer once
+  (sha256-pinned, at runtime install or when a graphic first loads it; never in the repo or
+  installer, since its licence terms page did not load) and staged beside a graphic for the gate
+  and every render (`graphics/gsap.rs`). A CDN link to GSAP is rewritten to the local file name
+  when a page is written, and the network check lets it through, so a composition written the
+  HyperFrames way passes without a rewrite. `blank` is now a GSAP starter (one paused timeline in
+  `window.__timelines["graphic"]`); the six cards stay on the Web Animations API. Tested live:
+  the GSAP blank, written with a jsDelivr link, passes all 12 gate checks; all six cards still
+  pass. **AGT-4 (schema cost)** the MCP tool list agents read on every connection went from
+  84,414 to 72,722 characters (−14 %, ~2,900 tokens): `$schema`, `title`, `format` and
+  `default: null` are left out of what agents are sent, "X or null" is written as
+  `type: [X, "null"]`, the `project` parameter is explained once in the rules, and one
+  duplicated description shortened. Checked: all 55 tools take exactly the same arguments
+  (names, types, required, allowed values) and keep every description; a test keeps the list
+  under 75,000 characters. `aeroedits do --help` keeps the full schemas.
 - **22 Oct 2026** — <a id="perf-1"></a>**PERF-1** transcript panel: words and lines are indexed
   once per transcript (`lib/transcriptIndex.ts`, binary search for the playing word and line) and
   only the lines on screen are drawn (`useLineWindow`, measured heights, spacers; a hidden panel

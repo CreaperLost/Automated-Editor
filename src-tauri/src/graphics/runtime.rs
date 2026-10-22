@@ -16,6 +16,10 @@ pub const NODE_VERSION: &str = "22.23.3";
 /// The version HyperFrames 0.8.162 itself pins (`CHROME_VERSION` in its browser manager).
 pub const CHROME_VERSION: &str = "152.0.7977.30";
 pub const HYPERFRAMES_VERSION: &str = "0.8.162";
+/// GSAP, the version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`): fetched from
+/// npm onto this computer when a graphic first uses it, never shipped with the app.
+pub const GSAP_VERSION: &str = "3.15.0";
+const GSAP_SHA256: &str = "d2e33ad202d4811e9084883f7ff9a27967ac4095caef51ca4c9d20697a253b1c";
 
 const PACKAGE_JSON: &str = include_str!("../../graphics/runtime/package.json");
 const PACKAGE_LOCK: &str = include_str!("../../graphics/runtime/package-lock.json");
@@ -284,9 +288,40 @@ pub fn install(
         });
         npm_ci(&node_dir, &platform, &package_dir, cancel)?;
     }
+    progress(InstallProgress {
+        step: "GSAP".into(),
+        bytes_done: 0,
+        bytes_total: None,
+    });
+    gsap_dist(cancel)?;
     let marker = serde_json::to_string_pretty(&pinned).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(MARKER), marker).map_err(|e| e.to_string())?;
     Ok(status())
+}
+
+/// The folder holding GSAP's files (`gsap.min.js`, its plugins), fetched once (1.7 MB) if
+/// missing. Graphics rendering at once wait for one fetch.
+pub fn gsap_dist(cancel: &AtomicBool) -> Result<PathBuf, String> {
+    static FETCHING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    let dir = runtime_dir();
+    let target = dir.join("gsap").join(GSAP_VERSION);
+    let dist = target.join("dist");
+    if dist.join("gsap.min.js").is_file() {
+        return Ok(dist);
+    }
+    let _one = FETCHING.lock();
+    if dist.join("gsap.min.js").is_file() {
+        return Ok(dist);
+    }
+    std::fs::create_dir_all(dir.join("gsap")).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let download = Download {
+        url: format!("https://registry.npmjs.org/gsap/-/gsap-{GSAP_VERSION}.tgz"),
+        sha256: GSAP_SHA256,
+        folder: "package".into(),
+    };
+    fetch_unpacked(&download, &dir, &target, "GSAP", cancel, &mut |_| {})
+        .map_err(|e| format!("GSAP is needed by this graphic and could not be fetched: {e}"))?;
+    Ok(dist)
 }
 
 /// Removes the whole runtime.

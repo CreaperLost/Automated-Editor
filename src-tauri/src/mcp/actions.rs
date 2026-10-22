@@ -334,9 +334,11 @@ pub static ACTIONS: [ToolDef; 39] = [
             that fills the frame never eases in or out: show it whole from the first frame to \
             the last, and fade or slide it in and out only when the root's data-entrance is \
             \"ease\" (the app sets that only for an overlay over the full-screen camera; mark a \
-            lower third or callout with data-overlay on the root); no network (no CDN scripts \
-            or web fonts); Web Animations or CSS, finite and paused; editable text as \
-            data-composition-variables.",
+            lower third or callout with data-overlay on the root); motion with GSAP 3.15 \
+            (`<script src=\"gsap.min.js\">`, plugins by file name; a CDN link to GSAP is made \
+            local) as one paused timeline in window.__timelines[\"graphic\"], or Web Animations \
+            with data-no-timeline on the root; no other network (no CDN scripts or web fonts); \
+            editable text as data-composition-variables.",
         schema: schema::<GraphicWriteArgs>,
         read_only: false,
         run: graphic_write_file,
@@ -1742,12 +1744,8 @@ pub struct FillerArgs {
     /// Which to cut: `filler`, `retake`. Default both.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
-    /// Whose review adds to the rules. `auto` (default): `openrouter` when the user has a key
-    /// set, else `local` when the built-in model is downloaded, else `in-house`. `local`:
-    /// the app's built-in model reads the flagged windows now (free, nothing leaves the
-    /// computer). `in-house`: the one you saved with `fillers_review` (nothing leaves the
-    /// computer). `openrouter`: the app sends the transcript to OpenRouter or OpenAI now (the
-    /// user's key, paid).
+    /// Whose review adds to the rules (see the tool's description). `local` and `in-house` send
+    /// nothing off the computer; `openrouter` uses the user's paid key.
     #[serde(default)]
     pub review: Option<FillerReview>,
     /// false: only list them. Default true.

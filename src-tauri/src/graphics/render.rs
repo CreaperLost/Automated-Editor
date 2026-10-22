@@ -662,6 +662,8 @@ fn render_now(
             spec.entrance,
         );
         std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
+        // GSAP, when the composition loads it, beside it (fetched once).
+        super::gsap::stage(&stage, cancel)?;
         let source = super::read_source(&spec.dir)?;
         // The brand kit fills the colours the graphic left to it and sets the font.
         let values = match spec.brand() {

@@ -15,8 +15,12 @@
     fine either way.
   - A graphic that holds to the end of its clip (an end card) says so with data-holds-end on
     the root and, when it eases, fades in only.
-  - No network: no CDN scripts or web fonts. Use the Web Animations API (element.animate,
-    finite, fill "both", paused) or CSS; put any images next to this file.
+  - Motion: GSAP 3.15 works offline. Load it by file name (<script src="gsap.min.js">, a plugin
+    as SplitText.min.js, CustomEase.min.js...); AeroEdits puts the files beside this one when
+    it renders, and turns a CDN link to GSAP into that name. Build one paused timeline as long
+    as the clip and register it as window.__timelines["graphic"]; HyperFrames seeks it. The Web
+    Animations API (paused, finite) works too: then mark the root data-no-timeline.
+  - No other network: no CDN scripts or web fonts; put any images next to this file.
   - Declare what should be editable in data-composition-variables on <html>; read values with
     data-var-text / var(--id) or window.__hyperframes.getVariables().
 -->
@@ -64,12 +68,12 @@
         font-weight: 800;
       }
     </style>
+    <script src="gsap.min.js"></script>
   </head>
   <body>
     <div
       id="root"
       data-composition-id="graphic"
-      data-no-timeline
       data-start="0"
       data-width="1920"
       data-height="1080"
@@ -82,27 +86,18 @@
     </div>
     <script>
       const root = document.getElementById("root");
-      const length = (parseFloat(root.dataset.duration) || 4) * 1000;
-      const outAt = Math.max(1200, length - 450);
+      const length = parseFloat(root.dataset.duration) || 4;
+      // One paused timeline, exactly as long as the clip; HyperFrames seeks it.
+      const tl = gsap.timeline({ paused: true });
+      tl.from("#title", { y: "4vmin", opacity: 0, duration: 0.6, ease: "power3.out" }, 0.15);
       // Full screen: cut in and out unless AeroEdits asks for an ease (see the note above).
-      const eases = root.dataset.entrance === "ease";
-      const fade = (id, delay) =>
-        document
-          .getElementById(id)
-          .animate(
-            [
-              { opacity: 0 },
-              { opacity: 1, offset: 300 / length },
-              { opacity: 1, offset: outAt / length },
-              { opacity: 0 },
-            ],
-            { duration: length, delay, fill: "both", iterations: 1 },
-          )
-          .pause();
-      if (eases) {
-        fade("card-back", 0);
-        fade("layout", 0);
+      if (root.dataset.entrance === "ease") {
+        tl.from(["#card-back", "#layout"], { opacity: 0, duration: 0.3, ease: "power1.out" }, 0);
+        tl.to(["#card-back", "#layout"], { opacity: 0, duration: 0.45, ease: "power1.in" }, Math.max(1.2, length - 0.45));
       }
+      tl.set({}, {}, length);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["graphic"] = tl;
     </script>
   </body>
 </html>

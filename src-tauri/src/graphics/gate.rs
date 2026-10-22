@@ -292,7 +292,8 @@ fn network_refs(files: &[(String, String)]) -> Vec<String> {
                     .take_while(|c| !c.is_whitespace() && !matches!(c, ')' | '<' | '>'))
                     .take(80)
                     .collect();
-                if reference.contains("www.w3.org/") {
+                // XML namespaces, and GSAP from a CDN (the render uses the local copy).
+                if reference.contains("www.w3.org/") || super::gsap::is_cdn_link(&reference) {
                     continue;
                 }
                 found.push(format!("{path}: {reference}"));
@@ -1145,7 +1146,9 @@ fn one_run(
             run.entrance,
         );
         let html = super::with_defaults(&sized, &run.values)?;
-        std::fs::write(stage.join(super::ENTRY), html).map_err(|e| e.to_string())
+        std::fs::write(stage.join(super::ENTRY), html).map_err(|e| e.to_string())?;
+        // GSAP, when the composition loads it, beside it (fetched once).
+        super::gsap::stage(&stage, cancel)
     })();
     if let Err(error) = staged {
         return RunResult {
@@ -1582,6 +1585,37 @@ mod tests {
     /// fails for its reasons, and an unchanged graphic answers from the cache.
     /// `AEROEDITS_GRAPHICS_RUNTIME=<installed runtime> cargo test --lib graphics_gate_real --
     /// --ignored --nocapture` (without it, the app's own runtime is used).
+    #[test]
+    #[ignore]
+    fn a_gsap_graphic_passes_the_gate_real() {
+        // Written the HyperFrames way, GSAP from its CDN: the file gets the local name, the
+        // render fetches GSAP once and stages it, and the graphic passes as it is.
+        let root = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let asset = super::super::create(root.path(), "blank", None, &Map::new()).unwrap();
+        let dir = super::super::folder(root.path(), &asset.id);
+        let html = std::fs::read_to_string(dir.join(super::super::ENTRY))
+            .unwrap()
+            .replace(
+                r#"<script src="gsap.min.js"></script>"#,
+                r#"<script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>"#,
+            );
+        assert!(html.contains("cdn.jsdelivr.net"));
+        super::super::write_file(&dir, super::super::ENTRY, html.as_bytes()).unwrap();
+        let written = std::fs::read_to_string(dir.join(super::super::ENTRY)).unwrap();
+        assert!(written.contains(r#"<script src="gsap.min.js">"#) && !written.contains("cdn."));
+        let cache = super::super::cache_folder(root.path(), &asset.id);
+        let report = run(&dir, &cache, &cancel, &mut |_: f64, _: &str| {}).unwrap();
+        eprintln!(
+            "gsap blank ({} s):\n  {}",
+            report.seconds,
+            report.lines().join("\n  ")
+        );
+        assert!(report.passed, "the GSAP blank fails the gate");
+        // GSAP lives beside the renderer, not in the project.
+        assert!(!dir.join("gsap.min.js").exists());
+    }
+
     #[test]
     #[ignore]
     fn graphics_gate_real() {

@@ -1,8 +1,9 @@
 //! The graphics the app ships, made for tutorials. Each is a full-screen HyperFrames
 //! composition with a transparent page and a card that fills the frame, so it cuts in and out
 //! (it fades only when the app asks, see [`super::Entrance`]), laid out in
-//! the viewport so it fits a 16:9 video and a 9:16 short alike, animated with the Web
-//! Animations API (no library, no network), with its text and colours as variables.
+//! the viewport so it fits a 16:9 video and a 9:16 short alike, with its text and colours as
+//! variables. The cards animate with the Web Animations API; `blank`, the start of a graphic of
+//! the agent's own, with GSAP (`super::gsap`), as HyperFrames' compositions do.
 use serde::Serialize;
 
 pub struct Template {
