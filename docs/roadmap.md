@@ -407,6 +407,41 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-3, SHT-2; Clips (SHT-1) afte
   per track at full view (O01); two alternating encoder threads for the non-wgpu preview path
   (O02).
 
+### Agent cost and quality — 99 % of the quality for 10 % of the price
+
+Raised 23 Oct as long-term direction. Every item here is measured against
+[EVAL-1](#eval-1): keep a cheaper path only when the edit stays as good.
+
+<a id="cost-1"></a>
+- **COST-1 · Review boards (M).** One image per minute of video: 60 small tiles, one a second,
+  in order (the storyboard's sheet, made denser), so an agent reviews a minute for the price of
+  one image. Then cheaper still: a coarse, compressed board first (fewer, smaller tiles, JPEG or
+  WebP) for the rough idea, and a sharper board of one stretch only where something looks off.
+  Measure tokens per reviewed minute and what the agent still catches.
+<a id="cost-2"></a>
+- **COST-2 · Tools on demand (S/M).** Today 55 tools, 72,722 characters (~18k tokens) in the
+  list, about 330 tokens a tool. Claude Code already loads an MCP tool's schema only when it is
+  used; other clients send the whole list. Measure per client (Claude app, Codex, Claude Code),
+  then send a small core set (status, template, scan, transcribe, the cleanup passes, chapters,
+  check, export) with the rest named in a line each and described on request.
+<a id="cost-3"></a>
+- **COST-3 · Cheaper reviewers (M).** Hand narrow judgement jobs (looking at a board, filler
+  windows, chapter titles, checking a graphic) to a smaller model or a lower reasoning effort,
+  through a subagent or the app's own OpenRouter pass with a cheap model; the main agent keeps
+  the decisions. Each swap kept only if EVAL-1 says the result is as good.
+<a id="sty-2"></a>
+- **STY-2 · Styles from references (M).** The agent studies a reference (a video as review
+  boards, images, a channel's thumbnails) and writes a style kit, a brand kit and two or three
+  graphic templates in that style; the user picks what to keep, and it goes into the library.
+  Cheap because it reads boards (COST-1), not whole videos. After STY-1.
+<a id="loop-1"></a>
+- **LOOP-1 · The user and the agent improve the app together (L).** Aim: a loop where each edit
+  makes the next one better: the app, the bundled material (templates, styles, rules) and the
+  taste. Records what the user changed after the agent (proposals accepted or rejected, cuts
+  restored, graphics redone) and turns patterns into proposed changes to the rules file
+  ([AGT-3](#agt-3)), templates and style kits, each accepted by the user. Data-driven, never
+  free-text rules learned on the side (the 17 Oct condition for bringing learning back).
+
 ### Code health
 
 <a id="qual-1"></a>
