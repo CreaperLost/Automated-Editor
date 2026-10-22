@@ -129,11 +129,15 @@ fn transcript_clock(
 fn refresh_playback(state: &AppState) {
     let opened = state.opened_project.lock();
     if let Some(reader) = opened.as_ref() {
-        if reader.history().current.captions.enabled {
-            let _ = state
-                .playback
-                .lock()
-                .apply_document(&reader.history().current);
+        let document = &reader.history().current;
+        let mut playback = state.playback.lock();
+        // A short in focus shows captions by its own setting, whatever the video's.
+        let short_captions = playback
+            .short_focus()
+            .and_then(|id| document.shorts.iter().find(|s| s.id == id))
+            .is_some_and(|short| short.layout.captions);
+        if document.captions.enabled || short_captions {
+            let _ = playback.apply_document(document);
         }
     }
 }
@@ -403,6 +407,22 @@ pub fn transcript_set_word_text_impl(
     refresh_playback(state);
     current_view(state, &project_handle, &track_id, short.as_deref())?
         .ok_or_else(|| "Transcript disappeared".into())
+}
+
+/// Sets the text of several words in one load and save: all of them, or none when one fails.
+pub fn transcript_set_words_text_impl(
+    state: &AppState,
+    project_handle: &str,
+    track_id: &str,
+    fixes: &[(String, String)],
+) -> Result<(), String> {
+    modify_transcript(state, project_handle, track_id, |t| {
+        fixes
+            .iter()
+            .try_for_each(|(word_id, text)| t.set_word_text(word_id, text))
+    })?;
+    refresh_playback(state);
+    Ok(())
 }
 
 /// Takes the punctuation off every word of the transcript (captions follow).

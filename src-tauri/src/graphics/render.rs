@@ -372,9 +372,35 @@ pub fn lookup(spec: &Spec) -> Lookup {
         return Lookup::Ready(path);
     }
     request(spec, &hash);
-    match latest(spec) {
+    match latest_cached(spec) {
         Some((path, length)) => Lookup::Stale(path, length),
         None => Lookup::Pending,
+    }
+}
+
+/// [`latest`], found once per generation (a render finishing or a source changing bumps it):
+/// a graphic waiting for its render asks on every frame it plays.
+fn latest_cached(spec: &Spec) -> Option<(PathBuf, u64)> {
+    type Found = HashMap<(PathBuf, String), Option<(PathBuf, u64)>>;
+    static LATEST: OnceLock<Mutex<(u64, Found)>> = OnceLock::new();
+    let now = generation();
+    let key = (spec.cache.clone(), spec.prefix());
+    let mut found = LATEST
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if found.0 != now {
+        *found = (now, HashMap::new());
+    }
+    match found.1.get(&key) {
+        // Cleaning the cache may have taken it since.
+        Some(Some((path, length))) if path.is_file() => Some((path.clone(), *length)),
+        Some(None) => None,
+        _ => {
+            let latest = latest(spec);
+            found.1.insert(key, latest.clone());
+            latest
+        }
     }
 }
 

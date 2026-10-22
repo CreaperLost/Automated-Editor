@@ -4103,7 +4103,7 @@ fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> Result<u64, 
 fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicSetArgs = params(args)?;
     let before = opened(ctx)?;
-    graphic_folder(ctx, &args.graphic)?;
+    let dir = graphic_folder(ctx, &args.graphic)?;
     if args.remove {
         commands::project_media_remove_impl(
             ctx.state,
@@ -4113,6 +4113,18 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         )?;
         let line = format!("Removed graphic {} and its clips.", args.graphic);
         return text(applied(ctx, "graphic_set", &before, vec![line])?);
+    }
+    // What can be wrong with the call is found before anything changes.
+    if args.slot.is_some() && args.short.is_none() {
+        return Err("`slot` needs `short`".into());
+    }
+    if let Some(brand) = &args.brand {
+        crate::graphics::brand_choice(&crate::graphics::brands::dir(), brand)?;
+    }
+    if !args.variables.is_empty() {
+        let source = crate::graphics::read_source(&dir)?;
+        let declared = crate::graphics::declarations(&dir)?;
+        crate::graphics::merge_variables(&declared, &source.variables, &args.variables)?;
     }
     let mut lines = Vec::new();
     // A take short's graphics are on its own timeline: moves and lengths happen there, at its
@@ -4162,114 +4174,127 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         (None, None, _) => None,
         _ => return Err("Give one of `moveToUs` or `moveToWord`".into()),
     };
-    if let Some(target) = target {
-        let now = current(ctx)?;
-        let (clip, start) = clip_of(ctx)?;
-        commands::project_sequence_edit_impl(
-            ctx.state,
-            now.handle,
-            now.revision,
-            crate::sequence::edit::SequenceEdit::MoveClips {
-                clip_ids: vec![clip],
-                delta_us: target as i64 - start as i64,
-                track_id: None,
-                anchor_id: None,
-            },
-            on_take.clone(),
-        )?;
-        lines.push(format!(
-            "Moved graphic {} to {}.",
-            args.graphic,
-            clock(target)
-        ));
-    }
-    if !args.variables.is_empty() || args.name.is_some() || args.brand.is_some() {
-        let updated = commands::graphics::project_graphic_set_impl(
-            ctx.state,
-            before.handle.clone(),
-            before.revision,
-            args.graphic.clone(),
-            args.variables.clone(),
-            args.name.clone(),
-            args.brand.clone(),
-        )?;
-        lines.push(format!(
-            "Graphic {} \"{}\": {}{}.",
-            args.graphic,
-            updated.graphic.name,
-            serde_json::to_string(&updated.graphic.variables).unwrap_or_default(),
-            match &updated.graphic.brand {
-                Some(kit) => format!(", brand kit {kit}"),
-                None => ", the project's brand kit".into(),
-            }
-        ));
-    }
-    match (&args.short, args.slot) {
-        (Some(wanted), Some(slot)) => {
+    // Each change is its own step on the revision the one before left. One that still fails
+    // after others went in says what did go in.
+    let steps = (|| -> Result<(), String> {
+        if let Some(target) = target {
             let now = current(ctx)?;
-            let (title, shorts) = with_reader(ctx.state, |reader| {
-                let document = reader.document();
-                let mut shorts = document.shorts.clone();
-                let short = shorts
-                    .iter_mut()
-                    .find(|s| s.id == *wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
-                    .ok_or_else(|| format!("No short {wanted} (see shorts)"))?;
-                let timeline = crate::shorts::short_timeline(document, short)?;
-                let clips: Vec<String> = timeline
-                    .sequence
-                    .clips()
-                    .filter(|(_, c)| c.asset == args.graphic)
-                    .map(|(_, c)| c.id.clone())
-                    .collect();
-                if clips.is_empty() {
-                    return Err(format!(
-                        "Graphic {} does not play in short \"{}\"",
-                        args.graphic, short.title
-                    ));
-                }
-                for clip in clips {
-                    if slot == crate::shorts::GraphicSlot::Full {
-                        short.layout.graphic_slots.remove(&clip);
-                    } else {
-                        short.layout.graphic_slots.insert(clip, slot);
-                    }
-                }
-                Ok((short.title.clone(), shorts))
-            })?;
-            commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
+            let (clip, start) = clip_of(ctx)?;
+            commands::project_sequence_edit_impl(
+                ctx.state,
+                now.handle,
+                now.revision,
+                crate::sequence::edit::SequenceEdit::MoveClips {
+                    clip_ids: vec![clip],
+                    delta_us: target as i64 - start as i64,
+                    track_id: None,
+                    anchor_id: None,
+                },
+                on_take.clone(),
+            )?;
             lines.push(format!(
-                "In short \"{title}\" it plays {}.",
-                match slot {
-                    crate::shorts::GraphicSlot::Full => "over the whole frame",
-                    crate::shorts::GraphicSlot::Camera => "in the camera's part",
-                    crate::shorts::GraphicSlot::Screen => "in the screen's part",
-                    crate::shorts::GraphicSlot::OverScreen => "over the screen, under the captions",
+                "Moved graphic {} to {}.",
+                args.graphic,
+                clock(target)
+            ));
+        }
+        if !args.variables.is_empty() || args.name.is_some() || args.brand.is_some() {
+            let now = current(ctx)?;
+            let updated = commands::graphics::project_graphic_set_impl(
+                ctx.state,
+                now.handle,
+                now.revision,
+                args.graphic.clone(),
+                args.variables.clone(),
+                args.name.clone(),
+                args.brand.clone(),
+            )?;
+            lines.push(format!(
+                "Graphic {} \"{}\": {}{}.",
+                args.graphic,
+                updated.graphic.name,
+                serde_json::to_string(&updated.graphic.variables).unwrap_or_default(),
+                match &updated.graphic.brand {
+                    Some(kit) => format!(", brand kit {kit}"),
+                    None => ", the project's brand kit".into(),
                 }
             ));
         }
-        (_, None) => {}
-        (None, Some(_)) => return Err("`slot` needs `short`".into()),
-    }
-    if let Some(length) = args.length_us {
-        let now = current(ctx)?;
-        let clip = clip_of(ctx)?;
-        let length = length.clamp(
-            crate::graphics::MIN_LENGTH_US,
-            crate::graphics::MAX_LENGTH_US,
-        );
-        commands::project_sequence_edit_impl(
-            ctx.state,
-            now.handle,
-            now.revision,
-            crate::sequence::edit::SequenceEdit::TrimClip {
-                clip_id: clip.0,
-                edge: crate::sequence::edit::Edge::End,
-                to_us: clip.1 + length,
-                ripple: None,
-            },
-            on_take.clone(),
-        )?;
-        lines.push(format!("It plays for {:.1} s.", length as f64 / 1e6));
+        match (&args.short, args.slot) {
+            (Some(wanted), Some(slot)) => {
+                let now = current(ctx)?;
+                let (title, shorts) = with_reader(ctx.state, |reader| {
+                    let document = reader.document();
+                    let mut shorts = document.shorts.clone();
+                    let short = shorts
+                        .iter_mut()
+                        .find(|s| s.id == *wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
+                        .ok_or_else(|| format!("No short {wanted} (see shorts)"))?;
+                    let timeline = crate::shorts::short_timeline(document, short)?;
+                    let clips: Vec<String> = timeline
+                        .sequence
+                        .clips()
+                        .filter(|(_, c)| c.asset == args.graphic)
+                        .map(|(_, c)| c.id.clone())
+                        .collect();
+                    if clips.is_empty() {
+                        return Err(format!(
+                            "Graphic {} does not play in short \"{}\"",
+                            args.graphic, short.title
+                        ));
+                    }
+                    for clip in clips {
+                        if slot == crate::shorts::GraphicSlot::Full {
+                            short.layout.graphic_slots.remove(&clip);
+                        } else {
+                            short.layout.graphic_slots.insert(clip, slot);
+                        }
+                    }
+                    Ok((short.title.clone(), shorts))
+                })?;
+                commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
+                lines.push(format!(
+                    "In short \"{title}\" it plays {}.",
+                    match slot {
+                        crate::shorts::GraphicSlot::Full => "over the whole frame",
+                        crate::shorts::GraphicSlot::Camera => "in the camera's part",
+                        crate::shorts::GraphicSlot::Screen => "in the screen's part",
+                        crate::shorts::GraphicSlot::OverScreen =>
+                            "over the screen, under the captions",
+                    }
+                ));
+            }
+            _ => {}
+        }
+        if let Some(length) = args.length_us {
+            let now = current(ctx)?;
+            let clip = clip_of(ctx)?;
+            let length = length.clamp(
+                crate::graphics::MIN_LENGTH_US,
+                crate::graphics::MAX_LENGTH_US,
+            );
+            commands::project_sequence_edit_impl(
+                ctx.state,
+                now.handle,
+                now.revision,
+                crate::sequence::edit::SequenceEdit::TrimClip {
+                    clip_id: clip.0,
+                    edge: crate::sequence::edit::Edge::End,
+                    to_us: clip.1 + length,
+                    ripple: None,
+                },
+                on_take.clone(),
+            )?;
+            lines.push(format!("It plays for {:.1} s.", length as f64 / 1e6));
+        }
+        Ok(())
+    })();
+    if let Err(error) = steps {
+        if lines.is_empty() {
+            return Err(error);
+        }
+        let done = applied(ctx, "graphic_set", &before, lines)?;
+        return Err(format!("{done}\nThen it stopped: {error}"));
     }
     if lines.is_empty() {
         return Err(
@@ -4892,22 +4917,24 @@ fn transcript_fix(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             })
             .collect::<Result<Vec<_>, _>>()
     })?;
-    let mut lines = Vec::new();
-    for (fix, old) in args.fixes.iter().zip(old) {
-        crate::commands::transcript::transcript_set_word_text_impl(
-            ctx.state,
-            open.handle.clone(),
-            key.clone(),
-            fix.word.clone(),
-            fix.text.clone(),
-            None,
-        )?;
-        lines.push(format!(
-            "{}: \"{old}\" -> \"{}\"",
-            fix.word,
-            fix.text.trim()
-        ));
-    }
+    // One load and one save for the whole batch: every fix goes in, or none does.
+    let fixes: Vec<(String, String)> = args
+        .fixes
+        .iter()
+        .map(|fix| (fix.word.clone(), fix.text.clone()))
+        .collect();
+    crate::commands::transcript::transcript_set_words_text_impl(
+        ctx.state,
+        &open.handle,
+        &key,
+        &fixes,
+    )?;
+    let lines: Vec<String> = args
+        .fixes
+        .iter()
+        .zip(old)
+        .map(|(fix, old)| format!("{}: \"{old}\" -> \"{}\"", fix.word, fix.text.trim()))
+        .collect();
     ctx.changed_project();
     text(format!(
         "Fixed {}:\n{}",
@@ -5573,6 +5600,27 @@ mod tests {
         assert!(moved.contains("Moved graphic"), "{moved}");
         assert_eq!(graphic(&ctx).unwrap().1, Some(1_600_000));
         assert_eq!(length(&ctx), total, "moving a graphic changes nothing else");
+        // Moved and renamed in one call: both go in.
+        let both = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "moveToWord": "w-0", "name": "Renamed" }),
+        )
+        .unwrap();
+        assert!(
+            both.contains("Moved graphic") && both.contains("\"Renamed\""),
+            "{both}"
+        );
+        assert_eq!(graphic(&ctx).unwrap().1, Some(0));
+        // A call with a wrong part changes nothing, not even the parts that were right.
+        let wrong = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "moveToWord": "w-3", "brand": "No Such Kit" }),
+        )
+        .unwrap_err();
+        assert!(wrong.contains("There is no brand kit"), "{wrong}");
+        assert_eq!(graphic(&ctx).unwrap().1, Some(0));
         let removed = call(
             &ctx,
             "graphic_set",
@@ -5582,6 +5630,46 @@ mod tests {
         assert!(removed.starts_with("Removed graphic"), "{removed}");
         assert!(graphic(&ctx).is_none());
         assert_eq!(length(&ctx), total);
+    }
+
+    #[test]
+    fn word_fixes_go_in_together_or_not_at_all() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let words = |ctx: &Ctx| {
+            let key = pick_sound(ctx, None, Want::Transcribed).unwrap();
+            with_reader(ctx.state, |reader| {
+                let transcript = store::load_transcript(reader.root(), &key)?.unwrap();
+                Ok(transcript
+                    .words
+                    .iter()
+                    .take(2)
+                    .map(|w| w.text.clone())
+                    .collect::<Vec<_>>())
+            })
+            .unwrap()
+        };
+        let before = words(&ctx);
+        let refused = call(
+            &ctx,
+            "transcript_fix",
+            json!({ "fixes": [{ "word": "w-0", "text": "First" }, { "word": "w-1", "text": " " }] }),
+        )
+        .unwrap_err();
+        assert!(refused.contains("cannot be empty"), "{refused}");
+        assert_eq!(words(&ctx), before, "the good fix waits for the bad one");
+        let fixed = call(
+            &ctx,
+            "transcript_fix",
+            json!({ "fixes": [{ "word": "w-0", "text": "First" }, { "word": "w-1", "text": "Second" }] }),
+        )
+        .unwrap();
+        assert!(fixed.starts_with("Fixed 2 words"), "{fixed}");
+        assert_eq!(words(&ctx), ["First", "Second"]);
     }
 
     #[test]

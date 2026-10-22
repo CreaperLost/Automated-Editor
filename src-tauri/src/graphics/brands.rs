@@ -109,8 +109,10 @@ fn check(kit: &BrandKit) -> Result<(), String> {
     Ok(())
 }
 
+/// Kit `name`, or the kit it was renamed to.
 pub fn load(brands: &Path, name: &str) -> Result<BrandKit, String> {
     check_name(name).map_err(|_| format!("There is no brand kit \"{name}\""))?;
+    let name = &current_name(brands, name);
     let path = brands.join(name).join(KIT_FILE);
     let text =
         std::fs::read_to_string(&path).map_err(|_| format!("There is no brand kit \"{name}\""))?;
@@ -190,12 +192,24 @@ pub struct BrandKitInput {
 pub fn save(brands: &Path, input: &BrandKitInput) -> Result<BrandKit, String> {
     let name = input.name.trim().to_string();
     check_name(&name)?;
-    let previous = input.previous.as_deref().filter(|p| !p.is_empty());
+    let previous = input
+        .previous
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .map(|p| current_name(brands, p));
+    let previous = previous.as_deref();
     let renamed = previous.is_some_and(|p| p != name);
     let target = brands.join(&name);
-    let exists = target.join(KIT_FILE).is_file();
-    if exists && (previous.is_none() || renamed) {
-        return Err(format!("There is already a brand kit \"{name}\""));
+    if previous.is_none() || renamed {
+        if target.join(KIT_FILE).is_file() {
+            return Err(format!("There is already a brand kit \"{name}\""));
+        }
+        // Never replaced: it is not a kit, so it is not ours to delete.
+        if target.exists() {
+            return Err(format!(
+                "Something called \"{name}\" is already in the brand kits folder"
+            ));
+        }
     }
     if previous.is_none() && list(brands).len() >= MAX_KITS {
         return Err(format!("Keep at most {MAX_KITS} brand kits"));
@@ -251,15 +265,92 @@ pub fn save(brands: &Path, input: &BrandKitInput) -> Result<BrandKit, String> {
         let _ = std::fs::remove_dir_all(&stage);
         return Err(error);
     }
-    if let Some(old) = &source {
-        let _ = std::fs::remove_dir_all(old);
+    // Graphics and projects store the kit's name: the old name keeps leading to the kit.
+    if let (true, Some(old)) = (renamed, previous) {
+        if let Err(error) = record_rename(brands, old, &name) {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(error);
+        }
     }
-    if target.exists() {
-        let _ = std::fs::remove_dir_all(&target);
+    // The old folder is set aside, not deleted, until the new one is in its place: a swap
+    // that fails (a file in use, say) puts it back.
+    let aside = match &source {
+        Some(old) => {
+            let backup = brands.join(format!(".old-{}", uuid::Uuid::new_v4().simple()));
+            if let Err(e) = std::fs::rename(old, &backup) {
+                let _ = std::fs::remove_dir_all(&stage);
+                return Err(format!("{}: {e}", old.display()));
+            }
+            Some((old, backup))
+        }
+        None => None,
+    };
+    if let Err(e) = std::fs::rename(&stage, &target) {
+        let _ = std::fs::remove_dir_all(&stage);
+        if let Some((old, backup)) = &aside {
+            let _ = std::fs::rename(backup, old);
+        }
+        return Err(format!("{}: {e}", target.display()));
     }
-    std::fs::rename(&stage, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+    if let Some((_, backup)) = aside {
+        let _ = std::fs::remove_dir_all(backup);
+    }
     super::render::sources_changed();
     Ok(kit)
+}
+
+/// Old kit names and the names they were renamed to, kept beside the kits.
+const RENAMES_FILE: &str = "renamed.json";
+/// How many renames in a row a name is followed through.
+const MAX_RENAME_HOPS: usize = 16;
+
+fn renames(brands: &Path) -> std::collections::BTreeMap<String, String> {
+    std::fs::read_to_string(brands.join(RENAMES_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_renames(
+    brands: &Path,
+    renames: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    let path = brands.join(RENAMES_FILE);
+    let text = serde_json::to_string_pretty(renames).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Remembers that kit `old` is now `new`; names that led to `old` now lead to `new`.
+fn record_rename(brands: &Path, old: &str, new: &str) -> Result<(), String> {
+    let mut map = renames(brands);
+    for target in map.values_mut() {
+        if target == old {
+            *target = new.to_string();
+        }
+    }
+    map.remove(new);
+    map.insert(old.to_string(), new.to_string());
+    write_renames(brands, &map)
+}
+
+/// The kit's name now: `name` itself while a kit has it, else the name it was renamed to.
+pub fn current_name(brands: &Path, name: &str) -> String {
+    let map = renames(brands);
+    let mut current = name.to_string();
+    for _ in 0..MAX_RENAME_HOPS {
+        if brands.join(&current).join(KIT_FILE).is_file() {
+            break;
+        }
+        match map.get(&current) {
+            Some(next) => current = next.clone(),
+            None => break,
+        }
+    }
+    if brands.join(&current).join(KIT_FILE).is_file() {
+        current
+    } else {
+        name.to_string()
+    }
 }
 
 /// The kit's file for `given`: its own file copied from `kit` (kept), a full path copied in as
@@ -304,6 +395,13 @@ pub fn remove(brands: &Path, name: &str) -> Result<(), String> {
         return Err(format!("There is no brand kit \"{name}\""));
     }
     std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // Its old names lead nowhere now.
+    let mut map = renames(brands);
+    let before = map.len();
+    map.retain(|_, target| target != name);
+    if map.len() != before {
+        let _ = write_renames(brands, &map);
+    }
     super::render::sources_changed();
     Ok(())
 }
@@ -472,6 +570,74 @@ mod tests {
         .is_err());
         remove(brands, "Acme Dark").unwrap();
         assert!(list(brands).is_empty());
+    }
+
+    #[test]
+    fn a_renamed_kit_is_still_found_by_its_old_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let brands = dir.path();
+        save(brands, &input("Acme")).unwrap();
+        let rename = |from: &str, to: &str| {
+            save(
+                brands,
+                &BrandKitInput {
+                    previous: Some(from.into()),
+                    ..input(to)
+                },
+            )
+            .unwrap()
+        };
+        rename("Acme", "Acme Dark");
+        rename("Acme Dark", "Acme Night");
+        // Graphics and projects that stored either old name get the kit, by its name now.
+        for old in ["Acme", "Acme Dark", "Acme Night"] {
+            assert_eq!(load(brands, old).unwrap().name, "Acme Night", "{old}");
+            assert_eq!(current_name(brands, old), "Acme Night");
+        }
+        // Renaming by an old name renames the kit.
+        rename("Acme", "Acme Day");
+        assert_eq!(load(brands, "Acme Dark").unwrap().name, "Acme Day");
+        assert_eq!(list(brands).len(), 1);
+        // A new kit given an old name is that name's kit from then on.
+        save(brands, &input("Acme")).unwrap();
+        assert_eq!(load(brands, "Acme").unwrap().name, "Acme");
+        assert_eq!(load(brands, "Acme Night").unwrap().name, "Acme Day");
+        // Removed, its old names lead nowhere.
+        remove(brands, "Acme Day").unwrap();
+        assert!(load(brands, "Acme Night").is_err());
+        assert_eq!(current_name(brands, "Acme Night"), "Acme Night");
+    }
+
+    #[test]
+    fn a_save_never_deletes_what_is_in_the_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let brands = dir.path();
+        save(brands, &input("Acme")).unwrap();
+        // Not a kit: a folder of the user's own.
+        std::fs::create_dir_all(brands.join("Notes")).unwrap();
+        std::fs::write(brands.join("Notes").join("todo.txt"), "keep").unwrap();
+        let error = save(
+            brands,
+            &BrandKitInput {
+                previous: Some("Acme".into()),
+                ..input("Notes")
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("already in the brand kits folder"),
+            "{error}"
+        );
+        assert!(save(brands, &input("Notes")).is_err());
+        assert!(brands.join("Notes").join("todo.txt").is_file());
+        assert_eq!(load(brands, "Acme").unwrap().name, "Acme");
+        // Nothing left behind by the saves.
+        let hidden = std::fs::read_dir(brands)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+            .count();
+        assert_eq!(hidden, 0);
     }
 
     #[test]

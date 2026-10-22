@@ -435,6 +435,11 @@ impl PlaybackOwner {
     pub fn speed(&self) -> f64 {
         self.speed
     }
+
+    /// The short playing instead of the video, if one is.
+    pub fn short_focus(&self) -> Option<&str> {
+        self.short_focus.as_deref()
+    }
     pub fn fail(&mut self, generation: u64, error: String) {
         if self.generation != generation {
             return;
@@ -473,12 +478,15 @@ impl PlaybackOwner {
     }
 }
 
-/// Whether any audible audio track has clips.
+/// Whether any audible audio track has clips, or the sound effects lane may play (export
+/// mixes it in, so the preview must too). A lane with nothing to play after all runs the
+/// clock on its own, like a missing recording.
 fn has_sound(document: &EditDocument) -> bool {
-    document
-        .sequence
-        .audio_tracks()
-        .any(|t| !t.muted && !t.clips.is_empty())
+    document.audio.sound_effects.audible()
+        || document
+            .sequence
+            .audio_tracks()
+            .any(|t| !t.muted && !t.clips.is_empty())
 }
 
 #[cfg(test)]
@@ -515,6 +523,20 @@ mod tests {
         // An empty timeline opens, ended.
         let empty = PlaybackOwner::open("e".into(), &EditDocument::default()).unwrap();
         assert_eq!(empty.snapshot().state, PlaybackState::Ended);
+    }
+
+    #[test]
+    fn sound_effects_alone_start_the_audio_device() {
+        let mut silent = document();
+        for track in &mut silent.sequence.tracks {
+            track.muted = true;
+        }
+        assert!(!has_sound(&silent));
+        silent.audio.sound_effects.clicks = true;
+        // Export mixes the lane in, so the preview asks for sound too.
+        assert!(has_sound(&silent));
+        silent.audio.sound_effects.muted = true;
+        assert!(!has_sound(&silent));
     }
 
     #[test]

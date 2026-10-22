@@ -650,6 +650,13 @@ export const TimelineStudio: React.FC = () => {
   };
   const snapUs = () => (pxPerUs > 0 ? SNAP_PX / pxPerUs : 0);
   const view: TimelineView = { durationUs: spanUs, pxPerUs, nowUs, pct, clientXToUs, snapUs, seekToUs };
+  // The time drawn: the visible stretch with half a view or more either side (all of it
+  // before the timeline has a size).
+  const drawnUs = (() => {
+    if (!(pxPerUs > 0) || viewportPx <= 0) return { from: 0, to: Number.MAX_SAFE_INTEGER };
+    const fromPx = (windowStep - 1) * (viewportPx / 2);
+    return { from: Math.max(0, fromPx / pxPerUs), to: (fromPx + viewportPx * 2.5) / pxPerUs };
+  })();
 
   const zoomTimeline = (factor: number, anchor?: { timeUs: number; offsetPx: number }) => {
     const next = Math.min(MAX_TIMELINE_ZOOM, Math.max(MIN_TIMELINE_ZOOM, timelineZoom * factor));
@@ -983,7 +990,7 @@ export const TimelineStudio: React.FC = () => {
     suppressClick,
     hint,
   });
-  const soundEffects = useSoundEffectsLane({ view, onError: setEditError });
+  const soundEffects = useSoundEffectsLane({ view, drawn: drawnUs, onError: setEditError });
   const layoutLane = useLayoutLane({ view });
 
   // ---- Keyboard -----------------------------------------------------------------------------
@@ -1578,13 +1585,6 @@ export const TimelineStudio: React.FC = () => {
     );
   };
 
-  // The time drawn: the visible stretch with half a view or more either side (all of it
-  // before the timeline has a size).
-  const drawnUs = (() => {
-    if (!(pxPerUs > 0) || viewportPx <= 0) return { from: 0, to: Number.MAX_SAFE_INTEGER };
-    const fromPx = (windowStep - 1) * (viewportPx / 2);
-    return { from: Math.max(0, fromPx / pxPerUs), to: (fromPx + viewportPx * 2.5) / pxPerUs };
-  })();
   /** The clips of a track (in order) that overlap the drawn time, with their positions. */
   const inView = (clips: Clip[]) => {
     let lo = 0;

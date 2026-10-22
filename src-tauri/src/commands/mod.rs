@@ -1832,9 +1832,11 @@ pub fn short_preview_frame_impl(
             .clone();
         short.layout = layout;
         let document = crate::shorts::short_document(base, &short, has_speech_transcript(reader))?;
+        // Transcripts are saved apart from the edit: a word fixed changes the captions too.
         let key = format!(
-            "{project_handle}:{}:{short_id}:{}",
+            "{project_handle}:{}:{}:{short_id}:{}",
             base.revision,
+            crate::transcript::store::changes(),
             serde_json::to_string(&short.layout).map_err(|e| e.to_string())?
         );
         (document, reader.root().to_path_buf(), key)

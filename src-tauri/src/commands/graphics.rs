@@ -457,7 +457,12 @@ pub fn graphics_brands_impl(
             let opened = state.opened_project.lock();
             let reader = opened.as_ref().ok_or("No opened project")?;
             require_handle(reader, &handle)?;
-            reader.document().graphics_brand.clone()
+            // A kit renamed since shows by its name now.
+            reader
+                .document()
+                .graphics_brand
+                .as_deref()
+                .map(|b| brands::current_name(&dir, b))
         }
         None => None,
     };
@@ -491,12 +496,12 @@ pub fn project_graphics_brand_set_impl(
     expected_revision: u64,
     brand: Option<String>,
 ) -> Result<OpenedProject, String> {
+    // Stored by the kit's name now (an old name leads to its kit).
     let brand = brand
         .map(|b| b.trim().to_string())
-        .filter(|b| !b.is_empty());
-    if let Some(name) = &brand {
-        brands::load(&brands::dir(), name)?;
-    }
+        .filter(|b| !b.is_empty())
+        .map(|name| brands::load(&brands::dir(), &name).map(|kit| kit.name))
+        .transpose()?;
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;

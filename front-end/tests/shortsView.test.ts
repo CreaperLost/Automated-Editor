@@ -45,3 +45,23 @@ test("applying an edit to a short's view finishes once its view is there", async
   assert.equal(state.openedProject?.revision, 2);
   assert.equal(state.openedProject?.shortView, "s1");
 });
+
+test("a short's view that arrives after leaving Shorts leaves the video's timeline alone", async () => {
+  useProjectStore.setState({ openedProject: project(1, [short]), viewShort: undefined, selectedClipIds: [] });
+  await useProjectStore.getState().applyOpenedProject(project(1, [short], "s1"), { remote: true });
+  const state = useProjectStore.getState();
+  assert.equal(state.openedProject?.shortView, undefined);
+  assert.equal(state.openedProject?.durationUs, 8_000_000);
+});
+
+test("a view of the short shown before arrives after another short shows, and is dropped", async () => {
+  useProjectStore.setState({ openedProject: project(1, [short], "s2"), viewShort: "s2", selectedClipIds: [] });
+  const asked: string[] = [];
+  api.projectShortView = async (_handle, id) => {
+    asked.push(id);
+    return project(1, [short], id);
+  };
+  await useProjectStore.getState().applyOpenedProject(project(1, [short], "s1"), { remote: true });
+  assert.deepEqual(asked, []);
+  assert.equal(useProjectStore.getState().openedProject?.shortView, "s2");
+});

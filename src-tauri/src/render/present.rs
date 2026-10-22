@@ -291,6 +291,9 @@ pub struct WindowPresenter {
     pipeline: PresentPipeline,
     /// The compositor whose device this was made on.
     pub compositor_id: u64,
+    /// The window's handle, asked for once: asking Tauri for it waits for the window's own
+    /// thread, which may itself be waiting for the caller (it froze the app, 22 Oct).
+    hwnd: Option<isize>,
 }
 
 impl WindowPresenter {
@@ -324,6 +327,7 @@ impl WindowPresenter {
                 .ok_or("The window has no alpha mode")?
         };
         Ok(Self {
+            hwnd: window_hwnd(&window),
             surface,
             window,
             format,
@@ -334,9 +338,12 @@ impl WindowPresenter {
         })
     }
 
-    /// The window's client area in pixels.
+    /// The window's client area in pixels, measured on the calling thread.
     pub fn client_size(&self) -> Result<(u32, u32), String> {
-        client_size(&self.window)
+        match self.hwnd {
+            Some(hwnd) => client_size_of(hwnd),
+            None => client_size(&self.window),
+        }
     }
 
     /// Draws `placement` with `frame` and shows it. Returns false when there was nothing to
@@ -422,19 +429,33 @@ extern "system" {
     fn GetClientRect(hwnd: isize, rect: *mut [i32; 4]) -> i32;
 }
 
+/// The window's Win32 handle. Tauri answers this from the window's thread, so never call it
+/// while holding a lock that thread may want.
+#[cfg(windows)]
+fn window_hwnd(window: &WindowTarget) -> Option<isize> {
+    use wgpu::rwh::HasWindowHandle;
+    match window.window_handle().ok()?.as_raw() {
+        wgpu::rwh::RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_hwnd(_window: &WindowTarget) -> Option<isize> {
+    None
+}
+
 /// The size of a window's client area in pixels.
 #[cfg(windows)]
 fn client_size(window: &WindowTarget) -> Result<(u32, u32), String> {
-    use wgpu::rwh::HasWindowHandle;
-    let handle = window
-        .window_handle()
-        .map_err(|e| format!("The window has no handle: {e}"))?;
-    let wgpu::rwh::RawWindowHandle::Win32(win32) = handle.as_raw() else {
-        return Err("Not a Windows window".into());
-    };
+    client_size_of(window_hwnd(window).ok_or("The window has no Win32 handle")?)
+}
+
+#[cfg(windows)]
+fn client_size_of(hwnd: isize) -> Result<(u32, u32), String> {
     let mut rect = [0i32; 4];
     // SAFETY: the handle is a live window (the presenter holds it) and `rect` is a RECT.
-    if unsafe { GetClientRect(win32.hwnd.get(), &mut rect) } == 0 {
+    if unsafe { GetClientRect(hwnd, &mut rect) } == 0 {
         return Err("Could not measure the window".into());
     }
     let [left, top, right, bottom] = rect;
@@ -443,6 +464,11 @@ fn client_size(window: &WindowTarget) -> Result<(u32, u32), String> {
 
 #[cfg(not(windows))]
 fn client_size(_window: &WindowTarget) -> Result<(u32, u32), String> {
+    Err("The window preview is only drawn this way on Windows".into())
+}
+
+#[cfg(not(windows))]
+fn client_size_of(_hwnd: isize) -> Result<(u32, u32), String> {
     Err("The window preview is only drawn this way on Windows".into())
 }
 

@@ -1859,6 +1859,13 @@ impl ExportWriter {
     }
 }
 
+/// Whether a written file of `actual` µs is the edit of `intended` µs at `fps`. The last frame
+/// is whole, so the picture can run up to one frame past the edit (most at 10 fps: 100 ms).
+fn duration_matches(actual: u64, intended: u64, fps: u32) -> bool {
+    let frame = 1_000_000 / u64::from(fps.max(1));
+    actual.abs_diff(intended) <= AUDIO_DURATION_SLACK_US.max(frame)
+}
+
 pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure> {
     let codec = settings.video_codec.to_ascii_lowercase();
     if codec != "h264" {
@@ -2488,7 +2495,7 @@ fn export_to_temp(
     let started = std::time::Instant::now();
     let actual_duration =
         media_duration_us(&captured.temp).map_err(|message| ExportFailure::Native { message })?;
-    if actual_duration.abs_diff(duration_us) > AUDIO_DURATION_SLACK_US {
+    if !duration_matches(actual_duration, duration_us, captured.settings.fps) {
         return Err(ExportFailure::Native {
             message: format!(
                 "Output duration {} differs from {}",
@@ -2670,6 +2677,17 @@ fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::media::decode_h264_frame;
+
+    #[test]
+    fn a_whole_last_frame_is_not_a_wrong_duration() {
+        // 1.01 s at 10 fps is 11 whole frames: 1.10 s of picture.
+        assert_eq!(frame_count(1_010_000, 10).unwrap(), 11);
+        assert!(duration_matches(1_100_000, 1_010_000, 10));
+        assert!(duration_matches(1_010_000, 1_010_000, 60));
+        // More than a frame (or the audio slack) off is still wrong.
+        assert!(!duration_matches(1_200_000, 1_010_000, 10));
+        assert!(!duration_matches(1_100_000, 1_010_000, 30));
+    }
 
     #[test]
     fn the_hard_link_fallback_moves_without_replacing() {

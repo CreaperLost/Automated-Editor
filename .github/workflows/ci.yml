@@ -60,6 +60,7 @@ jobs:
           cache-dependency-path: front-end/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit
+      - run: npm run test:cleanup
 
   rust-tests:
     name: Rust tests

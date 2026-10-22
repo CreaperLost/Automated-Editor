@@ -143,6 +143,12 @@ mounted at `recordings/<asset id>/`.
   broke Windows' 260-char limit). Export waits for pending renders. A render takes ~16–28 s.
 - **Brand kits** (`brands.rs`): app-level `<config>/AeroEdits/brands/<name>/brand.json` (+ logo,
   font file) → a `<style id="aeroedits-brand">` with `--brand-*` variables at render time.
+  Projects and graphics store a kit's **name**, so a rename is recorded in `brands/renamed.json`
+  (old → new, chains collapsed) and every lookup (`load`, `current_name`) follows it; deleting a
+  kit drops its old names. A save builds the new folder beside the old one and swaps it in, the
+  old one set aside and put back if the swap fails; a non-kit folder in the way is refused.
+- **Agent file writes** (`write_file`): plain relative paths only, and no symlink or junction
+  anywhere in the path (the graphic's folder included), like the project's `safe_path`.
 - **Library** (`library.rs`) and **gate** (`gate.rs`): saving to the library runs a no-model check
   (lint, network refs, kit colours, layout overflow and contrast at 16:9 and 9:16 with long text,
   first/last-frame coverage, variable changes visible) in parallel headless Chromes, ~26–30 s, cached
@@ -197,6 +203,32 @@ Rules that keep it fast (break one and it shows):
 - Long reads (transcript, cues, waveforms) run on the blocking pool, not Tauri's main thread.
 - The preview worker never blocks on the JPEG encoder (fallback path); on Windows the preview is
   drawn by wgpu under a transparent webview.
+- A graphic waiting for its render shows its newest older render, found once per render
+  generation, not by listing the cache folder every frame.
+- Sound-effect markers, like clips, are drawn only in the timeline's drawn time.
+- `transcript_fix` changes all its words in one load and one save.
+
+## Threads and locks: the window thread must never wait on us
+
+A Tauri command without `async` runs **on the window's own thread** (Tauri 2). So do a few Tauri
+calls made from other threads: `window_handle()` (and anything that asks the window for its size or
+position) sends a message to that thread and waits for the answer. Together these make a deadlock
+easy, and it froze the app whenever a short played in the window preview (fixed 22 Oct): the
+playback engine held the `preview` lock while drawing, drawing asked Tauri for the window's handle,
+and the window thread was waiting for the `preview` lock in the synchronous `preview_layout`
+command. Windows then reports the app as not responding and closes it (`AppHangB1`).
+
+- Never hold an app lock (`preview`, `playback`, `opened_project`, `command_lock`) across a call
+  that may wait on the window thread, a draw, a decode or a file write.
+- `if let Some(x) = state.preview.lock().f() { … }` keeps the guard for the **whole block**; take
+  the value in its own statement first (`let x = state.preview.lock().f();`). `let … else` and plain
+  `let` statements drop it at the end of the line.
+- The window presenter (`render/present.rs`) gets the window's Win32 handle once, when it is made,
+  and measures the window with `GetClientRect` on the drawing thread.
+- Heavy synchronous commands belong in `async` + `spawn_blocking`.
+- To see a hang: `cdb -pv -p <pid> -c "~*k 40; qd"` (Windows SDK debuggers) prints every
+  thread's stack without stopping the app; look for two threads each waiting on what the other
+  holds. A hang shows as a window that stops responding while the process's CPU time stays flat.
 
 ## Working on the code: notes that saved time
 
@@ -218,3 +250,6 @@ Rules that keep it fast (break one and it shows):
 - The local-LLM build needs a short `CARGO_TARGET_DIR` (`C:\aeb`), the Vulkan SDK, LLVM and Ninja;
   `scripts/build-windows.ps1` sets it up.
 - After any docs change, run `.venv\Scripts\python.exe scripts/check_doc_links.py`.
+- Front-end behaviour tests are `front-end/tests/*.test.ts` (`npm run test:cleanup`, also run by
+  CI): stores with a mocked `api`, no browser. A change of a store's async flow (queued saves,
+  late replies) gets a test there.

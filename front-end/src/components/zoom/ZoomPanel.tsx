@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Check, Crosshair, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
+import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { api } from "../../lib/ipc";
 import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
 import { InspectorSection } from "../inspector/InspectorSection";
@@ -69,15 +70,12 @@ export const ZoomPanel: React.FC = () => {
   const saved = openedProject?.zoomSettings ?? DEFAULT_ZOOM_SETTINGS;
   const [draft, setDraft] = useState<ZoomSettings | null>(null);
   const settings = draft ?? saved;
-  const saveTimer = React.useRef<number>();
-  React.useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+  // A change still waiting when the panel closes (another workspace) is saved then, not lost.
+  const settingsSave = useDebouncedSave(350);
   const setSettings = (patch: Partial<ZoomSettings>) => {
     const next = { ...settings, ...patch };
     setDraft(next);
-    window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      const project = useProjectStore.getState().openedProject;
-      if (!project) return;
+    settingsSave.schedule((project) => {
       api
         .projectZoomSettingsSet(project.projectHandle, project.revision, next)
         .then((updated) => {
@@ -86,7 +84,7 @@ export const ZoomPanel: React.FC = () => {
           setError(undefined);
         })
         .catch((err) => setError(String(err)));
-    }, 350);
+    });
   };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();

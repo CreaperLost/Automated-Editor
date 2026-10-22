@@ -249,7 +249,10 @@ pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
         variables: source.variables,
         declarations: declarations(&dir).unwrap_or_default(),
         render: render::state_of(&asset.id),
-        brand: source.brand,
+        // A kit renamed since shows by its name now.
+        brand: source
+            .brand
+            .map(|b| brands::current_name(&brands::dir(), &b)),
     })
 }
 
@@ -259,10 +262,7 @@ pub fn brand_choice(brands_dir: &Path, given: &str) -> Result<Option<String>, St
     match given.trim() {
         "" | brands::DEFAULT => Ok(None),
         brands::NONE => Ok(Some(brands::NONE.into())),
-        name => {
-            brands::load(brands_dir, name)?;
-            Ok(Some(name.to_string()))
-        }
+        name => Ok(Some(brands::load(brands_dir, name)?.name)),
     }
 }
 
@@ -501,9 +501,12 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
         return Err("That file is too big for a graphic".into());
     }
     let target = dir.join(path);
+    // A link in the way (the folder, a subfolder or the file) could lead outside the folder.
+    no_links(dir, path)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    no_links(dir, path)?;
     // A page written the HyperFrames way links GSAP from a CDN: it gets the local copy instead.
     let localized = relative
         .to_ascii_lowercase()
@@ -514,6 +517,41 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
     std::fs::write(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
     render::sources_changed();
     Ok(())
+}
+
+/// Refuses a symlink or junction at `dir` or at any part of `relative` that exists, like the
+/// project's own paths ([`crate::project::reader::safe_path`]).
+fn no_links(dir: &Path, relative: &Path) -> Result<(), String> {
+    let refused =
+        || "The graphic's folder has a link in that path; write somewhere else".to_string();
+    let mut path = dir.to_path_buf();
+    let parts = std::iter::once(None).chain(relative.components().map(Some));
+    for part in parts {
+        if let Some(part) = part {
+            path.push(part);
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() || is_reparse_point(&meta) => {
+                return Err(refused())
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// How a graphic comes on and goes off. The app decides it from where the graphic plays and
@@ -909,6 +947,38 @@ mod tests {
         for bad in ["../x.html", "/abs.html", "", "graphic.json", "a/../../b"] {
             assert!(write_file(dir.path(), bad, b"x").is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_write_never_follows_a_link_out_of_the_graphic() {
+        let dir = tempfile::tempdir().unwrap();
+        let graphic = dir.path().join("graphic");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&graphic).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("note.txt"), "keep").unwrap();
+        let link = graphic.join("assets");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output();
+            if !made.is_ok_and(|o| o.status.success()) {
+                return; // No junctions here (a restricted sandbox).
+            }
+        }
+        let refused = write_file(&graphic, "assets/note.txt", b"overwritten").unwrap_err();
+        assert!(refused.contains("link"), "{refused}");
+        assert_eq!(
+            std::fs::read_to_string(outside.join("note.txt")).unwrap(),
+            "keep"
+        );
+        // The graphic's folder itself being a link is refused too.
+        assert!(write_file(&link, "index.html", b"x").is_err());
     }
 
     #[test]

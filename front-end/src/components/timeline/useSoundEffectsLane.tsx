@@ -1,15 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Sparkles, Volume2, VolumeX } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { DEFAULT_AUDIO_SETTINGS, DEFAULT_SOUND_EFFECTS, type SoundEffect } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import { HDR_BUTTON, HeaderRow, MIN_LANE_PX, type TimelineView } from "./timelineShared";
 
+/** How long a whoosh marker is drawn. */
+const WHOOSH_US = 480_000;
+
 /**
  * The sound effects track: where the soft clicks and the whooshes play, and its mute. The
  * volume and which sounds play are on the Audio page.
  */
-export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onError: (message?: string) => void }) {
+export function useSoundEffectsLane({
+  view,
+  drawn,
+  onError,
+}: {
+  view: TimelineView;
+  /** The time the timeline draws (see TimelineStudio's `drawnUs`): only those markers are made. */
+  drawn: { from: number; to: number };
+  onError: (message?: string) => void;
+}) {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const [effects, setEffects] = useState<SoundEffect[]>([]);
@@ -36,6 +48,10 @@ export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onE
     hasRecording,
   ]);
 
+  // In time order, counted once per list rather than on every timeline render.
+  const sorted = useMemo(() => [...effects].sort((a, b) => a.atUs - b.atUs), [effects]);
+  const clicks = useMemo(() => effects.filter((e) => e.kind === "click").length, [effects]);
+
   if (!openedProject || !hasRecording) return { header: null, lane: null };
 
   const toggleMute = () => {
@@ -51,7 +67,6 @@ export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onE
       })
       .catch((err) => onError(String(err)));
   };
-  const clicks = effects.filter((e) => e.kind === "click").length;
   const whooshes = effects.length - clicks;
   const silent = settings.muted || (!settings.clicks && !settings.whooshes);
   const height = MIN_LANE_PX;
@@ -90,7 +105,7 @@ export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onE
     >
       {view.durationUs > 0 &&
         !silent &&
-        effects.map((effect, index) =>
+        inDrawn(sorted, drawn).map(({ effect, index }) =>
           effect.kind === "click" ? (
             <div
               key={index}
@@ -101,7 +116,7 @@ export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onE
             <div
               key={index}
               className="absolute top-1.5 bottom-1.5 rounded-full bg-audio/30 border border-audio/50 pointer-events-none"
-              style={{ left: view.pct(effect.atUs), width: view.pct(480_000) }}
+              style={{ left: view.pct(effect.atUs), width: view.pct(WHOOSH_US) }}
             />
           ),
         )}
@@ -109,4 +124,19 @@ export function useSoundEffectsLane({ view, onError }: { view: TimelineView; onE
   );
 
   return { header, lane };
+}
+
+/** The effects (in time order) that start in the drawn time, a whoosh's length before it included. */
+function inDrawn(effects: SoundEffect[], drawn: { from: number; to: number }) {
+  const from = drawn.from - WHOOSH_US;
+  let lo = 0;
+  let hi = effects.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (effects[mid].atUs < from) lo = mid + 1;
+    else hi = mid;
+  }
+  const out: { effect: SoundEffect; index: number }[] = [];
+  for (let i = lo; i < effects.length && effects[i].atUs <= drawn.to; i++) out.push({ effect: effects[i], index: i });
+  return out;
 }

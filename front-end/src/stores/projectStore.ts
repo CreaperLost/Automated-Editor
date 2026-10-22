@@ -265,6 +265,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const current = get().openedProject;
     // A window showing a short turns every project it is handed into that short's view.
     const viewShort = get().viewShort;
+    // A short's view asked for before the window moved on (back to the video, or to another
+    // short) arrives late: what shows now is not that short.
+    if (project.shortView && project.shortView !== viewShort) return;
     // A short removed by this revision has no view: the project as it is shows the list without it.
     const removed =
       !!viewShort &&

@@ -19,7 +19,7 @@ follows; gaming work is not scheduled yet.
    missing agent operations, and a baseline to measure everything after against.
 2. **Next: durability, a place for intent, and sight.** History that survives reopening, notes
    anchored to the edit, a user-owned rules file, a moving preview, and the basic craft surfaces
-   (caption type, sound clips, graphics render quality, source search).
+   (one look for all graphics, caption type, sound clips, graphics render quality, source search).
 3. **Later: build the director loop on those foundations.** Beat plan and style trial on top of
    anchored notes; idea-first shorts on top of source search; cues on top of sound clips;
    finishing and delivery.
@@ -30,6 +30,7 @@ flowchart LR
     SAFE1 --> NOTE1[NOTE-1 anchored notes]
     SAFE2[SAFE-2 history + checkpoints] --> GFX4[GFX-4 graphic variants]
     NOTE1 --> PLAN1[PLAN-1 beat plan + style trial]
+    GFX5[GFX-5 one look for all graphics] --> STY1
     AGT3[AGT-3 project rules file] --> STY1[STY-1 style kit]
     STY1 --> PLAN1
     FTG1[FTG-1 source search] --> SHT1[SHT-1 idea-first shorts]
@@ -60,7 +61,48 @@ flowchart LR
 
 ## Next
 
-Rough order; the first four are the foundations the Later tier builds on.
+Rough order. GFX-5 comes first (George, 22 Oct: "very, very important"); the four after it are
+the foundations the Later tier builds on.
+
+<a id="gfx-5"></a>
+### GFX-5 · One look for every graphic in a video, changed in one place — M/L
+
+- **Why:** each graphic carries its own sizes, corners, spacing and motion. The brand kit gives
+  only three colours, a font and a logo, and nothing makes a graphic use even those. So graphics
+  in one video drift apart, and a small change (rounder cards, slower entrances) means editing
+  every graphic by hand.
+- **Do:**
+  1. **The video's look:** design tokens beside the brand kit. Type scale (title / body / label
+     sizes, weights, spacing); shape (corner radius, border, shadow, padding); layout (margins,
+     alignment, card width); colour roles beyond the kit's three (surface, muted text, highlight);
+     motion (entry and exit style, duration, stagger, easing, overall speed). A project has one
+     look, stored in the edit document, so choosing or adjusting it is one undo step. Looks are
+     saved app-wide like brand kits, with a few presets, and long-form and shorts values may
+     differ (graphics re-made for 9:16 keep the same look).
+  2. **Every graphic reads it:** the render injects the tokens as `--look-*` CSS properties and
+     GSAP defaults (easing, duration scale), the way `brand.css` does for the kit today. The
+     bundled templates and library items use tokens for these properties, never fixed values.
+     The look and the kit are part of the render hash, so changing either re-renders every
+     graphic that uses them.
+  3. **Adjust everything at once:** a Look page in the Graphics panel with a few global controls
+     (size, roundness, speed, energy, density), previewed on two or three of the video's own
+     graphics before applying. A graphic can still override a token; overrides are shown as such.
+  4. **The agent keeps it consistent:** `graphic_check` flags a graphic that hard-codes a token's
+     property (a colour, font, radius or duration) instead of using the look;
+     `graphic_templatize` turns hard-coded values into tokens; new graphics are written against
+     the look; a "bring in line" proposal lists the outliers as one batch. MCP: `look` get / set.
+     A request in words ("make everything a bit calmer") becomes a proposed token change that the
+     user accepts in the Agent panel.
+  5. **AI-built looks:** the agent proposes two or three looks from the brand kit, a
+     description or a reference (with [STY-2](#sty-2) later), each rendered on the video's own
+     graphics, and the user picks one.
+- **Done when:** on a tutorial with about eight graphics from different templates, switching the
+  brand kit or the look re-renders all of them and they match. One "roundness" or "speed" change
+  reaches all of them in one undo step. `graphic_check` fails a graphic with a hard-coded accent
+  colour.
+- **Relation:** the visual half of [STY-1](#sty-1), brought forward (decided 22 Oct); STY-1 keeps
+  the written rules. [CAP-1](#cap-1) takes caption type and colours from the same look.
+  [GFX-4](#gfx-4) variants later let a look change be compared before it is used.
 
 <a id="safe-2"></a>
 ### SAFE-2 · Persistent history and named checkpoints — M/L
@@ -136,8 +178,8 @@ Rough order; the first four are the foundations the Later tier builds on.
 <a id="cap-1"></a>
 ### CAP-1 · Captions as typography — M
 
-- **Do:** caption font and weight from the brand kit (bundled font files, Greek coverage
-  checked); per-word **emphasis** stored on the transcript marks and chosen by the agent (the one
+- **Do:** caption font and weight from the brand kit and the video's look ([GFX-5](#gfx-5);
+  bundled font files, Greek coverage checked); per-word **emphasis** stored on the transcript marks and chosen by the agent (the one
   word that makes you keep watching), drawn in the accent colour; two or three deterministic
   animation presets (word pop-in, karaoke highlight, static); caption ownership per range
   (native / inside a graphic / hidden).
@@ -201,9 +243,10 @@ Grouped by area. Order within a group is the suggested order.
   5–10 s range, approve the look, then scale. Graphics keep their word anchor (fixes C3).
   Plan beats are NOTE-1 records with `kind: beat` (decided, [Q-PLAN](decisions.md#q-plan)).
 <a id="sty-1"></a>
-- **STY-1 · Style kit (M).** Beside the brand kit, referencing it: caption rules, motion
-  character, graphic density and placement, sound policy, a few reference images and files;
-  separate long-form and shorts profiles. Some rules checkable by `graphic_check`, not all
+- **STY-1 · Style kit (M).** Beside the brand kit and the video's look, referencing both:
+  caption rules, graphic density and placement, sound policy, a few reference images and files;
+  separate long-form and shorts profiles. The visual tokens (type, shape, motion) moved to
+  [GFX-5](#gfx-5) on 22 Oct. Some rules checkable by `graphic_check`, not all
   (pacing needs judgement). Builds on AGT-3's storage. Decision: [Q-RULES](decisions.md#q-rules).
 <a id="auto-3"></a>
 - **AUTO-3 · "Save this workflow" (M).** From an approved edit: instructions, defaults,
@@ -458,6 +501,20 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **22 Oct 2026** — **An audit's findings fixed** (each in [gaps.md](gaps.md), fixed 22 Oct).
+  The **shorts preview freeze** George reported was a deadlock between the playback engine and
+  the window thread; reproduced in the dev app, stacks read with `cdb`, fixed, and the same test
+  rerun clean (the rule is in [architecture](architecture.md#threads-and-locks-the-window-thread-must-never-wait-on-us)).
+  Also: queued short edits keep their project and short; a late short view no longer replaces
+  the video's timeline; brand-kit saves never lose the kit and renames keep graphics and projects
+  working (`renamed.json`); `graphic_set` checks everything before changing anything;
+  `transcript_fix` is all or nothing in one save; slider saves survive a panel closing; a short's
+  captions follow word fixes; sound effects play in the preview with no other audio; 10 fps
+  exports pass their duration check; videos with 16+ audio streams import; agent graphic writes
+  refuse links; a waiting graphic no longer lists its cache every frame; sound-effect markers are
+  drawn only near the view; big images decode straight to the preview size. CI now runs the
+  front-end tests.
 
 - **23 Oct 2026** — **A smaller agent context, and graphics on a take short that move**: 18
   rarely needed tools sit behind `more` (the tool list 75,260 → 53,828 characters; works in

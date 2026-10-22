@@ -211,7 +211,14 @@ export function shortOp(label: string, work: (p: OpenedProject) => Promise<Opene
     patchShort(short.id, { layout: draft });
   }
   set({ draft: null });
-  saveQueue = saveQueue.then(() => runShorts(label, work));
+  // Asked for the short on show: never lands on another short or project shown by the time
+  // the saves before it are done.
+  const asked = useProjectStore.getState().openedProject;
+  saveQueue = saveQueue.then(() => {
+    const now = useProjectStore.getState().openedProject;
+    if (!now || now.projectHandle !== asked?.projectHandle || now.shortView !== asked.shortView) return;
+    return runShorts(label, work);
+  });
 }
 
 /**

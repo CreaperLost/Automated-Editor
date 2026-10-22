@@ -526,7 +526,10 @@ fn tick(
     if *last_frame == Some(key) {
         // A short's frame in the window: draw it again where the preview moved to.
         if in_window && preview.visible && underlay.layout_revision != preview.layout_revision {
-            if let Some((window, placement)) = state.preview.lock().underlay() {
+            // Taken apart from the `if let`: its lock would last the whole draw, and drawing
+            // can wait for the window's thread while that thread waits for this lock.
+            let target = state.preview.lock().underlay();
+            if let Some((window, placement)) = target {
                 match runtime
                     .evaluator
                     .present_again(&mut underlay.presenter, &window, &placement)
@@ -547,8 +550,10 @@ fn tick(
         runtime.evaluator.prefetch(render_us, horizon);
     }
     if in_window && preview.visible {
-        // The short's frame (sent to the Shorts Studio below) shows in the editor too.
-        if let Some((window, placement)) = state.preview.lock().underlay() {
+        // The short's frame (sent to the Shorts Studio below) shows in the editor too. The lock
+        // is let go before drawing (see above).
+        let target = state.preview.lock().underlay();
+        if let Some((window, placement)) = target {
             match runtime
                 .evaluator
                 .present_again(&mut underlay.presenter, &window, &placement)
