@@ -1146,15 +1146,29 @@ fn create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 fn undo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     params::<NoArgs>(args)?;
     let before = opened(ctx)?;
+    let label = with_reader(ctx.state, |r| {
+        Ok(r.history().undo_label().map(str::to_string))
+    })?;
     commands::project_undo_impl(ctx.state, before.handle.clone(), before.revision, None)?;
-    undone(ctx, &before, "Undid the last change.")
+    let what = match label {
+        Some(label) => format!("Undid \"{label}\"."),
+        None => "Undid the last change.".into(),
+    };
+    undone(ctx, &before, &what)
 }
 
 fn redo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     params::<NoArgs>(args)?;
     let before = opened(ctx)?;
+    let label = with_reader(ctx.state, |r| {
+        Ok(r.history().redo_label().map(str::to_string))
+    })?;
     commands::project_redo_impl(ctx.state, before.handle.clone(), before.revision, None)?;
-    undone(ctx, &before, "Redid the last undone change.")
+    let what = match label {
+        Some(label) => format!("Redid \"{label}\"."),
+        None => "Redid the last undone change.".into(),
+    };
+    undone(ctx, &before, &what)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -5616,7 +5630,7 @@ mod tests {
         assert!(listed[0].can_undo);
 
         let undone = call(&ctx, "undo", json!({})).unwrap();
-        assert!(undone.starts_with("Undid the last change."), "{undone}");
+        assert!(undone.starts_with("Undid \"Cut "), "{undone}");
         assert_eq!(length(&ctx), before);
     }
 
@@ -5714,7 +5728,7 @@ mod tests {
         );
         // Each change was one undo step.
         let undone = call(&ctx, "undo", json!({})).unwrap();
-        assert!(undone.starts_with("Undid the last change."), "{undone}");
+        assert!(undone.starts_with("Undid \"Zooms\"."), "{undone}");
         assert!(call(&ctx, "zooms", json!({ "op": "list" }))
             .unwrap()
             .contains("2.0x"));

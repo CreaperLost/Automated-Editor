@@ -1135,6 +1135,9 @@ export interface OpenedProject {
   previewAvailable: boolean;
   undoAvailable: boolean;
   redoAvailable: boolean;
+  /** What undo and redo would take back or bring back, e.g. "Cut 12.3 s". */
+  undoLabel?: string;
+  redoLabel?: string;
   zooms?: ProjectZoom[];
   dismissedZoomIds?: string[];
   layout?: EditLayout;

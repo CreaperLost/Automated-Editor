@@ -45,25 +45,35 @@ flowchart LR
 
 ## Now
 
-<a id="eval-1"></a>
-### EVAL-1 · A baseline evaluation set and a run report — S/M
+<a id="safe-2"></a>
+### SAFE-2 · Persistent history and named checkpoints — M/L
 
-- **Why:** every research doc asks for it, and without it no later item can prove it helped.
-- **Do (decided 23 Oct):** two English inputs, the milestones in order: a long-form tutorial
-  (`Untitled 22 Oct 2026 2.aero`, camera and telemetry) edited with the `tutorial` template, and
-  a short from a take recorded for it (`Untitled 22 Oct 2026 3.aero`) with the `shorts`
-  template, footage and graphics from the edited tutorial. Run each with a real agent and record
-  wall time, agent tokens and cost, tool calls, human corrections, wrong cuts and misses, and
-  provider spend (transcription, reviews). Greek is future work (LNG-4).
-- **Output:** `plans/evaluation.md` with the numbers, rerun after each cost or quality change.
+- **Plan:** [plans/history.md](plans/history.md) (23 Oct): history on disk, then agent runs,
+  then checkpoints. Decided 23 Oct: graphic source undo waits for GFX-4, a checkpoint before
+  every agent run, up to 2 GB of history per project.
+- **Phase 1 built 23 Oct:** undo and redo survive closing the app (checked in the dev app over
+  MCP), with no 64-step limit, and each step is named from what it changed. **Left:** phase 2
+  (undo what the agent did in a run) and phase 3 (checkpoints).
+- **Do:** keep the edit history on disk so undo survives reopen; one "undo what the agent did"
+  step per agent run; named checkpoints ("clean cut", "approved look") that snapshot the edit
+  document, graphic source folders and caption marks with their transcript stamp; restoring
+  creates a new revision and invalidates pending proposals. Offer a checkpoint automatically
+  before an agent workflow (the agent's version of "duplicate the project first").
+- **Done when:** restore after a reopen and after more changes than the old 64-step stack.
+- **Why now:** in the EVAL-1 run, about $0.30 of the short's $0.55 went on redoing work after
+  an app restart emptied the undo history.
+- **Was:** backlog #13 (once turned down as "named versions/compare"; back as plain history).
+
+The EVAL-1 baseline shipped 23 Oct (see [Done](#done)); rerun it from
+[plans/evaluation.md](plans/evaluation.md) after each cost or quality change.
 
 ---
 
 ## Next
 
 Rough order. GFX-5's look, saved looks, the shorts look and bring-in-line shipped (22-23 Oct);
-what is left of it waits on research, so the four after it come first: they are the foundations
-the Later tier builds on.
+what is left of it waits on research, so the three after it come first (SAFE-2, the fourth,
+moved to Now on 23 Oct): they are the foundations the Later tier builds on.
 
 <a id="gfx-5"></a>
 ### GFX-5 · Looks proposed by the agent — S/M, research first
@@ -75,17 +85,6 @@ The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#do
   Creators who make good graphics with agents seem to give each request a board of reference
   images, the brand kit and a tuned prompt (as a skill): research how they do it before building
   this; it likely joins [STY-2](#sty-2).
-
-<a id="safe-2"></a>
-### SAFE-2 · Persistent history and named checkpoints — M/L
-
-- **Do:** keep the edit history on disk so undo survives reopen; one "undo what the agent did"
-  step per agent run; named checkpoints ("clean cut", "approved look") that snapshot the edit
-  document, graphic source folders and caption marks with their transcript stamp; restoring
-  creates a new revision and invalidates pending proposals. Offer a checkpoint automatically
-  before an agent workflow (the agent's version of "duplicate the project first").
-- **Done when:** restore after a reopen and after more changes than the old 64-step stack.
-- **Was:** backlog #13 (once turned down as "named versions/compare"; back as plain history).
 
 <a id="note-1"></a>
 ### NOTE-1 · Anchored notes: comments the agent reads, and "Ask AI about this" — M
@@ -592,7 +591,7 @@ Most recent first. Details live in git history and the plans.
   "looks wrong" check instead of a dry run first (takes not guarded); `graphic_add` takes
   `items`, one call and one undo step. Tutorial: 34 → 20 calls, $0.41 → $0.36. Cost is now
   mostly writing the context (tool list, template, transcript), the case for COST-2.
-- **23 Oct 2026** — **EVAL-1 baseline** ([plans/evaluation.md](plans/evaluation.md)): a real
+- **23 Oct 2026** — <a id="eval-1"></a>**EVAL-1 baseline** ([plans/evaluation.md](plans/evaluation.md)): a real
   agent (Claude Code headless, Sonnet 5.5, the app's MCP server only) edited George's 7-min
   tutorial for $0.41 in 34 calls and made a short from a take for about $0.30 in a clean run.
   Fixed from it: quiet microphones' word tails cut by the tight pass (edges stay 24 dB below

@@ -253,7 +253,8 @@ pub fn call(tool: &ToolDef, ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output
         None => {}
     }
     ctx.project = project;
-    (tool.run)(ctx, args)
+    let agent = ctx.agent.clone();
+    crate::project::history::as_agent(&agent, tool.name, || (tool.run)(ctx, args))
 }
 
 static TOOLS: [ToolDef; 15] = [

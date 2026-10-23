@@ -53,6 +53,8 @@ fontdue = "0.9"
 ttf-parser = "0.25"
 # Checks the graphics runtime's downloads and names graphic renders.
 sha2 = "0.10"
+# Compresses the edit history's saved states (already in the tree through png).
+flate2 = "1.1"
 # Names the fields of an agent's settings change that the settings do not have.
 serde_ignored = "0.1"
 

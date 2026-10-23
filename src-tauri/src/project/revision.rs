@@ -1,4 +1,5 @@
 //! Versioned edit document (`project.json`). Source media is never rewritten.
+use super::history::{describe, History, StepMeta};
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path};
 use crate::layouts::LayoutTrack;
@@ -21,7 +22,6 @@ pub use crate::sequence::edit::TrimSide;
 /// Version 2: assets and a sequence of tracks. Earlier documents are not read.
 pub const EDIT_SCHEMA_VERSION: u32 = 2;
 pub const MAX_EDIT_BYTES: u64 = 4_194_304;
-pub const MAX_UNDO: usize = 64;
 pub const MAX_CUTS_PER_REVISION: usize = 256;
 /// Muted moments one sound can hold.
 pub const MAX_NOISE_MUTES: usize = 50_000;
@@ -357,6 +357,19 @@ pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
     Ok(Some(document))
 }
 
+/// `document` as saved: what the UI is shown (where things land, missing files) is worked
+/// out, not stored.
+pub(super) fn stored_form(document: &EditDocument) -> EditDocument {
+    let mut stored = document.clone();
+    for zoom in &mut stored.zooms {
+        zoom.edited_ranges.clear();
+    }
+    for asset in &mut stored.assets {
+        asset.missing = false;
+    }
+    stored
+}
+
 pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), String> {
     document.validate()?;
     let path = safe_path(root, "project.json")?;
@@ -365,14 +378,7 @@ pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), St
             return Err("Edit document cannot be a symlink".into());
         }
     }
-    // What the UI is shown (where things land, missing files) is worked out, not stored.
-    let mut stored = document.clone();
-    for zoom in &mut stored.zooms {
-        zoom.edited_ranges.clear();
-    }
-    for asset in &mut stored.assets {
-        asset.missing = false;
-    }
+    let stored = stored_form(document);
     let serialized = serde_json::to_vec_pretty(&stored).map_err(|e| e.to_string())?;
     if serialized.len() as u64 > MAX_EDIT_BYTES {
         return Err("Edit document exceeds size limit".into());
@@ -450,28 +456,71 @@ fn persist_revision(root: &Path, expected: u64, next: &EditDocument) -> Result<(
     result
 }
 
+/// The current edit and its undo history, which lives on disk (see `history.rs`).
 #[derive(Clone, Debug)]
 pub struct EditHistory {
     pub current: EditDocument,
-    undo: Vec<EditDocument>,
-    redo: Vec<EditDocument>,
+    log: History,
+    /// What the next step is, set by whoever is about to make it.
+    next_step: Option<StepMeta>,
 }
 
 impl EditHistory {
+    /// A history that starts with `current`.
     pub fn new(current: EditDocument) -> Self {
         Self {
             current,
-            undo: Vec::new(),
-            redo: Vec::new(),
+            log: History::empty(),
+            next_step: None,
         }
     }
 
+    /// `current` with the history saved in the project at `root`, and a note when that
+    /// history had to be repaired.
+    pub fn open(root: &Path, current: EditDocument) -> (Self, Option<String>) {
+        let (log, note) = History::open(root, &current);
+        (
+            Self {
+                current,
+                log,
+                next_step: None,
+            },
+            note,
+        )
+    }
+
     pub fn undo_available(&self) -> bool {
-        !self.undo.is_empty()
+        self.log.undo_step().is_some()
     }
 
     pub fn redo_available(&self) -> bool {
-        !self.redo.is_empty()
+        self.log.redo_step().is_some()
+    }
+
+    pub fn undo_label(&self) -> Option<&str> {
+        self.log.undo_step().map(|s| s.label.as_str())
+    }
+
+    pub fn redo_label(&self) -> Option<&str> {
+        self.log.redo_step().map(|s| s.label.as_str())
+    }
+
+    pub fn steps(&self) -> &History {
+        &self.log
+    }
+
+    #[cfg(test)]
+    pub fn steps_mut(&mut self) -> &mut History {
+        &mut self.log
+    }
+
+    /// Names the next step this history makes; without it a step is called "Edit".
+    pub fn set_next_step(&mut self, meta: StepMeta) {
+        self.next_step = Some(meta);
+    }
+
+    pub fn clear_next_step(&mut self) {
+        self.next_step = None;
     }
 
     fn check(&self, expected_revision: u64) -> Result<(), String> {
@@ -500,12 +549,17 @@ impl EditHistory {
             .checked_add(1)
             .ok_or("Revision overflow")?;
         next.attach_zoom_ranges();
+        // Both states are on disk before the edit is, so the step can always be undone.
+        let before = self.log.current_state(persist_root, &self.current)?;
+        let after = self.log.save_state(persist_root, &next)?;
         persist_revision(persist_root, expected_revision, &next)?;
-        self.undo.push(self.current.clone());
-        if self.undo.len() > MAX_UNDO {
-            self.undo.remove(0);
-        }
-        self.redo.clear();
+        let meta = self
+            .next_step
+            .take()
+            .unwrap_or_else(StepMeta::for_this_thread);
+        let was = &self.current;
+        self.log
+            .record_commit(persist_root, before, after, meta, || describe(was, &next));
         self.current = next;
         Ok(&self.current)
     }
@@ -1286,15 +1340,15 @@ impl EditHistory {
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
-        let mut previous = self.undo.last().cloned().ok_or("Nothing to undo")?;
+        let step = self.log.undo_step().ok_or("Nothing to undo")?;
+        let mut previous = self.log.load_state(persist_root, &step.before)?;
         previous.revision = self
             .current
             .revision
             .checked_add(1)
             .ok_or("Revision overflow")?;
         persist_revision(persist_root, expected_revision, &previous)?;
-        self.undo.pop();
-        self.redo.push(self.current.clone());
+        self.log.record_undo(persist_root);
         self.current = previous;
         Ok(&self.current)
     }
@@ -1305,15 +1359,15 @@ impl EditHistory {
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
-        let mut next = self.redo.last().cloned().ok_or("Nothing to redo")?;
+        let step = self.log.redo_step().ok_or("Nothing to redo")?;
+        let mut next = self.log.load_state(persist_root, &step.after)?;
         next.revision = self
             .current
             .revision
             .checked_add(1)
             .ok_or("Revision overflow")?;
         persist_revision(persist_root, expected_revision, &next)?;
-        self.redo.pop();
-        self.undo.push(self.current.clone());
+        self.log.record_redo(persist_root);
         self.current = next;
         Ok(&self.current)
     }
@@ -1924,5 +1978,201 @@ mod tests {
         history.undo(3, dir.path()).unwrap();
         history.undo(4, dir.path()).unwrap();
         assert_eq!(history.current.duration_us(), 8 * S);
+    }
+
+    fn reopen(root: &Path) -> (EditHistory, Option<String>) {
+        EditHistory::open(root, load_edit_document(root).unwrap().unwrap())
+    }
+
+    fn states(root: &Path) -> usize {
+        fs::read_dir(root.join("history/states")).map_or(0, |d| d.count())
+    }
+
+    #[test]
+    fn undo_and_redo_survive_reopening() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        history.ripple_cuts(1, &[(S, 3 * S)], dir.path()).unwrap();
+        history.undo(2, dir.path()).unwrap();
+        drop(history);
+
+        let (mut history, note) = reopen(dir.path());
+        assert_eq!(note, None);
+        assert_eq!(history.current.duration_us(), 9 * S);
+        assert_eq!(history.undo_label(), Some("Cut 1.0 s"));
+        assert_eq!(history.redo_label(), Some("Cut 2.0 s"));
+        history.redo(3, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 7 * S);
+        history.undo(4, dir.path()).unwrap();
+        history.undo(5, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 10 * S);
+        assert!(!history.undo_available());
+        // Going back and forth saves nothing new: three states, one per edit.
+        assert_eq!(states(dir.path()), 3);
+    }
+
+    #[test]
+    fn more_steps_than_the_old_stack_come_back_after_reopening() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        for revision in 0..100 {
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+        }
+        assert_eq!(history.current.duration_us(), 9 * S);
+        drop(history);
+        let (mut history, _) = reopen(dir.path());
+        assert_eq!(history.steps().undo_len(), 100);
+        for revision in 100..200 {
+            history.undo(revision, dir.path()).unwrap();
+        }
+        assert_eq!(history.current.duration_us(), 10 * S);
+        assert!(history.undo(200, dir.path()).is_err());
+    }
+
+    #[test]
+    fn an_edit_saved_without_its_log_line_becomes_a_step() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        // As if the app stopped after saving project.json but before writing the log.
+        let mut changed = history.current.clone();
+        changed.revision = 2;
+        changed.chapters = vec![crate::chapters::Chapter {
+            id: "c-1".into(),
+            source_us: 0,
+            title: "Intro".into(),
+            media: None,
+            edited_us: None,
+        }];
+        save_edit_document(dir.path(), &changed).unwrap();
+        drop(history);
+
+        let (mut history, note) = reopen(dir.path());
+        assert!(note.unwrap().contains("kept as an undo step"));
+        assert_eq!(history.undo_label(), Some("Change made outside AeroEdits"));
+        history.undo(2, dir.path()).unwrap();
+        assert!(history.current.chapters.is_empty());
+        assert_eq!(history.current.duration_us(), 9 * S);
+        history.undo(3, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 10 * S);
+    }
+
+    #[test]
+    fn a_log_line_cut_short_is_ignored_and_a_broken_log_set_aside() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        history.ripple_cuts(1, &[(S, 2 * S)], dir.path()).unwrap();
+        drop(history);
+        let log = dir.path().join("history/log.jsonl");
+        let mut text = fs::read_to_string(&log).unwrap();
+        text.push_str("{\"op\":\"und");
+        fs::write(&log, &text).unwrap();
+        let (history, note) = reopen(dir.path());
+        assert_eq!(note, None);
+        assert_eq!(history.steps().undo_len(), 2);
+
+        fs::write(
+            &log,
+            "not json
+{\"op\":\"undo\"}
+",
+        )
+        .unwrap();
+        let (history, note) = reopen(dir.path());
+        assert!(note.unwrap().contains("could not be read"));
+        assert!(!history.undo_available());
+        assert!(dir.path().join("history/log.unreadable-1.jsonl").is_file());
+    }
+
+    #[test]
+    fn the_oldest_steps_go_when_history_is_over_its_limit() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(0, 10_000)], dir.path()).unwrap();
+        let one_state = history.steps().stored_bytes() / 2;
+        history.steps_mut().set_limit_bytes(one_state * 4);
+        for revision in 1..20 {
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+        }
+        let kept = history.steps().undo_len();
+        assert!((2..=4).contains(&kept), "{kept} steps kept");
+        assert_eq!(states(dir.path()), kept + 1);
+        drop(history);
+        let (mut history, _) = reopen(dir.path());
+        assert_eq!(history.steps().undo_len(), kept);
+        for revision in 20..20 + kept as u64 {
+            history.undo(revision, dir.path()).unwrap();
+        }
+        assert_eq!(
+            history.current.duration_us(),
+            10 * S - (20 - kept as u64) * 10_000
+        );
+    }
+
+    #[test]
+    fn a_step_made_in_an_agent_call_is_the_agents() {
+        use crate::project::history::{as_agent, Author};
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        as_agent("claude-code", "silence", || {
+            history.ripple_cuts(0, &[(S, 4 * S)], dir.path()).unwrap();
+        });
+        history.ripple_cuts(1, &[(0, S)], dir.path()).unwrap();
+        history.undo(2, dir.path()).unwrap();
+        let step = history.steps().undo_step().unwrap();
+        assert_eq!(step.by, Author::Agent);
+        assert_eq!(step.agent.as_deref(), Some("claude-code"));
+        assert_eq!(step.tool.as_deref(), Some("silence"));
+        assert_eq!(step.label, "Cut 3.0 s");
+        assert_eq!(history.steps().redo_step().unwrap().by, Author::User);
+    }
+
+    /// What history adds to one edit of a real project:
+    /// `AEROEDITS_HISTORY_PROJECT=<project folder> cargo test --lib history_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn history_cost_on_a_real_project() {
+        let Ok(project) = std::env::var("AEROEDITS_HISTORY_PROJECT") else {
+            return;
+        };
+        let document = load_edit_document(Path::new(&project)).unwrap().unwrap();
+        let dir = tempdir().unwrap();
+        save_edit_document(dir.path(), &document).unwrap();
+        let mut history = EditHistory::new(document);
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let revision = history.current.revision;
+            let started = std::time::Instant::now();
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+            times.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // The part that is history's own: saving one new state.
+        let mut saves = Vec::new();
+        for i in 0..20u64 {
+            let mut next = history.current.clone();
+            next.zoom_settings.transition_ms = 100 + i as u32;
+            let started = std::time::Instant::now();
+            history.steps_mut().save_state(dir.path(), &next).unwrap();
+            saves.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        saves.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("saving a state p50 {:.1} ms", saves[10]);
+        let json = fs::metadata(dir.path().join("project.json")).unwrap().len();
+        eprintln!(
+            "project.json {} KB, state {} KB, edit p50 {:.1} ms, max {:.1} ms",
+            json / 1024,
+            history.steps().stored_bytes() / states(dir.path()) as u64 / 1024,
+            times[10],
+            times[19]
+        );
     }
 }

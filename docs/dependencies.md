@@ -40,6 +40,7 @@ Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
 | `ort` (ONNX Runtime) | `=2.0.0-rc.13` (exact) | Parakeet, YuNet; ONNX Runtime 1.28 CUDA build |
 | `llama-cpp-2` | `=0.1.160` (exact) | Local filler review on Vulkan; lacks Gemma's chat template |
 | `tokio` | 1.38 | — |
+| `flate2` | 1.1 (locked 1.1.10, pure-Rust `miniz_oxide` back end) | Compresses the edit history's saved states (SAFE-2, 23 Oct). Was already in the tree through `png`, so adding it changed no locked version |
 
 `Cargo.lock` is committed (since 21 Oct; it used to be git-ignored), so every machine and CI
 build with exactly the same crates. `cargo update` happens only in a review.

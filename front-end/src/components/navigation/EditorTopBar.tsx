@@ -166,13 +166,13 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
           <div className="flex items-center gap-0.5 shrink-0">
             <IconButton
               icon={Undo2}
-              label={`Undo${shortcut("undo") ? ` (${shortcut("undo")})` : ""}`}
+              label={`Undo${project.undoLabel ? ` ${project.undoLabel}` : ""}${shortcut("undo") ? ` (${shortcut("undo")})` : ""}`}
               disabled={!project.undoAvailable}
               onClick={() => run(undoProject)}
             />
             <IconButton
               icon={Redo2}
-              label={`Redo${shortcut("redo") ? ` (${shortcut("redo")})` : ""}`}
+              label={`Redo${project.redoLabel ? ` ${project.redoLabel}` : ""}${shortcut("redo") ? ` (${shortcut("redo")})` : ""}`}
               disabled={!project.redoAvailable}
               onClick={() => run(redoProject)}
             />

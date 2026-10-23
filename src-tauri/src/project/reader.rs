@@ -105,6 +105,11 @@ pub struct OpenedProject {
     pub preview_available: bool,
     pub undo_available: bool,
     pub redo_available: bool,
+    /// What undo and redo would take back or bring back, e.g. "Cut 12.3 s".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redo_label: Option<String>,
     #[serde(default)]
     pub zooms: Vec<ZoomKeyframe>,
     #[serde(default)]
@@ -567,7 +572,8 @@ impl ProjectReader {
                 Self::starting_document(&root, &project_file)?
             }
         };
-        let history = EditHistory::new(document);
+        let (history, note) = EditHistory::open(&root, document);
+        diagnostics.extend(note);
         let mut reader = Self {
             summary: OpenedProject {
                 project_handle: uuid::Uuid::new_v4().to_string(),
@@ -582,6 +588,8 @@ impl ProjectReader {
                 preview_available: false,
                 undo_available: false,
                 redo_available: false,
+                undo_label: None,
+                redo_label: None,
                 zooms: Vec::new(),
                 dismissed_zoom_ids: Vec::new(),
                 zoom_settings: Default::default(),
@@ -1109,6 +1117,8 @@ impl ProjectReader {
             .unwrap_or(30);
         self.summary.undo_available = self.history.undo_available();
         self.summary.redo_available = self.history.redo_available();
+        self.summary.undo_label = self.history.undo_label().map(str::to_string);
+        self.summary.redo_label = self.history.redo_label().map(str::to_string);
         self.summary.zooms = document.zooms_with_ranges();
         self.summary.dismissed_zoom_ids = document.dismissed_zoom_ids.clone();
         self.summary.zoom_settings = document.zoom_settings.clone();
