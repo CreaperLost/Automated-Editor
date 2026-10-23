@@ -59,6 +59,7 @@ sha2 = "0.10"
 flate2 = "1.1"
 # Names the fields of an agent's settings change that the settings do not have.
 serde_ignored = "0.1"
+wuff = "0.2.9"
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }

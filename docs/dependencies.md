@@ -42,6 +42,7 @@ Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
 | `tokio` | 1.38 | — |
 | `serde_json` | 1.0 with `float_roundtrip` (locked 1.0.151) | Exact float parsing since 23 Oct: the default parser can read a number back one bit off, which made a reopened edit look changed to the undo history |
 | `flate2` | 1.1 (locked 1.1.10, pure-Rust `miniz_oxide` back end) | Compresses the edit history's saved states (SAFE-2, 23 Oct). Was already in the tree through `png`, so adding it changed no locked version |
+| `wuff` | 0.2.9 (MIT, pure Rust) | Unpacks a brand kit's .woff/.woff2 font for captions (CAP-1, 23 Oct). A port of Google's WOFF2 decoder; checked on two KaTeX .woff2 files. Brings a second, older `brotli-decompressor` (5.0.3 beside 6.0.1) and `alloc-no-stdlib` 2.0.4; drop the duplicate when `wuff` moves to 6.x |
 
 `Cargo.lock` is committed (since 21 Oct; it used to be git-ignored), so every machine and CI
 build with exactly the same crates. `cargo update` happens only in a review.

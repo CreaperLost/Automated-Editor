@@ -136,22 +136,28 @@ pub fn resolve(kit: Option<&BrandKit>, brands: &Path, weight: u16) -> Typeface {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if matches!(extension.as_str(), "ttf" | "otf") {
+        let readable = matches!(extension.as_str(), "ttf" | "otf" | "woff" | "woff2");
+        if readable {
             if let Some(font) = load(&path) {
                 return with(font, format!("{family} (the {} kit's font file)", kit.name));
             }
-        } else if let Some(found) = installed(family, weight).and_then(|p| Some((load(&p)?, p))) {
-            return with(found.0, installed_label(family, &found.1, &kit.name));
-        } else {
-            return Typeface {
-                label: format!(
-                    "{} (the {} kit's font is a .{extension} file, which captions can't read: \
-                     give the kit a .ttf or .otf, or install {family})",
-                    plain.label, kit.name
-                ),
-                ..plain
-            };
         }
+        if let Some(found) = installed(family, weight).and_then(|p| Some((load(&p)?, p))) {
+            return with(found.0, installed_label(family, &found.1, &kit.name));
+        }
+        let why = if readable {
+            format!("the {} kit's font file {file} is missing or damaged", kit.name)
+        } else {
+            format!(
+                "the {} kit's font is a .{extension} file, which captions can't read: give the \
+                 kit a .ttf, .otf, .woff or .woff2, or install {family}",
+                kit.name
+            )
+        };
+        return Typeface {
+            label: format!("{} ({why})", plain.label),
+            ..plain
+        };
     }
     if normalized(family) == "inter" || normalized(family) == normalized(BUNDLED_FAMILY) {
         return Typeface {
@@ -199,13 +205,24 @@ fn load(path: &Path) -> Option<Arc<fontdue::Font>> {
             return Some(font.clone());
         }
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = unpacked(std::fs::read(path).ok()?)?;
     let font = Arc::new(fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).ok()?);
     cache
         .lock()
         .ok()?
         .insert(path.to_path_buf(), (stamp.0, stamp.1, font.clone()));
     Some(font)
+}
+
+/// A web font (WOFF or WOFF2, known by its first bytes, whatever its name) as the TrueType or
+/// OpenType font it packs; any other font as it is.
+fn unpacked(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    match bytes.get(..4) {
+        Some(b"wOFF") => wuff::decompress_woff1(&bytes).ok(),
+        Some(b"wOF2") => wuff::decompress_woff2(&bytes).ok(),
+        _ => Some(bytes),
+    }
+    .filter(|font| font.len() as u64 <= MAX_FONT_BYTES)
 }
 
 fn font_dirs() -> Vec<PathBuf> {
@@ -311,6 +328,47 @@ mod tests {
         }
     }
 
+    /// `sfnt` packed as WOFF 1.0: each table zlib-compressed, in the order the font lists them.
+    fn woff1(sfnt: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let u16_at = |at: usize| u16::from_be_bytes([sfnt[at], sfnt[at + 1]]);
+        let u32_at = |at: usize| u32::from_be_bytes(sfnt[at..at + 4].try_into().unwrap());
+        let count = u16_at(4) as usize;
+        let mut directory = Vec::new();
+        let mut data = Vec::new();
+        let data_start = 44 + 20 * count;
+        let mut sfnt_size = 12 + 16 * count as u32;
+        for i in 0..count {
+            let record = 12 + 16 * i;
+            let (offset, length) = (u32_at(record + 8) as usize, u32_at(record + 12) as usize);
+            let table = &sfnt[offset..offset + length];
+            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+            z.write_all(table).unwrap();
+            let packed = z.finish().unwrap();
+            let stored = if packed.len() < table.len() { packed } else { table.to_vec() };
+            directory.extend_from_slice(&sfnt[record..record + 4]);
+            directory.extend_from_slice(&((data_start + data.len()) as u32).to_be_bytes());
+            directory.extend_from_slice(&(stored.len() as u32).to_be_bytes());
+            directory.extend_from_slice(&(length as u32).to_be_bytes());
+            directory.extend_from_slice(&sfnt[record + 4..record + 8]);
+            data.extend_from_slice(&stored);
+            data.resize(data.len().next_multiple_of(4), 0);
+            sfnt_size += (length as u32).next_multiple_of(4);
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(b"wOFF");
+        out.extend_from_slice(&sfnt[0..4]);
+        out.extend_from_slice(&((data_start + data.len()) as u32).to_be_bytes());
+        out.extend_from_slice(&(count as u16).to_be_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(&sfnt_size.to_be_bytes());
+        out.extend_from_slice(&[0, 1, 0, 0]);
+        out.extend_from_slice(&[0; 20]);
+        out.extend_from_slice(&directory);
+        out.extend_from_slice(&data);
+        out
+    }
+
     #[test]
     fn a_kit_file_is_used_and_lends_nothing_it_has() {
         let dir = tempfile::tempdir().unwrap();
@@ -321,9 +379,21 @@ mod tests {
             .label
             .starts_with("Brand Sans (the Mine kit's font file)"));
         assert!(face.borrowed("Γειά σου").is_empty());
-        // A web font file can't be read: the bundled one, saying why.
+        // A web font is unpacked, whatever it is named.
+        std::fs::write(dir.path().join("Mine/brand.woff"), woff1(BUNDLED[0].1)).unwrap();
+        let face = resolve(Some(&kit("Brand Sans", Some("brand.woff"))), dir.path(), 700);
+        assert!(face.label.starts_with("Brand Sans (the Mine kit's font file)"));
+        assert_ne!(face.main().lookup_glyph_index('Γ'), 0);
+        // A file it can't read: the bundled one, saying why.
+        std::fs::write(dir.path().join("Mine/broken.woff2"), b"wOF2 not really").unwrap();
         let face = resolve(
-            Some(&kit("Nowhere Font Xyz", Some("brand.woff2"))),
+            Some(&kit("Nowhere Font Xyz", Some("broken.woff2"))),
+            dir.path(),
+            700,
+        );
+        assert!(face.label.contains("broken.woff2 is missing or damaged"), "{}", face.label);
+        let face = resolve(
+            Some(&kit("Nowhere Font Xyz", Some("brand.eot"))),
             dir.path(),
             700,
         );
