@@ -19,7 +19,7 @@ one place; other docs link to it instead of restating it.
 
 | Folder | What goes there |
 |---|---|
-| [plans/](plans/) | One plan per piece of work that is being built or about to be: design, decisions, build log. [ai-readiness](plans/ai-readiness.md) (the agent system, built), [layouts](plans/layouts.md) (built; follow-ups), [shorts](plans/shorts.md) (partly built; next phases), [local-review-eval](plans/local-review-eval.md) (measurement + data in `review-eval/`) |
+| [plans/](plans/) | One plan per piece of work that is being built or about to be: design, decisions, build log. [ai-readiness](plans/ai-readiness.md) (the agent system, built), [layouts](plans/layouts.md) (built; follow-ups), [history](plans/history.md) (undo on disk, agent runs, checkpoints; built), [shorts](plans/shorts.md) (partly built; next phases), [local-review-eval](plans/local-review-eval.md) (measurement + data in `review-eval/`) |
 | [contracts/](contracts/) | File formats shared with the AeroShoot recorder: [keyboard](contracts/keyboard-telemetry.md), [windows](contracts/window-telemetry.md) |
 | [research/](research/README.md) | Competitors, creator workflows, the paused re-voice lab, and the raw evidence |
 | [images/](images/) | The two diagrams (plain SVG with light and dark colours; edit by hand) |

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod checkpoint;
 pub mod folder;
 pub mod history;
 pub mod journal;

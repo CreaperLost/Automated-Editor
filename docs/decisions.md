@@ -27,6 +27,7 @@ settled table with the date and update the roadmap item it blocks.
 | Sound effects (clicks, whooshes) off by default | 20 Oct | backlog |
 | Fillers/retakes default to rules + AI review; OpenRouter/OpenAI when a key is set, local Qwen 4B only without one; `apply: true` is not the default for either | 21 Oct | [local-review-eval](plans/local-review-eval.md) |
 | Greek is transcribed online only until a local model is good enough | 20 Oct | backlog |
+| Undo history lives in the project (`history/`), up to 2 GB, no step limit; a checkpoint before every agent run (newest five kept); graphic source edits are kept only in checkpoints until GFX-4 | 23 Oct | [plans/history.md](plans/history.md#decisions-george-23-oct-2026) |
 | Layouts: one shared style per timeline, layouts only arrange; sections anchored in recording time; favourites copied when applied; default transition Auto; moves play inside the section; face centring on every camera slot; shorts keep their own base and sections; bubble on a 3×3 grid with S/M/L; side by side has fit and fill; layouts bound to keys by the user, no fixed slots | 21 Oct | [plans/layouts.md](plans/layouts.md#decisions-21-oct-2026) |
 | Re-voicing and lip sync paused until a local, commercially licensed stack is good enough | 18 Oct | [research/revoice.md](research/revoice.md) |
 | Licence rule for any bundled model: MIT, Apache-2.0, GPL-3.0 (as a separate component), OpenRAIL. Never non-commercial, research-only or revenue-capped | 18 Oct | research/revoice.md |

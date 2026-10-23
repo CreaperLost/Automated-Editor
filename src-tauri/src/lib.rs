@@ -1352,6 +1352,68 @@ fn proposal_undo_run(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_history(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::project_history_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_save(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    name: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::checkpoint_save_impl(&state, project_handle, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_rename(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    id: String,
+    name: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::checkpoint_rename_impl(&state, project_handle, id, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_delete(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    id: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::checkpoint_delete_impl(&state, project_handle, id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_restore(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    id: String,
+) -> Result<commands::history::RestoreOutcome, String> {
+    use tauri::Emitter;
+    let outcome =
+        commands::history::checkpoint_restore_impl(&state, project_handle, expected_revision, id)?;
+    // Graphic files and caption marks may have come back too.
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    let _ = app.emit("aeroedits-graphics-updated", ());
+    let _ = app.emit(
+        "aeroedits-captions-changed",
+        serde_json::json!({ "source": "checkpoint" }),
+    );
+    Ok(outcome)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn ai_settings_get() -> ai::AiSettingsView {
     commands::transcript::ai_settings_get_impl()
 }
@@ -2363,6 +2425,11 @@ pub fn run() {
             proposal_reject,
             proposal_undo,
             proposal_undo_run,
+            project_history,
+            checkpoint_save,
+            checkpoint_rename,
+            checkpoint_delete,
+            checkpoint_restore,
             mcp_app_connect,
             mcp_skill_install,
             ai_settings_get,

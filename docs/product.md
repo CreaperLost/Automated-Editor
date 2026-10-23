@@ -176,7 +176,7 @@ Registered in [`mcp/skill.rs`](../src-tauri/src/mcp/skill.rs) (2),
 | Read | `project_info`, `transcript_get`, `timeline_get`, `playhead_get`, `telemetry_get`, `layout_get` | — |
 | Look | `frame_render`, `timeline_view`, `storyboard` | — |
 | Propose | `propose_cuts`, `propose_edit`, `proposals_list`, `proposal_withdraw`, `undo_batch` | Waits for the user in the Agent panel (unless autopilot) |
-| Project | `status`, `scan`, `open`, `create`, `undo`, `redo`, `settings`, `media_import` | Directly, one undo step each |
+| Project | `status`, `scan`, `open`, `create`, `undo` (`run: true`: the agent's whole run), `redo`, `checkpoint`, `settings`, `media_import` | Directly, one undo step each; the app saves a checkpoint before each agent run |
 | Speech | `transcribe`, `mouth_noises`, `silence`, `fillers`, `fillers_review`, `speed`, `transcript_fix` | Directly; `apply: false` is a dry run; word fixes are not undo steps |
 | Picture | `layouts`, `zooms` (automatic and single zooms), `faces` | Directly; dry run available |
 | Shorts | `shorts`, `short_create`, `short_footage`, `short_from_take` | Directly |

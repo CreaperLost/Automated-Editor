@@ -143,6 +143,44 @@ George's call: $1-2 a video is fine, so the cost work stops here; no third run.
   lengthens graphics on the short's own timeline, so the 23-call detour of run 2's S2 is one
   call; the app refuses an under-take batch whose graphics would overlap, with the times.
 
+## Run 3 (23 Oct): the tutorial with history and checkpoints (SAFE-2)
+
+The tutorial only (T1, T2), same inputs and messages, a fresh project, to check SAFE-2 with a
+real agent: undo its run, go back to its checkpoint.
+
+| | Run 2 | Run 3 |
+|---|---|---|
+| T1 tutorial edit | 13 calls, 2:33, $0.264 | 14 calls, 2:42, $0.228 |
+| T2 graphics | 7 calls, 2:29, $0.094 | 11 calls, 4:47, $0.148 |
+| **Tutorial** | **20 calls, $0.358** | **25 calls, $0.375** |
+
+- **Same edit:** 7:10 → 5:46.66, 114 mouth noises muted, 121 pauses (70 s) cut, 24 fillers and
+  5 retakes (15 from the OpenRouter review), 12 zooms, one camera-only section, five chapters,
+  `check` clean. T2 added 10 graphics (one library hub, three step cards, five key points, an
+  end card). T2 cost more because its first `graphic_add` was refused: the app had restarted
+  between the turns (a fix of mine was building) and the project came back under a new id.
+- **History across two restarts:** T1's seven steps and its run came back after the app was
+  rebuilt twice; **Undo the run** in the Agent panel took T2's run back (5:48.71 → 5:46.66, no
+  graphics placed, its batch marked undone); going back to "Before claude-code's run" from the
+  History popover then changed nothing, as it should (the edit already matched it; the run's
+  10 graphic folders stay on disk, placed nowhere); going back to the first checkpoint gave the
+  raw 7:10.42 recording, and Undo returned to T1's edit (12 zooms, 5 chapters).
+- **Found and fixed in this run:**
+  - **Agents were named "agent".** Claude Code 2.1.308 asks `server/discover` before
+    `initialize`; the bridge passed it on, connecting to the app before it knew the client's
+    name, so every batch, step and run was "agent". The bridge now answers it as unknown
+    (-32601) and the client goes on to the handshake: T2's run is "claude-code".
+  - **A reopened edit looked changed.** serde_json's default float parser can read a number one
+    bit off (a zoom centre `0.20614035087719298` came back `...296`), so the history saw a
+    "Change made outside AeroEdits" on top of T1's run and refused to undo the run. serde_json
+    now parses exactly (`float_roundtrip`), and opening compares the documents when only their
+    hashes differ.
+  - **Automatic checkpoints** were saved before the agent was named (no agent on them) and
+    twice for T1 (transcribing changed the transcripts before the first step). One per run
+    now, under the agent's name.
+- Undone-run graphics left as folders on disk are a small open point: nothing lists or plays
+  them, but they take space until the project is cleaned.
+
 ## Rerun
 
 Same inputs, same messages (T1, T2, S1, then the user's answer to what the agent asks), a

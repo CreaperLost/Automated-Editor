@@ -62,8 +62,8 @@ material ([research/](research/README.md)); creator claims are not measurements.
 |---|---|---|
 | **Agent proposals were not bound to a project.** They carried `expectedRevision` but the MCP helper called `with_proposals(state, None, …)`, i.e. whichever project was open | Code: `mcp/propose.rs` | Fixed 21 Oct: [SAFE-1](roadmap.md#safe-1). Left: direct actions check the `project` id just before running rather than under the command lock ([AGT-1](roadmap.md#agt-1)) |
 | **Undo dies on reopen.** `EditHistory` is in memory, capped at `MAX_UNDO = 64`; only the current document is saved. "Undo what the agent did yesterday" has no substrate | Code: `project/revision.rs` | Fixed 23 Oct: history on disk, no step limit under 2 GB, and an agent's run undone as one step ([SAFE-2](roadmap.md#safe-2) phases 1-2) |
-| **Graphic source edits have no undo.** `graphic_set` (variables, brand) and `graphic_write_file` write source directly; library "versions" don't keep old files | Code: `commands/graphics.rs`, `graphics/library.rs` | [SAFE-2](roadmap.md#safe-2), then [GFX-4](roadmap.md#gfx-4) |
-| **No checkpoints.** No "clean cut" / "approved look" snapshot covering the edit, graphic source and caption marks (transcripts sit outside the edit's undo) | Research: ChatCut, every Resolve creator duplicates the project first | [SAFE-2](roadmap.md#safe-2) |
+| **Graphic source edits have no undo.** `graphic_set` (variables, brand) and `graphic_write_file` write source directly; library "versions" don't keep old files | Code: `commands/graphics.rs`, `graphics/library.rs` | Partly 23 Oct: checkpoints keep graphic files and the app saves one before every agent run ([SAFE-2](roadmap.md#safe-2)); undo steps for them are [GFX-4](roadmap.md#gfx-4) |
+| **No checkpoints.** No "clean cut" / "approved look" snapshot covering the edit, graphic source and caption marks (transcripts sit outside the edit's undo) | Research: ChatCut, every Resolve creator duplicates the project first | Fixed 23 Oct ([SAFE-2](roadmap.md#safe-2)) |
 
 ## 3. Agent surface
 

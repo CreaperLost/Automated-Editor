@@ -1575,6 +1575,40 @@ export interface ProposalsView {
   warning?: string;
 }
 
+/** The History popover: checkpoints and recent steps, newest first. */
+export interface HistoryView {
+  projectHandle: string;
+  checkpoints: HistoryCheckpoint[];
+  steps: HistoryStep[];
+}
+
+export interface HistoryCheckpoint {
+  id: string;
+  name: string;
+  by: "user" | "agent";
+  agent?: string;
+  /** Saved by the app before an agent run (the newest few are kept). */
+  auto: boolean;
+  at: string;
+  graphics: number;
+}
+
+export interface HistoryStep {
+  label: string;
+  by: "user" | "agent";
+  agent?: string;
+  at: string;
+  /** Undone: Redo brings it back. */
+  undone: boolean;
+}
+
+export interface CheckpointRestoreOutcome {
+  project: OpenedProject;
+  proposals: ProposalsView;
+  history: HistoryView;
+  message: string;
+}
+
 /** Everything one agent changed in one go (since its last template call, with no change of yours between). */
 export interface AgentRun {
   agent: string;

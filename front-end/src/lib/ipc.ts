@@ -49,6 +49,8 @@ import {
   McpStatus,
   ProposalOutcome,
   ProposalsView,
+  HistoryView,
+  CheckpointRestoreOutcome,
   TranscriptRunResult,
   TranscriptSettings,
   TranscriptSettingsView,
@@ -378,6 +380,15 @@ export const api = {
     invokeTauri<ProposalOutcome>("proposal_undo", { projectHandle, expectedRevision, batchId }),
   proposalUndoRun: (projectHandle: string, expectedRevision: number) =>
     invokeTauri<ProposalOutcome>("proposal_undo_run", { projectHandle, expectedRevision }),
+  projectHistory: (projectHandle: string) => invokeTauri<HistoryView>("project_history", { projectHandle }),
+  checkpointSave: (projectHandle: string, name: string) =>
+    invokeTauri<HistoryView>("checkpoint_save", { projectHandle, name }),
+  checkpointRename: (projectHandle: string, id: string, name: string) =>
+    invokeTauri<HistoryView>("checkpoint_rename", { projectHandle, id, name }),
+  checkpointDelete: (projectHandle: string, id: string) =>
+    invokeTauri<HistoryView>("checkpoint_delete", { projectHandle, id }),
+  checkpointRestore: (projectHandle: string, expectedRevision: number, id: string) =>
+    invokeTauri<CheckpointRestoreOutcome>("checkpoint_restore", { projectHandle, expectedRevision, id }),
   aiSettingsGet: () => invokeTauri<AiSettingsView>("ai_settings_get"),
   aiSettingsSet: (settings: AiSettings) => invokeTauri<AiSettingsView>("ai_settings_set", { settings }),
   aiSetApiKey: (provider: AiProvider, key: string) =>

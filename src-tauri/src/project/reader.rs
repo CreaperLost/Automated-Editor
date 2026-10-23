@@ -784,6 +784,55 @@ impl ProjectReader {
         self.history.end_run();
     }
 
+    /// Saves a checkpoint named `name` (see [`EditHistory::save_checkpoint`]).
+    pub fn save_checkpoint(
+        &mut self,
+        name: &str,
+    ) -> Result<crate::project::history::Checkpoint, String> {
+        self.history.save_checkpoint(&self.root, name, false)
+    }
+
+    /// Before `agent` changes something: a checkpoint, when this starts a new run of its.
+    pub fn checkpoint_before_agent(&mut self, agent: &str) {
+        if self.history.steps().continues_run(Some(agent)) || self.history.steps().run_saved(agent)
+        {
+            return;
+        }
+        let name = format!("Before {agent}'s run");
+        match self.history.save_checkpoint(&self.root, &name, true) {
+            Ok(_) => self.history.steps_mut().saved_before_run(agent),
+            Err(error) => eprintln!("history: no checkpoint before {agent}'s run: {error}"),
+        }
+    }
+
+    /// Goes back to checkpoint `id` (see [`EditHistory::restore_checkpoint`]).
+    pub fn restore_checkpoint(
+        &mut self,
+        expected_revision: u64,
+        id: &str,
+    ) -> Result<
+        (
+            OpenedProject,
+            crate::project::history::Checkpoint,
+            crate::project::checkpoint::Restored,
+        ),
+        String,
+    > {
+        let (checkpoint, restored) =
+            self.history
+                .restore_checkpoint(expected_revision, &self.root, id)?;
+        self.index_recordings_quietly();
+        Ok((self.done(), checkpoint, restored))
+    }
+
+    pub fn rename_checkpoint(&mut self, id: &str, name: &str) -> Result<(), String> {
+        self.history.rename_checkpoint(&self.root, id, name)
+    }
+
+    pub fn delete_checkpoint(&mut self, id: &str) -> Result<(), String> {
+        self.history.delete_checkpoint(&self.root, id)
+    }
+
     pub fn redo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
         self.history.redo(expected_revision, &self.root)?;
         self.index_recordings_quietly();

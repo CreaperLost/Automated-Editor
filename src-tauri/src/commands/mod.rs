@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod graphics;
+pub mod history;
 pub mod noises;
 pub mod proposals;
 pub mod transcript;

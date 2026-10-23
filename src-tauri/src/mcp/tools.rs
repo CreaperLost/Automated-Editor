@@ -146,6 +146,7 @@ pub fn find(name: &str) -> Option<&'static ToolDef> {
 /// them. The CLI and direct calls reach them as before. Name each in `more`'s description.
 pub const MORE: &[&str] = &[
     "redo",
+    "checkpoint",
     "playhead_get",
     "layout_get",
     "telemetry_get",
@@ -254,7 +255,15 @@ pub fn call(tool: &ToolDef, ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output
     }
     ctx.project = project;
     let agent = ctx.agent.clone();
-    crate::project::history::as_agent(&agent, tool.name, || (tool.run)(ctx, args))
+    crate::project::history::as_agent(&agent, tool.name, || {
+        // Before an agent's run changes anything, the app saves where things are.
+        if !tool.read_only && tool.name != "checkpoint" {
+            if let Some(reader) = ctx.state.opened_project.lock().as_mut() {
+                reader.checkpoint_before_agent(&agent);
+            }
+        }
+        (tool.run)(ctx, args)
+    })
 }
 
 static TOOLS: [ToolDef; 15] = [
@@ -262,7 +271,7 @@ static TOOLS: [ToolDef; 15] = [
         name: "more",
         description: "Tools an edit rarely needs, left out of this list to save tokens: `tool` \
             alone gives one's description and arguments; with `args` it runs, as if called \
-            directly. redo (the undo taken back); playhead_get (where the user's playhead is); \
+            directly. redo (the undo taken back); checkpoint (named moments to go back to); playhead_get (where the user's playhead is); \
             layout_get (a layout's details); telemetry_get (mouse and keys at a time); speed \
             (play a stretch faster or slower, only when asked); transcript_fix (a misheard \
             word); captions (the caption lines and their emphasis words); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
@@ -1042,6 +1051,7 @@ mod tests {
                     "edits": [{ "kind": "addTrack", "trackKind": "video" }] }),
                 "proposal_withdraw" => json!({ "batchId": "b-1" }),
                 "undo_batch" => json!({ "batchId": "b-1", "expectedRevision": 0 }),
+                "checkpoint" => json!({ "op": "list" }),
                 "settings" => json!({ "area": "captions" }),
                 "short_create" => json!({ "title": "t", "fromWord": "w-0", "toWord": "w-1" }),
                 "media_import" => json!({ "paths": ["a.mp4"] }),

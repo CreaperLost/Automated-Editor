@@ -1,10 +1,11 @@
 # History and checkpoints: plan v1 (2026-10-23)
 
-[SAFE-2](../roadmap.md#safe-2). Status: **phases 1 and 2 built 23 Oct 2026** (see
-[phase 1](#built-phase-1-23-oct-2026), [phase 2](#built-phase-2-23-oct-2026)); phase 3
-(checkpoints) not started. George's answers to its
-three questions are under [Decisions](#decisions-george-23-oct-2026). When it ships, fold the
-model into [architecture.md](../architecture.md) and delete this plan.
+[SAFE-2](../roadmap.md#safe-2). Status: **built 23 Oct 2026**, all three phases (see
+[phase 1](#built-phase-1-23-oct-2026), [phase 2](#built-phase-2-23-oct-2026),
+[phase 3](#built-phase-3-23-oct-2026)). The model is in
+[architecture.md](../architecture.md#the-project-and-the-sequence-model); this file is the build
+log. Checked with a real agent in [EVAL-1 run 3](#checked-with-a-real-agent-eval-1-run-3-23-oct-2026). George's answers
+to its three questions are under [Decisions](#decisions-george-23-oct-2026).
 
 Goal: undo that survives closing the app, one step that takes back everything an agent did in a
 run, and named checkpoints ("clean cut", "approved look") the user or the agent can go back to.
@@ -199,6 +200,45 @@ Where it differs from the design above, this wins.
   stopped and started, the panel showed the run, **Undo the run** took all three back in one
   step (1:40.4 again, captions off, no mutes) and the top bar's Undo brought them back.
   Not checked yet: a full EVAL-1 tutorial run by a real agent.
+
+## Built: phase 3 (23 Oct 2026)
+
+- `project/checkpoint.rs` captures and restores what lives beside the edit; the checkpoint
+  records are lines in `history/log.jsonl` (`checkpoint`, `checkpointRename`,
+  `checkpointDelete`), and graphic files are kept by hash in `history/files/` (they dedupe
+  across checkpoints and go when no checkpoint needs them). Not a tar per graphic as planned:
+  per-file blobs share what did not change.
+- **Caption marks** come back only when the transcript's word ids (and its `createdAt`) are the
+  same, so a word fix keeps them and transcribing again skips them, with the reason in the
+  answer.
+- **Going back** saves "Before restoring "…"" first (automatic, so it rotates with the others):
+  Undo brings back only the edit, so that checkpoint is how a restore of graphics and marks is
+  taken back. When the edit is the same as the checkpoint's, no step is made. Waiting batches
+  are withdrawn with a line in their summary saying why. Restored graphics are asked to render
+  at once (`render::request_all`), not when the playhead reaches them.
+- **Automatic checkpoints** are taken in `tools::call` before an agent's first changing call of
+  a new run (so graphic source edits, which make no step, are covered too), named "Before
+  claude-code's run"; one the same as the newest automatic one is not saved again, so a run of
+  many calls makes one. Renaming one makes it the user's to keep. At most 200 checkpoints.
+- **UI:** a History button beside Undo/Redo opens a popover: a name and Save, the checkpoints
+  (go back, rename, delete), and the last 40 steps with an agent mark and the undone ones struck
+  through. **MCP:** `checkpoint` (`list`, `save`, `restore`) behind `more`; `status` names the
+  newest named checkpoint. Not built from the design above: clicking a step to jump to it, and
+  the Agent panel offering the pre-run checkpoint when a run can't be undone in one step.
+- Adding or removing media now names the step ("Added a graphic") instead of "Timeline edit,
+  Media".
+- **Checked in the dev app:** an agent cut silences and added a key-point graphic over MCP (one
+  automatic checkpoint for the run); "With graphic" saved from the popover; the agent changed the
+  graphic's text and rendered it; going back from the popover put the text back ("Put back 1
+  graphic"), the frame showed the old text, and in a second run the restored graphic rendered by
+  itself within seconds.
+
+## Checked with a real agent (EVAL-1 run 3, 23 Oct 2026)
+
+The tutorial edited by Claude Code headless (T1, T2) in the dev app, then its run undone from
+the Agent panel and its checkpoints gone back to from the History popover: details and the
+three fixes it led to (the client's name, exact float parsing, one checkpoint per run) are in
+[evaluation.md](evaluation.md#run-3-23-oct-the-tutorial-with-history-and-checkpoints-safe-2).
 
 ## Decisions (George, 23 Oct 2026)
 

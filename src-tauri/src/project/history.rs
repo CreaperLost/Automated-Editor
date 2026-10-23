@@ -9,13 +9,19 @@ use super::reader::{open_regular, safe_path};
 use super::revision::{stored_form, EditDocument, MAX_EDIT_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 
 pub const HISTORY_DIR: &str = "history";
 const STATES_DIR: &str = "history/states";
+/// Graphic source files kept for checkpoints, by the hash of their bytes.
+const FILES_DIR: &str = "history/files";
+/// Checkpoints made automatically before agent runs that are kept.
+const MAX_AUTO_CHECKPOINTS: usize = 5;
+const MAX_CHECKPOINTS: usize = 200;
+const MAX_CHECKPOINT_NAME_CHARS: usize = 80;
 const LOG_FILE: &str = "history/log.jsonl";
 const LOG_SCHEMA_VERSION: u32 = 1;
 /// Saved states a project keeps before its oldest steps go (George, 23 Oct).
@@ -92,19 +98,47 @@ pub fn as_agent<T>(agent: &str, tool: &str, call: impl FnOnce() -> T) -> T {
 /// A short name for the change from `before` to `after`, from the parts that differ.
 pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
     let mut parts: Vec<String> = Vec::new();
+    // Media added or taken out names the step; placing it on the timeline goes without saying.
+    let had = |doc: &EditDocument, id: &str| doc.assets.iter().any(|a| a.id == id);
+    let added: Vec<_> = after
+        .assets
+        .iter()
+        .filter(|a| !had(before, &a.id))
+        .collect();
+    let removed: Vec<_> = before
+        .assets
+        .iter()
+        .filter(|a| !had(after, &a.id))
+        .collect();
+    let media = |assets: &[&crate::sequence::Asset], verb: &str| -> Option<String> {
+        if assets.is_empty() {
+            return None;
+        }
+        let graphics = assets
+            .iter()
+            .all(|a| a.kind == crate::sequence::AssetKind::Graphic);
+        let what = if graphics { "graphic" } else { "media file" };
+        Some(match assets.len() {
+            1 => format!("{verb} a {what}"),
+            n => format!("{verb} {n} {what}s"),
+        })
+    };
+    parts.extend(media(&added, "Added"));
+    parts.extend(media(&removed, "Removed"));
+    let placed = !parts.is_empty();
     if before.sequence != after.sequence {
         let (was, now) = (before.duration_us(), after.duration_us());
         let seconds = |us: u64| format!("{:.1} s", us as f64 / 1e6);
-        parts.push(if now < was {
-            format!("Cut {}", seconds(was - now))
+        if now < was {
+            parts.push(format!("Cut {}", seconds(was - now)));
         } else if now > was {
-            format!("Added {}", seconds(now - was))
-        } else {
-            "Timeline edit".into()
-        });
+            parts.push(format!("Added {}", seconds(now - was)));
+        } else if !placed {
+            parts.push("Timeline edit".into());
+        }
     }
     let named: [(bool, &str); 12] = [
-        (before.assets != after.assets, "Media"),
+        (!placed && before.assets != after.assets, "Media"),
         (before.noise_mutes != after.noise_mutes, "Mouth noises"),
         (
             before.zooms != after.zooms
@@ -128,6 +162,10 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
             .filter(|(changed, _)| *changed)
             .map(|(_, n)| n.to_string()),
     );
+    finish(parts)
+}
+
+fn finish(parts: Vec<String>) -> String {
     match parts.len() {
         0 => "Edit".into(),
         1 | 2 => parts.join(", "),
@@ -192,6 +230,49 @@ pub struct RunUndo {
     pub since_revision: u64,
 }
 
+/// A named moment to go back to: the edit, each graphic's source files and the caption marks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checkpoint {
+    /// `c-<n>`.
+    pub id: String,
+    pub name: String,
+    /// The edit's state (`history/states/`).
+    pub state: String,
+    #[serde(default)]
+    pub by: Author,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Made by the app before an agent run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
+    pub at: String,
+    /// Each graphic's source files: graphic id → path in its folder → file hash.
+    #[serde(default)]
+    pub graphics: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each transcript's caption marks, by sound key.
+    #[serde(default)]
+    pub captions: BTreeMap<String, CaptionSnapshot>,
+}
+
+/// One transcript's caption marks and the words they hang on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionSnapshot {
+    /// The transcript's word ids, hashed: marks come back only onto the same words.
+    pub stamp: String,
+    pub marks: BTreeMap<String, crate::transcript::CaptionMark>,
+}
+
+impl Checkpoint {
+    /// The same edit, graphics and captions: saving it again would add nothing.
+    pub fn same_as(&self, other: &Checkpoint) -> bool {
+        self.state == other.state
+            && self.graphics == other.graphics
+            && self.captions == other.captions
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 enum Line {
@@ -208,6 +289,16 @@ enum Line {
     Drop {
         n: usize,
     },
+    Checkpoint {
+        checkpoint: Checkpoint,
+    },
+    CheckpointRename {
+        id: String,
+        name: String,
+    },
+    CheckpointDelete {
+        id: String,
+    },
 }
 
 /// The undo and redo stacks as steps; the documents stay on disk until one is needed.
@@ -223,6 +314,13 @@ pub struct History {
     /// The next agent step starts a new run even if its agent's last one was recent
     /// (the agent began a new workflow).
     run_ended: bool,
+    /// Oldest first.
+    checkpoints: Vec<Checkpoint>,
+    /// Size on disk of each kept graphic file.
+    file_sizes: HashMap<String, u64>,
+    /// The agent whose coming run already has its checkpoint: the calls before its first step
+    /// (transcribing, say) change things but should not each save another.
+    run_saved_for: Option<String>,
 }
 
 impl History {
@@ -264,15 +362,7 @@ impl History {
     /// The run an agent's next step belongs to: the top step's, while it is the same agent's,
     /// recent, and no workflow began since; else a new one.
     fn run_for(&mut self, agent: Option<&str>) -> String {
-        let now = chrono::Utc::now();
-        let continues = !self.run_ended
-            && self.undo.last().is_some_and(|top| {
-                top.run.is_some()
-                    && top.agent.as_deref() == agent
-                    && chrono::DateTime::parse_from_rfc3339(&top.at).is_ok_and(|at| {
-                        (now - at.with_timezone(&chrono::Utc)).num_seconds() < RUN_GAP_SECONDS
-                    })
-            });
+        let continues = self.continues_run(agent);
         self.run_ended = false;
         if continues {
             return self
@@ -289,6 +379,150 @@ impl History {
             .max()
             .map_or(1, |n| n + 1);
         format!("r-{next}")
+    }
+
+    /// Whether `agent`'s next step would join the run on top rather than start one.
+    pub fn continues_run(&self, agent: Option<&str>) -> bool {
+        let now = chrono::Utc::now();
+        !self.run_ended
+            && self.undo.last().is_some_and(|top| {
+                top.run.is_some()
+                    && top.agent.as_deref() == agent
+                    && chrono::DateTime::parse_from_rfc3339(&top.at).is_ok_and(|at| {
+                        (now - at.with_timezone(&chrono::Utc)).num_seconds() < RUN_GAP_SECONDS
+                    })
+            })
+    }
+
+    /// Whether `agent`'s coming run already has its checkpoint.
+    pub fn run_saved(&self, agent: &str) -> bool {
+        self.run_saved_for.as_deref() == Some(agent)
+    }
+
+    /// `agent`'s coming run has its checkpoint, until a step is made.
+    pub fn saved_before_run(&mut self, agent: &str) {
+        self.run_saved_for = Some(agent.to_string());
+    }
+
+    /// Oldest first.
+    pub fn checkpoints(&self) -> &[Checkpoint] {
+        &self.checkpoints
+    }
+
+    pub fn checkpoint(&self, id: &str) -> Result<&Checkpoint, String> {
+        self.checkpoints
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| format!("No checkpoint {id}"))
+    }
+
+    /// The steps newest first, at most `limit`, each with whether it is undone (waiting on
+    /// the redo stack).
+    pub fn recent_steps(&self, limit: usize) -> Vec<(&Step, bool)> {
+        self.redo
+            .iter()
+            .map(|s| (s, true))
+            .chain(self.undo.iter().rev().map(|s| (s, false)))
+            .take(limit)
+            .collect()
+    }
+
+    /// Keeps `checkpoint` (its state and files already saved), giving it an id and a clean
+    /// name. Automatic ones beyond the newest few go.
+    pub fn add_checkpoint(&mut self, root: &Path, mut checkpoint: Checkpoint) -> Checkpoint {
+        let next = self
+            .checkpoints
+            .iter()
+            .filter_map(|c| c.id.strip_prefix("c-")?.parse::<u64>().ok())
+            .max()
+            .map_or(1, |n| n + 1);
+        checkpoint.id = format!("c-{next}");
+        checkpoint.name = clean_name(&checkpoint.name);
+        self.checkpoints.push(checkpoint.clone());
+        self.append(
+            root,
+            &Line::Checkpoint {
+                checkpoint: checkpoint.clone(),
+            },
+        );
+        let autos: Vec<String> = self
+            .checkpoints
+            .iter()
+            .filter(|c| c.auto)
+            .map(|c| c.id.clone())
+            .collect();
+        let extra = autos.len().saturating_sub(MAX_AUTO_CHECKPOINTS);
+        let mut gone: Vec<String> = autos.into_iter().take(extra).collect();
+        // Past the cap, the oldest go whoever made them.
+        let over = (self.checkpoints.len() - gone.len()).saturating_sub(MAX_CHECKPOINTS);
+        let oldest: Vec<String> = self
+            .checkpoints
+            .iter()
+            .filter(|c| !gone.contains(&c.id))
+            .take(over)
+            .map(|c| c.id.clone())
+            .collect();
+        gone.extend(oldest);
+        for id in gone {
+            self.checkpoints.retain(|c| c.id != id);
+            self.append(root, &Line::CheckpointDelete { id });
+        }
+        self.prune(root);
+        checkpoint
+    }
+
+    pub fn rename_checkpoint(&mut self, root: &Path, id: &str, name: &str) -> Result<(), String> {
+        let name = clean_name(name);
+        let checkpoint = self
+            .checkpoints
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| format!("No checkpoint {id}"))?;
+        checkpoint.name = name.clone();
+        // A checkpoint someone named is theirs to keep.
+        checkpoint.auto = false;
+        self.append(
+            root,
+            &Line::CheckpointRename {
+                id: id.into(),
+                name,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn delete_checkpoint(&mut self, root: &Path, id: &str) -> Result<(), String> {
+        self.checkpoint(id)?;
+        self.checkpoints.retain(|c| c.id != id);
+        self.append(root, &Line::CheckpointDelete { id: id.into() });
+        self.prune(root);
+        Ok(())
+    }
+
+    /// Keeps a graphic file for checkpoints and returns its hash.
+    pub fn save_file(&mut self, root: &Path, bytes: &[u8]) -> Result<String, String> {
+        let hash = hex(&Sha256::digest(bytes));
+        if self.file_sizes.contains_key(&hash) {
+            return Ok(hash);
+        }
+        let size = write_packed(root, FILES_DIR, &file_path(root, &hash)?, bytes)?;
+        self.file_sizes.insert(hash.clone(), size);
+        Ok(hash)
+    }
+
+    /// A graphic file kept for checkpoints.
+    pub fn load_file(&self, root: &Path, hash: &str) -> Result<Vec<u8>, String> {
+        let file = open_regular(&file_path(root, hash)?)
+            .map_err(|_| "A file this checkpoint kept is missing")?;
+        let mut bytes = Vec::new();
+        flate2::read::GzDecoder::new(file)
+            .take(MAX_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("A file this checkpoint kept could not be read: {e}"))?;
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            return Err("A file this checkpoint kept is too big".into());
+        }
+        Ok(bytes)
     }
 
     /// The newest agent run still in the undo history, and whether it can be undone. A run
@@ -365,6 +599,11 @@ impl History {
         self.sizes.values().sum()
     }
 
+    #[cfg(test)]
+    pub fn kept_files(&self) -> usize {
+        self.file_sizes.len()
+    }
+
     /// The history saved beside `current` (the document just read from `project.json`), with
     /// a note when something had to be repaired. Never fails: a history that cannot be read
     /// is set aside and the project starts with none, as before this existed.
@@ -394,10 +633,15 @@ impl History {
         trim_unreachable(&mut history.undo, &have);
         trim_unreachable(&mut history.redo, &have);
         let known = history.current.clone().filter(|h| have(h));
+        history.checkpoints.retain(|c| have(&c.state));
         history.sizes = sizes;
+        history.file_sizes = file_sizes(root);
         let mut note = None;
         match state_hash(current) {
-            Ok((hash, _)) if Some(&hash) != history.current.as_ref() => {
+            Ok((hash, _))
+                if Some(&hash) != history.current.as_ref()
+                    && !same_document(root, history.current.as_deref(), current) =>
+            {
                 // A crash between saving the edit and the log, or a change made elsewhere:
                 // the edit on disk wins and becomes a step, so nothing is lost either way.
                 if let Some(before) = known {
@@ -465,6 +709,17 @@ impl History {
             Line::Drop { n } => {
                 self.undo.drain(..n.min(self.undo.len()));
             }
+            Line::Checkpoint { checkpoint } => {
+                self.checkpoints.retain(|c| c.id != checkpoint.id);
+                self.checkpoints.push(checkpoint);
+            }
+            Line::CheckpointRename { id, name } => {
+                if let Some(c) = self.checkpoints.iter_mut().find(|c| c.id == id) {
+                    c.name = name;
+                    c.auto = false;
+                }
+            }
+            Line::CheckpointDelete { id } => self.checkpoints.retain(|c| c.id != id),
         }
     }
 
@@ -505,6 +760,7 @@ impl History {
     ) {
         let run = (meta.by == Author::Agent && meta.joins_run)
             .then(|| self.run_for(meta.agent.as_deref()));
+        self.run_saved_for = None;
         if meta.by == Author::User {
             self.run_ended = false;
         }
@@ -563,6 +819,10 @@ impl History {
         if let Some(current) = &self.current {
             *uses.entry(current).or_default() += 1;
         }
+        // A checkpoint's state is never let go.
+        for checkpoint in &self.checkpoints {
+            *uses.entry(&checkpoint.state).or_default() += 1;
+        }
         let mut total: u64 = self
             .sizes
             .iter()
@@ -598,6 +858,24 @@ impl History {
                 }
             }
         }
+        let kept: std::collections::HashSet<&String> = self
+            .checkpoints
+            .iter()
+            .flat_map(|c| c.graphics.values().flat_map(|files| files.values()))
+            .collect();
+        let unused: Vec<String> = self
+            .file_sizes
+            .keys()
+            .filter(|hash| !kept.contains(hash))
+            .cloned()
+            .collect();
+        for hash in unused {
+            if let Ok(path) = file_path(root, &hash) {
+                if fs::remove_file(path).is_ok() {
+                    self.file_sizes.remove(&hash);
+                }
+            }
+        }
     }
 
     /// Rewrites the log as just the steps it still holds.
@@ -612,6 +890,11 @@ impl History {
         for _ in &self.redo {
             text.push_str(&line_text(&Line::Undo)?);
         }
+        for checkpoint in &self.checkpoints {
+            text.push_str(&line_text(&Line::Checkpoint {
+                checkpoint: checkpoint.clone(),
+            })?);
+        }
         ensure_dirs(root)?;
         let path = safe_path(root, LOG_FILE)?;
         let dir = safe_path(root, HISTORY_DIR)?;
@@ -621,6 +904,18 @@ impl History {
         temp.persist(path).map_err(|e| e.to_string())?;
         Ok(())
     }
+}
+
+/// Whether the state saved as `hash` is `document` (its revision aside), for when their hashes
+/// differ although nothing changed: a number read back one bit off, say.
+fn same_document(root: &Path, hash: Option<&str>, document: &EditDocument) -> bool {
+    let Some(saved) = hash.and_then(|h| load_state(root, h).ok()) else {
+        return false;
+    };
+    let (mut saved, mut document) = (stored_form(&saved), stored_form(document));
+    saved.revision = 0;
+    document.revision = 0;
+    saved == document
 }
 
 /// Drops steps that can no longer be reached because a state they need is missing: on the
@@ -650,6 +945,71 @@ fn clean_label(label: &str) -> String {
     } else {
         label.to_string()
     }
+}
+
+fn clean_name(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX_CHECKPOINT_NAME_CHARS)
+        .collect();
+    let name = name.trim();
+    if name.is_empty() {
+        "Checkpoint".into()
+    } else {
+        name.to_string()
+    }
+}
+
+/// The largest graphic file a checkpoint keeps (a graphic's whole source is capped at this).
+pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+fn file_path(root: &Path, hash: &str) -> Result<std::path::PathBuf, String> {
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid kept file".into());
+    }
+    safe_path(root, &format!("{FILES_DIR}/{hash}.gz"))
+}
+
+/// Writes `bytes` gzip-compressed to `path` (in `dir`) atomically; returns its size on disk.
+fn write_packed(root: &Path, dir: &str, path: &Path, bytes: &[u8]) -> Result<u64, String> {
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.is_file() {
+            return Ok(meta.len());
+        }
+    }
+    let dir = safe_path(root, dir)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(bytes).map_err(|e| e.to_string())?;
+    let packed = encoder.finish().map_err(|e| e.to_string())?;
+    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    temp.write_all(&packed).map_err(|e| e.to_string())?;
+    temp.as_file().sync_all().map_err(|e| e.to_string())?;
+    temp.persist(path).map_err(|e| e.to_string())?;
+    Ok(packed.len() as u64)
+}
+
+fn file_sizes(root: &Path) -> HashMap<String, u64> {
+    let mut sizes = HashMap::new();
+    let Ok(dir) = safe_path(root, FILES_DIR) else {
+        return sizes;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return sizes;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(hash) = name.to_str().and_then(|n| n.strip_suffix(".gz")) else {
+            continue;
+        };
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() && file_path(root, hash).is_ok() {
+                sizes.insert(hash.to_string(), meta.len());
+            }
+        }
+    }
+    sizes
 }
 
 fn hex(bytes: &[u8]) -> String {

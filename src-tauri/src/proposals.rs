@@ -1118,6 +1118,46 @@ pub fn undo_run(
     Ok((summary, what))
 }
 
+/// Goes back to checkpoint `id` (`ProjectReader::restore_checkpoint`). What was waiting was
+/// worked out on the edit as it was, so it is withdrawn. Says what was done.
+pub fn restore_checkpoint(
+    reader: &mut ProjectReader,
+    proposals: &mut Proposals,
+    expected_revision: u64,
+    id: &str,
+) -> Result<(OpenedProject, String), String> {
+    let (summary, checkpoint, restored) = reader.restore_checkpoint(expected_revision, id)?;
+    if restored.graphics > 0 {
+        // Their files changed back: render them now rather than when the playhead gets there.
+        crate::graphics::render::request_all(reader.root(), &reader.history().current);
+    }
+    let mut withdrawn = 0;
+    for batch in &mut proposals.batches {
+        if batch.status == Status::Pending {
+            batch.status = Status::Withdrawn;
+            batch.decided_at = Some(now());
+            batch.summary.push(format!(
+                "Withdrawn: the edit went back to checkpoint \"{}\".",
+                checkpoint.name
+            ));
+            withdrawn += 1;
+        }
+    }
+    let mut what = format!("Went back to checkpoint \"{}\".", checkpoint.name);
+    let side = restored.summary();
+    if !side.is_empty() {
+        what.push(' ');
+        what.push_str(&side);
+    }
+    if withdrawn > 0 {
+        what.push_str(&format!(
+            " {withdrawn} waiting batch{} withdrawn.",
+            if withdrawn == 1 { "" } else { "es" }
+        ));
+    }
+    Ok((summary, what))
+}
+
 /// Batch `batch` is undone, with its items accepted at revisions `undone` names: for the user
 /// what it did waits again; for the agent (`by_agent`) it is withdrawn.
 fn set_undone(batch: &mut Batch, undone: impl Fn(u64) -> bool, by_agent: bool) {

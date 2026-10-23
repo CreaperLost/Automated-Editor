@@ -22,7 +22,7 @@ they are is in [decisions.md](decisions.md).
 ## The project and the sequence model
 
 A project folder holds `project.json` (the edit document), `transcripts/<asset>.<stream>.json`,
-`agent/proposals.json`, `graphics/<id>/` and caches. Recordings play from their own folders,
+`agent/proposals.json`, `graphics/<id>/`, `history/` (undo history and checkpoints) and caches. Recordings play from their own folders,
 mounted at `recordings/<asset id>/`.
 
 - **Assets and streams.** Everything playable is an asset (`Recording`, `Video`, `Image`, `Audio`,
@@ -44,8 +44,27 @@ mounted at `recordings/<asset id>/`.
   chapters and shorts all live in **source time** and are mapped through a clock on read, so cuts,
   reorders and undo never move them off their content.
 - **Revisions and undo.** Every edit bumps `revision`; edits pass `expected_revision` and a
-  mismatch is refused ("Stale edit revision"). `EditHistory` keeps up to 64 undo steps **in
-  memory only** (gap: [SAFE-2](roadmap.md#safe-2)).
+  mismatch is refused ("Stale edit revision").
+- **History on disk** (`project/history.rs`, SAFE-2). Each edit state is saved gzip-compressed
+  in `history/states/<sha256>.json.gz`, named by its JSON with `revision` zeroed (so undo and
+  redo write nothing new); `history/log.jsonl` is append-only (commit, undo, redo, drop,
+  checkpoint lines) and is replayed, checked against `project.json` and rewritten on open. A
+  crash between saving the edit and the log comes back as a "Change made outside AeroEdits"
+  step. `EditHistory` holds steps, not documents; up to 2 GB of states per project, oldest steps
+  first, no step limit. Steps are named from what changed (`history::describe`) and marked as
+  an agent's while its MCP call runs (`history::as_agent`, a thread-local set in `tools::call`).
+- **Agent runs.** An agent's steps carry a run id while the same agent keeps editing within 15
+  minutes with nothing of the user's between; `template` starts a new run. Undoing a run
+  (Agent panel, MCP `undo` `run: true`) restores the state from before it as one new step and
+  marks its batches undone.
+- **Checkpoints** (`project/checkpoint.rs`): the edit's state, each graphic's source files
+  (`history/files/<sha256>.gz`) and each transcript's caption marks with a stamp of its word ids.
+  Saved by the user (top bar History), the agent (`checkpoint` behind `more`) and the app before
+  every agent run (newest five kept). Going back is one step (when the edit differs), puts the
+  graphic files and caption marks back (marks only onto the same words), asks for the graphics'
+  renders, withdraws waiting batches, and saves what was there first as a checkpoint. Graphic
+  source edits are not undo steps (GFX-4). Plan and build log:
+  [plans/history.md](plans/history.md).
 - **Shorts** are windows anchored in source time that follow the video's edits until edited on
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
   from the video under it (`take_short.rs`), each piece at its own speed. Their own layout

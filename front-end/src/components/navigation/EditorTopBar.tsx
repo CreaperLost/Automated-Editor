@@ -34,6 +34,7 @@ import {
 } from "../layout/dockLayout";
 import { useAgentStore } from "../../stores/agentStore";
 import { TemplatesMenu } from "./TemplatesMenu";
+import { HistoryPopover } from "./HistoryPopover";
 import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
 
 // Loaded when first opened.
@@ -176,6 +177,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
               disabled={!project.redoAvailable}
               onClick={() => run(redoProject)}
             />
+            <HistoryPopover onError={onError} />
           </div>
         </>
       )}

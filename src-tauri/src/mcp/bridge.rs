@@ -171,6 +171,14 @@ pub async fn relay(
                         hello = message.get("params").cloned().unwrap_or_default();
                         write_line(&mut output, &reply(id, initialize_result(&hello))).await?;
                     }
+                    // Newer clients (Claude Code 2.1.3xx) ask this before `initialize`. Answered
+                    // as unknown so they fall back to the handshake, which carries their name;
+                    // passed on, it would connect to the app before the name is known.
+                    ("server/discover", Some(id)) => {
+                        let unknown = json!({ "jsonrpc": "2.0", "id": id,
+                            "error": { "code": -32601, "message": "Method not found" } });
+                        write_line(&mut output, &unknown).await?;
+                    }
                     ("notifications/initialized", None) => {}
                     ("ping", Some(id)) => write_line(&mut output, &reply(id, json!({}))).await?,
                     ("tools/list", Some(id)) => {

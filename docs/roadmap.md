@@ -45,28 +45,9 @@ flowchart LR
 
 ## Now
 
-<a id="safe-2"></a>
-### SAFE-2 · Persistent history and named checkpoints — M/L
-
-- **Plan:** [plans/history.md](plans/history.md) (23 Oct): history on disk, then agent runs,
-  then checkpoints. Decided 23 Oct: graphic source undo waits for GFX-4, a checkpoint before
-  every agent run, up to 2 GB of history per project.
-- **Phase 1 built 23 Oct:** undo and redo survive closing the app (checked in the dev app over
-  MCP), with no 64-step limit, and each step is named from what it changed.
-- **Phase 2 built 23 Oct:** an agent's run is undone as one step from the Agent panel or with
-  `undo` `run: true`, after reopening too. **Left:** phase 3 (checkpoints).
-- **Do:** keep the edit history on disk so undo survives reopen; one "undo what the agent did"
-  step per agent run; named checkpoints ("clean cut", "approved look") that snapshot the edit
-  document, graphic source folders and caption marks with their transcript stamp; restoring
-  creates a new revision and invalidates pending proposals. Offer a checkpoint automatically
-  before an agent workflow (the agent's version of "duplicate the project first").
-- **Done when:** restore after a reopen and after more changes than the old 64-step stack.
-- **Why now:** in the EVAL-1 run, about $0.30 of the short's $0.55 went on redoing work after
-  an app restart emptied the undo history.
-- **Was:** backlog #13 (once turned down as "named versions/compare"; back as plain history).
-
-The EVAL-1 baseline shipped 23 Oct (see [Done](#done)); rerun it from
-[plans/evaluation.md](plans/evaluation.md) after each cost or quality change.
+Nothing started. SAFE-2 and the EVAL-1 baseline shipped 23 Oct (see [Done](#done)); rerun
+EVAL-1 from [plans/evaluation.md](plans/evaluation.md) after each cost or quality change, and
+take the next item from Next.
 
 ---
 
@@ -74,7 +55,7 @@ The EVAL-1 baseline shipped 23 Oct (see [Done](#done)); rerun it from
 
 Rough order. GFX-5's look, saved looks, the shorts look and bring-in-line shipped (22-23 Oct);
 what is left of it waits on research, so the three after it come first (SAFE-2, the fourth,
-moved to Now on 23 Oct): they are the foundations the Later tier builds on.
+shipped 23 Oct): they are the foundations the Later tier builds on.
 
 <a id="gfx-5"></a>
 ### GFX-5 · Looks proposed by the agent — S/M, research first
@@ -467,6 +448,16 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — <a id="safe-2"></a>**SAFE-2 history and checkpoints**
+  ([plans/history.md](plans/history.md)). Undo and redo survive closing the app, with no
+  64-step limit (up to 2 GB of compressed states per project), and each step is named from what
+  it changed. An agent's run is undone as one step from the Agent panel or `undo` `run: true`.
+  Checkpoints keep the edit, the graphics' files and the caption marks: saved from the top bar's
+  History, by the agent (`checkpoint`), and by the app before every agent run; going back is one
+  step and saves what was there first. Checked with a real agent in EVAL-1 run 3 (the tutorial
+  edited, its run undone, its checkpoints gone back to), which also fixed agents being named
+  "agent" (Claude Code's `server/discover`) and a reopened edit reading as changed (exact float
+  parsing). Graphic source edits are still not undo steps (GFX-4).
 - **23 Oct 2026** — **CAP-1 captions as typography.** Captions take the brand kit's font (its
   .ttf/.otf file, else that family installed on the computer, else the bundled Inter Display,
   OFL, four weights replacing Liberation Sans) at the look's title weight (App 650 → Bold, Calm

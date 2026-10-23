@@ -1203,6 +1203,13 @@ mod tests {
             "params": {"name": "transcript_get", "arguments": {}}})
         };
 
+        // A client that asks the newer discovery first is told it is unknown, so it does the
+        // handshake (with its name) instead.
+        let discover = ask(
+            json!({"jsonrpc": "2.0", "id": "d-1", "method": "server/discover",
+            "params": {"_meta": {"io.modelcontextprotocol/clientInfo": {"name": "claude-ai"}}}}),
+        );
+        assert_eq!(discover["error"]["code"], -32601, "{discover}");
         // The app is closed: the handshake and the tools still come, from the bridge.
         let hello = ask(
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {

@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 41] = [
+pub static ACTIONS: [ToolDef; 42] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -70,6 +70,15 @@ pub static ACTIONS: [ToolDef; 41] = [
         schema: schema::<NoArgs>,
         read_only: false,
         run: redo,
+    },
+    ToolDef {
+        name: "checkpoint",
+        description: "Named moments to go back to: the edit, the graphics' files and the \
+            caption marks. `op`: list; save (with `name`); restore (with `id`; one undo step, \
+            and what is there now is saved first). The app saves one before each of your runs.",
+        schema: schema::<CheckpointArgs>,
+        read_only: false,
+        run: checkpoint,
     },
     ToolDef {
         name: "speed",
@@ -766,6 +775,16 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             document.chapters.len(),
             document.shorts.len(),
         ));
+        let checkpoints = reader.history().steps().checkpoints();
+        if let Some(newest) = checkpoints.iter().rev().find(|c| !c.auto) {
+            lines.push(format!(
+                "Checkpoints: {}; newest named \"{}\" ({}, {}).",
+                checkpoints.len(),
+                newest.name,
+                newest.id,
+                newest.at
+            ));
+        }
         let faces = crate::face::status(reader.root(), document);
         if !faces.is_empty() {
             let each: Vec<String> = faces
@@ -1143,6 +1162,83 @@ fn create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         "Created {path} and opened it.\n{}",
         status_text(ctx)?
     ))
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointArgs {
+    /// list, save or restore.
+    pub op: String,
+    /// For save: what to call it, such as "clean cut".
+    #[serde(default)]
+    pub name: Option<String>,
+    /// For restore: the checkpoint's id from list (`c-2`).
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+fn checkpoint(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: CheckpointArgs = params(args)?;
+    match args.op.trim() {
+        "list" => with_reader(ctx.state, |reader| {
+            let checkpoints = reader.history().steps().checkpoints();
+            if checkpoints.is_empty() {
+                return text("No checkpoints yet.".to_string());
+            }
+            let lines: Vec<String> = checkpoints
+                .iter()
+                .rev()
+                .map(|c| {
+                    format!(
+                        "{}: \"{}\", {}{}",
+                        c.id,
+                        c.name,
+                        c.at,
+                        if c.auto { " (saved by the app)" } else { "" }
+                    )
+                })
+                .collect();
+            text(lines.join("\n"))
+        }),
+        "save" => {
+            let name = args
+                .name
+                .filter(|n| !n.trim().is_empty())
+                .ok_or("save needs `name`: what to call this moment, such as \"clean cut\"")?;
+            let saved = {
+                let _guard = ctx.state.command_lock.lock();
+                let mut opened = ctx.state.opened_project.lock();
+                let reader = opened.as_mut().ok_or(super::tools::NO_PROJECT_MESSAGE)?;
+                reader.save_checkpoint(&name)?
+            };
+            text(format!(
+                "Saved checkpoint {} \"{}\": the edit, {} and the caption marks. \
+                 `checkpoint` op restore with this id goes back to it.",
+                saved.id,
+                saved.name,
+                plural(saved.graphics.len(), "graphic")
+            ))
+        }
+        "restore" => {
+            let id = args.id.ok_or("restore needs `id` (from op list)")?;
+            let before = opened(ctx)?;
+            let (what, view) = crate::commands::proposals::with_proposals(
+                ctx.state,
+                ctx.project.as_deref(),
+                |reader, proposals| {
+                    crate::proposals::restore_checkpoint(reader, proposals, before.revision, &id)
+                        .map(|(_, what)| what)
+                },
+            )?;
+            ctx.host.transcript_changed();
+            let mut answer = undone(ctx, &before, &what)?;
+            if let Some(warning) = view.warning {
+                answer.push(Output::Text(warning));
+            }
+            Ok(answer)
+        }
+        other => Err(format!("No op {other}: `op` is list, save or restore")),
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -5617,6 +5713,66 @@ mod tests {
             call(&ctx, "undo", json!({ "run": true }))
         });
         assert!(other.is_err());
+    }
+
+    #[test]
+    fn the_app_saves_a_checkpoint_before_an_agent_run_and_the_agent_can_go_back_to_it() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let mut ctx = Ctx::new(&host, "claude-code", false);
+        let mut through_the_server = |name: &str, args: Value| {
+            let tool = crate::mcp::tools::find(name).unwrap();
+            crate::mcp::tools::call(tool, &mut ctx, args).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .filter_map(|o| match o {
+                        Output::Text(text) => Some(text),
+                        Output::Png(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        };
+        let start = through_the_server("status", json!({})).unwrap();
+        assert!(!start.contains("Checkpoints:"), "{start}");
+        through_the_server("fillers", json!({})).unwrap();
+        through_the_server(
+            "settings",
+            json!({ "area": "captions", "set": { "enabled": true } }),
+        )
+        .unwrap();
+        let listed = through_the_server("checkpoint", json!({ "op": "list" })).unwrap();
+        // One for the run, not one per call.
+        assert_eq!(listed.lines().count(), 1, "{listed}");
+        assert!(
+            listed.starts_with("c-1: \"Before claude-code's run\""),
+            "{listed}"
+        );
+
+        let saved =
+            through_the_server("checkpoint", json!({ "op": "save", "name": "Cleaned" })).unwrap();
+        assert!(
+            saved.starts_with("Saved checkpoint c-2 \"Cleaned\""),
+            "{saved}"
+        );
+        let status = through_the_server("status", json!({})).unwrap();
+        assert!(
+            status.contains("Checkpoints: 2; newest named \"Cleaned\" (c-2"),
+            "{status}"
+        );
+
+        let back =
+            through_the_server("checkpoint", json!({ "op": "restore", "id": "c-1" })).unwrap();
+        assert!(
+            back.starts_with("Went back to checkpoint \"Before claude-code's run\"."),
+            "{back}"
+        );
+        assert!(back.contains("Length 0:03"), "{back}");
+        let captions = through_the_server("settings", json!({ "area": "captions" })).unwrap();
+        assert!(captions.contains("\"enabled\":false"), "{captions}");
     }
 
     #[test]
