@@ -15,8 +15,9 @@ and delete its details here. Keep IDs stable; never renumber.
 shorts and gaming videos. Everything in Now and Next serves milestone 1; shorts work (SHT-*)
 follows; gaming work is not scheduled yet.
 
-1. **Now: make what exists safe, complete and measured.** Small fixes, project binding, the
-   missing agent operations, and a baseline to measure everything after against.
+1. **Now: make what exists safe, complete and measured, then give settings one clear home.**
+   Small fixes, project binding, the missing agent operations, a baseline to measure against,
+   and presets and styles (ORG-1, 23 Oct) so everything after has a place to live.
 2. **Next: durability, a place for intent, and sight.** History that survives reopening, notes
    anchored to the edit, a user-owned rules file, a moving preview, and the basic craft surfaces
    (one look for all graphics, caption type, sound clips, graphics render quality, source search).
@@ -30,9 +31,9 @@ flowchart LR
     SAFE1 --> NOTE1[NOTE-1 anchored notes]
     SAFE2[SAFE-2 history + checkpoints] --> GFX4[GFX-4 graphic variants]
     NOTE1 --> PLAN1[PLAN-1 beat plan + style trial]
-    GFX5[GFX-5 one look for all graphics] --> STY1
-    AGT3[AGT-3 project rules file] --> STY1[STY-1 style kit]
-    STY1 --> PLAN1
+    ORG1[ORG-1 presets + styles] --> PLAN1
+    ORG1 --> STY2[STY-2 styles from references]
+    ORG1 --> AUTO1[AUTO-1 run a preset after opening]
     FTG1[FTG-1 source search] --> SHT1[SHT-1 idea-first shorts]
     FTG1 --> FTG2[FTG-2 selects + B-roll]
     SND1[SND-1 sound clips] --> SND2[SND-2 cues at graphic events]
@@ -45,24 +46,40 @@ flowchart LR
 
 ## Now
 
-Nothing started. SAFE-2 and the EVAL-1 baseline shipped 23 Oct (see [Done](#done)); rerun
-EVAL-1 from [plans/evaluation.md](plans/evaluation.md) after each cost or quality change, and
-take the next item from Next.
+Rerun EVAL-1 from [plans/evaluation.md](plans/evaluation.md) after each cost or quality change.
+
+<a id="org-1"></a>
+### ORG-1 · Presets and styles — L, in phases
+
+- **Plan:** [plans/presets-and-styles.md](plans/presets-and-styles.md). **Decided 23 Oct
+  (George):** the app's saved things become four, by one rule: how it looks → **Style**, what
+  the app does → **Preset**, where things sit → **Layout**, only this video → **Project**.
+  Caption position and words per caption are Preset.
+- **Why first:** every item after it (style from references, AI-proposed styles, the rules
+  file, a Gaming preset, "save this workflow", sound) needs a home that is clear to George and
+  to agents; building them on today's eight overlapping stores would make the mess bigger.
+- **Phases:** (1) Style: brand kit, graphics look, caption look and frame look in one; (2)
+  Preset values with built-in Tutorial / Shorts / Clips, the project storing only its changes,
+  "changed here" markers; (3) the agent's method and rules inside the preset (`template` →
+  `preset`); (4) one `library` agent tool replacing the old ones, EVAL-1 rerun.
+- **Absorbs:** STY-1 (style kit), UI-3 (saved settings), AGT-3 (rules file, as the preset's
+  rules), the brand-kit and saved-look tools.
 
 ---
 
 ## Next
 
-Rough order. GFX-5's look, saved looks, the shorts look and bring-in-line shipped (22-23 Oct);
-what is left of it waits on research, so the three after it come first (SAFE-2, the fourth,
-shipped 23 Oct): they are the foundations the Later tier builds on.
+Rough order, after ORG-1. GFX-5's look, saved looks, the shorts look and bring-in-line shipped
+(22-23 Oct); what is left of it waits on research and on ORG-1's Style, so NOTE-1 and REV-1
+come first: they are the foundations the Later tier builds on.
 
 <a id="gfx-5"></a>
-### GFX-5 · Looks proposed by the agent — S/M, research first
+### GFX-5 · Styles proposed by the agent — S/M, research first, after ORG-1 phase 1
 
-The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#done)). Left:
-- **AI-built looks: later, research first (George, 23 Oct).** The agent proposes two or three
-  looks from the brand kit and a description in words, each previewed on the video's own
+The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#done)); the look
+and saved looks become part of the Style in [ORG-1](#org-1). Left:
+- **AI-built styles: later, research first (George, 23 Oct).** The agent proposes two or three
+  styles from a brand and a description in words, each previewed on the video's own
   graphics (the `graphics_look` preview is the building block), and the user picks one.
   Creators who make good graphics with agents seem to give each request a board of reference
   images, the brand kit and a tuned prompt (as a skill): research how they do it before building
@@ -101,24 +118,20 @@ The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#do
   join marks it unreviewed.
 
 <a id="agt-3"></a>
-### AGT-3 · A project rules file the user owns — M
+### AGT-3 · Rules the user owns — folded into ORG-1 (23 Oct)
 
-- **Why:** the sharpest structural difference between our agent loop and every strong example:
-  the method lives in a file the user owns and the agent improves.
-- **Do:** first read the three published skills (Christian's Editing Skill, Tao's motion skill,
-  Jason's blueprint artifact; one day). Then: rules at two scopes (this project, all projects),
-  stored outside the installed `SKILL.md`; served with `template`; the agent may **propose**
-  a rule (with the example that taught it), the user accepts in the Agent panel; the agent can
-  say which rule shaped a proposal. Rejecting one cut never silently changes a rule.
-- **Decision:** [Q-RULES](decisions.md#q-rules). **23 Oct:** George isn't sure it's worth it
-  yet; shown example rules, waiting on his call.
+The rules now live in each preset's method ([ORG-1](#org-1) phase 3), served by `preset`. What
+is left after that phase: the agent **proposing** a rule (with the example that taught it), the
+user accepting it in the Agent panel, and the agent saying which rule shaped a proposal;
+rejecting one cut never silently changes a rule. Read the three published skills (Christian's
+Editing Skill, Tao's motion skill, Jason's blueprint artifact) before designing that.
+**Decision:** [Q-RULES](decisions.md#q-rules).
 
 <a id="agt-4"></a>
 ### AGT-4 · Readiness report and long jobs — S/M
 
-- **Schema cost: done 23 Oct** (see Done). **Left:** a read-only `readiness` that works without a project (app/bridge versions, project and
-  revision, models and runtimes installed, keys present yes/no, what is unavailable and why).
-  Cancellation for long jobs. Smaller candidates to weigh here: a "state screenshot" (canvas +
+- **Schema cost and readiness: done 23 Oct** (see Done). **Left:** cancellation for long
+  jobs. Smaller candidates to weigh here: a "state screenshot" (canvas +
   timeline + inspector at one moment), a time budget per stage that stops and asks, a diagnose
   action for a broken timeline. **Was:** backlog #16.
 
@@ -126,8 +139,8 @@ The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#do
 ### CAP-1 · Captions as typography — leftovers, S
 
 Font, emphasis, styles and giving way to full-frame graphics shipped 23 Oct (see
-[Done](#done)). Left: reading a kit's .woff/.woff2 font file (captions fall back to Inter
-Display and say why); a real-edit check in the dev app with a brand kit.
+[Done](#done)), and kit .woff/.woff2 files the same day. Left: a real-edit check in the dev
+app with a brand kit.
 
 <a id="snd-1"></a>
 ### SND-1 · Minimal sound surface — M
@@ -147,12 +160,6 @@ Display and say why); a real-edit check in the dev app with a brand kit.
   the edit (or "cut"). The same search in a UI box (it is also Gather for shorts).
 - **Done when:** finds labelled moments in a real tutorial, including one removed by a cut and one
   in an imported take. **Was:** backlog #14 step 1. **Unblocks:** FTG-2, SHT-1, take-short footage picker.
-
-<a id="dlv-1"></a>
-### DLV-1 · Subtitle and transcript export — S
-
-- **Do:** SRT and VTT from the edited timeline (respecting hidden words and caption breaks),
-  transcript as Markdown/plain text, and an audio-only export. For the video and each short.
 
 <a id="lay-1"></a>
 ### LAY-1 · Layouts: look-only playback swap, then measure — M
@@ -186,11 +193,9 @@ Grouped by area. Order within a group is the suggested order.
   5–10 s range, approve the look, then scale. Graphics keep their word anchor (fixes C3).
   Plan beats are NOTE-1 records with `kind: beat` (decided, [Q-PLAN](decisions.md#q-plan)).
 <a id="sty-1"></a>
-- **STY-1 · Style kit (M).** Beside the brand kit and the video's look, referencing both:
-  caption rules, graphic density and placement, sound policy, a few reference images and files;
-  separate long-form and shorts profiles. The visual tokens (type, shape, motion) moved to
-  [GFX-5](#gfx-5) on 22 Oct. Some rules checkable by `graphic_check`, not all
-  (pacing needs judgement). Builds on AGT-3's storage. Decision: [Q-RULES](decisions.md#q-rules).
+- **STY-1 · Style kit — folded into ORG-1 (23 Oct).** Its looks (and reference images) are the
+  **Style**; its caption rules, graphic density and placement and sound policy are the
+  **Preset**'s, with separate long-form and shorts presets. See [ORG-1](#org-1).
 <a id="auto-3"></a>
 - **AUTO-3 · "Save this workflow" (M).** From an approved edit: instructions, defaults,
   exceptions and checks as a named, versioned workflow shown as a readable summary first. Proven
@@ -343,11 +348,11 @@ removed 23 Oct 2026: not needed.
 ### Automation
 
 <a id="auto-1"></a>
-- **AUTO-1 · Run a template on request after opening (S).** Replaces folder watch, which was
+- **AUTO-1 · Run a preset on request after opening (S).** Replaces folder watch, which was
   turned down: nothing starts when a recording finishes. After opening a project the user picks a
-  template (tutorial, shorts, take-shorts…) and the saved method runs up to its first question,
-  with only free local steps unless the user confirms. Builds on AGT-3's rules and the existing
-  saved answers. Decision: [Q-WATCH](decisions.md#q-watch).
+  preset (Tutorial, Shorts, Clips…) and its method runs up to its first question, with only
+  free local steps unless the user confirms. After [ORG-1](#org-1) phase 3. Decision:
+  [Q-WATCH](decisions.md#q-watch).
 <a id="auto-2"></a>
 - **AUTO-2 · Speech matching across takes (M).** Measured speech-level matching (then gentle EQ)
   so a re-recorded sentence doesn't jump.
@@ -361,10 +366,9 @@ removed 23 Oct 2026: not needed.
 - **UI-2 · Basic and Advanced settings (M).** Inventory every panel's settings first, then split.
   **Was:** backlog #8.
 <a id="ui-3"></a>
-- **UI-3 · Templates (saved looks): save over, remove, add (S).** Decide what a look holds
-  (layout, audio, captions, zooms, cleanup choices, brand kit). Rename the Tauri
-  `templates_list` / `template_save` / `template_apply` family to `looks_*`, so
-  "template" means only the agent's workflow templates. **Was:** backlog #6.
+- **UI-3 · Templates (saved settings) — folded into ORG-1 (23 Oct).** Update (save over) was
+  added 23 Oct; the Templates menu is replaced by presets in [ORG-1](#org-1) phase 2.
+  **Was:** backlog #6.
 
 ### Dependencies
 
@@ -405,15 +409,15 @@ Raised 23 Oct as long-term direction. Every item here is measured against
   the decisions. Each swap kept only if EVAL-1 says the result is as good.
 <a id="sty-2"></a>
 - **STY-2 · Styles from references (M).** The agent studies a reference (a video as review
-  boards, images, a channel's thumbnails) and writes a style kit, a brand kit and two or three
-  graphic templates in that style; the user picks what to keep, and it goes into the library.
-  Cheap because it reads boards (COST-1), not whole videos. After STY-1.
+  boards, images, a channel's thumbnails) and writes a **Style** (kept with its references) and
+  two or three graphic templates in it; the user picks what to keep, and it goes into the
+  library. Cheap because it reads boards (COST-1), not whole videos. After ORG-1 phase 1.
 <a id="loop-1"></a>
 - **LOOP-1 · The user and the agent improve the app together (L).** Aim: a loop where each edit
-  makes the next one better: the app, the bundled material (templates, styles, rules) and the
-  taste. Records what the user changed after the agent (proposals accepted or rejected, cuts
-  restored, graphics redone) and turns patterns into proposed changes to the rules file
-  ([AGT-3](#agt-3)), templates and style kits, each accepted by the user. Data-driven, never
+  makes the next one better: the app, the bundled material (presets, styles, graphic
+  templates) and the taste. Records what the user changed after the agent (proposals accepted
+  or rejected, cuts restored, graphics redone) and turns patterns into proposed changes to a
+  preset's rules ([AGT-3](#agt-3)), graphic templates and styles, each accepted by the user. Data-driven, never
   free-text rules learned on the side (the 17 Oct condition for bringing learning back).
 
 ### Code health
@@ -447,6 +451,23 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **23 Oct 2026** — <a id="dlv-1"></a>**DLV-1 subtitle, transcript and audio export.** SRT,
+  WebVTT, the transcript as plain text or Markdown (chapters as headings, paragraphs at long
+  pauses) and the sound alone as WAV, of the video or any short (`export/files.rs`). Subtitles
+  and transcript come from the caption cues, so they follow cuts, hidden words and caption
+  breaks; subtitles keep the captions' capitals, the transcript doesn't. The WAV comes from the
+  export's mixer. Agents: `export` with `file` (and `short`, or "all"); the user: Other files in
+  the Export dialog, saved beside the video. Shorts have no button yet (agents only).
+- **23 Oct 2026** — **CAP-1 leftovers: web fonts.** A brand kit's .woff/.woff2 font file now
+  reaches captions (unpacked by `wuff`, see [dependencies.md](dependencies.md)); a kit font
+  file that is missing or damaged says so instead of "not installed". The real-edit check with
+  a brand kit is still open.
+- **23 Oct 2026** — **AGT-4 readiness.** `status` works with no project open and then says what
+  this computer is ready for (or with `readiness: true` beside a project): app version and
+  path, transcription keys and Parakeet, GPU pack, AI key, local filler model, face model,
+  graphics renderer, FFmpeg and the agent skill per agent, each with why and where to fix it.
+  Folded into `status` rather than a new tool (COST-2). Cancelling long jobs is still open.
 
 - **23 Oct 2026** — <a id="safe-2"></a>**SAFE-2 history and checkpoints**
   ([plans/history.md](plans/history.md)). Undo and redo survive closing the app, with no

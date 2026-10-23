@@ -117,10 +117,10 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| ~~The brand kit's font doesn't reach captions~~ | **Fixed** 23 Oct: kit font file (.ttf/.otf) or the installed family, else Inter Display; .woff/.woff2 kit files still fall back | [CAP-1](roadmap.md#cap-1) |
+| ~~The brand kit's font doesn't reach captions~~ | **Fixed** 23 Oct: kit font file (.ttf/.otf, and .woff/.woff2 since later that day) or the installed family, else Inter Display | [CAP-1](roadmap.md#cap-1) |
 | ~~No per-word emphasis, no animation presets~~ (**fixed** 23 Oct); caption ownership by stretch **fixed** 23 Oct: captions give way to full-frame graphics | Code; research: every short-form reference | [CAP-1](roadmap.md#cap-1) |
 | Greek glyph coverage in graphics never tested (captions: tested 23 Oct, every bundled weight) | Log | [GFX-3](roadmap.md#gfx-3) |
-| No subtitle files (SRT/VTT) or transcript export; burned-in captions are the only output | Code: 0 matches for `srt|webvtt` | [DLV-1](roadmap.md#dlv-1) |
+| ~~No subtitle files (SRT/VTT) or transcript export~~ | **Fixed** 23 Oct: SRT, VTT, text, Markdown and WAV from `export` `file` and the Export dialog | [DLV-1](roadmap.md#dlv-1) |
 
 ## 7. Sound and music
 
