@@ -15,6 +15,7 @@ import {
   PreviewHitMode,
   MediaInteropStatus,
   MediaParityReport,
+  ExportFileKind,
   ExportSettings,
   ExportStatus,
   SilenceConfig,
@@ -634,6 +635,10 @@ export const api = {
     invokeTauri<OpenedProject>("project_shorts_generate", { projectHandle, trackId }),
   projectShortExport: (projectHandle: string, shortId: string, settings: ExportSettings) =>
     invokeTauri<ExportStatus>("project_short_export", { projectHandle, shortId, settings }),
+  /** Saves subtitles, the transcript or the sound of the video (or a short); answers with the
+   *  path. Next to the project unless `destination`. */
+  exportFile: (projectHandle: string, kind: ExportFileKind, shortId: string | null, destination: string | null) =>
+    invokeTauri<string>("export_file", { projectHandle, kind, shortId, destination }),
   /** A JPEG of the short `offsetUs` into it, drawn with `layout`. */
   shortPreviewFrame: (projectHandle: string, shortId: string, layout: ShortLayout, offsetUs: number) =>
     invokeTauri<ArrayBuffer>("short_preview_frame", {

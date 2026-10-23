@@ -287,7 +287,8 @@ pub static ACTIONS: [ToolDef; 42] = [
         name: "export",
         description: "Exports the video (the canvas size and frame rate unless given; next to the \
             project unless `destination`). Waits until done and reports progress unless `wait: \
-            false`, which returns a job id for export_status; `cancel` with that id stops it.",
+            false`, which returns a job id for export_status; `cancel` with that id stops it. \
+            `file` saves subtitles, the transcript or the sound alone instead.",
         schema: schema::<ExportArgs>,
         // Writes the video file (over `destination` if it exists).
         read_only: false,
@@ -3864,6 +3865,11 @@ pub struct ExportArgs {
     /// Stop the export with this job id (from `wait: false` or export_status) instead.
     #[serde(default)]
     pub cancel: Option<String>,
+    /// Save another file instead of the video, of the video or of `short`: subtitles (`srt`,
+    /// `vtt`, from the captions as cut, hidden words left out), the transcript (`txt`, `md`
+    /// with the chapters as headings) or the sound alone (`wav`). `settings` don't apply.
+    #[serde(default)]
+    pub file: Option<crate::export::files::FileKind>,
 }
 
 fn export_defaults(ctx: &Ctx) -> Result<crate::export::ExportSettings, String> {
@@ -3885,6 +3891,9 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         return text(format!("Asked export {job} to stop: {:?}.", status.state));
     }
     let open = opened(ctx)?;
+    if let Some(kind) = args.file {
+        return export_files(ctx, &open.handle, kind, args.short.as_deref(), args.destination);
+    }
     let defaults = export_defaults(ctx)?;
     let mut settings = match &args.settings {
         Some(patch) => patched("export", &defaults, patch)?,
@@ -3944,13 +3953,45 @@ fn wait_for_export(
     }
 }
 
-/// Exports the short `wanted` (id or title) or "all", one after another.
-fn export_shorts(
+/// Saves the file `kind` of the video, or of the short `short` (id, title or "all").
+fn export_files(
     ctx: &Ctx,
     handle: &str,
-    wanted: &str,
-    mut settings: crate::export::ExportSettings,
+    kind: crate::export::files::FileKind,
+    short: Option<&str>,
+    destination: Option<String>,
 ) -> Result<Vec<Output>, String> {
+    let targets: Vec<(Option<String>, String)> = match short {
+        Some(wanted) => chosen_shorts(ctx, wanted)?
+            .into_iter()
+            .map(|(id, title)| (Some(id), format!("\"{title}\"")))
+            .collect(),
+        None => vec![(None, "The video".into())],
+    };
+    // One file name can't hold several shorts: each goes next to the project.
+    let destination = if targets.len() == 1 { destination } else { None };
+    let mut lines = Vec::new();
+    for (i, (id, label)) in targets.iter().enumerate() {
+        let path = commands::export_file_impl(
+            ctx.state,
+            handle.to_string(),
+            id.clone(),
+            kind,
+            destination.clone(),
+            &mut |done| {
+                ctx.progress(
+                    (i as f64 + done) / targets.len() as f64,
+                    &format!("Writing {label}, {:.0}%", done * 100.0),
+                )
+            },
+        )?;
+        lines.push(format!("{label}: {}", path.display()));
+    }
+    text(lines.join("\n"))
+}
+
+/// The shorts `wanted` names (id or title), or all of them for "all", as (id, title).
+fn chosen_shorts(ctx: &Ctx, wanted: &str) -> Result<Vec<(String, String)>, String> {
     let shorts: Vec<(String, String)> = with_reader(ctx.state, |reader| {
         Ok(reader
             .document()
@@ -3959,13 +4000,14 @@ fn export_shorts(
             .map(|s| (s.id.clone(), s.title.clone()))
             .collect())
     })?;
-    let chosen: Vec<&(String, String)> = if wanted.trim().eq_ignore_ascii_case("all") {
-        shorts.iter().collect()
+    let chosen: Vec<(String, String)> = if wanted.trim().eq_ignore_ascii_case("all") {
+        shorts.clone()
     } else {
         shorts
             .iter()
             .filter(|(id, title)| id == wanted || title.eq_ignore_ascii_case(wanted.trim()))
             .take(1)
+            .cloned()
             .collect()
     };
     if chosen.is_empty() {
@@ -3982,6 +4024,17 @@ fn export_shorts(
             )
         });
     }
+    Ok(chosen)
+}
+
+/// Exports the short `wanted` (id or title) or "all", one after another.
+fn export_shorts(
+    ctx: &Ctx,
+    handle: &str,
+    wanted: &str,
+    mut settings: crate::export::ExportSettings,
+) -> Result<Vec<Output>, String> {
+    let chosen = chosen_shorts(ctx, wanted)?;
     // Each short is named after itself next to the project; one file name can't hold them.
     settings.destination = None;
     let mut lines = Vec::new();
@@ -6970,6 +7023,35 @@ mod tests {
             cleared.contains("No sections: the base shows throughout."),
             "{cleared}"
         );
+    }
+
+    #[test]
+    fn subtitles_transcript_and_sound_are_saved_next_to_the_project() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "agent", false);
+        let saved = call(&ctx, "export", json!({ "file": "srt" })).unwrap();
+        assert!(saved.starts_with("The video: "), "{saved}");
+        let srt = std::fs::read_to_string(dir.path().join("Lesson.srt")).unwrap();
+        assert!(
+            srt.starts_with("1\r\n00:00:00,000 --> 00:00:01,190\r\nHello um there.\r\n\r\n2\r\n00:00:01,600 --> "),
+            "{srt}"
+        );
+        call(&ctx, "export", json!({ "file": "md" })).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("Lesson.md")).unwrap(),
+            "# Lesson\n\nHello um there. So next step now.\n"
+        );
+        call(&ctx, "export", json!({ "file": "wav" })).unwrap();
+        let wav = std::fs::read(dir.path().join("Lesson.wav")).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(wav.len(), 44 + 4 * 48_000 * 4);
+        assert!(call(&ctx, "export", json!({ "file": "srt", "short": "x" }))
+            .unwrap_err()
+            .contains("No shorts yet"));
     }
 
     #[test]

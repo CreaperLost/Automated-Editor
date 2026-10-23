@@ -3,9 +3,10 @@ import { CheckCircle2, Download, Film, FolderOpen, X, XCircle } from "lucide-rea
 import { api, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { FILE_MANAGER } from "../../lib/projectActions";
+import { useProjectStore } from "../../stores/projectStore";
 import { CheckPanel } from "./CheckPanel";
 import { Button, IconButton, Segmented, cn } from "../ui";
-import type { ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
+import type { ExportFileKind, ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
 const RESOLUTIONS = [
@@ -20,6 +21,13 @@ const QUALITIES: { key: ExportQuality | "custom"; label: string; hint: string }[
   { key: "high", label: "High", hint: "Sharp screen text at a sensible size. Recommended." },
   { key: "max", label: "Max", hint: "Near lossless. Large files." },
   { key: "custom", label: "Bitrate", hint: "Set the average video bitrate yourself." },
+];
+const OTHER_FILES: { kind: ExportFileKind; label: string; hint: string }[] = [
+  { kind: "srt", label: "SRT", hint: "Subtitles for YouTube and most players" },
+  { kind: "vtt", label: "VTT", hint: "Subtitles for the web (WebVTT)" },
+  { kind: "md", label: "Transcript", hint: "The words as Markdown, chapters as headings" },
+  { kind: "txt", label: "Text", hint: "The words as plain text" },
+  { kind: "wav", label: "Audio", hint: "The sound alone, as a WAV file" },
 ];
 const MIN_MBPS = 1;
 const MAX_MBPS = 200;
@@ -153,6 +161,24 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     };
   }, []);
 
+  // Subtitles, transcript and sound go beside the video, named like it.
+  const projectHandle = useProjectStore((s) => s.openedProject?.projectHandle);
+  const [saving, setSaving] = useState<ExportFileKind>();
+  const [saved, setSaved] = useState<{ path?: string; error?: string }>();
+  const saveFile = async (kind: ExportFileKind) => {
+    if (!projectHandle) return;
+    setSaving(kind);
+    setSaved(undefined);
+    try {
+      const beside = destination ? destination.replace(/\.[^./\\]*$/, "") + `.${kind}` : null;
+      setSaved({ path: await api.exportFile(projectHandle, kind, null, beside) });
+    } catch (err) {
+      setSaved({ error: String(err) });
+    } finally {
+      setSaving(undefined);
+    }
+  };
+
   const field = (label: string, control: React.ReactNode, hint?: React.ReactNode) => (
     <div className="space-y-1.5">
       <div className="text-label font-medium text-studio-200">{label}</div>
@@ -277,6 +303,39 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                     Change…
                   </Button>
                 </div>,
+              )}
+              {field(
+                "Other files",
+                <div className="flex flex-wrap gap-2">
+                  {OTHER_FILES.map((file) => (
+                    <Button
+                      key={file.kind}
+                      size="sm"
+                      variant="secondary"
+                      title={file.hint}
+                      disabled={saving !== undefined}
+                      onClick={() => void saveFile(file.kind)}
+                    >
+                      {saving === file.kind ? "Saving…" : file.label}
+                    </Button>
+                  ))}
+                </div>,
+                saved?.error ? (
+                  <span role="alert" className="text-danger-fg">
+                    {saved.error}
+                  </span>
+                ) : saved?.path ? (
+                  <span className="flex items-center gap-2">
+                    <span className="flex-1 min-w-0 truncate font-mono select-text" title={saved.path}>
+                      Saved {saved.path}
+                    </span>
+                    <button type="button" className="shrink-0 underline hover:text-studio-200" onClick={() => void api.showInFinder(saved.path!)}>
+                      Show
+                    </button>
+                  </span>
+                ) : (
+                  "Subtitles and the transcript follow the cuts, as the captions do. Saved beside the video."
+                ),
               )}
             </fieldset>
           </div>

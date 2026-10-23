@@ -1356,6 +1356,9 @@ export interface ExportFailure {
 
 export type ExportQuality = "standard" | "high" | "max";
 
+/** The edit's other files: subtitles, the transcript, the sound alone. */
+export type ExportFileKind = "srt" | "vtt" | "txt" | "md" | "wav";
+
 export interface ExportSettings {
   videoCodec: "h264";
   audioCodec: "aac";

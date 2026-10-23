@@ -2129,6 +2129,31 @@ fn export_start(
     commands::export_start_impl(&state, project_handle, settings)
 }
 
+/// Saves subtitles, the transcript or the sound alone; answers with the file's path.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn export_file(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: Option<String>,
+    kind: export::files::FileKind,
+    destination: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::export_file_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            short_id,
+            kind,
+            destination,
+            &mut |_| {},
+        )
+        .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn export_status(
@@ -2406,6 +2431,7 @@ pub fn run() {
             media_interop_status,
             media_run_parity,
             export_start,
+            export_file,
             export_status,
             export_cancel,
             detect_silence,

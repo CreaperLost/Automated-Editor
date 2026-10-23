@@ -2591,6 +2591,94 @@ pub fn export_cancel_impl(
     state.export.lock().cancel(&job_id)
 }
 
+/// Saves one of the edit's other files (subtitles, transcript or the sound alone) for the video
+/// or the short `short_id`: at `destination`, else next to the project named after it (and the
+/// short), replacing an earlier one. Returns where it went.
+pub fn export_file_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<String>,
+    kind: crate::export::files::FileKind,
+    destination: Option<String>,
+    on_progress: &mut dyn FnMut(f64),
+) -> Result<PathBuf, String> {
+    use crate::export::files;
+    let (root, stem, assets, contents, sound) = {
+        let _guard = state.command_lock.lock();
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let base = &reader.history().current;
+        let short = match &short_id {
+            Some(id) => Some(
+                base.shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or("That short no longer exists")?,
+            ),
+            None => None,
+        };
+        let (stem, title) = match short {
+            Some(short) => (
+                format!("{} - {}", reader.summary.name, short.title),
+                short.title.clone(),
+            ),
+            None => (reader.summary.name.clone(), reader.summary.name.clone()),
+        };
+        let (contents, sound) = if kind == files::FileKind::Wav {
+            // The document the video export plays, so the sound matches it.
+            let document = match short {
+                Some(short) => {
+                    crate::shorts::short_document(base, short, has_speech_transcript(reader))?
+                }
+                None => base.clone(),
+            };
+            (None, Some(document))
+        } else {
+            let (timeline, cues) =
+                transcript::caption_cues(reader, short_id.as_deref(), !kind.is_subtitles())?;
+            let (_, cues) = cues.ok_or("Nothing is transcribed yet: transcribe the speech first")?;
+            if cues.is_empty() {
+                return Err("No words are left in the edit to write".into());
+            }
+            let chapters = crate::chapters::timeline(&timeline.chapters, &timeline);
+            let text = match kind {
+                files::FileKind::Srt => files::srt(&cues),
+                files::FileKind::Vtt => files::vtt(&cues),
+                files::FileKind::Txt => files::plain(&cues, &chapters),
+                _ => files::markdown(&title, &cues, &chapters),
+            };
+            (Some(text), None)
+        };
+        (
+            reader.root().to_path_buf(),
+            stem,
+            base.assets.clone(),
+            contents,
+            sound,
+        )
+    };
+    let requested = match destination {
+        Some(path) if !path.trim().is_empty() => path,
+        _ => crate::export::default_destination(&root, &stem, 0)
+            .with_extension(kind.extension())
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let path = crate::export::resolve_destination(&root, &stem, 0, Some(&requested), &assets)
+        .map_err(|failure| failure.message().to_string())?;
+    if let Some(text) = contents {
+        fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    } else if let Some(document) = sound {
+        let mixer = crate::media::audio::AudioMixer::new(&root, &document)?;
+        if !mixer.has_audio() {
+            return Err("The edit has no sound".into());
+        }
+        crate::export::files::write_wav(&mixer, &path, on_progress)?;
+    }
+    Ok(path)
+}
+
 /// Formats the window title for project editing.
 /// When a project is open, produces "AeroEdits — <Project Name>" (e.g. "AeroEdits — Launch Demo").
 /// When no project is open (None or empty), produces "AeroEdits".

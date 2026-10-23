@@ -1,5 +1,6 @@
 //! Immutable-revision export job. Preview and export share one scene evaluator.
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
+pub mod files;
 mod native;
 
 use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
@@ -93,6 +94,20 @@ pub enum ExportFailure {
     EncoderBusy { message: String },
     Native { message: String },
     Io { message: String },
+}
+
+impl ExportFailure {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Collision { message }
+            | Self::Cancelled { message }
+            | Self::InvalidSettings { message }
+            | Self::SourcePath { message }
+            | Self::EncoderBusy { message }
+            | Self::Native { message }
+            | Self::Io { message } => message,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

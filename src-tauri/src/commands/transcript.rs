@@ -1131,23 +1131,46 @@ pub enum CaptionEdit {
     Emphasis { word_ids: Vec<String>, on: bool },
 }
 
+/// The timeline of the video or the short `short`, and the cues of the transcript its captions
+/// read (with that transcript's id), or `None` when nothing is transcribed. `written` keeps the
+/// words as written, not in capitals: for a transcript rather than captions.
+pub(crate) fn caption_cues(
+    reader: &crate::project::reader::ProjectReader,
+    short: Option<&str>,
+    written: bool,
+) -> Result<
+    (
+        crate::project::revision::EditDocument,
+        Option<(String, Vec<crate::captions::CaptionCue>)>,
+    ),
+    String,
+> {
+    let timeline = caption_timeline(reader, short)?;
+    let mut settings = timeline.captions.clone();
+    if written {
+        settings.uppercase = false;
+    }
+    let root = reader.root();
+    let candidates = crate::export::caption_candidates(&timeline);
+    let Some(transcript) =
+        crate::captions::caption_source(&settings, candidates, Vec::new(), |id| {
+            store::load_transcript(root, id).ok().flatten()
+        })
+    else {
+        return Ok((timeline, None));
+    };
+    let mapper = timeline.transcript_clock(&transcript.track_id)?;
+    let cues = crate::captions::build_cues(&transcript, &mapper, &settings);
+    Ok((timeline, Some((transcript.track_id, cues))))
+}
+
 fn caption_track(
     reader: &crate::project::reader::ProjectReader,
     short: Option<&str>,
 ) -> Result<CaptionTrackView, String> {
-    let timeline = caption_timeline(reader, short)?;
-    let document = &timeline;
-    let settings = &document.captions;
-    let root = reader.root();
-    let candidates = crate::export::caption_candidates(document);
-    let Some(transcript) =
-        crate::captions::caption_source(settings, candidates, Vec::new(), |id| {
-            store::load_transcript(root, id).ok().flatten()
-        })
-    else {
+    let (timeline, Some((track_id, cues))) = caption_cues(reader, short, false)? else {
         return Ok(CaptionTrackView::default());
     };
-    let mapper = document.transcript_clock(&transcript.track_id)?;
     // A short's graphics fill its frame or not by their mode, which its own document knows.
     let shown =
         match short.and_then(|id| reader.history().current.shorts.iter().find(|s| s.id == id)) {
@@ -1158,8 +1181,8 @@ fn caption_track(
             }
             None => timeline.clone(),
         };
-    let free = crate::graphics::render::whole_frame_ranges(root, &shown);
-    let cues = crate::captions::build_cues(&transcript, &mapper, settings)
+    let free = crate::graphics::render::whole_frame_ranges(reader.root(), &shown);
+    let cues = cues
         .into_iter()
         .map(|cue| CaptionCueView {
             under_graphic: crate::graphics::render::meets_ranges(&free, cue.start_us, cue.end_us),
@@ -1177,7 +1200,7 @@ fn caption_track(
         })
         .collect();
     Ok(CaptionTrackView {
-        track_id: Some(transcript.track_id),
+        track_id: Some(track_id),
         cues,
     })
 }
