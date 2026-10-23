@@ -8,9 +8,9 @@ import { assetById, findClip } from "../../lib/sequence";
 import type { GraphicVariable, GraphicView } from "../../lib/types";
 import { RenderBadge } from "../graphics/GraphicsPanel";
 import { LibrarySave } from "../graphics/LibrarySave";
-import { useBrands, useGraphicsUpdates } from "../graphics/graphicsEvents";
+import { useGraphicsUpdates, useStyles } from "../graphics/graphicsEvents";
 
-/** The variables a brand kit fills where a graphic has not set them. */
+/** The variables a style's brand fills where a graphic has not set them. */
 const KIT_VARIABLES = ["background", "text", "accent"] as const;
 
 const fieldClass =
@@ -32,7 +32,7 @@ export const GraphicSection: React.FC = () => {
   const asset = openedProject && found ? assetById(openedProject, found.clip.asset) : undefined;
   const assetId = asset?.kind === "graphic" ? asset.id : undefined;
   const handle = openedProject?.projectHandle;
-  const brands = useBrands(handle, openedProject?.revision);
+  const styles = useStyles(handle, openedProject?.revision);
   // Only the selected graphic's fields show, so an edit never lands on another graphic.
   const graphic = loaded?.assetId === assetId ? loaded : undefined;
   const showing = useRef<string>();
@@ -68,7 +68,7 @@ export const GraphicSection: React.FC = () => {
   if (!openedProject || !found || !assetId) return null;
   const { clip, track } = found;
 
-  const save = async (variables: Record<string, unknown>, name?: string, brand?: string) => {
+  const save = async (variables: Record<string, unknown>, name?: string, style?: string) => {
     const project = useProjectStore.getState().openedProject;
     if (!project) return;
     setError(undefined);
@@ -79,7 +79,7 @@ export const GraphicSection: React.FC = () => {
         assetId,
         variables,
         name,
-        brand,
+        style,
       );
       take(updated.graphic, `${project.projectHandle}:${assetId}`);
       if (updated.project) applyOpenedProject(updated.project);
@@ -87,9 +87,9 @@ export const GraphicSection: React.FC = () => {
       setError(String(err));
     }
   };
-  // The kit this graphic takes its colours from, if any.
-  const kitName = graphic?.brand === "none" ? null : (graphic?.brand ?? brands?.projectDefault ?? null);
-  const kit = brands?.kits.find((k) => k.name === kitName);
+  // The style this graphic takes its colours from: its own, else the project's.
+  const styleName = graphic?.style ?? styles?.projectStyle ?? null;
+  const kit = styles?.styles.find((s) => s.name === styleName)?.style.brand.colors;
   const setLength = async (seconds: number) => {
     const lengthUs = Math.round(seconds * 1e6);
     if (!Number.isFinite(lengthUs) || lengthUs < 500_000 || lengthUs === clip.durationUs) return;
@@ -131,28 +131,44 @@ export const GraphicSection: React.FC = () => {
             <RenderBadge graphic={graphic} ready={ready} />
           </div>
           <label className="flex items-center justify-between gap-2 text-label text-studio-300">
-            <span className="shrink-0">Brand kit</span>
+            <span className="shrink-0">Style</span>
             <select
-              aria-label="The graphic's brand kit"
-              value={graphic.brand ?? "default"}
+              aria-label="The graphic's style"
+              value={graphic.style ?? "project"}
               disabled={track.locked}
               onChange={(e) => void save({}, undefined, e.target.value)}
               className={fieldClass}
             >
-              <option value="default">
-                Project's ({brands?.projectDefault ?? "none"})
-              </option>
-              <option value="none">No brand kit</option>
-              {(brands?.kits ?? []).map((k) => (
-                <option key={k.name} value={k.name}>
-                  {k.name}
+              <option value="project">The project&apos;s ({styles?.projectStyle ?? "Light"})</option>
+              {(styles?.styles ?? []).map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.name}
                 </option>
               ))}
-              {graphic.brand && graphic.brand !== "none" && !brands?.kits.some((k) => k.name === graphic.brand) && (
-                <option value={graphic.brand}>{graphic.brand} (removed)</option>
+              {graphic.style && !styles?.styles.some((s) => s.name === graphic.style) && (
+                <option value={graphic.style}>{graphic.style} (removed)</option>
               )}
             </select>
           </label>
+          {graphic.look && Object.keys(graphic.look).length > 0 && (
+            <div className="flex items-center justify-between gap-2 text-meta text-studio-500">
+              <span className="truncate">Its own look: {Object.keys(graphic.look).join(", ")}</span>
+              <button
+                type="button"
+                className="hover:text-white hover:underline"
+                disabled={track.locked}
+                onClick={() => {
+                  const tokens = Object.fromEntries(Object.keys(graphic.look ?? {}).map((k) => [k, null]));
+                  void api
+                    .projectGraphicLookSet(openedProject.projectHandle, graphic.assetId, tokens)
+                    .then((view) => take(view, `${openedProject.projectHandle}:${graphic.assetId}`))
+                    .catch((err) => setError(String(err)));
+                }}
+              >
+                Take the style&apos;s
+              </button>
+            </div>
+          )}
           {graphic.declarations.map((decl) => {
             const own = decl.id in graphic.variables;
             const fromKit =
@@ -164,7 +180,7 @@ export const GraphicSection: React.FC = () => {
                 key={`${graphic.assetId}-${decl.id}`}
                 decl={decl}
                 value={own ? graphic.variables[decl.id] : (fromKit ?? decl.default)}
-                note={fromKit ? "from the kit" : undefined}
+                note={fromKit ? "from the style" : undefined}
                 onReset={
                   own && kit && (KIT_VARIABLES as readonly string[]).includes(decl.id)
                     ? () => void save({ [decl.id]: null })

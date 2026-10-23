@@ -17,7 +17,9 @@ use std::sync::Arc;
 pub mod graphics;
 pub mod history;
 pub mod noises;
+pub mod preset;
 pub mod proposals;
+pub mod style;
 pub mod transcript;
 pub mod transcript_pauses;
 
@@ -1222,7 +1224,6 @@ pub fn project_layout_update_impl(
                 std::path::Path::new(&source),
             )?;
             layout.wallpaper_asset = Some(relative);
-            layout.background_type = "wallpaper".into();
         }
         reader.update_layout(expected_revision, layout)
     })
@@ -1874,36 +1875,6 @@ pub fn project_shorts_set_impl(
 ) -> Result<OpenedProject, String> {
     mutate_opened(state, project_handle, |reader| {
         reader.set_shorts(expected_revision, shorts)
-    })
-}
-
-/// Saves the open project's settings (and `short`'s look) as a template for every project.
-pub fn template_save_impl(
-    state: &AppState,
-    project_handle: String,
-    name: String,
-    short: Option<String>,
-) -> Result<Vec<crate::templates::Template>, String> {
-    let template = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
-        require_handle(reader, &project_handle)?;
-        crate::templates::capture(&reader.history().current, &name, short.as_deref())?
-    };
-    crate::templates::save(&crate::templates::dir(), template)
-}
-
-/// Gives the open project a saved template's settings, and `short` its short look.
-pub fn template_apply_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    template_id: String,
-    short: Option<String>,
-) -> Result<OpenedProject, String> {
-    let template = crate::templates::find(&crate::templates::dir(), &template_id)?;
-    mutate_opened(state, project_handle, |reader| {
-        reader.apply_template(expected_revision, &template, short.as_deref())
     })
 }
 
@@ -2637,7 +2608,8 @@ pub fn export_file_impl(
         } else {
             let (timeline, cues) =
                 transcript::caption_cues(reader, short_id.as_deref(), !kind.is_subtitles())?;
-            let (_, cues) = cues.ok_or("Nothing is transcribed yet: transcribe the speech first")?;
+            let (_, cues) =
+                cues.ok_or("Nothing is transcribed yet: transcribe the speech first")?;
             if cues.is_empty() {
                 return Err("No words are left in the edit to write".into());
             }

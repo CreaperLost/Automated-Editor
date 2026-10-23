@@ -8,11 +8,12 @@ thorough review. The actions are the `aeroedits` MCP tools, or `aeroedits do <ac
 A tool named here that isn't in your list (`speed`, `transcript_fix`, `short_create`, ...) runs
 through `more`.
 
-## Saved answers
+## The preset's choices
 
-When the template shows saved answers, ask once: "Same settings as last time?" and list them in
-a line or two. On yes, run automatically with them. After the user answers the questions, save
-them with `template_save`, so next time is one question.
+When the preset shows choices, ask once: "Same settings as last time?" and list them in a line
+or two. On yes, run automatically with them. When the user answers differently, save the
+answers as the preset's choices (`library`, `kind: preset`, `op: set`), so next time is one
+question.
 
 <!-- steps -->
 ## One pass at a time
@@ -25,7 +26,7 @@ don't ask about later passes with earlier numbers.
 ## Automatically
 
 When the user says so ("auto", "no questions", "just do it", yes to "same as last time?"), make
-each choice yourself: the saved answers, else the template's defaults. Run each pass once, no
+each choice yourself: the preset's choices, else the method's defaults. Run each pass once, no
 dry run: the cutting passes (`mouth_noises`, `silence`, `fillers`) with `guard: true`, which
 apply only if the result looks right and otherwise say why ("Not applied"): then stop and ask.
 Report one line per pass, still never export without the user's go.
@@ -36,7 +37,7 @@ Report one line per pass, still never export without the user's go.
 Ask a step's questions in one message, numbered, each with its choices (default first) and the
 numbers that matter from `scan`. Use your client's question tool if it has one. Skip questions
 that don't apply (no camera: no webcam questions; one microphone: no microphone question).
-Change nothing the user hasn't agreed to, apart from steps the template marks automatic.
+Change nothing the user hasn't agreed to, apart from steps the method marks automatic.
 <!-- /steps -->
 
 ## Reporting
@@ -87,7 +88,8 @@ Cuts the passes don't make (a tangent, a take the rules missed): read `transcrip
 `propose_cuts` by word id with a reason; the user accepts them in the Agent panel. To fix what
 you made: `graphic_set` (`moveToWord`, `remove`), `zooms` (`op: list`, then `update`, `remove`,
 `create`), `shorts` (`op: range`, `op: remove`), `transcript_fix` for a misheard word, `export`
-with `cancel`. Brand kits and the graphics library are the user's: change them only when asked.
+with `cancel`. Styles, presets and the graphics library are the user's (`library`): change
+them only when asked; a project picking one (`op: use`) is an undo step like any edit.
 Graphics: `graphics` gives their rules with the list.
 
 ## Stay on the right project

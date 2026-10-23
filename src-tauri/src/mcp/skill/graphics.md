@@ -27,24 +27,24 @@ variables. Write a composition of your own (`graphic_add` with `blank`, then
 After adding, `graphic_render`, then look with `frame_render` (with `short` for a short's).
 
 When the user likes a graphic you wrote, offer to keep it. On a yes: `graphic_templatize` (its
-source and the rules: text as variables, brand kit colours, timing from `data-duration`, a
+source and the rules: text as variables, the style's colours, timing from `data-duration`, a
 portrait block, a cut unless `data-entrance` is `ease`, no network), rewrite the files, then
 `graphic_check` until it passes. Then `library_save` with a `label`, a one-line `useWhen` and
 `lengthUs`. If it answers with a close library item or template, ask whether to update that
 item (`update`) or keep both (`asNew`). Never save without the user's yes; save a failing
 graphic (`asIs`) only at their word.
 
-Every graphic in a video shares one look (`graphics_look`, behind `more`): type sizes, corners,
-spacing and motion as `--look-*` tokens, beside the brand kit's colours. Changing it restyles every
-graphic. When the user asks for a change in words ("calmer", "rounder"), try it with `preview:
-true`, show them, and apply on their yes. A composition you write takes its sizes, corners and
-motion from the tokens (`blank` shows how); `graphic_check` warns about any it fixes itself.
-
-Brand kits (`brand_kits`) are the user's colours, font and logo. The project has a default kit
-(`brand_pick`) and a graphic may pick another (`graphic_set` `brand`). A kit fills the
-`background`, `text` and `accent` variables a graphic has not set, so with a kit leave those
-unset; a composition of your own can use `var(--brand-accent)`, `var(--brand-background)`,
-`var(--brand-text)`, `var(--brand-font)` and `var(--brand-logo)`. `graphic_add` with `library`
+Every graphic in a video wears the project's style (`library` `kind: style`): its brand
+(colours, title and body fonts, logo) and its graphics look (type sizes, corners, spacing and
+motion as `--look-*` tokens), bigger and livelier at 9:16. Changing the style restyles every
+graphic in every project wearing it, so ask first; for a change in words ("calmer", "rounder"),
+`op: preview` with `set`, show the user, and `op: set` on their yes. A graphic may wear another
+style or set tokens of its own (`graphic_set` `style`, `look`). The style fills the
+`background`, `text` and `accent` variables a graphic has not set, so leave those unset; a
+composition of your own takes its sizes, corners and motion from the tokens (`blank` shows how)
+and can use `var(--brand-accent)`, `var(--brand-background)`, `var(--brand-text)`,
+`var(--brand-muted)`, `var(--brand-font)`, `var(--brand-body-font)` and `var(--brand-logo)`;
+`graphic_check` warns about values it fixes itself. `graphic_add` with `library`
 copies a library item in. Items marked "as is" fail the check: look at one with `frame_render`
 before relying on it.
 

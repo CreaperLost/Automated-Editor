@@ -160,10 +160,10 @@ fn resolve_ref(layout: &LayoutRef) -> Result<(Option<Layout>, Option<String>), S
             Ok((Some(spec.clone()), None))
         }
         LayoutRef::Name(name) if name.trim().eq_ignore_ascii_case("base") => Ok((None, None)),
-        LayoutRef::Name(name) => favourites::named(&crate::templates::dir(), name)
+        LayoutRef::Name(name) => favourites::named(&favourites::dir(), name)
             .map(|(name, layout)| (Some(layout), Some(name)))
             .ok_or_else(|| {
-                let favourites: Vec<String> = favourites::list(&crate::templates::dir())
+                let favourites: Vec<String> = favourites::list(&favourites::dir())
                     .into_iter()
                     .map(|f| f.name)
                     .collect();
@@ -278,7 +278,7 @@ fn listing(timeline: &EditDocument, label: &str) -> Vec<String> {
 }
 
 fn favourite_lines() -> String {
-    let favourites = favourites::list(&crate::templates::dir());
+    let favourites = favourites::list(&favourites::dir());
     format!(
         "Built-in layouts: {}. Favourites: {}.",
         crate::layouts::built_ins()
@@ -418,7 +418,7 @@ fn run(ctx: &Ctx, args: LayoutsArgs) -> Result<String, String> {
                 },
                 (None, None) => target(&document, short.as_deref())?.layouts.base,
             };
-            let saved = favourites::save(&crate::templates::dir(), name, layout.clone())?;
+            let saved = favourites::save(&favourites::dir(), name, layout.clone())?;
             return Ok(format!(
                 "Saved favourite \"{}\": {}. {} kept.",
                 name.trim(),
@@ -432,7 +432,7 @@ fn run(ctx: &Ctx, args: LayoutsArgs) -> Result<String, String> {
                 .as_deref()
                 .or(args.id.as_deref())
                 .ok_or("Give the favourite's `name`")?;
-            let left = favourites::remove(&crate::templates::dir(), which)?;
+            let left = favourites::remove(&favourites::dir(), which)?;
             return Ok(format!(
                 "Forgot \"{which}\"; {} left.",
                 plural(left.len(), "favourite")

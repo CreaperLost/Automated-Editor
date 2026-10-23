@@ -33,7 +33,7 @@ import {
   type LayoutPreset,
 } from "../layout/dockLayout";
 import { useAgentStore } from "../../stores/agentStore";
-import { TemplatesMenu } from "./TemplatesMenu";
+import { PresetMenu } from "../presets/PresetMenu";
 import { HistoryPopover } from "./HistoryPopover";
 import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
 
@@ -155,7 +155,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             </MenuButton>
           )}
         />
-        <TemplatesMenu onError={onError} />
+        <PresetMenu onError={onError} />
       </div>
 
       {project && (

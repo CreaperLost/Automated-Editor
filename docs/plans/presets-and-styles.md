@@ -155,3 +155,113 @@ touched.
   cues play, ducking) is Preset. Confirm when SND-1 starts.
 - How the built-in presets and styles are updated when the app updates, if the user changed
   them: probably built-ins are read-only and "edit" makes a copy.
+
+## As built (23 Oct 2026)
+
+All four phases were built in one go while George was away; he asked for the decisions below to
+be listed so he can change them. Each says what it means and what else could have been done.
+
+### Style
+
+1. **The JSON shape** is the one George approved: `brand` (colours: background, text, accent,
+   **muted**; fonts: **title** and **body**, each a family and an optional file; logo),
+   `graphics` (the look), `captions`, `frame`, `portrait`. Every part is optional in a file and
+   falls back to Light's. *Alternative:* a flat list of tokens.
+2. **Muted** is a real colour now, set on graphics as `--look-muted` unless the graphic set its
+   own text or background colour (then the look's mix stays, so muted text stays readable on a
+   graphic's own colours). *Alternative:* keep muted mixed from text and background, dropping
+   the role.
+3. **Body font**: body text uses it, titles (`.title`, `.count`, `h1`, `h2`) keep the title font;
+   captions use the title font. Empty means "same as titles". *Alternative:* captions get a
+   font of their own.
+4. **Built-in styles are read-only.** In the editor, the first change to Light makes
+   **"My light"** and dresses the project in it (a notice says so); agents get the same through
+   `library` (no `saveAs` gives "My light"). *Alternatives:* edit built-ins in place (an app
+   update would then have to merge), or refuse and ask for a name every time.
+5. **Light** is today's look exactly (GFX-5 graphics, the Forest background, indigo camera
+   border, white captions with outline, pop at 9:16); **Dark** is near-black and off-white with
+   a blue accent, the Graphite background, a soft screen shadow and a white 4 px camera border.
+   *Alternative:* Light with a light background (it is "the app-like look" for graphics; the
+   frame kept today's dark Forest so nothing changes on screen).
+6. **Editing a style saves as you go** (debounced, like the other inspector settings) instead
+   of Save / Cancel, so the preview shows each change. A style change is **not an undo step**
+   (it is app-wide); picking another style is. *Alternative:* a draft with Save, or style edits
+   in the project's history.
+7. **Where the frame and caption look live at draw time:** the old fields stay on
+   `EditLayout` / `CaptionSettings` as never-stored fields, filled from the style by
+   `style::dress` when a document is drawn (every preview and export goes through
+   `SceneEvaluator::new_reusing`). This kept the renderer untouched. *Alternative:* pass a
+   `Frame` through every render function (cleaner types, a much bigger change).
+8. **A project's wallpaper image** stays the project's (Video page, "Background image"); when
+   set it wins over the style's background, and "Use the style's" drops it.
+9. **9:16** is any short and any 9:16 canvas. Its caption style defaults to **pop** (the old
+   per-short default) and it may have its own background. A short's own background and caption
+   style are gone (the style decides). *Alternative:* keep a per-short override.
+10. **The style editor is a page of the Inspector** (Video, Audio, Captions, **Style**), not the
+    Graphics tab, since it dresses captions and the frame too. A graphic's own style and "take
+    the style's look" are on its Clip page.
+11. A missing style falls back to **Light** silently; renamed styles are followed through
+    `styles/renamed.json`, as brand kits were.
+
+### Preset
+
+12. **What a preset holds:** the edit document's parts `layout` (canvas, screen size and crop,
+    cursor, badges, window crop, face framing, mirror, auto-hide), `captions` (on, position,
+    offset, size, words, lines, capitals), `zoomSettings`, `audio`, `layouts` (base and
+    picking); `short` (what a new short starts with); `choices` (the method's answers: cleanup
+    passes, review depth, graphics, export); `style` (for a new project); `method.md` and
+    `rules.md`. **Export settings and the app-wide cleanup levels are not in it yet** (export
+    takes the choices' `export`). *Alternative:* move the export dialog's defaults and silence
+    levels in too (a later step).
+13. **How "only the changes" works:** in memory a project still has every value; on disk
+    (`project.json` and history states) the preset's parts are written as `presetChanges`, a
+    JSON merge patch over the preset's values, and read back over the preset as it is now. So
+    every command and the renderer are unchanged. A change to a preset reaches each project the
+    next time it is opened; the open project follows at once (one undo step). *Alternative:*
+    every setting read through a resolver (preset, then project) at use time.
+14. **What is always the project's own** is never counted as "changed" nor saved into a preset:
+    the wallpaper file, hand-framed camera clips, window-crop stretches, the captioned track,
+    layout sections and per-track mixes.
+15. **"Changed here"** shows as chips at the top of each settings section (Video, Captions,
+    Audio, Zoom), one per changed value, each a reset, plus "all back". *Alternative:* a dot
+    beside every control (more code in every control).
+16. **The Preset menu** replaces Templates in the top bar: follow another preset (what you
+    changed stays changed), what new shorts start from, save changes to the preset (not for a
+    built-in), save as a new preset (the project then follows it), take every change back,
+    method and rules, presets folder, remove. Following another preset also switches the style
+    when the project still wore the old preset's default style.
+17. **The project picks two presets:** its own and one for its new shorts (default Shorts). The
+    shorts preset's `short` values are what the first short starts with (later shorts copy the
+    first, as before).
+18. **Built-in presets are read-only too:** saving a method into one asks for a copy's name;
+    an agent saving choices into one makes "My tutorial" and the project follows it.
+19. **Presets are not renamed** (no rename in the UI; a removed or missing preset falls back to
+    Tutorial). *Alternative:* renames followed like styles.
+
+### Method, rules and agents
+
+20. **Open question answered:** a preset's method is **two Markdown files**: `method.md` (steps
+    and questions) and `rules.md` (the user's own rules, which win over the method). The shipped
+    app rules (`mcp/skill/rules.md`) stay the app's. The built-in methods moved to
+    `src-tauri/src/preset/methods/` and start with `# Preset: Tutorial` and so on.
+21. **Saved answers are the preset's `choices`.** The old `agents/answers/*.json` and
+    `templates.json` in George's config are not read and were **left on disk** (not deleted).
+22. **`template` is `preset`** (same arguments); `template_save` is gone (choices are saved with
+    `library` `kind: preset` `op: set`). MCP prompts are the presets (names like `tutorial`,
+    `my-gaming`).
+23. **One `library` tool** in the main tool list (not behind `more`): `kind` style / preset /
+    layout, `op` list, show, use, set, remove, plus preview / check / bring_in_line (styles) and
+    save / reset (presets). Layouts only list, show and remove there; saving and using a layout
+    stays in `layouts`. A graphic's own style and tokens moved to `graphic_set` (`style`,
+    `look`). It is marked destructive (it writes app-wide files).
+24. **`settings`** refuses look fields (pointing at the style), and its silence-levels area is
+    renamed from `presets` to **`cleanup`** so "preset" means one thing.
+25. **`status`** adds one line: the preset (and how many values were changed here), the shorts'
+    preset and the style.
+26. **Tests write no user files:** styles and presets go to a temporary folder in test builds.
+
+### Not done
+
+- **EVAL-1 was not rerun** (the agents' tools and method text changed).
+- A real edit with a style of George's own (font and logo files) checked in an export.
+- "Changed here" for the Layouts section and a short's settings.

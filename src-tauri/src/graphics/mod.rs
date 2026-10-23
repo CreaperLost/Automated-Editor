@@ -8,7 +8,6 @@
 //! canvas size and length, so the same graphic plays full screen in a 16:9 video and in a 9:16
 //! short. On the timeline a graphic is drawn over everything (captions too) and is never cut
 //! into (see `sequence::edit`).
-pub mod brands;
 pub mod gate;
 pub mod gsap;
 pub mod library;
@@ -42,9 +41,9 @@ pub struct GraphicSource {
     /// Values for the composition's declared variables; missing ones use its defaults.
     #[serde(default)]
     pub variables: Map<String, Value>,
-    /// The brand kit it uses: absent for the project's default, `none` for no kit.
+    /// The style it uses: absent for the project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub brand: Option<String>,
+    pub style: Option<String>,
     /// Look tokens of its own over the video's (`radius`, `ease`...): shown as overrides.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub look: std::collections::BTreeMap<String, String>,
@@ -239,8 +238,8 @@ pub struct GraphicView {
     pub variables: Map<String, Value>,
     pub declarations: Vec<VariableDecl>,
     pub render: render::RenderState,
-    /// Its own brand kit choice: absent for the project's default, `none` for no kit.
-    pub brand: Option<String>,
+    /// Its own style: absent for the project's.
+    pub style: Option<String>,
     /// Look tokens of its own over the video's.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub look: std::collections::BTreeMap<String, String>,
@@ -257,21 +256,23 @@ pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
         variables: source.variables,
         declarations: declarations(&dir).unwrap_or_default(),
         render: render::state_of(&asset.id),
-        // A kit renamed since shows by its name now.
-        brand: source
-            .brand
-            .map(|b| brands::current_name(&brands::dir(), &b)),
+        // A style renamed since shows by its name now.
+        style: source
+            .style
+            .map(|s| crate::style::store::current_name(&crate::style::store::dir(), &s)),
         look: source.look,
     })
 }
 
-/// Checks a graphic's brand choice as the editor or an agent gives it: `default` (the
-/// project's), `none`, or a kit in `brands`. Returns what `graphic.json` stores.
-pub fn brand_choice(brands_dir: &Path, given: &str) -> Result<Option<String>, String> {
+/// What the editor and agents send for "the project's style" as a graphic's choice.
+pub const PROJECT_STYLE: &str = "project";
+
+/// Checks a graphic's style choice as the editor or an agent gives it: `project` (or empty)
+/// for the project's, or a style's name. Returns what `graphic.json` stores.
+pub fn style_choice(given: &str) -> Result<Option<String>, String> {
     match given.trim() {
-        "" | brands::DEFAULT => Ok(None),
-        brands::NONE => Ok(Some(brands::NONE.into())),
-        name => Ok(Some(brands::load(brands_dir, name)?.name)),
+        "" | PROJECT_STYLE => Ok(None),
+        name => Ok(Some(crate::style::store::load(name)?.name)),
     }
 }
 
@@ -308,7 +309,7 @@ pub fn create(
                 name,
                 template: Some(found.name.to_string()),
                 variables,
-                brand: None,
+                style: None,
                 look: Default::default(),
             },
         )

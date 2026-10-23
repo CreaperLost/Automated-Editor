@@ -1,9 +1,9 @@
 //! Bringing a video's graphics in line with its look: what `graphic_check` finds a graphic
 //! deciding for itself (its own colours, fonts, corners and CSS timings, and look tokens of its
-//! own) rewritten to the look's tokens and the brand kit's colours, by rule (no model).
+//! own) rewritten to the look's tokens and the style's colours, by rule (no model).
 //!
 //! Only styles are rewritten (`<style>` blocks, `style="..."` attributes and `.css` files);
-//! colours in scripts, and colours no role of the kit is close to (a red "false" stamp is
+//! colours in scripts, and colours no role of the style is close to (a red "false" stamp is
 //! meant), stay and are listed. Applying makes each changed graphic a copy with the new files
 //! and points its clips at the copy, so undo brings the old one back as it was.
 use super::{gate, look};
@@ -11,7 +11,7 @@ use crate::project::revision::EditDocument;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// A colour is taken for a role of the kit only this close (distance in RGB, 0-255 each).
+/// A colour is taken for a role of the style only this close (distance in RGB, 0-255 each).
 const NEAR: f64 = 72.0;
 /// The look's duration as a CSS time (the token is milliseconds without a unit, for scripts).
 const DURATION: &str = "calc(var(--look-duration) * 1ms)";
@@ -45,7 +45,7 @@ impl Plan {
 
 type Rgb = [f64; 3];
 
-/// The kit's colour roles, as a graphic would write them, and their colours.
+/// The style's colour roles, as a graphic would write them, and their colours.
 struct Palette {
     /// (what to write, its colour, a role a see-through colour can take)
     roles: Vec<(&'static str, Rgb, bool)>,
@@ -109,8 +109,16 @@ fn hex(text: &str) -> Option<Rgb> {
 fn parse_colour(text: &str) -> Option<(Rgb, f64)> {
     let text = text.trim();
     if let Some(digits) = text.strip_prefix('#') {
-        let nibble = |i: usize| u8::from_str_radix(&digits[i..i + 1], 16).ok().map(|v| v as f64 * 17.0);
-        let byte = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok().map(f64::from);
+        let nibble = |i: usize| {
+            u8::from_str_radix(&digits[i..i + 1], 16)
+                .ok()
+                .map(|v| v as f64 * 17.0)
+        };
+        let byte = |i: usize| {
+            u8::from_str_radix(&digits[i..i + 2], 16)
+                .ok()
+                .map(f64::from)
+        };
         if !digits.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
@@ -150,7 +158,11 @@ fn parse_colour(text: &str) -> Option<(Rgb, f64)> {
                 })
             };
             Some((
-                [channel(parts.first()?)?, channel(parts.get(1)?)?, channel(parts.get(2)?)?],
+                [
+                    channel(parts.first()?)?,
+                    channel(parts.get(1)?)?,
+                    channel(parts.get(2)?)?,
+                ],
                 alpha,
             ))
         }
@@ -182,7 +194,9 @@ fn next_boundary(css: &str) -> Option<usize> {
     while i < bytes.len() {
         match bytes[i] {
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = css[i + 2..].find("*/").map_or(bytes.len(), |e| i + 2 + e + 2);
+                i = css[i + 2..]
+                    .find("*/")
+                    .map_or(bytes.len(), |e| i + 2 + e + 2);
                 continue;
             }
             quote @ (b'"' | b'\'') => {
@@ -268,7 +282,12 @@ fn declaration(text: &str, palette: &Palette, changes: &mut Vec<String>) -> Stri
 }
 
 /// What `property`'s `value` becomes.
-fn value_in_line(property: &str, value: &str, palette: &Palette, changes: &mut Vec<String>) -> String {
+fn value_in_line(
+    property: &str,
+    value: &str,
+    palette: &Palette,
+    changes: &mut Vec<String>,
+) -> String {
     let lower = value.to_ascii_lowercase();
     let from_vars = lower.contains("var(");
     let short = |v: &str| v.chars().take(40).collect::<String>();
@@ -278,7 +297,8 @@ fn value_in_line(property: &str, value: &str, palette: &Palette, changes: &mut V
             "var(--look-font)".into()
         }
         "border-radius" if !from_vars => {
-            let fine = lower == "0" || lower == "50%" || lower.starts_with("99") || lower == "inherit";
+            let fine =
+                lower == "0" || lower == "50%" || lower.starts_with("99") || lower == "inherit";
             if fine {
                 return value.to_string();
             }
@@ -297,7 +317,10 @@ fn value_in_line(property: &str, value: &str, palette: &Palette, changes: &mut V
         "transition" | "animation" if !from_vars && lower != "none" => {
             let timed = timing(value);
             if timed != value {
-                note(changes, format!("{property} {} → the look's timing", short(value)));
+                note(
+                    changes,
+                    format!("{property} {} → the look's timing", short(value)),
+                );
             }
             replace_colours(&timed, palette, changes).0
         }
@@ -340,7 +363,12 @@ fn timing(value: &str) -> String {
             .collect();
         let lead = entry.len() - entry.trim_start().len();
         let trail = entry.trim_end().len();
-        out.push(format!("{}{}{}", &entry[..lead], words.join(" "), &entry[trail..]));
+        out.push(format!(
+            "{}{}{}",
+            &entry[..lead],
+            words.join(" "),
+            &entry[trail..]
+        ));
     }
     out.join(",")
 }
@@ -367,7 +395,7 @@ fn split_top(text: &str, at: char) -> Vec<String> {
     out
 }
 
-/// `value` with its colour literals (outside `var(...)`) written as the kit's roles where one
+/// `value` with its colour literals (outside `var(...)`) written as the style's roles where one
 /// is close, and how many literals it had.
 fn replace_colours(value: &str, palette: &Palette, changes: &mut Vec<String>) -> (String, usize) {
     let mut out = String::with_capacity(value.len());
@@ -377,7 +405,7 @@ fn replace_colours(value: &str, palette: &Palette, changes: &mut Vec<String>) ->
     let mut i = 0;
     while i < bytes.len() {
         let rest = &lower[i..];
-        // A variable (and its fallback) is the kit's already.
+        // A variable (and its fallback) is the style's already.
         if rest.starts_with("var(") {
             let end = closing(value, i + 3);
             out.push_str(&value[i..end]);
@@ -428,16 +456,16 @@ fn replace_colours(value: &str, palette: &Palette, changes: &mut Vec<String>) ->
 /// How a role reads in a change line.
 fn role_name(role: &str) -> String {
     let name = [
-        ("--background", "the kit's background"),
-        ("--text", "the kit's text"),
-        ("--accent", "the kit's accent"),
+        ("--background", "the style's background"),
+        ("--text", "the style's text"),
+        ("--accent", "the style's accent"),
         ("--look-muted", "the look's muted text"),
         ("--look-line", "the look's line"),
         ("--look-tint", "the look's tint"),
     ]
     .iter()
     .find(|(token, _)| role.contains(&format!("var({token})")))
-    .map_or("a kit colour", |(_, name)| name);
+    .map_or("a style colour", |(_, name)| name);
     if role.starts_with("color-mix") {
         format!("{name}, see-through")
     } else {
@@ -490,10 +518,7 @@ fn rewrite_html(html: &str, palette: &Palette, changes: &mut Vec<String>) -> Str
             (_, Some(attr)) => {
                 // Only an attribute (after a space), not `data-style="..."`.
                 let start = attr + "style=\"".len();
-                let is_attribute = html[..attr]
-                    .chars()
-                    .last()
-                    .is_some_and(char::is_whitespace);
+                let is_attribute = html[..attr].chars().last().is_some_and(char::is_whitespace);
                 let Some(end) = html[start..].find('"').map(|i| start + i) else {
                     break;
                 };
@@ -516,22 +541,28 @@ fn rewrite_html(html: &str, palette: &Palette, changes: &mut Vec<String>) -> Str
     out
 }
 
-/// The kit graphic `dir` takes (its own, else the project's), as its three colours.
-fn kit_colours(dir: &Path, project_brand: Option<&str>) -> Option<(String, String, String)> {
-    let own = super::read_source(dir).ok()?.brand;
-    let name = super::brands::effective(own.as_deref(), project_brand)?;
-    let kit = super::brands::load(&super::brands::dir(), name).ok()?;
-    Some((kit.background, kit.text, kit.accent))
+/// The style graphic `dir` takes (its own, else the project's), as its three colours.
+fn kit_colours(dir: &Path, project_style: &str) -> Option<(String, String, String)> {
+    let own = super::read_source(dir).ok()?.style;
+    let style = own
+        .as_deref()
+        .and_then(crate::style::store::cached)
+        .unwrap_or_else(|| crate::style::store::resolve(project_style));
+    let c = style.brand.colors;
+    Some((c.background, c.text, c.accent))
 }
 
 /// The files of graphic folder `dir` brought in line, as (relative path, new text), and what
 /// changes and what stays. Only files that change are listed.
 fn rewritten(
     dir: &Path,
-    project_brand: Option<&str>,
+    project_style: &str,
 ) -> Result<(Vec<(String, String)>, Vec<String>, Vec<String>), String> {
-    let kit = kit_colours(dir, project_brand);
-    let palette = Palette::new(kit.as_ref().map(|(b, t, a)| (b.as_str(), t.as_str(), a.as_str())));
+    let kit = kit_colours(dir, project_style);
+    let palette = Palette::new(
+        kit.as_ref()
+            .map(|(b, t, a)| (b.as_str(), t.as_str(), a.as_str())),
+    );
     let mut files = Vec::new();
     super::render::list_files(dir, dir, &mut files)?;
     let mut changes = Vec::new();
@@ -579,8 +610,7 @@ pub fn plan(root: &Path, document: &EditDocument) -> Vec<Plan> {
         .filter_map(|asset| {
             let dir = super::folder(root, &asset.id);
             let source = super::read_source(&dir).ok()?;
-            let (_, mut changes, left) =
-                rewritten(&dir, document.graphics_brand.as_deref()).ok()?;
+            let (_, mut changes, left) = rewritten(&dir, &document.style).ok()?;
             if !source.look.is_empty() {
                 changes.push(format!(
                     "its own look ({}) → the video's",
@@ -639,7 +669,7 @@ pub fn apply(root: &Path, document: &EditDocument, plans: &[Plan]) -> Result<App
                 .iter()
                 .position(|a| a.id == plan.graphic)
                 .ok_or_else(|| format!("\"{}\" is no longer in the project", plan.name))?;
-            let (files, _, _) = rewritten(&dir, document.graphics_brand.as_deref())?;
+            let (files, _, _) = rewritten(&dir, &document.style)?;
             let id = crate::sequence::sources::new_asset_id(false);
             let to = super::folder(root, &id);
             applied.made.push(to.clone());
@@ -701,11 +731,19 @@ mod tests {
         assert!(out.contains("color: var(--text);"), "{out}");
         assert!(out.contains("1px solid var(--look-line)"), "{out}");
         assert!(out.contains("color: var(--accent);"), "{out}");
-        assert!(out.contains("color-mix(in srgb, var(--text) 40%, transparent)"), "{out}");
-        // A red stamp is meant; a fallback inside var() is the kit's already.
+        assert!(
+            out.contains("color-mix(in srgb, var(--text) 40%, transparent)"),
+            "{out}"
+        );
+        // A red stamp is meant; a fallback inside var() is the style's already.
         assert!(out.contains("color: #E5484D;"), "{out}");
         assert!(out.contains("var(--accent, #123456)"), "{out}");
-        assert!(changes.iter().any(|c| c == "#fdfdfd → the kit's background"), "{changes:?}");
+        assert!(
+            changes
+                .iter()
+                .any(|c| c == "#fdfdfd → the style's background"),
+            "{changes:?}"
+        );
     }
 
     #[test]
@@ -720,7 +758,10 @@ mod tests {
         assert!(out.contains("font-family: var(--look-font);"), "{out}");
         assert!(out.contains(".a { font-family"), "selectors stay: {out}");
         assert!(out.contains("border-radius: var(--look-radius);"), "{out}");
-        assert!(out.contains("border-radius: var(--look-radius-small);"), "{out}");
+        assert!(
+            out.contains("border-radius: var(--look-radius-small);"),
+            "{out}"
+        );
         assert!(out.contains("border-radius: 50%;"), "{out}");
         assert!(
             out.contains(
@@ -729,11 +770,18 @@ mod tests {
             ),
             "{out}"
         );
-        assert!(out.contains("box-shadow: var(--look-shadow) !important;"), "{out}");
+        assert!(
+            out.contains("box-shadow: var(--look-shadow) !important;"),
+            "{out}"
+        );
         assert!(out.contains("animation: none;"), "{out}");
         // What is left passes the gate's look check.
         let html = format!("<html><head><style>{out}</style></head></html>");
-        assert!(gate::hard_coded(&html).1.is_empty(), "{:?}", gate::hard_coded(&html));
+        assert!(
+            gate::hard_coded(&html).1.is_empty(),
+            "{:?}",
+            gate::hard_coded(&html)
+        );
     }
 
     #[test]
@@ -745,7 +793,12 @@ mod tests {
                     <script>el.style.color = '#ff0000';</script></body></html>";
         let out = rewrite_html(html, &palette(), &mut changes);
         assert!(out.contains(".t { color: var(--text); }"), "{out}");
-        assert!(out.contains("style=\"background: var(--background); border-radius: var(--look-radius)\""), "{out}");
+        assert!(
+            out.contains(
+                "style=\"background: var(--background); border-radius: var(--look-radius)\""
+            ),
+            "{out}"
+        );
         assert!(out.contains("data-style=\"color: #fff\""), "{out}");
         assert!(out.contains("'#ff0000'"), "{out}");
         assert!(out.ends_with("</script></body></html>"), "{out}");
@@ -770,9 +823,10 @@ mod tests {
         let asset = super::super::create(root, "blank", Some("Card"), &Default::default()).unwrap();
         let folder = super::super::folder(root, &asset.id);
         let html_path = folder.join(super::super::ENTRY);
-        let html = std::fs::read_to_string(&html_path)
-            .unwrap()
-            .replace("</style>", ".mine { color: #222222; border-radius: 14px; }</style>");
+        let html = std::fs::read_to_string(&html_path).unwrap().replace(
+            "</style>",
+            ".mine { color: #222222; border-radius: 14px; }</style>",
+        );
         std::fs::write(&html_path, &html).unwrap();
         let mut source = super::super::read_source(&folder).unwrap();
         source.look.insert("radius".into(), "0".into());
@@ -795,23 +849,35 @@ mod tests {
 
         let plans = plan(root, &document);
         assert_eq!(plans.len(), 1, "{plans:?}");
-        assert!(plans[0].changes.iter().any(|c| c.starts_with("its own look (radius)")));
+        assert!(plans[0]
+            .changes
+            .iter()
+            .any(|c| c.starts_with("its own look (radius)")));
         let applied = apply(root, &document, &plans).unwrap();
         let new_id = &applied.document.assets[0].id;
         assert_ne!(new_id, &id);
         assert_eq!(applied.document.sequence.tracks[0].clips[0].asset, *new_id);
         let new_folder = super::super::folder(root, new_id);
         let new_html = std::fs::read_to_string(new_folder.join(super::super::ENTRY)).unwrap();
-        assert!(new_html.contains(".mine { color: var(--text); border-radius: var(--look-radius); }"));
-        assert!(super::super::read_source(&new_folder).unwrap().look.is_empty());
+        assert!(
+            new_html.contains(".mine { color: var(--text); border-radius: var(--look-radius); }")
+        );
+        assert!(super::super::read_source(&new_folder)
+            .unwrap()
+            .look
+            .is_empty());
         // The old graphic is as it was, for undo; in line now, it plans nothing.
         assert_eq!(std::fs::read_to_string(&html_path).unwrap(), html);
         assert!(plan(root, &applied.document).is_empty());
         // A graphic changed after its plan is refused, and nothing is left behind.
         std::fs::write(&html_path, html.replace("#222222", "#333333")).unwrap();
-        let before = std::fs::read_dir(root.join(super::super::GRAPHICS_DIR)).unwrap().count();
+        let before = std::fs::read_dir(root.join(super::super::GRAPHICS_DIR))
+            .unwrap()
+            .count();
         assert!(apply(root, &document, &plans).is_err());
-        let after = std::fs::read_dir(root.join(super::super::GRAPHICS_DIR)).unwrap().count();
+        let after = std::fs::read_dir(root.join(super::super::GRAPHICS_DIR))
+            .unwrap()
+            .count();
         assert_eq!(before, after);
     }
 }

@@ -18,6 +18,7 @@ pub mod media_bin;
 mod parity;
 mod perf;
 pub mod playback;
+pub mod preset;
 pub mod project;
 pub mod proposals;
 pub mod render;
@@ -25,9 +26,9 @@ pub mod secrets;
 pub mod sequence;
 pub mod shorts;
 pub mod sound_effects;
+pub mod style;
 pub mod take_short;
 pub mod telemetry;
-pub mod templates;
 pub mod timeline;
 pub mod transcript;
 pub mod under_take;
@@ -349,7 +350,7 @@ fn project_layouts_change(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn layout_favourites_list() -> Vec<layouts::favourites::Favourite> {
-    layouts::favourites::list(&templates::dir())
+    layouts::favourites::list(&layouts::favourites::dir())
 }
 
 #[cfg(feature = "tauri-app")]
@@ -358,13 +359,13 @@ fn layout_favourite_save(
     name: String,
     layout: layouts::Layout,
 ) -> Result<Vec<layouts::favourites::Favourite>, String> {
-    layouts::favourites::save(&templates::dir(), &name, layout)
+    layouts::favourites::save(&layouts::favourites::dir(), &name, layout)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn layout_favourite_remove(id: String) -> Result<Vec<layouts::favourites::Favourite>, String> {
-    layouts::favourites::remove(&templates::dir(), &id)
+    layouts::favourites::remove(&layouts::favourites::dir(), &id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -983,47 +984,6 @@ fn project_shorts_set(
     shorts: Vec<shorts::Short>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn templates_list() -> Vec<templates::Template> {
-    templates::list(&templates::dir())
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn template_save(
-    state: State<'_, AppState>,
-    project_handle: String,
-    name: String,
-    short_id: Option<String>,
-) -> Result<Vec<templates::Template>, String> {
-    commands::template_save_impl(&state, project_handle, name, short_id)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn template_delete(template_id: String) -> Result<Vec<templates::Template>, String> {
-    templates::remove(&templates::dir(), &template_id)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn template_apply(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    template_id: String,
-    short_id: Option<String>,
-) -> Result<project::OpenedProject, String> {
-    commands::template_apply_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        template_id,
-        short_id,
-    )
 }
 
 /// Async: lining up the take's sounds reads them, which must not hold the main thread.
@@ -1845,7 +1805,7 @@ fn project_graphic_set(
     asset_id: String,
     variables: serde_json::Map<String, serde_json::Value>,
     name: Option<String>,
-    brand: Option<String>,
+    style: Option<String>,
 ) -> Result<commands::graphics::GraphicUpdated, String> {
     commands::graphics::project_graphic_set_impl(
         &state,
@@ -1854,57 +1814,125 @@ fn project_graphic_set(
         asset_id,
         variables,
         name,
-        brand,
+        style,
     )
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn graphics_brands(
-    state: State<'_, AppState>,
-    project_handle: Option<String>,
-) -> Result<commands::graphics::BrandsView, String> {
-    commands::graphics::graphics_brands_impl(&state, project_handle)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn graphics_look(
+fn project_graphic_look_set(
     state: State<'_, AppState>,
     project_handle: String,
-) -> Result<commands::graphics::LookView, String> {
-    commands::graphics::graphics_look_impl(&state, project_handle)
+    asset_id: String,
+    tokens: std::collections::BTreeMap<String, Option<String>>,
+) -> Result<graphics::GraphicView, String> {
+    commands::graphics::project_graphic_look_set_impl(&state, project_handle, asset_id, tokens)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn project_graphics_look_set(
+fn presets(
+    state: State<'_, AppState>,
+    project_handle: Option<String>,
+) -> Result<commands::preset::PresetsView, String> {
+    commands::preset::presets_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_preset_set(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
-    look: graphics::look::Look,
+    name: String,
+    shorts: bool,
 ) -> Result<project::OpenedProject, String> {
-    commands::graphics::project_graphics_look_set_impl(
+    commands::preset::project_preset_set_impl(
         &state,
         project_handle,
         expected_revision,
-        look,
+        name,
+        shorts,
     )
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn graphics_look_save(
-    name: String,
-    look: graphics::look::Look,
-) -> Result<Vec<graphics::look::SavedLook>, String> {
-    commands::graphics::graphics_look_save_impl(name, look)
+fn project_preset_reset(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    part: Option<String>,
+    field: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::project_preset_reset_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        part,
+        field,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn graphics_look_saved_remove(name: String) -> Result<Vec<graphics::look::SavedLook>, String> {
-    commands::graphics::graphics_look_saved_remove_impl(name)
+fn preset_save_from_project(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    name: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::preset_save_from_project_impl(&state, project_handle, expected_revision, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_save(
+    state: State<'_, AppState>,
+    input: preset::store::PresetInput,
+) -> Result<preset::PresetView, String> {
+    commands::preset::preset_save_impl(&state, input)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_remove(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    commands::preset::preset_remove_impl(&state, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn styles(
+    state: State<'_, AppState>,
+    project_handle: Option<String>,
+) -> Result<commands::style::StylesView, String> {
+    commands::style::styles_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_save(
+    state: State<'_, AppState>,
+    input: style::store::StyleInput,
+) -> Result<style::StyleView, String> {
+    commands::style::style_save_impl(&state, input)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_remove(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    commands::style::style_remove_impl(&state, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_style_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    name: String,
+) -> Result<project::OpenedProject, String> {
+    commands::style::project_style_set_impl(&state, project_handle, expected_revision, name)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1932,57 +1960,22 @@ fn project_graphics_in_line(
     )
 }
 
-/// Stills of a few of the video's graphics with another look (a few seconds).
+/// Stills of a few of the video's graphics in another style (a few seconds).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-async fn graphics_look_preview(
+async fn style_preview(
     app: tauri::AppHandle,
     project_handle: String,
-    look: graphics::look::Look,
+    style: style::Style,
 ) -> Result<Vec<commands::graphics::LookStill>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::graphics::graphics_look_preview_impl(
-            &app.state::<AppState>(),
-            project_handle,
-            look,
-        )
+        commands::graphics::style_preview_impl(&app.state::<AppState>(), project_handle, style)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn graphics_brand_save(
-    state: tauri::State<'_, AppState>,
-    kit: graphics::brands::BrandKitInput,
-) -> Result<graphics::brands::BrandKitView, String> {
-    commands::graphics::graphics_brand_save_impl(&state, kit)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn graphics_brand_remove(name: String) -> Result<(), String> {
-    commands::graphics::graphics_brand_remove_impl(name)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_graphics_brand_set(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    brand: Option<String>,
-) -> Result<project::OpenedProject, String> {
-    commands::graphics::project_graphics_brand_set_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        brand,
-    )
-}
-
-/// A logo or font file for a brand kit.
+/// A logo or font file for a style.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_brand_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
@@ -2359,15 +2352,18 @@ pub fn run() {
             project_graphics_list,
             project_frame_thumbnail,
             project_graphic_set,
-            graphics_brands,
-            graphics_brand_save,
-            graphics_brand_remove,
-            project_graphics_brand_set,
-            graphics_look,
-            project_graphics_look_set,
-            graphics_look_preview,
-            graphics_look_save,
-            graphics_look_saved_remove,
+            project_graphic_look_set,
+            presets,
+            project_preset_set,
+            project_preset_reset,
+            preset_save_from_project,
+            preset_save,
+            preset_remove,
+            styles,
+            style_save,
+            style_remove,
+            project_style_set,
+            style_preview,
             graphics_in_line_plan,
             project_graphics_in_line,
             pick_brand_file,
@@ -2467,10 +2463,6 @@ pub fn run() {
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,
-            templates_list,
-            template_save,
-            template_delete,
-            template_apply,
             project_short_from_take,
             project_short_footage,
             project_shorts_generate,

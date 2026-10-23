@@ -1,6 +1,7 @@
 //! Captions burned into preview and export. The words come from a track's transcript, so
-//! captions follow every cut and undo; the style lives in the edit document, the typeface and
-//! accent come from the brand kit and the video's look ([`CaptionLook`]).
+//! captions follow every cut and undo; where they sit and how many words they hold live in the
+//! edit document, how they look (colours, outline, box, pop / karaoke / static, the typeface and
+//! accent) in the project's style ([`crate::style`], [`CaptionLook`]).
 //!
 //! Cues are groups of a few kept words in edited time. Each word of a cue is rasterized once
 //! into coverage masks, then composed for the moment shown: popping in, lit as it is said, or
@@ -8,14 +9,12 @@
 //! the export draw the same frame.
 pub mod fonts;
 
-use crate::graphics::brands::BrandKit;
 use crate::media::{ColorInfo, PixelFormat, VideoFrame};
 use crate::project::layout::parse_hex_rgb;
 use crate::timeline::TimelineMapper;
 use crate::transcript::{Transcript, WordKind};
 pub use fonts::Typeface;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 pub const FONT_SIZE_PCT_RANGE: (f32, f32) = (2.0, 15.0);
 pub const OFFSET_PCT_RANGE: (f32, f32) = (0.0, 45.0);
@@ -103,30 +102,6 @@ pub struct CaptionSettings {
     /// Font size as a percentage of the canvas height.
     #[serde(default = "default_font_size_pct")]
     pub font_size_pct: f32,
-    #[serde(default = "default_text_color")]
-    pub text_color: String,
-    /// How the words come on screen.
-    #[serde(default)]
-    pub style: CaptionStyle,
-    /// Draw the emphasis words (picked per caption, kept on the transcript) in the accent.
-    #[serde(default = "default_true")]
-    pub emphasis: bool,
-    /// The emphasis colour; empty takes the brand kit's accent.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub emphasis_color: String,
-    /// The font weight (100 to 900); 0 takes the look's title weight.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub weight: u16,
-    /// A dark outline around the letters.
-    #[serde(default = "default_true")]
-    pub outline: bool,
-    /// A box behind the text.
-    #[serde(default)]
-    pub background: bool,
-    #[serde(default = "default_background_color")]
-    pub background_color: String,
-    #[serde(default = "default_background_opacity")]
-    pub background_opacity: f32,
     #[serde(default)]
     pub uppercase: bool,
     /// Most words shown at once.
@@ -135,10 +110,32 @@ pub struct CaptionSettings {
     /// Most lines a caption takes; a longer one is drawn smaller to fit.
     #[serde(default = "default_max_lines")]
     pub max_lines: u32,
-}
-
-fn is_zero(v: &u16) -> bool {
-    *v == 0
+    // How they look: never stored, put on from the project's style as the document is drawn
+    // (`style::dress`).
+    #[serde(skip, default = "default_text_color")]
+    pub text_color: String,
+    /// How the words come on screen.
+    #[serde(skip)]
+    pub style: CaptionStyle,
+    /// Draw the emphasis words (picked per caption, kept on the transcript) in the accent.
+    #[serde(skip, default = "default_true")]
+    pub emphasis: bool,
+    /// The emphasis colour; empty takes the style's accent.
+    #[serde(skip)]
+    pub emphasis_color: String,
+    /// The font weight (100 to 900); 0 takes the graphics' title weight.
+    #[serde(skip)]
+    pub weight: u16,
+    /// A dark outline around the letters.
+    #[serde(skip, default = "default_true")]
+    pub outline: bool,
+    /// A box behind the text.
+    #[serde(skip)]
+    pub background: bool,
+    #[serde(skip, default = "default_background_color")]
+    pub background_color: String,
+    #[serde(skip, default = "default_background_opacity")]
+    pub background_opacity: f32,
 }
 
 /// One line: easier to read, and what a caption turned on starts with.
@@ -185,11 +182,6 @@ impl CaptionSettings {
         };
         check("Caption size", self.font_size_pct, FONT_SIZE_PCT_RANGE)?;
         check("Caption offset", self.offset_pct, OFFSET_PCT_RANGE)?;
-        check(
-            "Caption background opacity",
-            self.background_opacity,
-            (0.0, 1.0),
-        )?;
         if !(MAX_WORDS_RANGE.0..=MAX_WORDS_RANGE.1).contains(&self.max_words) {
             return Err(format!(
                 "Words per caption must be between {} and {}",
@@ -201,12 +193,6 @@ impl CaptionSettings {
         }
         if !matches!(self.position.as_str(), "bottom" | "middle" | "top") {
             return Err("Caption position must be bottom, middle or top".into());
-        }
-        let (lo, hi) = fonts::WEIGHT_RANGE;
-        if self.weight != 0 && !(lo..=hi).contains(&self.weight) {
-            return Err(format!(
-                "Caption weight must be {lo} to {hi}, or 0 for the look's"
-            ));
         }
         // A sound's key, `<asset>.<stream>`; that it names a sound of the project is checked
         // where the assets are known.
@@ -221,18 +207,13 @@ impl CaptionSettings {
                 return Err("Invalid caption track id".into());
             }
         }
-        parse_hex_rgb(&self.text_color)?;
-        parse_hex_rgb(&self.background_color)?;
-        if !self.emphasis_color.is_empty() {
-            parse_hex_rgb(&self.emphasis_color)?;
-        }
         Ok(())
     }
 }
 
-/// What captions take from outside their own settings: the typeface (the brand kit's font at
-/// the look's weight), the accent the emphasis words are drawn in, and how fast and far a
-/// word pops (the look's speed and energy).
+/// What captions take from the style beyond their settings: the typeface (the brand's title
+/// font at the caption weight), the accent the emphasis words are drawn in, and how fast and
+/// far a word pops (the graphics look's speed and energy).
 #[derive(Clone)]
 pub struct CaptionLook {
     pub face: Typeface,
@@ -245,10 +226,10 @@ pub struct CaptionLook {
 }
 
 impl CaptionLook {
+    /// `settings` as dressed by `style` (its weight and emphasis colour), with `look`'s motion.
     pub fn new(
         settings: &CaptionSettings,
-        kit: Option<&BrandKit>,
-        brands: &Path,
+        style: &crate::style::Style,
         look: &crate::graphics::look::Look,
     ) -> Self {
         let weight = if settings.weight > 0 {
@@ -263,12 +244,12 @@ impl CaptionLook {
         let accent = if !settings.emphasis_color.is_empty() {
             settings.emphasis_color.clone()
         } else {
-            kit.map(|k| k.accent.clone())
+            Some(style.brand.colors.accent.clone())
                 .filter(|a| parse_hex_rgb(a).is_ok())
                 .unwrap_or_else(|| crate::graphics::look::ACCENT.into())
         };
         Self {
-            face: fonts::resolve(kit, brands, weight),
+            face: fonts::resolve(style, weight),
             accent,
             weight,
             pop_us: POP_US / look.speed.max(0.1),
@@ -276,27 +257,20 @@ impl CaptionLook {
         }
     }
 
-    /// The look of `document`'s captions: its brand kit (from the app's kits) and its look.
+    /// The look of `document`'s captions, from its style.
     pub fn of(document: &crate::project::revision::EditDocument) -> Self {
-        let brands = crate::graphics::brands::dir();
-        let kit = document
-            .graphics_brand
-            .as_deref()
-            .and_then(|name| crate::graphics::brands::load(&brands, name).ok());
-        Self::new(
-            &document.captions,
-            kit.as_ref(),
-            &brands,
-            &document.graphics_look,
-        )
+        let style = crate::style::of(document);
+        let portrait = crate::style::is_portrait(document);
+        let mut settings = document.captions.clone();
+        crate::style::dress_captions(&mut settings, &style, portrait);
+        Self::new(&settings, &style, &style.graphics_for(portrait))
     }
 
-    /// No brand kit and the default look.
+    /// The Light style's look, for `settings` as they are.
     pub fn plain(settings: &CaptionSettings) -> Self {
         Self::new(
             settings,
-            None,
-            Path::new(""),
+            &crate::style::Style::default(),
             &crate::graphics::look::Look::default(),
         )
     }
@@ -958,14 +932,25 @@ pub fn colorize(
             shown_end[word.line] = shown_end[word.line].max(word.line_x + word.ink_w);
         }
     }
-    let shift = |word: &WordRaster| ((word.line_w - shown_end[word.line]) / 2.0).max(0.0).round();
+    let shift = |word: &WordRaster| {
+        ((word.line_w - shown_end[word.line]) / 2.0)
+            .max(0.0)
+            .round()
+    };
     // Every outline goes under every word's letters.
     for (i, word) in raster.words.iter().enumerate() {
         let state = shown(i);
         if state.alpha > 0.0 {
-            paint(&mut px, w, h, word, &word.outline, state.scale, shift(word), |_| {
-                (outline_color, 0.9 * state.alpha)
-            });
+            paint(
+                &mut px,
+                w,
+                h,
+                word,
+                &word.outline,
+                state.scale,
+                shift(word),
+                |_| (outline_color, 0.9 * state.alpha),
+            );
         }
     }
     for (i, word) in raster.words.iter().enumerate() {
@@ -982,16 +967,25 @@ pub fn colorize(
         // before it is said, so its accent reads on a dark screen.
         let edge = word.ink_x + state.lit * word.ink_w;
         let bright = settings.emphasis && word.emphasis;
-        paint(&mut px, w, h, word, &word.fill, state.scale, shift(word), |sx| {
-            let lit = if state.lit >= 1.0 || bright {
-                1.0
-            } else if state.lit <= 0.0 {
-                0.0
-            } else {
-                ((edge - sx) / 1.5 + 0.5).clamp(0.0, 1.0)
-            };
-            (color, state.alpha * (UNSAID + (1.0 - UNSAID) * lit))
-        });
+        paint(
+            &mut px,
+            w,
+            h,
+            word,
+            &word.fill,
+            state.scale,
+            shift(word),
+            |sx| {
+                let lit = if state.lit >= 1.0 || bright {
+                    1.0
+                } else if state.lit <= 0.0 {
+                    0.0
+                } else {
+                    ((edge - sx) / 1.5 + 0.5).clamp(0.0, 1.0)
+                };
+                (color, state.alpha * (UNSAID + (1.0 - UNSAID) * lit))
+            },
+        );
     }
     let mut data = vec![0u8; (w * h * 4) as usize];
     for (p, o) in px.iter().zip(data.chunks_exact_mut(4)) {
@@ -1193,23 +1187,6 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.validate().is_err());
-        let bad = CaptionSettings {
-            text_color: "red".into(),
-            ..Default::default()
-        };
-        assert!(bad.validate().is_err());
-        for weight in [50, 1000] {
-            let bad = CaptionSettings {
-                weight,
-                ..Default::default()
-            };
-            assert!(bad.validate().is_err(), "{weight}");
-        }
-        let bad = CaptionSettings {
-            emphasis_color: "blue".into(),
-            ..Default::default()
-        };
-        assert!(bad.validate().is_err());
         for bad_key in ["../x", "a..b", "nodot", ".sound0", "a.", "a/b.sound0"] {
             let bad = CaptionSettings {
                 track_id: Some(bad_key.into()),
@@ -1224,10 +1201,9 @@ mod tests {
         }
         .validate()
         .unwrap();
-        // The style is a word.
-        let style: CaptionSettings = serde_json::from_str(r#"{"style":"pop"}"#).unwrap();
-        assert_eq!(style.style, CaptionStyle::Pop);
-        assert!(serde_json::from_str::<CaptionSettings>(r#"{"style":"wobble"}"#).is_err());
+        // How they look is the style's, never stored with them.
+        let stored = serde_json::to_value(CaptionSettings::default()).unwrap();
+        assert!(stored.get("style").is_none() && stored.get("textColor").is_none());
     }
 
     #[test]
@@ -1358,28 +1334,20 @@ mod tests {
         };
         let frame = colorize(&raster, &plain, &look, &states);
         assert_eq!(count(&frame, [255, 0, 0]), 0);
-        // Without its own colour, the emphasis is the kit's accent.
-        let kit = BrandKit {
-            name: "K".into(),
-            background: "#FFFFFF".into(),
-            text: "#000000".into(),
-            accent: "#123456".into(),
-            font: String::new(),
-            font_file: None,
-            logo: None,
-        };
-        let look = CaptionLook::new(
-            &CaptionSettings::default(),
-            Some(&kit),
-            Path::new(""),
-            &Default::default(),
-        );
+        // Without its own colour, the emphasis is the style's accent.
+        let mut style = crate::style::Style::default();
+        style.brand.colors.accent = "#123456".into();
+        let look = CaptionLook::new(&CaptionSettings::default(), &style, &Default::default());
         assert_eq!(look.accent, "#123456");
     }
 
     #[test]
     fn a_popping_line_is_centred_and_the_emphasis_word_is_bright_before_it_is_said() {
-        let mut t = transcript(&[("one", 0, 400), ("wonderful", 500, 900), ("two", 1000, 1300)]);
+        let mut t = transcript(&[
+            ("one", 0, 400),
+            ("wonderful", 500, 900),
+            ("two", 1000, 1300),
+        ]);
         t.set_caption_mark("w-2", |m| m.emphasis = true).unwrap();
         let settings = CaptionSettings {
             style: CaptionStyle::Pop,
@@ -1418,7 +1386,10 @@ mod tests {
         let raster = rasterize_cue(&cues[0], &karaoke, &look, 1280, 720).unwrap();
         let states = word_states(&cues[0], CaptionStyle::Karaoke, &look, 0);
         let frame = colorize(&raster, &karaoke, &look, &states);
-        assert!(count(&frame, [255, 0, 0]) > 50, "the emphasis word is bright red");
+        assert!(
+            count(&frame, [255, 0, 0]) > 50,
+            "the emphasis word is bright red"
+        );
         assert_eq!(count(&frame, [255, 255, 255]), 0, "the others are dim");
     }
 
@@ -1450,8 +1421,7 @@ mod tests {
         // The look's speed makes it quicker.
         let quick = CaptionLook::new(
             &settings,
-            None,
-            Path::new(""),
+            &crate::style::Style::default(),
             &crate::graphics::look::Look {
                 speed: 2.0,
                 ..Default::default()

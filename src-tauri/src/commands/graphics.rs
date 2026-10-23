@@ -1,7 +1,7 @@
 //! Graphics: the renderer's install, the templates, and making and changing graphics in the
 //! open project.
 use super::{require_handle, AppState};
-use crate::graphics::{self, brands, gate, library, render, runtime, templates};
+use crate::graphics::{self, gate, library, render, runtime, templates};
 use crate::project::OpenedProject;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -377,8 +377,8 @@ pub struct GraphicUpdated {
     pub project: Option<OpenedProject>,
 }
 
-/// Changes a graphic's variables and brand kit (its source: no undo step; it renders again)
-/// and, with `name`, its name (an edit). `brand` is `default` (the project's), `none` or a kit.
+/// Changes a graphic's variables and style (its source: no undo step; it renders again) and,
+/// with `name`, its name (an edit). `style` is `project` (the project's) or a style's name.
 #[allow(clippy::too_many_arguments)]
 pub fn project_graphic_set_impl(
     state: &AppState,
@@ -387,7 +387,7 @@ pub fn project_graphic_set_impl(
     asset_id: String,
     variables: Map<String, Value>,
     name: Option<String>,
-    brand: Option<String>,
+    style: Option<String>,
 ) -> Result<GraphicUpdated, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
@@ -400,12 +400,12 @@ pub fn project_graphic_set_impl(
         let declared = graphics::declarations(&dir)?;
         source.variables = graphics::merge_variables(&declared, &source.variables, &variables)?;
     }
-    let brand = brand
-        .map(|b| graphics::brand_choice(&brands::dir(), &b))
+    let style = style
+        .map(|s| graphics::style_choice(&s))
         .transpose()?
-        .filter(|b| *b != source.brand);
-    if let Some(brand) = &brand {
-        source.brand = brand.clone();
+        .filter(|s| *s != source.style);
+    if let Some(style) = &style {
+        source.style = style.clone();
     }
     let name = name
         .map(|n| n.trim().chars().take(80).collect::<String>())
@@ -419,7 +419,7 @@ pub fn project_graphic_set_impl(
         project = Some(reader.commit_document(expected_revision, next)?);
         source.name = name.clone();
     }
-    if !variables.is_empty() || name.is_some() || brand.is_some() {
+    if !variables.is_empty() || name.is_some() || style.is_some() {
         graphics::write_source(&dir, &source)?;
     }
     if project.is_some() {
@@ -435,7 +435,7 @@ pub fn project_graphic_set_impl(
     })
 }
 
-/// Sets look tokens of a graphic's own over the video's (`None` takes one back to the video's).
+/// Sets look tokens of a graphic's own over its style's (`None` takes one back to the style's).
 /// Like its variables, its source changes in place (no undo step); it renders again.
 pub fn project_graphic_look_set_impl(
     state: &AppState,
@@ -465,149 +465,6 @@ pub fn project_graphic_look_set_impl(
 /// Forgets failed renders and looks at the graphics' files again (after a hand edit).
 pub fn graphics_render_again_impl() {
     render::sources_changed();
-}
-
-/// The brand kits, and the open project's default kit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrandsView {
-    pub kits: Vec<brands::BrandKitView>,
-    /// The project's default kit (it may have been removed since).
-    pub project_default: Option<String>,
-    pub folder: String,
-}
-
-pub fn graphics_brands_impl(
-    state: &AppState,
-    project_handle: Option<String>,
-) -> Result<BrandsView, String> {
-    let dir = brands::dir();
-    let project_default = match project_handle {
-        Some(handle) => {
-            let opened = state.opened_project.lock();
-            let reader = opened.as_ref().ok_or("No opened project")?;
-            require_handle(reader, &handle)?;
-            // A kit renamed since shows by its name now.
-            reader
-                .document()
-                .graphics_brand
-                .as_deref()
-                .map(|b| brands::current_name(&dir, b))
-        }
-        None => None,
-    };
-    Ok(BrandsView {
-        kits: brands::list(&dir)
-            .iter()
-            .map(|kit| brands::view(&dir, kit))
-            .collect(),
-        project_default,
-        folder: dir.display().to_string(),
-    })
-}
-
-/// Saves a brand kit (new, changed or renamed); graphics that use it render again, and the
-/// preview's captions take its font and accent.
-pub fn graphics_brand_save_impl(
-    state: &AppState,
-    kit: brands::BrandKitInput,
-) -> Result<brands::BrandKitView, String> {
-    let dir = brands::dir();
-    let saved = brands::save(&dir, &kit)?;
-    super::transcript::refresh_playback(state);
-    Ok(brands::view(&dir, &saved))
-}
-
-pub fn graphics_brand_remove_impl(name: String) -> Result<(), String> {
-    brands::remove(&brands::dir(), &name)
-}
-
-/// Sets the project's default brand kit (`None` for none), one undo step.
-pub fn project_graphics_brand_set_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    brand: Option<String>,
-) -> Result<OpenedProject, String> {
-    // Stored by the kit's name now (an old name leads to its kit).
-    let brand = brand
-        .map(|b| b.trim().to_string())
-        .filter(|b| !b.is_empty())
-        .map(|name| brands::load(&brands::dir(), &name).map(|kit| kit.name))
-        .transpose()?;
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    if reader.document().graphics_brand == brand {
-        return Ok(reader.view_or_summary(None));
-    }
-    let mut next = reader.document().clone();
-    next.graphics_brand = brand;
-    let project = reader.commit_document(expected_revision, next)?;
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    // Every graphic restyles: render them all now, not as the playhead reaches each.
-    render::request_all(reader.root(), &reader.history().current);
-    Ok(project)
-}
-
-/// The video's look, the presets, every token's value, and the graphics with tokens of their
-/// own.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LookView {
-    pub look: graphics::look::Look,
-    pub presets: Vec<graphics::look::PresetView>,
-    pub tokens: std::collections::BTreeMap<&'static str, String>,
-    /// Graphics of this video that override tokens: (name, the tokens).
-    pub overrides: Vec<(String, Vec<String>)>,
-    /// The looks the user saved, app-wide.
-    pub saved: Vec<graphics::look::SavedLook>,
-}
-
-pub fn graphics_look_impl(state: &AppState, project_handle: String) -> Result<LookView, String> {
-    let opened = state.opened_project.lock();
-    let reader = opened.as_ref().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    let document = reader.document();
-    let overrides = document
-        .assets
-        .iter()
-        .filter(|a| a.is_graphic())
-        .filter_map(|asset| {
-            let source = graphics::read_source(&graphics::folder(reader.root(), &asset.id)).ok()?;
-            (!source.look.is_empty()).then(|| (source.name, source.look.into_keys().collect()))
-        })
-        .collect();
-    Ok(LookView {
-        look: document.graphics_look.clone(),
-        presets: graphics::look::presets(),
-        tokens: document.graphics_look.values(),
-        overrides,
-        saved: graphics::look::saved(&graphics::look::saved_dir()),
-    })
-}
-
-/// Saves `look` app-wide as `name` (over a saved look of that name); the saved looks after.
-pub fn graphics_look_save_impl(
-    name: String,
-    look: graphics::look::Look,
-) -> Result<Vec<graphics::look::SavedLook>, String> {
-    let dir = graphics::look::saved_dir();
-    graphics::look::save(&dir, &name, &look)?;
-    Ok(graphics::look::saved(&dir))
-}
-
-/// Removes saved look `name`; projects keep the look they have. The saved looks after.
-pub fn graphics_look_saved_remove_impl(
-    name: String,
-) -> Result<Vec<graphics::look::SavedLook>, String> {
-    let dir = graphics::look::saved_dir();
-    graphics::look::remove_saved(&dir, &name)?;
-    Ok(graphics::look::saved(&dir))
 }
 
 /// What bringing the video's graphics in line with its look would change (graphics already in
@@ -654,34 +511,7 @@ pub fn project_graphics_in_line_impl(
     Ok(project)
 }
 
-/// Sets the video's look, one undo step; every graphic that uses it renders again.
-pub fn project_graphics_look_set_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    look: graphics::look::Look,
-) -> Result<OpenedProject, String> {
-    look.validate()?;
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    if reader.document().graphics_look == look {
-        return Ok(reader.view_or_summary(None));
-    }
-    let mut next = reader.document().clone();
-    next.graphics_look = look;
-    let project = reader.commit_document(expected_revision, next)?;
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    // Every graphic restyles: render them all now, not as the playhead reaches each.
-    render::request_all(reader.root(), &reader.history().current);
-    Ok(project)
-}
-
-/// How a graphic of the video would look with another look.
+/// How a graphic of the video would look in another style.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LookStill {
@@ -691,23 +521,23 @@ pub struct LookStill {
     pub image: String,
 }
 
-/// The most graphics a look's preview draws.
+/// The most graphics a style's preview draws.
 const LOOK_PREVIEW_GRAPHICS: usize = 3;
 
-/// Stills of up to three of the video's graphics (the first of each, by where they play) with
-/// `look` instead of the video's, without changing anything. Takes a few seconds.
-pub fn graphics_look_preview_impl(
+/// Stills of up to three of the video's graphics (the first of each, by where they play) in
+/// `style` instead of the project's, without changing anything. Takes a few seconds.
+pub fn style_preview_impl(
     state: &AppState,
     project_handle: String,
-    look: graphics::look::Look,
+    style: crate::style::Style,
 ) -> Result<Vec<LookStill>, String> {
-    look.validate()?;
+    style.validate()?;
     let specs: Vec<(String, render::Spec)> = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
-        let mut document = reader.document().clone();
-        document.graphics_look = look;
+        let document = reader.document().clone();
+        let portrait = crate::style::is_portrait(&document);
         let canvas = document.layout.preview_dimensions()?;
         let mut clips: Vec<&crate::sequence::Clip> = document
             .sequence
@@ -728,7 +558,7 @@ pub fn graphics_look_preview_impl(
             .take(LOOK_PREVIEW_GRAPHICS)
             .filter_map(|clip| {
                 let asset = document.asset(&clip.asset)?;
-                let spec = render::Spec::for_clip(
+                let mut spec = render::Spec::for_clip(
                     reader.root(),
                     &document,
                     asset,
@@ -737,12 +567,13 @@ pub fn graphics_look_preview_impl(
                     &[],
                     Default::default(),
                 );
+                spec.dress(&style, portrait);
                 Some((asset.name.clone(), spec))
             })
             .collect()
     };
     if specs.is_empty() {
-        return Err("This video has no graphics to show the look on".into());
+        return Err("This video has no graphics to show the style on".into());
     }
     let cancel = AtomicBool::new(false);
     let stills: Vec<Result<LookStill, String>> = std::thread::scope(|scope| {

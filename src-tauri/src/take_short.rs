@@ -368,7 +368,7 @@ pub fn new_short(
         .shorts
         .first()
         .map(|s| s.layout.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|| crate::preset::store::resolve(&document.shorts_preset).short_layout());
     layout.graphic_slots.clear();
     layout.camera_clips.clear();
     let mut layouts = document
@@ -505,7 +505,8 @@ pub fn footage_sound_mix(document: &EditDocument, short: &Short) -> Option<(Stri
     Some((
         track.id.clone(),
         mix.map_or(0.0, |m| m.volume_db),
-        mix.and_then(|m| m.duck_db).unwrap_or(document.audio.duck_db),
+        mix.and_then(|m| m.duck_db)
+            .unwrap_or(document.audio.duck_db),
     ))
 }
 

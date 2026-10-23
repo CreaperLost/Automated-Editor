@@ -5,6 +5,7 @@ import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { api } from "../../lib/ipc";
 import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { PresetMarks } from "../presets/PresetMarks";
 import { Notice, Switch } from "../ui";
 
 function formatTime(us: number): string {
@@ -152,6 +153,9 @@ export const ZoomPanel: React.FC = () => {
 
   return (
     <div className="h-full overflow-y-auto bg-studio-900 text-label select-none">
+      <div className="px-3 pt-2">
+        <PresetMarks part="zoomSettings" />
+      </div>
       {error && (
         <Notice tone="danger" onDismiss={() => setError(undefined)}>
           {error}

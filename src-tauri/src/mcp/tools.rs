@@ -106,16 +106,15 @@ pub struct ToolDef {
 }
 
 /// Tools that overwrite or delete something the app's undo can't bring back: a file on disk,
-/// graphic source, the shared library, saved answers. Sent to clients as `destructiveHint`;
+/// graphic source, the shared library, styles and presets. Sent to clients as `destructiveHint`;
 /// every other writing tool only makes changes that are one undo step, or adds new files.
 pub const DESTRUCTIVE: &[&str] = &[
-    "brand_kit_set",
     "export",
     "graphic_set",
     "graphic_write_file",
+    "library",
     "library_remove",
     "library_save",
-    "template_save",
     "transcript_fix",
     "captions",
 ];
@@ -131,6 +130,7 @@ pub fn all() -> &'static [ToolDef] {
         super::skill::TOOLS
             .iter()
             .chain(TOOLS.iter())
+            .chain(super::library::TOOLS.iter())
             .chain(super::actions::ACTIONS.iter())
             .copied()
             .collect()
@@ -156,11 +156,7 @@ pub const MORE: &[&str] = &[
     "propose_edit",
     "proposal_withdraw",
     "short_create",
-    "template_save",
     "graphics_install",
-    "brand_pick",
-    "brand_kit_set",
-    "graphics_look",
     "graphic_write_file",
     "graphic_templatize",
     "graphic_check",
@@ -276,10 +272,8 @@ static TOOLS: [ToolDef; 15] = [
             (play a stretch faster or slower, only when asked); transcript_fix (a misheard \
             word); captions (the caption lines and their emphasis words); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
             (take back your batch); short_create (a clip from the video's words); \
-            template_save (keep the user's answers); graphics_install (the graphics renderer, \
-            ask first); brand_pick (the project's brand kit); brand_kit_set (make or change a \
-            kit); graphics_look (one style for every graphic: sizes, corners, motion); \
-            graphic_write_file, graphic_templatize, graphic_check, library_save, \
+            graphics_install (the graphics renderer, \
+            ask first); graphic_write_file, graphic_templatize, graphic_check, library_save, \
             library_remove (writing a graphic of your own and keeping it in the library).",
         schema: schema::<MoreArgs>,
         read_only: false,
@@ -1059,25 +1053,25 @@ mod tests {
                 "short_footage" => json!({ "short": "s1" }),
                 "graphic_add" => json!({ "template": "title", "atUs": 0 }),
                 "graphic_set" => json!({ "graphic": "g", "name": "n" }),
-                "brand_pick" => json!({ "brand": "none" }),
                 "graphic_templatize" | "graphic_check" => json!({ "graphic": "g" }),
                 "library_save" => json!({ "graphic": "g", "useWhen": "always" }),
+                "library" => json!({ "kind": "style", "op": "use", "name": "Light" }),
                 "graphic_write_file" => {
                     json!({ "graphic": "g", "path": "index.html", "contents": "" })
                 }
                 // These work without a project open (and installing would download).
                 "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
-                "open" | "create" | "status" | "export_status" | "template" | "template_save"
-                | "graphics"
-                | "graphics_install" | "brand_kits" | "brand_kit_set" | "library_remove"
-                | "more" => continue,
+                "open" | "create" | "status" | "export_status" | "preset" | "graphics"
+                | "graphics_install" | "library_remove" | "more" => continue,
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();
             assert_eq!(error, NO_PROJECT_MESSAGE, "{}", tool.name);
         }
         // Status says what the computer is ready for instead.
-        let Output::Text(status) = (find("status").unwrap().run)(&ctx, json!({})).unwrap().remove(0)
+        let Output::Text(status) = (find("status").unwrap().run)(&ctx, json!({}))
+            .unwrap()
+            .remove(0)
         else {
             panic!("status answers in text");
         };

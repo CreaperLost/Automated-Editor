@@ -39,9 +39,8 @@ the agent's output more checkable without the user watching every frame?*
    transcript.
 5. **Pin to meaning, not to time.** Things hang off words, clicks and recording time, so cuts
    don't knock them out of place.
-6. **One source for the look.** A brand kit (colours, font, logo) and the video's look (type,
-   corners, spacing, motion) feed every graphic (captions not yet; see
-   [gaps.md](gaps.md#6-captions)).
+6. **One source for the look.** The project's style (brand colours, fonts and logo, the
+   graphics look, the caption look and the frame) dresses every graphic, caption and frame.
 
 ## Where AeroEdits wins, and must keep winning
 
@@ -73,9 +72,9 @@ lack it, so we say "we have", not "only we have".
 | Layouts | Bubble (3×3 grid, S/M/L, shapes), side by side (fit/fill, any share), camera only (punch-in), screen only; a base layout plus sections anchored in recording time; favourites; **Pick from the recording** (rest, busy, hook rules) | Telemetry, face tracks |
 | Camera | Face centring on every camera slot (YuNet, found once per recording), hand framing per clip | Local model |
 | Telemetry polish | Window crop to the front window, bubble hides under activity, shortcut badges, click/whoosh lane (off by default) | `windows.jsonl`, `keys.jsonl`, `events.jsonl` |
-| Captions | The brand kit's font (else Inter Display, bundled) at the look's weight; one emphasis word per caption in the accent, picked by the agent; pop-in, karaoke or static; English and Greek, 16:9 and 9:16 | Transcript |
+| Captions | The style's title font (else Inter Display, bundled) at its caption weight; one emphasis word per caption in the accent, picked by the agent; pop-in, karaoke or static; English and Greek, 16:9 and 9:16 | Transcript |
 | Audio | Track gain, denoise, speech ducking, loudness normalisation to -14 LUFS by default with a peak leveller, crossfades at cuts | DSP |
-| Graphics | HyperFrames compositions: 6 tutorial templates + blank in a light app style, one look per video (presets, five controls, preview), brand kits, an app-level library behind a no-model quality gate, short slots; exports render them at their fps and 2× density above 1080p | Pinned runtime (200 MB download on first use) |
+| Graphics | HyperFrames compositions: 6 tutorial templates + blank in a light app style, one style per video (brand, graphics look with presets and five controls, preview), an app-level library behind a no-model quality gate, short slots; exports render them at their fps and 2× density above 1080p | Pinned runtime (200 MB download on first use) |
 | Shorts | A Shorts workspace tab; word-range shorts that follow the video's edits or get their own timeline; **take shorts** (a new camera take with footage from the long video under it, each piece at its own speed; graphics full frame, split beside the face or over it); own layouts | Agent or the app's cloud AI picks moments |
 | Chapters | YouTube chapters from the transcript, checked before export | The app's cloud AI |
 | Review | `check` (≈12 defect classes, one-click fixes, each its own undo step) and `storyboard` (one contact sheet of the edit) | No model |
@@ -117,10 +116,11 @@ flowchart LR
 
 ## How an agent edits a tutorial today
 
-The agent reads the shipped skill (`src-tauri/src/mcp/skill/`), then follows the `tutorial`
-template:
+The agent reads the shipped skill (`src-tauri/src/mcp/skill/`), then follows the Tutorial
+preset's method:
 
-1. `template("tutorial")` → steps, rules and the user's saved answers ("Same as last time?").
+1. `preset("tutorial")` → steps, rules, the user's own rules and the preset's choices ("Same as
+   last time?").
 2. `create` / `status` / `scan` → mics, cameras, mouse data, transcribers, dry-run estimates.
 3. `transcribe` (online, the language detected).
 4. For each pass (mouth noises → silence → gaps → fillers → layouts → zooms): dry run

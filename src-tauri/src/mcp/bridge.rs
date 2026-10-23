@@ -194,8 +194,7 @@ pub async fn relay(
                         let params = message.get("params");
                         let name = params.and_then(|p| p.get("name")).and_then(Value::as_str).unwrap_or_default();
                         let arguments = params.and_then(|p| p.get("arguments")).and_then(Value::as_object);
-                        let config = crate::transcript::settings::config_dir();
-                        let answer = match super::skill::prompt_get(&config, name, arguments) {
+                        let answer = match super::skill::prompt_get(name, arguments) {
                             Ok(prompt) => reply(id, serde_json::to_value(prompt).unwrap_or_default()),
                             Err(error) => json!({ "jsonrpc": "2.0", "id": id,
                                 "error": { "code": -32602, "message": error } }),

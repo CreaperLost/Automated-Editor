@@ -184,7 +184,7 @@ pub fn arguments(
     let properties = schema.get("properties").cloned().unwrap_or_default();
     let mut out = Map::new();
     // Plain words fill the required properties in order: `aeroedits do settings captions`; or,
-    // for a tool that requires none, its only property or its `name`: `aeroedits do template
+    // for a tool that requires none, its only property or its `name`: `aeroedits do preset
     // tutorial`.
     let mut required: Vec<&str> = schema
         .get("required")
@@ -624,9 +624,9 @@ mod tests {
         .unwrap();
         assert_eq!(args, json!({"area": "captions", "set": {"enabled": true}}));
 
-        // A tool with one optional option takes it as a plain word: `do template tutorial`.
+        // A tool with one optional option takes it as a plain word: `do preset tutorial`.
         let template =
-            serde_json::to_value(schemars::schema_for!(super::super::skill::TemplateArgs)).unwrap();
+            serde_json::to_value(schemars::schema_for!(super::super::skill::PresetArgs)).unwrap();
         assert_eq!(
             arguments(&template, &strings(&["tutorial"]), &[]).unwrap(),
             json!({"name": "tutorial"})

@@ -1,20 +1,22 @@
-//! The `aeroedits` skill: how an agent runs a whole edit (ask, apply, report, export), and a
-//! template for each kind of video (its steps, what to ask the user, the defaults). The text
-//! ships inside the app, so it always matches the actions, and reaches agents three ways: the
-//! `template` tool (any client; the server's instructions point to it), MCP prompts (the Claude
-//! app's + menu, slash commands in Claude Code), and a skill folder installed for Claude Code and
-//! Codex from the AI agents dialog. The user's answers to a template's questions are kept, so
-//! the next edit asks one question.
+//! The `aeroedits` skill: how an agent runs a whole edit (ask, apply, report, export), from the
+//! preset for the kind of video (`crate::preset`: its method, the user's rules for it and its
+//! choices). The text ships inside the app (and the user's presets), so it always matches the
+//! actions, and reaches agents three ways: the `preset` tool (any client; the server's
+//! instructions point to it), MCP prompts (the Claude app's + menu, slash commands in Claude
+//! Code), and a skill folder installed for Claude Code and Codex from the AI agents dialog. The
+//! user's answers to a method's questions are saved as the preset's choices (with `library`),
+//! so the next edit asks one question and the app reads the same settings.
 use super::tools::{params, schema, text, Ctx, Output, ToolDef};
+use crate::preset::{self, Preset};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The installed skill: what it is for, and a pointer to `template`, which has the rest.
+/// The installed skill: what it is for, and a pointer to `preset`, which has the rest.
 const SKILL: &str = include_str!("skill/SKILL.md");
-/// The rules every edit follows, given once with the template.
+/// The rules every edit follows, given once with the method.
 const RULES: &str = include_str!("skill/rules.md");
 const EXPORT: &str = include_str!("skill/export.md");
 /// How to work with graphics, given with the `graphics` list (only edits with graphics need it).
@@ -29,135 +31,71 @@ const LEGACY_FILES: [&str; 4] = [
 /// The line that makes an installed skill folder AeroEdits' to update.
 const MARKER: &str = "<!-- Installed by AeroEdits";
 
-pub struct Template {
-    pub name: &'static str,
-    pub title: &'static str,
-    pub description: &'static str,
-    text: &'static str,
+/// The preset called `name` (any case; a prompt's name, `my-gaming`, finds "My gaming").
+fn find(name: &str) -> Result<Preset, String> {
+    let wanted = name.trim();
+    preset::store::load(wanted).or_else(|error| {
+        preset::store::list()
+            .into_iter()
+            .find(|p| prompt_name(&p.name) == wanted.to_lowercase())
+            .ok_or(error)
+    })
 }
 
-pub static TEMPLATES: [Template; 3] = [
-    Template {
-        name: "tutorial",
-        title: "Tutorial edit",
-        description: "A screen-recorded tutorial, long form: clean speech, steady pacing, \
-            webcam and zooms, no captions, chapters, then export when the user says.",
-        text: include_str!("skill/templates/tutorial.md"),
-    },
-    Template {
-        name: "shorts",
-        title: "Shorts from a take",
-        description: "A vertical short the user recorded in a new take (camera and microphone, \
-            made outside the app): the take talks, you put under it the long video's footage and \
-            graphics that show each sentence, then new graphics, then export when the user says. \
-            The app's Shorts tab.",
-        text: include_str!("skill/templates/shorts.md"),
-    },
-    Template {
-        name: "clips",
-        title: "Clips from the video",
-        description: "Vertical clips cut from the edited video: you pick the best moments from \
-            its transcript, the app gives them the split-screen look and layout sections, then \
-            export when the user says. The app's Clips tab.",
-        text: include_str!("skill/templates/clips.md"),
-    },
-];
-
-fn find(name: &str) -> Result<&'static Template, String> {
-    TEMPLATES
-        .iter()
-        .find(|t| t.name == name.trim())
-        .ok_or_else(|| format!("No template {name}. Templates: {}", names()))
+/// A preset's name as a prompt's: lower case, `-` between words.
+fn prompt_name(name: &str) -> String {
+    crate::graphics::library::slug(name)
 }
 
-fn names() -> String {
-    TEMPLATES
-        .iter()
-        .map(|t| t.name)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-// ---------------------------------------------------------------------------------------
-// Saved answers.
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Saved {
-    saved_at: String,
-    answers: Value,
-}
-
-fn answers_path(config: &Path, name: &str) -> PathBuf {
-    config
-        .join("agents")
-        .join("answers")
-        .join(format!("{name}.json"))
-}
-
-fn load_answers(config: &Path, name: &str) -> Option<Saved> {
-    let mut saved: Saved =
-        serde_json::from_slice(&fs::read(answers_path(config, name)).ok()?).ok()?;
-    forget_review(&mut saved.answers);
-    Some(saved)
-}
-
-/// Who reviews fillers and who transcribes are never saved answers: `review: auto` (the app's
-/// OpenRouter review when a key is set) and `provider: auto` (online, the language detected)
-/// unless the user asks otherwise in the conversation. Answers saved while the in-house review
-/// or Parakeet was the default would otherwise keep them forever.
-fn forget_review(answers: &mut Value) {
-    if let Some(fillers) = answers.get_mut("fillers").and_then(Value::as_object_mut) {
+/// What a preset's method is told about choices of other names: who reviews fillers and who
+/// transcribes are never kept (`review: auto`, `provider: auto` unless the user asks in the
+/// conversation).
+pub fn forget_review(choices: &mut serde_json::Map<String, Value>) {
+    if let Some(fillers) = choices.get_mut("fillers").and_then(Value::as_object_mut) {
         fillers.remove("review");
     }
-    if let Some(answers) = answers.as_object_mut() {
-        answers.remove("transcriber");
-    }
+    choices.remove("transcriber");
 }
 
-fn save_answers(config: &Path, name: &str, answers: Value) -> Result<(), String> {
-    let path = answers_path(config, name);
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("Could not save the answers: {e}"))?;
-    }
-    let saved = Saved {
-        saved_at: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
-        answers,
+/// Everything an agent needs for an edit of this kind: the rules, the method, the export
+/// steps and the preset's choices (a prompt's whole guide, for a run step by step).
+pub fn guide(name: &str) -> Result<String, String> {
+    compose(name, false, true)
+}
+
+/// The guide `preset` gives: for an automatic run (`auto`) without what only a run step by
+/// step needs (dry runs to ask about, the questions) nor the thorough review unless the
+/// choices say so; the export steps only with `export` (asked for at the end). Agents pay for
+/// every word of it, on every edit.
+fn compose(name: &str, auto: bool, export: bool) -> Result<String, String> {
+    let preset = find(name)?;
+    let mut choices = preset.choices.clone();
+    forget_review(&mut choices);
+    let thorough = choices.get("review").and_then(Value::as_str) == Some("thorough");
+    let chosen = if choices.is_empty() {
+        format!(
+            "## Choices\n\nNone in {} yet: ask the method's questions, then save the answers \
+             as its choices with `library` (`kind: preset`, `op: set`, `set: {{\"choices\": \
+             {{...}}}}`).",
+            preset.name
+        )
+    } else {
+        format!(
+            "## Choices ({})\n\nThe preset's choices: ask once whether to use them again. After \
+             the user answers differently, save them with `library` (`kind: preset`, `op: set`, \
+             `set: {{\"choices\": {{...}}}}`).\n\n```json\n{}\n```",
+            preset.name,
+            serde_json::to_string_pretty(&choices).unwrap_or_default()
+        )
     };
-    let json = serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| format!("Could not save the answers: {e}"))
-}
-
-/// Everything an agent needs for an edit of this kind: the rules, the template, the export
-/// steps and the user's saved answers (a prompt's whole guide, for a run step by step).
-pub fn guide(config: &Path, name: &str) -> Result<String, String> {
-    compose(config, name, false, true)
-}
-
-/// The guide `template` gives: for an automatic run (`auto`) without what only a run step by
-/// step needs (dry runs to ask about, the questions, saving answers) nor the thorough review
-/// unless the saved answers chose it; the export steps only with `export` (asked for at the
-/// end). Agents pay for every word of it, on every edit.
-fn compose(config: &Path, name: &str, auto: bool, export: bool) -> Result<String, String> {
-    let template = find(name)?;
-    let loaded = load_answers(config, template.name);
-    let thorough = loaded
-        .as_ref()
-        .and_then(|s| s.answers.get("review"))
-        .and_then(Value::as_str)
-        == Some("thorough");
-    let saved = match loaded {
-        Some(saved) => format!(
-            "## Saved answers ({}, saved {})\n\nAsk once whether to use them again.\n\n```json\n{}\n```",
-            template.name,
-            saved.saved_at,
-            serde_json::to_string_pretty(&saved.answers).unwrap_or_default()
-        ),
-        None => format!(
-            "## Saved answers\n\nNone for {} yet: ask the template's questions, then save the \
-             answers with `template_save`.",
-            template.name
-        ),
+    let own_rules = if preset.rules.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "## The user's rules for {}\n\nThey win over the method and the rules above.\n\n{}\n\n---\n\n",
+            preset.name,
+            preset.rules.trim()
+        )
     };
     let export = if export {
         format!("{}\n\n---\n\n", EXPORT.trim())
@@ -166,9 +104,9 @@ fn compose(config: &Path, name: &str, auto: bool, export: bool) -> Result<String
     };
     // A checkout with CRLF line ends embeds them.
     let whole = format!(
-        "{}\n\n---\n\n{}\n\n---\n\n{export}{saved}",
+        "{}\n\n---\n\n{own_rules}{}\n\n---\n\n{export}{chosen}",
         RULES.trim(),
-        template.text.trim(),
+        preset.method.trim(),
     )
     .replace("\r\n", "\n");
     Ok(for_mode(&whole, auto, thorough))
@@ -220,32 +158,22 @@ fn for_mode(text: &str, auto: bool, thorough: bool) -> String {
 // ---------------------------------------------------------------------------------------
 // Tools.
 
-pub static TOOLS: [ToolDef; 2] = [
-    ToolDef {
-        name: "template",
-        description:
-            "How to run a whole edit: the plan for a kind of video (the steps, what to ask \
-            the user, the defaults), the general rules and the user's saved answers. Call it \
-            first when the user asks for an edit, with `auto: true` when they want it done \
-            automatically; `part: export` gives the export steps. Without `name`, the list.",
-        schema: schema::<TemplateArgs>,
-        read_only: true,
-        run: template,
-    },
-    ToolDef {
-        name: "template_save",
-        description: "Saves the user's answers to a template's questions, in the shape the \
-            template gives, so the next edit can reuse them (`template` shows them).",
-        schema: schema::<SaveArgs>,
-        read_only: false,
-        run: template_save,
-    },
-];
+pub static TOOLS: [ToolDef; 1] = [ToolDef {
+    name: "preset",
+    description: "How to run a whole edit: the preset for a kind of video (its method: the \
+        steps, what to ask the user, the defaults; the user's own rules for it; its saved \
+        choices) and the general rules. Call it first when the user asks for an edit, with \
+        `auto: true` when they want it done automatically; `part: export` gives the export \
+        steps. Without `name`, the list (the open project's preset first).",
+    schema: schema::<PresetArgs>,
+    read_only: true,
+    run: preset_tool,
+}];
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct TemplateArgs {
-    /// The template, such as `tutorial`. Without it, the list of templates.
+pub struct PresetArgs {
+    /// The preset, such as `tutorial`. Without it, the list of presets.
     #[serde(default)]
     pub name: Option<String>,
     /// The user wants it done automatically: the guide without the questions.
@@ -256,23 +184,19 @@ pub struct TemplateArgs {
     pub part: Option<String>,
 }
 
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveArgs {
-    pub name: String,
-    /// The user's answers, in the shape the template gives.
-    pub answers: Value,
-}
-
-fn template(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: TemplateArgs = params(args)?;
+fn preset_tool(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: PresetArgs = params(args)?;
     // A workflow begins: what the agent changes from here is a new run, undone on its own.
-    if let Some(reader) = ctx.state.opened_project.lock().as_mut() {
-        reader.end_agent_run();
-    }
+    let ours = match ctx.state.opened_project.lock().as_mut() {
+        Some(reader) => {
+            reader.end_agent_run();
+            Some(reader.document().preset.clone())
+        }
+        None => None,
+    };
     match args.name.filter(|n| !n.trim().is_empty()) {
         Some(name) => match args.part.as_deref().map(str::trim) {
-            None | Some("") => text(compose(&ctx.host.config_dir(), &name, args.auto, false)?),
+            None | Some("") => text(compose(&name, args.auto, false)?),
             Some("export") => {
                 find(&name)?;
                 text(EXPORT.trim().replace("\r\n", "\n"))
@@ -280,43 +204,42 @@ fn template(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             Some(other) => Err(format!("No part {other}: `part` is `export`")),
         },
         None => {
-            let mut lines = vec!["Templates (`template` with a name gives one):".to_string()];
-            lines.extend(
-                TEMPLATES
-                    .iter()
-                    .map(|t| format!("{}: {}", t.name, t.description)),
-            );
+            let mut lines = vec!["Presets (`preset` with a name gives one):".to_string()];
+            let mut all = preset::store::list();
+            if let Some(ours) = &ours {
+                all.sort_by_key(|p| !p.name.eq_ignore_ascii_case(ours));
+            }
+            lines.extend(all.iter().map(|p| {
+                format!(
+                    "{}: {}{}",
+                    prompt_name(&p.name),
+                    p.description,
+                    if ours
+                        .as_deref()
+                        .is_some_and(|o| o.eq_ignore_ascii_case(&p.name))
+                    {
+                        " (the open project's)"
+                    } else {
+                        ""
+                    }
+                )
+            }));
             text(lines.join("\n"))
         }
     }
 }
 
-fn template_save(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: SaveArgs = params(args)?;
-    let template = find(&args.name)?;
-    if !args.answers.is_object() {
-        return Err("`answers` must be a JSON object, in the shape the template gives".into());
-    }
-    let mut answers = args.answers;
-    forget_review(&mut answers);
-    save_answers(&ctx.host.config_dir(), template.name, answers)?;
-    text(format!(
-        "Saved the answers for {}; the next edit offers them again.",
-        template.name
-    ))
-}
-
 // ---------------------------------------------------------------------------------------
-// MCP prompts: a template the user picks in the client, the whole guide in one message.
+// MCP prompts: a preset the user picks in the client, the whole guide in one message.
 
 pub fn prompt_list() -> Vec<rmcp::model::Prompt> {
     use rmcp::model::{Prompt, PromptArgument};
-    TEMPLATES
+    preset::store::list()
         .iter()
-        .map(|t| {
+        .map(|p| {
             Prompt::new(
-                t.name,
-                Some(t.description),
+                prompt_name(&p.name),
+                Some(p.description.clone()),
                 Some(vec![
                     PromptArgument::new("recording")
                         .with_description(
@@ -328,18 +251,17 @@ pub fn prompt_list() -> Vec<rmcp::model::Prompt> {
                         .with_required(false),
                 ]),
             )
-            .with_title(t.title)
+            .with_title(p.name.clone())
         })
         .collect()
 }
 
 pub fn prompt_get(
-    config: &Path,
     name: &str,
     arguments: Option<&serde_json::Map<String, Value>>,
 ) -> Result<rmcp::model::GetPromptResult, String> {
     use rmcp::model::{GetPromptResult, PromptMessage, Role};
-    let template = find(name)?;
+    let preset = find(name)?;
     let argument = |key: &str| {
         arguments
             .and_then(|a| a.get(key))
@@ -359,14 +281,14 @@ pub fn prompt_get(
         (None, _) => "Edit the project open in AeroEdits".to_string(),
     };
     let message = format!(
-        "{what}, following the {} template. All of it is below, so there is no need to call \
-         `template`.\n\n{}",
-        template.name,
-        guide(config, template.name)?
+        "{what}, following the {} preset. All of it is below, so there is no need to call \
+         `preset`.\n\n{}",
+        preset.name,
+        guide(&preset.name)?
     );
     Ok(
         GetPromptResult::new(vec![PromptMessage::new_text(Role::User, message)])
-            .with_description(template.title),
+            .with_description(preset.name),
     )
 }
 
@@ -527,43 +449,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_guide_has_the_rules_the_template_the_export_and_the_saved_answers() {
-        let config = tempfile::tempdir().unwrap();
-        let guide = guide(config.path(), "tutorial").unwrap();
+    fn the_guide_has_the_rules_the_method_the_export_and_the_choices() {
+        let guide = guide("tutorial").unwrap();
         assert!(
             !guide.starts_with("---") && !guide.contains(MARKER),
             "{guide}"
         );
         assert!(guide.starts_with("# Editing in AeroEdits"), "{guide}");
-        let (rules, template, export) = (
-            guide.find("## Saved answers\n\nWhen").unwrap(),
-            guide.find("\n# Template: tutorial").unwrap(),
+        let (rules, method, export, choices) = (
+            guide
+                .find("## Choices")
+                .unwrap_or(0)
+                .min(guide.find("# Editing").unwrap()),
+            guide.find("\n# Preset: Tutorial").unwrap(),
             guide.find("\n# Export").unwrap(),
+            guide.find("## Choices (Tutorial)").unwrap(),
         );
-        assert!(rules < template && template < export, "{guide}");
         assert!(
-            guide.ends_with("save the answers with `template_save`."),
+            rules < method && method < export && export < choices,
             "{guide}"
         );
+        assert!(guide.contains("\"review\": \"fast\""), "{guide}");
+        assert!(
+            guide::is_err(super::guide("vlog")),
+            "a preset that isn't there"
+        );
+    }
 
-        save_answers(
-            config.path(),
-            "tutorial",
-            serde_json::json!({ "silence": "tight" }),
-        )
-        .unwrap();
-        let guide = super::guide(config.path(), "tutorial").unwrap();
-        assert!(
-            guide.contains("\"silence\": \"tight\"") && guide.contains("Ask once"),
-            "{guide}"
-        );
-        assert!(super::guide(config.path(), "vlog")
-            .unwrap_err()
-            .contains("Templates: tutorial"));
+    mod guide {
+        pub fn is_err(result: Result<String, String>) -> bool {
+            result.is_err_and(|e| e.contains("There is no preset"))
+        }
     }
 
     #[test]
-    fn the_template_tools_list_give_and_remember() {
+    fn the_preset_tool_lists_and_gives_a_method() {
         let host = crate::mcp::tests_support::BareHost::default();
         let ctx = Ctx::new(&host, "agent", false);
         let call = |name: &str, args: Value| {
@@ -572,13 +492,12 @@ mod tests {
                 Output::Png(_) => String::new(),
             })
         };
-        let list = call("template", serde_json::json!({})).unwrap();
+        let list = call("preset", serde_json::json!({})).unwrap();
         assert!(
             list.contains("\ntutorial: A screen-recorded tutorial"),
             "{list}"
         );
-        let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
-        assert!(guide.contains("None for tutorial yet"), "{guide}");
+        let guide = call("preset", serde_json::json!({ "name": "tutorial" })).unwrap();
         // Step by step: the questions and the thorough review, no export steps yet.
         assert!(
             guide.contains("## Asking") && guide.contains("### 3b."),
@@ -594,8 +513,8 @@ mod tests {
         );
         // Automatic: none of the asking, nor the thorough review it didn't choose.
         let auto = call(
-            "template",
-            serde_json::json!({ "name": "tutorial", "auto": true }),
+            "preset",
+            serde_json::json!({ "name": "Tutorial", "auto": true }),
         )
         .unwrap();
         assert!(auto.contains("You are running it automatically"), "{auto}");
@@ -614,57 +533,31 @@ mod tests {
             guide.len()
         );
         let export = call(
-            "template",
+            "preset",
             serde_json::json!({ "name": "tutorial", "part": "export" }),
         )
         .unwrap();
         assert!(export.starts_with("# Export"), "{export}");
-        let saved = call(
-            "template_save",
-            serde_json::json!({ "name": "tutorial", "answers": { "silence": "gentle", "transcriber": "parakeet" } }),
-        )
+        // Who reviews fillers is never kept in the choices.
+        let mut choices = serde_json::json!({ "fillers": { "apply": true, "review": "in-house" },
+            "transcriber": "parakeet" })
+        .as_object()
+        .cloned()
         .unwrap();
-        assert!(
-            saved.starts_with("Saved the answers for tutorial"),
-            "{saved}"
+        forget_review(&mut choices);
+        assert_eq!(
+            serde_json::Value::Object(choices),
+            serde_json::json!({ "fillers": { "apply": true } })
         );
-        let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
-        assert!(guide.contains("\"silence\": \"gentle\""), "{guide}");
-        // Nor who transcribes: agents transcribe online, the language detected.
-        assert!(!guide.contains("\"transcriber\""), "{guide}");
-        // Who reviews fillers is never kept: the app's review runs unless the user says.
-        call(
-            "template_save",
-            serde_json::json!({ "name": "tutorial",
-                "answers": { "fillers": { "apply": true, "review": "in-house" } } }),
-        )
-        .unwrap();
-        let guide = call("template", serde_json::json!({ "name": "tutorial" })).unwrap();
-        assert!(
-            guide.contains("\"apply\": true") && !guide.contains("\"review\": \"in-house\""),
-            "{guide}"
-        );
-        assert!(answers_path(host.config.path(), "tutorial").is_file());
-        assert!(call(
-            "template_save",
-            serde_json::json!({ "name": "tutorial", "answers": [1] })
-        )
-        .is_err());
-        assert!(call(
-            "template_save",
-            serde_json::json!({ "name": "vlog", "answers": {} })
-        )
-        .is_err());
     }
 
     #[test]
     fn a_prompt_carries_the_recording_and_the_whole_guide() {
-        let config = tempfile::tempdir().unwrap();
         assert_eq!(prompt_list()[0].name, "tutorial");
         let mut arguments = serde_json::Map::new();
         arguments.insert("recording".into(), r"C:\Rec\Lesson.aero".into());
         arguments.insert("name".into(), "Lesson 1".into());
-        let prompt = prompt_get(config.path(), "tutorial", Some(&arguments)).unwrap();
+        let prompt = prompt_get("tutorial", Some(&arguments)).unwrap();
         let message = serde_json::to_value(&prompt.messages[0]).unwrap();
         let text = message["content"]["text"].as_str().unwrap();
         assert!(
@@ -672,11 +565,11 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("# Template: tutorial") && text.contains("# Export"),
+            text.contains("# Preset: Tutorial") && text.contains("# Export"),
             "{text}"
         );
         assert_eq!(message["role"], "user");
-        let open = prompt_get(config.path(), "tutorial", None).unwrap();
+        let open = prompt_get("tutorial", None).unwrap();
         let text = serde_json::to_value(&open.messages[0]).unwrap()["content"]["text"].clone();
         assert!(text
             .as_str()

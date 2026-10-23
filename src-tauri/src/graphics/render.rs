@@ -57,11 +57,10 @@ pub struct Spec {
     pub length_us: u64,
     /// How it comes on and goes off where it plays: a cut, or an ease over the camera.
     pub entrance: super::Entrance,
-    /// The app's brand kits folder.
-    pub brands: PathBuf,
-    /// The project's brand kit, for a graphic that has not picked its own.
-    pub default_brand: Option<String>,
-    /// The look's style for this graphic: the video's, with the graphic's own tokens over it.
+    /// The style it takes (its own, else the project's), by name and as JSON.
+    pub style_name: String,
+    pub style_json: String,
+    /// The style's graphics look as CSS, with the graphic's own tokens over it.
     pub look: String,
     /// How it shows (`data-mode` on its root): `full`, `split` beside the face in a short, or
     /// `over` a picture that shows through.
@@ -112,16 +111,16 @@ impl Spec {
             fps: RENDER_FPS,
             length_us: length_us.max(100_000),
             entrance: super::Entrance::Cut,
-            brands: super::brands::dir(),
-            default_brand: None,
+            style_name: crate::style::DEFAULT.into(),
+            style_json: serde_json::to_string(&crate::style::Style::default()).unwrap_or_default(),
             look: super::look::Look::default().css(&Default::default()),
             mode: "full",
         }
     }
 
     /// The same graphic and length rendered for a canvas of its own: `document`'s render size
-    /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), the
-    /// document's brand kit, and how it comes on and goes off there. `full_camera` is where the
+    /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), its style
+    /// (its own or the document's), and how it comes on and goes off there. `full_camera` is where the
     /// camera fills the frame ([`super::full_camera_ranges`] of `document`). `quality` picks
     /// the draft or an export's final render.
     pub fn for_clip(
@@ -149,11 +148,10 @@ impl Spec {
         // it unless its composition says it is an overlay.
         spec.entrance =
             super::entrance_for(full_camera, clip, || whole_frame && !overlay_of(&spec.dir));
-        spec.default_brand = document.graphics_brand.clone();
-        let own = super::read_source(&spec.dir)
-            .map(|s| s.look)
-            .unwrap_or_default();
-        spec.look = document.graphics_look.css(&own);
+        spec.dress(
+            &crate::style::of(document),
+            crate::style::is_portrait(document),
+        );
         if let Quality::Final { fps } = quality {
             spec.fps = fps.clamp(1, MAX_FINAL_FPS);
             // Larger than the draft: twice as sharp, where HyperFrames can (a whole 16:9 or
@@ -165,11 +163,27 @@ impl Spec {
         spec
     }
 
-    /// The kit this render uses, if it has one and the kit is there.
-    fn brand(&self) -> Option<super::brands::BrandKit> {
-        let own = super::read_source(&self.dir).ok()?.brand;
-        let name = super::brands::effective(own.as_deref(), self.default_brand.as_deref())?;
-        super::brands::load(&self.brands, name).ok()
+    /// Takes `project`'s style, or the graphic's own when it picked one, on a canvas of that
+    /// shape, with the graphic's own look tokens over it.
+    pub fn dress(&mut self, project: &crate::style::Style, portrait: bool) {
+        let source = super::read_source(&self.dir).ok();
+        let style = source
+            .as_ref()
+            .and_then(|s| s.style.as_deref())
+            .and_then(crate::style::store::cached)
+            .unwrap_or_else(|| project.clone());
+        let own = source.map(|s| s.look).unwrap_or_default();
+        self.look = style.graphics_for(portrait).css(&own);
+        self.style_name = style.name.clone();
+        self.style_json = serde_json::to_string(&style).unwrap_or_default();
+    }
+
+    /// The style this render takes.
+    fn style(&self) -> crate::style::Style {
+        let mut style: crate::style::Style =
+            serde_json::from_str(&self.style_json).unwrap_or_default();
+        style.name = self.style_name.clone();
+        style
     }
 
     /// Renders are named by their size in pixels.
@@ -239,16 +253,9 @@ impl Spec {
             hasher.update((bytes.len() as u64).to_le_bytes());
             hasher.update(&bytes);
         }
-        // The brand kit, so changing the kit (or picking another) renders it again.
-        match self.brand() {
-            Some(kit) => {
-                hasher.update(b"brand\0");
-                hasher.update(kit.name.as_bytes());
-                hasher.update([0]);
-                hasher.update(super::brands::fingerprint(&self.brands, &kit));
-            }
-            None => hasher.update(b"no brand\0"),
-        }
+        // The style, so changing it (or picking another) renders it again.
+        hasher.update(b"style\0");
+        hasher.update(crate::style::brand::fingerprint(&self.style()));
         // The look, so changing it renders every graphic again; and how it shows.
         hasher.update(b"look\0");
         hasher.update(self.look.as_bytes());
@@ -489,7 +496,7 @@ pub fn lookup(spec: &Spec) -> Lookup {
 }
 
 /// Asks for the render of every graphic in `document` that is missing one for the preview
-/// (after a change that restyles them all: the look, the brand kit), so they render now rather
+/// (after a change that restyles them all: the look, the style), so they render now rather
 /// than when the playhead reaches each.
 pub fn request_all(root: &Path, document: &crate::project::revision::EditDocument) {
     let Ok(canvas) = document.layout.preview_dimensions() else {
@@ -863,7 +870,7 @@ fn render_now(
 }
 
 /// Copies `spec`'s graphic into `stage` as it renders: sized to its canvas and length, with
-/// the video's look, GSAP beside it when it loads it, and its brand kit. Returns the values of
+/// the video's look, GSAP beside it when it loads it, and its style. Returns the values of
 /// its variables (the kit's colours where the graphic left them) and the file they are in.
 fn stage_render(
     spec: &Spec,
@@ -909,15 +916,14 @@ fn stage_render(
     // GSAP, when the composition loads it, beside it (fetched once).
     super::gsap::stage(stage, cancel)?;
     let source = super::read_source(&spec.dir)?;
-    // The brand kit fills the colours the graphic left to it and sets the font.
-    let values = match spec.brand() {
-        Some(kit) => {
-            super::brands::stage(&spec.brands, &kit, stage)?;
-            let declared = super::declarations(stage).unwrap_or_default();
-            super::brands::fill_variables(&source.variables, &declared, &kit)
-        }
-        None => source.variables,
-    };
+    // The style's brand fills the colours the graphic left to it and sets the fonts.
+    let style = spec.style();
+    let own_colors = ["text", "background"]
+        .iter()
+        .any(|id| source.variables.contains_key(*id));
+    crate::style::brand::stage(&style, stage, own_colors)?;
+    let declared = super::declarations(stage).unwrap_or_default();
+    let values = crate::style::brand::fill_variables(&source.variables, &declared, &style);
     let variables = stage.join(".aeroedits-variables.json");
     std::fs::write(
         &variables,
@@ -1218,8 +1224,8 @@ mod tests {
             fps: 30,
             length_us,
             entrance: super::super::Entrance::Cut,
-            brands: dir.join("brands"),
-            default_brand: None,
+            style_name: "Light".into(),
+            style_json: serde_json::to_string(&crate::style::Style::default()).unwrap(),
             look: String::new(),
             mode: "full",
         }
@@ -1256,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn the_name_changes_with_the_brand_kit() {
+    fn the_name_changes_with_the_style() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("index.html"),
@@ -1264,43 +1270,27 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("graphic.json"), "{\"name\":\"T\"}").unwrap();
-        let brands = tempfile::tempdir().unwrap();
         let mut a = spec(dir.path(), &dir.path().join("cache"), 4_000_000);
-        a.brands = brands.path().to_path_buf();
-        let plain = a.hash().unwrap();
-        let kit = |accent: &str| super::super::brands::BrandKitInput {
-            name: "Acme".into(),
-            background: "#000000".into(),
-            text: "#FFFFFF".into(),
-            accent: accent.into(),
-            ..Default::default()
-        };
-        super::super::brands::save(&a.brands, &kit("#FF0000")).unwrap();
-        // A missing default kit is no kit.
-        a.default_brand = Some("Gone".into());
-        assert_eq!(a.hash().unwrap(), plain);
-        a.default_brand = Some("Acme".into());
-        let branded = a.hash().unwrap();
-        assert_ne!(branded, plain);
-        super::super::brands::save(
-            &a.brands,
-            &super::super::brands::BrandKitInput {
-                previous: Some("Acme".into()),
-                ..kit("#00FF00")
-            },
-        )
-        .unwrap();
-        assert_ne!(a.hash().unwrap(), branded, "a changed kit renders again");
-        // The graphic's own "none" wins over the project's kit.
+        let light = a.hash().unwrap();
+        let dark = crate::style::builtin().remove(1);
+        a.dress(&dark, false);
+        let darker = a.hash().unwrap();
+        assert_ne!(darker, light);
+        let mut changed = dark.clone();
+        changed.brand.colors.accent = "#00FF00".into();
+        a.dress(&changed, false);
+        assert_ne!(a.hash().unwrap(), darker, "a changed style renders again");
+        // On a tall canvas the look is scaled.
+        a.dress(&dark, true);
+        assert_ne!(a.hash().unwrap(), darker);
+        // The graphic's own style wins over the project's.
         std::fs::write(
             dir.path().join("graphic.json"),
-            "{\"name\":\"T\",\"brand\":\"none\"}",
+            "{\"name\":\"T\",\"style\":\"Light\"}",
         )
         .unwrap();
-        let none = a.hash().unwrap();
-        assert_ne!(none, plain, "graphic.json changed");
-        a.default_brand = None;
-        assert_eq!(a.hash().unwrap(), none);
+        a.dress(&dark, false);
+        assert_eq!(a.style_name, "Light");
     }
 
     #[test]

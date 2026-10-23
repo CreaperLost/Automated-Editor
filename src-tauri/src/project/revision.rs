@@ -73,15 +73,28 @@ pub struct EditDocument {
     /// Auto-zoom settings: how far zooms go, how many, how the camera follows.
     #[serde(default, skip_serializing_if = "crate::zoom::ZoomSettings::is_default")]
     pub zoom_settings: crate::zoom::ZoomSettings,
-    /// The brand kit graphics use unless they pick another (see `graphics::brands`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graphics_brand: Option<String>,
-    /// One look for every graphic in the video (see `graphics::look`).
-    #[serde(
-        default,
-        skip_serializing_if = "crate::graphics::look::Look::is_default"
-    )]
-    pub graphics_look: crate::graphics::look::Look,
+    /// The style it is dressed in: graphics, captions and the frame (see `crate::style`).
+    #[serde(default = "default_style")]
+    pub style: String,
+    /// The preset it follows: what its settings are unless changed here (see `crate::preset`;
+    /// stored, only the changes are written).
+    #[serde(default = "default_preset")]
+    pub preset: String,
+    /// The preset its new shorts start from.
+    #[serde(default = "default_shorts_preset")]
+    pub shorts_preset: String,
+}
+
+fn default_style() -> String {
+    crate::style::DEFAULT.into()
+}
+
+fn default_preset() -> String {
+    crate::preset::DEFAULT.into()
+}
+
+fn default_shorts_preset() -> String {
+    crate::preset::SHORTS.into()
 }
 
 impl Default for EditDocument {
@@ -102,8 +115,9 @@ impl Default for EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             zoom_settings: Default::default(),
-            graphics_brand: None,
-            graphics_look: Default::default(),
+            style: default_style(),
+            preset: default_preset(),
+            shorts_preset: default_shorts_preset(),
         }
     }
 }
@@ -296,10 +310,14 @@ impl EditDocument {
         crate::chapters::validate(&self.chapters)?;
         crate::shorts::validate(&self.shorts)?;
         crate::shorts::validate_edits(self)?;
-        if let Some(brand) = &self.graphics_brand {
-            crate::graphics::brands::check_name(brand)?;
+        if !crate::style::is_builtin(&self.style) {
+            crate::style::store::check_name(&self.style)?;
         }
-        self.graphics_look.validate()?;
+        for preset in [&self.preset, &self.shorts_preset] {
+            if !crate::preset::is_builtin(preset) {
+                crate::preset::store::check_name(preset)?;
+            }
+        }
         Ok(())
     }
 }
@@ -352,8 +370,9 @@ pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
             version.schema_version
         ));
     }
-    let document: EditDocument =
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid edit document: {e}"))?;
+    let document = crate::preset::read(value)?;
     document.validate()?;
     Ok(Some(document))
 }
@@ -379,7 +398,8 @@ pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), St
             return Err("Edit document cannot be a symlink".into());
         }
     }
-    let stored = stored_form(document);
+    // Only what differs from its preset is written.
+    let stored = crate::preset::stored(&stored_form(document))?;
     let serialized = serde_json::to_vec_pretty(&stored).map_err(|e| e.to_string())?;
     if serialized.len() as u64 > MAX_EDIT_BYTES {
         return Err("Edit document exceeds size limit".into());
@@ -983,54 +1003,6 @@ impl EditHistory {
         settings.validate()?;
         let mut next = self.current.clone();
         with_zoom_settings(&mut next, settings);
-        if next == self.current {
-            return Ok(&self.current);
-        }
-        self.commit_next(expected_revision, persist_root, next)
-    }
-
-    /// Takes on a saved template's settings, and its short look on `short` when one is named,
-    /// in one step. What belongs to this project (see [`crate::templates`]) stays.
-    pub fn apply_template(
-        &mut self,
-        expected_revision: u64,
-        template: &crate::templates::Template,
-        short: Option<&str>,
-        persist_root: &Path,
-    ) -> Result<&EditDocument, String> {
-        use crate::templates::{captions_onto, layout_onto, short_look_onto};
-        self.check(expected_revision)?;
-        let mut next = self.current.clone();
-        next.layout = layout_onto(&template.layout, &self.current.layout);
-        validate_layout(&next.layout)?;
-        next.captions = captions_onto(&template.captions, &self.current.captions);
-        next.captions.validate()?;
-        template.zoom_settings.validate()?;
-        with_zoom_settings(&mut next, template.zoom_settings.clone());
-        next.layouts.base = template.base.clone();
-        next.layouts.pick = template.pick.clone();
-        next.layouts.validate()?;
-        next.graphics_brand = template.graphics_brand.clone();
-        if let Some(look) = &template.graphics_look {
-            look.validate()?;
-            next.graphics_look = look.clone();
-        }
-        if let Some(id) = short {
-            let look = template
-                .short_look
-                .as_ref()
-                .ok_or("This template was saved without a short look")?;
-            let own = next
-                .shorts
-                .iter_mut()
-                .find(|s| s.id == id)
-                .ok_or("That short is gone")?;
-            own.layout = short_look_onto(look, &own.layout);
-            if let Some(base) = &template.short_base {
-                own.layouts.base = base.clone();
-            }
-            crate::shorts::validate(&next.shorts)?;
-        }
         if next == self.current {
             return Ok(&self.current);
         }

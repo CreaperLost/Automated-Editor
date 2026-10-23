@@ -54,7 +54,7 @@ material ([research/](research/README.md)); creator claims are not measurements.
 | **A 10 fps export could fail its own duration check** (a whole last frame runs up to 100 ms past the edit; the slack was 80 ms) | Code: `export/mod.rs` | Fixed 22 Oct: up to one frame is allowed |
 | **A video with 16+ audio streams failed to import** after extracting them all (picture + 16 > `MAX_STREAMS`) | Code: `media_bin.rs` | Fixed 22 Oct: only the sounds that fit beside the picture |
 | **`graphic_write_file` followed links** (symlinks, junctions) out of the graphic's folder | Code: `graphics/mod.rs` `write_file` | Fixed 22 Oct: a link anywhere in the path is refused, like the project's `safe_path` |
-| **Two different things are called `template_save`.** The MCP tool saves skill *answers*; the Tauri command saves a *look* | Code: `mcp/skill.rs`, `templates.rs` | Open: moved to [UI-3](roadmap.md#ui-3) (rename the whole saved-look command family) |
+| ~~**Two different things are called `template_save`.**~~ | Code: `mcp/skill.rs`, `templates.rs` | Fixed 23 Oct ([ORG-1](roadmap.md#org-1)): both are gone; answers are a preset's choices, saved settings are presets |
 
 ## 2. Safety and recovery
 
@@ -110,8 +110,8 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 | **No comments or notes anchored to the edit.** Zero matches for `comment|annotation|marker`. The user can't say "that zoom at 2:14 is wrong" except in chat; the agent can't leave "unsure about this cut" for the user | Code; research: Tandem (comment on the timeline), Tao (timestamped feedback, a drawn region beat words) | [NOTE-1](roadmap.md#note-1) |
 | **No selection reference.** The user can't hand the agent "this graphic / these words / this rectangle"; they describe timestamps in chat | Research: ChatCut selection mode | [NOTE-1](roadmap.md#note-1) |
 | **No plan before the build.** `storyboard` reviews the edit that exists, not the one to come; graphics are proposed as a chat list; `graphic_add(atWord)` resolves the word once and forgets it | Code: `mcp/actions.rs` `graphic_add` | [PLAN-1](roadmap.md#plan-1) |
-| **The user's method can't be saved.** Saved answers remember settings for 3 fixed templates. `SKILL.md` is compiled into the binary and reinstalled, so the user can't own it and the agent can't improve it. Every strong creator workflow (a 1,400-line skill the agent rewrites, a published prompt doc, a skill zip) keeps the method in a user-owned file | Code: `mcp/skill.rs` (`include_str!`); research | [AGT-3](roadmap.md#agt-3) |
-| **Style is only colours, a font and a logo.** No caption rules, motion character, density, sound policy or references | Code: `graphics/brands.rs` | Visual look: [GFX-5](roadmap.md#gfx-5); written rules: [STY-1](roadmap.md#sty-1) after [AGT-3](roadmap.md#agt-3) |
+| ~~**The user's method can't be saved.**~~ Fixed 23 Oct ([ORG-1](roadmap.md#org-1)): presets of the user's own, each with its method and rules as Markdown, edited in the Preset menu. Was: saved answers remember settings for 3 fixed templates. `SKILL.md` is compiled into the binary and reinstalled, so the user can't own it and the agent can't improve it. Every strong creator workflow (a 1,400-line skill the agent rewrites, a published prompt doc, a skill zip) keeps the method in a user-owned file | Code: `mcp/skill.rs` (`include_str!`); research | [AGT-3](roadmap.md#agt-3) |
+| **Style is only colours, a font and a logo.** No caption rules, motion character, density, sound policy or references. 23 Oct: a Style now holds the brand, graphics look, caption look and frame ([ORG-1](roadmap.md#org-1)); references and sound are still missing | Code: `style/` | Visual look: [GFX-5](roadmap.md#gfx-5); written rules: [STY-1](roadmap.md#sty-1) after [AGT-3](roadmap.md#agt-3) |
 
 ## 6. Captions
 

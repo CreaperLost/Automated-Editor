@@ -1,9 +1,16 @@
-//! Favourite layouts: your own, under a name, kept for the app rather than one project (next to
-//! the templates). Using one copies its layout into the section, so changing or removing a
-//! favourite later leaves every project as it was.
+//! Favourite layouts: your own, under a name, kept for the app rather than one project. Using
+//! one copies its layout into the section, so changing or removing a favourite later leaves
+//! every project as it was.
 use super::Layout;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// The folder `layouts.json` is in: the app's config (`AEROEDITS_TEMPLATES_DIR` overrides it).
+pub fn dir() -> PathBuf {
+    std::env::var_os("AEROEDITS_TEMPLATES_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(crate::transcript::settings::config_dir)
+}
 
 pub const MAX_FAVOURITES: usize = 100;
 const FILE: &str = "layouts.json";

@@ -1,7 +1,6 @@
-//! The captions' typeface: the brand kit's font (its file, or that family installed on this
-//! computer), else the bundled Inter Display, at the look's weight. Letters the font lacks (Greek
+//! The captions' typeface: the style's title font (its file, or that family installed on this
+//! computer), else the bundled Inter Display, at the caption weight. Letters the font lacks (Greek
 //! in a Latin-only font) come from Inter Display at the same weight, so every caption draws.
-use crate::graphics::brands::BrandKit;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -117,20 +116,26 @@ impl Typeface {
     }
 }
 
-/// The typeface for kit `kit` (kept in `brands`) at `weight`.
-pub fn resolve(kit: Option<&BrandKit>, brands: &Path, weight: u16) -> Typeface {
+/// The typeface for `style`'s title font at `weight`.
+pub fn resolve(style: &crate::style::Style, weight: u16) -> Typeface {
+    let folder = crate::style::store::folder_of(style).unwrap_or_default();
+    resolve_in(&style.brand.fonts.title, &folder, &style.name, weight)
+}
+
+/// The typeface for `font` (its file in `folder`) of style `owner` at `weight`.
+fn resolve_in(font: &crate::style::Font, folder: &Path, owner: &str, weight: u16) -> Typeface {
     let plain = Typeface::bundled(weight);
-    let Some(kit) = kit.filter(|k| !k.font.trim().is_empty()) else {
+    let family = font.family.trim();
+    if family.is_empty() {
         return plain;
-    };
-    let family = kit.font.trim();
+    }
     let with = |font: Arc<fontdue::Font>, how: String| Typeface {
         primary: Some(font),
         label: how,
         ..plain.clone()
     };
-    if let Some(file) = &kit.font_file {
-        let path = brands.join(&kit.name).join(file);
+    if let Some(file) = &font.file {
+        let path = folder.join(file);
         let extension = path
             .extension()
             .and_then(|e| e.to_str())
@@ -139,19 +144,18 @@ pub fn resolve(kit: Option<&BrandKit>, brands: &Path, weight: u16) -> Typeface {
         let readable = matches!(extension.as_str(), "ttf" | "otf" | "woff" | "woff2");
         if readable {
             if let Some(font) = load(&path) {
-                return with(font, format!("{family} (the {} kit's font file)", kit.name));
+                return with(font, format!("{family} (the {owner} style's font file)"));
             }
         }
         if let Some(found) = installed(family, weight).and_then(|p| Some((load(&p)?, p))) {
-            return with(found.0, installed_label(family, &found.1, &kit.name));
+            return with(found.0, installed_label(family, &found.1, owner));
         }
         let why = if readable {
-            format!("the {} kit's font file {file} is missing or damaged", kit.name)
+            format!("the {owner} style's font file {file} is missing or damaged")
         } else {
             format!(
-                "the {} kit's font is a .{extension} file, which captions can't read: give the \
-                 kit a .ttf, .otf, .woff or .woff2, or install {family}",
-                kit.name
+                "the {owner} style's font is a .{extension} file, which captions can't read: \
+                 give the style a .ttf, .otf, .woff or .woff2, or install {family}"
             )
         };
         return Typeface {
@@ -161,25 +165,25 @@ pub fn resolve(kit: Option<&BrandKit>, brands: &Path, weight: u16) -> Typeface {
     }
     if normalized(family) == "inter" || normalized(family) == normalized(BUNDLED_FAMILY) {
         return Typeface {
-            label: format!("{} (the {} kit's font)", plain.label, kit.name),
+            label: format!("{} (the {owner} style's font)", plain.label),
             ..plain
         };
     }
     match installed(family, weight).and_then(|p| Some((load(&p)?, p))) {
-        Some((font, path)) => with(font, installed_label(family, &path, &kit.name)),
+        Some((font, path)) => with(font, installed_label(family, &path, owner)),
         None => Typeface {
             label: format!(
-                "{} ({family}, the {} kit's font, is not installed on this computer)",
-                plain.label, kit.name
+                "{} ({family}, the {owner} style's font, is not installed on this computer)",
+                plain.label
             ),
             ..plain
         },
     }
 }
 
-fn installed_label(family: &str, path: &Path, kit: &str) -> String {
+fn installed_label(family: &str, path: &Path, owner: &str) -> String {
     let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    format!("{family} (the {kit} kit's font, installed: {file})")
+    format!("{family} (the {owner} style's font, installed: {file})")
 }
 
 fn normalized(family: &str) -> String {
@@ -316,16 +320,15 @@ mod tests {
         assert_eq!(Typeface::bundled(650).label, "Inter Display Bold");
     }
 
-    fn kit(font: &str, file: Option<&str>) -> BrandKit {
-        BrandKit {
-            name: "Mine".into(),
-            background: "#FFFFFF".into(),
-            text: "#000000".into(),
-            accent: "#FF0000".into(),
-            font: font.into(),
-            font_file: file.map(Into::into),
-            logo: None,
+    fn font(family: &str, file: Option<&str>) -> crate::style::Font {
+        crate::style::Font {
+            family: family.into(),
+            file: file.map(Into::into),
         }
+    }
+
+    fn resolve(font: crate::style::Font, folder: &Path, weight: u16) -> Typeface {
+        super::resolve_in(&font, &folder.join("Mine"), "Mine", weight)
     }
 
     /// `sfnt` packed as WOFF 1.0: each table zlib-compressed, in the order the font lists them.
@@ -345,7 +348,11 @@ mod tests {
             let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
             z.write_all(table).unwrap();
             let packed = z.finish().unwrap();
-            let stored = if packed.len() < table.len() { packed } else { table.to_vec() };
+            let stored = if packed.len() < table.len() {
+                packed
+            } else {
+                table.to_vec()
+            };
             directory.extend_from_slice(&sfnt[record..record + 4]);
             directory.extend_from_slice(&((data_start + data.len()) as u32).to_be_bytes());
             directory.extend_from_slice(&(stored.len() as u32).to_be_bytes());
@@ -374,34 +381,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("Mine")).unwrap();
         std::fs::write(dir.path().join("Mine/brand.ttf"), BUNDLED[0].1).unwrap();
-        let face = resolve(Some(&kit("Brand Sans", Some("brand.ttf"))), dir.path(), 700);
+        let face = resolve(font("Brand Sans", Some("brand.ttf")), dir.path(), 700);
         assert!(face
             .label
-            .starts_with("Brand Sans (the Mine kit's font file)"));
+            .starts_with("Brand Sans (the Mine style's font file)"));
         assert!(face.borrowed("Γειά σου").is_empty());
         // A web font is unpacked, whatever it is named.
         std::fs::write(dir.path().join("Mine/brand.woff"), woff1(BUNDLED[0].1)).unwrap();
-        let face = resolve(Some(&kit("Brand Sans", Some("brand.woff"))), dir.path(), 700);
-        assert!(face.label.starts_with("Brand Sans (the Mine kit's font file)"));
+        let face = resolve(font("Brand Sans", Some("brand.woff")), dir.path(), 700);
+        assert!(face
+            .label
+            .starts_with("Brand Sans (the Mine style's font file)"));
         assert_ne!(face.main().lookup_glyph_index('Γ'), 0);
         // A file it can't read: the bundled one, saying why.
         std::fs::write(dir.path().join("Mine/broken.woff2"), b"wOF2 not really").unwrap();
         let face = resolve(
-            Some(&kit("Nowhere Font Xyz", Some("broken.woff2"))),
+            font("Nowhere Font Xyz", Some("broken.woff2")),
             dir.path(),
             700,
         );
-        assert!(face.label.contains("broken.woff2 is missing or damaged"), "{}", face.label);
-        let face = resolve(
-            Some(&kit("Nowhere Font Xyz", Some("brand.eot"))),
-            dir.path(),
-            700,
+        assert!(
+            face.label.contains("broken.woff2 is missing or damaged"),
+            "{}",
+            face.label
         );
+        let face = resolve(font("Nowhere Font Xyz", Some("brand.eot")), dir.path(), 700);
         assert!(face.label.contains("can't read"), "{}", face.label);
         // Not installed anywhere: the bundled one.
-        let face = resolve(Some(&kit("Nowhere Font Xyz", None)), dir.path(), 700);
+        let face = resolve(font("Nowhere Font Xyz", None), dir.path(), 700);
         assert!(face.label.contains("is not installed"), "{}", face.label);
-        let face = resolve(Some(&kit("Inter", None)), dir.path(), 600);
-        assert_eq!(face.label, "Inter Display Semibold (the Mine kit's font)");
+        let face = resolve(font("Inter", None), dir.path(), 600);
+        assert_eq!(face.label, "Inter Display Semibold (the Mine style's font)");
     }
 }

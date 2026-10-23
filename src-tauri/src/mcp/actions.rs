@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 42] = [
+pub static ACTIONS: [ToolDef; 38] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -59,7 +59,7 @@ pub static ACTIONS: [ToolDef; 42] = [
     ToolDef {
         name: "undo",
         description: "Undoes the last change to the edit, whoever made it. `run: true` undoes \
-            everything you changed since your last `template` call (your run) as one step, \
+            everything you changed since your last `preset` call (your run) as one step, \
             while the user has changed nothing since.",
         schema: schema::<UndoArgs>,
         read_only: false,
@@ -178,10 +178,12 @@ pub static ACTIONS: [ToolDef; 42] = [
     },
     ToolDef {
         name: "settings",
-        description: "Reads or changes settings. `area`: captions, layout (the style: \
-            background, corners, camera border, `faceFraming`; where things go is `layouts`), \
-            audio, zoom, transcription, ai, export, presets. Without `set` it shows the current \
-            values; `set` is a JSON object of just the fields to change (nested objects merge). \
+        description: "Reads or changes this project's settings (changes from its preset; \
+            `library` `kind: preset`). `area`: captions (on, position, size, words), layout \
+            (canvas, screen size and crop, cursor, `faceFraming`; where things go is `layouts`; \
+            how it looks is the style's), audio, zoom, transcription, ai, export, cleanup (the \
+            cleanup levels). Without `set` it shows the current values; `set` is a JSON object of \
+            just the fields to change (nested objects merge). \
             Telemetry polish: layout `webcamAutoHide` (on by default; the bubble fades while work \
             is under it), `windowCrop` (on by default) with `windowCropPaddingPct` and \
             `windowCropOff` (recording stretches `{media, sourceStartUs, sourceEndUs}` shown \
@@ -309,7 +311,7 @@ pub static ACTIONS: [ToolDef; 42] = [
             their variables, types and defaults), the user's graphics library (templates saved \
             from earlier projects, each with when to use it: look there before writing a new \
             graphic) and the graphics in the project (id, where they play, their variables, \
-            brand kit, how their render is going). Graphics play full screen over everything \
+            style, how their render is going). Graphics play full screen over everything \
             (screen, camera, captions), and cuts never go through one, so add them as one of \
             the last passes, after the cuts are checked and before chapters.",
         schema: schema::<NoArgs>,
@@ -332,7 +334,7 @@ pub static ACTIONS: [ToolDef; 42] = [
         name: "graphic_set",
         description: "Changes a graphic: its variables (checked against what it declares; \
             null puts one back to its default), its name, its length on the timeline, its \
-            brand kit (`default` for the project's, `none`, or a kit from brand_kits), and with \
+            style (`project` or a style from `library`), `look` tokens of its own, and with \
             `short` how it shows there (`slot`: `full` frame, `screen` split beside the face, \
             `overFace` over the face filling the frame, `camera`, or `overScreen` under the \
             captions). It renders again by itself. `moveToUs` or \
@@ -377,7 +379,7 @@ pub static ACTIONS: [ToolDef; 42] = [
         description: "Turns a graphic you wrote (one the user likes) toward a general template \
             for the user's library: returns its source, what the app already sees in it (network \
             references, missing brand colours, fixed text) and the rules to rewrite it by (text \
-            as variables, brand kit colours, timing from data-duration, viewport layout with a \
+            as variables, style colours, timing from data-duration, viewport layout with a \
             portrait block, a cut unless data-entrance is \"ease\", no network). Rewrite its \
             files, then graphic_check.",
         schema: schema::<GraphicOnlyArgs>,
@@ -389,7 +391,7 @@ pub static ACTIONS: [ToolDef; 42] = [
         description: "The library's gate for a graphic, run by the app (no model): HyperFrames' \
             check (lint, runtime, overflow, contrast) at 16:9 and 9:16 with its text and with \
             long text, stills at 3 s and 8 s (see-through at both ends, so its timing follows \
-            the clip), each text variable changing the picture, no network, brand kit colours. \
+            the clip), each text variable changing the picture, no network, style colours. \
             Answers pass or fail per check with why, and a contact sheet (both shapes, its text \
             and long text). Takes 30-90 s; an unchanged graphic answers at once.",
         schema: schema::<GraphicOnlyArgs>,
@@ -420,17 +422,6 @@ pub static ACTIONS: [ToolDef; 42] = [
         run: graphics_install,
     },
     ToolDef {
-        name: "brand_kit_set",
-        description: "Makes or changes one of the user's brand kits (app-wide, every project \
-            sees it): `name`, `background`, `text` and `accent` colours (#RRGGBB), `font`, and \
-            `fontFile` / `logo` as full paths to copy into the kit. Fields left out keep the \
-            kit's current values; `previous` renames a kit; `remove: true` deletes it. Graphics \
-            using it render again. Ask the user first: kits are theirs.",
-        schema: schema::<BrandKitSetArgs>,
-        read_only: false,
-        run: brand_kit_set,
-    },
-    ToolDef {
         name: "library_remove",
         description: "Removes an item (id or name, from `graphics`) from the user's graphics \
             library, for every project. Graphics already placed from it stay. Only at the \
@@ -457,44 +448,11 @@ pub static ACTIONS: [ToolDef; 42] = [
             number, a name, the twist, the verdict), never a small word; most lines get one, a \
             flat line none. A line has one: a new pick replaces the old, `word` left out clears \
             it. Kept on the transcript, so the video and its shorts share them; not an undo \
-            step. The look (style pop/karaoke/static, size) is `settings` `area: captions`.",
+            step. Where they sit and their size is `settings` `area: captions`; how they look \
+            (pop/karaoke/static, colours, box) is the project's style (`library`).",
         schema: schema::<CaptionsArgs>,
         read_only: false,
         run: captions,
-    },
-    ToolDef {
-        name: "brand_kits",
-        description: "The user's brand kits (background, text and accent colours, a font, a \
-            logo) and the project's default kit. A kit fills a graphic's `background`, `text` \
-            and `accent` variables where the graphic has not set them, and sets the font; a \
-            composition of your own can use var(--brand-accent), var(--brand-font), \
-            var(--brand-logo) and the others. Kits are made by the user in the Graphics tab.",
-        schema: schema::<NoArgs>,
-        read_only: true,
-        run: brand_kits,
-    },
-    ToolDef {
-        name: "brand_pick",
-        description: "Picks the brand kit the project's graphics use (`brand`: a kit's name, or \
-            `none`), one undo step; with `graphic`, picks that graphic's own instead \
-            (`default` follows the project's). Graphics render again.",
-        schema: schema::<BrandPickArgs>,
-        read_only: false,
-        run: brand_pick,
-    },
-    ToolDef {
-        name: "graphics_look",
-        description: "The video's look: one style every graphic takes (type sizes, corners, \
-            spacing, motion) beside the brand kit's colours. No arguments: the look and its \
-            tokens. A `preset`, the five controls or `tokens` change it for every graphic (one \
-            undo step; for a request in words, `preview: true` first and show the user); \
-            `graphic` with `tokens` sets that graphic's own. Shorts take the video's look times \
-            the `shorts*` multiples. `saved` starts from a look the user saved, `save` saves one \
-            (at their word). `bringInLine` proposes rewriting the graphics in `notInLine` to the \
-            look, one batch.",
-        schema: schema::<GraphicsLookArgs>,
-        read_only: false,
-        run: graphics_look,
     },
 ];
 
@@ -751,7 +709,13 @@ fn readiness_text() -> String {
             .unwrap_or_else(|_| "path unknown".into()),
     )];
     let view = tc::transcript_settings_get_impl();
-    let key = |source: &Option<String>| if source.is_some() { "key set" } else { "no key" };
+    let key = |source: &Option<String>| {
+        if source.is_some() {
+            "key set"
+        } else {
+            "no key"
+        }
+    };
     lines.push(format!(
         "Transcription online: ElevenLabs {}, OpenRouter {}{}.",
         key(&view.elevenlabs_key_source),
@@ -931,6 +895,18 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             document.chapters.len(),
             document.shorts.len(),
         ));
+        let changed = crate::preset::changed_count(document);
+        lines.push(format!(
+            "Preset: {}{} (its shorts: {}). Style: {}.",
+            crate::preset::of(document).name,
+            if changed == 0 {
+                String::new()
+            } else {
+                format!(", {} changed here", plural(changed, "value"))
+            },
+            crate::preset::store::resolve(&document.shorts_preset).name,
+            crate::style::of(document).name,
+        ));
         let checkpoints = reader.history().steps().checkpoints();
         if let Some(newest) = checkpoints.iter().rev().find(|c| !c.auto) {
             lines.push(format!(
@@ -1055,7 +1031,7 @@ pub struct ScanArgs {
     pub preset: Option<Preset>,
 }
 
-/// What the recording has and what each pass would do, for the questions a template asks.
+/// What the recording has and what each pass would do, for the questions a method asks.
 fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ScanArgs = params(args)?;
     let preset = args.preset.unwrap_or_default();
@@ -2903,13 +2879,13 @@ pub enum Area {
     Transcription,
     Ai,
     Export,
-    Presets,
+    Cleanup,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsArgs {
-    /// captions, layout, audio, zoom, transcription, ai, export or presets.
+    /// captions, layout, audio, zoom, transcription, ai, export or cleanup.
     pub area: Area,
     /// Only the fields to change, such as {"enabled": true, "fontSizePct": 6}.
     #[serde(default)]
@@ -2930,7 +2906,7 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     let before = opened(ctx);
     match args.area {
-        Area::Presets | Area::Export => {
+        Area::Cleanup | Area::Export => {
             return Err(format!(
                 "{name} cannot be set here: pass these values to the actions instead"
             ))
@@ -2947,6 +2923,7 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             let before = before.as_ref().map_err(Clone::clone)?;
             let (handle, revision) = (before.handle.clone(), before.revision);
             let document = with_reader(ctx.state, |reader| Ok(reader.document().clone()))?;
+            style_owned(area, &patch)?;
             match area {
                 Area::Captions => {
                     let next = patched(&name, &document.captions, &patch)?;
@@ -2980,6 +2957,50 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
 }
 
+/// Refuses fields that are how things look: they are the project's style's, never set here.
+fn style_owned(area: Area, patch: &Value) -> Result<(), String> {
+    let owned: &[&str] = match area {
+        Area::Captions => &[
+            "style",
+            "textColor",
+            "emphasis",
+            "emphasisColor",
+            "weight",
+            "outline",
+            "background",
+            "backgroundColor",
+            "backgroundOpacity",
+        ],
+        Area::Layout => &[
+            "backgroundType",
+            "backgroundPreset",
+            "colorStart",
+            "colorEnd",
+            "cornerRadiusPx",
+            "shadowBlurPx",
+            "shadowOpacity",
+            "webcamBorderColor",
+            "webcamBorderWidth",
+            "webcamShadow",
+        ],
+        _ => &[],
+    };
+    let named: Vec<&str> = owned
+        .iter()
+        .copied()
+        .filter(|key| patch.get(*key).is_some())
+        .collect();
+    if named.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is how it looks: that is the project's style (`library` `kind: style`), not a \
+             setting of the project",
+            named.join(", ")
+        ))
+    }
+}
+
 fn value<T: Serialize>(settings: &T) -> Value {
     serde_json::to_value(settings).unwrap_or_default()
 }
@@ -2988,7 +3009,7 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
     Ok(match area {
         Area::Transcription => value(&tc::transcript_settings_get_impl().settings),
         Area::Ai => value(&tc::ai_settings_get_impl().settings),
-        Area::Presets => {
+        Area::Cleanup => {
             let presets: Vec<Value> = [Preset::Gentle, Preset::Balanced, Preset::Tight, Preset::Aggressive]
                 .iter()
                 .map(|preset| {
@@ -3365,7 +3386,9 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             .shorts
             .first()
             .map(|s| s.layout.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                crate::preset::store::resolve(&document.shorts_preset).short_layout()
+            });
         layout.graphic_slots.clear();
         layout.camera_clips.clear();
         let mut layouts = document
@@ -3766,11 +3789,13 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     let sound_line = |short: &crate::shorts::Short| -> Result<String, String> {
         with_reader(ctx.state, |reader| {
-            Ok(crate::take_short::footage_sound_mix(reader.document(), short)
-                .map(|(_, volume, duck)| {
-                    format!("Footage sound: {volume:+} dB, lowered {duck} dB under the voice.")
-                })
-                .unwrap_or_default())
+            Ok(
+                crate::take_short::footage_sound_mix(reader.document(), short)
+                    .map(|(_, volume, duck)| {
+                        format!("Footage sound: {volume:+} dB, lowered {duck} dB under the voice.")
+                    })
+                    .unwrap_or_default(),
+            )
         })
     };
     let change = match args.op.unwrap_or_default() {
@@ -4047,7 +4072,13 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     let open = opened(ctx)?;
     if let Some(kind) = args.file {
-        return export_files(ctx, &open.handle, kind, args.short.as_deref(), args.destination);
+        return export_files(
+            ctx,
+            &open.handle,
+            kind,
+            args.short.as_deref(),
+            args.destination,
+        );
     }
     let defaults = export_defaults(ctx)?;
     let mut settings = match &args.settings {
@@ -4124,7 +4155,11 @@ fn export_files(
         None => vec![(None, "The video".into())],
     };
     // One file name can't hold several shorts: each goes next to the project.
-    let destination = if targets.len() == 1 { destination } else { None };
+    let destination = if targets.len() == 1 {
+        destination
+    } else {
+        None
+    };
     let mut lines = Vec::new();
     for (i, (id, label)) in targets.iter().enumerate() {
         let path = commands::export_file_impl(
@@ -4339,7 +4374,7 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             "template": g.graphic.template,
             "folder": g.graphic.folder,
             "variables": g.graphic.variables,
-            "brand": g.graphic.brand.clone().unwrap_or_else(|| "default".into()),
+            "style": g.graphic.style.clone().unwrap_or_else(|| "project".into()),
             "plays": g.clips.iter().map(|(id, start, length)| json!({
                 "clip": id,
                 "at": clock(*start),
@@ -4497,9 +4532,13 @@ pub struct GraphicSetArgs {
     /// How long its (first) clip plays.
     #[serde(default)]
     pub length_us: Option<u64>,
-    /// Its brand kit: `default` (the project's), `none`, or a kit's name from brand_kits.
+    /// Its style: `project` (the project's) or a style's name from `library`.
     #[serde(default)]
-    pub brand: Option<String>,
+    pub style: Option<String>,
+    /// Graphics look tokens of its own over its style's, by name (`radius`, `ease`...); null
+    /// takes one back.
+    #[serde(default)]
+    pub look: std::collections::BTreeMap<String, Option<String>>,
     /// A short (id or title): set the graphic's `slot` in it; for a short made from a take,
     /// moves and lengths are on its own timeline too (`moveToWord` a word of the take).
     #[serde(default)]
@@ -4558,8 +4597,16 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     if args.slot.is_some() && args.short.is_none() {
         return Err("`slot` needs `short`".into());
     }
-    if let Some(brand) = &args.brand {
-        crate::graphics::brand_choice(&crate::graphics::brands::dir(), brand)?;
+    if let Some(style) = &args.style {
+        crate::graphics::style_choice(style)?;
+    }
+    if !args.look.is_empty() {
+        let tokens = args
+            .look
+            .iter()
+            .filter_map(|(name, value)| Some((name.clone(), value.clone()?)))
+            .collect();
+        crate::graphics::look::check_tokens(&tokens)?;
     }
     if !args.variables.is_empty() {
         let source = crate::graphics::read_source(&dir)?;
@@ -4638,7 +4685,7 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 clock(target)
             ));
         }
-        if !args.variables.is_empty() || args.name.is_some() || args.brand.is_some() {
+        if !args.variables.is_empty() || args.name.is_some() || args.style.is_some() {
             let now = current(ctx)?;
             let updated = commands::graphics::project_graphic_set_impl(
                 ctx.state,
@@ -4647,18 +4694,36 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 args.graphic.clone(),
                 args.variables.clone(),
                 args.name.clone(),
-                args.brand.clone(),
+                args.style.clone(),
             )?;
             lines.push(format!(
                 "Graphic {} \"{}\": {}{}.",
                 args.graphic,
                 updated.graphic.name,
                 serde_json::to_string(&updated.graphic.variables).unwrap_or_default(),
-                match &updated.graphic.brand {
-                    Some(kit) => format!(", brand kit {kit}"),
-                    None => ", the project's brand kit".into(),
+                match &updated.graphic.style {
+                    Some(style) => format!(", style {style}"),
+                    None => ", the project's style".into(),
                 }
             ));
+        }
+        if !args.look.is_empty() {
+            let now = current(ctx)?;
+            let view = commands::graphics::project_graphic_look_set_impl(
+                ctx.state,
+                now.handle,
+                args.graphic.clone(),
+                args.look.clone(),
+            )?;
+            lines.push(if view.look.is_empty() {
+                format!("Graphic {} takes its style's look.", args.graphic)
+            } else {
+                format!(
+                    "Graphic {} has look tokens of its own: {}.",
+                    args.graphic,
+                    serde_json::to_string(&view.look).unwrap_or_default()
+                )
+            });
         }
         match (&args.short, args.slot) {
             (Some(wanted), Some(slot)) => {
@@ -4889,7 +4954,7 @@ keeping its design and motion, so it takes any text, fits anywhere and takes the
 window.__hyperframes.getVariables(). Defaults are good example text; a list is one string with \
 an item per line. No text written into the markup that no variable fills.
 2. Colours: only the shared color variables background, text and accent (declare all three and \
-use var(--background), var(--text), var(--accent)), so the user's brand kits apply. Tints come \
+use var(--background), var(--text), var(--accent)), so the user's styles apply. Tints come \
 from color-mix() or opacity, not new hex colours.
 3. Timing: read the length from the root's data-duration (parseFloat(root.dataset.duration) * \
 1000) and place every animation as a share of it: when it eases, in over about 300 ms and out \
@@ -5142,363 +5207,6 @@ fn graphics_install(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(format!(
         "Installed the graphics renderer (HyperFrames {}) in {}.",
         status.hyperframes, status.dir
-    ))
-}
-
-fn brand_kits(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
-    let handle = current(ctx).ok().map(|open| open.handle);
-    let has_project = handle.is_some();
-    let view = commands::graphics::graphics_brands_impl(ctx.state, handle)?;
-    let out = json!({
-        "kits": view.kits.iter().map(|kit| json!({
-            "name": kit.name,
-            "background": kit.background,
-            "text": kit.text,
-            "accent": kit.accent,
-            "font": kit.font,
-            "logo": kit.logo.is_some(),
-        })).collect::<Vec<_>>(),
-        "projectDefault": if has_project {
-            json!(view.project_default.unwrap_or_else(|| "none".into()))
-        } else {
-            json!("no project open")
-        },
-        "folder": view.folder,
-    });
-    super::tools::pretty(&out)
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GraphicsLookArgs {
-    /// app, calm or bold.
-    #[serde(default)]
-    pub preset: Option<String>,
-    /// Multiples of the preset's (1 leaves it): type size 0.75-1.35, corner roundness 0-2.5,
-    /// speed 0.5-2, energy (travel as things come in) 0-2, density (padding, gaps) 0.7-1.4.
-    #[serde(default)]
-    pub size: Option<f32>,
-    #[serde(default)]
-    pub roundness: Option<f32>,
-    #[serde(default)]
-    pub speed: Option<f32>,
-    #[serde(default)]
-    pub energy: Option<f32>,
-    #[serde(default)]
-    pub density: Option<f32>,
-    /// Tokens by name (without `--look-`) set by hand; null takes one back.
-    #[serde(default)]
-    pub tokens: std::collections::BTreeMap<String, Option<String>>,
-    /// A graphic's id: `tokens` become its own, over the video's look.
-    #[serde(default)]
-    pub graphic: Option<String>,
-    /// Draw up to three of the video's graphics with the look asked for, changing nothing.
-    #[serde(default)]
-    pub preview: bool,
-    /// Start from one of the user's saved looks (by name), before the changes above.
-    #[serde(default)]
-    pub saved: Option<String>,
-    /// Save the resulting look app-wide under this name (only at the user's word).
-    #[serde(default)]
-    pub save: Option<String>,
-    /// The shorts' look is the video's times these (default size 1.15, energy 1.25, speed
-    /// 1.1; 0.5-2; 1 makes a short like the video).
-    #[serde(default)]
-    pub shorts_size: Option<f32>,
-    #[serde(default)]
-    pub shorts_energy: Option<f32>,
-    #[serde(default)]
-    pub shorts_speed: Option<f32>,
-    /// Propose one batch that rewrites every graphic not following the look (own colours,
-    /// fonts, corners, CSS timings, own tokens) to the look and kit, for the user to accept.
-    #[serde(default)]
-    pub bring_in_line: bool,
-}
-
-fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: GraphicsLookArgs = params(args)?;
-    let before = opened(ctx)?;
-    if let Some(graphic) = &args.graphic {
-        let view = commands::graphics::project_graphic_look_set_impl(
-            ctx.state,
-            before.handle.clone(),
-            graphic.clone(),
-            args.tokens.clone(),
-        )?;
-        return text(format!(
-            "Graphic {graphic} \"{}\" has its own {}. It renders again by itself.",
-            view.name,
-            if view.look.is_empty() {
-                "look no more: it takes the video's".to_string()
-            } else {
-                format!(
-                    "look tokens: {}",
-                    serde_json::to_string(&view.look).unwrap_or_default()
-                )
-            }
-        ));
-    }
-    if args.bring_in_line {
-        let agent = ctx.agent.clone();
-        return super::propose::propose(ctx, |reader, proposals| {
-            crate::proposals::propose_restyle(
-                reader,
-                proposals,
-                &agent,
-                "Bring every graphic in line with the video's look",
-            )
-        });
-    }
-    let view = commands::graphics::graphics_look_impl(ctx.state, before.handle.clone())?;
-    let mut look = match &args.saved {
-        Some(name) => {
-            crate::graphics::look::find_saved(&crate::graphics::look::saved_dir(), name)?.look
-        }
-        None => view.look.clone(),
-    };
-    for (field, value) in [
-        (&mut look.shorts.size, args.shorts_size),
-        (&mut look.shorts.energy, args.shorts_energy),
-        (&mut look.shorts.speed, args.shorts_speed),
-    ] {
-        if let Some(value) = value {
-            *field = value;
-        }
-    }
-    if let Some(preset) = &args.preset {
-        look.preset = preset.trim().to_string();
-    }
-    for (field, value) in [
-        (&mut look.size, args.size),
-        (&mut look.roundness, args.roundness),
-        (&mut look.speed, args.speed),
-        (&mut look.energy, args.energy),
-        (&mut look.density, args.density),
-    ] {
-        if let Some(value) = value {
-            *field = value;
-        }
-    }
-    for (name, value) in &args.tokens {
-        match value {
-            Some(value) => look.tokens.insert(name.clone(), value.trim().to_string()),
-            None => look.tokens.remove(name),
-        };
-    }
-    look.validate()?;
-    if args.preview {
-        let stills =
-            commands::graphics::graphics_look_preview_impl(ctx.state, before.handle.clone(), look)?;
-        let mut out = vec![Output::Text(format!(
-            "Not applied. {}: call again without `preview` to apply.",
-            stills
-                .iter()
-                .map(|s| format!("\"{}\"", s.name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))];
-        use base64::Engine;
-        for still in stills {
-            let data = still.image.trim_start_matches("data:image/png;base64,");
-            out.push(Output::Png(
-                base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|e| e.to_string())?,
-            ));
-        }
-        return Ok(out);
-    }
-    let saved_line = match &args.save {
-        Some(name) => {
-            let item =
-                crate::graphics::look::save(&crate::graphics::look::saved_dir(), name, &look)?;
-            Some(format!("Saved as \"{}\" for every project.", item.name))
-        }
-        None => None,
-    };
-    if look == view.look {
-        if let Some(line) = saved_line {
-            return text(line);
-        }
-        let not_in_line: Vec<String> = commands::graphics::graphics_in_line_plan_impl(
-            ctx.state,
-            before.handle.clone(),
-        )?
-        .into_iter()
-        .map(|p| p.name)
-        .collect();
-        let out = json!({
-            "look": view.look,
-            "presets": view.presets,
-            "tokens": view.tokens,
-            "ownLook": view.overrides,
-            "saved": view.saved.iter().map(|s| &s.name).collect::<Vec<_>>(),
-            "notInLine": not_in_line,
-        });
-        return super::tools::pretty(&out);
-    }
-    commands::graphics::project_graphics_look_set_impl(
-        ctx.state,
-        before.handle.clone(),
-        before.revision,
-        look.clone(),
-    )?;
-    text(applied(
-        ctx,
-        "graphics_look",
-        &before,
-        saved_line.into_iter().chain([
-            format!(
-                "The video's look: {} (size ×{}, roundness ×{}, speed ×{}, energy ×{}, density \
-                 ×{}){}.",
-                look.preset,
-                look.size,
-                look.roundness,
-                look.speed,
-                look.energy,
-                look.density,
-                if look.tokens.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        ", tokens {}",
-                        serde_json::to_string(&look.tokens).unwrap_or_default()
-                    )
-                }
-            ),
-            "Every graphic renders again by itself.".into(),
-        ])
-        .collect(),
-    )?)
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct BrandPickArgs {
-    /// A kit's name from brand_kits, or `none`; with `graphic` also `default` (the project's).
-    pub brand: String,
-    /// One graphic's id; without it the project's default kit is set.
-    #[serde(default)]
-    pub graphic: Option<String>,
-}
-
-fn brand_pick(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: BrandPickArgs = params(args)?;
-    let before = opened(ctx)?;
-    let line = match &args.graphic {
-        Some(graphic) => {
-            let updated = commands::graphics::project_graphic_set_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                graphic.clone(),
-                Default::default(),
-                None,
-                Some(args.brand.clone()),
-            )?;
-            format!(
-                "Graphic {graphic} \"{}\" uses {}.",
-                updated.graphic.name,
-                match &updated.graphic.brand {
-                    Some(kit) if kit == crate::graphics::brands::NONE => "no brand kit".into(),
-                    Some(kit) => format!("brand kit {kit}"),
-                    None => "the project's brand kit".into(),
-                }
-            )
-        }
-        None => {
-            let brand = match args.brand.trim() {
-                crate::graphics::brands::NONE | "" => None,
-                crate::graphics::brands::DEFAULT => {
-                    return Err("Give a kit's name or `none` for the project".into())
-                }
-                name => Some(name.to_string()),
-            };
-            commands::graphics::project_graphics_brand_set_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                brand.clone(),
-            )?;
-            match brand {
-                Some(kit) => format!("The project's graphics use brand kit {kit} by default."),
-                None => "The project's graphics use no brand kit by default.".into(),
-            }
-        }
-    };
-    text(applied(
-        ctx,
-        "brand_pick",
-        &before,
-        vec![line, "Graphics render again by themselves.".into()],
-    )?)
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct BrandKitSetArgs {
-    pub name: String,
-    /// The kit's name before, to rename it.
-    #[serde(default)]
-    pub previous: Option<String>,
-    #[serde(default)]
-    pub background: Option<String>,
-    #[serde(default)]
-    pub text: Option<String>,
-    #[serde(default)]
-    pub accent: Option<String>,
-    /// A font family name.
-    #[serde(default)]
-    pub font: Option<String>,
-    /// Full path of a font file to copy into the kit.
-    #[serde(default)]
-    pub font_file: Option<String>,
-    /// Full path of a logo to copy into the kit.
-    #[serde(default)]
-    pub logo: Option<String>,
-    /// Delete the kit.
-    #[serde(default)]
-    pub remove: bool,
-}
-
-fn brand_kit_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: BrandKitSetArgs = params(args)?;
-    let dir = crate::graphics::brands::dir();
-    if args.remove {
-        commands::graphics::graphics_brand_remove_impl(args.name.clone())?;
-        return text(format!("Removed brand kit {}.", args.name));
-    }
-    let existing = crate::graphics::brands::list(&dir)
-        .into_iter()
-        .find(|k| k.name == args.previous.as_deref().unwrap_or(&args.name));
-    let pick = |given: Option<String>, had: Option<&String>, what: &str| {
-        given
-            .or_else(|| had.cloned())
-            .ok_or_else(|| format!("A new kit needs `{what}` (#RRGGBB)"))
-    };
-    let kit = crate::graphics::brands::BrandKitInput {
-        name: args.name.clone(),
-        previous: args.previous.clone(),
-        background: pick(
-            args.background,
-            existing.as_ref().map(|k| &k.background),
-            "background",
-        )?,
-        text: pick(args.text, existing.as_ref().map(|k| &k.text), "text")?,
-        accent: pick(args.accent, existing.as_ref().map(|k| &k.accent), "accent")?,
-        font: args
-            .font
-            .or_else(|| existing.as_ref().map(|k| k.font.clone()))
-            .unwrap_or_default(),
-        font_file: args.font_file,
-        logo: args.logo,
-    };
-    let saved = commands::graphics::graphics_brand_save_impl(ctx.state, kit)?;
-    text(format!(
-        "Saved brand kit {}: {}.",
-        args.name,
-        serde_json::to_string(&saved).unwrap_or_default()
     ))
 }
 
@@ -5903,8 +5611,8 @@ mod tests {
             "{back}"
         );
         assert!(length(&ctx) < start);
-        // A new workflow starts a new run: only what came after `template` goes.
-        agent("template", json!({})).unwrap();
+        // A new workflow starts a new run: only what came after `preset` goes.
+        agent("preset", json!({})).unwrap();
         agent(
             "settings",
             json!({ "area": "captions", "set": { "fontSizePct": 7 } }),
@@ -6434,14 +6142,20 @@ mod tests {
         assert!(landed.contains("autopilot accepted it"), "{landed}");
         // The footage and B-roll sound share one track: its volume and ducking are set once.
         let listed = call(&ctx, "short_footage", json!({ "short": "Take" })).unwrap();
-        assert!(listed.contains("Footage sound: +0 dB, lowered 12 dB"), "{listed}");
+        assert!(
+            listed.contains("Footage sound: +0 dB, lowered 12 dB"),
+            "{listed}"
+        );
         let sound = call(
             &ctx,
             "short_footage",
             json!({ "short": "Take", "op": "sound", "volumeDb": -6, "duckDb": 18 }),
         )
         .unwrap();
-        assert!(sound.contains("Footage sound: -6 dB, lowered 18 dB"), "{sound}");
+        assert!(
+            sound.contains("Footage sound: -6 dB, lowered 18 dB"),
+            "{sound}"
+        );
         assert!(call(
             &ctx,
             "short_footage",
@@ -6452,7 +6166,10 @@ mod tests {
             let document = reader.document();
             let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
             let timeline = crate::shorts::short_timeline(document, short)?;
-            let track = crate::take_short::footage_sound_track(short).unwrap().id.clone();
+            let track = crate::take_short::footage_sound_track(short)
+                .unwrap()
+                .id
+                .clone();
             Ok(timeline.audio.tracks[&track].clone())
         })
         .unwrap();
@@ -6592,10 +6309,10 @@ mod tests {
         let wrong = call(
             &ctx,
             "graphic_set",
-            json!({ "graphic": id, "moveToWord": "w-3", "brand": "No Such Kit" }),
+            json!({ "graphic": id, "moveToWord": "w-3", "style": "No Such Style" }),
         )
         .unwrap_err();
-        assert!(wrong.contains("There is no brand kit"), "{wrong}");
+        assert!(wrong.contains("There is no style"), "{wrong}");
         assert_eq!(graphic(&ctx).unwrap().1, Some(0));
         let removed = call(
             &ctx,
@@ -6700,51 +6417,108 @@ mod tests {
         .unwrap();
         assert!(set.contains("\"step\":4") && set.contains("1.5 s"), "{set}");
 
-        // Brand kits: the graphic's own choice and the project's default.
+        // Styles: the graphic's own and the project's.
         let own = call(
             &ctx,
-            "brand_pick",
-            json!({ "graphic": id, "brand": "none" }),
+            "graphic_set",
+            json!({ "graphic": id, "style": "Dark" }),
         )
         .unwrap();
-        assert!(own.contains("uses no brand kit"), "{own}");
-        let missing = call(&ctx, "brand_pick", json!({ "brand": "No Such Kit" })).unwrap_err();
-        assert!(missing.contains("There is no brand kit"), "{missing}");
-        let project = call(&ctx, "brand_pick", json!({ "brand": "none" })).unwrap();
-        assert!(project.contains("use no brand kit by default"), "{project}");
+        assert!(own.contains("style Dark"), "{own}");
+        let missing = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "No Such Style" }),
+        )
+        .unwrap_err();
+        assert!(missing.contains("There is no style"), "{missing}");
+        let project = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "dark" }),
+        )
+        .unwrap();
+        assert!(project.contains("dressed in style Dark"), "{project}");
+        assert_eq!(history(&ctx)[0].action.as_deref(), Some("library"));
+        let ours = with_reader(ctx.state, |r| Ok(r.document().style.clone())).unwrap();
+        assert_eq!(ours, "Dark");
         let listed = call(&ctx, "graphics", json!({})).unwrap();
-        assert!(listed.contains("\"brand\":\"none\""), "{listed}");
+        assert!(listed.contains("\"style\":\"Dark\""), "{listed}");
         // The graphics rules come with the list, once, instead of in every edit's rules.
         assert!(listed.starts_with("# Graphics"), "{listed}");
-
-        // The video's look: read, changed in one undo step, and a graphic's own tokens.
-        let look = call(&ctx, "graphics_look", json!({})).unwrap();
-        assert!(look.contains("app") && look.contains("radius"), "{look}");
-        let bad = call(&ctx, "graphics_look", json!({ "speed": 9 })).unwrap_err();
-        assert!(bad.contains("speed"), "{bad}");
-        let set = call(
+        call(
             &ctx,
-            "graphics_look",
-            json!({ "preset": "calm", "speed": 1.5 }),
+            "graphic_set",
+            json!({ "graphic": id, "style": "project" }),
         )
         .unwrap();
-        assert!(set.contains("calm") && set.contains("speed ×1.5"), "{set}");
-        assert_eq!(history(&ctx)[0].action.as_deref(), Some("graphics_look"));
-        let preset = with_reader(ctx.state, |r| Ok(r.document().graphics_look.preset.clone()));
-        assert_eq!(preset.unwrap(), "calm");
+
+        // A style: shown, never changed when built in, copied and changed app-wide.
+        let shown = call(&ctx, "library", json!({ "kind": "style", "op": "show" })).unwrap();
+        assert!(
+            shown.contains("\"accent\"") && shown.contains("radius"),
+            "{shown}"
+        );
+        // The project wears Light: a change to it goes into a copy the project then wears.
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "Light" }),
+        )
+        .unwrap();
+        let built_in = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "set": { "graphics": { "speed": 1.5 } } }),
+        )
+        .unwrap();
+        assert!(built_in.contains("style My light"), "{built_in}");
+        let ours = with_reader(ctx.state, |r| Ok(r.document().style.clone())).unwrap();
+        assert_eq!(ours, "My light");
+        assert_eq!(
+            crate::style::store::load("Light").unwrap().graphics.speed,
+            1.0
+        );
+        let bad = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "saveAs": "Mine", "set": { "graphics": { "speed": 9 } } }),
+        )
+        .unwrap_err();
+        assert!(bad.contains("speed"), "{bad}");
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "saveAs": "Mine", "set": { "graphics": { "preset": "calm" } } }),
+        )
+        .unwrap();
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "Mine" }),
+        )
+        .unwrap();
+        let listed = call(&ctx, "library", json!({ "kind": "style" })).unwrap();
+        assert!(listed.contains("\"name\": \"Mine\""), "{listed}");
+
+        // A graphic's own tokens put it out of line: one batch brings it back.
         let own = call(
             &ctx,
-            "graphics_look",
-            json!({ "graphic": id, "tokens": { "radius": "0" } }),
+            "graphic_set",
+            json!({ "graphic": id, "look": { "radius": "0" } }),
         )
         .unwrap();
         assert!(own.contains("\"radius\":\"0\""), "{own}");
         let listed = call(&ctx, "graphics", json!({})).unwrap();
         assert!(listed.contains("\"look\":{\"radius\":\"0\"}"), "{listed}");
-        // A graphic with a look of its own is out of line: one batch brings it back.
-        let look = call(&ctx, "graphics_look", json!({})).unwrap();
-        assert!(look.contains("\"notInLine\": [\n    \"Step card\""), "{look}");
-        let proposed = call(&ctx, "graphics_look", json!({ "bringInLine": true })).unwrap();
+        let check = call(&ctx, "library", json!({ "kind": "style", "op": "check" })).unwrap();
+        assert!(check.contains("Step card"), "{check}");
+        let proposed = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "bring_in_line" }),
+        )
+        .unwrap();
         assert!(
             proposed.contains("Proposed b-") && proposed.contains("its own look (radius)"),
             "{proposed}"
@@ -6764,7 +6538,10 @@ mod tests {
         let in_line = with_reader(ctx.state, |reader| {
             let document = reader.document();
             let graphic = document.assets.iter().find(|a| a.is_graphic()).unwrap();
-            let on_timeline = document.sequence.clips().any(|(_, c)| c.asset == graphic.id);
+            let on_timeline = document
+                .sequence
+                .clips()
+                .any(|(_, c)| c.asset == graphic.id);
             let source =
                 crate::graphics::read_source(&crate::graphics::folder(reader.root(), &graphic.id))?;
             Ok((graphic.id.clone(), on_timeline, source.look.is_empty()))
@@ -6772,9 +6549,13 @@ mod tests {
         .unwrap();
         assert_ne!(in_line.0, id, "a copy, so undo has the old one");
         assert!(in_line.1 && in_line.2, "{in_line:?}");
-        assert!(call(&ctx, "graphics_look", json!({ "bringInLine": true }))
-            .unwrap_err()
-            .contains("nothing to bring in line"));
+        assert!(call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "bring_in_line" })
+        )
+        .unwrap_err()
+        .contains("nothing to bring in line"));
         let id = in_line.0;
         let slot = call(
             &ctx,
@@ -7025,14 +6806,14 @@ mod tests {
             error.contains("Unknown captions setting enabeld") && error.contains("enabled"),
             "{error}"
         );
-        let presets = call(&ctx, "settings", json!({ "area": "presets" })).unwrap();
+        let presets = call(&ctx, "settings", json!({ "area": "cleanup" })).unwrap();
         assert!(
             presets.contains("\"preset\":\"tight\"") && presets.contains("\"thresholdDb\":-36.0"),
             "{presets}"
         );
         let export = call(&ctx, "settings", json!({ "area": "export" })).unwrap();
         assert!(export.contains("\"width\":1920"), "{export}");
-        assert!(call(&ctx, "settings", json!({ "area": "presets", "set": {} })).is_err());
+        assert!(call(&ctx, "settings", json!({ "area": "cleanup", "set": {} })).is_err());
     }
 
     #[test]

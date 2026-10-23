@@ -1,4 +1,4 @@
-# Template: clips
+# Preset: Clips
 
 Vertical clips (9:16) cut from the edited video: you read the transcript and pick the moments
 yourself (no AI key needed), the app builds each short with the look of the others (a
@@ -14,7 +14,7 @@ go.
 ## 1. Project (automatic)
 
 - `status`. Shorts need a transcript: if nothing is transcribed, `transcribe` (online, the
-  language detected; as in the tutorial template).
+  language detected; as in the Tutorial preset).
 - `status` says how many shorts are already made. Ask whether to keep them
   (default) or start over (remove them in the Shorts Studio; there is no action for it).
 - With a camera, `faces` (it waits until the face is found in every camera; shorts centre

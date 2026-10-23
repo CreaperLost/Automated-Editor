@@ -1,7 +1,6 @@
 import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
   CheckReport,
-  Template,
   OpenedProject,
   SegmentPage,
   WaveformOverview,
@@ -67,14 +66,16 @@ import {
   GraphicTemplate,
   GraphicUpdated,
   GraphicView,
-  BrandKit,
-  BrandKitInput,
-  BrandsView,
-  GraphicsLook,
   LookStill,
-  SavedLook,
+  PresetInput,
+  PresetPart,
+  PresetsView,
+  PresetView,
+  Style,
+  StyleInput,
+  StylesView,
+  StyleView,
   InLinePlan,
-  LookView,
   GraphicLibraryItem,
   GraphicLibrarySave,
   GraphicLibrarySaved,
@@ -495,7 +496,7 @@ export const api = {
     invokeTauri<string>("project_frame_thumbnail", { projectHandle, atUs, width }),
   /**
    * Sets variables (`null` puts one back to its default) and, optionally, the name and the
-   * brand kit ("default" follows the project's, "none" is no kit).
+   * style ("project" follows the project's).
    */
   projectGraphicSet: (
     projectHandle: string,
@@ -503,7 +504,7 @@ export const api = {
     assetId: string,
     variables: Record<string, unknown>,
     name?: string,
-    brand?: string,
+    style?: string,
   ) =>
     invokeTauri<GraphicUpdated>("project_graphic_set", {
       projectHandle,
@@ -511,30 +512,42 @@ export const api = {
       assetId,
       variables,
       name: name ?? null,
-      brand: brand ?? null,
+      style: style ?? null,
     }),
-  /** The app's brand kits and, with a project, its default kit. */
-  graphicsBrands: (projectHandle?: string) =>
-    invokeTauri<BrandsView>("graphics_brands", { projectHandle: projectHandle ?? null }),
-  graphicsBrandSave: (kit: BrandKitInput) => invokeTauri<BrandKit>("graphics_brand_save", { kit }),
-  graphicsBrandRemove: (name: string) => invokeTauri<void>("graphics_brand_remove", { name }),
-  /** Picks a logo or font file for a brand kit; null when cancelled. */
+  /** Every preset and, with a project, its preset and what it changed from it. */
+  presets: (projectHandle?: string) => invokeTauri<PresetsView>("presets", { projectHandle: projectHandle ?? null }),
+  /** The project (or its new shorts, with `shorts`) follows preset `name`; one undo step. */
+  projectPresetSet: (projectHandle: string, expectedRevision: number, name: string, shorts = false) =>
+    invokeTauri<OpenedProject>("project_preset_set", { projectHandle, expectedRevision, name, shorts }),
+  /** Takes the project's changes back to its preset's values: all, a part's, or one field; one undo step. */
+  projectPresetReset: (projectHandle: string, expectedRevision: number, part?: PresetPart, field?: string) =>
+    invokeTauri<OpenedProject>("project_preset_reset", {
+      projectHandle,
+      expectedRevision,
+      part: part ?? null,
+      field: field ?? null,
+    }),
+  /** The project's settings into its preset, or a new one called `name` it then follows. */
+  presetSaveFromProject: (projectHandle: string, expectedRevision: number, name?: string) =>
+    invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null }),
+  presetSave: (input: PresetInput) => invokeTauri<PresetView>("preset_save", { input }),
+  presetRemove: (name: string) => invokeTauri<void>("preset_remove", { name }),
+  /** Every style and, with a project, its style. */
+  styles: (projectHandle?: string) => invokeTauri<StylesView>("styles", { projectHandle: projectHandle ?? null }),
+  /** Saves a style app-wide (new, changed, renamed, or a copy of a built-in). */
+  styleSave: (input: StyleInput) => invokeTauri<StyleView>("style_save", { input }),
+  styleRemove: (name: string) => invokeTauri<void>("style_remove", { name }),
+  /** Picks a logo or font file for a style; null when cancelled. */
   pickBrandFile: (kind: "logo" | "font") => invokeTauri<string | null>("pick_brand_file", { kind }),
-  /** Sets the project's default brand kit (null for none), one undo step. */
-  projectGraphicsBrandSet: (projectHandle: string, expectedRevision: number, brand: string | null) =>
-    invokeTauri<OpenedProject>("project_graphics_brand_set", { projectHandle, expectedRevision, brand }),
-  /** The video's look, the presets, its tokens and the graphics with tokens of their own. */
-  graphicsLook: (projectHandle: string) => invokeTauri<LookView>("graphics_look", { projectHandle }),
-  /** Sets the video's look, one undo step; its graphics render again. */
-  projectGraphicsLookSet: (projectHandle: string, expectedRevision: number, look: GraphicsLook) =>
-    invokeTauri<OpenedProject>("project_graphics_look_set", { projectHandle, expectedRevision, look }),
-  /** Stills of up to three of the video's graphics with `look`, changing nothing (a few seconds). */
-  graphicsLookPreview: (projectHandle: string, look: GraphicsLook) =>
-    invokeTauri<LookStill[]>("graphics_look_preview", { projectHandle, look }),
-  /** Saves a look by name for every project (over one of that name); the saved looks after. */
-  graphicsLookSave: (name: string, look: GraphicsLook) =>
-    invokeTauri<SavedLook[]>("graphics_look_save", { name, look }),
-  graphicsLookSavedRemove: (name: string) => invokeTauri<SavedLook[]>("graphics_look_saved_remove", { name }),
+  /** Dresses the project in style `name`, one undo step. */
+  projectStyleSet: (projectHandle: string, expectedRevision: number, name: string) =>
+    invokeTauri<OpenedProject>("project_style_set", { projectHandle, expectedRevision, name }),
+  /** Stills of up to three of the video's graphics in `style`, changing nothing (a few seconds). */
+  stylePreview: (projectHandle: string, style: Style) =>
+    invokeTauri<LookStill[]>("style_preview", { projectHandle, style }),
+  /** Look tokens of a graphic's own over its style's (null takes one back). */
+  projectGraphicLookSet: (projectHandle: string, assetId: string, tokens: Record<string, string | null>) =>
+    invokeTauri<GraphicView>("project_graphic_look_set", { projectHandle, assetId, tokens }),
   /** What bringing the video's graphics in line with its look would change, changing nothing. */
   graphicsInLinePlan: (projectHandle: string) => invokeTauri<InLinePlan[]>("graphics_in_line_plan", { projectHandle }),
   /** Brings those graphics in line, one undo step. */
@@ -616,14 +629,6 @@ export const api = {
   projectCheckFix: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_check_fix", { projectHandle, expectedRevision, ids }),
   projectCurrent: () => invokeTauri<OpenedProject | null>("project_current"),
-  templatesList: () => invokeTauri<Template[]>("templates_list"),
-  /** Saves the project's settings (and the short's look, given one) under `name`; the same name replaces. */
-  templateSave: (projectHandle: string, name: string, shortId: string | null) =>
-    invokeTauri<Template[]>("template_save", { projectHandle, name, shortId }),
-  templateDelete: (templateId: string) => invokeTauri<Template[]>("template_delete", { templateId }),
-  /** One undo step: the template's settings, and its short look on `shortId`. */
-  templateApply: (projectHandle: string, expectedRevision: number, templateId: string, shortId: string | null) =>
-    invokeTauri<OpenedProject>("template_apply", { projectHandle, expectedRevision, templateId, shortId }),
   projectShortsSet: (projectHandle: string, expectedRevision: number, shorts: Short[]) =>
     invokeTauri<OpenedProject>("project_shorts_set", {
       projectHandle,

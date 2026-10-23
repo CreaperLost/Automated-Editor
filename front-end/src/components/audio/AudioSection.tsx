@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Mic, MousePointerClick, Music, Sparkles, Volume2, VolumeX, Wand2, Wind } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { PresetMarks } from "../presets/PresetMarks";
 import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
@@ -418,6 +419,7 @@ export const AudioSection: React.FC = () => {
 
   return (
     <InspectorSection id="audio" title="Audio" icon={Volume2}>
+      <PresetMarks part="audio" />
       {error && (
         <Notice tone="danger" className="rounded-control border" onDismiss={() => setError(undefined)}>
           {error}

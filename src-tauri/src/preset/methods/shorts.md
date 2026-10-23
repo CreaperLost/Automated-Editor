@@ -1,4 +1,4 @@
-# Template: shorts from a take
+# Preset: Shorts (from a take)
 
 A vertical short (9:16) told again for shorts: the user recorded a new take, a camera video
 (often with its own microphone), maybe a separate microphone file, or an AeroEdits recording,
@@ -13,7 +13,7 @@ the defaults below, report in one message and go on. Export still waits for the 
 ## 1. Project (automatic)
 
 - `status`. The long video needs a transcript (that is how you find its footage): if it has
-  none, `transcribe` it (online, the language detected; as in the tutorial template). The
+  none, `transcribe` it (online, the language detected; as in the Tutorial preset). The
   long video should be edited first: footage only comes from what its edit keeps.
 - `status` says how many shorts are already made.
 
@@ -109,8 +109,8 @@ Once the take is cut, `more` with `tool: captions` and `args: {"short": <id>}` l
 short's caption lines, numbered. Pick per line the one word that makes a viewer keep watching (a
 number, a name, the twist, the verdict, the thing being warned about), never a small word
 ("the", "is", "and"); a flat line gets none. Set them in one call: `args: {"short": <id>,
-"emphasis": [{"line": 0, "word": "never"}, ...]}`. They are drawn in the brand kit's accent.
-The short's words pop in by default; the user picks pop, karaoke or static in the Shorts tab.
+"emphasis": [{"line": 0, "word": "never"}, ...]}`. They are drawn in the style's accent.
+How the words come on (pop by default at 9:16) is the project's style (`library` `kind: style`).
 
 ## 7. Propose (automatic)
 

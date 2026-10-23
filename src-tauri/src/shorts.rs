@@ -62,14 +62,6 @@ pub struct ShortLayout {
     pub caption_lines: u32,
     /// Caption text size in this short, as a percentage of its height; 0 uses the editor's.
     pub caption_size_pct: f32,
-    /// How this short's caption words come on screen; `None` takes the video's.
-    pub caption_style: Option<crate::captions::CaptionStyle>,
-    /// The background behind the screen and camera: `project` (the video's own), `solid`,
-    /// `gradient`, `preset` or `wallpaper` (the project's image).
-    pub background_type: String,
-    pub background_color_start: String,
-    pub background_color_end: String,
-    pub background_preset: String,
     /// Where each graphic plays in this short, by its clip id; a graphic not listed plays
     /// full screen.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -275,12 +267,6 @@ impl Default for ShortLayout {
             caption_max_words: 0,
             caption_lines: 1,
             caption_size_pct: 0.0,
-            // Words popping in as they are said suit a phone.
-            caption_style: Some(crate::captions::CaptionStyle::Pop),
-            background_type: "project".into(),
-            background_color_start: "#000000".into(),
-            background_color_end: "#1e1b4b".into(),
-            background_preset: "aurora".into(),
             graphic_slots: Default::default(),
         }
     }
@@ -292,17 +278,6 @@ impl ShortLayout {
             return Err(format!(
                 "Screen zoom is {MIN_SCREEN_ZOOM}x to {MAX_SCREEN_ZOOM}x"
             ));
-        }
-        if !matches!(
-            self.background_type.as_str(),
-            "project" | "solid" | "gradient" | "preset" | "wallpaper"
-        ) {
-            return Err("Unknown short background".into());
-        }
-        crate::project::layout::parse_hex_rgb(&self.background_color_start)?;
-        crate::project::layout::parse_hex_rgb(&self.background_color_end)?;
-        if self.background_preset.is_empty() || self.background_preset.len() > 32 {
-            return Err("Unknown background preset".into());
         }
         if !(-1.0..=1.0).contains(&self.screen_pan_x) || !(-1.0..=1.0).contains(&self.screen_pan_y)
         {
@@ -408,22 +383,6 @@ pub fn camera_framing(
     let focus = crate::face::cached_track(root, &clip.asset, &clip.stream)
         .and_then(|track| crate::face::clip_focus(&track, clip.in_us, clip.out_us()));
     (focus, (0.0, 0.0))
-}
-
-/// The short's background as the project layout it is drawn from: the video's own, or the
-/// short's choice of colour, gradient, built-in or the project's image.
-pub fn background_layout(
-    project: &crate::project::EditLayout,
-    short: &ShortLayout,
-) -> crate::project::EditLayout {
-    let mut layout = project.clone();
-    if short.background_type != "project" {
-        layout.background_type = short.background_type.clone();
-        layout.color_start = short.background_color_start.clone();
-        layout.color_end = short.background_color_end.clone();
-        layout.background_preset = short.background_preset.clone();
-    }
-    layout
 }
 
 /// Where the screen goes in its `region` (x, y, w, h) and which part of it (UV) shows.
@@ -640,8 +599,6 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
     timeline.chapters.clear();
     timeline.short_layout = None;
     timeline.layouts = short.layouts.clone();
-    // Its graphics take the video's look, tuned for a phone.
-    timeline.graphics_look = base.graphics_look.for_short();
     // A take's captions read the take's own words.
     if let Some(take) = &short.take {
         timeline.captions.track_id = Some(take.voice.clone());
@@ -788,9 +745,6 @@ pub fn short_document(
     document.captions.max_lines = short.layout.caption_lines.clamp(1, 3);
     if short.layout.caption_size_pct > 0.0 {
         document.captions.font_size_pct = short.layout.caption_size_pct;
-    }
-    if let Some(style) = short.layout.caption_style {
-        document.captions.style = style;
     }
     // Its camera clips are its own (the same ids can be the video's).
     document.layout.camera_clips = short.layout.camera_clips.clone();
@@ -1326,22 +1280,5 @@ mod tests {
                 assert!(uv_x >= 0.1 - 1e-4 && uv_w <= 0.8 + 1e-4);
             }
         }
-    }
-
-    #[test]
-    fn a_short_can_pick_its_own_background() {
-        let project = crate::project::EditLayout::default();
-        let mut short = ShortLayout::default();
-        assert_eq!(background_layout(&project, &short), project);
-        short.background_type = "gradient".into();
-        short.background_color_start = "#112233".into();
-        short.validate().unwrap();
-        let layout = background_layout(&project, &short);
-        assert_eq!(
-            (layout.background_type.as_str(), layout.color_start.as_str()),
-            ("gradient", "#112233")
-        );
-        short.background_color_end = "blue".into();
-        assert!(short.validate().is_err());
     }
 }

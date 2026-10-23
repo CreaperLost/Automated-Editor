@@ -10,8 +10,8 @@
      1440x1080 for 4:3. Scale the others the same way.
    - Where: next to the project (default) or a path the user gives.
    - Quality: high (default, sharp screen text), standard (smaller file), max (near lossless).
-   Use the saved export answers when the user said "same as last time".
-2. Wait for the user's go. Don't export on your own, even at the end of a template.
+   Use the preset's export choices when the user said "same as last time".
+2. Wait for the user's go. Don't export on your own, even at the end of a method.
 3. Run `export` with `settings` `{"width": W, "height": H, "quality": "high"}` and
    `destination` only if the user gave one. It waits and reports progress; the app shows it in
    its Export window too. If your client gives up on long calls, run `export` with

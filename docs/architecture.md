@@ -140,10 +140,13 @@ mounted at `recordings/<asset id>/`.
 - **Actions** apply directly like a button, one undo step each, listed in the Agent panel
   history. Detection actions take `apply: false`. Long jobs send MCP progress notifications.
   Requests on one connection run concurrently; agents that need order wait for each reply.
-- **The skill** (`mcp/skill/`: `SKILL.md`, `export.md`, `templates/{tutorial,shorts,take-shorts}.md`)
-  is compiled in, served by the `template` tool, as MCP prompts and server instructions, and
-  installed into Claude Code / Codex skill folders (refreshed at launch while marked "Installed
-  by AeroEdits"). Saved answers: `<config>/AeroEdits/agents/answers/<template>.json`.
+- **The skill** (`mcp/skill/`: `SKILL.md`, `rules.md`, `export.md`, `graphics.md`) is compiled
+  in; with the preset's method (`preset/methods/*.md` for the built-ins, `method.md` for the
+  user's) it is served by the `preset` tool, as MCP prompts and server instructions, and installed
+  into Claude Code / Codex skill folders (refreshed at launch while marked "Installed by
+  AeroEdits"). The user's answers are the preset's `choices`, saved with `library`.
+- **`library`** (`mcp/library.rs`, `mcp/presets.rs`): one tool for styles, presets and favourite
+  layouts (`kind`, `op`), instead of a tool per kind and operation.
 - **Events:** agent changes emit `aeroedits-project-updated`, `aeroedits-proposals-updated`,
   `aeroedits-agent-activity`, `aeroedits-agent-opened` so the UI refreshes.
 
@@ -152,7 +155,7 @@ mounted at `recordings/<asset id>/`.
 `src-tauri/src/graphics/`. Decided in Graphics v1 ([ai-readiness](plans/ai-readiness.md#graphics-v1-agreed-2026-10-15)).
 
 - **Asset:** a HyperFrames project in `graphics/<id>/` (`index.html`, `graphic.json` with
-  variables, brand, length). Variables are declared with `data-composition-variables`.
+  variables, its own style if any, its own look tokens, length). Variables are declared with `data-composition-variables`.
 - **Slots, not safe zones:** where a graphic plays decides its render box (whole canvas; a short's
   camera, screen or over-screen part). Full-screen graphics cut in and out (`data-entrance`); an
   overlay on the camera may ease.
@@ -161,21 +164,27 @@ mounted at `recordings/<asset id>/`.
 - **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.162 with its own
   Node 22 and chrome-headless-shell (`runtime.rs`, hash-checked, ~200 MB download, ~500 MB on
   disk); WebM VP9 alpha decoded with `libvpx-vp9` forced; cache key over source files, canvas,
-  length, fps, density, brand and version. The preview plays a **draft** (30 fps, 1920 px long
+  length, fps, density, style (settings and files) and version. The preview plays a **draft** (30 fps, 1920 px long
   side); an export renders **final** ones at its own fps, and at twice the density (HyperFrames
   `--resolution landscape-4k` / `portrait-4k`, same layout) when larger than 1080p. Renders stage in `<runtime>/work/<hash12>/` (long project paths
   broke Windows' 260-char limit). Export waits for pending renders. A render takes ~16–28 s.
-- **The look** (`look.rs`): one per video in the edit document (preset, five global controls,
-  hand-set tokens), injected into every render after the composition's own defaults as `--look-*`
+- **The look** (`look.rs`): a style's graphics look (preset, five global controls, hand-set
+  tokens; scaled at 9:16), injected into every render after the composition's own defaults as `--look-*`
   properties on `[data-composition-id]`, where HyperFrames puts the colour variables the roles
   mix from; part of the render hash. Find the root by `graphics::root_at` (the attribute with a
   value), never the first `data-composition-id` in the file: the look's selector comes first.
-- **Brand kits** (`brands.rs`): app-level `<config>/AeroEdits/brands/<name>/brand.json` (+ logo,
-  font file) → a `<style id="aeroedits-brand">` with `--brand-*` variables at render time.
-  Projects and graphics store a kit's **name**, so a rename is recorded in `brands/renamed.json`
-  (old → new, chains collapsed) and every lookup (`load`, `current_name`) follows it; deleting a
-  kit drops its old names. A save builds the new folder beside the old one and swaps it in, the
-  old one set aside and put back if the swap fails; a non-kit folder in the way is refused.
+- **Styles** (`src-tauri/src/style/`): built in (Light, Dark) or app-level
+  `<config>/AeroEdits/styles/<name>/style.json` (+ font and logo files). The brand becomes a
+  `<style id="aeroedits-brand">` with `--brand-*` variables at render time (`style/brand.rs`);
+  `style::dress` puts the frame and caption look onto a document as it is drawn (the
+  `#[serde(skip)]` fields of `EditLayout` and `CaptionSettings`: never stored). Projects and
+  graphics store a style's **name**, so a rename is recorded in `styles/renamed.json` and every
+  lookup follows it. A save builds the new folder beside the old one and swaps it in.
+- **Presets** (`src-tauri/src/preset/`): built in (Tutorial, Shorts, Clips) or app-level
+  `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). A document is
+  stored with `preset::stored` (the parts a preset sets written as `presetChanges`, a JSON merge
+  patch over the preset's values) and read with `preset::read`, in `project.json` and in history
+  states alike.
 - **Agent file writes** (`write_file`): plain relative paths only, and no symlink or junction
   anywhere in the path (the graphic's folder included), like the project's `safe_path`.
 - **Library** (`library.rs`) and **gate** (`gate.rs`): saving to the library runs a no-model check

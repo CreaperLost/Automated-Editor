@@ -293,7 +293,7 @@ pub struct SceneEvaluator {
     graphics_quality: crate::graphics::render::Quality,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
-    /// The captions' typeface and accent, from the brand kit and the look.
+    /// The captions' typeface and accent, from the style and the look.
     caption_look: std::cell::OnceCell<crate::captions::CaptionLook>,
     /// Where graphics fill the frame: no captions there.
     caption_free: std::cell::OnceCell<Vec<(u64, u64)>>,
@@ -395,12 +395,9 @@ impl DecoderWarmer {
     }
 }
 
-/// The background a document draws: the project's, or the short's own choice.
+/// The background a document draws (as its style dressed it).
 fn background_layout(document: &EditDocument) -> crate::project::layout::EditLayout {
-    match &document.short_layout {
-        Some(short) => crate::shorts::background_layout(&document.layout, short),
-        None => document.layout.clone(),
-    }
+    document.layout.clone()
 }
 
 fn background_key(
@@ -515,6 +512,9 @@ impl SceneEvaluator {
         height: u32,
         reuse: Option<EvaluatorReuse>,
     ) -> Result<Self, String> {
+        // Drawn in its style: the frame's and the captions' look.
+        let mut document = document;
+        crate::style::dress(&mut document);
         let key = background_key(&root, &background_layout(&document), width, height);
         let wallpaper = std::cell::OnceCell::new();
         let mut media = None;
@@ -4042,15 +4042,14 @@ mod tests {
             .layers
             .iter()
             .any(|l| l.role == crate::render::LayerRole::Overlay));
-        // A preview kept across edits keeps its background only while the short's choice
-        // stays the same.
+        // A preview kept across edits keeps its background only while the style's stays the
+        // same.
         let key = |document: &EditDocument| {
             background_key(dir.path(), &background_layout(document), 64, 64)
         };
         let before = key(&short_document);
-        let layout = short_document.short_layout.as_mut().unwrap();
-        layout.background_type = "gradient".into();
-        layout.background_color_start = "#0000FF".into();
+        short_document.layout.background_type = "gradient".into();
+        short_document.layout.color_start = "#0000FF".into();
         assert_ne!(key(&short_document), before);
     }
 
@@ -4174,15 +4173,22 @@ mod tests {
             "sourceStartUs": 0, "sourceEndUs": 5_000_000
         }))
         .unwrap();
-        assert!(short.layout.captions, "a short has captions unless turned off");
+        assert!(
+            short.layout.captions,
+            "a short has captions unless turned off"
+        );
         let mut short_document = crate::shorts::short_document(&document, &short, false).unwrap();
         assert_eq!(
             whole_frame_ranges(dir.path(), &short_document),
             vec![(1_000_000, 2_000_000), (3_000_000, 4_000_000)]
         );
         let layout = short_document.short_layout.as_mut().unwrap();
-        layout.graphic_slots.insert("g1".into(), GraphicSlot::Screen);
-        layout.graphic_slots.insert("g2".into(), GraphicSlot::OverFace);
+        layout
+            .graphic_slots
+            .insert("g1".into(), GraphicSlot::Screen);
+        layout
+            .graphic_slots
+            .insert("g2".into(), GraphicSlot::OverFace);
         assert!(whole_frame_ranges(dir.path(), &short_document).is_empty());
         // A video's captions are off until turned on.
         assert!(!EditDocument::default().captions.enabled);
@@ -4814,7 +4820,9 @@ mod tests {
         // Over the whole frame the camera has no screen to share it with.
         assert_eq!(camera_rect(&document), (0, 0, 1080, 1920));
         let layout = document.short_layout.as_mut().unwrap();
-        layout.graphic_slots.insert("g1".into(), GraphicSlot::Screen);
+        layout
+            .graphic_slots
+            .insert("g1".into(), GraphicSlot::Screen);
         assert_eq!(camera_rect(&document), (0, 0, 1080, 672));
     }
 

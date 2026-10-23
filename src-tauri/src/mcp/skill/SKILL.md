@@ -6,10 +6,11 @@ description: Edit videos in AeroEdits (screen-recorded tutorials first) with its
 
 # Editing in AeroEdits
 
-Everything you need comes from the app, so it always matches its actions: call the `template`
-tool with the kind of video (`aeroedits do template --name tutorial` in a shell) and follow what
-it returns: the rules, the steps, what to ask the user, the export steps and the user's saved
-answers. `template` without a name lists the kinds:
+Everything you need comes from the app, so it always matches its actions: call the `preset`
+tool with the kind of video (`aeroedits do preset --name tutorial` in a shell) and follow what
+it returns: the rules, the user's own rules for that kind of video, the steps, what to ask the
+user, the export steps and the preset's saved choices. `preset` without a name lists them (the
+user may have presets of their own):
 
 - `tutorial`: a tutorial, a screen recording, a course lesson.
 - `shorts`: a short the user recorded a new take for ("make a short from my take", from a
@@ -19,4 +20,4 @@ answers. `template` without a name lists the kinds:
 - `clips`: the best moments cut out of the edited video (no new recording).
 
 If none fits, say so and ask which is closest. The user's own instructions win over the
-template. Never export before the user says go.
+preset. Never export before the user says go.

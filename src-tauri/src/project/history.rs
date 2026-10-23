@@ -152,8 +152,11 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
         (before.captions != after.captions, "Captions"),
         (before.chapters != after.chapters, "Chapters"),
         (before.shorts != after.shorts, "Shorts"),
-        (before.graphics_look != after.graphics_look, "Graphics look"),
-        (before.graphics_brand != after.graphics_brand, "Brand kit"),
+        (before.style != after.style, "Style"),
+        (
+            before.preset != after.preset || before.shorts_preset != after.shorts_preset,
+            "Preset",
+        ),
         (before.short_layout != after.short_layout, "Short layout"),
     ];
     parts.extend(
@@ -1032,7 +1035,7 @@ fn state_path(root: &Path, hash: &str) -> Result<std::path::PathBuf, String> {
 fn state_hash(document: &EditDocument) -> Result<(String, Vec<u8>), String> {
     let mut stored = stored_form(document);
     stored.revision = 0;
-    let json = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec(&crate::preset::stored(&stored)?).map_err(|e| e.to_string())?;
     let hash = hex(&Sha256::digest(&json));
     Ok((hash, json))
 }
@@ -1078,7 +1081,9 @@ fn load_state(root: &Path, hash: &str) -> Result<EditDocument, String> {
         return Err("That step's saved edit exceeds the size limit".into());
     }
     // No migration: a state from an earlier AeroEdits simply cannot be gone back to.
-    let mut document: EditDocument = serde_json::from_slice(&json)
+    let mut document = serde_json::from_slice(&json)
+        .map_err(|e| e.to_string())
+        .and_then(crate::preset::read)
         .map_err(|_| "That step was saved by an earlier AeroEdits and cannot be restored")?;
     document.validate()?;
     document.attach_zoom_ranges();

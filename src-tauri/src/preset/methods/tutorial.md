@@ -1,4 +1,4 @@
-# Template: tutorial
+# Preset: Tutorial
 
 A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, the webcam and zooms
 where they help, no captions, chapters at the end. Run the steps in order, with one line to the
@@ -11,7 +11,7 @@ Two ways to run it:
   user's OK.
 - **Automatic**, when the user says so ("do it automatically", "auto", "no questions",
   "same as last time"), at the start or at any point. You then make each choice yourself: the
-  saved answers if there are any, otherwise the defaults below. You still run each pass's dry
+  preset's choices if there are any, otherwise the defaults below. You still run each pass's dry
   run first, report one line per pass, and stop to ask when a result looks wrong (see step 4).
   Export still waits for the user's go.
 
@@ -26,9 +26,9 @@ answer, else fast):
   that matters. Ask: "Review: fast / thorough (reads every word and checks the joins, slower)".
 <!-- /steps -->
 <!-- auto -->
-You are running it automatically: make each choice yourself (the saved answers, else the
+You are running it automatically: make each choice yourself (the preset's choices, else the
 defaults below), report one line per pass, stop and ask when a pass says "Not applied" or a
-result looks wrong (step 4). The review is fast unless the saved answers say thorough. Export
+result looks wrong (step 4). The review is fast unless the choices say thorough. Export
 still waits for the user's go.
 <!-- /auto -->
 
@@ -70,7 +70,7 @@ For every pass:
 3. Run the pass with the chosen settings, then one line: what it did, length before → after.
 <!-- /steps -->
 
-Automatic: step 3 only, with the saved answers or the defaults and `guard: true` on
+Automatic: step 3 only, with the preset's choices or the defaults and `guard: true` on
 `mouth_noises`, `silence` and `fillers` (the app checks section 4's first and last rules and
 applies nothing when one fails); layouts and zooms apply directly.
 
@@ -141,7 +141,9 @@ After the passes, on the cut edit:
    each with its time and why, at most ten, worst first.
 <!-- /thorough -->
 <!-- steps -->
-After the passes, save the choices with `template_save` (`name: tutorial`), in this shape:
+After the passes, when the user answered differently from the preset's choices, save them as
+its choices with `library` (`kind: preset`, `op: set`, `set: {"choices": {...}}`), in this
+shape (a built-in preset goes into a copy the project then follows):
 
 ```json
 {
@@ -152,7 +154,7 @@ After the passes, save the choices with `template_save` (`name: tutorial`), in t
   "fillers": { "apply": true },
   "webcam": { "keep": true, "focus": true },
   "zooms": { "apply": true, "settings": { "minHoldMs": 5000, "mergeGapMs": 5000, "clickScale": 1.6 } },
-  "graphics": { "apply": false, "brand": "the project's" },
+  "graphics": { "apply": false },
   "export": { "resolution": "1080p", "quality": "high" }
 }
 ```
@@ -178,12 +180,13 @@ watching, never a small word, none on a flat line), after the cuts.
 Graphics come after the cuts, on the final timeline: they play full screen over everything and
 no cut goes through one. A full-screen graphic cuts in and out, never eases; only one laid over
 the full-screen camera eases (the app decides; `graphics` gives the rules with its list). Ask
-whether the user wants graphics (default no in automatic mode unless the saved answers say yes). If yes:
+whether the user wants graphics (default no in automatic mode unless the choices say yes). If yes:
 
 1. `graphics`: the templates, the user's library and their variables. If the renderer is not
-   installed, ask before `graphics_install` (a 200 MB download). `brand_kits`: if the user has
-   kits and the project uses none, ask which (`brand_pick`); the kit then gives every graphic
-   its colours and font, so leave `background`, `text` and `accent` unset.
+   installed, ask before `graphics_install` (a 200 MB download). The project's style
+   (`status`; `library` `kind: style`) gives every graphic its colours, fonts and look, so
+   leave `background`, `text` and `accent` unset. If the user has styles of their own and the
+   project wears a built-in one, ask which (`library` `op: use`).
 2. Read `transcript_get` and propose a short list, one line each with its time, template and
    text. The user's library comes first: an item whose `useWhen` fits the moment beats a
    bundled template (it is how they like it). Otherwise a `title` where a new section starts,
@@ -224,7 +227,7 @@ the sound):
   (the listening list from 3b, or with fast review: the first and last ten seconds and each
   retake cut), with times.
 - **Approved by you:** which passes and proposal batches the user said yes to, and which ran
-  automatically on saved answers.
+  automatically on the preset's choices.
 
 Then **Still open:** what the check left (with times), proposals still waiting in the Agent
 panel, and anything you were unsure about. Any step can be undone from the Agent panel's
@@ -232,5 +235,5 @@ history.
 
 ## 9. Export (ask)
 
-Ask before exporting; on the go, `template` with this `name` and `part: "export"` gives the
+Ask before exporting; on the go, `preset` with this `name` and `part: "export"` gives the
 export steps.

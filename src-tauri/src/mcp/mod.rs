@@ -13,6 +13,8 @@ pub mod clients;
 pub(crate) mod frames;
 pub mod ipc;
 mod layouts;
+mod library;
+mod presets;
 mod propose;
 pub mod skill;
 pub mod storyboard;
@@ -63,7 +65,7 @@ pub trait Host: Send + Sync + 'static {
     fn local_review_ready(&self) -> bool {
         crate::ai::local::ready()
     }
-    /// The app's settings folder; the user's answers to templates are kept in it.
+    /// The app's settings folder.
     fn config_dir(&self) -> std::path::PathBuf {
         crate::transcript::settings::config_dir()
     }
@@ -348,9 +350,9 @@ async fn session(stream: impl ipc::Stream, host: Arc<dyn Host>, stop: Cancellati
 }
 
 /// Kept short: some clients repeat it in front of every tool they look up. The rules come
-/// once, from `template`.
+/// once, from `preset`.
 const INSTRUCTIONS: &str = "AeroEdits edits screen-recorded tutorials, on the project the user \
-has open. For an edit of a video, call `template` first and follow it: it has the rules, the \
+has open. For an edit of a video, call `preset` first and follow it: it has the rules, the \
 steps, what to ask and the export steps; never export before the user says go. The app's \
 actions (scan, transcribe, silence, fillers, zooms, chapters, export, ...) do the work, each as \
 one undo step answering in a line or two. Times are microseconds on the edited timeline. Pass \
@@ -397,13 +399,9 @@ impl rmcp::ServerHandler for Handler {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetPromptResponse, rmcp::ErrorData> {
         self.note_client(&context);
-        skill::prompt_get(
-            &self.host.config_dir(),
-            &request.name,
-            request.arguments.as_ref(),
-        )
-        .map(Into::into)
-        .map_err(|error| rmcp::ErrorData::invalid_params(error, None))
+        skill::prompt_get(&request.name, request.arguments.as_ref())
+            .map(Into::into)
+            .map_err(|error| rmcp::ErrorData::invalid_params(error, None))
     }
 
     async fn call_tool(
@@ -1218,7 +1216,7 @@ mod tests {
         );
         assert_eq!(hello["result"]["serverInfo"]["name"], "aeroedits");
         assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
-        // Short, since some clients repeat it before every tool; the rules come from `template`.
+        // Short, since some clients repeat it before every tool; the rules come from `preset`.
         let instructions = hello["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("never export before the user says go"));
         assert!(instructions.len() < 700, "{}", instructions.len());
@@ -1236,7 +1234,7 @@ mod tests {
         // There is no one-call cleanup: agents run and report one pass at a time.
         assert!(!names.contains(&"cleanup"), "{names:?}");
         assert!(
-            names.contains(&"template") && names.contains(&"scan"),
+            names.contains(&"preset") && names.contains(&"scan"),
             "{names:?}"
         );
         assert!(
@@ -1246,11 +1244,11 @@ mod tests {
         assert!(hello["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("call `template` first"));
+            .contains("call `preset` first"));
         // Templates need no app either.
         let prompts = ask(json!({"jsonrpc": "2.0", "id": 20, "method": "prompts/list"}));
         assert_eq!(
-            prompts["result"]["prompts"][0]["title"], "Tutorial edit",
+            prompts["result"]["prompts"][0]["title"], "Tutorial",
             "{prompts}"
         );
         let prompt = ask(
@@ -1264,7 +1262,7 @@ mod tests {
             message.starts_with(r"Edit the recording C:\Rec\Lesson.aero in AeroEdits"),
             "{prompt}"
         );
-        assert!(message.contains("# Template: tutorial"), "{prompt}");
+        assert!(message.contains("# Preset: Tutorial"), "{prompt}");
         let missing = ask(
             json!({"jsonrpc": "2.0", "id": 22, "method": "prompts/get", "params": {"name": "vlog"}}),
         );
@@ -1361,19 +1359,11 @@ mod tests {
             })
         };
         // Without `args`: what the tool does and takes.
-        let help = run(serde_json::json!({ "tool": "template_save" })).unwrap();
-        assert!(
-            help.starts_with("template_save: Saves") && help.contains("\"answers\""),
-            "{help}"
-        );
-        // With them: it runs as if called directly.
-        let saved = run(serde_json::json!({ "tool": "template_save",
-            "args": { "name": "tutorial", "answers": { "silence": "gentle" } } }))
-        .unwrap();
-        assert!(
-            saved.starts_with("Saved the answers for tutorial"),
-            "{saved}"
-        );
+        let help = run(serde_json::json!({ "tool": "speed" })).unwrap();
+        assert!(help.starts_with("speed: "), "{help}");
+        // With them: it runs as if called directly (here: no project open).
+        let ran = run(serde_json::json!({ "tool": "redo", "args": {} })).unwrap_err();
+        assert_eq!(ran, tools::NO_PROJECT_MESSAGE, "{ran}");
         // Only the tools behind it.
         assert!(run(serde_json::json!({ "tool": "status", "args": {} }))
             .unwrap_err()

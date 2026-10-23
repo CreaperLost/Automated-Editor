@@ -16,11 +16,6 @@ export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   captionMaxWords: 0,
   captionLines: 1,
   captionSizePct: 0,
-  captionStyle: "pop",
-  backgroundType: "project",
-  backgroundColorStart: "#000000",
-  backgroundColorEnd: "#1e1b4b",
-  backgroundPreset: "aurora",
 };
 /** How long a new short lasts. */
 const NEW_SHORT_US = 30_000_000;

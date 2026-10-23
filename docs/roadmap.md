@@ -49,35 +49,28 @@ flowchart LR
 Rerun EVAL-1 from [plans/evaluation.md](plans/evaluation.md) after each cost or quality change.
 
 <a id="org-1"></a>
-### ORG-1 · Presets and styles — L, in phases
+### ORG-1 · Presets and styles — built 23 Oct (all four phases), left: EVAL-1 rerun and review
 
-- **Plan:** [plans/presets-and-styles.md](plans/presets-and-styles.md). **Decided 23 Oct
-  (George):** the app's saved things become four, by one rule: how it looks → **Style**, what
-  the app does → **Preset**, where things sit → **Layout**, only this video → **Project**.
-  Caption position and words per caption are Preset.
-- **Why first:** every item after it (style from references, AI-proposed styles, the rules
-  file, a Gaming preset, "save this workflow", sound) needs a home that is clear to George and
-  to agents; building them on today's eight overlapping stores would make the mess bigger.
-- **Phases:** (1) Style: brand kit, graphics look, caption look and frame look in one; (2)
-  Preset values with built-in Tutorial / Shorts / Clips, the project storing only its changes,
-  "changed here" markers; (3) the agent's method and rules inside the preset (`template` →
-  `preset`); (4) one `library` agent tool replacing the old ones, EVAL-1 rerun.
-- **Absorbs:** STY-1 (style kit), UI-3 (saved settings), AGT-3 (rules file, as the preset's
-  rules), the brand-kit and saved-look tools.
+- **Plan:** [plans/presets-and-styles.md](plans/presets-and-styles.md) (with what was decided while
+  building it, "As built"). What shipped is in [Done](#done).
+- **Left:** George's review of the decisions taken while he was away (listed in the plan); the
+  EVAL-1 rerun (the agents' tools and the method text changed: `template` → `preset`, the brand
+  and look tools → `library`); a real edit with a style of his own (fonts, logo) checked in an
+  export.
 
 ---
 
 ## Next
 
-Rough order, after ORG-1. GFX-5's look, saved looks, the shorts look and bring-in-line shipped
-(22-23 Oct); what is left of it waits on research and on ORG-1's Style, so NOTE-1 and REV-1
-come first: they are the foundations the Later tier builds on.
+Rough order, after ORG-1. GFX-5's look, the shorts look and bring-in-line shipped (22-23 Oct)
+and are part of the Style now; what is left of it waits on research, so NOTE-1 and REV-1 come
+first: they are the foundations the Later tier builds on.
 
 <a id="gfx-5"></a>
 ### GFX-5 · Styles proposed by the agent — S/M, research first, after ORG-1 phase 1
 
-The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#done)); the look
-and saved looks become part of the Style in [ORG-1](#org-1). Left:
+The look, the shorts look and bring-in-line shipped (see [Done](#done)) and are the Style's
+graphics look and 9:16 variant since [ORG-1](#org-1). Left:
 - **AI-built styles: later, research first (George, 23 Oct).** The agent proposes two or three
   styles from a brand and a description in words, each previewed on the video's own
   graphics (the `graphics_look` preview is the building block), and the user picks one.
@@ -120,8 +113,8 @@ and saved looks become part of the Style in [ORG-1](#org-1). Left:
 <a id="agt-3"></a>
 ### AGT-3 · Rules the user owns — folded into ORG-1 (23 Oct)
 
-The rules now live in each preset's method ([ORG-1](#org-1) phase 3), served by `preset`. What
-is left after that phase: the agent **proposing** a rule (with the example that taught it), the
+The rules live in each preset (`rules.md` beside its `method.md`, [ORG-1](#org-1) phase 3, built
+23 Oct), editable in the Preset menu and served by `preset`. What is left: the agent **proposing** a rule (with the example that taught it), the
 user accepting it in the Agent panel, and the agent saying which rule shaped a proposal;
 rejecting one cut never silently changes a rule. Read the three published skills (Christian's
 Editing Skill, Tao's motion skill, Jason's blueprint artifact) before designing that.
@@ -366,8 +359,8 @@ removed 23 Oct 2026: not needed.
 - **UI-2 · Basic and Advanced settings (M).** Inventory every panel's settings first, then split.
   **Was:** backlog #8.
 <a id="ui-3"></a>
-- **UI-3 · Templates (saved settings) — folded into ORG-1 (23 Oct).** Update (save over) was
-  added 23 Oct; the Templates menu is replaced by presets in [ORG-1](#org-1) phase 2.
+- **UI-3 · Templates (saved settings) — done in ORG-1 (23 Oct).** The Templates menu is gone;
+  the Preset menu saves the project's settings into its preset or a new one.
   **Was:** backlog #6.
 
 ### Dependencies
@@ -452,6 +445,36 @@ editor already tolerates both.
 
 Most recent first. Details live in git history and the plans.
 
+- **23 Oct 2026** — **ORG-1 presets and styles, all four phases**
+  ([plans/presets-and-styles.md](plans/presets-and-styles.md)).
+  - **Style** (`src-tauri/src/style/`): brand (background, text, accent and muted colours; title
+    and body fonts, as a family or a file; a logo), the graphics look, the caption look (pop /
+    karaoke / static, weight, emphasis and its colour, text colour, outline, box) and the frame
+    (background, screen corners and shadow, camera border and shadow), plus a 9:16 variant
+    (graphics multiples, caption style, background). Built in: **Light** (today's look) and
+    **Dark**; the user's in `<config>/AeroEdits/styles/<name>/`. A project wears one (one undo
+    step); a graphic may wear another and keep tokens of its own. Nothing of a style is stored
+    in a project: it is put on as the document is drawn, so changing a style redraws every
+    project wearing it. Inspector: a **Style** page (picker and editor, changes save as made;
+    the first change to a built-in makes "My light" and dresses the project in it). Brand kits,
+    saved looks, the Look panel and their commands and folders are gone.
+  - **Preset** (`src-tauri/src/preset/`): edit settings by part (`layout`, `captions`,
+    `zoomSettings`, `audio`, `layouts`), what a new short starts with, the method's choices
+    (formerly saved answers), the default style, the method (`method.md`) and the user's rules
+    (`rules.md`). Built in: **Tutorial**, **Shorts**, **Clips**; the user's in
+    `<config>/AeroEdits/presets/<name>/`. A project follows one (and one for its new shorts) and
+    **stores only what it changed** (`presetChanges` in `project.json` and history states), so a
+    value it never changed follows the preset. "Changed here" chips (click to take one back) in
+    the Video, Captions, Audio and Zoom settings; a **Preset menu** in the top bar (follow
+    another, save changes to the preset, save as new, take every change back, method and
+    rules editor). The Templates menu and `templates.json` are gone.
+  - **Agents:** `template` → `preset` (method, the user's rules, the choices, in one answer);
+    `template_save`, `brand_kits`, `brand_kit_set`, `brand_pick` and `graphics_look` → one
+    `library` tool (`kind` style / preset / layout; `op` list, show, use, set, remove, preview,
+    check, bring_in_line, save, reset); `graphic_set` takes `style` and `look` tokens;
+    `settings` refuses look fields (they are the style's) and its silence levels area is
+    `cleanup`; `status` names the preset, the style and how many values were changed.
+    `cargo test --lib` 605 passed; front-end tests and build pass; EVAL-1 not rerun yet.
 - **23 Oct 2026** — <a id="dlv-1"></a>**DLV-1 subtitle, transcript and audio export.** SRT,
   WebVTT, the transcript as plain text or Markdown (chapters as headings, paragraphs at long
   pauses) and the sound alone as WAV, of the video or any short (`export/files.rs`). Subtitles

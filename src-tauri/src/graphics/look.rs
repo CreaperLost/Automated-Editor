@@ -1,7 +1,7 @@
-//! The video's look: one set of design tokens every graphic in it takes (type, shape, layout,
-//! colour roles and motion), beside the brand kit's colours, font and logo. A project has one
-//! look in its edit document, so choosing or adjusting it is one undo step, and it is part of
-//! every render's hash, so a change restyles every graphic that uses it.
+//! The graphics look: one set of design tokens every graphic takes (type, shape, layout, colour
+//! roles and motion), beside the brand's colours, fonts and logo. It is a part of a style
+//! (`crate::style`), and part of every render's hash, so a change restyles every graphic that
+//! uses it.
 //!
 //! A look is a preset, five global controls that scale it (size, roundness, speed, energy,
 //! density) and any tokens set by hand. At render time it becomes `--look-*` custom properties
@@ -31,7 +31,7 @@ fn default_preset() -> String {
     DEFAULT_PRESET.into()
 }
 
-/// What the edit document keeps of the video's look.
+/// A style's graphics look.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Look {
@@ -56,14 +56,10 @@ pub struct Look {
     /// Tokens set by hand, by name without `--look-` (`radius`, `ease`...), over the rest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tokens: BTreeMap<String, String>,
-    /// How the video's shorts differ from it.
-    #[serde(default)]
-    pub shorts: ShortsLook,
 }
 
-/// A short's graphics take the video's look tuned for a phone: these multiply the video's
-/// controls (1 makes a short look like the video), so a change to the video's look reaches its
-/// shorts too.
+/// On a 9:16 canvas graphics take the look tuned for a phone: these multiply its controls (1
+/// keeps it as it is), so a change to the look reaches the shorts too.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortsLook {
@@ -111,7 +107,6 @@ impl Default for Look {
             energy: 1.0,
             density: 1.0,
             tokens: BTreeMap::new(),
-            shorts: ShortsLook::default(),
         }
     }
 }
@@ -134,27 +129,16 @@ impl Look {
                 return Err(format!("The look's {name} must be {lo} to {hi}"));
             }
         }
-        let (lo, hi) = SHORTS_RANGE;
-        for (name, value) in [
-            ("size", self.shorts.size),
-            ("energy", self.shorts.energy),
-            ("speed", self.shorts.speed),
-        ] {
-            if !(lo..=hi).contains(&value) {
-                return Err(format!("The shorts' {name} must be {lo} to {hi}"));
-            }
-        }
         check_tokens(&self.tokens)
     }
 
-    /// The look a short's graphics take: this one with the shorts' multiples applied, kept
-    /// within the controls' ranges.
-    pub fn for_short(&self) -> Look {
+    /// This look with a 9:16 canvas's multiples applied, kept within the controls' ranges.
+    pub fn scaled(&self, by: &ShortsLook) -> Look {
         let scaled = |v: f32, by: f32, (lo, hi): (f32, f32)| (v * by).clamp(lo, hi);
         Look {
-            size: scaled(self.size, self.shorts.size, SIZE_RANGE),
-            energy: scaled(self.energy, self.shorts.energy, ENERGY_RANGE),
-            speed: scaled(self.speed, self.shorts.speed, SPEED_RANGE),
+            size: scaled(self.size, by.size, SIZE_RANGE),
+            energy: scaled(self.energy, by.energy, ENERGY_RANGE),
+            speed: scaled(self.speed, by.speed, SPEED_RANGE),
             ..self.clone()
         }
     }
@@ -229,7 +213,7 @@ impl Look {
     }
 }
 
-/// The colours the templates and the look fall back to without a brand kit: the app look.
+/// The colours the templates and the look fall back to without a style: the app look.
 pub const BACKGROUND: &str = "#FFFFFF";
 pub const TEXT: &str = "#1D1D1F";
 pub const ACCENT: &str = "#0071E3";
@@ -421,7 +405,7 @@ pub fn check_tokens(tokens: &BTreeMap<String, String>) -> Result<(), String> {
 }
 
 /// `html` with `css` as the last style in its head, so it wins over the composition's own (and
-/// before the brand kit's, which only sets `--brand-*` and the page font).
+/// before the style's, which only sets `--brand-*` and the page font).
 pub fn inject_css(html: &str, css: &str) -> String {
     let block = format!("<style id=\"{STYLE_ID}\">\n{css}</style>\n");
     match html.find("</head>") {
@@ -450,133 +434,29 @@ pub fn presets() -> Vec<PresetView> {
         .collect()
 }
 
-/// A look the user saved by name, app-wide like a brand kit, to use in any project.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SavedLook {
-    pub name: String,
-    pub look: Look,
-}
-
-/// The app's saved looks folder (`AEROEDITS_LOOKS_DIR` overrides it): one JSON file a look.
-pub fn saved_dir() -> std::path::PathBuf {
-    std::env::var_os("AEROEDITS_LOOKS_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| crate::transcript::settings::config_dir().join("looks"))
-}
-
-fn saved_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-    dir.join(format!("{}.json", super::library::slug(name)))
-}
-
-/// Every saved look, by name.
-pub fn saved(dir: &std::path::Path) -> Vec<SavedLook> {
-    let mut out: Vec<SavedLook> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
-        .filter(|s: &SavedLook| s.look.validate().is_ok())
-        .collect();
-    out.sort_by_key(|s| s.name.to_lowercase());
-    out
-}
-
-/// The saved look called `name` (any case).
-pub fn find_saved(dir: &std::path::Path, name: &str) -> Result<SavedLook, String> {
-    let all = saved(dir);
-    let wanted = name.trim();
-    all.iter()
-        .find(|s| s.name.eq_ignore_ascii_case(wanted))
-        .cloned()
-        .ok_or_else(|| {
-            if all.is_empty() {
-                format!("There is no saved look \"{wanted}\" (none are saved)")
-            } else {
-                format!(
-                    "There is no saved look \"{wanted}\" (there are: {})",
-                    all.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
-                )
-            }
-        })
-}
-
-/// Saves `look` as `name`, over a saved look of that name.
-pub fn save(dir: &std::path::Path, name: &str, look: &Look) -> Result<SavedLook, String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 40 {
-        return Err("A saved look needs a name of 1 to 40 characters".into());
-    }
-    look.validate()?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    // Saving over one keeps the name as it was first written.
-    let name = find_saved(dir, name).map_or(name.to_string(), |s| s.name);
-    let item = SavedLook {
-        name,
-        look: look.clone(),
-    };
-    let path = saved_path(dir, &item.name);
-    let text = serde_json::to_string_pretty(&item).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(item)
-}
-
-/// Removes the saved look called `name`. Projects using it keep their own copy.
-pub fn remove_saved(dir: &std::path::Path, name: &str) -> Result<(), String> {
-    let item = find_saved(dir, name)?;
-    let path = saved_path(dir, &item.name);
-    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn a_short_takes_the_videos_look_tuned_and_follows_it() {
+    fn a_tall_canvas_takes_the_look_tuned_and_follows_it() {
         let mut look = Look::default();
-        let short = look.for_short();
+        let by = ShortsLook::default();
+        let short = look.scaled(&by);
         assert_eq!(short.size, 1.15);
         assert_eq!(short.energy, 1.25);
         assert_eq!(short.speed, 1.1);
         assert_eq!(short.roundness, 1.0);
-        // A change to the video's look reaches its shorts, within the controls' ranges.
         look.size = 1.3;
         look.roundness = 2.0;
-        assert_eq!(look.for_short().size, SIZE_RANGE.1);
-        assert_eq!(look.for_short().roundness, 2.0);
-        // Multiples of 1 make a short look like the video.
-        look.shorts = ShortsLook {
+        assert_eq!(look.scaled(&by).size, SIZE_RANGE.1);
+        assert_eq!(look.scaled(&by).roundness, 2.0);
+        let same = ShortsLook {
             size: 1.0,
             energy: 1.0,
             speed: 1.0,
         };
-        assert_eq!(look.for_short().values(), look.values());
-        look.shorts.size = 3.0;
-        assert!(look.validate().is_err());
-    }
-
-    #[test]
-    fn looks_are_saved_app_wide_by_name() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(saved(dir.path()).is_empty());
-        let mut look = Look::default();
-        look.preset = "bold".into();
-        save(dir.path(), "My channel", &look).unwrap();
-        look.roundness = 0.0;
-        // The same name in another case saves over it and keeps its name.
-        save(dir.path(), "my CHANNEL", &look).unwrap();
-        let all = saved(dir.path());
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].name, "My channel");
-        assert_eq!(all[0].look.roundness, 0.0);
-        assert_eq!(find_saved(dir.path(), "my channel").unwrap().look, look);
-        assert!(save(dir.path(), " ", &look).is_err());
-        look.speed = 9.0;
-        assert!(save(dir.path(), "Fast", &look).is_err());
-        remove_saved(dir.path(), "My channel").unwrap();
-        assert!(find_saved(dir.path(), "My channel").is_err());
+        assert_eq!(look.scaled(&same).values(), look.values());
     }
 
     #[test]

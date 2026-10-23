@@ -131,10 +131,7 @@ export interface ZoomKeyframe {
 
 /** How the camera is dressed wherever a layout puts it (where it goes is the layout's). */
 export interface CameraBubbleSettings {
-  borderColor: string;
-  borderWidth: number;
   mirror: boolean;
-  shadow: boolean;
   /** Fade the bubble out while you click, drag, scroll, rest the pointer or type under it. */
   autoHide: boolean;
   /** Line every camera clip up with the face in it. */
@@ -341,15 +338,8 @@ export interface ScreenCrop {
 }
 
 export interface CanvasSettings {
-  backgroundType: "gradient" | "solid" | "wallpaper" | "preset";
-  backgroundPreset: BackgroundPreset;
-  colorStart: string;
-  colorEnd: string;
   screenCrop: ScreenCrop;
   screenScalePct: number; // 40 to 100
-  cornerRadiusPx: number; // 0 to 32
-  shadowBlurPx: number; // 0 to 40
-  shadowOpacity: number; // 0.0 to 1.0
   aspectRatio: "16:9" | "9:16" | "4:3" | "1:1";
   /** Draw the recorded mouse pointer (recordings that left it out of the video). */
   cursorVisible: boolean;
@@ -441,20 +431,6 @@ export interface CaptionSettings {
   offsetPct: number;
   /** Text size, 2 to 15 % of the canvas height. */
   fontSizePct: number;
-  textColor: string;
-  /** How the words come on screen. */
-  style: CaptionStyle;
-  /** Draw each caption's emphasis word in the accent. */
-  emphasis: boolean;
-  /** The emphasis colour; empty or absent takes the brand kit's accent. */
-  emphasisColor?: string;
-  /** Font weight, 100 to 900; 0 or absent takes the look's title weight. */
-  weight?: number;
-  outline: boolean;
-  background: boolean;
-  backgroundColor: string;
-  /** 0 to 1. */
-  backgroundOpacity: number;
   uppercase: boolean;
   /** Most words on screen at once, 1 to 12. */
   maxWords: number;
@@ -467,13 +443,6 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
   position: "bottom",
   offsetPct: 8,
   fontSizePct: 5.5,
-  textColor: "#FFFFFF",
-  style: "karaoke",
-  emphasis: true,
-  outline: true,
-  background: false,
-  backgroundColor: "#000000",
-  backgroundOpacity: 0.55,
   uppercase: false,
   maxWords: 6,
   maxLines: 1,
@@ -482,23 +451,14 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
 export interface EditLayout {
   aspectRatio: string;
   paddingPx: number;
-  backgroundType?: string;
-  colorStart?: string;
-  colorEnd?: string;
-  cornerRadiusPx?: number;
-  shadowBlurPx?: number;
-  shadowOpacity?: number;
+  /** The project's own background image, shown instead of its style's background. */
   wallpaperAsset?: string | null;
-  backgroundPreset?: string;
   screenCropLeft?: number;
   screenCropTop?: number;
   screenCropRight?: number;
   screenCropBottom?: number;
   screenScalePct?: number;
-  webcamBorderColor?: string;
-  webcamBorderWidth?: number;
   webcamMirror?: boolean;
-  webcamShadow?: boolean;
   faceFraming?: boolean;
   /** Camera clips (by clip id) framed by hand, -1 to 1 each way from the centre. */
   cameraClips?: Record<string, { offsetX: number; offsetY: number }>;
@@ -539,17 +499,7 @@ export function presetBackgroundCss(key: BackgroundPreset): string {
 
 export function canvasFromLayout(layout: EditLayout): CanvasSettings {
   const aspect = layout.aspectRatio;
-  const preset = BACKGROUND_PRESETS.find((p) => p.key === layout.backgroundPreset);
   return {
-    backgroundType:
-      layout.backgroundType === "solid" ||
-      layout.backgroundType === "wallpaper" ||
-      layout.backgroundType === "preset"
-        ? layout.backgroundType
-        : "gradient",
-    backgroundPreset: preset?.key ?? "aurora",
-    colorStart: layout.colorStart ?? "#312e81",
-    colorEnd: layout.colorEnd ?? "#0f172a",
     screenCrop: {
       left: layout.screenCropLeft ?? 0,
       top: layout.screenCropTop ?? 0,
@@ -564,9 +514,6 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
         (layout.screenScalePct ?? 100) * Math.max(0, (1080 - 2 * (layout.paddingPx ?? 0)) / 1080),
       ),
     ),
-    cornerRadiusPx: layout.cornerRadiusPx ?? 0,
-    shadowBlurPx: layout.shadowBlurPx ?? 0,
-    shadowOpacity: layout.shadowOpacity ?? 0.5,
     aspectRatio:
       aspect === "9:16" || aspect === "4:3" || aspect === "1:1" || aspect === "16:9"
         ? aspect
@@ -582,10 +529,7 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
 
 export function cameraFromLayout(layout: EditLayout): CameraBubbleSettings {
   return {
-    borderColor: layout.webcamBorderColor ?? "#6366f1",
-    borderWidth: layout.webcamBorderWidth ?? 0,
     mirror: layout.webcamMirror ?? true,
-    shadow: layout.webcamShadow ?? false,
     autoHide: layout.webcamAutoHide ?? true,
     faceFraming: layout.faceFraming ?? true,
   };
@@ -602,23 +546,13 @@ export function layoutFromSettings(
   return {
     aspectRatio: canvas.aspectRatio,
     paddingPx: 0,
-    backgroundType: canvas.backgroundType,
-    backgroundPreset: canvas.backgroundPreset,
     screenCropLeft: canvas.screenCrop.left,
     screenCropTop: canvas.screenCrop.top,
     screenCropRight: canvas.screenCrop.right,
     screenCropBottom: canvas.screenCrop.bottom,
     screenScalePct: canvas.screenScalePct,
-    colorStart: canvas.colorStart,
-    colorEnd: canvas.colorEnd,
-    cornerRadiusPx: canvas.cornerRadiusPx,
-    shadowBlurPx: canvas.shadowBlurPx,
-    shadowOpacity: canvas.shadowOpacity,
     wallpaperAsset: wallpaperAsset ?? undefined,
-    webcamBorderColor: camera.borderColor,
-    webcamBorderWidth: camera.borderWidth,
     webcamMirror: camera.mirror,
-    webcamShadow: camera.shadow,
     faceFraming: camera.faceFraming,
     cameraClips: current?.cameraClips,
     cursorVisible: canvas.cursorVisible,
@@ -819,45 +753,13 @@ export interface GraphicView {
   variables: Record<string, unknown>;
   declarations: GraphicVariable[];
   render: GraphicRenderState;
-  /** Its own brand kit: null follows the project's default, "none" is no kit. */
-  brand: string | null;
+  /** Its own style: null follows the project's. */
+  style: string | null;
+  /** Graphics look tokens of its own over its style's. */
+  look?: Record<string, string>;
 }
 
-/** An app-level brand kit the graphics take their colours, font and logo from. */
-export interface BrandKit {
-  name: string;
-  background: string;
-  text: string;
-  accent: string;
-  /** A font family; empty keeps each graphic's own. */
-  font: string;
-  /** The kit's own font and logo file names. */
-  fontFile: string | null;
-  logo: string | null;
-  logoPath: string | null;
-  folder: string;
-}
-
-/** A kit to save: `logo`/`fontFile` are the kit's own file (kept), a full path to copy, or null. */
-export interface BrandKitInput {
-  name: string;
-  previous?: string | null;
-  background: string;
-  text: string;
-  accent: string;
-  font: string;
-  fontFile: string | null;
-  logo: string | null;
-}
-
-export interface BrandsView {
-  kits: BrandKit[];
-  /** The open project's default kit (it may have been removed since). */
-  projectDefault: string | null;
-  folder: string;
-}
-
-/** The video's look: one set of design tokens every graphic takes (src-tauri graphics/look.rs). */
+/** A style's graphics look: design tokens every graphic takes (src-tauri graphics/look.rs). */
 export interface GraphicsLook {
   /** app, calm or bold. */
   preset: string;
@@ -869,8 +771,6 @@ export interface GraphicsLook {
   density: number;
   /** Tokens set by hand, by name without `--look-`. */
   tokens?: Record<string, string>;
-  /** A short's graphics take this look times these (1 makes a short like the video). */
-  shorts?: ShortsLook;
 }
 
 export interface ShortsLook {
@@ -882,16 +782,10 @@ export interface ShortsLook {
 export const DEFAULT_SHORTS_LOOK: ShortsLook = { size: 1.15, energy: 1.25, speed: 1.1 };
 
 export const SHORTS_LOOK_CONTROLS = [
-  { id: "size", label: "Size", hint: "Type sizes in shorts, times the video's" },
-  { id: "energy", label: "Energy", hint: "How far things travel in shorts, times the video's" },
-  { id: "speed", label: "Speed", hint: "How fast things come in in shorts, times the video's" },
+  { id: "size", label: "Size", hint: "Type sizes at 9:16, times the style's" },
+  { id: "energy", label: "Energy", hint: "How far things travel at 9:16, times the style's" },
+  { id: "speed", label: "Speed", hint: "How fast things come in at 9:16, times the style's" },
 ] as const;
-
-/** A look saved by name for every project. */
-export interface SavedLook {
-  name: string;
-  look: GraphicsLook;
-}
 
 /** What bringing one graphic in line with the look changes (src-tauri graphics/restyle.rs). */
 export interface InLinePlan {
@@ -917,15 +811,127 @@ export interface LookPreset {
   description: string;
 }
 
-export interface LookView {
-  look: GraphicsLook;
-  presets: LookPreset[];
-  /** Every token's value for the look as it is. */
-  tokens: Record<string, string>;
-  /** Graphics with tokens of their own: [name, the tokens]. */
-  overrides: [string, string[]][];
-  /** The looks the user saved, app-wide. */
-  saved: SavedLook[];
+/** A background a style's frame draws (a project's wallpaper image wins over it). */
+export interface StyleBackground {
+  type: "solid" | "gradient" | "preset";
+  preset: BackgroundPreset;
+  colorStart: string;
+  colorEnd: string;
+}
+
+export interface StyleFont {
+  /** A font family, like Inter; empty is the system's. */
+  family: string;
+  /** The style's own font file, or a full path to copy in when saving. */
+  file?: string | null;
+}
+
+/** How a video looks: brand, graphics, captions, frame and the 9:16 variant (src-tauri style/mod.rs). */
+export interface Style {
+  brand: {
+    colors: { background: string; text: string; accent: string; muted: string };
+    fonts: { title: StyleFont; body: StyleFont };
+    /** The style's own logo file, or a full path to copy in when saving. */
+    logo?: string | null;
+  };
+  graphics: GraphicsLook;
+  captions: {
+    style: CaptionStyle;
+    /** 100 to 900; 0 takes the graphics' title weight. */
+    weight: number;
+    emphasis: boolean;
+    /** Empty takes the brand's accent. */
+    emphasisColor: string;
+    textColor: string;
+    outline: boolean;
+    box: { on: boolean; color: string; opacity: number };
+  };
+  frame: {
+    background: StyleBackground;
+    screen: { cornerRadiusPx: number; shadowBlurPx: number; shadowOpacity: number };
+    camera: { borderColor: string; borderWidth: number; shadow: boolean };
+  };
+  portrait: {
+    graphics: ShortsLook;
+    /** Absent keeps the captions' own. */
+    captionStyle?: CaptionStyle | null;
+    /** Absent keeps the frame's. */
+    background?: StyleBackground | null;
+  };
+}
+
+export interface StyleView {
+  name: string;
+  builtin: boolean;
+  style: Style;
+  folder: string | null;
+  logoPath: string | null;
+}
+
+export interface StylesView {
+  styles: StyleView[];
+  /** The open project's style. */
+  projectStyle: string | null;
+  lookPresets: LookPreset[];
+  tokenNames: string[];
+  backgrounds: BackgroundPreset[];
+  /** The project's graphics with a style or tokens of their own: [name, style, tokens]. */
+  own: [string, string | null, string[]][];
+  folder: string;
+}
+
+/** What the app and the agent do for one kind of video (src-tauri preset/mod.rs). */
+export interface Preset {
+  description: string;
+  /** The style a project made with it wears. */
+  style: string;
+  /** Edit settings by part (layout, captions, zoomSettings, audio, layouts): only what differs from the app's. */
+  values: Record<string, Record<string, unknown>>;
+  /** What a new short starts with. */
+  short: Record<string, unknown>;
+  /** The choices the agent's method asks about (cleanup, review depth, graphics, export). */
+  choices: Record<string, unknown>;
+}
+
+export interface PresetView {
+  name: string;
+  builtin: boolean;
+  preset: Preset;
+  /** The agent's steps (Markdown). */
+  method: string;
+  /** The user's own rules for this kind of video (Markdown). */
+  rules: string;
+  folder: string | null;
+}
+
+/** A setting's part of the edit, as presets name them. */
+export type PresetPart = "layout" | "captions" | "zoomSettings" | "audio" | "layouts";
+
+export interface PresetsView {
+  presets: PresetView[];
+  projectPreset: string | null;
+  shortsPreset: string | null;
+  /** What the open project changed from its preset, by part (its own files and clips left out). */
+  changes: Partial<Record<PresetPart, Record<string, unknown>>>;
+  changed: number;
+  /** The preset's value of every setting, by part. */
+  inherited: Partial<Record<PresetPart, Record<string, unknown>>>;
+  folder: string;
+}
+
+export interface PresetInput {
+  name: string;
+  previous?: string | null;
+  preset: Preset;
+  method: string;
+  rules: string;
+}
+
+/** A style to save: `previous` renames one (a built-in is copied, never changed). */
+export interface StyleInput {
+  name: string;
+  previous?: string | null;
+  style: Style;
 }
 
 export interface LookStill {
@@ -1102,22 +1108,6 @@ export type SequenceEdit =
   | { kind: "setSpeed"; clipIds: string[]; speed: number; range?: { startUs: number; endUs: number } | null; ripple?: boolean | null }
   /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
   | { kind: "restoreCuts"; clipIds: string[] };
-
-/** Saved settings any project can take on (src-tauri/src/templates.rs). */
-export interface Template {
-  id: string;
-  name: string;
-  layout: EditLayout;
-  captions: CaptionSettings;
-  zoomSettings: ZoomSettings;
-  /** The video's base layout and how its sections are picked. */
-  base: Layout;
-  pick: PickSettings;
-  graphicsBrand?: string;
-  /** A short's look and base layout; absent when saved without a short. */
-  shortLook?: ShortLayout;
-  shortBase?: Layout;
-}
 
 /** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
 export interface OpenedProject {
@@ -1688,13 +1678,6 @@ export interface ShortLayout {
   captionLines: number;
   /** Caption size as a percentage of the short's height; 0 uses the editor's. */
   captionSizePct: number;
-  /** How this short's caption words come on screen; null takes the video's. */
-  captionStyle?: CaptionStyle | null;
-  /** "project" (the video's own background), "solid", "gradient", "preset" or "wallpaper". */
-  backgroundType: "project" | "solid" | "gradient" | "preset" | "wallpaper";
-  backgroundColorStart: string;
-  backgroundColorEnd: string;
-  backgroundPreset: string;
   /** Where each graphic plays, by clip id; one not listed plays full frame. */
   graphicSlots?: Record<string, GraphicSlot>;
 }

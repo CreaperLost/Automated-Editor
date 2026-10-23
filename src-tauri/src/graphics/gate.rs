@@ -1,7 +1,7 @@
 //! The check a graphic passes to go to the library as a template, run by the app with no model.
 //!
 //! A general template takes any text, fits a 16:9 video and a 9:16 short, follows the length of
-//! its clip, takes the brand kit's colours and needs no network. The gate looks at the graphic's
+//! its clip, takes the style's colours and needs no network. The gate looks at the graphic's
 //! files, then at staged copies of it rendered through the pinned HyperFrames:
 //! - `hyperframes check` (lint, runtime errors, layout overflow, contrast) at 16:9 and 9:16,
 //!   with the graphic's own values and again with long test values for every string variable,
@@ -171,7 +171,7 @@ fn load(cache: &Path, hash: &str) -> Option<Report> {
 // ---------------------------------------------------------------------------------------
 // What the files say.
 
-/// The checks made on the files alone: no network, the brand kit's colour variables, a
+/// The checks made on the files alone: no network, the style's colour variables, a
 /// portrait block, no fixed text.
 pub fn static_checks(
     html: &str,
@@ -220,7 +220,7 @@ pub fn static_checks(
             "Brand kit colours",
             Status::Fail,
             format!(
-                "declare {} as color variables and use them for every colour, so a brand kit applies",
+                "declare {} as color variables and use them for every colour, so a style applies",
                 missing.join(", ")
             ),
         )
@@ -308,7 +308,7 @@ fn network_refs(files: &[(String, String)]) -> Vec<String> {
     found
 }
 
-/// Whether the graphic takes the video's look: a colour of its own fails (the brand kit must
+/// Whether the graphic takes the video's look: a colour of its own fails (the style must
 /// reach every colour); a font, corner radius or animation timing of its own is a warning (the
 /// look sets them for every graphic at once; `graphic_templatize` turns them into tokens).
 fn look_check(html: &str) -> Check {
@@ -349,7 +349,7 @@ fn look_check(html: &str) -> Check {
             "look",
             "The video's look",
             Status::Pass,
-            "colours from the brand kit, type, corners and motion from the look",
+            "colours from the style, type, corners and motion from the look",
         )
     }
 }
@@ -791,7 +791,7 @@ pub fn run(
             contrast: true,
             entrance: super::Entrance::Ease,
             split: false,
-            at:times(SHORT_US, &[0.0, 0.5, 0.75], true),
+            at: times(SHORT_US, &[0.0, 0.5, 0.75], true),
         },
         Run {
             key: "t".into(),
@@ -802,7 +802,7 @@ pub fn run(
             contrast: true,
             entrance: super::Entrance::Ease,
             split: false,
-            at:times(LONG_US, &[0.0, 0.5, 0.75], true),
+            at: times(LONG_US, &[0.0, 0.5, 0.75], true),
         },
         Run {
             key: "wl".into(),
@@ -813,7 +813,7 @@ pub fn run(
             contrast: false,
             entrance: super::Entrance::Ease,
             split: false,
-            at:times(SHORT_US, &[0.5], false),
+            at: times(SHORT_US, &[0.5], false),
         },
         Run {
             key: "tl".into(),
@@ -824,7 +824,7 @@ pub fn run(
             contrast: false,
             entrance: super::Entrance::Ease,
             split: false,
-            at:times(LONG_US, &[0.5], false),
+            at: times(LONG_US, &[0.5], false),
         },
     ];
     for (n, decl) in strings.iter().enumerate() {
@@ -840,7 +840,7 @@ pub fn run(
             contrast: false,
             entrance: super::Entrance::Ease,
             split: false,
-            at:times(SHORT_US, &[0.5, 0.75], false),
+            at: times(SHORT_US, &[0.5, 0.75], false),
         });
     }
     // As the app places it everywhere but over the full-screen camera: cut in and out.
