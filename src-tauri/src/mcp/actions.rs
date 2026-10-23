@@ -21,8 +21,9 @@ pub static ACTIONS: [ToolDef; 42] = [
         description: "Where the open project stands, in a few lines: length, sounds and whether \
             they are transcribed, mouth noises muted, zooms, layouts, captions, chapters, \
             shorts, whether each camera has a face track for framing shorts, and anything \
-            running. Call it first and after a cleanup.",
-        schema: schema::<NoArgs>,
+            running. Call it first and after a cleanup. With no project open, or `readiness`, \
+            it also says what this computer is ready for (keys, models, renderer).",
+        schema: schema::<StatusArgs>,
         read_only: true,
         run: status,
     },
@@ -707,9 +708,163 @@ pub(super) fn plural(n: usize, one: &str) -> String {
 // ---------------------------------------------------------------------------------------
 // Project.
 
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusArgs {
+    /// Also say what this computer is ready for: app version, keys set, models and runtimes
+    /// installed, and what is unavailable and why. Always given when no project is open.
+    #[serde(default)]
+    pub readiness: bool,
+}
+
 fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
-    text(status_text(ctx)?)
+    let args: StatusArgs = params(args)?;
+    let project = match status_text(ctx) {
+        Ok(lines) => lines,
+        Err(error) if error == super::tools::NO_PROJECT_MESSAGE => {
+            return text(format!(
+                "No project is open: `open` or `create` one.\n{}",
+                readiness_text()
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    text(if args.readiness {
+        format!("{project}\n{}", readiness_text())
+    } else {
+        project
+    })
+}
+
+/// What this computer is ready for, a line a part: what's missing says why and where to fix it.
+fn readiness_text() -> String {
+    let mut lines = vec![format!(
+        "Readiness: AeroEdits {}{}; agents reach it through this same program ({}).",
+        env!("CARGO_PKG_VERSION"),
+        if cfg!(debug_assertions) {
+            " (development build)"
+        } else {
+            ""
+        },
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "path unknown".into()),
+    )];
+    let view = tc::transcript_settings_get_impl();
+    let key = |source: &Option<String>| if source.is_some() { "key set" } else { "no key" };
+    lines.push(format!(
+        "Transcription online: ElevenLabs {}, OpenRouter {}{}.",
+        key(&view.elevenlabs_key_source),
+        key(&view.openrouter_key_source),
+        match not_ready(&view, crate::transcript::ProviderKind::ElevenLabs) {
+            Some(why) => format!(" ({why}; Greek needs one)"),
+            None => String::new(),
+        }
+    ));
+    lines.push(format!(
+        "Transcription local (Parakeet, English): {}.",
+        match not_ready(&view, crate::transcript::ProviderKind::Parakeet) {
+            None => "ready".to_string(),
+            Some(why) => format!("not ready: {why}"),
+        }
+    ));
+    if crate::cuda::wanted() {
+        lines.push(format!(
+            "GPU pack (CUDA, speeds up Parakeet): {}.",
+            if crate::cuda::present(&crate::cuda::default_dir()) {
+                "installed".to_string()
+            } else if !crate::cuda::nvidia_driver() {
+                "not needed: no NVIDIA graphics card driver".to_string()
+            } else {
+                format!(
+                    "not installed ({} MB download, Transcription settings in the app); \
+                     Parakeet runs on the CPU meanwhile",
+                    crate::cuda::download_bytes() / 1_000_000
+                )
+            }
+        ));
+    }
+    let ai = tc::ai_settings_get_impl();
+    let (provider, ai_key) = match ai.settings.provider {
+        crate::ai::AiProvider::OpenAi => ("OpenAI", &ai.openai_key_source),
+        crate::ai::AiProvider::OpenRouter => ("OpenRouter", &ai.openrouter_key_source),
+    };
+    lines.push(format!(
+        "AI key ({provider}): {}.",
+        if ai_key.is_some() {
+            "set, so chapters, shorts and the filler review can run"
+        } else {
+            "none, so no chapters or shorts from the app; you review fillers yourself"
+        }
+    ));
+    lines.push(format!(
+        "Local filler review model: {}.",
+        if !crate::ai::local::compiled_in() {
+            "not part of this build"
+        } else if crate::ai::local::ready() {
+            "ready"
+        } else {
+            "not downloaded (AI settings in the app)"
+        }
+    ));
+    lines.push(format!(
+        "Face model (framing shorts): {}.",
+        if !crate::face::yunet::compiled_in() {
+            "not part of this build"
+        } else if crate::face::yunet::model_present(&crate::face::yunet::default_model_dir()) {
+            "ready"
+        } else {
+            "downloads by itself the first time faces are tracked"
+        }
+    ));
+    let graphics = crate::graphics::runtime::status();
+    lines.push(format!(
+        "Graphics renderer (HyperFrames {}): {}.",
+        graphics.hyperframes,
+        if graphics.installed {
+            "installed".to_string()
+        } else if graphics.outdated {
+            "needs an update: `graphics_install`".to_string()
+        } else {
+            format!(
+                "not installed: `graphics_install` (about {} MB)",
+                graphics.download_mb
+            )
+        }
+    ));
+    lines.push(format!(
+        "FFmpeg: {}.",
+        if crate::media::ffmpeg::available() {
+            "found"
+        } else {
+            "missing, so nothing can be imported or exported (reinstall the app)"
+        }
+    ));
+    let skills: Vec<String> = super::skill::states()
+        .into_iter()
+        .filter(|s| s.available)
+        .map(|s| {
+            format!(
+                "{} {}",
+                match s.home {
+                    super::skill::SkillHome::ClaudeCode => "Claude Code",
+                    super::skill::SkillHome::Codex => "Codex",
+                },
+                match (s.installed, s.current) {
+                    (true, true) => "installed",
+                    (true, false) => "installed but from another version: reinstall it",
+                    _ => "not installed",
+                }
+            )
+        })
+        .collect();
+    if !skills.is_empty() {
+        lines.push(format!(
+            "Agent skill (Agent settings in the app): {}.",
+            skills.join(", ")
+        ));
+    }
+    lines.join("\n")
 }
 
 fn status_text(ctx: &Ctx) -> Result<String, String> {

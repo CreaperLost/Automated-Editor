@@ -1067,13 +1067,29 @@ mod tests {
                 }
                 // These work without a project open (and installing would download).
                 "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
-                "open" | "create" | "export_status" | "template" | "template_save" | "graphics"
+                "open" | "create" | "status" | "export_status" | "template" | "template_save"
+                | "graphics"
                 | "graphics_install" | "brand_kits" | "brand_kit_set" | "library_remove"
                 | "more" => continue,
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();
             assert_eq!(error, NO_PROJECT_MESSAGE, "{}", tool.name);
+        }
+        // Status says what the computer is ready for instead.
+        let Output::Text(status) = (find("status").unwrap().run)(&ctx, json!({})).unwrap().remove(0)
+        else {
+            panic!("status answers in text");
+        };
+        for part in [
+            "No project is open",
+            "Readiness: AeroEdits ",
+            "Transcription local (Parakeet, English): ",
+            "AI key (",
+            "Graphics renderer (HyperFrames ",
+            "FFmpeg: ",
+        ] {
+            assert!(status.contains(part), "{part} missing: {status}");
         }
         assert!(params::<FrameParams>(json!({ "atUs": "soon" })).is_err());
     }
