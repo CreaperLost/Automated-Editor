@@ -66,6 +66,8 @@ import {
   GraphicTemplate,
   GraphicUpdated,
   GraphicView,
+  CleanupSettings,
+  ExportPreferences,
   LookStill,
   PresetInput,
   PresetPart,
@@ -532,6 +534,14 @@ export const api = {
     invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null }),
   presetSave: (input: PresetInput) => invokeTauri<PresetView>("preset_save", { input }),
   presetRemove: (name: string) => invokeTauri<void>("preset_remove", { name }),
+  /** Renames one of the user's presets; projects following it keep following it. */
+  presetRename: (name: string, to: string) => invokeTauri<PresetView>("preset_rename", { name, to }),
+  /** What the project's cleanup passes start from; one undo step. */
+  projectCleanupSet: (projectHandle: string, expectedRevision: number, cleanup: CleanupSettings) =>
+    invokeTauri<OpenedProject>("project_cleanup_set", { projectHandle, expectedRevision, cleanup }),
+  /** What the project's Export dialog starts with; one undo step. */
+  projectExportSet: (projectHandle: string, expectedRevision: number, exportPreferences: ExportPreferences) =>
+    invokeTauri<OpenedProject>("project_export_set", { projectHandle, expectedRevision, export: exportPreferences }),
   /** Every style and, with a project, its style. */
   styles: (projectHandle?: string) => invokeTauri<StylesView>("styles", { projectHandle: projectHandle ?? null }),
   /** Saves a style app-wide (new, changed, renamed, or a copy of a built-in). */

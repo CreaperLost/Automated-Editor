@@ -181,8 +181,9 @@ pub static ACTIONS: [ToolDef; 38] = [
         description: "Reads or changes this project's settings (changes from its preset; \
             `library` `kind: preset`). `area`: captions (on, position, size, words), layout \
             (canvas, screen size and crop, cursor, `faceFraming`; where things go is `layouts`; \
-            how it looks is the style's), audio, zoom, transcription, ai, export, cleanup (the \
-            cleanup levels). Without `set` it shows the current values; `set` is a JSON object of \
+            how it looks is the style's), audio, zoom, cleanup (silence, gap and mouth-noise \
+            levels the passes start from), export (resolution, fps, quality), transcription, \
+            ai. Without `set` it shows the current values; `set` is a JSON object of \
             just the fields to change (nested objects merge). \
             Telemetry polish: layout `webcamAutoHide` (on by default; the bubble fades while work \
             is under it), `windowCrop` (on by default) with `windowCropPaddingPct` and \
@@ -1034,16 +1035,20 @@ pub struct ScanArgs {
 /// What the recording has and what each pass would do, for the questions a method asks.
 fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ScanArgs = params(args)?;
-    let preset = args.preset.unwrap_or_default();
+    // A level asked for, else the project's own levels.
+    let preset = args.preset;
     let (mut lines, transcribed, cameras, mouse) =
         with_reader(ctx.state, |reader| {
             let document = reader.document();
             let all = sounds(reader);
             let mut lines = vec![format!(
-                "Scan of \"{}\", {} long, measured with the {} preset; nothing was changed.",
+                "Scan of \"{}\", {} long, measured with {}; nothing was changed.",
                 reader.summary.name,
                 clock(document.duration_us()),
-                one_line(&preset).trim_matches('"'),
+                match preset {
+                    Some(level) => format!("the {} level", one_line(&level).trim_matches('"')),
+                    None => "the project's cleanup settings".into(),
+                },
             )];
             let describe = |s: &Sound| {
                 let mut notes = vec![if s.transcribed {
@@ -1161,7 +1166,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         run_noises(
             ctx,
             NoiseArgs {
-                sensitivity: Some(preset.noise_sensitivity()),
+                sensitivity: preset.map(Preset::noise_sensitivity),
                 apply: dry,
                 ..Default::default()
             },
@@ -1173,7 +1178,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         run_silence(
             ctx,
             SilenceArgs {
-                preset: Some(preset),
+                preset,
                 apply: dry,
                 ..Default::default()
             },
@@ -1187,7 +1192,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 ctx,
                 SilenceArgs {
                     mode: SilenceMode::Gaps,
-                    preset: Some(preset),
+                    preset,
                     apply: dry,
                     ..Default::default()
                 },
@@ -1771,7 +1776,12 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
         before.handle.clone(),
         key.clone(),
         crate::dsp::noises::NoiseConfig {
-            sensitivity: args.sensitivity.unwrap_or(0.5),
+            sensitivity: match args.sensitivity {
+                Some(sensitivity) => sensitivity,
+                None => with_reader(ctx.state, |reader| {
+                    Ok(reader.document().cleanup.mouth_noise_sensitivity)
+                })?,
+            },
             padding_ms: args.padding_ms.unwrap_or(20),
         },
         args.short.clone(),
@@ -1959,7 +1969,29 @@ const ALL_SPEECH: &str = "speech";
 
 fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let preset = args.preset.unwrap_or_default();
+    // A level asked for, else the project's own (from its preset unless changed there).
+    let ours = with_reader(ctx.state, |reader| Ok(reader.document().cleanup.clone()))?;
+    let levels = match args.preset {
+        Some(preset) => {
+            let (threshold_db, min_duration_ms, padding_ms) = preset.silence();
+            let (gap_min, gap_padding, refine) = preset.gaps();
+            crate::preset::settings::CleanupSettings {
+                silence: crate::preset::settings::SilenceLevel {
+                    threshold_db,
+                    min_duration_ms,
+                    padding_ms,
+                },
+                gaps: crate::preset::settings::GapLevel {
+                    min_duration_ms: gap_min,
+                    padding_ms: gap_padding,
+                    refine_word_edges: refine,
+                    edge_threshold_db: ours.gaps.edge_threshold_db,
+                },
+                ..ours
+            }
+        }
+        None => ours,
+    };
     let short = args
         .short
         .as_deref()
@@ -1968,11 +2000,11 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
     let short = short.as_deref();
     let (result, described) = match args.mode {
         SilenceMode::Silence => {
-            let (threshold, min, padding) = preset.silence();
+            let level = &levels.silence;
             let config = crate::dsp::SilenceConfig {
-                threshold_db: args.threshold_db.unwrap_or(threshold),
-                min_duration_ms: args.min_duration_ms.unwrap_or(min),
-                padding_ms: args.padding_ms.unwrap_or(padding),
+                threshold_db: args.threshold_db.unwrap_or(level.threshold_db),
+                min_duration_ms: args.min_duration_ms.unwrap_or(level.min_duration_ms),
+                padding_ms: args.padding_ms.unwrap_or(level.padding_ms),
                 auto_level: args.auto_level,
                 window_ms: None,
                 step_ms: None,
@@ -2027,12 +2059,12 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
             (result, described)
         }
         SilenceMode::Gaps => {
-            let (min, padding, refine) = preset.gaps();
+            let level = &levels.gaps;
             let config = crate::transcript::pauses::TranscriptGapConfig {
-                min_duration_ms: args.min_duration_ms.unwrap_or(min),
-                padding_ms: args.padding_ms.unwrap_or(padding),
-                refine_word_edges: args.refine_word_edges.unwrap_or(refine),
-                edge_threshold_db: args.edge_threshold_db.unwrap_or(-42.0),
+                min_duration_ms: args.min_duration_ms.unwrap_or(level.min_duration_ms),
+                padding_ms: args.padding_ms.unwrap_or(level.padding_ms),
+                refine_word_edges: args.refine_word_edges.unwrap_or(level.refine_word_edges),
+                edge_threshold_db: args.edge_threshold_db.unwrap_or(level.edge_threshold_db),
                 keep_sound_events: args.keep_sound_events.unwrap_or(false),
             };
             // Every microphone: each needs its transcript, which the pass checks.
@@ -2906,11 +2938,7 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     let before = opened(ctx);
     match args.area {
-        Area::Cleanup | Area::Export => {
-            return Err(format!(
-                "{name} cannot be set here: pass these values to the actions instead"
-            ))
-        }
+
         Area::Transcription => {
             let next = patched(&name, &tc::transcript_settings_get_impl().settings, &patch)?;
             tc::transcript_settings_set_impl(next)?;
@@ -2940,6 +2968,14 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 Area::Zoom => {
                     let next = patched(&name, &document.zoom_settings, &patch)?;
                     commands::project_zoom_settings_set_impl(ctx.state, handle, revision, next)?;
+                }
+                Area::Cleanup => {
+                    let next = patched(&name, &document.cleanup, &patch)?;
+                    commands::preset::project_cleanup_set_impl(ctx.state, handle, revision, next)?;
+                }
+                Area::Export => {
+                    let next = patched(&name, &document.export, &patch)?;
+                    commands::preset::project_export_set_impl(ctx.state, handle, revision, next)?;
                 }
                 _ => unreachable!("handled above"),
             }
@@ -3010,6 +3046,7 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
         Area::Transcription => value(&tc::transcript_settings_get_impl().settings),
         Area::Ai => value(&tc::ai_settings_get_impl().settings),
         Area::Cleanup => {
+            let ours = with_reader(ctx.state, |reader| Ok(value(&reader.document().cleanup)))?;
             let presets: Vec<Value> = [Preset::Gentle, Preset::Balanced, Preset::Tight, Preset::Aggressive]
                 .iter()
                 .map(|preset| {
@@ -3023,12 +3060,9 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
                     })
                 })
                 .collect();
-            Value::Array(presets)
+            json!({ "project": ours, "levels": presets })
         }
-        Area::Export => {
-            let defaults = export_defaults(ctx)?;
-            value(&defaults)
-        }
+        Area::Export => with_reader(ctx.state, |reader| Ok(value(&reader.document().export)))?,
         area => with_reader(ctx.state, |reader| {
             let document = reader.document();
             Ok(match area {
@@ -4052,15 +4086,11 @@ pub struct ExportArgs {
     pub file: Option<crate::export::files::FileKind>,
 }
 
+/// The project's export settings (from its preset unless changed here).
 fn export_defaults(ctx: &Ctx) -> Result<crate::export::ExportSettings, String> {
     with_reader(ctx.state, |reader| {
-        let (width, height) = reader.document().layout.preview_dimensions()?;
-        Ok(crate::export::ExportSettings {
-            width,
-            height,
-            fps: reader.summary.fps,
-            ..Default::default()
-        })
+        let document = reader.document();
+        document.export.settings(&document.layout)
     })
 }
 
@@ -6707,7 +6737,7 @@ mod tests {
         let has = |part: &str| assert!(report.contains(part), "{part} in:\n{report}");
         assert!(
             report
-                .starts_with("Scan of \"Lesson\", 0:04.00 long, measured with the balanced preset"),
+                .starts_with("Scan of \"Lesson\", 0:04.00 long, measured with the project's cleanup settings"),
             "{report}"
         );
         has(&format!("Microphones: 1, {key} (transcribed)."));
@@ -6812,8 +6842,19 @@ mod tests {
             "{presets}"
         );
         let export = call(&ctx, "settings", json!({ "area": "export" })).unwrap();
-        assert!(export.contains("\"width\":1920"), "{export}");
-        assert!(call(&ctx, "settings", json!({ "area": "cleanup", "set": {} })).is_err());
+        assert!(export.contains("\"resolution\":\"1080p\""), "{export}");
+        // The project's cleanup and export settings can be changed, one undo step each.
+        let set = call(
+            &ctx,
+            "settings",
+            json!({ "area": "cleanup", "set": { "silence": { "paddingMs": 60 } } }),
+        )
+        .unwrap();
+        assert!(set.contains("\"paddingMs\":60"), "{set}");
+        let set = call(&ctx, "settings", json!({ "area": "export", "set": { "resolution": "4K" } }))
+            .unwrap();
+        assert!(set.contains("\"resolution\":\"4K\""), "{set}");
+        assert!(call(&ctx, "settings", json!({ "area": "export", "set": { "fps": 7 } })).is_err());
     }
 
     #[test]

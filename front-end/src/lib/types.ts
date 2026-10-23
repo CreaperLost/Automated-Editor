@@ -905,7 +905,7 @@ export interface PresetView {
 }
 
 /** A setting's part of the edit, as presets name them. */
-export type PresetPart = "layout" | "captions" | "zoomSettings" | "audio" | "layouts";
+export type PresetPart = "layout" | "captions" | "zoomSettings" | "audio" | "layouts" | "cleanup" | "export";
 
 export interface PresetsView {
   presets: PresetView[];
@@ -1110,9 +1110,28 @@ export type SequenceEdit =
   | { kind: "restoreCuts"; clipIds: string[] };
 
 /** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
+/** What the cleanup passes start from (src-tauri preset/settings.rs). */
+export interface CleanupSettings {
+  silence: { thresholdDb: number; minDurationMs: number; paddingMs: number };
+  gaps: { minDurationMs: number; paddingMs: number; refineWordEdges: boolean; edgeThresholdDb: number };
+  /** 0 to 1. */
+  mouthNoiseSensitivity: number;
+}
+
+/** What the Export dialog starts with. */
+export interface ExportPreferences {
+  resolution: string;
+  fps: number;
+  quality: "standard" | "high" | "max" | "custom";
+  mbps: number;
+}
+
 export interface OpenedProject {
   projectHandle: string;
   revision: number;
+  /** From the project's preset unless changed here. */
+  cleanup?: CleanupSettings;
+  export?: ExportPreferences;
   name: string;
   projectPath?: string;
   /** Where the timeline ends. */

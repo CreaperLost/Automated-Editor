@@ -134,6 +134,12 @@ pub struct OpenedProject {
     /// Set when this is short `id`'s own timeline (the sequence is the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
+    /// What the cleanup passes and the Export dialog start from (from the project's preset
+    /// unless changed here).
+    #[serde(default)]
+    pub cleanup: crate::preset::settings::CleanupSettings,
+    #[serde(default)]
+    pub export: crate::preset::settings::ExportPreferences,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -601,6 +607,8 @@ impl ProjectReader {
                 chapters: Vec::new(),
                 shorts: Vec::new(),
                 short_view: None,
+                cleanup: Default::default(),
+                export: Default::default(),
             },
             root,
             history,
@@ -1180,6 +1188,8 @@ impl ProjectReader {
         self.summary.audio = document.audio.clone();
         self.summary.noise_mutes = document.noise_mutes.clone();
         self.summary.captions = document.captions.clone();
+        self.summary.cleanup = document.cleanup.clone();
+        self.summary.export = document.export.clone();
         let mut chapters = document.chapters.clone();
         crate::chapters::attach_edited(&mut chapters, document);
         self.summary.chapters = chapters;

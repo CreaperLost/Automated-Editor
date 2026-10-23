@@ -208,11 +208,12 @@ be listed so he can change them. Each says what it means and what else could hav
 12. **What a preset holds:** the edit document's parts `layout` (canvas, screen size and crop,
     cursor, badges, window crop, face framing, mirror, auto-hide), `captions` (on, position,
     offset, size, words, lines, capitals), `zoomSettings`, `audio`, `layouts` (base and
-    picking); `short` (what a new short starts with); `choices` (the method's answers: cleanup
-    passes, review depth, graphics, export); `style` (for a new project); `method.md` and
-    `rules.md`. **Export settings and the app-wide cleanup levels are not in it yet** (export
-    takes the choices' `export`). *Alternative:* move the export dialog's defaults and silence
-    levels in too (a later step).
+    picking), `cleanup` (the silence and gap levels and mouth-noise sensitivity the Cleanup
+    panel and the agent start from) and `export` (the Export dialog's resolution, frame rate and
+    quality); `short` (what a new short starts with); `choices` (the method's answers); `style`
+    (for a new project); `method.md` and `rules.md`. **George, 23 Oct: yes to export and cleanup
+    in the preset** (added the same day; they were the browser's and the session's before, so
+    they now save with the project, show "changed here" chips, and `settings` can set them).
 13. **How "only the changes" works:** in memory a project still has every value; on disk
     (`project.json` and history states) the preset's parts are written as `presetChanges`, a
     JSON merge patch over the preset's values, and read back over the preset as it is now. So
@@ -235,8 +236,10 @@ be listed so he can change them. Each says what it means and what else could hav
     first, as before).
 18. **Built-in presets are read-only too:** saving a method into one asks for a copy's name;
     an agent saving choices into one makes "My tutorial" and the project follows it.
-19. **Presets are not renamed** (no rename in the UI; a removed or missing preset falls back to
-    Tutorial). *Alternative:* renames followed like styles.
+19. **Your own presets can be renamed** (Preset menu, "Rename..."); built-in ones keep their
+    names. **George, 23 Oct.** A renamed preset keeps answering to its old names
+    (`presets/renamed.json`), so projects that stored the old name still follow it. A removed
+    or missing preset falls back to Tutorial.
 
 ### Method, rules and agents
 
@@ -265,3 +268,6 @@ be listed so he can change them. Each says what it means and what else could hav
 - **EVAL-1 was not rerun** (the agents' tools and method text changed).
 - A real edit with a style of George's own (font and logo files) checked in an export.
 - "Changed here" for the Layouts section and a short's settings.
+
+**George's answers (23 Oct):** cleanup levels and export settings go in the preset (12); his own
+presets can be renamed (19); every other decision stays as built.

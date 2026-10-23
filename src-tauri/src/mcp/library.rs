@@ -73,8 +73,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         (at the user's word). Styles also: preview (stills of the video's graphics with `set` \
         applied, changing nothing: show the user before set), check (graphics not following \
         the style) and bring_in_line (one batch rewriting them, for the user to accept). \
-        Presets also: save (the project's settings into its preset, or a new one with \
-        `saveAs`) and reset (the project's changes back to its preset's values).",
+        Presets also: save (the project's settings into its preset, or a new one: \
+        `saveAs`) and reset (the project's changes back).",
     schema: schema::<LibraryArgs>,
     read_only: false,
     run: library,

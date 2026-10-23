@@ -1896,6 +1896,38 @@ fn preset_save(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_cleanup_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    cleanup: preset::settings::CleanupSettings,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::project_cleanup_set_impl(&state, project_handle, expected_revision, cleanup)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_export_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    export: preset::settings::ExportPreferences,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::project_export_set_impl(&state, project_handle, expected_revision, export)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_rename(
+    state: State<'_, AppState>,
+    name: String,
+    to: String,
+) -> Result<preset::PresetView, String> {
+    commands::preset::preset_rename_impl(&state, name, to)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn preset_remove(state: State<'_, AppState>, name: String) -> Result<(), String> {
     commands::preset::preset_remove_impl(&state, name)
 }
@@ -2359,6 +2391,9 @@ pub fn run() {
             preset_save_from_project,
             preset_save,
             preset_remove,
+            preset_rename,
+            project_cleanup_set,
+            project_export_set,
             styles,
             style_save,
             style_remove,

@@ -8,6 +8,7 @@
 //! `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). A project names
 //! one preset (and one for its shorts) and stores only what it changed from it ([`stored`]): a
 //! value the project never changed follows the preset, also when the preset changes later.
+pub mod settings;
 pub mod store;
 
 use crate::project::revision::EditDocument;
@@ -21,7 +22,15 @@ pub const SHORTS: &str = "Shorts";
 
 /// The parts of the edit document a preset sets, by their names in it. Everything else (media,
 /// the edit, chapters, shorts, graphics...) is the project's own.
-pub const KEYS: [&str; 5] = ["layout", "captions", "zoomSettings", "audio", "layouts"];
+pub const KEYS: [&str; 7] = [
+    "layout",
+    "captions",
+    "zoomSettings",
+    "audio",
+    "layouts",
+    "cleanup",
+    "export",
+];
 
 /// Values in those parts that are always the project's own: they are never saved into a
 /// preset (they name this project's files, clips and stretches).
@@ -46,7 +55,8 @@ pub struct Preset {
     /// The style a project made with it wears.
     pub style: String,
     /// Edit settings, by part of the edit document (`layout`, `captions`, `zoomSettings`,
-    /// `audio`, `layouts`), only the fields that differ from the app's defaults.
+    /// `audio`, `layouts`, `cleanup`, `export`), only the fields that differ from the app's
+    /// defaults.
     #[schemars(with = "Map<String, Value>")]
     pub values: Map<String, Value>,
     /// What a new short of a project whose shorts follow this preset starts with (fields of a
@@ -170,6 +180,14 @@ fn app_defaults() -> Map<String, Value> {
         (
             "layouts".into(),
             value(serde_json::to_value(&document.layouts)),
+        ),
+        (
+            "cleanup".into(),
+            value(serde_json::to_value(&document.cleanup)),
+        ),
+        (
+            "export".into(),
+            value(serde_json::to_value(&document.export)),
         ),
     ])
 }

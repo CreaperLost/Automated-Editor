@@ -83,6 +83,12 @@ pub struct EditDocument {
     /// The preset its new shorts start from.
     #[serde(default = "default_shorts_preset")]
     pub shorts_preset: String,
+    /// What the cleanup passes start from (silence and gap levels, mouth-noise sensitivity).
+    #[serde(default)]
+    pub cleanup: crate::preset::settings::CleanupSettings,
+    /// What the Export dialog starts with.
+    #[serde(default)]
+    pub export: crate::preset::settings::ExportPreferences,
 }
 
 fn default_style() -> String {
@@ -118,6 +124,8 @@ impl Default for EditDocument {
             style: default_style(),
             preset: default_preset(),
             shorts_preset: default_shorts_preset(),
+            cleanup: Default::default(),
+            export: Default::default(),
         }
     }
 }
@@ -313,6 +321,8 @@ impl EditDocument {
         if !crate::style::is_builtin(&self.style) {
             crate::style::store::check_name(&self.style)?;
         }
+        self.cleanup.validate()?;
+        self.export.validate()?;
         for preset in [&self.preset, &self.shorts_preset] {
             if !crate::preset::is_builtin(preset) {
                 crate::preset::store::check_name(preset)?;

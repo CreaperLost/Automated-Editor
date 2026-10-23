@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BookOpen, Check, Copy, FolderOpen, RotateCcw, Save, Smartphone, Trash2 } from "lucide-react";
+import { BookOpen, Check, Copy, FolderOpen, Pencil, RotateCcw, Save, Smartphone, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
 import type { OpenedProject, PresetView } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
@@ -15,6 +15,7 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const view = usePresets(project?.projectHandle, project?.revision);
   const [naming, setNaming] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const [editing, setEditing] = useState<PresetView>();
   const [notice, setNotice] = useState<string>();
 
@@ -86,6 +87,7 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
     { label: "Open the presets folder", icon: FolderOpen, onSelect: () => void api.showInFinder(view.folder) },
     ...(current && !current.builtin
       ? ([
+          { label: `Rename ${current.name}…`, icon: Pencil, onSelect: () => setRenaming(true) },
           {
             label: `Remove ${current.name}`,
             icon: Trash2,
@@ -143,6 +145,24 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
           }}
         />
       )}
+      {renaming && current && (
+        <NameDialog
+          title={`Rename ${current.name}`}
+          initial={current.name}
+          taken={view.presets.filter((p) => p.name !== current.name).map((p) => p.name)}
+          onClose={() => setRenaming(false)}
+          onSave={(name) => {
+            setRenaming(false);
+            void api
+              .presetRename(current.name, name)
+              .then(() => {
+                presetsChanged();
+                setNotice(`Renamed to ${name}`);
+              })
+              .catch((err) => onError(String(err)));
+          }}
+        />
+      )}
       {editing && (
         <MethodDialog
           preset={editing}
@@ -192,20 +212,23 @@ const Dialog: React.FC<{ label: string; wide?: boolean; onClose: () => void; chi
   </div>
 );
 
-const NameDialog: React.FC<{ taken: string[]; onClose: () => void; onSave: (name: string) => void }> = ({
-  taken,
-  onClose,
-  onSave,
-}) => {
-  const [name, setName] = useState("");
+const NameDialog: React.FC<{
+  taken: string[];
+  title?: string;
+  initial?: string;
+  onClose: () => void;
+  onSave: (name: string) => void;
+}> = ({ taken, title, initial, onClose, onSave }) => {
+  const [name, setName] = useState(initial ?? "");
   const trimmed = name.trim();
   const clash = taken.some((t) => t.toLowerCase() === trimmed.toLowerCase());
   return (
-    <Dialog label="Save as a new preset" onClose={onClose} onSubmit={() => trimmed && !clash && onSave(trimmed)}>
-      <h2 className="text-body font-semibold text-studio-100">Save as a new preset</h2>
+    <Dialog label={title ?? "Save as a new preset"} onClose={onClose} onSubmit={() => trimmed && !clash && onSave(trimmed)}>
+      <h2 className="text-body font-semibold text-studio-100">{title ?? "Save as a new preset"}</h2>
       <p className="text-label text-studio-400 leading-relaxed">
-        This video&apos;s settings (canvas, captions, zooms, sound, layouts) become a preset this video then follows,
-        with the method and rules of the one it follows now. Any project can follow it.
+        {title
+          ? "Projects that follow it keep following it under its new name."
+          : "This video's settings (canvas, captions, zooms, sound, layouts, cleanup, export) become a preset this video then follows, with the method and rules of the one it follows now. Any project can follow it."}
       </p>
       <input
         autoFocus

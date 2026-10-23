@@ -1,5 +1,6 @@
 //! Where presets are kept: the built-in ones in code, the user's one folder each in
-//! `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`).
+//! `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). The user's
+//! can be renamed: projects store a preset's name, so `renamed.json` leads old names to it.
 use super::{builtin, is_builtin, Preset};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,8 @@ pub const FILE: &str = "preset.json";
 pub const METHOD: &str = "method.md";
 pub const RULES: &str = "rules.md";
 const MAX_PRESETS: usize = 100;
+const RENAMES_FILE: &str = "renamed.json";
+const MAX_RENAME_HOPS: usize = 16;
 
 /// The app's presets folder (`AEROEDITS_PRESETS_DIR` overrides it).
 pub fn dir() -> PathBuf {
@@ -46,13 +49,7 @@ pub fn load_in(presets: &Path, name: &str) -> Result<Preset, String> {
         return Ok(preset);
     }
     check_name(wanted).map_err(|_| no_preset(presets, wanted))?;
-    // Any case: a folder's name as it is on disk.
-    let folder = std::fs::read_dir(presets)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .find(|n| n.eq_ignore_ascii_case(wanted))
+    let folder = folder_named(presets, &current_name(presets, wanted))
         .ok_or_else(|| no_preset(presets, wanted))?;
     let at = presets.join(&folder);
     let text = std::fs::read_to_string(at.join(FILE)).map_err(|_| no_preset(presets, wanted))?;
@@ -66,6 +63,59 @@ pub fn load_in(presets: &Path, name: &str) -> Result<Preset, String> {
         .unwrap_or_default()
         .replace("\r\n", "\n");
     Ok(preset)
+}
+
+/// The folder of preset `name` (any case), as it is on disk.
+fn folder_named(presets: &Path, name: &str) -> Option<String> {
+    std::fs::read_dir(presets)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join(FILE).is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .find(|n| n.eq_ignore_ascii_case(name))
+}
+
+fn renames(presets: &Path) -> BTreeMap<String, String> {
+    std::fs::read_to_string(presets.join(RENAMES_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_renames(presets: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
+    let path = presets.join(RENAMES_FILE);
+    let text = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Remembers that preset `old` is now `new`; names that led to `old` now lead to `new`.
+fn record_rename(presets: &Path, old: &str, new: &str) -> Result<(), String> {
+    let mut map = renames(presets);
+    for target in map.values_mut() {
+        if target.eq_ignore_ascii_case(old) {
+            *target = new.to_string();
+        }
+    }
+    map.retain(|k, _| !k.eq_ignore_ascii_case(new));
+    map.insert(old.to_lowercase(), new.to_string());
+    write_renames(presets, &map)
+}
+
+/// The preset's name now: `name` while a preset has it, else the name it was renamed to.
+pub fn current_name(presets: &Path, name: &str) -> String {
+    let map = renames(presets);
+    let mut current = name.trim().to_string();
+    for _ in 0..MAX_RENAME_HOPS {
+        if folder_named(presets, &current).is_some() {
+            return current;
+        }
+        match map.get(&current.to_lowercase()) {
+            Some(next) => current = next.clone(),
+            None => break,
+        }
+    }
+    name.trim().to_string()
 }
 
 fn no_preset(presets: &Path, name: &str) -> String {
@@ -96,7 +146,7 @@ pub fn cached(name: &str) -> Option<Preset> {
     type Cache = BTreeMap<String, (Vec<Option<std::time::SystemTime>>, Option<Preset>)>;
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     let presets = dir();
-    let folder = presets.join(name.trim());
+    let folder = presets.join(current_name(&presets, name));
     let stamp: Vec<_> = [FILE, METHOD, RULES]
         .iter()
         .map(|f| {
@@ -171,7 +221,7 @@ pub fn save_in(presets: &Path, input: &PresetInput) -> Result<Preset, String> {
     let target = presets.join(&name);
     let renamed = previous.as_deref().is_some_and(|p| p != name);
     if previous.is_none() || renamed {
-        if load_in(presets, &name).is_ok() {
+        if folder_named(presets, &name).is_some() {
             return Err(format!("There is already a preset \"{name}\""));
         }
         if target.exists() {
@@ -191,6 +241,7 @@ pub fn save_in(presets: &Path, input: &PresetInput) -> Result<Preset, String> {
     if let (true, Some(old)) = (renamed, &previous) {
         std::fs::rename(presets.join(old), &target)
             .map_err(|e| format!("{}: {e}", target.display()))?;
+        record_rename(presets, old, &name)?;
     }
     std::fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
     let write = |file: &str, text: &str| {
@@ -218,7 +269,15 @@ pub fn remove_in(presets: &Path, name: &str) -> Result<(), String> {
     }
     let preset = load_in(presets, name)?;
     let folder = presets.join(&preset.name);
-    std::fs::remove_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))
+    std::fs::remove_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    // Its old names lead nowhere now.
+    let mut map = renames(presets);
+    let before = map.len();
+    map.retain(|_, target| !target.eq_ignore_ascii_case(&preset.name));
+    if map.len() != before {
+        let _ = write_renames(presets, &map);
+    }
+    Ok(())
 }
 
 pub fn remove(name: &str) -> Result<(), String> {
@@ -264,6 +323,8 @@ mod tests {
         save_in(presets, &renamed).unwrap();
         let names: Vec<String> = list_in(presets).into_iter().map(|p| p.name).collect();
         assert_eq!(names, ["Tutorial", "Shorts", "Clips", "Gaming long"]);
+        // Projects that stored the old name still find it.
+        assert_eq!(load_in(presets, "gaming").unwrap().name, "Gaming long");
         for bad in ["", "../x", "Tutorial", "clips"] {
             assert!(save_in(presets, &input(bad)).is_err(), "{bad:?}");
         }
@@ -278,6 +339,10 @@ mod tests {
             .cloned()
             .unwrap();
         assert!(save_in(presets, &wrong).is_err());
+        // A new preset may take an old name, which is its own from then on.
+        save_in(presets, &input("Gaming")).unwrap();
+        assert_eq!(load_in(presets, "Gaming").unwrap().name, "Gaming");
+        remove_in(presets, "Gaming").unwrap();
         remove_in(presets, "Gaming long").unwrap();
         assert!(load_in(presets, "Gaming long").is_err());
         assert!(remove_in(presets, "Tutorial").is_err());

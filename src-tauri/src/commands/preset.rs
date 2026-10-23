@@ -113,6 +113,53 @@ pub fn project_preset_set_impl(
     })
 }
 
+/// Sets what the project's cleanup passes start from, one undo step.
+pub fn project_cleanup_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    cleanup: preset::settings::CleanupSettings,
+) -> Result<OpenedProject, String> {
+    cleanup.validate()?;
+    commit(state, &project_handle, expected_revision, |document| {
+        let mut next = document.clone();
+        next.cleanup = cleanup;
+        Ok(next)
+    })
+}
+
+/// Sets what the project's Export dialog starts with, one undo step.
+pub fn project_export_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    export: preset::settings::ExportPreferences,
+) -> Result<OpenedProject, String> {
+    export.validate()?;
+    commit(state, &project_handle, expected_revision, |document| {
+        let mut next = document.clone();
+        next.export = export;
+        Ok(next)
+    })
+}
+
+/// Renames the user's preset `name` to `to`; projects that follow it keep following it (their
+/// old name for it leads to it, see `preset::store`).
+pub fn preset_rename_impl(_state: &AppState, name: String, to: String) -> Result<PresetView, String> {
+    let current = store::load(&name)?;
+    if preset::is_builtin(&current.name) {
+        return Err(format!("{} is built in and keeps its name", current.name));
+    }
+    let saved = store::save(&store::PresetInput {
+        name: to.trim().to_string(),
+        previous: Some(current.name.clone()),
+        method: current.method.clone(),
+        rules: current.rules.clone(),
+        preset: current.clone(),
+    })?;
+    Ok(preset::view(&saved))
+}
+
 /// Takes the project's changes back to its preset's values (what is always its own stays):
 /// all of them, a `part` (`captions`, `layout`...), or one `field` of it. One undo step.
 pub fn project_preset_reset_impl(
@@ -223,9 +270,8 @@ pub fn preset_remove_impl(state: &AppState, name: String) -> Result<(), String> 
 fn changes_before(state: &AppState, name: &str) -> Option<Value> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref()?;
-    reader
-        .document()
-        .preset
+    preset::of(reader.document())
+        .name
         .eq_ignore_ascii_case(name.trim())
         .then(|| preset::stored(reader.document()).ok())?
 }
@@ -310,7 +356,7 @@ pub fn preset_patch_impl(
                 (
                     r.summary.project_handle.clone(),
                     r.document().revision,
-                    r.document().preset.eq_ignore_ascii_case(&current.name),
+                    preset::of(r.document()).name.eq_ignore_ascii_case(&current.name),
                 )
             })
         };

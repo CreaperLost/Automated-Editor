@@ -6,7 +6,8 @@ import { FILE_MANAGER } from "../../lib/projectActions";
 import { useProjectStore } from "../../stores/projectStore";
 import { CheckPanel } from "./CheckPanel";
 import { Button, IconButton, Segmented, cn } from "../ui";
-import type { ExportFileKind, ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
+import type { ExportFileKind, ExportPreferences, ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
+import { PresetMarks } from "../presets/PresetMarks";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
 const RESOLUTIONS = [
@@ -31,33 +32,24 @@ const OTHER_FILES: { kind: ExportFileKind; label: string; hint: string }[] = [
 ];
 const MIN_MBPS = 1;
 const MAX_MBPS = 200;
-const STORAGE_KEY = "aeroedits.exportPreferences";
-
-interface ExportPreferences {
-  resolution: string;
-  fps: number;
-  quality: ExportQuality | "custom";
-  mbps: number;
-}
 
 const DEFAULT_PREFERENCES: ExportPreferences = { resolution: "1080p", fps: 30, quality: "high", mbps: 16 };
 
-function loadPreferences(): ExportPreferences {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null");
-    if (stored && typeof stored === "object") return { ...DEFAULT_PREFERENCES, ...stored };
-  } catch {
-    // Storage can be unavailable; the defaults still work.
-  }
-  return DEFAULT_PREFERENCES;
-}
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Keeps the choices as the project's export settings (its preset's unless changed here), a
+ *  moment after the last change. */
 function savePreferences(preferences: ExportPreferences) {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
-  } catch {
-    // Not remembering the choice is harmless.
-  }
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const project = useProjectStore.getState().openedProject;
+    if (!project || JSON.stringify(project.export) === JSON.stringify(preferences)) return;
+    if (preferences.mbps < MIN_MBPS || preferences.mbps > MAX_MBPS || !Number.isFinite(preferences.mbps)) return;
+    void api
+      .projectExportSet(project.projectHandle, project.revision, preferences)
+      .then((updated) => useProjectStore.getState().applyOpenedProject(updated))
+      .catch(() => undefined);
+  }, 500);
 }
 
 /** Mirrors `fit_export_size` in src-tauri/src/project/layout.rs for the size label. */
@@ -101,7 +93,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   onCancel,
   onClose,
 }) => {
-  const [preferences, setPreferences] = useState(loadPreferences);
+  const [preferences, setPreferences] = useState<ExportPreferences>(
+    () => useProjectStore.getState().openedProject?.export ?? DEFAULT_PREFERENCES,
+  );
   const update = (patch: Partial<ExportPreferences>) =>
     setPreferences((current) => {
       const next = { ...current, ...patch };
@@ -231,6 +225,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 <p className="text-label text-studio-400">MP4 · H.264 video · AAC audio · {aspectRatio} canvas</p>
               </div>
             </div>
+
+            <PresetMarks part="export" />
 
             {/* The choices */}
             <fieldset disabled={exporting} className="space-y-5 min-w-0 disabled:opacity-60">
