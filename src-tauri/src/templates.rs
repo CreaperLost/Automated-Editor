@@ -121,7 +121,8 @@ pub fn capture(
     })
 }
 
-/// Saves `template`, replacing one of the same name (it keeps that one's id and place).
+/// Saves `template`, replacing one of the same name (it keeps that one's id and place). Saved
+/// without a short, it keeps the short look the one it replaces had.
 pub fn save(dir: &Path, mut template: Template) -> Result<Vec<Template>, String> {
     let mut templates = list(dir);
     match templates
@@ -130,6 +131,10 @@ pub fn save(dir: &Path, mut template: Template) -> Result<Vec<Template>, String>
     {
         Some(same) => {
             template.id = same.id.clone();
+            if template.short_look.is_none() {
+                template.short_look = same.short_look.take();
+                template.short_base = same.short_base.take();
+            }
             *same = template;
         }
         None => {
@@ -221,6 +226,12 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].id, first[0].id);
         assert_eq!(second[0].layout.corner_radius_px, 9);
+        // Saved over from the video, a short look saved before stays.
+        let mut with_short = capture(&document, "Tutorial", None).unwrap();
+        with_short.short_look = Some(ShortLayout::default());
+        save(dir.path(), with_short).unwrap();
+        let kept = save(dir.path(), capture(&document, "Tutorial", None).unwrap()).unwrap();
+        assert!(kept[0].short_look.is_some());
         assert!(capture(&document, "  ", None).is_err());
         assert!(capture(&document, "x", Some("nope")).is_err());
         assert!(remove(dir.path(), &first[0].id).unwrap().is_empty());

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Bookmark, BookmarkPlus, Check, Trash2 } from "lucide-react";
+import { Bookmark, BookmarkPlus, Check, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
 import type { Template } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
@@ -59,6 +59,16 @@ export const TemplatesMenu: React.FC<{ onError: (message: string) => void }> = (
       .then(setTemplates)
       .catch((err) => onError(String(err)));
 
+  /** Saves the current settings as `name`, over the template of that name if there is one. */
+  const save = (name: string) =>
+    void api
+      .templateSave(project.projectHandle, name, shortId)
+      .then((list) => {
+        setTemplates(list);
+        setNotice(`Saved "${name}"`);
+      })
+      .catch((err) => onError(String(err)));
+
   const describe = (template: Template) =>
     template.shortLook ? "Video and short look" : "Video settings";
 
@@ -81,6 +91,14 @@ export const TemplatesMenu: React.FC<{ onError: (message: string) => void }> = (
     ...(templates.length
       ? ([
           { kind: "separator" },
+          {
+            kind: "submenu",
+            label: shortId ? "Update with these settings and short look" : "Update with current settings",
+            icon: RefreshCw,
+            entries: templates.map(
+              (template): MenuEntry => ({ label: template.name, hint: describe(template), onSelect: () => save(template.name) }),
+            ),
+          },
           {
             kind: "submenu",
             label: "Delete",
@@ -118,13 +136,7 @@ export const TemplatesMenu: React.FC<{ onError: (message: string) => void }> = (
           onClose={() => setNaming(false)}
           onSave={(name) => {
             setNaming(false);
-            void api
-              .templateSave(project.projectHandle, name, shortId)
-              .then((list) => {
-                setTemplates(list);
-                setNotice(`Saved "${name}"`);
-              })
-              .catch((err) => onError(String(err)));
+            save(name);
           }}
         />
       )}
