@@ -476,8 +476,9 @@ Most recent first. Details live in git history and the plans.
   accent (`emphasisColor` overrides); agents list the numbered lines and pick by line and word
   with `captions` (behind `more`), the user with Emphasis on the caption track. Three
   **styles** (`style`): `pop` (each word grows in with a small overshoot as it is said, timed
-  by the look's speed and energy), `karaoke` (the caption shows dim, each word lights up left
-  to right as it is said), `static`; the video defaults to karaoke, shorts to pop (their own
+  by the look's speed and energy; a line builds from its middle, centred on the words shown
+  so far), `karaoke` (the caption shows dim, each word lights up left to right as it is said;
+  the emphasis word stays bright from the start), `static`; the video defaults to karaoke, shorts to pop (their own
   choice in the Shorts tab). Words are drawn once, composed per frame from the edited time
   only, so preview and export match (tested: two evaluators, one seeking, give the same bytes).
   Templates (shorts, clips, tutorial when captions are on) pick emphasis. Checked by eye on

@@ -530,6 +530,11 @@ struct WordRaster {
     ink_x: f32,
     ink_w: f32,
     emphasis: bool,
+    /// Its line, where it starts on it and the line's whole width: a line shown in part is
+    /// centred on the words shown so far.
+    line: usize,
+    line_x: f32,
+    line_w: f32,
 }
 
 /// A cue drawn once: each word's coverage and the background box's.
@@ -768,6 +773,9 @@ pub fn rasterize_cue(
             ink_x,
             ink_w: word.width.max(1.0),
             emphasis: cue.words[word.index].emphasis,
+            line: word.line,
+            line_x: word.x,
+            line_w,
         });
     }
     let boxed = if settings.background {
@@ -887,13 +895,14 @@ fn paint(
     word: &WordRaster,
     mask: &[u8],
     scale: f32,
+    dx: f32,
     shade: impl Fn(f32) -> ([f32; 3], f32),
 ) {
     if mask.is_empty() || scale <= 0.01 {
         return;
     }
     let (half_w, half_h) = (word.width as f32 / 2.0, word.height as f32 / 2.0);
-    let (cx, cy) = (word.x as f32 + half_w, word.y as f32 + half_h);
+    let (cx, cy) = (word.x as f32 + dx + half_w, word.y as f32 + half_h);
     let x0 = ((cx - half_w * scale).floor() as i64).max(0);
     let x1 = ((cx + half_w * scale).ceil() as i64).min(width as i64);
     let y0 = ((cy - half_h * scale).floor() as i64).max(0);
@@ -938,11 +947,23 @@ pub fn colorize(
         }
     }
     let shown = |i: usize| states.get(i).copied().unwrap_or(WordState::SHOWN);
+    // A line whose later words are still to come is centred on the words shown so far (as
+    // popping captions do), moving by whole pixels so still words stay sharp.
+    let mut shown_end: Vec<f32> = Vec::new();
+    for (i, word) in raster.words.iter().enumerate() {
+        if shown_end.len() <= word.line {
+            shown_end.resize(word.line + 1, 0.0);
+        }
+        if shown(i).alpha > 0.0 {
+            shown_end[word.line] = shown_end[word.line].max(word.line_x + word.ink_w);
+        }
+    }
+    let shift = |word: &WordRaster| ((word.line_w - shown_end[word.line]) / 2.0).max(0.0).round();
     // Every outline goes under every word's letters.
     for (i, word) in raster.words.iter().enumerate() {
         let state = shown(i);
         if state.alpha > 0.0 {
-            paint(&mut px, w, h, word, &word.outline, state.scale, |_| {
+            paint(&mut px, w, h, word, &word.outline, state.scale, shift(word), |_| {
                 (outline_color, 0.9 * state.alpha)
             });
         }
@@ -957,10 +978,12 @@ pub fn colorize(
         } else {
             text
         };
-        // Lit up to here, with a soft edge of a pixel and a half.
+        // Lit up to here, with a soft edge of a pixel and a half. The emphasis word is bright
+        // before it is said, so its accent reads on a dark screen.
         let edge = word.ink_x + state.lit * word.ink_w;
-        paint(&mut px, w, h, word, &word.fill, state.scale, |sx| {
-            let lit = if state.lit >= 1.0 {
+        let bright = settings.emphasis && word.emphasis;
+        paint(&mut px, w, h, word, &word.fill, state.scale, shift(word), |sx| {
+            let lit = if state.lit >= 1.0 || bright {
                 1.0
             } else if state.lit <= 0.0 {
                 0.0
@@ -1352,6 +1375,51 @@ mod tests {
             &Default::default(),
         );
         assert_eq!(look.accent, "#123456");
+    }
+
+    #[test]
+    fn a_popping_line_is_centred_and_the_emphasis_word_is_bright_before_it_is_said() {
+        let mut t = transcript(&[("one", 0, 400), ("wonderful", 500, 900), ("two", 1000, 1300)]);
+        t.set_caption_mark("w-2", |m| m.emphasis = true).unwrap();
+        let settings = CaptionSettings {
+            style: CaptionStyle::Pop,
+            emphasis_color: "#FF0000".into(),
+            ..Default::default()
+        };
+        let cues = build_cues(&t, &mapper(&[(0, 2000)]), &settings);
+        let look = CaptionLook::plain(&settings);
+        let raster = rasterize_cue(&cues[0], &settings, &look, 1280, 720).unwrap();
+        // Ink across the frame's columns: its middle sits at the caption's middle.
+        let middle = |frame: &VideoFrame| {
+            let columns: Vec<u32> = (0..frame.width)
+                .filter(|&x| {
+                    (0..frame.height)
+                        .any(|y| frame.data[((y * frame.width + x) * 4 + 3) as usize] > 128)
+                })
+                .collect();
+            (columns[0] + columns[columns.len() - 1]) as f32 / 2.0
+        };
+        for at in [450_000, 950_000, 1_500_000] {
+            let states = word_states(&cues[0], CaptionStyle::Pop, &look, at);
+            let frame = colorize(&raster, &settings, &look, &states);
+            assert!(
+                (middle(&frame) - raster.width as f32 / 2.0).abs() < 3.0,
+                "centred at {at}: {} of {}",
+                middle(&frame),
+                raster.width
+            );
+        }
+
+        // Karaoke before "two" is said: the other words dim, "two" in its full accent.
+        let karaoke = CaptionSettings {
+            style: CaptionStyle::Karaoke,
+            ..settings
+        };
+        let raster = rasterize_cue(&cues[0], &karaoke, &look, 1280, 720).unwrap();
+        let states = word_states(&cues[0], CaptionStyle::Karaoke, &look, 0);
+        let frame = colorize(&raster, &karaoke, &look, &states);
+        assert!(count(&frame, [255, 0, 0]) > 50, "the emphasis word is bright red");
+        assert_eq!(count(&frame, [255, 255, 255]), 0, "the others are dim");
     }
 
     #[test]
