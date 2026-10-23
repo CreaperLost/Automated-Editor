@@ -144,7 +144,7 @@ pub enum Status {
     Rejected,
     /// The agent took it back, or undid it.
     Withdrawn,
-    /// An action that was undone.
+    /// An action that was undone, or any batch undone with the agent's run.
     Undone,
 }
 
@@ -1068,6 +1068,59 @@ pub fn undo(
     }
     let summary = reader.undo(expected_revision)?;
     let batch = proposals.get_mut(id)?;
+    set_undone(batch, |r| r == applied, by_agent.is_some());
+    Ok(summary)
+}
+
+/// Undoes the newest agent run as one step (`ProjectReader::undo_run`); the batches it
+/// accepted are undone as `undo` does one. Says what was taken back.
+pub fn undo_run(
+    reader: &mut ProjectReader,
+    proposals: &mut Proposals,
+    expected_revision: u64,
+    by_agent: Option<&str>,
+) -> Result<(OpenedProject, String), String> {
+    let current = reader.document().revision;
+    if current != expected_revision {
+        return Err("Stale edit revision".into());
+    }
+    if let Some(agent) = by_agent {
+        let run = reader.history().steps().run_to_undo()?;
+        if run.agent != agent {
+            return Err(format!("The last run was {}'s, not yours", run.agent));
+        }
+    }
+    let (summary, run) = reader.undo_run(expected_revision)?;
+    let mut batches = 0;
+    for batch in &mut proposals.batches {
+        let Some(applied) = batch.applied_revision else {
+            continue;
+        };
+        if applied > run.since_revision && applied <= current {
+            set_undone(batch, |r| r > run.since_revision, by_agent.is_some());
+            // Undoing the run takes all of it away: nothing comes back to wait.
+            batch.status = Status::Undone;
+            batch.decided_at = Some(now());
+            batches += 1;
+        }
+    }
+    let what = format!(
+        "Undid {}'s run: {} change{}{}",
+        run.agent,
+        run.changes,
+        if run.changes == 1 { "" } else { "s" },
+        match batches {
+            0 => String::new(),
+            1 => ", 1 batch".into(),
+            n => format!(", {n} batches"),
+        }
+    );
+    Ok((summary, what))
+}
+
+/// Batch `batch` is undone, with its items accepted at revisions `undone` names: for the user
+/// what it did waits again; for the agent (`by_agent`) it is withdrawn.
+fn set_undone(batch: &mut Batch, undone: impl Fn(u64) -> bool, by_agent: bool) {
     batch.applied_revision = None;
     batch.auto = false;
     match &mut batch.change {
@@ -1077,7 +1130,7 @@ pub fn undo(
         }
         Change::Cuts { items, .. } => {
             for item in items.iter_mut() {
-                if item.state == ItemState::Accepted && item.revision == Some(applied) {
+                if item.state == ItemState::Accepted && item.revision.is_some_and(&undone) {
                     item.state = ItemState::Pending;
                     item.revision = None;
                 }
@@ -1086,11 +1139,10 @@ pub fn undo(
             batch.settle();
         }
     }
-    if by_agent.is_some() && batch.status != Status::Undone {
+    if by_agent && batch.status != Status::Undone {
         batch.status = Status::Withdrawn;
     }
     batch.decided_at = (batch.status != Status::Pending).then(now);
-    Ok(summary)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1163,6 +1215,9 @@ pub struct ProposalsView {
     pub revision: u64,
     /// Newest first.
     pub batches: Vec<BatchView>,
+    /// The newest agent run still in the undo history, to undo as one step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<crate::project::history::RunView>,
     /// Set when a change was made but the proposals file could not be saved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
@@ -1255,6 +1310,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
         project_handle: reader.summary.project_handle.clone(),
         revision: document.revision,
         batches,
+        last_run: reader.history().steps().last_run(),
         warning: None,
     }
 }

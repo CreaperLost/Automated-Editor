@@ -376,6 +376,8 @@ export const api = {
   /** Undoes a batch's accept while it is still the latest change. */
   proposalUndo: (projectHandle: string, expectedRevision: number, batchId: string) =>
     invokeTauri<ProposalOutcome>("proposal_undo", { projectHandle, expectedRevision, batchId }),
+  proposalUndoRun: (projectHandle: string, expectedRevision: number) =>
+    invokeTauri<ProposalOutcome>("proposal_undo_run", { projectHandle, expectedRevision }),
   aiSettingsGet: () => invokeTauri<AiSettingsView>("ai_settings_get"),
   aiSettingsSet: (settings: AiSettings) => invokeTauri<AiSettingsView>("ai_settings_set", { settings }),
   aiSetApiKey: (provider: AiProvider, key: string) =>

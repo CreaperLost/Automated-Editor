@@ -1569,8 +1569,25 @@ export interface ProposalsView {
   revision: number;
   /** Newest first. */
   batches: ProposalBatch[];
+  /** The newest agent run still in the undo history, to undo as one step. */
+  lastRun?: AgentRun;
   /** A change was made but the Agent panel's history could not be saved. */
   warning?: string;
+}
+
+/** Everything one agent changed in one go (since its last template call, with no change of yours between). */
+export interface AgentRun {
+  agent: string;
+  /** Its steps still in the undo history. */
+  changes: number;
+  startedAt: string;
+  endedAt: string;
+  /** Nothing came after it, so it can be undone as one step. */
+  canUndo: boolean;
+  /** It was undone as one step; Undo brings it back while nothing came after. */
+  undone: boolean;
+  /** Why it cannot: the changes made after it. */
+  blockedBy?: string;
 }
 
 export interface ProposalOutcome {

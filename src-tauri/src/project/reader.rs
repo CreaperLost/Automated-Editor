@@ -769,6 +769,21 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    /// Takes back the newest agent run as one step (see [`EditHistory::undo_run`]).
+    pub fn undo_run(
+        &mut self,
+        expected_revision: u64,
+    ) -> Result<(OpenedProject, crate::project::history::RunUndo), String> {
+        let run = self.history.undo_run(expected_revision, &self.root)?;
+        self.index_recordings_quietly();
+        Ok((self.done(), run))
+    }
+
+    /// The agents' next step starts a new run.
+    pub fn end_agent_run(&mut self) {
+        self.history.end_run();
+    }
+
     pub fn redo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
         self.history.redo(expected_revision, &self.root)?;
         self.index_recordings_quietly();

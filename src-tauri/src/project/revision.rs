@@ -1,5 +1,5 @@
 //! Versioned edit document (`project.json`). Source media is never rewritten.
-use super::history::{describe, History, StepMeta};
+use super::history::{describe, History, RunUndo, StepMeta};
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path};
 use crate::layouts::LayoutTrack;
@@ -536,6 +536,8 @@ impl EditHistory {
         persist_root: &Path,
         mut next: EditDocument,
     ) -> Result<&EditDocument, String> {
+        // Taken first, so a failed commit does not name the next one.
+        let meta = self.next_step.take();
         self.check(expected_revision)?;
         next.schema_version = EDIT_SCHEMA_VERSION;
         crate::shorts::give_own_timelines(&mut next);
@@ -553,13 +555,12 @@ impl EditHistory {
         let before = self.log.current_state(persist_root, &self.current)?;
         let after = self.log.save_state(persist_root, &next)?;
         persist_revision(persist_root, expected_revision, &next)?;
-        let meta = self
-            .next_step
-            .take()
-            .unwrap_or_else(StepMeta::for_this_thread);
+        let meta = meta.unwrap_or_else(StepMeta::for_this_thread);
         let was = &self.current;
         self.log
-            .record_commit(persist_root, before, after, meta, || describe(was, &next));
+            .record_commit(persist_root, before, after, meta, next.revision, || {
+                describe(was, &next)
+            });
         self.current = next;
         Ok(&self.current)
     }
@@ -1332,6 +1333,35 @@ impl EditHistory {
             noise_mutes,
         });
         self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Ends the agents' current run (they began a new workflow).
+    pub fn end_run(&mut self) {
+        self.log.end_run();
+    }
+
+    /// Takes back everything the newest agent run did, as one new step, while nothing came
+    /// after it. Undo then brings the run back.
+    pub fn undo_run(
+        &mut self,
+        expected_revision: u64,
+        persist_root: &Path,
+    ) -> Result<RunUndo, String> {
+        self.check(expected_revision)?;
+        let run = self.log.run_to_undo()?;
+        let previous = self.log.load_state(persist_root, &run.before)?;
+        let mut meta = StepMeta::for_this_thread();
+        meta.joins_run = false;
+        meta.undoes_run = Some(run.run.clone());
+        meta.label = Some(format!(
+            "Undo {}'s run ({} change{})",
+            run.agent,
+            run.changes,
+            if run.changes == 1 { "" } else { "s" }
+        ));
+        self.next_step = Some(meta);
+        self.commit_next(expected_revision, persist_root, previous)?;
+        Ok(run)
     }
 
     pub fn undo(
@@ -2131,6 +2161,83 @@ mod tests {
         assert_eq!(step.tool.as_deref(), Some("silence"));
         assert_eq!(step.label, "Cut 3.0 s");
         assert_eq!(history.steps().redo_step().unwrap().by, Author::User);
+    }
+
+    #[test]
+    fn an_agents_steps_form_one_run_until_someone_else_edits() {
+        use crate::project::history::as_agent;
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        as_agent("claude-code", "silence", || {
+            history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+            history.ripple_cuts(1, &[(S, 2 * S)], dir.path()).unwrap();
+            history.ripple_cuts(2, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        let run = history.steps().last_run().unwrap();
+        assert_eq!((run.changes, run.can_undo), (3, true));
+
+        history.ripple_cuts(3, &[(0, S)], dir.path()).unwrap();
+        let run = history.steps().last_run().unwrap();
+        assert!(!run.can_undo);
+        assert_eq!(run.blocked_by.as_deref(), Some("\"Cut 1.0 s\""));
+        let refused = history.undo_run(4, dir.path()).unwrap_err();
+        assert!(refused.contains("\"Cut 1.0 s\" came after it"), "{refused}");
+
+        history.undo(4, dir.path()).unwrap();
+        let run = history.undo_run(5, dir.path()).unwrap();
+        assert_eq!((run.agent.as_str(), run.changes), ("claude-code", 3));
+        assert_eq!(history.current.duration_us(), 10 * S);
+        assert_eq!(
+            history.undo_label(),
+            Some("Undo claude-code's run (3 changes)")
+        );
+        // Undoing the run undo brings all of it back; the run is still one.
+        history.undo(6, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 7 * S);
+        assert_eq!(history.steps().last_run().unwrap().changes, 3);
+    }
+
+    #[test]
+    fn a_new_workflow_or_another_agent_starts_a_new_run_and_runs_survive_reopening() {
+        use crate::project::history::as_agent;
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        as_agent("claude-code", "silence", || {
+            history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        history.end_run();
+        as_agent("claude-code", "fillers", || {
+            history.ripple_cuts(1, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        as_agent("codex", "fillers", || {
+            history.ripple_cuts(2, &[(S, 2 * S)], dir.path()).unwrap();
+            history.ripple_cuts(3, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        drop(history);
+        let (mut history, _) = reopen(dir.path());
+        let run = history.steps().last_run().unwrap();
+        assert_eq!((run.agent.as_str(), run.changes), ("codex", 2));
+        history.undo_run(4, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 8 * S);
+        let run = history.steps().last_run().unwrap();
+        assert_eq!(
+            (run.agent.as_str(), run.undone, run.can_undo),
+            ("codex", true, false)
+        );
+        assert!(history
+            .undo_run(5, dir.path())
+            .unwrap_err()
+            .contains("already undone"));
+        // Undo the run undo and codex's two steps: claude-code's second run is next.
+        history.undo(5, dir.path()).unwrap();
+        history.undo(6, dir.path()).unwrap();
+        history.undo(7, dir.path()).unwrap();
+        let run = history.steps().last_run().unwrap();
+        assert_eq!(
+            (run.agent.as_str(), run.changes, run.can_undo),
+            ("claude-code", 1, true)
+        );
+        assert_eq!(history.current.duration_us(), 8 * S);
     }
 
     /// What history adds to one edit of a real project:

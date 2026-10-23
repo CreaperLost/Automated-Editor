@@ -52,8 +52,9 @@ flowchart LR
   then checkpoints. Decided 23 Oct: graphic source undo waits for GFX-4, a checkpoint before
   every agent run, up to 2 GB of history per project.
 - **Phase 1 built 23 Oct:** undo and redo survive closing the app (checked in the dev app over
-  MCP), with no 64-step limit, and each step is named from what it changed. **Left:** phase 2
-  (undo what the agent did in a run) and phase 3 (checkpoints).
+  MCP), with no 64-step limit, and each step is named from what it changed.
+- **Phase 2 built 23 Oct:** an agent's run is undone as one step from the Agent panel or with
+  `undo` `run: true`, after reopening too. **Left:** phase 3 (checkpoints).
 - **Do:** keep the edit history on disk so undo survives reopen; one "undo what the agent did"
   step per agent run; named checkpoints ("clean cut", "approved look") that snapshot the edit
   document, graphic source folders and caption marks with their transcript stamp; restoring

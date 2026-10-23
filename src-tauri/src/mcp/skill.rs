@@ -266,6 +266,10 @@ pub struct SaveArgs {
 
 fn template(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: TemplateArgs = params(args)?;
+    // A workflow begins: what the agent changes from here is a new run, undone on its own.
+    if let Some(reader) = ctx.state.opened_project.lock().as_mut() {
+        reader.end_agent_run();
+    }
     match args.name.filter(|n| !n.trim().is_empty()) {
         Some(name) => match args.part.as_deref().map(str::trim) {
             None | Some("") => text(compose(&ctx.host.config_dir(), &name, args.auto, false)?),

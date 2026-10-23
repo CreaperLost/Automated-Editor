@@ -1,7 +1,8 @@
 # History and checkpoints: plan v1 (2026-10-23)
 
-[SAFE-2](../roadmap.md#safe-2). Status: **phase 1 built 23 Oct 2026** (see
-[Built](#built-phase-1-23-oct-2026)); phases 2 and 3 not started. George's answers to its
+[SAFE-2](../roadmap.md#safe-2). Status: **phases 1 and 2 built 23 Oct 2026** (see
+[phase 1](#built-phase-1-23-oct-2026), [phase 2](#built-phase-2-23-oct-2026)); phase 3
+(checkpoints) not started. George's answers to its
 three questions are under [Decisions](#decisions-george-23-oct-2026). When it ships, fold the
 model into [architecture.md](../architecture.md) and delete this plan.
 
@@ -176,6 +177,28 @@ Where it differs from the design above, this wins.
 - **Checked in the dev app:** an agent cut pauses and added a zoom over MCP, the app was
   stopped and started again, the reopened project's undo button read "Undo Zooms", and `undo`
   took both steps back ("Undid "Cut 58.8 s"") and `redo` brought one back.
+
+## Built: phase 2 (23 Oct 2026)
+
+- A step an agent makes gets a run id (`r-<n>`) and the revision it made. It joins the top
+  step's run while that step is the same agent's, less than 15 minutes old, and no `template`
+  call came between (`template` calls `ProjectReader::end_agent_run`); a user step on top
+  means the next agent step starts a new run.
+- `EditHistory::undo_run` restores the state from before the run's first step as one new step,
+  "Undo claude-code's run (3 changes)", marked with the run it undid (`undoesRun`), so Undo
+  brings the whole run back. Refused, with the label of what came after, when the run's last
+  step is not the current one; an agent may only undo its own run.
+- `proposals::undo_run` marks every batch accepted in the run (applied revision after the run
+  began) **Undone**, including edit batches: undoing the run takes all of it away, so none of it
+  comes back to wait in the panel.
+- **Agent panel:** a card at the top, "Last run by claude-code · 3 changes · 1 min ago", with
+  **Undo the run**; after it, "undone; Undo brings it back"; when you changed something after
+  the run, it names that change instead of offering the button (`ProposalsView.lastRun`).
+  **MCP:** `undo` with `run: true`.
+- **Checked in the dev app:** three changes over MCP (silence, mouth noises, captions on), the app
+  stopped and started, the panel showed the run, **Undo the run** took all three back in one
+  step (1:40.4 again, captions off, no mutes) and the top bar's Undo brought them back.
+  Not checked yet: a full EVAL-1 tutorial run by a real agent.
 
 ## Decisions (George, 23 Oct 2026)
 

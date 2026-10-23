@@ -44,6 +44,10 @@ pub struct StepMeta {
     pub tool: Option<String>,
     /// The proposal batch the step accepted.
     pub batch: Option<String>,
+    /// An agent's step that belongs to its run, so the run can be undone as one.
+    pub joins_run: bool,
+    /// The run this step undoes.
+    pub undoes_run: Option<String>,
 }
 
 impl StepMeta {
@@ -55,6 +59,7 @@ impl StepMeta {
                 by: Author::Agent,
                 agent: Some(agent.clone()),
                 tool: Some(tool.clone()),
+                joins_run: true,
                 ..Self::default()
             },
             None => Self::default(),
@@ -67,6 +72,9 @@ thread_local! {
     /// end on one blocking thread, so every step they make is theirs.
     static AGENT_CALL: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
 }
+
+/// An agent's run ends after this long without one of its steps.
+const RUN_GAP_SECONDS: i64 = 15 * 60;
 
 /// Runs `call` with the steps it makes on this thread marked as `agent`'s, by `tool`.
 pub fn as_agent<T>(agent: &str, tool: &str, call: impl FnOnce() -> T) -> T {
@@ -142,7 +150,46 @@ pub struct Step {
     pub tool: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch: Option<String>,
+    /// The agent run it was part of (`r-<n>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// The run this step undid as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undoes_run: Option<String>,
+    /// The edit revision the step made.
+    #[serde(default)]
+    pub revision: u64,
     pub at: String,
+}
+
+/// The newest agent run in the undo history, as the Agent panel shows it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunView {
+    pub agent: String,
+    /// Its steps still in the history.
+    pub changes: usize,
+    pub started_at: String,
+    pub ended_at: String,
+    /// Nothing came after it, so it can be undone as one step.
+    pub can_undo: bool,
+    /// It was undone as one step (Undo brings it back while nothing came after).
+    pub undone: bool,
+    /// Why it cannot: the changes made after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
+}
+
+/// What undoing a run takes back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunUndo {
+    pub run: String,
+    pub agent: String,
+    pub changes: usize,
+    /// The state from before its first step.
+    pub before: String,
+    /// The revisions its steps made are above this one.
+    pub since_revision: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -173,6 +220,9 @@ pub struct History {
     /// Size on disk of each saved state.
     sizes: HashMap<String, u64>,
     limit_bytes: u64,
+    /// The next agent step starts a new run even if its agent's last one was recent
+    /// (the agent began a new workflow).
+    run_ended: bool,
 }
 
 impl History {
@@ -193,6 +243,116 @@ impl History {
 
     pub fn undo_len(&self) -> usize {
         self.undo.len()
+    }
+
+    /// Ends the agents' current run: their next step starts another.
+    pub fn end_run(&mut self) {
+        self.run_ended = true;
+    }
+
+    /// The steps at the top of the undo stack that belong to the same run as the top one.
+    fn top_run(&self) -> Option<&[Step]> {
+        let run = self.undo.last()?.run.as_ref()?;
+        let start = self
+            .undo
+            .iter()
+            .rposition(|s| s.run.as_ref() != Some(run))
+            .map_or(0, |i| i + 1);
+        Some(&self.undo[start..])
+    }
+
+    /// The run an agent's next step belongs to: the top step's, while it is the same agent's,
+    /// recent, and no workflow began since; else a new one.
+    fn run_for(&mut self, agent: Option<&str>) -> String {
+        let now = chrono::Utc::now();
+        let continues = !self.run_ended
+            && self.undo.last().is_some_and(|top| {
+                top.run.is_some()
+                    && top.agent.as_deref() == agent
+                    && chrono::DateTime::parse_from_rfc3339(&top.at).is_ok_and(|at| {
+                        (now - at.with_timezone(&chrono::Utc)).num_seconds() < RUN_GAP_SECONDS
+                    })
+            });
+        self.run_ended = false;
+        if continues {
+            return self
+                .undo
+                .last()
+                .and_then(|s| s.run.clone())
+                .expect("checked above");
+        }
+        let next = self
+            .undo
+            .iter()
+            .chain(self.redo.iter())
+            .filter_map(|s| s.run.as_deref()?.strip_prefix("r-")?.parse::<u64>().ok())
+            .max()
+            .map_or(1, |n| n + 1);
+        format!("r-{next}")
+    }
+
+    /// The newest agent run still in the undo history, and whether it can be undone. A run
+    /// undone as one step is reported as such rather than the run before it.
+    pub fn last_run(&self) -> Option<RunView> {
+        let end = self
+            .undo
+            .iter()
+            .rposition(|s| s.run.is_some() || s.undoes_run.is_some())?;
+        let (run, undone) = match &self.undo[end].undoes_run {
+            Some(run) => (run, true),
+            None => (self.undo[end].run.as_ref()?, false),
+        };
+        let steps: Vec<&Step> = self.undo[..=end]
+            .iter()
+            .filter(|s| s.run.as_ref() == Some(run))
+            .collect();
+        let first = steps.first()?;
+        let last = steps.last()?;
+        let after = &self.undo[end + 1..];
+        Some(RunView {
+            agent: first.agent.clone().unwrap_or_else(|| "agent".into()),
+            changes: steps.len(),
+            started_at: first.at.clone(),
+            ended_at: last.at.clone(),
+            can_undo: !undone && after.is_empty(),
+            undone,
+            blocked_by: match after {
+                [] => None,
+                [one] => Some(format!("\"{}\"", one.label)),
+                [.., last] => Some(format!("\"{}\" and {} more", last.label, after.len() - 1)),
+            },
+        })
+    }
+
+    /// What undoing the newest run would take back, or why it cannot be.
+    pub fn run_to_undo(&self) -> Result<RunUndo, String> {
+        let Some(steps) = self.top_run() else {
+            return Err(match self.last_run() {
+                Some(RunView {
+                    blocked_by: Some(after),
+                    ..
+                }) => format!(
+                    "The agent's last run cannot be undone as one step: {after} came after it. \
+                     Undo those first."
+                ),
+                Some(run) if run.undone => {
+                    "The agent's last run is already undone; `undo` brings it back".into()
+                }
+                _ => "No agent run to undo".into(),
+            });
+        };
+        Ok(RunUndo {
+            run: steps[0].run.clone().unwrap_or_default(),
+            agent: steps[0].agent.clone().unwrap_or_else(|| "agent".into()),
+            changes: steps.len(),
+            before: steps[0].before.clone(),
+            since_revision: steps
+                .iter()
+                .map(|s| s.revision)
+                .min()
+                .unwrap_or(0)
+                .saturating_sub(1),
+        })
     }
 
     #[cfg(test)]
@@ -251,6 +411,9 @@ impl History {
                             agent: None,
                             tool: None,
                             batch: None,
+                            run: None,
+                            undoes_run: None,
+                            revision: current.revision,
                             at: now(),
                         });
                         note = Some(
@@ -337,8 +500,14 @@ impl History {
         before: String,
         after: String,
         meta: StepMeta,
+        revision: u64,
         label: impl FnOnce() -> String,
     ) {
+        let run = (meta.by == Author::Agent && meta.joins_run)
+            .then(|| self.run_for(meta.agent.as_deref()));
+        if meta.by == Author::User {
+            self.run_ended = false;
+        }
         let step = Step {
             before,
             after: after.clone(),
@@ -347,6 +516,9 @@ impl History {
             agent: meta.agent.map(|a| clean_label(&a)),
             tool: meta.tool.map(|t| clean_label(&t)),
             batch: meta.batch,
+            run,
+            undoes_run: meta.undoes_run,
+            revision,
             at: now(),
         };
         self.current = Some(after);

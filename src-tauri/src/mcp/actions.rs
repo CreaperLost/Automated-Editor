@@ -57,8 +57,10 @@ pub static ACTIONS: [ToolDef; 41] = [
     },
     ToolDef {
         name: "undo",
-        description: "Undoes the last change to the edit, whoever made it.",
-        schema: schema::<NoArgs>,
+        description: "Undoes the last change to the edit, whoever made it. `run: true` undoes \
+            everything you changed since your last `template` call (your run) as one step, \
+            while the user has changed nothing since.",
+        schema: schema::<UndoArgs>,
         read_only: false,
         run: undo,
     },
@@ -1143,9 +1145,32 @@ fn create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     ))
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoArgs {
+    /// Undo your whole run as one step instead of the last change.
+    #[serde(default)]
+    pub run: bool,
+}
+
 fn undo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
+    let args: UndoArgs = params(args)?;
     let before = opened(ctx)?;
+    if args.run {
+        let (what, view) = crate::commands::proposals::with_proposals(
+            ctx.state,
+            ctx.project.as_deref(),
+            |reader, proposals| {
+                crate::proposals::undo_run(reader, proposals, before.revision, Some(&ctx.agent))
+                    .map(|(_, what)| what)
+            },
+        )?;
+        let mut answer = undone(ctx, &before, &format!("{what}."))?;
+        if let Some(warning) = view.warning {
+            answer.push(Output::Text(warning));
+        }
+        return Ok(answer);
+    }
     let label = with_reader(ctx.state, |r| {
         Ok(r.history().undo_label().map(str::to_string))
     })?;
@@ -5536,6 +5561,62 @@ mod tests {
             listed.starts_with(&format!("Found 2 fillers and 0 retakes in {key}")),
             "{listed}"
         );
+    }
+
+    #[test]
+    fn an_agent_run_is_undone_as_one_step_with_its_batches() {
+        use crate::project::history::as_agent;
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let agent =
+            |name: &str, args: Value| as_agent("claude-code", name, || call(&ctx, name, args));
+        let start = length(&ctx);
+        agent("fillers", json!({})).unwrap();
+        agent(
+            "settings",
+            json!({ "area": "captions", "set": { "enabled": true } }),
+        )
+        .unwrap();
+        assert!(length(&ctx) < start);
+
+        let undone = agent("undo", json!({ "run": true })).unwrap();
+        assert!(
+            undone.starts_with("Undid claude-code's run: 2 changes"),
+            "{undone}"
+        );
+        assert_eq!(length(&ctx), start);
+        assert!(history(&ctx)
+            .iter()
+            .all(|b| b.status == crate::proposals::Status::Undone));
+        // The run undo is itself a step, so Undo brings the run back.
+        let back = call(&ctx, "undo", json!({})).unwrap();
+        assert!(
+            back.starts_with("Undid \"Undo claude-code's run (2 changes)\""),
+            "{back}"
+        );
+        assert!(length(&ctx) < start);
+        // A new workflow starts a new run: only what came after `template` goes.
+        agent("template", json!({})).unwrap();
+        agent(
+            "settings",
+            json!({ "area": "captions", "set": { "fontSizePct": 7 } }),
+        )
+        .unwrap();
+        let undone = agent("undo", json!({ "run": true })).unwrap();
+        assert!(
+            undone.starts_with("Undid claude-code's run: 1 change"),
+            "{undone}"
+        );
+        assert!(length(&ctx) < start);
+        // Not another agent's run.
+        let other = as_agent("codex", "undo", || {
+            call(&ctx, "undo", json!({ "run": true }))
+        });
+        assert!(other.is_err());
     }
 
     #[test]

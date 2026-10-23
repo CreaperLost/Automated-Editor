@@ -312,6 +312,15 @@ export const AgentPanel: React.FC = () => {
     );
   };
 
+  const lastRun = shownHere ? proposals?.lastRun : undefined;
+  const undoRun = () => {
+    if (!openedProject || !lastRun) return;
+    void run(
+      () => api.proposalUndoRun(openedProject.projectHandle, openedProject.revision),
+      `Undid ${lastRun.agent}'s run (${lastRun.changes} change${lastRun.changes === 1 ? "" : "s"}). Undo brings it back.`,
+    );
+  };
+
   const connected = status?.connected ?? [];
   const detail = !status?.enabled
     ? "Agents off"
@@ -373,6 +382,40 @@ export const AgentPanel: React.FC = () => {
             </li>
           ))}
         </ul>
+      )}
+
+      {openedProject && lastRun && (
+        <div className="shrink-0 mx-3 mt-2.5 rounded-control border border-studio-800 bg-studio-850 px-2.5 py-2">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 text-meta">
+              <p className="text-studio-200 truncate" title={lastRun.agent}>
+                Last run by {lastRun.agent}
+              </p>
+              <p className="text-studio-500">
+                {lastRun.changes} change{lastRun.changes === 1 ? "" : "s"} ·{" "}
+                {lastRun.undone ? (lastRun.blockedBy ? "undone" : "undone; Undo brings it back") : since(lastRun.endedAt)}
+              </p>
+            </div>
+            {lastRun.canUndo && (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={Undo2}
+                disabled={busy}
+                onClick={undoRun}
+                className="ml-auto shrink-0"
+                title="Takes back everything it changed as one step; Undo brings it back"
+              >
+                Undo the run
+              </Button>
+            )}
+          </div>
+          {!lastRun.canUndo && !lastRun.undone && lastRun.blockedBy && (
+            <p className="mt-1 text-meta text-studio-500">
+              {lastRun.blockedBy} came after it, so it can&rsquo;t be undone in one step. Undo that first.
+            </p>
+          )}
+        </div>
       )}
 
       <div className="shrink-0 px-3 pt-2.5">

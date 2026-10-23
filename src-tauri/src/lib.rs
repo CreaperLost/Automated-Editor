@@ -1337,6 +1337,21 @@ fn proposal_undo(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn proposal_undo_run(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+) -> Result<commands::proposals::ProposalOutcome, String> {
+    use tauri::Emitter;
+    let outcome =
+        commands::proposals::proposal_undo_run_impl(&state, project_handle, expected_revision)?;
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    Ok(outcome)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn ai_settings_get() -> ai::AiSettingsView {
     commands::transcript::ai_settings_get_impl()
 }
@@ -2347,6 +2362,7 @@ pub fn run() {
             proposal_accept,
             proposal_reject,
             proposal_undo,
+            proposal_undo_run,
             mcp_app_connect,
             mcp_skill_install,
             ai_settings_get,
