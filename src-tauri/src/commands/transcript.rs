@@ -126,7 +126,7 @@ fn transcript_clock(
 }
 
 /// Playback keeps its own copy of the captions; rebuild it after the transcript changes.
-fn refresh_playback(state: &AppState) {
+pub(crate) fn refresh_playback(state: &AppState) {
     let opened = state.opened_project.lock();
     if let Some(reader) = opened.as_ref() {
         let document = &reader.history().current;
@@ -1087,6 +1087,12 @@ pub struct CaptionCueView {
     pub word_ids: Vec<String>,
     /// Where each word starts on the edited timeline.
     pub word_starts_us: Vec<u64>,
+    /// Its word drawn in the accent, when one is picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emphasis: Option<String>,
+    /// A graphic fills the frame over some of it, and the caption gives way there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub under_graphic: bool,
 }
 
 /// The caption track: the transcript captions read from and its cues in edited time.
@@ -1120,6 +1126,9 @@ pub enum CaptionEdit {
     Merge { word_id: String },
     /// Shows or hides words in the captions; the sound is untouched.
     Hide { word_ids: Vec<String>, hidden: bool },
+    /// Draws each word in the accent (`on`), or stops. A caption has one: picking a word
+    /// drops the one its caption had.
+    Emphasis { word_ids: Vec<String>, on: bool },
 }
 
 fn caption_track(
@@ -1139,9 +1148,21 @@ fn caption_track(
         return Ok(CaptionTrackView::default());
     };
     let mapper = document.transcript_clock(&transcript.track_id)?;
+    // A short's graphics fill its frame or not by their mode, which its own document knows.
+    let shown =
+        match short.and_then(|id| reader.history().current.shorts.iter().find(|s| s.id == id)) {
+            Some(short) => {
+                let mut shown = timeline.clone();
+                shown.short_layout = Some(short.layout.clone());
+                shown
+            }
+            None => timeline.clone(),
+        };
+    let free = crate::graphics::render::whole_frame_ranges(root, &shown);
     let cues = crate::captions::build_cues(&transcript, &mapper, settings)
         .into_iter()
         .map(|cue| CaptionCueView {
+            under_graphic: crate::graphics::render::meets_ranges(&free, cue.start_us, cue.end_us),
             start_us: cue.start_us,
             end_us: cue.end_us,
             text: cue
@@ -1151,6 +1172,7 @@ fn caption_track(
                 .collect::<Vec<_>>()
                 .join(" "),
             word_starts_us: cue.words.iter().map(|w| w.start_us).collect(),
+            emphasis: cue.words.iter().find(|w| w.emphasis).map(|w| w.id.clone()),
             word_ids: cue.words.into_iter().map(|w| w.id).collect(),
         })
         .collect();
@@ -1158,6 +1180,34 @@ fn caption_track(
         track_id: Some(transcript.track_id),
         cues,
     })
+}
+
+/// The emphasis words to drop so each caption keeps one when `picked` are emphasized; an error
+/// when two picked words share a caption.
+fn emphasis_replaced(track: &CaptionTrackView, picked: &[String]) -> Result<Vec<String>, String> {
+    let mut replaced = Vec::new();
+    for cue in &track.cues {
+        let here: Vec<&String> = picked
+            .iter()
+            .filter(|id| cue.word_ids.contains(id))
+            .collect();
+        if here.len() > 1 {
+            return Err(format!(
+                "{} are in one caption (\"{}\"): pick one word a caption",
+                here.iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                cue.text
+            ));
+        }
+        if let (Some(old), Some(new)) = (&cue.emphasis, here.first()) {
+            if old != *new {
+                replaced.push(old.clone());
+            }
+        }
+    }
+    Ok(replaced)
 }
 
 /// The timeline captions are placed on: the project's, or short `short`'s own.
@@ -1220,6 +1270,16 @@ pub fn transcript_caption_edit_impl(
         }
         _ => None,
     };
+    // The emphasis words picked now replace the ones their captions had.
+    let replaced = match &change {
+        CaptionEdit::Emphasis { word_ids, on: true } => {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().ok_or("No opened project")?;
+            super::require_handle(reader, &project_handle)?;
+            emphasis_replaced(&caption_track(reader, short_id.as_deref())?, word_ids)?
+        }
+        _ => Vec::new(),
+    };
     modify_transcript(state, &project_handle, &track_id, |t| match &change {
         CaptionEdit::SetText { word_ids, text } => t.replace_words(word_ids, text),
         CaptionEdit::Retime { word_ids, .. } => {
@@ -1237,6 +1297,15 @@ pub fn transcript_caption_edit_impl(
         CaptionEdit::Hide { word_ids, hidden } => {
             for id in word_ids {
                 t.set_caption_mark(id, |m| m.hidden = *hidden)?;
+            }
+            Ok(())
+        }
+        CaptionEdit::Emphasis { word_ids, on } => {
+            for id in &replaced {
+                t.set_caption_mark(id, |m| m.emphasis = false)?;
+            }
+            for id in word_ids {
+                t.set_caption_mark(id, |m| m.emphasis = *on)?;
             }
             Ok(())
         }

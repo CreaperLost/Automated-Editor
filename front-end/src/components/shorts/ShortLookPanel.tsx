@@ -15,6 +15,7 @@ import {
   useSelectedShort,
   useShortsStore,
 } from "../../stores/shortsStore";
+import { CAPTION_STYLES } from "../captions/CaptionsSection";
 import { InspectorSection } from "../inspector/InspectorSection";
 import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "./CameraFraming";
@@ -285,6 +286,16 @@ export const ShortLookPanel: React.FC = () => {
             )}
             {layout.captions && (
               <div className="space-y-2">
+                <div className="space-y-1">
+                  <span className="text-label text-studio-400">Words appear</span>
+                  <div className="flex gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
+                    {([[null, "Video's", "As the video's captions"], ...CAPTION_STYLES] as const).map(([style, label, hint]) => (
+                      <button key={label} type="button" title={hint} aria-pressed={(layout.captionStyle ?? null) === style} onClick={() => changeLayout({ captionStyle: style })} className={segmented((layout.captionStyle ?? null) === style)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <label className="block space-y-1">
                   <div className="flex justify-between">
                     <span className="text-label text-studio-400">Words at once</span>
@@ -311,7 +322,7 @@ export const ShortLookPanel: React.FC = () => {
                 </label>
               </div>
             )}
-            <p className="text-meta text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the short's timeline.</p>
+            <p className="text-meta text-studio-500">Colours come from the editor's Captions settings, the font and accent from the brand kit; edit caption text and emphasis on the short's timeline.</p>
           </InspectorSection>
 
           <div className="flex flex-col gap-2 p-4">

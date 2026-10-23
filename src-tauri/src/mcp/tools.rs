@@ -117,6 +117,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "library_save",
     "template_save",
     "transcript_fix",
+    "captions",
 ];
 
 pub fn destructive(name: &str) -> bool {
@@ -150,6 +151,7 @@ pub const MORE: &[&str] = &[
     "telemetry_get",
     "speed",
     "transcript_fix",
+    "captions",
     "propose_edit",
     "proposal_withdraw",
     "short_create",
@@ -262,7 +264,7 @@ static TOOLS: [ToolDef; 15] = [
             directly. redo (the undo taken back); playhead_get (where the user's playhead is); \
             layout_get (a layout's details); telemetry_get (mouse and keys at a time); speed \
             (play a stretch faster or slower, only when asked); transcript_fix (a misheard \
-            word); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
+            word); captions (the caption lines and their emphasis words); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
             (take back your batch); short_create (a clip from the video's words); \
             template_save (keep the user's answers); graphics_install (the graphics renderer, \
             ask first); brand_pick (the project's brand kit); brand_kit_set (make or change a \

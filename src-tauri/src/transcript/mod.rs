@@ -99,6 +99,9 @@ pub struct CaptionMark {
     /// Heard but not shown in the captions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// The word of its caption drawn in the accent (picked by the agent or the user).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emphasis: bool,
 }
 
 impl CaptionMark {

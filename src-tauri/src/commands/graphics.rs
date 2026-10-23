@@ -506,12 +506,15 @@ pub fn graphics_brands_impl(
     })
 }
 
-/// Saves a brand kit (new, changed or renamed); graphics that use it render again.
+/// Saves a brand kit (new, changed or renamed); graphics that use it render again, and the
+/// preview's captions take its font and accent.
 pub fn graphics_brand_save_impl(
+    state: &AppState,
     kit: brands::BrandKitInput,
 ) -> Result<brands::BrandKitView, String> {
     let dir = brands::dir();
     let saved = brands::save(&dir, &kit)?;
+    super::transcript::refresh_playback(state);
     Ok(brands::view(&dir, &saved))
 }
 

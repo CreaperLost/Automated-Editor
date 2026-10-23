@@ -117,9 +117,9 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| One embedded font (Liberation Sans Bold); the brand kit's font doesn't reach captions (principle 6 isn't true yet) | Code: `captions.rs` (`include_bytes!`) | [CAP-1](roadmap.md#cap-1) |
-| No per-word emphasis chosen by meaning, no animation presets, no explicit caption ownership per moment (native caption / graphic text / hidden) | Code; research: every short-form reference | [CAP-1](roadmap.md#cap-1) |
-| Greek glyph coverage (tonos, diaeresis, final sigma) never tested in captions or graphics | Log | [CAP-1](roadmap.md#cap-1) |
+| ~~The brand kit's font doesn't reach captions~~ | **Fixed** 23 Oct: kit font file (.ttf/.otf) or the installed family, else Inter Display; .woff/.woff2 kit files still fall back | [CAP-1](roadmap.md#cap-1) |
+| ~~No per-word emphasis, no animation presets~~ (**fixed** 23 Oct); caption ownership by stretch **fixed** 23 Oct: captions give way to full-frame graphics | Code; research: every short-form reference | [CAP-1](roadmap.md#cap-1) |
+| Greek glyph coverage in graphics never tested (captions: tested 23 Oct, every bundled weight) | Log | [GFX-3](roadmap.md#gfx-3) |
 | No subtitle files (SRT/VTT) or transcript export; burned-in captions are the only output | Code: 0 matches for `srt|webvtt` | [DLV-1](roadmap.md#dlv-1) |
 
 ## 7. Sound and music
@@ -202,7 +202,7 @@ performance on a real `.aero` with `perf.rs`. → [VER-1](roadmap.md#ver-1).
 | C1 | `SKILL.md` telemetry polish on/off | **Fixed** 21 Oct ([FIX-2](roadmap.md#fix-2)) |
 | C2 | "No keystroke capture" vs keyboard telemetry v1 | **Fixed** in [ai-readiness.md](plans/ai-readiness.md#decisions-2026-10-13): no typed text is ever captured |
 | C3 | Graphics v1 says a placement stores a word anchor; the code resolves the word to a time once | **Fixed** in the plan text; storing the anchor is part of [PLAN-1](roadmap.md#plan-1) |
-| C4 | "A brand kit feeds every caption" | Marked not yet true; [CAP-1](roadmap.md#cap-1) |
+| C4 | "A brand kit feeds every caption" | **Fixed** 23 Oct: font and accent ([CAP-1](roadmap.md#cap-1)) |
 | C5 | Research said our HyperFrames skills cover "3D, shaders"; our gate and authoring rules allowed only WAAPI/CSS | GSAP allowed 23 Oct ([GFX-2](roadmap.md#gfx-2)); 3D and shaders still not |
 | C6 | Phase 2 handoff still said "nothing is committed" | Removed (historical doc deleted) |
 | C7 | Backlog said the cut-out layout needs task 10; it needs the matte | Fixed: [LAY-4](roadmap.md#lay-4) depends on [FX-1](roadmap.md#fx-1) |

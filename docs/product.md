@@ -73,7 +73,7 @@ lack it, so we say "we have", not "only we have".
 | Layouts | Bubble (3×3 grid, S/M/L, shapes), side by side (fit/fill, any share), camera only (punch-in), screen only; a base layout plus sections anchored in recording time; favourites; **Pick from the recording** (rest, busy, hook rules) | Telemetry, face tracks |
 | Camera | Face centring on every camera slot (YuNet, found once per recording), hand framing per clip | Local model |
 | Telemetry polish | Window crop to the front window, bubble hides under activity, shortcut badges, click/whoosh lane (off by default) | `windows.jsonl`, `keys.jsonl`, `events.jsonl` |
-| Captions | Word-highlighted captions, style sliders, one embedded font (Liberation Sans Bold) | Transcript |
+| Captions | The brand kit's font (else Inter Display, bundled) at the look's weight; one emphasis word per caption in the accent, picked by the agent; pop-in, karaoke or static; English and Greek, 16:9 and 9:16 | Transcript |
 | Audio | Track gain, denoise, speech ducking, loudness normalisation to -14 LUFS by default with a peak leveller, crossfades at cuts | DSP |
 | Graphics | HyperFrames compositions: 6 tutorial templates + blank in a light app style, one look per video (presets, five controls, preview), brand kits, an app-level library behind a no-model quality gate, short slots; exports render them at their fps and 2× density above 1080p | Pinned runtime (200 MB download on first use) |
 | Shorts | A Shorts workspace tab; word-range shorts that follow the video's edits or get their own timeline; **take shorts** (a new camera take with footage from the long video under it, each piece at its own speed; graphics full frame, split beside the face or over it); own layouts | Agent or the app's cloud AI picks moments |

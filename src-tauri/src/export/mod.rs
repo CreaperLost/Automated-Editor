@@ -278,7 +278,11 @@ pub struct SceneEvaluator {
     graphics_quality: crate::graphics::render::Quality,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
-    /// The last cue drawn and its colored frame for the active word.
+    /// The captions' typeface and accent, from the brand kit and the look.
+    caption_look: std::cell::OnceCell<crate::captions::CaptionLook>,
+    /// Where graphics fill the frame: no captions there.
+    caption_free: std::cell::OnceCell<Vec<(u64, u64)>>,
+    /// The last cue drawn and its colored frame for its words' state.
     caption_cache: std::cell::RefCell<CaptionCache>,
     /// Recorded pointers by recording, looked up once per evaluator.
     cursors: std::cell::RefCell<Cursors>,
@@ -332,7 +336,7 @@ impl MediaLookups {
 #[derive(Default)]
 struct CaptionCache {
     raster: Option<(usize, Option<crate::captions::CueRaster>)>,
-    frame: Option<((usize, Option<usize>), VideoFrame)>,
+    frame: Option<((usize, Vec<crate::captions::WordState>), VideoFrame)>,
 }
 
 /// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
@@ -556,6 +560,8 @@ impl SceneEvaluator {
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
+            caption_look: std::cell::OnceCell::new(),
+            caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
             prefetched: Default::default(),
@@ -1700,20 +1706,34 @@ impl SceneEvaluator {
                 .unwrap_or_default()
         });
         let index = crate::captions::cue_at(cues, edited_us)?;
+        let free = self.caption_free.get_or_init(|| {
+            crate::graphics::render::whole_frame_ranges(&self.root, &self.document)
+        });
+        if crate::graphics::render::in_ranges(free, edited_us) {
+            return None;
+        }
         let cue = &cues[index];
-        let active = crate::captions::active_word(cue, edited_us);
+        let look = self
+            .caption_look
+            .get_or_init(|| crate::captions::CaptionLook::of(&self.document));
+        let states = crate::captions::word_states(cue, settings.style, look, edited_us);
         let mut cache = self.caption_cache.borrow_mut();
         let frame = match &cache.frame {
-            Some((key, frame)) if *key == (index, active) => frame.clone(),
+            Some((key, frame)) if key.0 == index && key.1 == states => frame.clone(),
             _ => {
                 if cache.raster.as_ref().map(|(i, _)| *i) != Some(index) {
-                    let raster =
-                        crate::captions::rasterize_cue(cue, settings, self.width, self.height);
+                    let raster = crate::captions::rasterize_cue(
+                        cue,
+                        settings,
+                        look,
+                        self.width,
+                        self.height,
+                    );
                     cache.raster = Some((index, raster));
                 }
                 let raster = cache.raster.as_ref()?.1.as_ref()?;
-                let frame = crate::captions::colorize(raster, settings, active);
-                cache.frame = Some(((index, active), frame.clone()));
+                let frame = crate::captions::colorize(raster, settings, look, &states);
+                cache.frame = Some(((index, states), frame.clone()));
                 frame
             }
         };
@@ -3694,7 +3714,7 @@ mod tests {
         document.layout.color_end = "#000000".into();
         document.captions.enabled = true;
         document.captions.text_color = "#FFFFFF".into();
-        document.captions.highlight_words = false;
+        document.captions.style = crate::captions::CaptionStyle::Static;
         let evaluator = SceneEvaluator {
             root: root.clone(),
             document,
@@ -3709,6 +3729,8 @@ mod tests {
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
+            caption_look: std::cell::OnceCell::new(),
+            caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
             prefetched: Default::default(),
@@ -3722,6 +3744,27 @@ mod tests {
         };
         let (_, _, y) = evaluator.caption_at(100_000).unwrap();
         assert!(y > 90, "caption sits in the lower half, y {y}");
+        // Every style draws a moment the same whatever was drawn before (the preview seeks,
+        // the export plays straight through).
+        for style in [
+            crate::captions::CaptionStyle::Pop,
+            crate::captions::CaptionStyle::Karaoke,
+        ] {
+            let mut document = evaluator.document.clone();
+            document.captions.style = style;
+            let straight = scenes(dir.path(), document.clone(), 320, 180);
+            let seeking = scenes(dir.path(), document, 320, 180);
+            for at in [0, 50_000, 100_000, 150_000, 650_000, 700_000] {
+                let a = straight
+                    .caption_at(at)
+                    .map(|(f, x, y)| (f.data.to_vec(), x, y));
+                let _ = seeking.caption_at(900_000 - at);
+                let b = seeking
+                    .caption_at(at)
+                    .map(|(f, x, y)| (f.data.to_vec(), x, y));
+                assert!(a == b, "{style:?} at {at}");
+            }
+        }
         let cues = evaluator.caption_cues.get().unwrap();
         let words: Vec<_> = cues
             .iter()
@@ -3770,6 +3813,8 @@ mod tests {
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
+            caption_look: std::cell::OnceCell::new(),
+            caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
             prefetched: Default::default(),
@@ -4058,6 +4103,74 @@ mod tests {
             .unwrap();
         let last = scene.layers.last().unwrap();
         assert_eq!((last.x, last.y, last.width, last.height), (0, 0, 160, 90));
+    }
+
+    #[test]
+    fn captions_give_way_where_a_graphic_fills_the_frame() {
+        use crate::graphics::render::{in_ranges, whole_frame_ranges};
+        use crate::shorts::GraphicSlot;
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let overlay =
+            crate::graphics::create(dir.path(), "blank", None, &serde_json::Map::new()).unwrap();
+        let html_path = std::path::Path::new(&overlay.path).join(crate::graphics::ENTRY);
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        std::fs::write(
+            &html_path,
+            html.replacen(
+                "data-composition-id=\"graphic\"",
+                "data-composition-id=\"graphic\" data-overlay",
+                1,
+            ),
+        )
+        .unwrap();
+        crate::graphics::render::sources_changed();
+        let clip = |id: &str, asset: &str, start_us: u64| Clip {
+            id: id.into(),
+            asset: asset.into(),
+            stream: "picture".into(),
+            start_us,
+            in_us: 0,
+            duration_us: 1_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        };
+        let mut track =
+            crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
+        track.clips.push(clip("g1", &card.id, 1_000_000));
+        track.clips.push(clip("g2", &overlay.id, 3_000_000));
+        document.assets.push(card);
+        document.assets.push(overlay);
+        document.sequence.tracks.push(track);
+        document.validate().unwrap();
+
+        // The video: the card fills the frame, the see-through overlay doesn't.
+        let free = whole_frame_ranges(dir.path(), &document);
+        assert_eq!(free, vec![(1_000_000, 2_000_000)]);
+        assert!(in_ranges(&free, 1_500_000) && !in_ranges(&free, 2_000_000));
+        assert!(!in_ranges(&free, 3_500_000));
+
+        // A short: only a graphic shown full; split or over the face, captions stay.
+        let short: crate::shorts::Short = serde_json::from_value(serde_json::json!({
+            "id": "s1", "title": "Short", "media": "logo",
+            "sourceStartUs": 0, "sourceEndUs": 5_000_000
+        }))
+        .unwrap();
+        assert!(short.layout.captions, "a short has captions unless turned off");
+        let mut short_document = crate::shorts::short_document(&document, &short, false).unwrap();
+        assert_eq!(
+            whole_frame_ranges(dir.path(), &short_document),
+            vec![(1_000_000, 2_000_000), (3_000_000, 4_000_000)]
+        );
+        let layout = short_document.short_layout.as_mut().unwrap();
+        layout.graphic_slots.insert("g1".into(), GraphicSlot::Screen);
+        layout.graphic_slots.insert("g2".into(), GraphicSlot::OverFace);
+        assert!(whole_frame_ranges(dir.path(), &short_document).is_empty());
+        // A video's captions are off until turned on.
+        assert!(!EditDocument::default().captions.enabled);
     }
 
     #[test]

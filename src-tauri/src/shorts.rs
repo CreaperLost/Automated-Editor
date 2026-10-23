@@ -62,6 +62,8 @@ pub struct ShortLayout {
     pub caption_lines: u32,
     /// Caption text size in this short, as a percentage of its height; 0 uses the editor's.
     pub caption_size_pct: f32,
+    /// How this short's caption words come on screen; `None` takes the video's.
+    pub caption_style: Option<crate::captions::CaptionStyle>,
     /// The background behind the screen and camera: `project` (the video's own), `solid`,
     /// `gradient`, `preset` or `wallpaper` (the project's image).
     pub background_type: String,
@@ -267,11 +269,14 @@ impl Default for ShortLayout {
             follow_zooms: true,
             screen_pan_x: 0.0,
             screen_pan_y: 0.0,
-            captions: false,
+            // A short is watched on a phone, often muted: captions on unless turned off.
+            captions: true,
             caption_spot: CaptionSpot::Seam,
             caption_max_words: 0,
             caption_lines: 1,
             caption_size_pct: 0.0,
+            // Words popping in as they are said suit a phone.
+            caption_style: Some(crate::captions::CaptionStyle::Pop),
             background_type: "project".into(),
             background_color_start: "#000000".into(),
             background_color_end: "#1e1b4b".into(),
@@ -783,6 +788,9 @@ pub fn short_document(
     document.captions.max_lines = short.layout.caption_lines.clamp(1, 3);
     if short.layout.caption_size_pct > 0.0 {
         document.captions.font_size_pct = short.layout.caption_size_pct;
+    }
+    if let Some(style) = short.layout.caption_style {
+        document.captions.style = style;
     }
     // Its camera clips are its own (the same ids can be the video's).
     document.layout.camera_clips = short.layout.camera_clips.clone();

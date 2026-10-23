@@ -142,15 +142,11 @@ The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#do
   action for a broken timeline. **Was:** backlog #16.
 
 <a id="cap-1"></a>
-### CAP-1 · Captions as typography — M
+### CAP-1 · Captions as typography — leftovers, S
 
-- **Do:** caption font and weight from the brand kit and the video's look ([GFX-5](#gfx-5);
-  bundled font files, Greek coverage checked); per-word **emphasis** stored on the transcript marks and chosen by the agent (the one
-  word that makes you keep watching), drawn in the accent colour; two or three deterministic
-  animation presets (word pop-in, karaoke highlight, static); caption ownership per range
-  (native / inside a graphic / hidden).
-- **Done when:** English and Greek captions with emphasis render identically in preview and
-  export at 16:9 and 9:16.
+Font, emphasis, styles and giving way to full-frame graphics shipped 23 Oct (see
+[Done](#done)). Left: reading a kit's .woff/.woff2 font file (captions fall back to Inter
+Display and say why); a real-edit check in the dev app with a brand kit.
 
 <a id="snd-1"></a>
 ### SND-1 · Minimal sound surface — M
@@ -470,6 +466,27 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **23 Oct 2026** — **CAP-1 captions as typography.** Captions take the brand kit's font (its
+  .ttf/.otf file, else that family installed on the computer, else the bundled Inter Display,
+  OFL, four weights replacing Liberation Sans) at the look's title weight (App 650 → Bold, Calm
+  → Semibold, Bold → Extra bold; `weight` overrides); letters a kit font lacks come from Inter
+  Display, so Greek always draws (`captions/fonts.rs`). One **emphasis** word per caption, kept
+  on the transcript's caption marks (shared by the video and its shorts), drawn in the kit's
+  accent (`emphasisColor` overrides); agents list the numbered lines and pick by line and word
+  with `captions` (behind `more`), the user with Emphasis on the caption track. Three
+  **styles** (`style`): `pop` (each word grows in with a small overshoot as it is said, timed
+  by the look's speed and energy), `karaoke` (the caption shows dim, each word lights up left
+  to right as it is said), `static`; the video defaults to karaoke, shorts to pop (their own
+  choice in the Shorts tab). Words are drawn once, composed per frame from the edited time
+  only, so preview and export match (tested: two evaluators, one seeking, give the same bytes).
+  Templates (shorts, clips, tutorial when captions are on) pick emphasis. Checked by eye on
+  English and Greek sheets at 16:9 and 9:16 (`caption_sheet_probe`); not yet in the dev app.
+  **Ownership by stretch (George):** captions never show where a graphic fills the frame,
+  even when they are on: in the video every graphic but a see-through overlay, in a short a
+  graphic shown full (split and over-face keep them) (`graphics::render::whole_frame_ranges`).
+  The caption track greys those captions and agents see them marked. Captions start off in
+  the video and on in shorts.
 
 - **23 Oct 2026** — **GFX-5 leftovers and SHT-4's footage sound.** **Saved looks:** a look is
   saved by name app-wide like a brand kit (`config/looks/<name>.json`, `graphics::look::save`)

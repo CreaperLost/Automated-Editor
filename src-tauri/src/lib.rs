@@ -1877,9 +1877,10 @@ async fn graphics_look_preview(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn graphics_brand_save(
+    state: tauri::State<'_, AppState>,
     kit: graphics::brands::BrandKitInput,
 ) -> Result<graphics::brands::BrandKitView, String> {
-    commands::graphics::graphics_brand_save_impl(kit)
+    commands::graphics::graphics_brand_save_impl(&state, kit)
 }
 
 #[cfg(feature = "tauri-app")]

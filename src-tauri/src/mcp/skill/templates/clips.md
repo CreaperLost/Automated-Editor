@@ -47,7 +47,9 @@ split itself (e.g. {"kind": "sideBySide", "cameraFirst": false, "cameraPct": 40}
 step card often reads better in the screen's part (`graphic_set` with `short` and `slot:
 screen`), or `overScreen` for one meant to sit on the screen picture. Then look at each short
 once with `storyboard` and `short` (its id): a tile per scene of its 9:16 frame. Fix a section
-that shows the wrong part, then report.
+that shows the wrong part. If the short shows captions, pick each line's emphasis word (`more`
+`tool: captions` with `short`, then `emphasis`: the one word a line that makes a viewer keep
+watching, never a small word, none on a flat line). Then report.
 
 ## 5. Export (ask)
 

@@ -103,6 +103,15 @@ callout or arrows: then write it as an overlay (no full background; the template
 you as a panel at the bottom). Don't cover the face with full-frame graphics for long: keep
 them short, or split. Add them to the plan with their mode; ask for an OK (automatic: go).
 
+## 6b. Caption emphasis (automatic)
+
+Once the take is cut, `more` with `tool: captions` and `args: {"short": <id>}` lists the
+short's caption lines, numbered. Pick per line the one word that makes a viewer keep watching (a
+number, a name, the twist, the verdict, the thing being warned about), never a small word
+("the", "is", "and"); a flat line gets none. Set them in one call: `args: {"short": <id>,
+"emphasis": [{"line": 0, "word": "never"}, ...]}`. They are drawn in the brand kit's accent.
+The short's words pop in by default; the user picks pop, karaoke or static in the Shorts tab.
+
 ## 7. Propose (automatic)
 
 One `short_footage` call with `op: add`, a `reason`, and every item at once; the user accepts

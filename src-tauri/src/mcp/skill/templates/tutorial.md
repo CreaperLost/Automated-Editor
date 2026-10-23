@@ -169,6 +169,9 @@ Stop and ask before running a pass when its dry run:
 
 Tutorials have no captions: if `status` shows them on, `settings` `area: captions`,
 `set: {"enabled": false}`. Turn them on only if the user says this is a short or vertical video.
+When captions are on (the user asked), pick each line's emphasis word with `more` `tool:
+captions` (it lists the lines; then `emphasis`: per line the one word that makes a viewer keep
+watching, never a small word, none on a flat line), after the cuts.
 
 ## 6. Graphics (ask)
 

@@ -428,6 +428,9 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   duckDb: 12,
 };
 
+/** How caption words come on screen: popping in as said, lighting up as said, or still. */
+export type CaptionStyle = "pop" | "karaoke" | "static";
+
 /** Captions burned into playback and export from a track's transcript. */
 export interface CaptionSettings {
   enabled: boolean;
@@ -439,8 +442,14 @@ export interface CaptionSettings {
   /** Text size, 2 to 15 % of the canvas height. */
   fontSizePct: number;
   textColor: string;
-  highlightWords: boolean;
-  highlightColor: string;
+  /** How the words come on screen. */
+  style: CaptionStyle;
+  /** Draw each caption's emphasis word in the accent. */
+  emphasis: boolean;
+  /** The emphasis colour; empty or absent takes the brand kit's accent. */
+  emphasisColor?: string;
+  /** Font weight, 100 to 900; 0 or absent takes the look's title weight. */
+  weight?: number;
   outline: boolean;
   background: boolean;
   backgroundColor: string;
@@ -459,8 +468,8 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
   offsetPct: 8,
   fontSizePct: 5.5,
   textColor: "#FFFFFF",
-  highlightWords: true,
-  highlightColor: "#FACC15",
+  style: "karaoke",
+  emphasis: true,
   outline: true,
   background: false,
   backgroundColor: "#000000",
@@ -1150,6 +1159,10 @@ export interface CaptionCueView {
   text: string;
   wordIds: string[];
   wordStartsUs: number[];
+  /** Its word drawn in the accent, when one is picked. */
+  emphasis?: string;
+  /** A graphic fills the frame over some of it; the caption gives way there. */
+  underGraphic?: boolean;
 }
 
 export interface CaptionTrackView {
@@ -1164,7 +1177,8 @@ export type CaptionEdit =
   | { kind: "retime"; wordIds: string[]; startUs: number; endUs: number }
   | { kind: "split"; wordId: string }
   | { kind: "merge"; wordId: string }
-  | { kind: "hide"; wordIds: string[]; hidden: boolean };
+  | { kind: "hide"; wordIds: string[]; hidden: boolean }
+  | { kind: "emphasis"; wordIds: string[]; on: boolean };
 
 /** A span of the edited timeline. */
 export interface EditedSpan {
@@ -1617,6 +1631,8 @@ export interface ShortLayout {
   captionLines: number;
   /** Caption size as a percentage of the short's height; 0 uses the editor's. */
   captionSizePct: number;
+  /** How this short's caption words come on screen; null takes the video's. */
+  captionStyle?: CaptionStyle | null;
   /** "project" (the video's own background), "solid", "gradient", "preset" or "wallpaper". */
   backgroundType: "project" | "solid" | "gradient" | "preset" | "wallpaper";
   backgroundColorStart: string;

@@ -605,6 +605,7 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
         return;
     };
     let cues = crate::captions::build_cues(&transcript, &mapper, settings);
+    let look = crate::captions::CaptionLook::of(document);
     let layouts = crate::layouts::resolve::of_document(document);
     let mut sizes = std::collections::HashMap::<(String, String), (u32, u32)>::new();
     // (cue start, cue end, the bubble's top and bottom) of each caption over the bubble.
@@ -626,7 +627,8 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
             .or_insert_with(|| camera_size(asset, &clip.stream));
         let (bx, by, bw, bh) =
             crate::render::webcam_bubble_rect(canvas_w, canvas_h, src_w, src_h, layout, bubble);
-        let Some((w, h)) = crate::captions::cue_size(cue, settings, canvas_w, canvas_h) else {
+        let Some((w, h)) = crate::captions::cue_size(cue, settings, &look, canvas_w, canvas_h)
+        else {
             continue;
         };
         let (x, y) = crate::captions::placement(settings, canvas_w, canvas_h, w, h);

@@ -411,6 +411,52 @@ fn hash_of(spec: &Spec) -> Result<String, String> {
 
 /// Whether the graphic in `dir` says it covers only part of the frame, read once per
 /// generation (a source change bumps it): placing graphics asks for every frame.
+/// Where graphics fill the whole frame on `document`'s timeline, in edited time, merged: a
+/// short's graphics shown full (not split or over the face), a video's unless the composition is
+/// an overlay. Captions give way there, whether or not they are on.
+pub fn whole_frame_ranges(
+    root: &Path,
+    document: &crate::project::revision::EditDocument,
+) -> Vec<(u64, u64)> {
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    for track in document.sequence.video_tracks().filter(|t| !t.hidden) {
+        for clip in &track.clips {
+            if !document.asset(&clip.asset).is_some_and(|a| a.is_graphic()) {
+                continue;
+            }
+            let fills = match &document.short_layout {
+                Some(short) => {
+                    crate::shorts::graphic_slot(short, &clip.id) == crate::shorts::GraphicSlot::Full
+                }
+                None => !overlay_of(&super::folder(root, &clip.asset)),
+            };
+            if fills && clip.end_us() > clip.start_us {
+                ranges.push((clip.start_us, clip.end_us()));
+            }
+        }
+    }
+    ranges.sort();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (a, b) in ranges {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
+}
+
+/// Whether `at` falls in one of `ranges` (sorted, from [`whole_frame_ranges`]).
+pub fn in_ranges(ranges: &[(u64, u64)], at: u64) -> bool {
+    let i = ranges.partition_point(|r| r.0 <= at);
+    i > 0 && at < ranges[i - 1].1
+}
+
+/// Whether `[start, end)` meets one of `ranges`.
+pub fn meets_ranges(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
+    ranges.iter().any(|&(a, b)| a < end && start < b)
+}
+
 fn overlay_of(dir: &Path) -> bool {
     static OVERLAYS: OnceLock<Mutex<(u64, HashMap<PathBuf, bool>)>> = OnceLock::new();
     let now = generation();
@@ -845,9 +891,15 @@ fn stage_render(
     std::fs::write(&entry, split(&sized)).map_err(|e| e.to_string())?;
     // Its own style sheets beside it lay out for the split part the same way.
     if spec.mode == "split" {
-        for sheet in std::fs::read_dir(stage).map_err(|e| e.to_string())?.flatten() {
+        for sheet in std::fs::read_dir(stage)
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
             let path = sheet.path();
-            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("css")) {
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("css"))
+            {
                 if let Ok(css) = std::fs::read_to_string(&path) {
                     std::fs::write(&path, split(&css)).map_err(|e| e.to_string())?;
                 }

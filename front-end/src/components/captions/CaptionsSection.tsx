@@ -5,7 +5,21 @@ import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { soundSources } from "../../lib/sequence";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import { CaptionSettings, DEFAULT_CAPTION_SETTINGS } from "../../lib/types";
+import { CaptionSettings, CaptionStyle, DEFAULT_CAPTION_SETTINGS } from "../../lib/types";
+
+export const CAPTION_STYLES: [CaptionStyle, string, string][] = [
+  ["pop", "Pop in", "Each word pops in as it is said"],
+  ["karaoke", "Karaoke", "The whole caption shows dim, and each word lights up as it is said"],
+  ["static", "Static", "The whole caption shows at once and stays still"],
+];
+
+const CAPTION_WEIGHTS: [number, string][] = [
+  [0, "The look's"],
+  [500, "Medium"],
+  [600, "Semibold"],
+  [700, "Bold"],
+  [800, "Extra bold"],
+];
 
 const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void }> = ({
   label,
@@ -98,7 +112,7 @@ export const CaptionsSection: React.FC = () => {
       )}
       <p className="text-meta text-studio-500">
         Captions come from the transcript, so transcribe a track first. Cut words disappear from them and fixed words
-        show corrected.
+        show corrected. The font is the brand kit's (else Inter Display) at the look's weight.
       </p>
       <fieldset disabled={!draft.enabled} className="space-y-4 disabled:opacity-50">
         {audioTracks.length > 1 && (
@@ -169,19 +183,71 @@ export const CaptionsSection: React.FC = () => {
           unit=""
           onChange={(maxLines) => update({ maxLines })}
         />
+        <div className="space-y-1">
+          <span className="text-label text-studio-400">Words appear</span>
+          <div className="grid grid-cols-3 gap-1">
+            {CAPTION_STYLES.map(([style, label, hint]) => (
+              <button
+                key={style}
+                type="button"
+                title={hint}
+                aria-pressed={draft.style === style}
+                onClick={() => update({ style })}
+                className={`py-1 rounded text-label border ${
+                  draft.style === style
+                    ? "bg-accent/30 border-accent-hover text-white"
+                    : "bg-studio-850 border-studio-800 text-studio-400 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <ColorRow label="Text color" value={draft.textColor} onChange={(textColor) => update({ textColor })} />
         <Toggle
-          label="Highlight the spoken word"
-          checked={draft.highlightWords}
-          onChange={(highlightWords) => update({ highlightWords })}
+          label="Emphasis word in the accent"
+          hint="Each caption's emphasis word (picked by the agent, or with Emphasis on the caption track) drawn in the brand kit's accent"
+          checked={draft.emphasis}
+          onChange={(emphasis) => update({ emphasis })}
         />
-        {draft.highlightWords && (
-          <ColorRow
-            label="Highlight color"
-            value={draft.highlightColor}
-            onChange={(highlightColor) => update({ highlightColor })}
-          />
+        {draft.emphasis && (
+          <label className="flex items-center justify-between text-label text-studio-400">
+            <span>Emphasis color</span>
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => update({ emphasisColor: draft.emphasisColor ? undefined : "#FACC15" })}
+                className="text-meta text-studio-400 hover:text-white underline-offset-2 hover:underline"
+                title={draft.emphasisColor ? "Use the brand kit's accent" : "Pick a colour of its own"}
+              >
+                {draft.emphasisColor ? "Use the kit's" : "Brand accent"}
+              </button>
+              {draft.emphasisColor && (
+                <input
+                  type="color"
+                  value={draft.emphasisColor.toLowerCase()}
+                  onChange={(e) => update({ emphasisColor: e.target.value.toUpperCase() })}
+                  className="w-12 h-6 bg-studio-850 border border-studio-800 rounded cursor-pointer"
+                />
+              )}
+            </span>
+          </label>
         )}
+        <label className="flex items-center justify-between text-label text-studio-400">
+          <span title="The font is the brand kit's (else Inter Display)">Weight</span>
+          <select
+            value={draft.weight ?? 0}
+            onChange={(e) => update({ weight: Number(e.target.value) || undefined })}
+            className="bg-studio-800 text-studio-100 text-label rounded px-1.5 py-0.5 border border-studio-700 focus:outline-none focus:border-accent-hover"
+          >
+            {CAPTION_WEIGHTS.map(([weight, label]) => (
+              <option key={weight} value={weight}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
         <Toggle label="Outline" checked={draft.outline} onChange={(outline) => update({ outline })} />
         <Toggle label="Background box" checked={draft.background} onChange={(background) => update({ background })} />
         {draft.background && (

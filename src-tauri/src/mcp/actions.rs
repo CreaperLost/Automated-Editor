@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 40] = [
+pub static ACTIONS: [ToolDef; 41] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -435,6 +435,19 @@ pub static ACTIONS: [ToolDef; 40] = [
         schema: schema::<TranscriptFixArgs>,
         read_only: false,
         run: transcript_fix,
+    },
+    ToolDef {
+        name: "captions",
+        description: "The caption lines as they show, numbered, with each line's emphasis word \
+            in *stars*; `short` for a short's. `emphasis`: per `line`, the `word` (as it reads \
+            there) drawn in the accent colour, the one word that makes a viewer keep watching (a \
+            number, a name, the twist, the verdict), never a small word; most lines get one, a \
+            flat line none. A line has one: a new pick replaces the old, `word` left out clears \
+            it. Kept on the transcript, so the video and its shorts share them; not an undo \
+            step. The look (style pop/karaoke/static, size) is `settings` `area: captions`.",
+        schema: schema::<CaptionsArgs>,
+        read_only: false,
+        run: captions,
     },
     ToolDef {
         name: "brand_kits",
@@ -5106,7 +5119,7 @@ pub struct BrandKitSetArgs {
     pub remove: bool,
 }
 
-fn brand_kit_set(_ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+fn brand_kit_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: BrandKitSetArgs = params(args)?;
     let dir = crate::graphics::brands::dir();
     if args.remove {
@@ -5138,7 +5151,7 @@ fn brand_kit_set(_ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         font_file: args.font_file,
         logo: args.logo,
     };
-    let saved = commands::graphics::graphics_brand_save_impl(kit)?;
+    let saved = commands::graphics::graphics_brand_save_impl(ctx.state, kit)?;
     text(format!(
         "Saved brand kit {}: {}.",
         args.name,
@@ -5230,6 +5243,183 @@ fn transcript_fix(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         "Fixed {}:\n{}",
         plural(lines.len(), "word"),
         lines.join("\n")
+    ))
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionPick {
+    /// The line's number, as listed.
+    pub line: usize,
+    /// The word as it reads in the line; left out clears the line's emphasis.
+    #[serde(default)]
+    pub word: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionsArgs {
+    /// Emphasis words to set; without it the lines are listed.
+    #[serde(default)]
+    pub emphasis: Vec<CaptionPick>,
+    /// A short (id or title): its caption lines.
+    #[serde(default)]
+    pub short: Option<String>,
+    /// List only the lines from here (seconds on the edited timeline).
+    #[serde(default)]
+    pub from_s: Option<f64>,
+    /// ...to here.
+    #[serde(default)]
+    pub to_s: Option<f64>,
+}
+
+/// A word as it reads, for matching what an agent wrote: letters and digits, lower case.
+fn plain_word(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: CaptionsArgs = params(args)?;
+    let open = opened(ctx)?;
+    let picked = args
+        .short
+        .as_deref()
+        .map(|s| short_named(ctx, s))
+        .transpose()?;
+    let short = picked.as_ref().map(|s| s.id.clone());
+    let track = commands::transcript::project_caption_cues_impl(
+        ctx.state,
+        open.handle.clone(),
+        short.clone(),
+    )?;
+    let Some(track_id) = track.track_id.clone() else {
+        return Err("No captions yet: nothing is transcribed.".into());
+    };
+    if args.emphasis.is_empty() {
+        let from = args.from_s.map(|s| (s.max(0.0) * 1e6) as u64).unwrap_or(0);
+        let to = args
+            .to_s
+            .map(|s| (s.max(0.0) * 1e6) as u64)
+            .unwrap_or(u64::MAX);
+        let (settings, look) = with_reader(ctx.state, |reader| {
+            let document = match &picked {
+                Some(short) => crate::shorts::short_document(reader.document(), short, true)?,
+                None => reader.document().clone(),
+            };
+            Ok((
+                document.captions.clone(),
+                crate::captions::CaptionLook::of(&document),
+            ))
+        })?;
+        let mut lines = vec![format!(
+            "{} caption lines ({}{}, {}; emphasis in {}, font {}).",
+            track.cues.len(),
+            if settings.enabled { "on" } else { "off" },
+            if short.is_some() {
+                " in this short"
+            } else {
+                ""
+            },
+            settings.style.label(),
+            look.accent,
+            look.face.label
+        )];
+        let mut without = 0;
+        for (i, cue) in track.cues.iter().enumerate() {
+            if cue.emphasis.is_none() {
+                without += 1;
+            }
+            if cue.end_us <= from || cue.start_us >= to {
+                continue;
+            }
+            let words: Vec<&str> = cue.text.split(' ').collect();
+            let text = if words.len() == cue.word_ids.len() {
+                cue.word_ids
+                    .iter()
+                    .zip(&words)
+                    .map(|(id, w)| {
+                        if cue.emphasis.as_ref() == Some(id) {
+                            format!("*{w}*")
+                        } else {
+                            w.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                cue.text.clone()
+            };
+            let covered = if cue.under_graphic {
+                " (a full-frame graphic covers it there: not shown)"
+            } else {
+                ""
+            };
+            lines.push(format!("{i} {} {text}{covered}", clock(cue.start_us)));
+        }
+        lines.push(format!("{without} without an emphasis word."));
+        return text(lines.join("\n"));
+    }
+    // Each pick names a line and one of its words.
+    let mut on = Vec::new();
+    let mut off = Vec::new();
+    let mut said = Vec::new();
+    for pick in &args.emphasis {
+        let cue = track.cues.get(pick.line).ok_or_else(|| {
+            format!(
+                "There is no line {} (there are {}); list them again",
+                pick.line,
+                track.cues.len()
+            )
+        })?;
+        match pick
+            .word
+            .as_deref()
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+        {
+            None => {
+                off.extend(cue.emphasis.clone());
+                said.push(format!("{}: none", pick.line));
+            }
+            Some(word) => {
+                let wanted = plain_word(word);
+                let index = cue
+                    .text
+                    .split(' ')
+                    .position(|w| plain_word(w) == wanted)
+                    .filter(|i| *i < cue.word_ids.len())
+                    .ok_or_else(|| {
+                        format!(
+                            "Line {} (\"{}\") has no word \"{word}\"",
+                            pick.line, cue.text
+                        )
+                    })?;
+                on.push(cue.word_ids[index].clone());
+                said.push(format!("{}: {word}", pick.line));
+            }
+        }
+    }
+    use crate::commands::transcript::CaptionEdit;
+    for (word_ids, on) in [(off, false), (on, true)] {
+        if word_ids.is_empty() {
+            continue;
+        }
+        commands::transcript::transcript_caption_edit_impl(
+            ctx.state,
+            open.handle.clone(),
+            track_id.clone(),
+            CaptionEdit::Emphasis { word_ids, on },
+            short.clone(),
+        )?;
+    }
+    ctx.changed_project();
+    text(format!(
+        "Emphasis set on {}: {}.",
+        plural(said.len(), "line"),
+        said.join(", ")
     ))
 }
 
