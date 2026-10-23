@@ -2,8 +2,15 @@ import React from "react";
 import { Film, Shapes, Sparkles, Trash2 } from "lucide-react";
 import { seekPlayback } from "../../lib/playbackControl";
 import { assetById } from "../../lib/sequence";
-import type { OpenedProject, Short } from "../../lib/types";
-import { cleanTake, removeFootage, removeShortClips, useShortsStore } from "../../stores/shortsStore";
+import { saveTrackMix } from "../../lib/trackMix";
+import { DEFAULT_AUDIO_SETTINGS, type OpenedProject, type Short } from "../../lib/types";
+import {
+  cleanTake,
+  removeFootage,
+  removeShortClips,
+  setShortsError,
+  useShortsStore,
+} from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
 import { Button } from "../ui";
 import { UnderTake } from "./UnderTake";
@@ -18,6 +25,55 @@ function streamName(project: OpenedProject, key: string | undefined): string {
   if (!asset) return key;
   return asset.kind === "recording" && stream ? `${asset.name} · ${stream.name}` : asset.name;
 }
+
+/// How loud the footage and B-roll sound plays under the take, and how far it is lowered while
+/// the voice talks: both play on the short's one Footage sound track, so one setting does both.
+const FootageSound: React.FC<{ project: OpenedProject }> = ({ project }) => {
+  // While the short is on show the sequence is its own; the audio settings are the project's.
+  const track = project.sequence.tracks.find((t) => t.kind === "audio" && t.role === "background");
+  const mix = track ? project.audio?.tracks?.[track.id] : undefined;
+  const saved = {
+    volumeDb: mix?.volumeDb ?? 0,
+    duckDb: mix?.duckDb ?? project.audio?.duckDb ?? DEFAULT_AUDIO_SETTINGS.duckDb,
+  };
+  const [draft, setDraft] = React.useState(saved);
+  // Undo, or the agent, changes it too.
+  React.useEffect(() => setDraft({ volumeDb: saved.volumeDb, duckDb: saved.duckDb }), [saved.volumeDb, saved.duckDb]);
+  if (!track) return null;
+  const commit = () => {
+    if (draft.volumeDb === saved.volumeDb && draft.duckDb === saved.duckDb) return;
+    void saveTrackMix({ [track.id]: draft }).catch((err) => setShortsError(String(err)));
+  };
+  const row = (label: string, title: string, key: "volumeDb" | "duckDb", min: number, max: number) => (
+    <label className="flex items-center gap-2 text-label text-studio-300" title={title}>
+      <span className="w-[6.5rem] shrink-0">{label}</span>
+      <input
+        type="range"
+        aria-label={label}
+        min={min}
+        max={max}
+        step={1}
+        value={draft[key]}
+        onChange={(e) => setDraft((was) => ({ ...was, [key]: Number(e.target.value) }))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        className="flex-1 min-w-0 h-1.5 cursor-pointer"
+      />
+      <span className="w-14 shrink-0 whitespace-nowrap text-right font-mono text-meta tabular-nums text-studio-200">
+        {key === "volumeDb" && draft[key] > 0 ? "+" : key === "duckDb" ? "−" : ""}
+        {draft[key]} dB
+      </span>
+    </label>
+  );
+  return (
+    <div className="space-y-1 rounded-control border border-studio-800 p-1.5">
+      <p className="text-meta text-studio-500">Footage and B-roll sound</p>
+      {row("Volume", "How loud the footage's and files' own sound plays (0 as recorded)", "volumeDb", -30, 12)}
+      {row("Under the voice", "How far it is lowered while the take's voice talks", "duckDb", 3, 30)}
+    </div>
+  );
+};
 
 /// A take short's take and what plays under it while the take talks: footage from the video,
 /// graphics and outside files. The agent places them (the "shorts" template), or the user here.
@@ -63,6 +119,7 @@ export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewi
         {busy === "Cleaning the take" ? "Cleaning…" : "Clean the take"}
       </Button>
       {viewing && <UnderTake project={project} short={short} />}
+      {viewing && <FootageSound project={project} />}
       {placed.length === 0 ? (
         <p className="text-meta text-studio-500 leading-relaxed">Nothing under the take yet: the camera fills the frame.</p>
       ) : (

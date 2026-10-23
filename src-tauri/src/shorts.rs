@@ -635,6 +635,8 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
     timeline.chapters.clear();
     timeline.short_layout = None;
     timeline.layouts = short.layouts.clone();
+    // Its graphics take the video's look, tuned for a phone.
+    timeline.graphics_look = base.graphics_look.for_short();
     // A take's captions read the take's own words.
     if let Some(take) = &short.take {
         timeline.captions.track_id = Some(take.voice.clone());
@@ -650,6 +652,11 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
             slice_sequence(&base.sequence, &base.assets, start, end)
         }
     };
+    // A take's footage sound is lowered under its voice, by the project's amount unless it
+    // has its own.
+    if let Some((track, _, duck_db)) = crate::take_short::footage_sound_mix(base, short) {
+        timeline.audio.tracks.entry(track).or_default().duck_db = Some(duck_db);
+    }
     // A graphic split beside the face or over it sets the layout while it plays.
     let sections = graphic_sections(&timeline, short);
     if !sections.is_empty() {

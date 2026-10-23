@@ -561,6 +561,8 @@ pub struct LookView {
     pub tokens: std::collections::BTreeMap<&'static str, String>,
     /// Graphics of this video that override tokens: (name, the tokens).
     pub overrides: Vec<(String, Vec<String>)>,
+    /// The looks the user saved, app-wide.
+    pub saved: Vec<graphics::look::SavedLook>,
 }
 
 pub fn graphics_look_impl(state: &AppState, project_handle: String) -> Result<LookView, String> {
@@ -582,7 +584,71 @@ pub fn graphics_look_impl(state: &AppState, project_handle: String) -> Result<Lo
         presets: graphics::look::presets(),
         tokens: document.graphics_look.values(),
         overrides,
+        saved: graphics::look::saved(&graphics::look::saved_dir()),
     })
+}
+
+/// Saves `look` app-wide as `name` (over a saved look of that name); the saved looks after.
+pub fn graphics_look_save_impl(
+    name: String,
+    look: graphics::look::Look,
+) -> Result<Vec<graphics::look::SavedLook>, String> {
+    let dir = graphics::look::saved_dir();
+    graphics::look::save(&dir, &name, &look)?;
+    Ok(graphics::look::saved(&dir))
+}
+
+/// Removes saved look `name`; projects keep the look they have. The saved looks after.
+pub fn graphics_look_saved_remove_impl(
+    name: String,
+) -> Result<Vec<graphics::look::SavedLook>, String> {
+    let dir = graphics::look::saved_dir();
+    graphics::look::remove_saved(&dir, &name)?;
+    Ok(graphics::look::saved(&dir))
+}
+
+/// What bringing the video's graphics in line with its look would change (graphics already in
+/// line are left out). Changes nothing.
+pub fn graphics_in_line_plan_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<Vec<graphics::restyle::Plan>, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    Ok(graphics::restyle::plan(reader.root(), reader.document()))
+}
+
+/// Brings the graphics of `plans` (as `graphics_in_line_plan_impl` gave them) in line, one
+/// undo step; each changed graphic renders again.
+pub fn project_graphics_in_line_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    plans: Vec<graphics::restyle::Plan>,
+) -> Result<OpenedProject, String> {
+    if plans.is_empty() {
+        return Err("Nothing to bring in line".into());
+    }
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let root = reader.root().to_path_buf();
+    let done = graphics::restyle::apply(&root, reader.document(), &plans)?;
+    let project = match reader.commit_document(expected_revision, done.document.clone()) {
+        Ok(project) => project,
+        Err(error) => {
+            done.discard();
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    render::request_all(&root, &reader.history().current);
+    Ok(project)
 }
 
 /// Sets the video's look, one undo step; every graphic that uses it renders again.

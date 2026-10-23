@@ -61,20 +61,20 @@ flowchart LR
 
 ## Next
 
-Rough order. GFX-5's look shipped 22 Oct; what is left of it comes first, and the four after it are
-the foundations the Later tier builds on.
+Rough order. GFX-5's look, saved looks, the shorts look and bring-in-line shipped (22-23 Oct);
+what is left of it waits on research, so the four after it come first: they are the foundations
+the Later tier builds on.
 
 <a id="gfx-5"></a>
-### GFX-5 · Looks: saved app-wide and proposed by the agent — S/M
+### GFX-5 · Looks proposed by the agent — S/M, research first
 
-The look itself shipped 22 Oct (see [Done](#done)). Left:
-- **Saved looks:** keep a look app-wide like a brand kit (name it, use it in another project);
-  today a project has its own and three presets.
-- **AI-built looks:** the agent proposes two or three looks from the brand kit, a description or
-  a reference (with [STY-2](#sty-2) later), each previewed on the video's own graphics, and the
-  user picks one. The `graphics_look` preview is the building block.
-- **Shorts:** long-form and shorts values may differ; today a short takes the video's look.
-- **Bring in line:** one proposal batch that rewrites the graphics `graphic_check` warns about.
+The look, saved looks, the shorts look and bring-in-line shipped (see [Done](#done)). Left:
+- **AI-built looks: later, research first (George, 23 Oct).** The agent proposes two or three
+  looks from the brand kit and a description in words, each previewed on the video's own
+  graphics (the `graphics_look` preview is the building block), and the user picks one.
+  Creators who make good graphics with agents seem to give each request a board of reference
+  images, the brand kit and a tuned prompt (as a skill): research how they do it before building
+  this; it likely joins [STY-2](#sty-2).
 
 <a id="safe-2"></a>
 ### SAFE-2 · Persistent history and named checkpoints — M/L
@@ -129,7 +129,8 @@ The look itself shipped 22 Oct (see [Done](#done)). Left:
   stored outside the installed `SKILL.md`; served with `template`; the agent may **propose**
   a rule (with the example that taught it), the user accepts in the Agent panel; the agent can
   say which rule shaped a proposal. Rejecting one cut never silently changes a rule.
-- **Decision:** [Q-RULES](decisions.md#q-rules).
+- **Decision:** [Q-RULES](decisions.md#q-rules). **23 Oct:** George isn't sure it's worth it
+  yet; shown example rules, waiting on his call.
 
 <a id="agt-4"></a>
 ### AGT-4 · Readiness report and long jobs — S/M
@@ -285,10 +286,15 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2; Clips (SHT-
 - **SHT-2 · Caption shaping in shorts (M).** Breaks, emphasis and hidden words per short; text
   fixes shared with the video.
 <a id="sht-3"></a>
-- **SHT-3 · Dress step (S/M).** Graphics into the short's slots as the last step, as a review batch.
+- **SHT-3 · Dress step (S/M).** George's order (23 Oct): a take comes in unedited, so first cut
+  it (chop, mouth noises), then match footage and graphics from the long video **only when
+  something there is related** (often nothing is), then graphics, **only on the kept parts**
+  (graphics on uncut words would have to be very long). The `shorts` template already cleans
+  up before footage and dress; left: make the matching step skippable in so many words, and
+  have the app refuse or warn on graphics placed on a take that hasn't been cut yet.
 <a id="sht-4"></a>
-- **SHT-4 · Take-short follow-ups (S).** Per-short ducking amount. (The picker, graphic modes
-  and footage speed are done, 23 Oct: see [Done](#done).)
+- **SHT-4 · Take-short follow-ups (S).** Done 23 Oct: the picker, graphic modes, footage speed
+  and the footage sound control (see [Done](#done)).
 <a id="sht-7"></a>
 - **SHT-7 · A split graphic knows its box (S/M).** Built and checked 23 Oct, with its
   follow-ups (split parts take the portrait rules, `graphic_check` renders one, `frame_render`
@@ -463,6 +469,25 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **23 Oct 2026** — **GFX-5 leftovers and SHT-4's footage sound.** **Saved looks:** a look is
+  saved by name app-wide like a brand kit (`config/looks/<name>.json`, `graphics::look::save`)
+  and picked in any project from the Look panel; agents use `graphics_look` `saved` / `save`.
+  **Shorts look:** a short's graphics take the video's look times its `shorts` multiples
+  (size ×1.15, energy ×1.25, speed ×1.1 by default; `Look::for_short`, set in
+  `shorts::short_timeline`), so a change to the video's look reaches its shorts; three sliders in
+  the Look panel, `shortsSize`/`shortsEnergy`/`shortsSpeed` for agents. **Bring in line**
+  (`graphics/restyle.rs`, by rule, no model): fonts, corner radii and CSS timings become the
+  look's tokens, colours close to a kit role become that role (see-through ones keep their alpha),
+  shadows the look's, a graphic's own tokens are dropped; colours in scripts and colours the kit
+  has nothing close to (a red stamp) stay and are listed. Each changed graphic becomes a copy its
+  clips (video and shorts) play, so undo has the old one. The Look panel says how many graphics
+  don't follow the look and applies it (one undo step); agents propose it as one batch
+  (`graphics_look` `bringInLine`, "Bring in line" in the Agent panel, stale if a graphic changed).
+  **SHT-4:** the take short's footage and B-roll sound share its Footage sound track; the Shorts
+  tab sets its volume and how far it is lowered under the voice, and so does `short_footage`
+  `op: sound`. A take's footage is now always lowered under its voice (the project's amount, 12 dB,
+  unless set), as the template always said; before, only with the project's ducking switch on.
 
 - **23 Oct 2026** — **SHT-7 follow-ups: a split part is a phone frame.** A graphic in a part of a
   short's split up to 3:2 wide (the camera up to about 55 %) renders with its `@media

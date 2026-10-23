@@ -110,7 +110,9 @@ a time: the app refuses a batch whose graphics would overlap, and says where. On
 `storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
 later with `graphic_set` `short` and `slot` renders that graphic again):
 `graphic_set` with `short` moves (`moveToWord`, a word of the take) or lengthens (`lengthUs`) a
-graphic on the short's timeline, `op: remove` with `fromS`/`toS` takes footage off.
+graphic on the short's timeline, `op: remove` with `fromS`/`toS` takes footage off. Footage and
+B-roll sound share one track: if the user finds it too loud or too quiet, `op: sound` with
+`volumeDb` (and `duckDb`, how far it drops under the voice).
 
 ## 8. Export (ask)
 

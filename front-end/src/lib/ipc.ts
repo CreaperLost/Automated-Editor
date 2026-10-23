@@ -69,6 +69,8 @@ import {
   BrandsView,
   GraphicsLook,
   LookStill,
+  SavedLook,
+  InLinePlan,
   LookView,
   GraphicLibraryItem,
   GraphicLibrarySave,
@@ -515,6 +517,15 @@ export const api = {
   /** Stills of up to three of the video's graphics with `look`, changing nothing (a few seconds). */
   graphicsLookPreview: (projectHandle: string, look: GraphicsLook) =>
     invokeTauri<LookStill[]>("graphics_look_preview", { projectHandle, look }),
+  /** Saves a look by name for every project (over one of that name); the saved looks after. */
+  graphicsLookSave: (name: string, look: GraphicsLook) =>
+    invokeTauri<SavedLook[]>("graphics_look_save", { name, look }),
+  graphicsLookSavedRemove: (name: string) => invokeTauri<SavedLook[]>("graphics_look_saved_remove", { name }),
+  /** What bringing the video's graphics in line with its look would change, changing nothing. */
+  graphicsInLinePlan: (projectHandle: string) => invokeTauri<InLinePlan[]>("graphics_in_line_plan", { projectHandle }),
+  /** Brings those graphics in line, one undo step. */
+  projectGraphicsInLine: (projectHandle: string, expectedRevision: number, plans: InLinePlan[]) =>
+    invokeTauri<OpenedProject>("project_graphics_in_line", { projectHandle, expectedRevision, plans }),
   graphicsLibrary: () => invokeTauri<GraphicLibraryItem[]>("graphics_library"),
   graphicsLibraryRemove: (id: string) => invokeTauri<void>("graphics_library_remove", { id }),
   /** A library item's contact sheet from the gate, as a data URL. */

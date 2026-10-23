@@ -83,6 +83,11 @@ pub enum Change {
         stamp: String,
         items: Vec<crate::under_take::Under>,
     },
+    /// Graphics brought in line with the video's look (`graphics::restyle`), all or nothing.
+    /// It holds while each graphic's files are as they were planned on.
+    Restyle {
+        items: Vec<crate::graphics::restyle::Plan>,
+    },
     /// One of the app's own actions the agent ran (jump cuts, fillers, zooms, ...), applied
     /// at once like a click; kept so the user sees it and can undo it.
     Action { action: String },
@@ -746,6 +751,42 @@ pub fn propose_under(
     })
 }
 
+/// Proposes bringing the video's graphics in line with its look (every graphic that is not).
+pub fn propose_restyle(
+    reader: &ProjectReader,
+    proposals: &mut Proposals,
+    agent: &str,
+    reason: &str,
+) -> Result<String, String> {
+    let document = reader.document();
+    let items = crate::graphics::restyle::plan(reader.root(), document);
+    if items.is_empty() {
+        return Err("Every graphic follows the video's look already: nothing to bring in line".into());
+    }
+    let summary = items.iter().map(|p| p.line()).collect();
+    proposals.add(Batch {
+        id: String::new(),
+        agent: agent.to_string(),
+        reason: check_reason(reason)?,
+        created_at: now(),
+        base_revision: document.revision,
+        change: Change::Restyle { items },
+        status: Status::Pending,
+        decided_at: None,
+        auto: false,
+        applied_revision: None,
+        summary,
+    })
+}
+
+/// Whether restyle `items` can still be applied: each graphic's files as planned on.
+fn restyle_holds(root: &Path, items: &[crate::graphics::restyle::Plan]) -> bool {
+    items.iter().all(|p| {
+        crate::graphics::gate::source_hash(&crate::graphics::folder(root, &p.graphic))
+            .is_ok_and(|hash| hash == p.stamp)
+    })
+}
+
 // ---------------------------------------------------------------------------------------
 // Deciding.
 
@@ -837,6 +878,24 @@ pub fn accept(
                 }
             }
         }
+        Change::Restyle { items } => {
+            if batch.status != Status::Pending {
+                return Err(format!("{id} is already decided"));
+            }
+            let root = reader.root().to_path_buf();
+            let done = crate::graphics::restyle::apply(&root, document, items)?;
+            match reader.commit_document(expected_revision, done.document.clone()) {
+                Ok(project) => {
+                    // Every changed graphic is new: render them now.
+                    crate::graphics::render::request_all(&root, &reader.history().current);
+                    (Some(project), Vec::new())
+                }
+                Err(error) => {
+                    done.discard();
+                    return Err(error);
+                }
+            }
+        }
         Change::Cuts {
             stream,
             words,
@@ -896,7 +955,7 @@ pub fn accept(
     }
     match &mut batch.change {
         Change::Action { .. } => {}
-        Change::Edits { .. } | Change::Under { .. } => {
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
             batch.status = Status::Accepted;
             batch.decided_at = Some(now());
         }
@@ -930,7 +989,7 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } | Change::Under { .. } => match (batch.status, rejected) {
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => match (batch.status, rejected) {
             (Status::Pending, true) => {
                 batch.status = Status::Rejected;
                 batch.decided_at = Some(now());
@@ -1013,7 +1072,9 @@ pub fn undo(
     batch.auto = false;
     match &mut batch.change {
         Change::Action { .. } => batch.status = Status::Undone,
-        Change::Edits { .. } | Change::Under { .. } => batch.status = Status::Pending,
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
+            batch.status = Status::Pending
+        }
         Change::Cuts { items, .. } => {
             for item in items.iter_mut() {
                 if item.state == ItemState::Accepted && item.revision == Some(applied) {
@@ -1067,8 +1128,8 @@ pub struct BatchView {
     pub reason: String,
     pub created_at: String,
     pub base_revision: u64,
-    /// `cuts`, `edits`, `under` (things put under a take short), or `action` (one of the
-    /// app's actions the agent ran).
+    /// `cuts`, `edits`, `under` (things put under a take short), `restyle` (graphics brought
+    /// in line with the look), or `action` (one of the app's actions the agent ran).
     pub kind: &'static str,
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1151,6 +1212,11 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                     out.short = Some(short.clone());
                     out.stale = batch.status == Status::Pending
                         && crate::under_take::stamp(document, short) != *stamp;
+                }
+                Change::Restyle { items } => {
+                    out.kind = "restyle";
+                    out.stale =
+                        batch.status == Status::Pending && !restyle_holds(reader.root(), items);
                 }
                 Change::Cuts {
                     stream,

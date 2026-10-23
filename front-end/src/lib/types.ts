@@ -860,6 +860,38 @@ export interface GraphicsLook {
   density: number;
   /** Tokens set by hand, by name without `--look-`. */
   tokens?: Record<string, string>;
+  /** A short's graphics take this look times these (1 makes a short like the video). */
+  shorts?: ShortsLook;
+}
+
+export interface ShortsLook {
+  size: number;
+  energy: number;
+  speed: number;
+}
+
+export const DEFAULT_SHORTS_LOOK: ShortsLook = { size: 1.15, energy: 1.25, speed: 1.1 };
+
+export const SHORTS_LOOK_CONTROLS = [
+  { id: "size", label: "Size", hint: "Type sizes in shorts, times the video's" },
+  { id: "energy", label: "Energy", hint: "How far things travel in shorts, times the video's" },
+  { id: "speed", label: "Speed", hint: "How fast things come in in shorts, times the video's" },
+] as const;
+
+/** A look saved by name for every project. */
+export interface SavedLook {
+  name: string;
+  look: GraphicsLook;
+}
+
+/** What bringing one graphic in line with the look changes (src-tauri graphics/restyle.rs). */
+export interface InLinePlan {
+  graphic: string;
+  name: string;
+  stamp: string;
+  changes: string[];
+  /** What stays its own (colours in scripts, colours the kit has nothing close to). */
+  left?: string[];
 }
 
 export const LOOK_CONTROLS = [
@@ -883,6 +915,8 @@ export interface LookView {
   tokens: Record<string, string>;
   /** Graphics with tokens of their own: [name, the tokens]. */
   overrides: [string, string[]][];
+  /** The looks the user saved, app-wide. */
+  saved: SavedLook[];
 }
 
 export interface LookStill {
@@ -1491,7 +1525,7 @@ export interface ProposalBatch {
   baseRevision: number;
   /** `action`: one of the app's own actions the agent ran, applied at once; `under`: footage,
    *  graphics and files under a take short. */
-  kind: "cuts" | "edits" | "under" | "action";
+  kind: "cuts" | "edits" | "under" | "restyle" | "action";
   /** For an action: which (`silence`, `fillers`, ...). */
   action?: string;
   /** For `under`: the take short it goes under. */

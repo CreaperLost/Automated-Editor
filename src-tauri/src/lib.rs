@@ -1815,6 +1815,46 @@ fn project_graphics_look_set(
     )
 }
 
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_look_save(
+    name: String,
+    look: graphics::look::Look,
+) -> Result<Vec<graphics::look::SavedLook>, String> {
+    commands::graphics::graphics_look_save_impl(name, look)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_look_saved_remove(name: String) -> Result<Vec<graphics::look::SavedLook>, String> {
+    commands::graphics::graphics_look_saved_remove_impl(name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_in_line_plan(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<Vec<graphics::restyle::Plan>, String> {
+    commands::graphics::graphics_in_line_plan_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphics_in_line(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    plans: Vec<graphics::restyle::Plan>,
+) -> Result<project::OpenedProject, String> {
+    commands::graphics::project_graphics_in_line_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        plans,
+    )
+}
+
 /// Stills of a few of the video's graphics with another look (a few seconds).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -2223,6 +2263,10 @@ pub fn run() {
             graphics_look,
             project_graphics_look_set,
             graphics_look_preview,
+            graphics_look_save,
+            graphics_look_saved_remove,
+            graphics_in_line_plan,
+            project_graphics_in_line,
             pick_brand_file,
             graphics_library,
             graphics_library_remove,

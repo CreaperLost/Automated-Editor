@@ -474,6 +474,29 @@ fn own_mut(short: &mut Short) -> Result<&mut Sequence, String> {
     }
 }
 
+/// The take short's Footage sound track: the footage's and the B-roll's sound play on it, so
+/// one volume and one ducking set both.
+pub fn footage_sound_track(short: &Short) -> Option<&Track> {
+    own(short)
+        .ok()?
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Audio && t.role == Some(Role::Background))
+}
+
+/// How the footage sound plays under the take: its volume in dB and how far it is lowered
+/// while the voice talks (a take's footage is always lowered: by the project's amount unless
+/// the track has its own), with the track's id.
+pub fn footage_sound_mix(document: &EditDocument, short: &Short) -> Option<(String, f32, f32)> {
+    let track = footage_sound_track(short)?;
+    let mix = document.audio.tracks.get(&track.id);
+    Some((
+        track.id.clone(),
+        mix.map_or(0.0, |m| m.volume_db),
+        mix.and_then(|m| m.duck_db).unwrap_or(document.audio.duck_db),
+    ))
+}
+
 /// The track of `kind` with `role` (the take's Footage tracks), made if it was removed.
 fn role_track(sequence: &mut Sequence, kind: TrackKind, role: Role, taken: &mut u64) -> usize {
     if let Some(i) = sequence

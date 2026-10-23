@@ -254,7 +254,8 @@ pub static ACTIONS: [ToolDef; 40] = [
             all (`template`, `library`, or `graphic`: a copy of one of the video's, made for \
             9:16), its own length without an end. Where nothing plays, the camera fills the \
             frame. `op: remove` takes footage off `fromS`..`toS` (all without them); \
-            `op: list` (default) lists it.",
+            `op: sound` sets the footage and B-roll sound's `volumeDb` and `duckDb` (one \
+            track); `op: list` (default) lists it.",
         schema: schema::<ShortFootageArgs>,
         read_only: false,
         run: short_footage,
@@ -461,7 +462,10 @@ pub static ACTIONS: [ToolDef; 40] = [
             spacing, motion) beside the brand kit's colours. No arguments: the look and its \
             tokens. A `preset`, the five controls or `tokens` change it for every graphic (one \
             undo step; for a request in words, `preview: true` first and show the user); \
-            `graphic` with `tokens` sets that graphic's own.",
+            `graphic` with `tokens` sets that graphic's own. Shorts take the video's look times \
+            the `shorts*` multiples. `saved` starts from a look the user saved, `save` saves one \
+            (at their word). `bringInLine` proposes rewriting the graphics in `notInLine` to the \
+            look, one batch.",
         schema: schema::<GraphicsLookArgs>,
         read_only: false,
         run: graphics_look,
@@ -3300,6 +3304,7 @@ pub enum FootageOp {
     List,
     Add,
     Remove,
+    Sound,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -3377,6 +3382,12 @@ pub struct ShortFootageArgs {
     pub from_s: Option<f64>,
     #[serde(default)]
     pub to_s: Option<f64>,
+    /// For `sound`: the footage and B-roll sound's volume, -30 to 12 dB (0 as recorded)...
+    #[serde(default)]
+    pub volume_db: Option<f32>,
+    /// ...and how far it is lowered while the voice talks, 3 to 30 dB.
+    #[serde(default)]
+    pub duck_db: Option<f32>,
 }
 
 fn to_us(seconds: f64) -> Result<u64, String> {
@@ -3449,8 +3460,49 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             })
             .collect())
     };
+    let sound_line = |short: &crate::shorts::Short| -> Result<String, String> {
+        with_reader(ctx.state, |reader| {
+            Ok(crate::take_short::footage_sound_mix(reader.document(), short)
+                .map(|(_, volume, duck)| {
+                    format!("Footage sound: {volume:+} dB, lowered {duck} dB under the voice.")
+                })
+                .unwrap_or_default())
+        })
+    };
     let change = match args.op.unwrap_or_default() {
-        FootageOp::List => return text(list(&short)?.join("\n")),
+        FootageOp::List => {
+            let mut lines = list(&short)?;
+            lines.push(sound_line(&short)?);
+            return text(lines.join("\n"));
+        }
+        FootageOp::Sound => {
+            let (track, volume, duck) = with_reader(ctx.state, |reader| {
+                crate::take_short::footage_sound_mix(reader.document(), &short)
+                    .ok_or_else(|| format!("{} has no footage sound track", short.id))
+            })?;
+            let mut audio = with_reader(ctx.state, |reader| Ok(reader.document().audio.clone()))?;
+            let (lo, hi) = crate::project::audio::TRACK_VOLUME_DB_RANGE;
+            let volume_db = args.volume_db.unwrap_or(volume);
+            if !(lo..=hi).contains(&volume_db) {
+                return Err(format!("volumeDb is {lo} to {hi}"));
+            }
+            let (lo, hi) = crate::project::audio::DUCK_DB_RANGE;
+            let duck_db = args.duck_db.unwrap_or(duck);
+            if !(lo..=hi).contains(&duck_db) {
+                return Err(format!("duckDb is {lo} to {hi}"));
+            }
+            let mix = audio.tracks.entry(track).or_default();
+            mix.volume_db = volume_db;
+            mix.duck_db = Some(duck_db);
+            commands::project_audio_update_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                audio,
+            )?;
+            let line = sound_line(&short)?;
+            return text(applied(ctx, "short_footage", &before, vec![line])?);
+        }
         FootageOp::Remove => commands::FootageChange::Remove {
             from_us: args.from_s.map(to_us).transpose()?,
             to_us: args.to_s.map(to_us).transpose()?,
@@ -4788,6 +4840,24 @@ pub struct GraphicsLookArgs {
     /// Draw up to three of the video's graphics with the look asked for, changing nothing.
     #[serde(default)]
     pub preview: bool,
+    /// Start from one of the user's saved looks (by name), before the changes above.
+    #[serde(default)]
+    pub saved: Option<String>,
+    /// Save the resulting look app-wide under this name (only at the user's word).
+    #[serde(default)]
+    pub save: Option<String>,
+    /// The shorts' look is the video's times these (default size 1.15, energy 1.25, speed
+    /// 1.1; 0.5-2; 1 makes a short like the video).
+    #[serde(default)]
+    pub shorts_size: Option<f32>,
+    #[serde(default)]
+    pub shorts_energy: Option<f32>,
+    #[serde(default)]
+    pub shorts_speed: Option<f32>,
+    /// Propose one batch that rewrites every graphic not following the look (own colours,
+    /// fonts, corners, CSS timings, own tokens) to the look and kit, for the user to accept.
+    #[serde(default)]
+    pub bring_in_line: bool,
 }
 
 fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -4813,8 +4883,33 @@ fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             }
         ));
     }
+    if args.bring_in_line {
+        let agent = ctx.agent.clone();
+        return super::propose::propose(ctx, |reader, proposals| {
+            crate::proposals::propose_restyle(
+                reader,
+                proposals,
+                &agent,
+                "Bring every graphic in line with the video's look",
+            )
+        });
+    }
     let view = commands::graphics::graphics_look_impl(ctx.state, before.handle.clone())?;
-    let mut look = view.look.clone();
+    let mut look = match &args.saved {
+        Some(name) => {
+            crate::graphics::look::find_saved(&crate::graphics::look::saved_dir(), name)?.look
+        }
+        None => view.look.clone(),
+    };
+    for (field, value) in [
+        (&mut look.shorts.size, args.shorts_size),
+        (&mut look.shorts.energy, args.shorts_energy),
+        (&mut look.shorts.speed, args.shorts_speed),
+    ] {
+        if let Some(value) = value {
+            *field = value;
+        }
+    }
     if let Some(preset) = &args.preset {
         look.preset = preset.trim().to_string();
     }
@@ -4858,12 +4953,32 @@ fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         }
         return Ok(out);
     }
+    let saved_line = match &args.save {
+        Some(name) => {
+            let item =
+                crate::graphics::look::save(&crate::graphics::look::saved_dir(), name, &look)?;
+            Some(format!("Saved as \"{}\" for every project.", item.name))
+        }
+        None => None,
+    };
     if look == view.look {
+        if let Some(line) = saved_line {
+            return text(line);
+        }
+        let not_in_line: Vec<String> = commands::graphics::graphics_in_line_plan_impl(
+            ctx.state,
+            before.handle.clone(),
+        )?
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
         let out = json!({
             "look": view.look,
             "presets": view.presets,
             "tokens": view.tokens,
             "ownLook": view.overrides,
+            "saved": view.saved.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            "notInLine": not_in_line,
         });
         return super::tools::pretty(&out);
     }
@@ -4877,7 +4992,7 @@ fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ctx,
         "graphics_look",
         &before,
-        vec![
+        saved_line.into_iter().chain([
             format!(
                 "The video's look: {} (size ×{}, roundness ×{}, speed ×{}, energy ×{}, density \
                  ×{}){}.",
@@ -4897,7 +5012,8 @@ fn graphics_look(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 }
             ),
             "Every graphic renders again by itself.".into(),
-        ],
+        ])
+        .collect(),
     )?)
 }
 
@@ -5667,6 +5783,31 @@ mod tests {
         )
         .unwrap();
         assert!(landed.contains("autopilot accepted it"), "{landed}");
+        // The footage and B-roll sound share one track: its volume and ducking are set once.
+        let listed = call(&ctx, "short_footage", json!({ "short": "Take" })).unwrap();
+        assert!(listed.contains("Footage sound: +0 dB, lowered 12 dB"), "{listed}");
+        let sound = call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "sound", "volumeDb": -6, "duckDb": 18 }),
+        )
+        .unwrap();
+        assert!(sound.contains("Footage sound: -6 dB, lowered 18 dB"), "{sound}");
+        assert!(call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "sound", "duckDb": 50 })
+        )
+        .is_err());
+        let ducked = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+            let timeline = crate::shorts::short_timeline(document, short)?;
+            let track = crate::take_short::footage_sound_track(short).unwrap().id.clone();
+            Ok(timeline.audio.tracks[&track].clone())
+        })
+        .unwrap();
+        assert_eq!((ducked.volume_db, ducked.duck_db), (-6.0, Some(18.0)));
         // graphic_add points to short_footage; a clip cut from the video takes neither.
         assert!(call(
             &ctx,
@@ -5951,6 +6092,41 @@ mod tests {
         assert!(own.contains("\"radius\":\"0\""), "{own}");
         let listed = call(&ctx, "graphics", json!({})).unwrap();
         assert!(listed.contains("\"look\":{\"radius\":\"0\"}"), "{listed}");
+        // A graphic with a look of its own is out of line: one batch brings it back.
+        let look = call(&ctx, "graphics_look", json!({})).unwrap();
+        assert!(look.contains("\"notInLine\": [\n    \"Step card\""), "{look}");
+        let proposed = call(&ctx, "graphics_look", json!({ "bringInLine": true })).unwrap();
+        assert!(
+            proposed.contains("Proposed b-") && proposed.contains("its own look (radius)"),
+            "{proposed}"
+        );
+        let batch = proposed
+            .split_whitespace()
+            .find(|w| w.starts_with("b-"))
+            .unwrap()
+            .trim_end_matches('.')
+            .to_string();
+        let (handle, revision) = with_reader(ctx.state, |r| {
+            Ok((r.summary.project_handle.clone(), r.document().revision))
+        })
+        .unwrap();
+        commands::proposals::proposal_accept_impl(ctx.state, handle, revision, batch, None, false)
+            .unwrap();
+        let in_line = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let graphic = document.assets.iter().find(|a| a.is_graphic()).unwrap();
+            let on_timeline = document.sequence.clips().any(|(_, c)| c.asset == graphic.id);
+            let source =
+                crate::graphics::read_source(&crate::graphics::folder(reader.root(), &graphic.id))?;
+            Ok((graphic.id.clone(), on_timeline, source.look.is_empty()))
+        })
+        .unwrap();
+        assert_ne!(in_line.0, id, "a copy, so undo has the old one");
+        assert!(in_line.1 && in_line.2, "{in_line:?}");
+        assert!(call(&ctx, "graphics_look", json!({ "bringInLine": true }))
+            .unwrap_err()
+            .contains("nothing to bring in line"));
+        let id = in_line.0;
         let slot = call(
             &ctx,
             "graphic_set",
