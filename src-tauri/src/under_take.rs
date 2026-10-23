@@ -195,10 +195,17 @@ fn put_all(
             }
         }
     }
+    if !done.graphics.is_empty() && take_short::uncut(&shorts[index]) {
+        done.lines.push(UNCUT.to_string());
+    }
     done.overlaps = overlaps(&done.document, &shorts[index], &done.graphics);
     done.document.shorts = shorts;
     Ok(())
 }
+
+/// Said when graphics go on a take that hasn't been cut: they sit on words a cut may take away.
+pub const UNCUT: &str = "Warning: the take hasn't been cut yet. Graphics on uncut words play long \
+     and a cut later can take their words away: cut its pauses and fillers first, then place graphics on the kept parts.";
 
 /// Where a graphic just placed (`placed`) plays at the same time as another graphic on the
 /// short's own timeline: two over the whole frame hide each other.

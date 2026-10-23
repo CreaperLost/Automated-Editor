@@ -72,6 +72,12 @@ export const UnderTake: React.FC<{ project: OpenedProject; short: Short }> = ({ 
             : `Goes from the playhead, ${formatTime(where.atUs)} (select a stretch to set its length).`}
       </p>
       {source === "video" && <FromVideo shortId={short.id} at={at} disabled={!!busy || !where} />}
+      {source === "graphic" && uncut(project) && (
+        <p role="alert" className="text-meta text-suggest-fg">
+          The take isn't cut yet: graphics on uncut words play long, and a cut later can take their words away. Clean
+          the take first, then place graphics on what it keeps.
+        </p>
+      )}
       {source === "graphic" && (
         <FromGraphics project={project} shortId={short.id} at={at} disabled={!!busy || !where} />
       )}
@@ -79,6 +85,11 @@ export const UnderTake: React.FC<{ project: OpenedProject; short: Short }> = ({ 
     </div>
   );
 };
+
+/** The take not cut yet: its voice is still the one clip it came in as (as `take_short::uncut`). */
+function uncut(project: OpenedProject): boolean {
+  return project.sequence.tracks.filter((t) => t.kind === "audio" && t.role === "mic").every((t) => t.clips.length <= 1);
+}
 
 type At = (lengthUs: number) => { atUs: number; toUs: number; selected: boolean } | null;
 

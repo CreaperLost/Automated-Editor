@@ -289,9 +289,10 @@ come first, in this order: SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2; Clips (SHT-
 - **SHT-3 · Dress step (S/M).** George's order (23 Oct): a take comes in unedited, so first cut
   it (chop, mouth noises), then match footage and graphics from the long video **only when
   something there is related** (often nothing is), then graphics, **only on the kept parts**
-  (graphics on uncut words would have to be very long). The `shorts` template already cleans
-  up before footage and dress; left: make the matching step skippable in so many words, and
-  have the app refuse or warn on graphics placed on a take that hasn't been cut yet.
+  (graphics on uncut words would have to be very long). Done 23 Oct: the `shorts` template
+  cleans up before footage and dress and says to skip matching when nothing in the video is
+  related; the app warns (in a batch's summary and in the Shorts tab's graphic picker) when
+  graphics go on a take whose voice is still one uncut clip (`take_short::uncut`).
 <a id="sht-4"></a>
 - **SHT-4 · Take-short follow-ups (S).** Done 23 Oct: the picker, graphic modes, footage speed
   and the footage sound control (see [Done](#done)).

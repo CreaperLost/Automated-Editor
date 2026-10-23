@@ -55,8 +55,13 @@ Mouth noises) and undo.
 
 ## 5. Pick the footage (ask)
 
+**Only when something in the long video is related.** Often nothing is (the take tells
+something the video never showed): then skip this step and the long video's graphics in step
+6, say so in one line ("nothing in the video matches; the take plays on its own"), and go on.
+Never force footage that doesn't show what the take says.
+
 Split the take into beats: the hook, each claim or step, the verdict or payoff. For each beat
-find the stretch of the long video that **shows** it:
+find the stretch of the long video that **shows** it (a beat with nothing goes without):
 
 - Search the video's transcript for the same names and things (a place, a mission, a menu, a
   setting). Where the video talked about it is usually where it was on screen.
@@ -81,9 +86,11 @@ Ask for an OK or changes (automatic: go).
 
 ## 6. Dress (ask)
 
-Pick graphics for the take's words too. First the **long video's own graphics** (`graphics`
-lists them with where they play): where a beat retells a part of the video that had a graphic,
-reuse it (`graphic`, its id: a copy made for 9:16, its text changeable without touching the
+Graphics go on the take only once it is cut (step 3): on uncut words they play long, and the
+app warns when they would. Pick graphics for the take's words too. First the **long video's
+own graphics** (`graphics` lists them with where they play), only if one is related (none is
+when step 5 found nothing): where a beat retells a part of the video that had a graphic, reuse
+it (`graphic`, its id: a copy made for 9:16, its text changeable without touching the
 video's). Then new ones (`template` or `library`), or one of your own: a title card on the
 hook, a label per beat ("MYTH #1", "TRUE"/"FALSE" stamp, a name), news or a new feature the
 video lacks.

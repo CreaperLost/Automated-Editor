@@ -474,6 +474,18 @@ fn own_mut(short: &mut Short) -> Result<&mut Sequence, String> {
     }
 }
 
+/// A take short not cut yet: its voice still plays as the one clip it came in as (every cut,
+/// a pause or a filler, splits it). Graphics placed then sit on words that may go.
+pub fn uncut(short: &Short) -> bool {
+    own(short).is_ok_and(|sequence| {
+        sequence
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackKind::Audio && t.role == Some(Role::Mic))
+            .all(|t| t.clips.len() <= 1)
+    })
+}
+
 /// The take short's Footage sound track: the footage's and the B-roll's sound play on it, so
 /// one volume and one ducking set both.
 pub fn footage_sound_track(short: &Short) -> Option<&Track> {
@@ -1003,6 +1015,7 @@ mod tests {
             score: None,
         };
         let mut short = new_short(&document, "t1".into(), "Take", "", &sources, &sync).unwrap();
+        assert!(uncut(&short), "a take comes in uncut");
         // A tight pause cut takes 10.0-10.3 s: the loosely timed "define" (10.2-10.8 s)
         // loses its first 0.1 s and is still heard.
         let sequence = &mut short.edit.as_mut().unwrap().sequence;
@@ -1019,6 +1032,7 @@ mod tests {
         )
         .unwrap()
         .0;
+        assert!(!uncut(&short), "a cut splits the voice");
         let word = |text: &str, from: u64, to: u64| TranscriptWord {
             id: String::new(),
             text: text.into(),
