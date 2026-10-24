@@ -14,7 +14,7 @@ use crate::render::{LayerRole, Scene};
 use image::{Rgba, RgbaImage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 pub const MAX_TILES: usize = 48;
 const DEFAULT_TILES: usize = 24;
@@ -463,6 +463,78 @@ pub fn build(
     )
 }
 
+/// Most frames one `frame_render` sheet holds.
+pub const MAX_SHEET_FRAMES: usize = 24;
+/// The label strip under a sheet's frame: one line.
+const LABEL_H: u32 = 18;
+
+/// One contact sheet of finished frames at `moments` (on the video's timeline, or a short's
+/// own), each labelled with its number and time: a graphic's or a zoom's motion in one image
+/// instead of a call per frame. Returns the PNG, its size, the columns and the moments drawn.
+pub fn sheet(
+    state: &AppState,
+    short: Option<&str>,
+    moments: &[u64],
+) -> Result<(Vec<u8>, u32, u32, u32, Vec<u64>), String> {
+    if moments.is_empty() || moments.len() > MAX_SHEET_FRAMES {
+        return Err(format!("Give 1 to {MAX_SHEET_FRAMES} moments"));
+    }
+    let canvas = {
+        let (document, _, _) = super::frames::document(state, short)?;
+        document.layout.preview_dimensions()?
+    };
+    let (tile_w, max_cols) = grid(canvas);
+    super::frames::with_document_evaluator(state, short, tile_w, |evaluator, document| {
+        let last = document.duration_us().saturating_sub(1);
+        let mut frames = Vec::with_capacity(moments.len());
+        let mut drawn = Vec::with_capacity(moments.len());
+        for &at in moments {
+            let at = at.min(last);
+            frames.push(evaluator.preview_at(at)?);
+            drawn.push(at);
+        }
+        let tile_h = frames.first().map_or(2, |f| f.height);
+        let cols = (frames.len() as u32).clamp(1, max_cols);
+        let rows = (frames.len() as u32).div_ceil(cols).max(1);
+        let cell_h = tile_h + LABEL_H;
+        let width = GAP + cols * (tile_w + GAP);
+        let height = GAP + rows * (cell_h + GAP);
+        let mut image = RgbaImage::from_pixel(width, height, BACKGROUND);
+        for (i, (frame, &at)) in frames.iter().zip(&drawn).enumerate() {
+            let (col, row) = (i as u32 % cols, i as u32 / cols);
+            let x = (GAP + col * (tile_w + GAP)) as i64;
+            let y = (GAP + row * (cell_h + GAP)) as i64;
+            blit_bgra(&mut image, frame, x, y);
+            let label = format!("#{} {}", i + 1, clock(at));
+            draw_text(
+                &mut image,
+                x + 4,
+                y + tile_h as i64 + 3,
+                &fit(&label, tile_w as f32 - 8.0),
+                TEXT_PX,
+                TITLE,
+            );
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut png, image::ImageFormat::Png)
+            .map_err(|e| format!("Could not encode the frames: {e}"))?;
+        Ok((png.into_inner(), width, height, cols, drawn))
+    })
+}
+
+/// `count` moments spread over `from..to`, from its first frame to about its last.
+pub fn spread(from: u64, to: u64, count: usize) -> Vec<u64> {
+    // A frame at 25 fps before the end, so the last tile still shows it.
+    let last = to.saturating_sub(40_000).max(from);
+    if count <= 1 {
+        return vec![from];
+    }
+    (0..count)
+        .map(|i| from + (last - from) * i as u64 / (count as u64 - 1))
+        .collect()
+}
+
 /// The caption strip under a tile's frame: number, times and chapter; what the frame shows;
 /// what is said.
 fn draw_strip(image: &mut RgbaImage, tile: &Tile, x: i64, y: i64, width: u32) {
@@ -519,24 +591,51 @@ pub fn storyboard(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     let header = format!(
         "Storyboard of {what}, revision {}: {} tiles, {}x{}, read left to right in rows of {}. \
-         Each tile's frame is at atUs; kind is what the frame shows.",
+         A line a tile: its stretch (and in microseconds), the moment its frame shows, what the \
+         frame shows (screen, screen+cam, camera, split, graphic, blank), then what is said.",
         board.revision,
         board.tiles.len(),
         board.width,
         board.height,
         board.cols
     );
-    let tiles =
-        serde_json::to_string(&json!({ "tiles": board.tiles })).map_err(|e| e.to_string())?;
-    Ok(vec![
-        Output::Png(board.png),
-        Output::Text(format!("{header}\n{tiles}")),
-    ])
+    // AI-1: lines instead of JSON, about half the characters for the same facts.
+    let mut lines = vec![header];
+    lines.extend(board.tiles.iter().map(tile_line));
+    Ok(vec![Output::Png(board.png), Output::Text(lines.join("\n"))])
+}
+
+/// `3. 0:12.40-0:20.00 (12400000..20000000) at 15000000: screen, zoom 1.6, gfx Title | "said"`.
+fn tile_line(tile: &Tile) -> String {
+    let mut line = format!(
+        "{}. {}-{} ({}..{}) at {}: {}",
+        tile.n, tile.from, tile.to, tile.from_us, tile.to_us, tile.at_us, tile.kind
+    );
+    if let Some(zoom) = tile.zoom {
+        line.push_str(&format!(", zoom {zoom:.1}"));
+    }
+    if tile.zooms > 0 {
+        line.push_str(&format!(
+            ", {} starting",
+            super::actions::plural(tile.zooms, "zoom")
+        ));
+    }
+    if let Some(graphic) = &tile.graphic {
+        line.push_str(&format!(", gfx {graphic}"));
+    }
+    if let Some(chapter) = &tile.chapter {
+        line.push_str(&format!(", chapter \"{chapter}\""));
+    }
+    if !tile.say.is_empty() {
+        line.push_str(&format!(" | \"{}\"", tile.say));
+    }
+    line
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const S: u64 = 1_000_000;
 
@@ -642,6 +741,17 @@ mod tests {
     }
 
     #[test]
+    fn a_sheet_spreads_its_moments_from_the_first_frame_to_the_last() {
+        assert_eq!(spread(10 * S, 12 * S, 1), vec![10 * S]);
+        assert_eq!(
+            spread(10 * S, 12 * S, 3),
+            vec![10 * S, 10_980_000, 11_960_000]
+        );
+        // Shorter than a frame: every tile shows its start.
+        assert_eq!(spread(10 * S, 10 * S + 20_000, 2), vec![10 * S, 10 * S]);
+    }
+
+    #[test]
     fn long_text_is_shortened() {
         assert_eq!(shorten("short", 10), "short");
         assert_eq!(shorten("a long line of speech", 10), "a long...");
@@ -666,6 +776,6 @@ mod tests {
         let Output::Text(text) = &output[1] else {
             panic!("expected text")
         };
-        assert!(text.contains("\"tiles\""), "{text}");
+        assert!(text.contains("\n1. 0:00.00-"), "{text}");
     }
 }

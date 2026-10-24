@@ -27,14 +27,15 @@ export const StagePanel: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
   const playbackShortId = useProjectStore((s) => s.playbackShortId);
   const viewShort = useProjectStore((s) => s.viewShort);
-  const inShorts = useWorkspaceStore((s) => s.workspace === "shorts");
+  const workspace = useWorkspaceStore((s) => s.workspace);
+  const inShorts = workspace === "shorts" || workspace === "clips";
   const aspectRatio = useSettingsStore((s) => s.canvas.aspectRatio);
 
   if (!project) return null;
   const playingShort = project.shorts?.find((short) => short.id === playbackShortId);
   const showsShort = !!project.shortView;
   // Shorts with none made yet: nothing to show but the way to make one.
-  const noShorts = inShorts && (project.shorts ?? []).length === 0;
+  const noShorts = inShorts && !(project.shorts ?? []).some((s) => (workspace === "shorts") === !!s.take);
 
   return (
     <div className="h-full flex flex-col min-w-0 min-h-0 overflow-hidden bg-studio-900">
@@ -71,7 +72,9 @@ export const StagePanel: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-hidden m-2 rounded-control bg-studio-950 flex items-center justify-center p-2">
         {noShorts ? (
           <p className="max-w-xs text-center text-label text-studio-500 leading-relaxed">
-            No shorts yet. Make one in the Shorts panel: New short, or Find with AI once the video is transcribed.
+            {workspace === "shorts"
+              ? "No shorts yet. Record yourself telling one part of this video, then add the take in the Shorts panel."
+              : "No clips yet. Make one in the Clips panel: New clip, or Find with AI once the video is transcribed."}
           </p>
         ) : (
           <NativePreviewHost key={project.projectHandle} fitAspectRatio={showsShort ? 9 / 16 : aspectValue(aspectRatio)} />

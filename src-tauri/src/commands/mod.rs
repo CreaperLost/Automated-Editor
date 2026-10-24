@@ -15,8 +15,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod graphics;
+pub mod history;
 pub mod noises;
+pub mod preset;
 pub mod proposals;
+pub mod style;
 pub mod transcript;
 pub mod transcript_pauses;
 
@@ -264,7 +267,7 @@ pub fn detect_silence_for(
             reader.document().revision,
         )
     };
-    let mut result = crate::project::silence::detect_track_silence_with_words(
+    let (mut result, _) = crate::project::silence::detect_track_silence_with_words(
         &ctx,
         &config,
         transcript.as_ref(),
@@ -406,6 +409,7 @@ fn detect_combined_silence(
             })
             .collect::<Result<Vec<_>, String>>()
     })?;
+    let (found, edges): (Vec<_>, Vec<_>) = found.into_iter().unzip();
     let lists: Vec<crate::project::silence::PlaysAndPauses> = sounds
         .iter()
         .zip(&found)
@@ -430,7 +434,17 @@ fn detect_combined_silence(
             }
         }
     }
-    let pauses = crate::project::silence::common_pauses(&lists, min_us);
+    let mut pauses = crate::project::silence::common_pauses(&lists, min_us);
+    // Two chosen sounds: the first is the voice, and the dead air before its first word and
+    // after its last goes whatever the other plays there (all speech: someone else may talk).
+    if track_ids.is_some() {
+        pauses.extend(sounds[0].1.iter().flat_map(|clip| {
+            edges[0]
+                .iter()
+                .filter_map(|&(a, b)| clip.timeline_range(a, b))
+        }));
+        pauses = crate::transcript::pauses::merge_ranges(pauses);
+    }
     let first = &found[0];
     let dependencies = sounds
         .iter()
@@ -1036,7 +1050,29 @@ pub fn project_zoom_suggestions_impl(
     }
     // The project's own settings, so every window finds the same zooms.
     let config = reader.history().current.zoom_settings.config();
-    let mut generation = all_zoom_suggestions(reader, &config)?;
+    zoom_suggestions_with(reader, &config)
+}
+
+/// The zooms `settings` would suggest, without saving them: an agent's dry run of other settings.
+pub fn project_zoom_preview_impl(
+    state: &AppState,
+    project_handle: String,
+    settings: &crate::zoom::ZoomSettings,
+) -> Result<crate::zoom::ZoomGeneration, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    if reader.summary.project_handle != project_handle {
+        return Err("Stale project handle".into());
+    }
+    zoom_suggestions_with(reader, &settings.config())
+}
+
+/// The suggestions found with `config`, less the zooms already in the edit or dismissed.
+fn zoom_suggestions_with(
+    reader: &crate::project::ProjectReader,
+    config: &crate::zoom::ZoomConfig,
+) -> Result<crate::zoom::ZoomGeneration, String> {
+    let mut generation = all_zoom_suggestions(reader, config)?;
     let taken: std::collections::BTreeSet<_> = reader
         .summary
         .zooms
@@ -1199,7 +1235,6 @@ pub fn project_layout_update_impl(
                 std::path::Path::new(&source),
             )?;
             layout.wallpaper_asset = Some(relative);
-            layout.background_type = "wallpaper".into();
         }
         reader.update_layout(expected_revision, layout)
     })
@@ -1693,6 +1728,33 @@ pub fn project_check_fix_impl(
     if report.revision != expected_revision {
         return Err("The edit changed since the check; check again".into());
     }
+    // `blips`: every blip between two cuts goes in one cut, one undo step.
+    if ids.iter().any(|id| id == "blips") {
+        let ranges: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.kind == crate::check::Kind::Fragment)
+            .filter_map(|f| match f.fix {
+                Some(crate::check::Fix::Cut { start_us, end_us }) => {
+                    Some(crate::zoom::EditedRange { start_us, end_us })
+                }
+                _ => None,
+            })
+            .collect();
+        if ranges.is_empty() {
+            return Err("No blips to remove".into());
+        }
+        return project_sequence_edit_impl(
+            state,
+            project_handle,
+            expected_revision,
+            SequenceEdit::DeleteRange {
+                ranges,
+                ripple: Some(true),
+            },
+            None,
+        );
+    }
     let all = ids.iter().any(|id| id == "all");
     let mut fixes = Vec::new();
     for finding in report.findings {
@@ -1750,20 +1812,6 @@ fn apply_check_fix(
             None,
         ),
         Fix::DeleteZoom { id } => project_zoom_delete_impl(state, handle, revision, id),
-        Fix::ZoomEase {
-            id,
-            source_start_us,
-            source_end_us,
-        } => {
-            let mut zoom = current()?
-                .zooms
-                .into_iter()
-                .find(|z| z.id == id)
-                .ok_or("That zoom is gone")?;
-            zoom.source_start_us = source_start_us;
-            zoom.source_end_us = source_end_us;
-            project_zoom_update_impl(state, handle, revision, zoom)
-        }
         Fix::CaptionOffset { offset_pct } => {
             let mut captions = current()?.captions;
             captions.offset_pct = offset_pct;
@@ -1824,9 +1872,11 @@ pub fn short_preview_frame_impl(
             .clone();
         short.layout = layout;
         let document = crate::shorts::short_document(base, &short, has_speech_transcript(reader))?;
+        // Transcripts are saved apart from the edit: a word fixed changes the captions too.
         let key = format!(
-            "{project_handle}:{}:{short_id}:{}",
+            "{project_handle}:{}:{}:{short_id}:{}",
             base.revision,
+            crate::transcript::store::changes(),
             serde_json::to_string(&short.layout).map_err(|e| e.to_string())?
         );
         (document, reader.root().to_path_buf(), key)
@@ -1863,36 +1913,6 @@ pub fn project_shorts_set_impl(
 ) -> Result<OpenedProject, String> {
     mutate_opened(state, project_handle, |reader| {
         reader.set_shorts(expected_revision, shorts)
-    })
-}
-
-/// Saves the open project's settings (and `short`'s look) as a template for every project.
-pub fn template_save_impl(
-    state: &AppState,
-    project_handle: String,
-    name: String,
-    short: Option<String>,
-) -> Result<Vec<crate::templates::Template>, String> {
-    let template = {
-        let opened = state.opened_project.lock();
-        let reader = opened.as_ref().ok_or("No opened project")?;
-        require_handle(reader, &project_handle)?;
-        crate::templates::capture(&reader.history().current, &name, short.as_deref())?
-    };
-    crate::templates::save(&crate::templates::dir(), template)
-}
-
-/// Gives the open project a saved template's settings, and `short` its short look.
-pub fn template_apply_impl(
-    state: &AppState,
-    project_handle: String,
-    expected_revision: u64,
-    template_id: String,
-    short: Option<String>,
-) -> Result<OpenedProject, String> {
-    let template = crate::templates::find(&crate::templates::dir(), &template_id)?;
-    mutate_opened(state, project_handle, |reader| {
-        reader.apply_template(expected_revision, &template, short.as_deref())
     })
 }
 
@@ -2578,6 +2598,95 @@ pub fn export_cancel_impl(
     job_id: String,
 ) -> Result<crate::export::ExportStatus, String> {
     state.export.lock().cancel(&job_id)
+}
+
+/// Saves one of the edit's other files (subtitles, transcript or the sound alone) for the video
+/// or the short `short_id`: at `destination`, else next to the project named after it (and the
+/// short), replacing an earlier one. Returns where it went.
+pub fn export_file_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<String>,
+    kind: crate::export::files::FileKind,
+    destination: Option<String>,
+    on_progress: &mut dyn FnMut(f64),
+) -> Result<PathBuf, String> {
+    use crate::export::files;
+    let (root, stem, assets, contents, sound) = {
+        let _guard = state.command_lock.lock();
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let base = &reader.history().current;
+        let short = match &short_id {
+            Some(id) => Some(
+                base.shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or("That short no longer exists")?,
+            ),
+            None => None,
+        };
+        let (stem, title) = match short {
+            Some(short) => (
+                format!("{} - {}", reader.summary.name, short.title),
+                short.title.clone(),
+            ),
+            None => (reader.summary.name.clone(), reader.summary.name.clone()),
+        };
+        let (contents, sound) = if kind == files::FileKind::Wav {
+            // The document the video export plays, so the sound matches it.
+            let document = match short {
+                Some(short) => {
+                    crate::shorts::short_document(base, short, has_speech_transcript(reader))?
+                }
+                None => base.clone(),
+            };
+            (None, Some(document))
+        } else {
+            let (timeline, cues) =
+                transcript::caption_cues(reader, short_id.as_deref(), !kind.is_subtitles())?;
+            let (_, cues) =
+                cues.ok_or("Nothing is transcribed yet: transcribe the speech first")?;
+            if cues.is_empty() {
+                return Err("No words are left in the edit to write".into());
+            }
+            let chapters = crate::chapters::timeline(&timeline.chapters, &timeline);
+            let text = match kind {
+                files::FileKind::Srt => files::srt(&cues),
+                files::FileKind::Vtt => files::vtt(&cues),
+                files::FileKind::Txt => files::plain(&cues, &chapters),
+                _ => files::markdown(&title, &cues, &chapters),
+            };
+            (Some(text), None)
+        };
+        (
+            reader.root().to_path_buf(),
+            stem,
+            base.assets.clone(),
+            contents,
+            sound,
+        )
+    };
+    let requested = match destination {
+        Some(path) if !path.trim().is_empty() => path,
+        _ => crate::export::default_destination(&root, &stem, 0)
+            .with_extension(kind.extension())
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let path = crate::export::resolve_destination(&root, &stem, 0, Some(&requested), &assets)
+        .map_err(|failure| failure.message().to_string())?;
+    if let Some(text) = contents {
+        fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    } else if let Some(document) = sound {
+        let mixer = crate::media::audio::AudioMixer::new(&root, &document)?;
+        if !mixer.has_audio() {
+            return Err("The edit has no sound".into());
+        }
+        crate::export::files::write_wav(&mixer, &path, on_progress)?;
+    }
+    Ok(path)
 }
 
 /// Formats the window title for project editing.

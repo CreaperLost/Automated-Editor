@@ -1,13 +1,28 @@
 import React, { useEffect, useState } from "react";
 import { Captions } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { PresetMarks } from "../presets/PresetMarks";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { soundSources } from "../../lib/sequence";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
-import { CaptionSettings, DEFAULT_CAPTION_SETTINGS } from "../../lib/types";
+import { CaptionSettings, CaptionStyle, DEFAULT_CAPTION_SETTINGS } from "../../lib/types";
 
-const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void }> = ({
+export const CAPTION_STYLES: [CaptionStyle, string, string][] = [
+  ["pop", "Pop in", "Each word pops in as it is said"],
+  ["karaoke", "Karaoke", "The whole caption shows dim, and each word lights up as it is said"],
+  ["static", "Static", "The whole caption shows at once and stays still"],
+];
+
+export const CAPTION_WEIGHTS: [number, string][] = [
+  [0, "The look's"],
+  [500, "Medium"],
+  [600, "Semibold"],
+  [700, "Bold"],
+  [800, "Extra bold"],
+];
+
+export const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChange: (checked: boolean) => void }> = ({
   label,
   hint,
   checked,
@@ -26,7 +41,7 @@ const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChang
   </label>
 );
 
-const ColorRow: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({
+export const ColorRow: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({
   label,
   value,
   onChange,
@@ -96,6 +111,7 @@ export const CaptionsSection: React.FC = () => {
           {error}
         </p>
       )}
+      <PresetMarks part="captions" />
       <p className="text-meta text-studio-500">
         Captions come from the transcript, so transcribe a track first. Cut words disappear from them and fixed words
         show corrected.
@@ -169,38 +185,10 @@ export const CaptionsSection: React.FC = () => {
           unit=""
           onChange={(maxLines) => update({ maxLines })}
         />
-        <ColorRow label="Text color" value={draft.textColor} onChange={(textColor) => update({ textColor })} />
-        <Toggle
-          label="Highlight the spoken word"
-          checked={draft.highlightWords}
-          onChange={(highlightWords) => update({ highlightWords })}
-        />
-        {draft.highlightWords && (
-          <ColorRow
-            label="Highlight color"
-            value={draft.highlightColor}
-            onChange={(highlightColor) => update({ highlightColor })}
-          />
-        )}
-        <Toggle label="Outline" checked={draft.outline} onChange={(outline) => update({ outline })} />
-        <Toggle label="Background box" checked={draft.background} onChange={(background) => update({ background })} />
-        {draft.background && (
-          <>
-            <ColorRow
-              label="Box color"
-              value={draft.backgroundColor}
-              onChange={(backgroundColor) => update({ backgroundColor })}
-            />
-            <RangeRow
-              label="Box opacity"
-              value={Math.round(draft.backgroundOpacity * 100)}
-              min={0}
-              max={100}
-              unit="%"
-              onChange={(pct) => update({ backgroundOpacity: pct / 100 })}
-            />
-          </>
-        )}
+        <p className="text-meta text-studio-500 leading-relaxed">
+          How they look (pop, karaoke or still, colours, outline, box, font) is the project&apos;s style: the Style
+          page.
+        </p>
         <Toggle label="ALL CAPS" checked={draft.uppercase} onChange={(uppercase) => update({ uppercase })} />
       </fieldset>
     </InspectorSection>

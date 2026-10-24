@@ -1,4 +1,6 @@
 //! Versioned edit document (`project.json`). Source media is never rewritten.
+use super::checkpoint::Restored;
+use super::history::{describe, Checkpoint, History, RunUndo, StepMeta};
 use super::layout::validate_layout;
 use super::reader::{open_regular, safe_path};
 use crate::layouts::LayoutTrack;
@@ -21,7 +23,6 @@ pub use crate::sequence::edit::TrimSide;
 /// Version 2: assets and a sequence of tracks. Earlier documents are not read.
 pub const EDIT_SCHEMA_VERSION: u32 = 2;
 pub const MAX_EDIT_BYTES: u64 = 4_194_304;
-pub const MAX_UNDO: usize = 64;
 pub const MAX_CUTS_PER_REVISION: usize = 256;
 /// Muted moments one sound can hold.
 pub const MAX_NOISE_MUTES: usize = 50_000;
@@ -72,9 +73,34 @@ pub struct EditDocument {
     /// Auto-zoom settings: how far zooms go, how many, how the camera follows.
     #[serde(default, skip_serializing_if = "crate::zoom::ZoomSettings::is_default")]
     pub zoom_settings: crate::zoom::ZoomSettings,
-    /// The brand kit graphics use unless they pick another (see `graphics::brands`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graphics_brand: Option<String>,
+    /// The style it is dressed in: graphics, captions and the frame (see `crate::style`).
+    #[serde(default = "default_style")]
+    pub style: String,
+    /// The preset it follows: what its settings are unless changed here (see `crate::preset`;
+    /// stored, only the changes are written).
+    #[serde(default = "default_preset")]
+    pub preset: String,
+    /// The preset its new shorts start from.
+    #[serde(default = "default_shorts_preset")]
+    pub shorts_preset: String,
+    /// What the cleanup passes start from (silence and gap levels, mouth-noise sensitivity).
+    #[serde(default)]
+    pub cleanup: crate::preset::settings::CleanupSettings,
+    /// What the Export dialog starts with.
+    #[serde(default)]
+    pub export: crate::preset::settings::ExportPreferences,
+}
+
+fn default_style() -> String {
+    crate::style::DEFAULT.into()
+}
+
+fn default_preset() -> String {
+    crate::preset::DEFAULT.into()
+}
+
+fn default_shorts_preset() -> String {
+    crate::preset::SHORTS.into()
 }
 
 impl Default for EditDocument {
@@ -95,7 +121,11 @@ impl Default for EditDocument {
             shorts: Vec::new(),
             short_layout: None,
             zoom_settings: Default::default(),
-            graphics_brand: None,
+            style: default_style(),
+            preset: default_preset(),
+            shorts_preset: default_shorts_preset(),
+            cleanup: Default::default(),
+            export: Default::default(),
         }
     }
 }
@@ -288,8 +318,15 @@ impl EditDocument {
         crate::chapters::validate(&self.chapters)?;
         crate::shorts::validate(&self.shorts)?;
         crate::shorts::validate_edits(self)?;
-        if let Some(brand) = &self.graphics_brand {
-            crate::graphics::brands::check_name(brand)?;
+        if !crate::style::is_builtin(&self.style) {
+            crate::style::store::check_name(&self.style)?;
+        }
+        self.cleanup.validate()?;
+        self.export.validate()?;
+        for preset in [&self.preset, &self.shorts_preset] {
+            if !crate::preset::is_builtin(preset) {
+                crate::preset::store::check_name(preset)?;
+            }
         }
         Ok(())
     }
@@ -343,10 +380,24 @@ pub fn load_edit_document(root: &Path) -> Result<Option<EditDocument>, String> {
             version.schema_version
         ));
     }
-    let document: EditDocument =
+    let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid edit document: {e}"))?;
+    let document = crate::preset::read(value)?;
     document.validate()?;
     Ok(Some(document))
+}
+
+/// `document` as saved: what the UI is shown (where things land, missing files) is worked
+/// out, not stored.
+pub(super) fn stored_form(document: &EditDocument) -> EditDocument {
+    let mut stored = document.clone();
+    for zoom in &mut stored.zooms {
+        zoom.edited_ranges.clear();
+    }
+    for asset in &mut stored.assets {
+        asset.missing = false;
+    }
+    stored
 }
 
 pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), String> {
@@ -357,14 +408,8 @@ pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), St
             return Err("Edit document cannot be a symlink".into());
         }
     }
-    // What the UI is shown (where things land, missing files) is worked out, not stored.
-    let mut stored = document.clone();
-    for zoom in &mut stored.zooms {
-        zoom.edited_ranges.clear();
-    }
-    for asset in &mut stored.assets {
-        asset.missing = false;
-    }
+    // Only what differs from its preset is written.
+    let stored = crate::preset::stored(&stored_form(document))?;
     let serialized = serde_json::to_vec_pretty(&stored).map_err(|e| e.to_string())?;
     if serialized.len() as u64 > MAX_EDIT_BYTES {
         return Err("Edit document exceeds size limit".into());
@@ -442,28 +487,70 @@ fn persist_revision(root: &Path, expected: u64, next: &EditDocument) -> Result<(
     result
 }
 
+/// The current edit and its undo history, which lives on disk (see `history.rs`).
 #[derive(Clone, Debug)]
 pub struct EditHistory {
     pub current: EditDocument,
-    undo: Vec<EditDocument>,
-    redo: Vec<EditDocument>,
+    log: History,
+    /// What the next step is, set by whoever is about to make it.
+    next_step: Option<StepMeta>,
 }
 
 impl EditHistory {
+    /// A history that starts with `current`.
     pub fn new(current: EditDocument) -> Self {
         Self {
             current,
-            undo: Vec::new(),
-            redo: Vec::new(),
+            log: History::empty(),
+            next_step: None,
         }
     }
 
+    /// `current` with the history saved in the project at `root`, and a note when that
+    /// history had to be repaired.
+    pub fn open(root: &Path, current: EditDocument) -> (Self, Option<String>) {
+        let (log, note) = History::open(root, &current);
+        (
+            Self {
+                current,
+                log,
+                next_step: None,
+            },
+            note,
+        )
+    }
+
     pub fn undo_available(&self) -> bool {
-        !self.undo.is_empty()
+        self.log.undo_step().is_some()
     }
 
     pub fn redo_available(&self) -> bool {
-        !self.redo.is_empty()
+        self.log.redo_step().is_some()
+    }
+
+    pub fn undo_label(&self) -> Option<&str> {
+        self.log.undo_step().map(|s| s.label.as_str())
+    }
+
+    pub fn redo_label(&self) -> Option<&str> {
+        self.log.redo_step().map(|s| s.label.as_str())
+    }
+
+    pub fn steps(&self) -> &History {
+        &self.log
+    }
+
+    pub fn steps_mut(&mut self) -> &mut History {
+        &mut self.log
+    }
+
+    /// Names the next step this history makes; without it a step is called "Edit".
+    pub fn set_next_step(&mut self, meta: StepMeta) {
+        self.next_step = Some(meta);
+    }
+
+    pub fn clear_next_step(&mut self) {
+        self.next_step = None;
     }
 
     fn check(&self, expected_revision: u64) -> Result<(), String> {
@@ -479,6 +566,8 @@ impl EditHistory {
         persist_root: &Path,
         mut next: EditDocument,
     ) -> Result<&EditDocument, String> {
+        // Taken first, so a failed commit does not name the next one.
+        let meta = self.next_step.take();
         self.check(expected_revision)?;
         next.schema_version = EDIT_SCHEMA_VERSION;
         crate::shorts::give_own_timelines(&mut next);
@@ -492,12 +581,16 @@ impl EditHistory {
             .checked_add(1)
             .ok_or("Revision overflow")?;
         next.attach_zoom_ranges();
+        // Both states are on disk before the edit is, so the step can always be undone.
+        let before = self.log.current_state(persist_root, &self.current)?;
+        let after = self.log.save_state(persist_root, &next)?;
         persist_revision(persist_root, expected_revision, &next)?;
-        self.undo.push(self.current.clone());
-        if self.undo.len() > MAX_UNDO {
-            self.undo.remove(0);
-        }
-        self.redo.clear();
+        let meta = meta.unwrap_or_else(StepMeta::for_this_thread);
+        let was = &self.current;
+        self.log
+            .record_commit(persist_root, before, after, meta, next.revision, || {
+                describe(was, &next)
+            });
         self.current = next;
         Ok(&self.current)
     }
@@ -926,50 +1019,6 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
-    /// Takes on a saved template's settings, and its short look on `short` when one is named,
-    /// in one step. What belongs to this project (see [`crate::templates`]) stays.
-    pub fn apply_template(
-        &mut self,
-        expected_revision: u64,
-        template: &crate::templates::Template,
-        short: Option<&str>,
-        persist_root: &Path,
-    ) -> Result<&EditDocument, String> {
-        use crate::templates::{captions_onto, layout_onto, short_look_onto};
-        self.check(expected_revision)?;
-        let mut next = self.current.clone();
-        next.layout = layout_onto(&template.layout, &self.current.layout);
-        validate_layout(&next.layout)?;
-        next.captions = captions_onto(&template.captions, &self.current.captions);
-        next.captions.validate()?;
-        template.zoom_settings.validate()?;
-        with_zoom_settings(&mut next, template.zoom_settings.clone());
-        next.layouts.base = template.base.clone();
-        next.layouts.pick = template.pick.clone();
-        next.layouts.validate()?;
-        next.graphics_brand = template.graphics_brand.clone();
-        if let Some(id) = short {
-            let look = template
-                .short_look
-                .as_ref()
-                .ok_or("This template was saved without a short look")?;
-            let own = next
-                .shorts
-                .iter_mut()
-                .find(|s| s.id == id)
-                .ok_or("That short is gone")?;
-            own.layout = short_look_onto(look, &own.layout);
-            if let Some(base) = &template.short_base {
-                own.layouts.base = base.clone();
-            }
-            crate::shorts::validate(&next.shorts)?;
-        }
-        if next == self.current {
-            return Ok(&self.current);
-        }
-        self.commit_next(expected_revision, persist_root, next)
-    }
-
     /// Takes the generated zooms off and puts the recordings' zooms back on, found again with
     /// the current auto-zoom settings (dismissed ones included); zooms you made or changed
     /// stay, and new ones never overlap them.
@@ -1268,21 +1317,112 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
+    /// Ends the agents' current run (they began a new workflow).
+    pub fn end_run(&mut self) {
+        self.log.end_run();
+    }
+
+    /// Takes back everything the newest agent run did, as one new step, while nothing came
+    /// after it. Undo then brings the run back.
+    pub fn undo_run(
+        &mut self,
+        expected_revision: u64,
+        persist_root: &Path,
+    ) -> Result<RunUndo, String> {
+        self.check(expected_revision)?;
+        let run = self.log.run_to_undo()?;
+        let previous = self.log.load_state(persist_root, &run.before)?;
+        let mut meta = StepMeta::for_this_thread();
+        meta.joins_run = false;
+        meta.undoes_run = Some(run.run.clone());
+        meta.label = Some(format!(
+            "Undo {}'s run ({} change{})",
+            run.agent,
+            run.changes,
+            if run.changes == 1 { "" } else { "s" }
+        ));
+        self.next_step = Some(meta);
+        self.commit_next(expected_revision, persist_root, previous)?;
+        Ok(run)
+    }
+
+    /// Saves a checkpoint of the edit, the graphics and the caption marks as they are now. An
+    /// automatic one the same as the newest automatic one is not saved again.
+    pub fn save_checkpoint(
+        &mut self,
+        persist_root: &Path,
+        name: &str,
+        auto: bool,
+    ) -> Result<Checkpoint, String> {
+        let state = self.log.current_state(persist_root, &self.current)?;
+        let meta = StepMeta::for_this_thread();
+        let checkpoint =
+            super::checkpoint::capture(persist_root, &mut self.log, state, name, &meta, auto)?;
+        if auto {
+            let newest = self.log.checkpoints().iter().rev().find(|c| c.auto);
+            if let Some(newest) = newest.filter(|c| c.same_as(&checkpoint)) {
+                return Ok(newest.clone());
+            }
+        }
+        Ok(self.log.add_checkpoint(persist_root, checkpoint))
+    }
+
+    /// Goes back to checkpoint `id`: its edit as one new step (Undo takes it back), then its
+    /// graphic files and caption marks. What is there now is saved first as an automatic
+    /// checkpoint, since Undo brings back only the edit.
+    pub fn restore_checkpoint(
+        &mut self,
+        expected_revision: u64,
+        persist_root: &Path,
+        id: &str,
+    ) -> Result<(Checkpoint, Restored), String> {
+        self.check(expected_revision)?;
+        let checkpoint = self.log.checkpoint(id)?.clone();
+        let document = self.log.load_state(persist_root, &checkpoint.state)?;
+        let now = self.save_checkpoint(
+            persist_root,
+            &format!("Before restoring \"{}\"", checkpoint.name),
+            true,
+        )?;
+        if now.state != checkpoint.state {
+            let mut meta = StepMeta::for_this_thread();
+            meta.joins_run = false;
+            meta.label = Some(format!("Restore \"{}\"", checkpoint.name));
+            self.next_step = Some(meta);
+            self.commit_next(expected_revision, persist_root, document)?;
+        }
+        let restored = super::checkpoint::restore(persist_root, &self.log, &checkpoint);
+        Ok((checkpoint, restored))
+    }
+
+    pub fn rename_checkpoint(
+        &mut self,
+        persist_root: &Path,
+        id: &str,
+        name: &str,
+    ) -> Result<(), String> {
+        self.log.rename_checkpoint(persist_root, id, name)
+    }
+
+    pub fn delete_checkpoint(&mut self, persist_root: &Path, id: &str) -> Result<(), String> {
+        self.log.delete_checkpoint(persist_root, id)
+    }
+
     pub fn undo(
         &mut self,
         expected_revision: u64,
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
-        let mut previous = self.undo.last().cloned().ok_or("Nothing to undo")?;
+        let step = self.log.undo_step().ok_or("Nothing to undo")?;
+        let mut previous = self.log.load_state(persist_root, &step.before)?;
         previous.revision = self
             .current
             .revision
             .checked_add(1)
             .ok_or("Revision overflow")?;
         persist_revision(persist_root, expected_revision, &previous)?;
-        self.undo.pop();
-        self.redo.push(self.current.clone());
+        self.log.record_undo(persist_root);
         self.current = previous;
         Ok(&self.current)
     }
@@ -1293,15 +1433,15 @@ impl EditHistory {
         persist_root: &Path,
     ) -> Result<&EditDocument, String> {
         self.check(expected_revision)?;
-        let mut next = self.redo.last().cloned().ok_or("Nothing to redo")?;
+        let step = self.log.redo_step().ok_or("Nothing to redo")?;
+        let mut next = self.log.load_state(persist_root, &step.after)?;
         next.revision = self
             .current
             .revision
             .checked_add(1)
             .ok_or("Revision overflow")?;
         persist_revision(persist_root, expected_revision, &next)?;
-        self.redo.pop();
-        self.undo.push(self.current.clone());
+        self.log.record_redo(persist_root);
         self.current = next;
         Ok(&self.current)
     }
@@ -1637,6 +1777,7 @@ mod tests {
         ZoomSuggestion {
             path: Vec::new(),
             score: 0.0,
+            kept: Vec::new(),
             id: id.into(),
             source_start_us: start,
             source_end_us: start + 2 * S,
@@ -1911,5 +2052,475 @@ mod tests {
         history.undo(3, dir.path()).unwrap();
         history.undo(4, dir.path()).unwrap();
         assert_eq!(history.current.duration_us(), 8 * S);
+    }
+
+    fn reopen(root: &Path) -> (EditHistory, Option<String>) {
+        EditHistory::open(root, load_edit_document(root).unwrap().unwrap())
+    }
+
+    fn states(root: &Path) -> usize {
+        fs::read_dir(root.join("history/states")).map_or(0, |d| d.count())
+    }
+
+    #[test]
+    fn undo_and_redo_survive_reopening() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        history.ripple_cuts(1, &[(S, 3 * S)], dir.path()).unwrap();
+        history.undo(2, dir.path()).unwrap();
+        drop(history);
+
+        let (mut history, note) = reopen(dir.path());
+        assert_eq!(note, None);
+        assert_eq!(history.current.duration_us(), 9 * S);
+        assert_eq!(history.undo_label(), Some("Cut 1.0 s"));
+        assert_eq!(history.redo_label(), Some("Cut 2.0 s"));
+        history.redo(3, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 7 * S);
+        history.undo(4, dir.path()).unwrap();
+        history.undo(5, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 10 * S);
+        assert!(!history.undo_available());
+        // Going back and forth saves nothing new: three states, one per edit.
+        assert_eq!(states(dir.path()), 3);
+    }
+
+    #[test]
+    fn more_steps_than_the_old_stack_come_back_after_reopening() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        for revision in 0..100 {
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+        }
+        assert_eq!(history.current.duration_us(), 9 * S);
+        drop(history);
+        let (mut history, _) = reopen(dir.path());
+        assert_eq!(history.steps().undo_len(), 100);
+        for revision in 100..200 {
+            history.undo(revision, dir.path()).unwrap();
+        }
+        assert_eq!(history.current.duration_us(), 10 * S);
+        assert!(history.undo(200, dir.path()).is_err());
+    }
+
+    #[test]
+    fn an_edit_saved_without_its_log_line_becomes_a_step() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        // As if the app stopped after saving project.json but before writing the log.
+        let mut changed = history.current.clone();
+        changed.revision = 2;
+        changed.chapters = vec![crate::chapters::Chapter {
+            id: "c-1".into(),
+            source_us: 0,
+            title: "Intro".into(),
+            media: None,
+            edited_us: None,
+        }];
+        save_edit_document(dir.path(), &changed).unwrap();
+        drop(history);
+
+        let (mut history, note) = reopen(dir.path());
+        assert!(note.unwrap().contains("kept as an undo step"));
+        assert_eq!(history.undo_label(), Some("Change made outside AeroEdits"));
+        history.undo(2, dir.path()).unwrap();
+        assert!(history.current.chapters.is_empty());
+        assert_eq!(history.current.duration_us(), 9 * S);
+        history.undo(3, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 10 * S);
+    }
+
+    #[test]
+    fn a_log_line_cut_short_is_ignored_and_a_broken_log_set_aside() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        history.ripple_cuts(1, &[(S, 2 * S)], dir.path()).unwrap();
+        drop(history);
+        let log = dir.path().join("history/log.jsonl");
+        let mut text = fs::read_to_string(&log).unwrap();
+        text.push_str("{\"op\":\"und");
+        fs::write(&log, &text).unwrap();
+        let (history, note) = reopen(dir.path());
+        assert_eq!(note, None);
+        assert_eq!(history.steps().undo_len(), 2);
+
+        fs::write(
+            &log,
+            "not json
+{\"op\":\"undo\"}
+",
+        )
+        .unwrap();
+        let (history, note) = reopen(dir.path());
+        assert!(note.unwrap().contains("could not be read"));
+        assert!(!history.undo_available());
+        assert!(dir.path().join("history/log.unreadable-1.jsonl").is_file());
+    }
+
+    #[test]
+    fn the_oldest_steps_go_when_history_is_over_its_limit() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(0, 10_000)], dir.path()).unwrap();
+        let one_state = history.steps().stored_bytes() / 2;
+        history.steps_mut().set_limit_bytes(one_state * 4);
+        for revision in 1..20 {
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+        }
+        let kept = history.steps().undo_len();
+        assert!((2..=4).contains(&kept), "{kept} steps kept");
+        assert_eq!(states(dir.path()), kept + 1);
+        drop(history);
+        let (mut history, _) = reopen(dir.path());
+        assert_eq!(history.steps().undo_len(), kept);
+        for revision in 20..20 + kept as u64 {
+            history.undo(revision, dir.path()).unwrap();
+        }
+        assert_eq!(
+            history.current.duration_us(),
+            10 * S - (20 - kept as u64) * 10_000
+        );
+    }
+
+    #[test]
+    fn a_step_made_in_an_agent_call_is_the_agents() {
+        use crate::project::history::{as_agent, Author};
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        as_agent("claude-code", "silence", || {
+            history.ripple_cuts(0, &[(S, 4 * S)], dir.path()).unwrap();
+        });
+        history.ripple_cuts(1, &[(0, S)], dir.path()).unwrap();
+        history.undo(2, dir.path()).unwrap();
+        let step = history.steps().undo_step().unwrap();
+        assert_eq!(step.by, Author::Agent);
+        assert_eq!(step.agent.as_deref(), Some("claude-code"));
+        assert_eq!(step.tool.as_deref(), Some("silence"));
+        assert_eq!(step.label, "Cut 3.0 s");
+        assert_eq!(history.steps().redo_step().unwrap().by, Author::User);
+    }
+
+    #[test]
+    fn an_agents_steps_form_one_run_until_someone_else_edits() {
+        use crate::project::history::as_agent;
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        as_agent("claude-code", "silence", || {
+            history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+            history.ripple_cuts(1, &[(S, 2 * S)], dir.path()).unwrap();
+            history.ripple_cuts(2, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        let run = history.steps().last_run().unwrap();
+        assert_eq!((run.changes, run.can_undo), (3, true));
+
+        history.ripple_cuts(3, &[(0, S)], dir.path()).unwrap();
+        let run = history.steps().last_run().unwrap();
+        assert!(!run.can_undo);
+        assert_eq!(run.blocked_by.as_deref(), Some("\"Cut 1.0 s\""));
+        let refused = history.undo_run(4, dir.path()).unwrap_err();
+        assert!(refused.contains("\"Cut 1.0 s\" came after it"), "{refused}");
+
+        history.undo(4, dir.path()).unwrap();
+        let run = history.undo_run(5, dir.path()).unwrap();
+        assert_eq!((run.agent.as_str(), run.changes), ("claude-code", 3));
+        assert_eq!(history.current.duration_us(), 10 * S);
+        assert_eq!(
+            history.undo_label(),
+            Some("Undo claude-code's run (3 changes)")
+        );
+        // Undoing the run undo brings all of it back; the run is still one.
+        history.undo(6, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 7 * S);
+        assert_eq!(history.steps().last_run().unwrap().changes, 3);
+    }
+
+    #[test]
+    fn a_new_workflow_or_another_agent_starts_a_new_run_and_runs_survive_reopening() {
+        use crate::project::history::as_agent;
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        as_agent("claude-code", "silence", || {
+            history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        history.end_run();
+        as_agent("claude-code", "fillers", || {
+            history.ripple_cuts(1, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        as_agent("codex", "fillers", || {
+            history.ripple_cuts(2, &[(S, 2 * S)], dir.path()).unwrap();
+            history.ripple_cuts(3, &[(S, 2 * S)], dir.path()).unwrap();
+        });
+        drop(history);
+        let (mut history, _) = reopen(dir.path());
+        let run = history.steps().last_run().unwrap();
+        assert_eq!((run.agent.as_str(), run.changes), ("codex", 2));
+        history.undo_run(4, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 8 * S);
+        let run = history.steps().last_run().unwrap();
+        assert_eq!(
+            (run.agent.as_str(), run.undone, run.can_undo),
+            ("codex", true, false)
+        );
+        assert!(history
+            .undo_run(5, dir.path())
+            .unwrap_err()
+            .contains("already undone"));
+        // Undo the run undo and codex's two steps: claude-code's second run is next.
+        history.undo(5, dir.path()).unwrap();
+        history.undo(6, dir.path()).unwrap();
+        history.undo(7, dir.path()).unwrap();
+        let run = history.steps().last_run().unwrap();
+        assert_eq!(
+            (run.agent.as_str(), run.changes, run.can_undo),
+            ("claude-code", 1, true)
+        );
+        assert_eq!(history.current.duration_us(), 8 * S);
+    }
+
+    fn graphic(root: &Path, id: &str, text: &str) {
+        let dir = root.join("graphics").join(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("index.html"), text).unwrap();
+    }
+
+    fn graphic_text(root: &Path, id: &str) -> String {
+        fs::read_to_string(root.join("graphics").join(id).join("index.html")).unwrap()
+    }
+
+    fn transcript(created_at: &str) -> crate::transcript::Transcript {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": crate::transcript::TRANSCRIPT_SCHEMA_VERSION,
+            "trackId": "rec.mic",
+            "provider": "parakeet",
+            "model": "test",
+            "createdAt": created_at,
+            "words": [
+                { "id": "w-1", "text": "Hello", "kind": "word", "sourceStartUs": 0, "sourceEndUs": 100_000 },
+                { "id": "w-2", "text": "there", "kind": "word", "sourceStartUs": 100_000, "sourceEndUs": 200_000 },
+            ],
+        }))
+        .unwrap()
+    }
+
+    fn marks(root: &Path) -> usize {
+        crate::transcript::store::load_transcript(root, "rec.mic")
+            .unwrap()
+            .unwrap()
+            .caption_marks
+            .len()
+    }
+
+    fn mark(root: &Path) {
+        let mut t = crate::transcript::store::load_transcript(root, "rec.mic")
+            .unwrap()
+            .unwrap();
+        t.caption_marks.insert(
+            "w-2".into(),
+            crate::transcript::CaptionMark {
+                cue_break: true,
+                ..Default::default()
+            },
+        );
+        crate::transcript::store::save_transcript(root, &t).unwrap();
+    }
+
+    #[test]
+    fn a_checkpoint_brings_back_the_edit_graphics_and_caption_marks_after_reopening() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        graphic(root, "m-1", "<h1>Clean</h1>");
+        crate::transcript::store::save_transcript(root, &transcript("2026-10-23T10:00:00Z"))
+            .unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], root).unwrap();
+        let saved = history.save_checkpoint(root, "Clean cut", false).unwrap();
+        assert_eq!((saved.id.as_str(), saved.graphics.len()), ("c-1", 1));
+
+        // Later: another cut, a graphic changed and one added, a caption break.
+        history.ripple_cuts(1, &[(S, 3 * S)], root).unwrap();
+        graphic(root, "m-1", "<h1>Changed</h1>");
+        fs::write(root.join("graphics/m-1/extra.css"), "h1{}").unwrap();
+        graphic(root, "m-2", "<h1>New</h1>");
+        mark(root);
+        drop(history);
+
+        let (mut history, _) = reopen(root);
+        assert_eq!(history.steps().checkpoints().len(), 1);
+        let (checkpoint, restored) = history.restore_checkpoint(2, root, "c-1").unwrap();
+        assert_eq!(checkpoint.name, "Clean cut");
+        assert_eq!(history.current.duration_us(), 9 * S);
+        assert_eq!(history.undo_label(), Some("Restore \"Clean cut\""));
+        assert_eq!((restored.graphics, restored.captions), (1, 1));
+        assert_eq!(graphic_text(root, "m-1"), "<h1>Clean</h1>");
+        assert!(!root.join("graphics/m-1/extra.css").exists());
+        // Made after the checkpoint: left alone.
+        assert_eq!(graphic_text(root, "m-2"), "<h1>New</h1>");
+        assert_eq!(marks(root), 0);
+        // What was there is kept too, so going back can itself be taken back.
+        let before = &history.steps().checkpoints()[1];
+        assert!(before.auto && before.name == "Before restoring \"Clean cut\"");
+        let (_, restored) = history
+            .restore_checkpoint(3, root, &before.id.clone())
+            .unwrap();
+        assert_eq!(graphic_text(root, "m-1"), "<h1>Changed</h1>");
+        assert_eq!(history.current.duration_us(), 7 * S);
+        assert_eq!(restored.captions, 1);
+    }
+
+    #[test]
+    fn caption_marks_stay_when_the_sound_was_transcribed_again() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        crate::transcript::store::save_transcript(root, &transcript("2026-10-23T10:00:00Z"))
+            .unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.save_checkpoint(root, "Before", false).unwrap();
+        crate::transcript::store::save_transcript(root, &transcript("2026-10-23T11:00:00Z"))
+            .unwrap();
+        mark(root);
+        let (_, restored) = history.restore_checkpoint(0, root, "c-1").unwrap();
+        assert_eq!(restored.captions, 0);
+        assert!(restored
+            .summary()
+            .contains("rec.mic stay as they are: it was transcribed again"));
+        assert_eq!(marks(root), 1);
+        // Nothing in the edit changed, so no step was made.
+        assert_eq!(history.current.revision, 0);
+    }
+
+    #[test]
+    fn checkpoints_before_runs_keep_the_newest_few_and_their_states_outlive_the_steps() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let mut history = EditHistory::new(doc(10 * S));
+        for revision in 0..8u64 {
+            history
+                .save_checkpoint(root, &format!("Before run {revision}"), true)
+                .unwrap();
+            // The same again adds nothing.
+            history.save_checkpoint(root, "Again", true).unwrap();
+            history.ripple_cuts(revision, &[(0, 10_000)], root).unwrap();
+        }
+        let names: Vec<&str> = history
+            .steps()
+            .checkpoints()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Before run 3",
+                "Before run 4",
+                "Before run 5",
+                "Before run 6",
+                "Before run 7"
+            ]
+        );
+        // Renaming one keeps it.
+        history.rename_checkpoint(root, "c-4", "Keep me").unwrap();
+        assert!(!history.steps().checkpoint("c-4").unwrap().auto);
+        // A tiny limit lets every old step go, but not the checkpoints' states.
+        history.steps_mut().set_limit_bytes(1);
+        history.ripple_cuts(8, &[(0, 10_000)], root).unwrap();
+        assert!(history.steps().undo_len() <= 1);
+        let (_, _) = history.restore_checkpoint(9, root, "c-4").unwrap();
+        assert_eq!(history.current.duration_us(), 10 * S - 3 * 10_000);
+        history.delete_checkpoint(root, "c-4").unwrap();
+        assert!(history.steps().checkpoint("c-4").is_err());
+        drop(history);
+        let (history, _) = reopen(root);
+        assert!(history.steps().checkpoint("c-4").is_err());
+        assert_eq!(history.steps().checkpoints().len(), 5);
+    }
+
+    #[test]
+    fn files_no_checkpoint_needs_are_let_go() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        graphic(root, "m-1", "one");
+        let mut history = EditHistory::new(doc(10 * S));
+        history.save_checkpoint(root, "A", false).unwrap();
+        graphic(root, "m-1", "two");
+        history.save_checkpoint(root, "B", false).unwrap();
+        assert_eq!(history.steps().kept_files(), 2);
+        history.delete_checkpoint(root, "c-1").unwrap();
+        assert_eq!(history.steps().kept_files(), 1);
+        assert_eq!(fs::read_dir(root.join("history/files")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_step_that_adds_a_graphic_is_named_for_it() {
+        use crate::project::history::describe;
+        let before = doc(10 * S);
+        let mut after = before.clone();
+        let mut graphic = after.assets[0].clone();
+        graphic.id = "m-1".into();
+        graphic.kind = crate::sequence::AssetKind::Graphic;
+        after.assets.push(graphic);
+        after.sequence.tracks[0].clips.clear();
+        assert_eq!(describe(&before, &after), "Added a graphic");
+        assert_eq!(describe(&after, &before), "Removed a graphic");
+        after.captions.enabled = !after.captions.enabled;
+        assert_eq!(describe(&before, &after), "Added a graphic, Captions");
+    }
+
+    /// The EVAL-1 rerun's zoom centre: read back with serde_json's fast float parser it came
+    /// out one bit off, so the reopened edit hashed as a change made outside the app.
+    #[test]
+    fn numbers_read_back_exactly_so_a_reopened_edit_is_the_same_state() {
+        let text = "0.20614035087719298";
+        let value: f64 = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&value).unwrap(), text);
+    }
+
+    /// What history adds to one edit of a real project:
+    /// `AEROEDITS_HISTORY_PROJECT=<project folder> cargo test --lib history_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn history_cost_on_a_real_project() {
+        let Ok(project) = std::env::var("AEROEDITS_HISTORY_PROJECT") else {
+            return;
+        };
+        let document = load_edit_document(Path::new(&project)).unwrap().unwrap();
+        let dir = tempdir().unwrap();
+        save_edit_document(dir.path(), &document).unwrap();
+        let mut history = EditHistory::new(document);
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let revision = history.current.revision;
+            let started = std::time::Instant::now();
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+            times.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // The part that is history's own: saving one new state.
+        let mut saves = Vec::new();
+        for i in 0..20u64 {
+            let mut next = history.current.clone();
+            next.zoom_settings.transition_ms = 100 + i as u32;
+            let started = std::time::Instant::now();
+            history.steps_mut().save_state(dir.path(), &next).unwrap();
+            saves.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        saves.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("saving a state p50 {:.1} ms", saves[10]);
+        let json = fs::metadata(dir.path().join("project.json")).unwrap().len();
+        eprintln!(
+            "project.json {} KB, state {} KB, edit p50 {:.1} ms, max {:.1} ms",
+            json / 1024,
+            history.steps().stored_bytes() / states(dir.path()) as u64 / 1024,
+            times[10],
+            times[19]
+        );
     }
 }

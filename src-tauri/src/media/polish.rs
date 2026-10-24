@@ -48,6 +48,14 @@ const LIMIT_CEILING: f64 = 0.891;
 /// a quiet recording to the target regardless clipped every syllable into the limiter, so
 /// the edit sounded squashed and much louder than its LUFS.
 const PEAK_PERCENTILE: f64 = 0.995;
+/// The leveller turns a loud 100 ms block down only as far as its peak needs to stay under
+/// the limiter, so normalization can boost quiet speech to the target instead of stopping at
+/// the first loud syllable (real edits fell 4-5 dB short of -14 LUFS). Normalization still
+/// stops where the edit's loud blocks (`PEAK_PERCENTILE`) would need more than this.
+const LEVEL_MAX_DB: f64 = 6.0;
+/// How fast the leveller turns down ahead of a loud block and back up after one, per block.
+const LEVEL_ATTACK_DB: f64 = 6.0;
+const LEVEL_RELEASE_DB: f64 = 1.5;
 /// Analyses kept for reuse, in bytes: an hour of sound analyses to well under a megabyte, so
 /// this holds every segment of many long recordings. The least recently used go first.
 const CACHE_BYTES: usize = 128 << 20;
@@ -359,6 +367,9 @@ pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
     gain: f64,
     limit: bool,
+    /// The leveller's gain at each 100 ms block edge of the timeline, linear in between
+    /// (empty when nothing needs turning down).
+    level: Vec<f64>,
     /// Noise reduction by lane and file (relative path): each audio track has its own
     /// setting, even where two play the same sound.
     denoisers: HashMap<(String, String), Arc<Denoiser>>,
@@ -406,31 +417,39 @@ impl PolishPlan {
         let mut plan = Self {
             gain: 1.0,
             limit: settings.normalize,
+            level: Vec::new(),
             denoisers,
             lane_ducks,
         };
         if settings.normalize {
-            if let Some((lufs, peak)) = plan.edit_loudness(lanes, duration_us, &analyze) {
-                let mut db =
-                    (settings.target_lufs as f64 - lufs).clamp(-MAX_NORMALIZE_DB, MAX_NORMALIZE_DB);
-                if peak > 0.0 {
-                    db = db.min(20.0 * (LIMIT_CEILING / peak).log10());
+            if let Some(edit) = plan.edit_loudness(lanes, duration_us, &analyze) {
+                let most = match edit.peak > 0.0 {
+                    true => 20.0 * (LIMIT_CEILING / edit.peak).log10() + LEVEL_MAX_DB,
+                    false => MAX_NORMALIZE_DB,
+                };
+                let limited = |db: f64| db.clamp(-MAX_NORMALIZE_DB, MAX_NORMALIZE_DB).min(most);
+                let mut db = limited(settings.target_lufs as f64 - edit.lufs);
+                // The leveller takes a little loudness off the loud blocks: measured on the
+                // same blocks, that is made up once, within the same limits.
+                let level = level_envelope(&edit.peaks, 10f64.powf(db / 20.0));
+                if let Some(levelled) = levelled_lufs(&edit.energy, &level) {
+                    db = limited(db + edit.lufs - levelled);
                 }
                 plan.gain = 10f64.powf(db / 20.0);
+                plan.level = level_envelope(&edit.peaks, plan.gain);
             }
         }
         Some(plan)
     }
 
-    /// Integrated loudness of the edit before normalization, and the peak that all but its
-    /// loudest blocks stay under (`PEAK_PERCENTILE`): every lane's clips, 100 ms blocks on
-    /// the timeline, with ducking applied.
+    /// How loud the edit is before normalization: every lane's clips, 100 ms blocks on the
+    /// timeline, with ducking applied.
     fn edit_loudness(
         &self,
         lanes: &[Lane],
         duration_us: u64,
         analyze: &dyn Fn(&SegmentSummary) -> Option<Arc<SegmentAnalysis>>,
-    ) -> Option<(f64, f64)> {
+    ) -> Option<EditLoudness> {
         let blocks = duration_us.div_ceil(LOUDNESS_BLOCK_US) as usize;
         let mut energy = vec![0f64; blocks];
         // Lanes add: their peaks sum at worst.
@@ -488,7 +507,12 @@ impl PolishPlan {
         loud.sort_by(f64::total_cmp);
         let index =
             ((loud.len() as f64 * PEAK_PERCENTILE) as usize).min(loud.len().saturating_sub(1));
-        Some((lufs, loud.get(index).copied().unwrap_or(0.0)))
+        Some(EditLoudness {
+            lufs,
+            peak: loud.get(index).copied().unwrap_or(0.0),
+            energy,
+            peaks,
+        })
     }
 
     /// Whether lane `lane` is lowered under speech.
@@ -516,10 +540,23 @@ impl PolishPlan {
             .map(|d| d.as_ref())
     }
 
-    /// Applies normalization gain and, when normalizing, a soft limiter from -3 dBFS that
-    /// never passes -1 dBFS.
-    pub fn finish(&self, sample: f64) -> f64 {
-        let x = sample * self.gain;
+    /// The leveller's gain at timeline time `edited_us` (1 where nothing is turned down).
+    fn level_gain(&self, edited_us: f64) -> f64 {
+        if self.level.is_empty() {
+            return 1.0;
+        }
+        let pos = (edited_us / LOUDNESS_BLOCK_US as f64).max(0.0);
+        let i = pos.floor() as usize;
+        let t = pos - i as f64;
+        let a = self.level.get(i).copied().unwrap_or(1.0);
+        let b = self.level.get(i + 1).copied().unwrap_or(1.0);
+        a + (b - a) * t
+    }
+
+    /// Applies normalization gain and the leveller at timeline time `edited_us` and, when
+    /// normalizing, a soft limiter from -3 dBFS that never passes -1 dBFS.
+    pub fn finish(&self, sample: f64, edited_us: f64) -> f64 {
+        let x = sample * self.gain * self.level_gain(edited_us);
         if !self.limit || x.abs() <= LIMIT_KNEE {
             return x;
         }
@@ -590,6 +627,61 @@ fn lane_ducks(
             (lane, envelope)
         })
         .collect()
+}
+
+/// An edit's loudness before normalization, per 100 ms block of the timeline.
+struct EditLoudness {
+    /// Integrated, in LUFS.
+    lufs: f64,
+    /// The peak all but the loudest blocks stay under (`PEAK_PERCENTILE`).
+    peak: f64,
+    /// Each block's K-weighted energy and peak.
+    energy: Vec<f64>,
+    peaks: Vec<f64>,
+}
+
+/// Integrated loudness of blocks of `energy` played through the leveller `level` (its gain
+/// at block edges; the mean of a block's two edges for the block).
+fn levelled_lufs(energy: &[f64], level: &[f64]) -> Option<f64> {
+    let levelled: Vec<f64> = energy
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| {
+            let edge = |k: usize| level.get(k).copied().unwrap_or(1.0);
+            let gain = (edge(i) + edge(i + 1)) / 2.0;
+            e * gain * gain
+        })
+        .collect();
+    integrated_lufs(&levelled)
+}
+
+/// The leveller's gain at each block edge for blocks peaking at `peaks` once boosted by
+/// `gain`: low enough at both edges of a block that its peak stays at the limiter's ceiling,
+/// turned down ahead of it by [`LEVEL_ATTACK_DB`] a block and back up by [`LEVEL_RELEASE_DB`].
+/// Linear between the edges, so never above either edge inside a block. Empty when no block
+/// needs it.
+fn level_envelope(peaks: &[f64], gain: f64) -> Vec<f64> {
+    let needed: Vec<f64> = peaks
+        .iter()
+        .map(|&p| (20.0 * (LIMIT_CEILING / (p * gain).max(1e-12)).log10()).min(0.0))
+        .collect();
+    if needed.iter().all(|&db| db >= 0.0) {
+        return Vec::new();
+    }
+    let mut edges: Vec<f64> = (0..=needed.len())
+        .map(|k| {
+            let before = k.checked_sub(1).and_then(|i| needed.get(i)).copied();
+            let after = needed.get(k).copied();
+            before.unwrap_or(0.0).min(after.unwrap_or(0.0))
+        })
+        .collect();
+    for k in 1..edges.len() {
+        edges[k] = edges[k].min(edges[k - 1] + LEVEL_RELEASE_DB);
+    }
+    for k in (0..edges.len() - 1).rev() {
+        edges[k] = edges[k].min(edges[k + 1] + LEVEL_ATTACK_DB);
+    }
+    edges.into_iter().map(|db| 10f64.powf(db / 20.0)).collect()
 }
 
 /// System-audio gain per 10 ms block of source time from microphone speech activity.
@@ -762,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn normalization_stops_where_peaks_would_reach_the_limiter() {
+    fn the_leveller_keeps_peaks_under_the_limiter_and_normalization_stops_past_it() {
         use super::super::audio::LaneClip;
         let dir = tempfile::tempdir().unwrap();
         // Quiet talk (about -38 LUFS) with a sharp transient every 50 ms near -6 dBFS.
@@ -810,13 +902,36 @@ mod tests {
         };
         let plan = PolishPlan::build(dir.path(), &settings, &[lane], 2_000_000).unwrap();
         let peak = 16_000.0 / 32_768.0;
-        // The loudness target alone asks for the full 20 dB; the peaks allow about 5.
-        assert!(plan.gain > 1.0);
-        assert!(
-            plan.gain * peak <= LIMIT_CEILING + 1e-3,
-            "gain {}",
-            plan.gain
-        );
+        // The loudness target alone asks for the full 20 dB; the peaks allow about 5, and the
+        // leveller [`LEVEL_MAX_DB`] more.
+        let limit = LIMIT_CEILING * 10f64.powf(LEVEL_MAX_DB / 20.0);
+        assert!(plan.gain * peak > LIMIT_CEILING * 1.5, "gain {}", plan.gain);
+        assert!(plan.gain * peak <= limit + 1e-3, "gain {}", plan.gain);
+        // Every block holds a transient: turned down all the way, it stays at the ceiling.
+        for ms in (0..2_000).step_by(7) {
+            let level = plan.level_gain(ms as f64 * 1_000.0);
+            assert!(
+                plan.gain * level * peak <= LIMIT_CEILING + 1e-3,
+                "{ms} ms: {level}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_leveller_turns_down_one_loud_block_and_ramps_back() {
+        // Blocks under the ceiling, one 5.6 dB over it at block 5.
+        let mut peaks = vec![0.5; 20];
+        peaks[5] = LIMIT_CEILING * 1.9;
+        let level = level_envelope(&peaks, 1.0);
+        assert_eq!(level.len(), 21);
+        // Both edges of the loud block hold it at the ceiling.
+        let held = 1.0 / 1.9;
+        assert!((level[5] - held).abs() < 1e-9 && (level[6] - held).abs() < 1e-9);
+        // Turned down one block ahead (6 dB a block), back up over four after.
+        assert!((level[4] - 1.0).abs() < 1e-9);
+        assert!(level[7] > held && level[7] < 1.0);
+        assert!((level[10] - 1.0).abs() < 1e-9);
+        assert!(level_envelope(&[0.5; 20], 1.0).is_empty());
     }
 
     #[test]
@@ -869,12 +984,14 @@ mod tests {
             lane_ducks: HashMap::new(),
             gain: 2.0,
             limit: true,
+            level: Vec::new(),
             denoisers: HashMap::new(),
         };
-        assert!((plan.finish(0.2) - 0.4).abs() < 1e-12);
-        assert!((plan.finish(0.35) - 0.7).abs() < 1e-12);
-        assert!(plan.finish(5.0) <= LIMIT_CEILING && plan.finish(5.0) > 0.89);
-        assert!(plan.finish(0.5) < LIMIT_CEILING && plan.finish(0.5) > LIMIT_KNEE);
-        assert!(plan.finish(-5.0) >= -LIMIT_CEILING && plan.finish(-0.5) > -LIMIT_CEILING);
+        let finish = |s: f64| plan.finish(s, 0.0);
+        assert!((finish(0.2) - 0.4).abs() < 1e-12);
+        assert!((finish(0.35) - 0.7).abs() < 1e-12);
+        assert!(finish(5.0) <= LIMIT_CEILING && finish(5.0) > 0.89);
+        assert!(finish(0.5) < LIMIT_CEILING && finish(0.5) > LIMIT_KNEE);
+        assert!(finish(-5.0) >= -LIMIT_CEILING && finish(-0.5) > -LIMIT_CEILING);
     }
 }

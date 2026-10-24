@@ -226,10 +226,16 @@ impl ChunkTranscriber for ScribeTranscriber {
     }
 
     fn plan(&self) -> ChunkPlan {
-        // Ten-minute uploads (about 19 MB of 16-bit WAV) keep each request well inside the
-        // API's limits and let progress move during long recordings.
+        // Ten-minute uploads (about 19 MB of 16-bit WAV) keep each ElevenLabs request well
+        // inside its limits and let progress move during long recordings. OpenRouter takes at
+        // most 25 MB per upload and gives the provider about a minute to answer, so it gets
+        // five-minute uploads (about 10 MB): an hour is twelve of them.
+        let max_chunk_us = match self.route {
+            Route::ElevenLabs => 600_000_000,
+            Route::OpenRouter => 300_000_000,
+        };
         ChunkPlan {
-            max_chunk_us: 600_000_000,
+            max_chunk_us,
             search_window_us: 20_000_000,
         }
     }

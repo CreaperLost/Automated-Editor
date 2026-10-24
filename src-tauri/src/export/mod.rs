@@ -1,5 +1,6 @@
 //! Immutable-revision export job. Preview and export share one scene evaluator.
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
+pub mod files;
 mod native;
 
 use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
@@ -95,6 +96,20 @@ pub enum ExportFailure {
     Io { message: String },
 }
 
+impl ExportFailure {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Collision { message }
+            | Self::Cancelled { message }
+            | Self::InvalidSettings { message }
+            | Self::SourcePath { message }
+            | Self::EncoderBusy { message }
+            | Self::Native { message }
+            | Self::Io { message } => message,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportStatus {
@@ -111,7 +126,43 @@ pub struct ExportStatus {
     pub output_path: Option<String>,
     pub failure: Option<ExportFailure>,
     pub diagnostics: Vec<String>,
+    /// What it is doing before the frames (rendering a graphic), with how far along that is.
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub stage_fraction: Option<f64>,
+    /// Its log, as it happens: the export page streams it.
+    #[serde(default)]
+    pub log: Vec<ExportLogLine>,
 }
+
+/// One line of an export's log.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportLogLine {
+    /// Seconds since the export started.
+    pub secs: f64,
+    pub level: ExportLogLevel,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportLogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// What an export says as it goes, besides its frames.
+pub enum ExportNote {
+    /// The step before the frames, and how far along it is (none: unknown).
+    Stage(String, Option<f64>),
+    Line(ExportLogLevel, String),
+}
+
+/// An export's log keeps its last lines only.
+const MAX_LOG_LINES: usize = 400;
 
 impl ExportStatus {
     pub fn idle() -> Self {
@@ -129,7 +180,22 @@ impl ExportStatus {
             output_path: None,
             failure: None,
             diagnostics: Vec::new(),
+            stage: None,
+            stage_fraction: None,
+            log: Vec::new(),
         }
+    }
+
+    /// Adds a line to the log, `started` being when the export began.
+    fn log(&mut self, started: std::time::Instant, level: ExportLogLevel, text: String) {
+        if self.log.len() >= MAX_LOG_LINES {
+            self.log.remove(0);
+        }
+        self.log.push(ExportLogLine {
+            secs: (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+            level,
+            text,
+        });
     }
 }
 
@@ -274,9 +340,17 @@ pub struct SceneEvaluator {
     >,
     /// Where the camera fills the frame, for the graphics that ease in over it.
     full_camera: std::cell::OnceCell<Vec<(u64, u64)>>,
+    /// The graphics renders it plays: the draft, or an export's final ones.
+    graphics_quality: crate::graphics::render::Quality,
+    /// An export's own copies of the renders it prepared, played in place of the cache's.
+    pinned_graphics: std::collections::HashMap<crate::graphics::render::Spec, PathBuf>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
-    /// The last cue drawn and its colored frame for the active word.
+    /// The captions' typeface and accent, from the style and the look.
+    caption_look: std::cell::OnceCell<crate::captions::CaptionLook>,
+    /// Where graphics fill the frame: no captions there.
+    caption_free: std::cell::OnceCell<Vec<(u64, u64)>>,
+    /// The last cue drawn and its colored frame for its words' state.
     caption_cache: std::cell::RefCell<CaptionCache>,
     /// Recorded pointers by recording, looked up once per evaluator.
     cursors: std::cell::RefCell<Cursors>,
@@ -330,7 +404,7 @@ impl MediaLookups {
 #[derive(Default)]
 struct CaptionCache {
     raster: Option<(usize, Option<crate::captions::CueRaster>)>,
-    frame: Option<((usize, Option<usize>), VideoFrame)>,
+    frame: Option<((usize, Vec<crate::captions::WordState>), VideoFrame)>,
 }
 
 /// State worth keeping when the playback worker rebuilds its evaluator after a seek or an
@@ -374,12 +448,9 @@ impl DecoderWarmer {
     }
 }
 
-/// The background a document draws: the project's, or the short's own choice.
+/// The background a document draws (as its style dressed it).
 fn background_layout(document: &EditDocument) -> crate::project::layout::EditLayout {
-    match &document.short_layout {
-        Some(short) => crate::shorts::background_layout(&document.layout, short),
-        None => document.layout.clone(),
-    }
+    document.layout.clone()
 }
 
 fn background_key(
@@ -494,6 +565,9 @@ impl SceneEvaluator {
         height: u32,
         reuse: Option<EvaluatorReuse>,
     ) -> Result<Self, String> {
+        // Drawn in its style: the frame's and the captions' look.
+        let mut document = document;
+        crate::style::dress(&mut document);
         let key = background_key(&root, &background_layout(&document), width, height);
         let wallpaper = std::cell::OnceCell::new();
         let mut media = None;
@@ -552,7 +626,11 @@ impl SceneEvaluator {
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
+            graphics_quality: Default::default(),
+            pinned_graphics: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
+            caption_look: std::cell::OnceCell::new(),
+            caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
             prefetched: Default::default(),
@@ -592,6 +670,21 @@ impl SceneEvaluator {
     /// Decodes sources no larger or faster than `limit`, for preview.
     pub fn with_decode_limit(mut self, limit: DecodeLimit) -> Self {
         self.decode_limit = limit;
+        self
+    }
+
+    /// Plays graphics from the renders `quality` names (an export's final ones).
+    pub fn with_graphics_quality(mut self, quality: crate::graphics::render::Quality) -> Self {
+        self.graphics_quality = quality;
+        self
+    }
+
+    /// Plays each graphic from the render pinned for it (see [`crate::graphics::render::pin`]).
+    pub fn with_pinned_graphics(
+        mut self,
+        renders: std::collections::HashMap<crate::graphics::render::Spec, PathBuf>,
+    ) -> Self {
+        self.pinned_graphics = renders;
         self
     }
 
@@ -839,9 +932,26 @@ impl SceneEvaluator {
             height: self.height,
             unit,
         };
+        // A graphic in a part of a short's split fills that part: without it a take (no screen
+        // recording) would turn the split into the camera alone, cropped to the whole frame
+        // behind the graphic, rather than framed into its own part.
+        let split_graphic = |part: crate::shorts::GraphicSlot| {
+            self.document.short_layout.as_ref().is_some_and(|short| {
+                shown
+                    .graphics
+                    .iter()
+                    .any(|clip| crate::shorts::graphic_slot(short, &clip.id) == part)
+            })
+        };
+        let filled = |picture: &Option<crate::media::VideoFrame>, part| {
+            picture
+                .as_ref()
+                .map(|f| (f.width, f.height))
+                .or_else(|| split_graphic(part).then_some((1920, 1080)))
+        };
         let sources = Sources {
-            screen: screen.as_ref().map(|f| (f.width, f.height)),
-            camera: webcam.as_ref().map(|f| (f.width, f.height)),
+            screen: filled(&screen, crate::shorts::GraphicSlot::Screen),
+            camera: filled(&webcam, crate::shorts::GraphicSlot::Camera),
         };
         let from = arrange(frame.from, style, canvas, sources);
         let to = arrange(frame.to, style, canvas, sources);
@@ -1038,9 +1148,16 @@ impl SceneEvaluator {
             clip,
             (self.width, self.height),
             full_camera,
+            self.graphics_quality,
         );
         // Never past a render's last frame.
-        let last_frame = 1_000_000 / render::RENDER_FPS as u64;
+        let last_frame = 1_000_000 / spec.fps as u64;
+        if let Some(path) = self.pinned_graphics.get(&spec) {
+            return Some(PictureJob::Video(
+                path.clone(),
+                local_us.min(spec.length_us.saturating_sub(last_frame)),
+            ));
+        }
         match render::lookup(&spec) {
             Lookup::Ready(path) => Some(PictureJob::Video(
                 path,
@@ -1277,6 +1394,8 @@ impl SceneEvaluator {
             .asset(asset)
             .filter(|a| a.is_recording() && settings.follow)
             .map(|a| crate::zoom::recording_cursor_samples(Path::new(&a.path)));
+        // The glides are timed on what the edit keeps, so a cut never makes a zoom jump.
+        let clock = self.document.picture_clock(asset);
         let zooms: Vec<crate::zoom::ZoomSuggestion> = self
             .document
             .zooms
@@ -1284,6 +1403,11 @@ impl SceneEvaluator {
             .filter(|zoom| self.document.clock_asset(zoom.media.as_deref()) == Some(asset))
             .map(|zoom| {
                 let mut suggestion = zoom.as_suggestion();
+                suggestion.kept = crate::zoom::kept_stretches(
+                    &clock,
+                    suggestion.source_start_us,
+                    suggestion.source_end_us,
+                );
                 if let Some(samples) = samples.as_ref().filter(|_| !zoom.fixed) {
                     suggestion.path = crate::zoom::follow_path(
                         samples,
@@ -1666,20 +1790,34 @@ impl SceneEvaluator {
                 .unwrap_or_default()
         });
         let index = crate::captions::cue_at(cues, edited_us)?;
+        let free = self.caption_free.get_or_init(|| {
+            crate::graphics::render::whole_frame_ranges(&self.root, &self.document)
+        });
+        if crate::graphics::render::in_ranges(free, edited_us) {
+            return None;
+        }
         let cue = &cues[index];
-        let active = crate::captions::active_word(cue, edited_us);
+        let look = self
+            .caption_look
+            .get_or_init(|| crate::captions::CaptionLook::of(&self.document));
+        let states = crate::captions::word_states(cue, settings.style, look, edited_us);
         let mut cache = self.caption_cache.borrow_mut();
         let frame = match &cache.frame {
-            Some((key, frame)) if *key == (index, active) => frame.clone(),
+            Some((key, frame)) if key.0 == index && key.1 == states => frame.clone(),
             _ => {
                 if cache.raster.as_ref().map(|(i, _)| *i) != Some(index) {
-                    let raster =
-                        crate::captions::rasterize_cue(cue, settings, self.width, self.height);
+                    let raster = crate::captions::rasterize_cue(
+                        cue,
+                        settings,
+                        look,
+                        self.width,
+                        self.height,
+                    );
                     cache.raster = Some((index, raster));
                 }
                 let raster = cache.raster.as_ref()?.1.as_ref()?;
-                let frame = crate::captions::colorize(raster, settings, active);
-                cache.frame = Some(((index, active), frame.clone()));
+                let frame = crate::captions::colorize(raster, settings, look, &states);
+                cache.frame = Some(((index, states), frame.clone()));
                 frame
             }
         };
@@ -1852,6 +1990,13 @@ impl ExportWriter {
     }
 }
 
+/// Whether a written file of `actual` µs is the edit of `intended` µs at `fps`. The last frame
+/// is whole, so the picture can run up to one frame past the edit (most at 10 fps: 100 ms).
+fn duration_matches(actual: u64, intended: u64, fps: u32) -> bool {
+    let frame = 1_000_000 / u64::from(fps.max(1));
+    actual.abs_diff(intended) <= AUDIO_DURATION_SLACK_US.max(frame)
+}
+
 pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure> {
     let codec = settings.video_codec.to_ascii_lowercase();
     if codec != "h264" {
@@ -2006,7 +2151,16 @@ pub fn resolve_destination(
         message: "Export destination is missing a file name".into(),
     })?;
     let resolved = canonical_parent.join(file_name);
-    if resolved.starts_with(&project_root) || is_inside_bundle(&resolved, Some(&project_root)) {
+    // An existing destination is checked as the file it really is: on a case-insensitive
+    // volume `original.wav` is `Original.wav`, and a link is what it points at.
+    let identity = if resolved.exists() {
+        dunce::canonicalize(&resolved).map_err(|e| ExportFailure::Io {
+            message: e.to_string(),
+        })?
+    } else {
+        resolved.clone()
+    };
+    if identity.starts_with(&project_root) || is_inside_bundle(&identity, Some(&project_root)) {
         return Err(ExportFailure::SourcePath {
             message: "Export destination cannot be inside the project bundle".into(),
         });
@@ -2016,9 +2170,9 @@ pub fn resolve_destination(
         let source = PathBuf::from(&asset.path);
         let canonical = dunce::canonicalize(&source).unwrap_or(source);
         let clash = if asset.is_recording() {
-            resolved.starts_with(&canonical)
+            identity.starts_with(&canonical)
         } else {
-            resolved == canonical
+            identity == canonical
         };
         if clash {
             return Err(ExportFailure::SourcePath {
@@ -2074,6 +2228,9 @@ fn status_from(
         output_path: None,
         failure,
         diagnostics: Vec::new(),
+        stage: None,
+        stage_fraction: None,
+        log: Vec::new(),
     }
 }
 
@@ -2225,11 +2382,23 @@ pub fn run_job(
     status: Arc<Mutex<ExportStatus>>,
     gate: &EncoderGate,
 ) {
+    let started = std::time::Instant::now();
     {
         let mut slot = status.lock();
         slot.state = ExportState::Running;
+        let s = &captured.settings;
+        let text = format!(
+            "Export started: {}x{} at {} fps, {} and {}, to {}",
+            s.width,
+            s.height,
+            s.fps,
+            s.video_codec,
+            s.audio_codec,
+            captured.dest.display()
+        );
+        slot.log(started, ExportLogLevel::Info, text);
     }
-    match run_export(
+    let result = run_export_logged(
         &captured,
         &cancel,
         |done, total| {
@@ -2238,23 +2407,43 @@ pub fn run_job(
             slot.progress_denominator = total;
             slot.state = ExportState::Running;
         },
-        gate,
-    ) {
-        Ok(path) => {
+        &mut |note| {
             let mut slot = status.lock();
+            match note {
+                ExportNote::Stage(text, fraction) => {
+                    slot.stage = Some(text);
+                    slot.stage_fraction = fraction;
+                }
+                ExportNote::Line(level, text) => slot.log(started, level, text),
+            }
+        },
+        gate,
+    );
+    let mut slot = status.lock();
+    slot.stage = None;
+    slot.stage_fraction = None;
+    match result {
+        Ok(path) => {
             slot.state = ExportState::Completed;
             slot.output_path = Some(path.to_string_lossy().into());
             slot.progress_numerator = slot.progress_denominator.max(1);
             slot.failure = None;
+            let text = format!("Done in {:.0} s", started.elapsed().as_secs_f64());
+            slot.log(started, ExportLogLevel::Info, text);
         }
         Err(failure) => {
             let cancelled = matches!(failure, ExportFailure::Cancelled { .. });
-            let mut slot = status.lock();
             slot.state = if cancelled {
                 ExportState::Cancelled
             } else {
                 ExportState::Failed
             };
+            let (level, what) = if cancelled {
+                (ExportLogLevel::Warn, "Cancelled")
+            } else {
+                (ExportLogLevel::Error, "Failed")
+            };
+            slot.log(started, level, format!("{what}: {}", failure.message()));
             slot.failure = Some(failure);
             slot.output_path = None;
         }
@@ -2280,7 +2469,18 @@ pub fn run_export(
     on_progress: impl FnMut(u32, u32),
     gate: &EncoderGate,
 ) -> Result<PathBuf, ExportFailure> {
-    let result = export_to_temp(captured, cancel, on_progress, gate);
+    run_export_logged(captured, cancel, on_progress, &mut |_| {}, gate)
+}
+
+/// [`run_export`], telling `note` what it is doing as it goes, for the export's log.
+pub fn run_export_logged(
+    captured: &CapturedExport,
+    cancel: &AtomicBool,
+    on_progress: impl FnMut(u32, u32),
+    note: &mut dyn FnMut(ExportNote),
+    gate: &EncoderGate,
+) -> Result<PathBuf, ExportFailure> {
+    let result = export_to_temp(captured, cancel, on_progress, note, gate);
     // Decoder processes opened for the export are not needed once it ends.
     crate::media::release_decoders();
     result
@@ -2290,6 +2490,7 @@ fn export_to_temp(
     captured: &CapturedExport,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(u32, u32),
+    note: &mut dyn FnMut(ExportNote),
     gate: &EncoderGate,
 ) -> Result<PathBuf, ExportFailure> {
     let _slot = gate
@@ -2316,20 +2517,82 @@ fn export_to_temp(
     };
     let duration_us = captured.document.duration_us();
     let frames = frame_count(duration_us, captured.settings.fps)?;
-    // Every graphic's render must be there before the first frame.
+    // Every graphic's final render must be there before the first frame: at the export's
+    // frame rate, and sharper than the preview's draft when the export is larger.
+    let graphics_quality = crate::graphics::render::Quality::Final {
+        fps: captured.settings.fps,
+    };
     let graphics = crate::graphics::render::specs_for(
         &captured.root,
         &captured.document,
         (captured.settings.width, captured.settings.height),
+        graphics_quality,
     );
-    crate::graphics::render::ensure(&graphics, cancel, &mut |_, _| on_progress(0, frames))
-        .map_err(|message| {
-            if cancel.load(Ordering::SeqCst) {
-                ExportFailure::Cancelled { message }
-            } else {
-                ExportFailure::Native { message }
+    if !graphics.is_empty() {
+        note(ExportNote::Line(
+            ExportLogLevel::Info,
+            format!(
+                "{} graphic{} at the export's quality ({} fps): rendering those not rendered yet",
+                graphics.len(),
+                if graphics.len() == 1 { "" } else { "s" },
+                captured.settings.fps
+            ),
+        ));
+    }
+    // Each graphic's label comes once as it starts; it is logged then and when it ends.
+    let mut current: Option<(String, std::time::Instant)> = None;
+    let mut rendered = 0;
+    let ensured =
+        crate::graphics::render::ensure(&graphics, cancel, &mut |fraction, label, line| {
+            // HyperFrames' own output, as it prints it.
+            if let Some(line) = line {
+                note(ExportNote::Line(ExportLogLevel::Info, format!("  {line}")));
+                return;
             }
-        })?;
+            if current.as_ref().map(|(l, _)| l.as_str()) != Some(label) {
+                if let Some((done, at)) = current.take() {
+                    note(ExportNote::Line(
+                        ExportLogLevel::Info,
+                        format!("{done}: done in {:.0} s", at.elapsed().as_secs_f64()),
+                    ));
+                }
+                note(ExportNote::Line(ExportLogLevel::Info, label.to_string()));
+                current = Some((label.to_string(), std::time::Instant::now()));
+                rendered += 1;
+            }
+            note(ExportNote::Stage(label.to_string(), Some(fraction)));
+        });
+    if let Some((done, at)) = current.take() {
+        let (level, how) = match &ensured {
+            Ok(_) => (ExportLogLevel::Info, "done"),
+            Err(_) => (ExportLogLevel::Error, "stopped"),
+        };
+        note(ExportNote::Line(
+            level,
+            format!("{done}: {how} after {:.0} s", at.elapsed().as_secs_f64()),
+        ));
+    }
+    let renders = ensured.map_err(|message| {
+        if cancel.load(Ordering::SeqCst) {
+            ExportFailure::Cancelled { message }
+        } else {
+            ExportFailure::Native { message }
+        }
+    })?;
+    // Held to the end: the video plays these renders whatever changes meanwhile.
+    let pinned = crate::graphics::render::pin(renders)
+        .map_err(|message| ExportFailure::Native { message })?;
+    if !graphics.is_empty() && rendered == 0 {
+        note(ExportNote::Line(
+            ExportLogLevel::Info,
+            "Every graphic was rendered already".into(),
+        ));
+    }
+    note(ExportNote::Stage("Writing frames".into(), None));
+    note(ExportNote::Line(
+        ExportLogLevel::Info,
+        format!("Writing {frames} frames"),
+    ));
     let mixer = AudioMixer::new(&captured.root, &captured.document)
         .map_err(|message| ExportFailure::Io { message })?;
     let (sample_rate, channels) = if mixer.has_audio() {
@@ -2349,6 +2612,8 @@ fn export_to_temp(
         captured.settings.height,
         captured.settings.fps,
     ))
+    .with_graphics_quality(graphics_quality)
+    .with_pinned_graphics(pinned.renders.clone())
     // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
     // pipe, and no conversion on the CPU.
     .with_nv12_output(ExportWriter::takes_nv12());
@@ -2481,7 +2746,7 @@ fn export_to_temp(
     let started = std::time::Instant::now();
     let actual_duration =
         media_duration_us(&captured.temp).map_err(|message| ExportFailure::Native { message })?;
-    if actual_duration.abs_diff(duration_us) > AUDIO_DURATION_SLACK_US {
+    if !duration_matches(actual_duration, duration_us, captured.settings.fps) {
         return Err(ExportFailure::Native {
             message: format!(
                 "Output duration {} differs from {}",
@@ -2663,6 +2928,17 @@ fn move_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::media::decode_h264_frame;
+
+    #[test]
+    fn a_whole_last_frame_is_not_a_wrong_duration() {
+        // 1.01 s at 10 fps is 11 whole frames: 1.10 s of picture.
+        assert_eq!(frame_count(1_010_000, 10).unwrap(), 11);
+        assert!(duration_matches(1_100_000, 1_010_000, 10));
+        assert!(duration_matches(1_010_000, 1_010_000, 60));
+        // More than a frame (or the audio slack) off is still wrong.
+        assert!(!duration_matches(1_200_000, 1_010_000, 10));
+        assert!(!duration_matches(1_100_000, 1_010_000, 30));
+    }
 
     #[test]
     fn the_hard_link_fallback_moves_without_replacing() {
@@ -3636,7 +3912,7 @@ mod tests {
         document.layout.color_end = "#000000".into();
         document.captions.enabled = true;
         document.captions.text_color = "#FFFFFF".into();
-        document.captions.highlight_words = false;
+        document.captions.style = crate::captions::CaptionStyle::Static;
         let evaluator = SceneEvaluator {
             root: root.clone(),
             document,
@@ -3649,7 +3925,11 @@ mod tests {
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
+            graphics_quality: Default::default(),
+            pinned_graphics: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
+            caption_look: std::cell::OnceCell::new(),
+            caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
             prefetched: Default::default(),
@@ -3663,6 +3943,27 @@ mod tests {
         };
         let (_, _, y) = evaluator.caption_at(100_000).unwrap();
         assert!(y > 90, "caption sits in the lower half, y {y}");
+        // Every style draws a moment the same whatever was drawn before (the preview seeks,
+        // the export plays straight through).
+        for style in [
+            crate::captions::CaptionStyle::Pop,
+            crate::captions::CaptionStyle::Karaoke,
+        ] {
+            let mut document = evaluator.document.clone();
+            document.captions.style = style;
+            let straight = scenes(dir.path(), document.clone(), 320, 180);
+            let seeking = scenes(dir.path(), document, 320, 180);
+            for at in [0, 50_000, 100_000, 150_000, 650_000, 700_000] {
+                let a = straight
+                    .caption_at(at)
+                    .map(|(f, x, y)| (f.data.to_vec(), x, y));
+                let _ = seeking.caption_at(900_000 - at);
+                let b = seeking
+                    .caption_at(at)
+                    .map(|(f, x, y)| (f.data.to_vec(), x, y));
+                assert!(a == b, "{style:?} at {at}");
+            }
+        }
         let cues = evaluator.caption_cues.get().unwrap();
         let words: Vec<_> = cues
             .iter()
@@ -3709,7 +4010,11 @@ mod tests {
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
+            graphics_quality: Default::default(),
+            pinned_graphics: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
+            caption_look: std::cell::OnceCell::new(),
+            caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
             cursors: Default::default(),
             prefetched: Default::default(),
@@ -3922,15 +4227,14 @@ mod tests {
             .layers
             .iter()
             .any(|l| l.role == crate::render::LayerRole::Overlay));
-        // A preview kept across edits keeps its background only while the short's choice
-        // stays the same.
+        // A preview kept across edits keeps its background only while the style's stays the
+        // same.
         let key = |document: &EditDocument| {
             background_key(dir.path(), &background_layout(document), 64, 64)
         };
         let before = key(&short_document);
-        let layout = short_document.short_layout.as_mut().unwrap();
-        layout.background_type = "gradient".into();
-        layout.background_color_start = "#0000FF".into();
+        short_document.layout.background_type = "gradient".into();
+        short_document.layout.color_start = "#0000FF".into();
         assert_ne!(key(&short_document), before);
     }
 
@@ -3978,7 +4282,12 @@ mod tests {
             let last = scene.layers.last().unwrap();
             assert_eq!((last.x, last.y, last.width, last.height), rect, "{slot:?}");
             // It renders for that space, at the render scale (1080 wide).
-            let spec = crate::graphics::render::specs_for(dir.path(), &short_document, (90, 160));
+            let spec = crate::graphics::render::specs_for(
+                dir.path(),
+                &short_document,
+                (90, 160),
+                Default::default(),
+            );
             assert_eq!(spec.len(), 1);
             let expected_h = (rect.3 as f64 * 1920.0 / 160.0).round() as u32 & !1;
             assert_eq!(
@@ -3993,6 +4302,81 @@ mod tests {
             .unwrap();
         let last = scene.layers.last().unwrap();
         assert_eq!((last.x, last.y, last.width, last.height), (0, 0, 160, 90));
+    }
+
+    #[test]
+    fn captions_give_way_where_a_graphic_fills_the_frame() {
+        use crate::graphics::render::{in_ranges, whole_frame_ranges};
+        use crate::shorts::GraphicSlot;
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let overlay =
+            crate::graphics::create(dir.path(), "blank", None, &serde_json::Map::new()).unwrap();
+        let html_path = std::path::Path::new(&overlay.path).join(crate::graphics::ENTRY);
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        std::fs::write(
+            &html_path,
+            html.replacen(
+                "data-composition-id=\"graphic\"",
+                "data-composition-id=\"graphic\" data-overlay",
+                1,
+            ),
+        )
+        .unwrap();
+        crate::graphics::render::sources_changed();
+        let clip = |id: &str, asset: &str, start_us: u64| Clip {
+            id: id.into(),
+            asset: asset.into(),
+            stream: "picture".into(),
+            start_us,
+            in_us: 0,
+            duration_us: 1_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        };
+        let mut track =
+            crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
+        track.clips.push(clip("g1", &card.id, 1_000_000));
+        track.clips.push(clip("g2", &overlay.id, 3_000_000));
+        document.assets.push(card);
+        document.assets.push(overlay);
+        document.sequence.tracks.push(track);
+        document.validate().unwrap();
+
+        // The video: the card fills the frame, the see-through overlay doesn't.
+        let free = whole_frame_ranges(dir.path(), &document);
+        assert_eq!(free, vec![(1_000_000, 2_000_000)]);
+        assert!(in_ranges(&free, 1_500_000) && !in_ranges(&free, 2_000_000));
+        assert!(!in_ranges(&free, 3_500_000));
+
+        // A short: only a graphic shown full; split or over the face, captions stay.
+        let short: crate::shorts::Short = serde_json::from_value(serde_json::json!({
+            "id": "s1", "title": "Short", "media": "logo",
+            "sourceStartUs": 0, "sourceEndUs": 5_000_000
+        }))
+        .unwrap();
+        assert!(
+            short.layout.captions,
+            "a short has captions unless turned off"
+        );
+        let mut short_document = crate::shorts::short_document(&document, &short, false).unwrap();
+        assert_eq!(
+            whole_frame_ranges(dir.path(), &short_document),
+            vec![(1_000_000, 2_000_000), (3_000_000, 4_000_000)]
+        );
+        let layout = short_document.short_layout.as_mut().unwrap();
+        layout
+            .graphic_slots
+            .insert("g1".into(), GraphicSlot::Screen);
+        layout
+            .graphic_slots
+            .insert("g2".into(), GraphicSlot::OverFace);
+        assert!(whole_frame_ranges(dir.path(), &short_document).is_empty());
+        // A video's captions are off until turned on.
+        assert!(!EditDocument::default().captions.enabled);
     }
 
     #[test]
@@ -4040,6 +4424,7 @@ mod tests {
                 clip,
                 (160, 90),
                 full_camera,
+                Default::default(),
             )
             .entrance
         };
@@ -4084,6 +4469,47 @@ mod tests {
         );
         // Without a camera-only section nothing fills the frame with the camera.
         assert!(crate::graphics::full_camera_ranges(&document).is_empty());
+    }
+
+    #[test]
+    fn an_export_plays_final_graphics_at_its_frame_rate_and_size() {
+        use crate::graphics::render::{Quality, Spec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let clip = Clip {
+            id: "g1".into(),
+            asset: card.id.clone(),
+            stream: "picture".into(),
+            start_us: 1_000_000,
+            in_us: 0,
+            duration_us: 3_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        };
+        document.assets.push(card.clone());
+        let spec = |canvas, quality| {
+            Spec::for_clip(dir.path(), &document, &card, &clip, canvas, &[], quality)
+        };
+        let draft = spec((1920, 1080), Quality::Draft);
+        // At the export settings' frame rate (60 by default).
+        assert_eq!(
+            (draft.width, draft.height, draft.density, draft.fps),
+            (1920, 1080, 1, 60)
+        );
+        // A 1080p export at that rate plays the preview's own render.
+        assert_eq!(spec((1920, 1080), Quality::Final { fps: 60 }), draft);
+        // At another rate, and at twice the density for 1440p and 4K: the same layout, sharper.
+        let other = spec((1920, 1080), Quality::Final { fps: 30 });
+        assert_eq!((other.density, other.fps), (1, 30));
+        for canvas in [(2560, 1440), (3840, 2160)] {
+            let sharp = spec(canvas, Quality::Final { fps: 30 });
+            assert_eq!((sharp.width, sharp.height, sharp.density), (1920, 1080, 2));
+        }
+        // The preview of a 4K project still plays the draft.
+        assert_eq!(spec((3840, 2160), Quality::Draft).density, 1);
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the
@@ -4443,6 +4869,8 @@ mod tests {
             ],
         );
         document.audio.sound_effects.clicks = true;
+        // The click's own level, not raised by a new project's loudness normalization.
+        document.audio.normalize = false;
         let effects = crate::sound_effects::plan(&document);
         // Two presses 50 ms apart: one click sound.
         assert_eq!(effects.len(), 1, "{effects:?}");
@@ -4528,6 +4956,60 @@ mod tests {
             ..Default::default()
         });
         (root, document)
+    }
+
+    /// A take short (a camera, no screen recording) with a graphic in the split's screen part:
+    /// the camera keeps its own part as it does beside a screen, rather than filling the frame
+    /// behind the graphic.
+    #[test]
+    fn a_graphic_in_the_split_keeps_the_camera_in_its_part() {
+        use crate::shorts::GraphicSlot;
+        let dir = tempfile::tempdir().unwrap();
+        let (root, mut document) = off_centre_face_short(dir.path());
+        for track in &mut document.sequence.tracks {
+            track.clips.retain(|c| c.stream != "screen");
+        }
+        document.layouts.base = crate::layouts::Layout::SideBySide(crate::layouts::SideBySide {
+            camera_first: true,
+            camera_pct: 35.0,
+            ..Default::default()
+        });
+        let graphic =
+            crate::graphics::create(&root, "title", None, &serde_json::Map::new()).unwrap();
+        let mut track =
+            crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
+        track.clips.push(Clip {
+            id: "g1".into(),
+            asset: graphic.id.clone(),
+            stream: "picture".into(),
+            start_us: 0,
+            in_us: 0,
+            duration_us: 800_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        });
+        document.assets.push(graphic);
+        document.sequence.tracks.push(track);
+        let camera_rect = |document: &EditDocument| {
+            let scene = scenes(&root, document.clone(), 1080, 1920)
+                .scene_at(400_000)
+                .unwrap();
+            let layer = scene
+                .layers
+                .iter()
+                .find(|l| l.role == crate::render::LayerRole::Webcam)
+                .expect("a camera layer")
+                .clone();
+            (layer.x, layer.y, layer.width, layer.height)
+        };
+        // Over the whole frame the camera has no screen to share it with.
+        assert_eq!(camera_rect(&document), (0, 0, 1080, 1920));
+        let layout = document.short_layout.as_mut().unwrap();
+        layout
+            .graphic_slots
+            .insert("g1".into(), GraphicSlot::Screen);
+        assert_eq!(camera_rect(&document), (0, 0, 1080, 672));
     }
 
     /// The document with its camera clips framed by hand, in the middle.

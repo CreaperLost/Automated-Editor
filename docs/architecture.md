@@ -1,9 +1,10 @@
 # Architecture: how AeroEdits is built
 
-The system as it stands on 21 Oct 2026, condensed from the finished plans (Premiere-style
-tracks, word alignment, the 4 Oct performance pass, AI readiness phases 0–3, layouts). Repository
-layout, build and test commands are in the [root README](../README.md). Why things are the way
-they are is in [decisions.md](decisions.md).
+The system as it stands on 24 Oct 2026, condensed from the finished plans (Premiere-style
+tracks, the 4 Oct performance pass, AI readiness, history and checkpoints, presets and styles).
+Those plans were deleted once built; git keeps them (`git log --diff-filter=D -- docs/plans/`).
+Repository layout, build and test commands are in the [root README](../README.md). Why things are
+the way they are is in [decisions.md](decisions.md).
 
 ## Stack
 
@@ -15,14 +16,14 @@ they are is in [decisions.md](decisions.md).
 - **Media:** FFmpeg (bundled sidecar on Windows/Linux) behind `media/ffmpeg.rs`; Swift
   AVFoundation bridges on macOS (`native/macos/`). Compositing in wgpu (`render/composite.wgsl`),
   with a CPU path kept at parity by tests.
-- **Models in the app:** Parakeet and wav2vec2 on ONNX Runtime (CUDA / DirectML / CPU; CUDA needs
+- **Models in the app:** Parakeet on ONNX Runtime (CUDA / DirectML / CPU; CUDA needs
   the downloadable GPU pack), YuNet face detection, Qwen3.5 4B through llama.cpp on Vulkan
   (`local-llm` feature).
 
 ## The project and the sequence model
 
 A project folder holds `project.json` (the edit document), `transcripts/<asset>.<stream>.json`,
-`agent/proposals.json`, `graphics/<id>/` and caches. Recordings play from their own folders,
+`agent/proposals.json`, `graphics/<id>/`, `history/` (undo history and checkpoints) and caches. Recordings play from their own folders,
 mounted at `recordings/<asset id>/`.
 
 - **Assets and streams.** Everything playable is an asset (`Recording`, `Video`, `Image`, `Audio`,
@@ -44,26 +45,49 @@ mounted at `recordings/<asset id>/`.
   chapters and shorts all live in **source time** and are mapped through a clock on read, so cuts,
   reorders and undo never move them off their content.
 - **Revisions and undo.** Every edit bumps `revision`; edits pass `expected_revision` and a
-  mismatch is refused ("Stale edit revision"). `EditHistory` keeps up to 64 undo steps **in
-  memory only** (gap: [SAFE-2](roadmap.md#safe-2)).
+  mismatch is refused ("Stale edit revision").
+- **History on disk** (`project/history.rs`, SAFE-2). Each edit state is saved gzip-compressed
+  in `history/states/<sha256>.json.gz`, named by its JSON with `revision` zeroed (so undo and
+  redo write nothing new); `history/log.jsonl` is append-only (commit, undo, redo, drop,
+  checkpoint lines) and is replayed, checked against `project.json` and rewritten on open. A
+  crash between saving the edit and the log comes back as a "Change made outside AeroEdits"
+  step. `EditHistory` holds steps, not documents; up to 2 GB of states per project, oldest steps
+  first, no step limit. Steps are named from what changed (`history::describe`) and marked as
+  an agent's while its MCP call runs (`history::as_agent`, a thread-local set in `tools::call`).
+- **Agent runs.** An agent's steps carry a run id while the same agent keeps editing within 15
+  minutes with nothing of the user's between; `preset` starts a new run. Undoing a run
+  (Agent panel, MCP `undo` `run: true`) restores the state from before it as one new step and
+  marks its batches undone.
+- **Checkpoints** (`project/checkpoint.rs`): the edit's state, each graphic's source files
+  (`history/files/<sha256>.gz`) and each transcript's caption marks with a stamp of its word ids.
+  Saved by the user (top bar History), the agent (`checkpoint` behind `more`) and the app before
+  every agent run (newest five kept). Going back is one step (when the edit differs), puts the
+  graphic files and caption marks back (marks only onto the same words), asks for the graphics'
+  renders, withdraws waiting batches, and saves what was there first as a checkpoint. Graphic
+  source edits are not undo steps (GFX-4).
 - **Shorts** are windows anchored in source time that follow the video's edits until edited on
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
-  from the video under it (`take_short.rs`). Their own layout tracks, captions and graphic slots.
+  from the video under it (`take_short.rs`), each piece at its own speed. Their own layout
+  tracks, captions and graphic slots. A graphic split beside the face (`screen`) or over it
+  (`overFace`) adds a layout section for its time when the short's timeline is built
+  (`shorts::graphic_sections`, never stored), and its render gets `data-mode`
+  (`full`/`split`/`over`) on the root.
 
-## Transcription and word alignment
+## Transcription
 
-- Providers behind one seam: Parakeet (local EN; Unified by default, TDT v3 as **Verbatim**),
-  ElevenLabs Scribe, Scribe via OpenRouter. Language English or Greek; fillers, retakes, the AI
-  prompts and caption capitals follow it.
-- **Alignment** (`transcript/align.rs`) runs after transcription: split at pauses over 0.5 s
-  (≤ 20 s windows ± 300 ms), wav2vec2-base-960h log-probs at 20 ms, Viterbi CTC over the known
-  letters. Guardrails: a word may shrink anywhere inside its old span but grow at most 120 ms;
-  low-confidence words and failed windows keep their times; order never changes; text and word
-  ids never change. Words the model can't spell ("$20", `[typing]`) keep their old times.
-  Measured on a 26.5 min recording: Parakeet words holding ≥150 ms of quiet went 234 → 6;
-  Parakeet vs Scribe boundary gap (median/p90) 70/220 ms → 0/30 ms.
-- `tighten_loose_words` remains for unaligned transcripts (Parakeet stretches words over pauses
-  on its 80 ms grid).
+- Providers behind one seam: Parakeet (local, English only; Unified by default, TDT v3 as
+  **Verbatim**), ElevenLabs Scribe, Scribe via OpenRouter. The language setting is `auto`
+  (default), `en` or `el`. Online is a chain: the saved route first (ElevenLabs by default), the
+  other when the first has no key or fails (no credits). On `auto` no language is sent and the
+  transcript keeps the one Scribe heard most (by words, over the chunks); fillers, retakes, the AI
+  prompts and caption capitals follow the transcript's language. Agents transcribe with
+  `provider: auto` and never change the app's saved settings.
+- Uploads: ElevenLabs takes 10-minute chunks (~19 MB of 16-bit WAV), OpenRouter 5-minute chunks
+  (~10 MB; its multipart limit is 25 MB and the provider gets about a minute), split at the
+  quietest point near the limit.
+- Word alignment (wav2vec2) was removed on 22 Oct 2026: it did not help in practice.
+  `tighten_loose_words` handles Parakeet's loose words (it stretches words over pauses on its
+  80 ms grid).
 - Filler/retake review: rules flag candidates (`ai/candidates.rs`), then OpenRouter/OpenAI reads
   every word in 300-word chunks, or local Qwen reads only the candidate windows under a JSON
   grammar, greedy. Probe: `ai/review_probe.rs`, labelled cases in [plans/review-eval](plans/review-eval/).
@@ -88,7 +112,30 @@ mounted at `recordings/<asset id>/`.
 
 ## The agent connection (MCP)
 
-`src-tauri/src/mcp/`. Full history and measurements in [plans/ai-readiness.md](plans/ai-readiness.md).
+`src-tauri/src/mcp/`. Measurements of real agent edits are in
+[plans/evaluation.md](plans/evaluation.md).
+
+The principles it was built on (AI readiness, 13 Oct):
+
+1. **The app is a tool server, the agent is the editor.** The agent decides; the app does
+   everything deterministic (cuts, rendering, alpha, compositing, mapping times through edits).
+2. **The agent proposes, the app checks, the user accepts** for judgement calls; built-in passes
+   apply directly, one undo step each. Autopilot accepts proposals automatically.
+3. **Text first, pixels when needed.** The compact transcript and telemetry are the working
+   surface; frames, sheets and the storyboard only at decision points.
+4. **Check the output, not the plan:** graphics over the real footage, cuts against the
+   transcript.
+5. **Pin to meaning, not to time:** graphics, footage and notes hang off words or recording
+   time, so later cuts don't knock them out of place.
+6. **One source for the look:** the style feeds every graphic, caption and the frame.
+
+Why MCP only: it works with any agent, costs the app nothing, stays inside every provider's
+terms, keeps secrets out of the app and keeps it testable. Coding agents are the main target;
+the app renders graphics itself and offers `graphic_write_file`, so a client without a shell
+still works. MCP sampling is not relied on (clients support it unevenly). Ideas were taken from
+browser-use/video-use (packed transcript, self-checks), adukhan98/video-edit (brand intake,
+storyboard approval), kamgasimo/ai-video-editor (pinned HyperFrames, cut lists with evidence) and
+zhuyansen/awesome-claude-video-skills.
 
 - **Transport.** Agents start `aeroedits --mcp-stdio` (`bridge.rs`). The bridge answers
   `initialize`, `ping` and `tools/list` itself (so the client sees tools while the app is closed)
@@ -116,19 +163,27 @@ mounted at `recordings/<asset id>/`.
 - **Actions** apply directly like a button, one undo step each, listed in the Agent panel
   history. Detection actions take `apply: false`. Long jobs send MCP progress notifications.
   Requests on one connection run concurrently; agents that need order wait for each reply.
-- **The skill** (`mcp/skill/`: `SKILL.md`, `export.md`, `templates/{tutorial,shorts,take-shorts}.md`)
-  is compiled in, served by the `template` tool, as MCP prompts and server instructions, and
-  installed into Claude Code / Codex skill folders (refreshed at launch while marked "Installed
-  by AeroEdits"). Saved answers: `<config>/AeroEdits/agents/answers/<template>.json`.
+- **Tools on demand** (COST-2): rarely needed tools (the shorts tools, `faces`, `layouts`,
+  `checkpoint`, ...) are behind `more`, which gives a tool's arguments or runs it, so every
+  session's tool list stays small. Not `tools/list_changed`: Codex doesn't refresh a list
+  mid-session. Long calls stop when the client cancels them or the user presses Stop in the
+  Agent panel (`tools::Stop`, checked between steps).
+- **The skill** (`mcp/skill/`: `SKILL.md`, `rules.md`, `export.md`, `graphics.md`) is compiled
+  in; with the preset's method (`preset/methods/*.md` for the built-ins, `method.md` for the
+  user's) it is served by the `preset` tool, as MCP prompts and server instructions, and installed
+  into Claude Code / Codex skill folders (refreshed at launch while marked "Installed by
+  AeroEdits"). The user's answers are the preset's `choices`, saved with `library`.
+- **`library`** (`mcp/library.rs`, `mcp/presets.rs`): one tool for styles, presets and favourite
+  layouts (`kind`, `op`), instead of a tool per kind and operation.
 - **Events:** agent changes emit `aeroedits-project-updated`, `aeroedits-proposals-updated`,
   `aeroedits-agent-activity`, `aeroedits-agent-opened` so the UI refreshes.
 
 ## Graphics
 
-`src-tauri/src/graphics/`. Decided in Graphics v1 ([ai-readiness](plans/ai-readiness.md#graphics-v1-agreed-2026-10-15)).
+`src-tauri/src/graphics/`. Decided in Graphics v1 (15 Oct; see [decisions](decisions.md)).
 
 - **Asset:** a HyperFrames project in `graphics/<id>/` (`index.html`, `graphic.json` with
-  variables, brand, length). Variables are declared with `data-composition-variables`.
+  variables, its own style if any, its own look tokens, length). Variables are declared with `data-composition-variables`.
 - **Slots, not safe zones:** where a graphic plays decides its render box (whole canvas; a short's
   camera, screen or over-screen part). Full-screen graphics cut in and out (`data-entrance`); an
   overlay on the camera may ease.
@@ -137,11 +192,35 @@ mounted at `recordings/<asset id>/`.
 - **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.162 with its own
   Node 22 and chrome-headless-shell (`runtime.rs`, hash-checked, ~200 MB download, ~500 MB on
   disk); WebM VP9 alpha decoded with `libvpx-vp9` forced; cache key over source files, canvas,
-  length, fps, brand and version; **30 fps, 1920 px long side** today
-  ([GFX-1](roadmap.md#gfx-1)). Renders stage in `<runtime>/work/<hash12>/` (long project paths
-  broke Windows' 260-char limit). Export waits for pending renders. A render takes ~16–28 s.
-- **Brand kits** (`brands.rs`): app-level `<config>/AeroEdits/brands/<name>/brand.json` (+ logo,
-  font file) → a `<style id="aeroedits-brand">` with `--brand-*` variables at render time.
+  length, fps, density, style (settings and files) and version. Every render of a graphic in an
+  edit, the preview's too, is at the export settings' frame rate (60 at most), so a 1080p export
+  plays the preview's renders; a larger export renders at twice the density (HyperFrames
+  `--resolution landscape-4k` / `portrait-4k`, same layout). Whenever the edit changes, each
+  graphic's export render is queued in the background behind the preview's
+  (`render::request_export`; 2 Chrome workers, below-normal priority, fast capture), so an
+  export of unchanged graphics starts writing frames at once (GFX-7). An export pins the renders
+  it starts with (`render::pin`, hard links in a `.export-*` folder) and fails rather than play a
+  placeholder. Renders stage in `<runtime>/work/<hash12>/` (long project paths broke Windows'
+  260-char limit). An 8 s graphic at 1080p60 takes about 40 s on an RTX 3060.
+- **The look** (`look.rs`): a style's graphics look (preset, five global controls, hand-set
+  tokens; scaled at 9:16), injected into every render after the composition's own defaults as `--look-*`
+  properties on `[data-composition-id]`, where HyperFrames puts the colour variables the roles
+  mix from; part of the render hash. Find the root by `graphics::root_at` (the attribute with a
+  value), never the first `data-composition-id` in the file: the look's selector comes first.
+- **Styles** (`src-tauri/src/style/`): built in (Light, Dark) or app-level
+  `<config>/AeroEdits/styles/<name>/style.json` (+ font and logo files). The brand becomes a
+  `<style id="aeroedits-brand">` with `--brand-*` variables at render time (`style/brand.rs`);
+  `style::dress` puts the frame and caption look onto a document as it is drawn (the
+  `#[serde(skip)]` fields of `EditLayout` and `CaptionSettings`: never stored). Projects and
+  graphics store a style's **name**, so a rename is recorded in `styles/renamed.json` and every
+  lookup follows it. A save builds the new folder beside the old one and swaps it in.
+- **Presets** (`src-tauri/src/preset/`): built in (Tutorial, Shorts, Clips) or app-level
+  `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). A document is
+  stored with `preset::stored` (the parts a preset sets written as `presetChanges`, a JSON merge
+  patch over the preset's values) and read with `preset::read`, in `project.json` and in history
+  states alike.
+- **Agent file writes** (`write_file`): plain relative paths only, and no symlink or junction
+  anywhere in the path (the graphic's folder included), like the project's `safe_path`.
 - **Library** (`library.rs`) and **gate** (`gate.rs`): saving to the library runs a no-model check
   (lint, network refs, kit colours, layout overflow and contrast at 16:9 and 9:16 with long text,
   first/last-frame coverage, variable changes visible) in parallel headless Chromes, ~26–30 s, cached
@@ -150,11 +229,15 @@ mounted at `recordings/<asset id>/`.
 ## Check, storyboard, export
 
 - **`check`** (`check.rs`) reads the edit only (no decode, no model, ~3 ms): missing media, black
-  frames, no sound, blips between cuts, words cut partway, choppy stretches, flashing or jumping
-  zooms, captions over the bubble, chapter rules, loudness not normalised, pending proposals. Safe
+  frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
+  bubble, chapter rules, loudness not normalised, pending proposals. Safe
   fixes, each its own undo step.
-- **`storyboard`** (`mcp/storyboard.rs`): a tile per scene (split where camera, zoom, graphic,
-  chapter or a long silence starts; ≤ 48 tiles, ≤ 2048 px) plus a JSON line per tile.
+- **`storyboard`** (`mcp/storyboard.rs`, agents only since 22 Oct 2026): a tile per scene (split
+  where camera, zoom, graphic, chapter or a long silence starts; ≤ 48 tiles, ≤ 2048 px) plus a
+  JSON line per tile.
+- **Zoom glides** are timed on the edited video: `zoom::kept_stretches` gives each zoom the parts
+  of it the edit keeps, and `zoom/eval.rs` eases in and out over those, so a cut through a glide
+  never makes it jump (the old "zoom jumps" check and its fix are gone).
 - **Export** (`export/mod.rs`): decode at the export fps, composite on the GPU, convert to NV12 on
   the GPU, encode with NVENC/AMF/QSV (one-frame test) or libx264; writer thread with a two-frame
   queue; the finished file is checked (duration, first/last frame). 1080p30 export ran at 2.6×
@@ -192,6 +275,32 @@ Rules that keep it fast (break one and it shows):
 - Long reads (transcript, cues, waveforms) run on the blocking pool, not Tauri's main thread.
 - The preview worker never blocks on the JPEG encoder (fallback path); on Windows the preview is
   drawn by wgpu under a transparent webview.
+- A graphic waiting for its render shows its newest older render, found once per render
+  generation, not by listing the cache folder every frame.
+- Sound-effect markers, like clips, are drawn only in the timeline's drawn time.
+- `transcript_fix` changes all its words in one load and one save.
+
+## Threads and locks: the window thread must never wait on us
+
+A Tauri command without `async` runs **on the window's own thread** (Tauri 2). So do a few Tauri
+calls made from other threads: `window_handle()` (and anything that asks the window for its size or
+position) sends a message to that thread and waits for the answer. Together these make a deadlock
+easy, and it froze the app whenever a short played in the window preview (fixed 22 Oct): the
+playback engine held the `preview` lock while drawing, drawing asked Tauri for the window's handle,
+and the window thread was waiting for the `preview` lock in the synchronous `preview_layout`
+command. Windows then reports the app as not responding and closes it (`AppHangB1`).
+
+- Never hold an app lock (`preview`, `playback`, `opened_project`, `command_lock`) across a call
+  that may wait on the window thread, a draw, a decode or a file write.
+- `if let Some(x) = state.preview.lock().f() { … }` keeps the guard for the **whole block**; take
+  the value in its own statement first (`let x = state.preview.lock().f();`). `let … else` and plain
+  `let` statements drop it at the end of the line.
+- The window presenter (`render/present.rs`) gets the window's Win32 handle once, when it is made,
+  and measures the window with `GetClientRect` on the drawing thread.
+- Heavy synchronous commands belong in `async` + `spawn_blocking`.
+- To see a hang: `cdb -pv -p <pid> -c "~*k 40; qd"` (Windows SDK debuggers) prints every
+  thread's stack without stopping the app; look for two threads each waiting on what the other
+  holds. A hang shows as a window that stops responding while the process's CPU time stays flat.
 
 ## Working on the code: notes that saved time
 
@@ -199,7 +308,8 @@ Rules that keep it fast (break one and it shows):
   Edit source with an editor tool, not `sed`/heredocs; restore CRLF with
   `sed -i 's/\r\?$/\r/' <path>` if a shell rewrite slipped in.
 - Don't run `cargo test`/`cargo build` while `cargo tauri dev` is building (shared `target/debug`
-  race: a false "cannot find function run"). Stop the dev app before editing Rust.
+  race: a false "cannot find function run"). Stop the dev app before editing Rust: a save
+  rebuilds and restarts it, ending a running agent turn or export.
 - Test on **copies** of recordings from `Documents\AeroShootRec\*.aero` (delete `project.json` in
   the copy), never originals. Use your own session's `mcp__aeroedits__*` tools read-only; test write
   tools on a scratch project. To try one-click connect without touching real settings, start the
@@ -213,3 +323,6 @@ Rules that keep it fast (break one and it shows):
 - The local-LLM build needs a short `CARGO_TARGET_DIR` (`C:\aeb`), the Vulkan SDK, LLVM and Ninja;
   `scripts/build-windows.ps1` sets it up.
 - After any docs change, run `.venv\Scripts\python.exe scripts/check_doc_links.py`.
+- Front-end behaviour tests are `front-end/tests/*.test.ts` (`npm run test:cleanup`, also run by
+  CI): stores with a mocked `api`, no browser. A change of a store's async flow (queued saves,
+  late replies) gets a test there.

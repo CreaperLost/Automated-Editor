@@ -62,12 +62,6 @@ pub struct ShortLayout {
     pub caption_lines: u32,
     /// Caption text size in this short, as a percentage of its height; 0 uses the editor's.
     pub caption_size_pct: f32,
-    /// The background behind the screen and camera: `project` (the video's own), `solid`,
-    /// `gradient`, `preset` or `wallpaper` (the project's image).
-    pub background_type: String,
-    pub background_color_start: String,
-    pub background_color_end: String,
-    pub background_preset: String,
     /// Where each graphic plays in this short, by its clip id; a graphic not listed plays
     /// full screen.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -90,6 +84,86 @@ pub enum GraphicSlot {
     /// Over the screen's part, under the captions; the graphic's see-through parts show the
     /// screen.
     OverScreen,
+    /// Over the face: the camera fills the frame while it plays and the graphic is drawn over
+    /// the whole of it, its see-through parts showing the face (callouts, labels, arrows).
+    OverFace,
+}
+
+impl GraphicSlot {
+    /// How it shows, for the user.
+    pub fn describe(self) -> &'static str {
+        match self {
+            GraphicSlot::Full => "over the whole frame",
+            GraphicSlot::Camera => "in the camera's part of the split",
+            GraphicSlot::Screen => "split: the face above, the graphic below",
+            GraphicSlot::OverScreen => "over the screen's part, under the captions",
+            GraphicSlot::OverFace => "over the face, which fills the frame",
+        }
+    }
+
+    /// What the graphic is told of it (`data-mode` on its root): `full`, `split` (a part of the
+    /// frame beside the face) or `over` (drawn over a picture that shows through).
+    pub fn data_mode(self) -> &'static str {
+        match self {
+            GraphicSlot::Full => "full",
+            GraphicSlot::Camera | GraphicSlot::Screen => "split",
+            GraphicSlot::OverScreen | GraphicSlot::OverFace => "over",
+        }
+    }
+}
+
+/// The split a graphic in the camera's or screen's part plays in: the short's base layout when
+/// that is a split, else the shorts' default one.
+pub fn split_layout(layouts: &crate::layouts::LayoutTrack) -> crate::layouts::Layout {
+    match &layouts.base {
+        base @ crate::layouts::Layout::SideBySide(_) => base.clone(),
+        _ => crate::layouts::LayoutTrack::for_short().base,
+    }
+}
+
+/// While a graphic shows split or over the face, the layout it needs: the split, or the camera
+/// filling the frame. Sections in the short's anchor media's time (the take's voice, or the
+/// recording), made fresh each time the short is played or exported, never stored.
+fn graphic_sections(timeline: &EditDocument, short: &Short) -> Vec<crate::layouts::LayoutSection> {
+    use crate::layouts::{CameraOnly, Layout, LayoutSection};
+    let anchor = match &short.media {
+        Some(media) => Some(media.clone()),
+        None => timeline
+            .assets
+            .iter()
+            .find(|a| a.is_recording())
+            .map(|a| a.id.clone()),
+    };
+    let Some(anchor) = anchor else {
+        return Vec::new();
+    };
+    let clock = crate::sequence::clock::asset_clock(&timeline.sequence, &anchor);
+    let mut out = Vec::new();
+    for track in timeline.sequence.video_tracks().filter(|t| !t.hidden) {
+        for clip in &track.clips {
+            let layout = match graphic_slot(&short.layout, &clip.id) {
+                GraphicSlot::Camera | GraphicSlot::Screen => split_layout(&timeline.layouts),
+                GraphicSlot::OverFace => Layout::CameraOnly(CameraOnly::default()),
+                _ => continue,
+            };
+            if !timeline.asset(&clip.asset).is_some_and(|a| a.is_graphic()) {
+                continue;
+            }
+            for (s, e) in clock.edited_range_to_source(clip.start_us, clip.end_us()) {
+                out.push(LayoutSection {
+                    rule: Some("graphic".into()),
+                    ..LayoutSection::new(
+                        format!("graphic-{}", clip.id),
+                        short.media.clone(),
+                        s,
+                        e,
+                        Some(layout.clone()),
+                    )
+                });
+            }
+        }
+    }
+    out
 }
 
 /// At most this many graphics have a slot in one short.
@@ -112,18 +186,60 @@ pub fn graphic_rect(
     width: u32,
     height: u32,
 ) -> (u32, u32, u32, u32) {
+    match &document.short_layout {
+        Some(short) => slot_rect(
+            graphic_slot(short, clip_id),
+            &document.layouts,
+            &document.layout,
+            width,
+            height,
+        ),
+        None => (0, 0, width, height),
+    }
+}
+
+/// The box a graphic in `slot` of `short` lays itself out in (its root's `data-width` x
+/// `data-height`): the graphic render size of the 9:16 frame, or of its part of the split as the
+/// short's split is set now. What the agent is told so it writes for that box.
+pub fn graphic_box(base: &EditDocument, short: &Short, slot: GraphicSlot) -> (u32, u32) {
+    let (width, height) = crate::graphics::render::render_size(1080, 1920);
+    let (_, _, w, h) = slot_rect(slot, &short.layouts, &base.layout, width, height);
+    ((w & !1).max(2), (h & !1).max(2))
+}
+
+/// `graphic_box` for the agent: "a 1080x1248 box (portrait)", and which of its layouts it
+/// takes when that is not its own shape's (see [`crate::graphics::as_split_part`]).
+pub fn describe_box((width, height): (u32, u32)) -> String {
+    let ratio = width as f64 / height.max(1) as f64;
+    let shape = if (ratio - 1.0).abs() < 0.1 {
+        "about square, portrait rules"
+    } else if ratio < 1.0 {
+        "portrait"
+    } else if ratio <= crate::graphics::SPLIT_PORTRAIT_MAX {
+        "landscape, portrait rules"
+    } else {
+        "landscape"
+    };
+    format!("a {width}x{height} box ({shape})")
+}
+
+/// Where a graphic in `slot` plays in a `width` x `height` frame of a short with `layouts` (its
+/// base layout is the split) and `style`.
+fn slot_rect(
+    slot: GraphicSlot,
+    layouts: &crate::layouts::LayoutTrack,
+    style: &crate::project::EditLayout,
+    width: u32,
+    height: u32,
+) -> (u32, u32, u32, u32) {
     use crate::layouts::arrange::{arrange, Canvas, Sources};
     let whole = (0, 0, width, height);
-    let Some(short) = &document.short_layout else {
-        return whole;
-    };
-    let slot = graphic_slot(short, clip_id);
-    if slot == GraphicSlot::Full {
+    if matches!(slot, GraphicSlot::Full | GraphicSlot::OverFace) {
         return whole;
     }
     let parts = arrange(
-        &document.layouts.base,
-        &document.layout,
+        &split_layout(layouts),
+        style,
         Canvas::new(width, height),
         Sources {
             screen: Some((1920, 1080)),
@@ -145,15 +261,12 @@ impl Default for ShortLayout {
             follow_zooms: true,
             screen_pan_x: 0.0,
             screen_pan_y: 0.0,
-            captions: false,
+            // A short is watched on a phone, often muted: captions on unless turned off.
+            captions: true,
             caption_spot: CaptionSpot::Seam,
             caption_max_words: 0,
             caption_lines: 1,
             caption_size_pct: 0.0,
-            background_type: "project".into(),
-            background_color_start: "#000000".into(),
-            background_color_end: "#1e1b4b".into(),
-            background_preset: "aurora".into(),
             graphic_slots: Default::default(),
         }
     }
@@ -165,17 +278,6 @@ impl ShortLayout {
             return Err(format!(
                 "Screen zoom is {MIN_SCREEN_ZOOM}x to {MAX_SCREEN_ZOOM}x"
             ));
-        }
-        if !matches!(
-            self.background_type.as_str(),
-            "project" | "solid" | "gradient" | "preset" | "wallpaper"
-        ) {
-            return Err("Unknown short background".into());
-        }
-        crate::project::layout::parse_hex_rgb(&self.background_color_start)?;
-        crate::project::layout::parse_hex_rgb(&self.background_color_end)?;
-        if self.background_preset.is_empty() || self.background_preset.len() > 32 {
-            return Err("Unknown background preset".into());
         }
         if !(-1.0..=1.0).contains(&self.screen_pan_x) || !(-1.0..=1.0).contains(&self.screen_pan_y)
         {
@@ -281,22 +383,6 @@ pub fn camera_framing(
     let focus = crate::face::cached_track(root, &clip.asset, &clip.stream)
         .and_then(|track| crate::face::clip_focus(&track, clip.in_us, clip.out_us()));
     (focus, (0.0, 0.0))
-}
-
-/// The short's background as the project layout it is drawn from: the video's own, or the
-/// short's choice of colour, gradient, built-in or the project's image.
-pub fn background_layout(
-    project: &crate::project::EditLayout,
-    short: &ShortLayout,
-) -> crate::project::EditLayout {
-    let mut layout = project.clone();
-    if short.background_type != "project" {
-        layout.background_type = short.background_type.clone();
-        layout.color_start = short.background_color_start.clone();
-        layout.color_end = short.background_color_end.clone();
-        layout.background_preset = short.background_preset.clone();
-    }
-    layout
 }
 
 /// Where the screen goes in its `region` (x, y, w, h) and which part of it (UV) shows.
@@ -528,6 +614,16 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
             slice_sequence(&base.sequence, &base.assets, start, end)
         }
     };
+    // A take's footage sound is lowered under its voice, by the project's amount unless it
+    // has its own.
+    if let Some((track, _, duck_db)) = crate::take_short::footage_sound_mix(base, short) {
+        timeline.audio.tracks.entry(track).or_default().duck_db = Some(duck_db);
+    }
+    // A graphic split beside the face or over it sets the layout while it plays.
+    let sections = graphic_sections(&timeline, short);
+    if !sections.is_empty() {
+        timeline.layouts.add(sections);
+    }
     Ok(timeline)
 }
 
@@ -848,6 +944,33 @@ mod tests {
             graphic_rect(&document, "g-over", 1080, 1920),
             (0, 0, 1080, 960)
         );
+        // The box a split graphic is told follows the short's split as it is set now.
+        let mut moved = short(0, 10 * S);
+        moved.layouts.base = bottom.clone();
+        assert_eq!(
+            graphic_box(&document, &moved, GraphicSlot::Screen),
+            (1080, 960)
+        );
+        assert_eq!(
+            graphic_box(&document, &moved, GraphicSlot::OverFace),
+            (1080, 1920)
+        );
+        if let Layout::SideBySide(split) = &mut moved.layouts.base {
+            split.camera_pct = 30.0;
+        }
+        assert_eq!(
+            graphic_box(&document, &moved, GraphicSlot::Screen),
+            (1080, 1344)
+        );
+        assert_eq!(
+            describe_box((1080, 864)),
+            "a 1080x864 box (landscape, portrait rules)"
+        );
+        assert_eq!(
+            describe_box((1080, 1040)),
+            "a 1080x1040 box (about square, portrait rules)"
+        );
+        assert_eq!(describe_box((1080, 384)), "a 1080x384 box (landscape)");
         let json = serde_json::to_value(&slotted).unwrap();
         assert_eq!(json["graphicSlots"]["g-over"], "overScreen");
         assert!(serde_json::to_value(&layout)
@@ -1157,22 +1280,5 @@ mod tests {
                 assert!(uv_x >= 0.1 - 1e-4 && uv_w <= 0.8 + 1e-4);
             }
         }
-    }
-
-    #[test]
-    fn a_short_can_pick_its_own_background() {
-        let project = crate::project::EditLayout::default();
-        let mut short = ShortLayout::default();
-        assert_eq!(background_layout(&project, &short), project);
-        short.background_type = "gradient".into();
-        short.background_color_start = "#112233".into();
-        short.validate().unwrap();
-        let layout = background_layout(&project, &short);
-        assert_eq!(
-            (layout.background_type.as_str(), layout.color_start.as_str()),
-            ("gradient", "#112233")
-        );
-        short.background_color_end = "blue".into();
-        assert!(short.validate().is_err());
     }
 }

@@ -3,9 +3,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Spoken-word standard (podcasts, Apple). YouTube turns louder uploads down to -14 LUFS
-/// and never turns quieter ones up, but -16 leaves speech room before the limiter.
-pub const DEFAULT_TARGET_LUFS: f32 = -16.0;
+/// What YouTube plays at: it turns louder uploads down to -14 LUFS and never turns quieter ones
+/// up. The leveller lets speech reach it without pressing into the limiter.
+pub const DEFAULT_TARGET_LUFS: f32 = -14.0;
 pub const DEFAULT_NOISE_REDUCTION_DB: f32 = 12.0;
 pub const DEFAULT_DUCK_DB: f32 = 12.0;
 pub const TARGET_LUFS_RANGE: (f32, f32) = (-30.0, -8.0);
@@ -99,6 +99,15 @@ impl Default for AudioSettings {
 }
 
 impl AudioSettings {
+    /// A new project's: loudness normalized to [`DEFAULT_TARGET_LUFS`], the rest off. (The
+    /// plain default leaves the sound as recorded.)
+    pub fn for_new_project() -> Self {
+        Self {
+            normalize: true,
+            ..Self::default()
+        }
+    }
+
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }

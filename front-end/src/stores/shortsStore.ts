@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api } from "../lib/ipc";
 import { GAP_PRESETS } from "../lib/jumpCutConfig";
 import { clipEnd, clipSourceAt, soundSources } from "../lib/sequence";
-import type { ExportStatus, OpenedProject, Short, ShortLayout } from "../lib/types";
+import type { ExportStatus, Footage, GraphicSlot, OpenedProject, Short, ShortGraphicFrom, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 
 export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
@@ -11,15 +11,11 @@ export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   followZooms: true,
   screenPanX: 0,
   screenPanY: 0,
-  captions: false,
+  captions: true,
   captionSpot: "seam",
   captionMaxWords: 0,
   captionLines: 1,
   captionSizePct: 0,
-  backgroundType: "project",
-  backgroundColorStart: "#000000",
-  backgroundColorEnd: "#1e1b4b",
-  backgroundPreset: "aurora",
 };
 /** How long a new short lasts. */
 const NEW_SHORT_US = 30_000_000;
@@ -29,6 +25,8 @@ export type ExportRow = { state: "waiting" | "running" | "completed" | "failed";
 interface ShortsState {
   /** The short picked in the list; the first one when none is (or it was removed). */
   selectedId?: string;
+  /** The tab showing: Shorts (made from a take) or Clips (cut from the video). */
+  kind: ShortKind;
   /** A look change shown at once, saved shortly after. */
   draft: ShortLayout | null;
   /** The whole video (new shorts are placed on it); the project store holds the short's view. */
@@ -46,6 +44,7 @@ interface ShortsState {
 
 const INITIAL: ShortsState = {
   selectedId: undefined,
+  kind: "shorts",
   draft: null,
   main: null,
   busy: null,
@@ -70,15 +69,29 @@ function errorMessage(err: unknown): string {
 export const setShortsError = (err: unknown) => set({ error: err === undefined ? undefined : errorMessage(err) });
 
 /** The picked short of `shorts`. */
-export function pickShort(shorts: Short[] | undefined, selectedId: string | undefined): Short | undefined {
-  return shorts?.find((s) => s.id === selectedId) ?? shorts?.[0];
+export function pickShort(shorts: Short[] | undefined, selectedId: string | undefined, kind?: ShortKind): Short | undefined {
+  const list = kind ? shorts?.filter((s) => ofKind(s, kind)) : shorts;
+  return list?.find((s) => s.id === selectedId) ?? list?.[0];
 }
 
-/** The picked short, followed. */
+/** Two tabs over one model: Shorts are made from a take, Clips are cut from the video. */
+export type ShortKind = "shorts" | "clips";
+
+export function ofKind(short: Short, kind: ShortKind): boolean {
+  return kind === "shorts" ? !!short.take : !short.take;
+}
+
+/** The tab showing (the dock sets it when Shorts or Clips opens). */
+export function setShortKind(kind: ShortKind) {
+  if (useShortsStore.getState().kind !== kind) set({ kind });
+}
+
+/** The picked short of the tab showing, followed. */
 export function useSelectedShort(): Short | undefined {
   const shorts = useProjectStore((s) => s.openedProject?.shorts);
   const selectedId = useShortsStore((s) => s.selectedId);
-  return pickShort(shorts, selectedId);
+  const kind = useShortsStore((s) => s.kind);
+  return pickShort(shorts, selectedId, kind);
 }
 
 /** A short's look with the newer settings older shorts lack filled from the defaults. */
@@ -93,7 +106,8 @@ let saveQueue: Promise<void> = Promise.resolve();
 export function resetShorts() {
   window.clearTimeout(saveTimer);
   saveTimer = undefined;
-  set({ ...INITIAL, checked: new Set(), exports: {} });
+  // The tab showing stays.
+  set({ ...INITIAL, kind: useShortsStore.getState().kind, checked: new Set(), exports: {} });
 }
 
 export function selectShort(id: string | undefined) {
@@ -154,7 +168,8 @@ function patchShort(id: string, patch: Partial<Short>) {
 }
 
 function selected(): Short | undefined {
-  return pickShort(useProjectStore.getState().openedProject?.shorts, useShortsStore.getState().selectedId);
+  const { selectedId, kind } = useShortsStore.getState();
+  return pickShort(useProjectStore.getState().openedProject?.shorts, selectedId, kind);
 }
 
 /** The picked short's look, with any change not saved yet. */
@@ -192,7 +207,14 @@ export function shortOp(label: string, work: (p: OpenedProject) => Promise<Opene
     patchShort(short.id, { layout: draft });
   }
   set({ draft: null });
-  saveQueue = saveQueue.then(() => runShorts(label, work));
+  // Asked for the short on show: never lands on another short or project shown by the time
+  // the saves before it are done.
+  const asked = useProjectStore.getState().openedProject;
+  saveQueue = saveQueue.then(() => {
+    const now = useProjectStore.getState().openedProject;
+    if (!now || now.projectHandle !== asked?.projectHandle || now.shortView !== asked.shortView) return;
+    return runShorts(label, work);
+  });
 }
 
 /**
@@ -242,7 +264,7 @@ export function newShort() {
   selectShort(id);
   void saveShorts((list) => [
     ...list,
-    { id, title: `Short ${list.length + 1}`, layout: DEFAULT_SHORT_LAYOUT, media: range.media, sourceStartUs: range.startUs, sourceEndUs: range.endUs },
+    { id, title: `Clip ${list.filter((s) => !s.take).length + 1}`, layout: DEFAULT_SHORT_LAYOUT, media: range.media, sourceStartUs: range.startUs, sourceEndUs: range.endUs },
   ]);
 }
 
@@ -336,7 +358,7 @@ export async function cleanTake(shortId: string, voice: string, before = "") {
       notice:
         `${before}Cleaned the take: cut ${ranges.length} pause${ranges.length === 1 ? "" : "s"} ` +
         `(${(cutUs / 1e6).toFixed(1)} s) and muted ${noises.length} mouth noise${noises.length === 1 ? "" : "s"}; ` +
-        "Undo takes either back. Next: ask the agent to pick footage from the video.",
+        "Undo takes either back. Next: put footage, graphics or files under it (below, or ask the agent).",
     });
   } catch (err) {
     setShortsError(`Couldn't clean the take: ${errorMessage(err)}`);
@@ -344,6 +366,42 @@ export async function cleanTake(shortId: string, voice: string, before = "") {
   } finally {
     set({ busy: null });
   }
+}
+
+/** Puts footage (the video's, or an imported file's) under a take, one undo step. */
+export function addFootage(shortId: string, items: Footage[]) {
+  void runShorts("Adding footage", (p) =>
+    api.projectShortFootage(p.projectHandle, p.revision, shortId, { op: "add", items }),
+  );
+}
+
+/** Makes a graphic and places it under a take at `atUs`, showing as `mode` (so it renders once,
+ *  for that); `lengthUs` null keeps its own. */
+export function addShortGraphic(
+  shortId: string,
+  from: ShortGraphicFrom,
+  atUs: number,
+  lengthUs: number | null,
+  mode: GraphicSlot = "full",
+) {
+  void runShorts("Adding a graphic", (p) =>
+    api
+      .projectShortGraphicAdd(p.projectHandle, p.revision, shortId, from, atUs, lengthUs, mode)
+      .then((made) => made.project),
+  );
+}
+
+/** Takes clips off the short on show (its graphics), leaving the gap. */
+export function removeShortClips(clipIds: string[]) {
+  void runShorts("Removing", (p) =>
+    api.projectSequenceEdit(p.projectHandle, p.revision, { kind: "delete", clipIds, ripple: false }),
+  );
+}
+
+/** Brings files into the project, to go under a take. */
+export function importForShort(paths: string[]) {
+  if (paths.length === 0) return;
+  void runShorts("Importing", (p) => api.projectMediaImport(p.projectHandle, p.revision, paths));
 }
 
 /** Takes the footage off `[fromUs, toUs)` of a take short's timeline. */

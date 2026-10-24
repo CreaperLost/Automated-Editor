@@ -8,10 +8,12 @@
 //! canvas size and length, so the same graphic plays full screen in a 16:9 video and in a 9:16
 //! short. On the timeline a graphic is drawn over everything (captions too) and is never cut
 //! into (see `sequence::edit`).
-pub mod brands;
 pub mod gate;
+pub mod gsap;
 pub mod library;
+pub mod look;
 pub mod render;
+pub mod restyle;
 pub mod runtime;
 pub mod templates;
 
@@ -39,9 +41,12 @@ pub struct GraphicSource {
     /// Values for the composition's declared variables; missing ones use its defaults.
     #[serde(default)]
     pub variables: Map<String, Value>,
-    /// The brand kit it uses: absent for the project's default, `none` for no kit.
+    /// The style it uses: absent for the project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub brand: Option<String>,
+    pub style: Option<String>,
+    /// Look tokens of its own over the video's (`radius`, `ease`...): shown as overrides.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub look: std::collections::BTreeMap<String, String>,
 }
 
 /// One variable a composition declares in `data-composition-variables`.
@@ -91,9 +96,31 @@ pub fn read_source(dir: &Path) -> Result<GraphicSource, String> {
 pub fn write_source(dir: &Path, source: &GraphicSource) -> Result<(), String> {
     let text = serde_json::to_string_pretty(source).map_err(|e| e.to_string())?;
     let path = dir.join(SOURCE_FILE);
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    write_shared(&path, (text + "\n").as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     render::sources_changed();
     Ok(())
+}
+
+/// Writes a graphic's file, which a background render may be reading at that moment: Windows
+/// refuses the write while it is open there (a sharing violation), so it is tried again for up
+/// to two seconds.
+fn write_shared(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    const SHARING_VIOLATION: i32 = 32;
+    const LOCK_VIOLATION: i32 = 33;
+    let mut tries = 0;
+    loop {
+        match std::fs::write(path, contents) {
+            Err(e)
+                if tries < 20
+                    && matches!(e.raw_os_error(), Some(SHARING_VIOLATION | LOCK_VIOLATION)) =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            done => return done,
+        }
+    }
 }
 
 /// The variables `index.html` declares, in its order.
@@ -233,8 +260,11 @@ pub struct GraphicView {
     pub variables: Map<String, Value>,
     pub declarations: Vec<VariableDecl>,
     pub render: render::RenderState,
-    /// Its own brand kit choice: absent for the project's default, `none` for no kit.
-    pub brand: Option<String>,
+    /// Its own style: absent for the project's.
+    pub style: Option<String>,
+    /// Look tokens of its own over the video's.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub look: std::collections::BTreeMap<String, String>,
 }
 
 pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
@@ -248,20 +278,23 @@ pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
         variables: source.variables,
         declarations: declarations(&dir).unwrap_or_default(),
         render: render::state_of(&asset.id),
-        brand: source.brand,
+        // A style renamed since shows by its name now.
+        style: source
+            .style
+            .map(|s| crate::style::store::current_name(&crate::style::store::dir(), &s)),
+        look: source.look,
     })
 }
 
-/// Checks a graphic's brand choice as the editor or an agent gives it: `default` (the
-/// project's), `none`, or a kit in `brands`. Returns what `graphic.json` stores.
-pub fn brand_choice(brands_dir: &Path, given: &str) -> Result<Option<String>, String> {
+/// What the editor and agents send for "the project's style" as a graphic's choice.
+pub const PROJECT_STYLE: &str = "project";
+
+/// Checks a graphic's style choice as the editor or an agent gives it: `project` (or empty)
+/// for the project's, or a style's name. Returns what `graphic.json` stores.
+pub fn style_choice(given: &str) -> Result<Option<String>, String> {
     match given.trim() {
-        "" | brands::DEFAULT => Ok(None),
-        brands::NONE => Ok(Some(brands::NONE.into())),
-        name => {
-            brands::load(brands_dir, name)?;
-            Ok(Some(name.to_string()))
-        }
+        "" | PROJECT_STYLE => Ok(None),
+        name => Ok(Some(crate::style::store::load(name)?.name)),
     }
 }
 
@@ -298,7 +331,8 @@ pub fn create(
                 name,
                 template: Some(found.name.to_string()),
                 variables,
-                brand: None,
+                style: None,
+                look: Default::default(),
             },
         )
     })();
@@ -370,9 +404,6 @@ pub fn place(
     at_us: u64,
     length_us: u64,
 ) -> Result<(crate::project::revision::EditDocument, String), String> {
-    use crate::sequence::edit::{apply_reserving, SequenceEdit};
-    use crate::sequence::{SourceRange, TrackKind};
-    let length = length_us.clamp(MIN_LENGTH_US, MAX_LENGTH_US);
     let at = at_us.min(document.duration_us());
     let mut next = document.clone();
     let asset_id = asset.id.clone();
@@ -380,10 +411,37 @@ pub fn place(
         next.assets.push(asset);
     }
     let taken: Vec<String> = next.track_ids_in_use().map(String::from).collect();
-    let graphic = |id: &str| next.assets.iter().any(|a| a.id == id && a.is_graphic());
+    let (sequence, clip_id) = place_on(
+        &next.sequence,
+        &next.assets,
+        &taken,
+        &asset_id,
+        at,
+        length_us,
+    )?;
+    next.sequence = sequence;
+    Ok((next, clip_id))
+}
+
+/// `sequence` with graphic `asset_id` (one of `assets`) placed at `at` for `length_us`: on a
+/// graphics track free there (a new one on top when none is), never pushing anything along.
+/// `taken` are the track ids in use project-wide. The video's timeline and a short's own
+/// timeline place graphics alike. Returns the sequence and the clip's id.
+pub fn place_on(
+    sequence: &crate::sequence::Sequence,
+    assets: &[Asset],
+    taken: &[String],
+    asset_id: &str,
+    at: u64,
+    length_us: u64,
+) -> Result<(crate::sequence::Sequence, String), String> {
+    use crate::sequence::edit::{apply_reserving, SequenceEdit};
+    use crate::sequence::{SourceRange, TrackKind};
+    let length = length_us.clamp(MIN_LENGTH_US, MAX_LENGTH_US);
+    let asset_id = asset_id.to_string();
+    let graphic = |id: &str| assets.iter().any(|a| a.id == id && a.is_graphic());
     // A track that holds only graphics (or is named for them) and is free for the whole span.
-    let free = next
-        .sequence
+    let free = sequence
         .video_tracks()
         .rev()
         .find(|t| {
@@ -393,13 +451,13 @@ pub fn place(
                 && t.is_free(at, at + length)
         })
         .map(|t| t.id.clone());
-    let mut sequence = next.sequence.clone();
+    let mut sequence = sequence.clone();
     let track_id = match free {
         Some(id) => id,
         None => {
             let (added, _) = apply_reserving(
                 &sequence,
-                &next.assets,
+                assets,
                 &SequenceEdit::AddTrack {
                     track_kind: TrackKind::Video,
                 },
@@ -412,7 +470,7 @@ pub fn place(
                 .ok_or("Could not add a track for the graphic")?;
             let (named, _) = apply_reserving(
                 &added,
-                &next.assets,
+                assets,
                 &SequenceEdit::SetTrack {
                     track_id: id.clone(),
                     name: TRACK_NAME.into(),
@@ -430,7 +488,7 @@ pub fn place(
     let before: Vec<String> = sequence.clips().map(|(_, c)| c.id.clone()).collect();
     let (placed, _) = apply_reserving(
         &sequence,
-        &next.assets,
+        assets,
         &SequenceEdit::PlaceAsset {
             asset_id: asset_id.clone(),
             at_us: at,
@@ -451,13 +509,12 @@ pub fn place(
         .find(|(_, c)| c.asset == asset_id && !before.contains(&c.id))
         .map(|(_, c)| c.id.clone())
         .ok_or("The graphic was not placed")?;
-    next.sequence = placed;
-    Ok((next, clip_id))
+    Ok((placed, clip_id))
 }
 
-/// Writes `contents` to `relative` inside a graphic's folder, for agents without a shell.
-/// Only plain relative paths inside the folder; `graphic.json` goes through the variables.
-pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
+/// `relative` as a plain path inside a graphic's folder (not `graphic.json`, which goes through
+/// the variables).
+fn plain_path(relative: &str) -> Result<&Path, String> {
     let path = Path::new(relative);
     let plain = !relative.is_empty()
         && relative.len() <= 200
@@ -473,16 +530,76 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
     if relative.eq_ignore_ascii_case(SOURCE_FILE) {
         return Err("graphic.json is changed through the graphic's variables".into());
     }
+    Ok(path)
+}
+
+/// The text of `relative` inside a graphic's folder, for an agent changing part of it.
+pub fn read_file(dir: &Path, relative: &str) -> Result<String, String> {
+    let path = plain_path(relative)?;
+    no_links(dir, path)?;
+    std::fs::read_to_string(dir.join(path))
+        .map_err(|e| format!("Could not read {relative} in the graphic's folder: {e}"))
+}
+
+/// Writes `contents` to `relative` inside a graphic's folder, for agents without a shell.
+/// Only plain relative paths inside the folder; `graphic.json` goes through the variables.
+pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
+    let path = plain_path(relative)?;
     if contents.len() as u64 > MAX_SOURCE_BYTES {
         return Err("That file is too big for a graphic".into());
     }
     let target = dir.join(path);
+    // A link in the way (the folder, a subfolder or the file) could lead outside the folder.
+    no_links(dir, path)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
+    no_links(dir, path)?;
+    // A page written the HyperFrames way links GSAP from a CDN: it gets the local copy instead.
+    let localized = relative
+        .to_ascii_lowercase()
+        .ends_with(".html")
+        .then(|| std::str::from_utf8(contents).ok().and_then(gsap::localize))
+        .flatten();
+    let contents = localized.as_ref().map_or(contents, |html| html.as_bytes());
+    write_shared(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
     render::sources_changed();
     Ok(())
+}
+
+/// Refuses a symlink or junction at `dir` or at any part of `relative` that exists, like the
+/// project's own paths ([`crate::project::reader::safe_path`]).
+fn no_links(dir: &Path, relative: &Path) -> Result<(), String> {
+    let refused =
+        || "The graphic's folder has a link in that path; write somewhere else".to_string();
+    let mut path = dir.to_path_buf();
+    let parts = std::iter::once(None).chain(relative.components().map(Some));
+    for part in parts {
+        if let Some(part) = part {
+            path.push(part);
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() || is_reparse_point(&meta) => {
+                return Err(refused())
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// How a graphic comes on and goes off. The app decides it from where the graphic plays and
@@ -511,9 +628,21 @@ impl Entrance {
 /// may ease in and out over the full-screen camera. Without it a graphic fills the frame.
 pub const OVERLAY_ATTR: &str = "data-overlay";
 
+/// Where the root composition element's `data-composition-id` attribute is: the first one
+/// given a value, so a `[data-composition-id]` selector in a style (the look's) is passed by.
+pub fn root_at(html: &str) -> Option<usize> {
+    html.match_indices("data-composition-id")
+        .map(|(at, _)| at)
+        .find(|&at| {
+            html[at + "data-composition-id".len()..]
+                .trim_start()
+                .starts_with('=')
+        })
+}
+
 /// Whether the root composition element's opening tag has attribute `name`.
 pub fn root_has(html: &str, name: &str) -> bool {
-    let Some(at) = html.find("data-composition-id") else {
+    let Some(at) = root_at(html) else {
         return false;
     };
     let start = html[..at].rfind('<').unwrap_or(0);
@@ -586,7 +715,7 @@ pub fn size_composition(
     entrance: Entrance,
 ) -> String {
     let mut html = html.to_string();
-    if let Some(at) = html.find("data-composition-id") {
+    if let Some(at) = root_at(&html) {
         let start = html[..at].rfind('<').unwrap_or(0);
         let end = html[at..].find('>').map_or(html.len(), |e| at + e);
         let mut tag = html[start..end].to_string();
@@ -607,6 +736,53 @@ pub fn size_composition(
         html.replace_range(start..end, &tag);
     }
     html
+}
+
+/// `html` with attribute `name` set to `value` on the root composition element.
+pub fn with_root_attribute(html: &str, name: &str, value: &str) -> String {
+    let mut html = html.to_string();
+    if let Some(at) = root_at(&html) {
+        let start = html[..at].rfind('<').unwrap_or(0);
+        let end = html[at..].find('>').map_or(html.len(), |e| at + e);
+        let tag = set_attribute(&html[start..end], name, value);
+        html.replace_range(start..end, &tag);
+    }
+    html
+}
+
+/// A part of a short's split up to this wide (width over height) is laid out as a phone frame.
+pub const SPLIT_PORTRAIT_MAX: f64 = 1.5;
+
+/// `css` (a style sheet, or a page with its styles) for a `width` x `height` part of a short's
+/// split: a part of a portrait phone frame, so up to [`SPLIT_PORTRAIT_MAX`] wide its
+/// `(orientation: portrait)` rules apply and its landscape ones don't, as in the whole 9:16
+/// frame. The 16:9 layout would set it small, sized for a whole video frame. Wider parts keep
+/// their own orientation.
+pub fn as_split_part(css: &str, width: u32, height: u32) -> String {
+    if width as f64 / height.max(1) as f64 > SPLIT_PORTRAIT_MAX {
+        return css.to_string();
+    }
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(open) = rest.find('(') {
+        out.push_str(&rest[..open]);
+        let query = &rest[open..];
+        let close = query.find(')').map_or(query.len(), |c| c + 1);
+        let inside: String = query[1..close.saturating_sub(1).max(1)]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        // Always true, never true: both compose with `and` in a longer query.
+        match inside.as_str() {
+            "orientation:portrait" => out.push_str("(min-width: 0px)"),
+            "orientation:landscape" => out.push_str("(max-width: 0px)"),
+            _ => out.push_str(&query[..close]),
+        }
+        rest = &query[close..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `tag` (an element's opening tag without its `>`) with attribute `name` set to `value`.
@@ -682,6 +858,39 @@ pub fn placeholder_frame(width: u32, height: u32, label: &str) -> crate::media::
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_root_is_found_past_the_looks_selector() {
+        let html = "<style>[data-composition-id] { --look-radius: 1vmin; }</style>\n\
+                    <div id=\"root\" data-composition-id=\"graphic\" data-overlay>";
+        let marked = with_root_attribute(html, "data-mode", "over");
+        assert!(marked.contains("data-composition-id=\"graphic\" data-overlay data-mode=\"over\""));
+        assert!(
+            marked.starts_with("<style>[data-composition-id] {"),
+            "{marked}"
+        );
+        assert!(root_has(&marked, "data-overlay"));
+        assert!(root_has(
+            &with_root_attribute(&marked, "data-mode", "split"),
+            "data-mode"
+        ));
+    }
+
+    #[test]
+    fn a_split_part_of_a_short_takes_the_portrait_rules() {
+        let css = "a { width: calc(1vw * (2)); } @media (orientation: portrait) { b {} } \
+                   @media (Orientation:landscape) and (min-height: 10px) { c {} }";
+        let part = as_split_part(css, 1080, 864);
+        assert_eq!(
+            part,
+            "a { width: calc(1vw * (2)); } @media (min-width: 0px) { b {} } \
+             @media (max-width: 0px) and (min-height: 10px) { c {} }"
+        );
+        // A part wider than 3:2 keeps its own orientation.
+        assert_eq!(as_split_part(css, 1080, 384), css);
+        // No closing bracket: left as it is.
+        assert_eq!(as_split_part("x (orientation", 1080, 864), "x (orientation");
+    }
 
     #[test]
     fn declarations_are_read_from_the_html_attribute() {
@@ -878,6 +1087,38 @@ mod tests {
         for bad in ["../x.html", "/abs.html", "", "graphic.json", "a/../../b"] {
             assert!(write_file(dir.path(), bad, b"x").is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_write_never_follows_a_link_out_of_the_graphic() {
+        let dir = tempfile::tempdir().unwrap();
+        let graphic = dir.path().join("graphic");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&graphic).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("note.txt"), "keep").unwrap();
+        let link = graphic.join("assets");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output();
+            if !made.is_ok_and(|o| o.status.success()) {
+                return; // No junctions here (a restricted sandbox).
+            }
+        }
+        let refused = write_file(&graphic, "assets/note.txt", b"overwritten").unwrap_err();
+        assert!(refused.contains("link"), "{refused}");
+        assert_eq!(
+            std::fs::read_to_string(outside.join("note.txt")).unwrap(),
+            "keep"
+        );
+        // The graphic's folder itself being a link is refused too.
+        assert!(write_file(&link, "index.html", b"x").is_err());
     }
 
     #[test]

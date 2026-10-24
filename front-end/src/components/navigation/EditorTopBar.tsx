@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { Suspense, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   AlertCircle,
@@ -14,7 +14,6 @@ import {
   Loader2,
   Redo2,
   RotateCcw,
-  Scissors,
   Undo2,
   X,
 } from "lucide-react";
@@ -29,15 +28,18 @@ import {
   LAYOUT_PRESETS,
   WORKSPACES,
   applyPresetToWorkspace,
-  requestPanel,
+  isShortsWorkspace,
   resetWorkspaceLayout,
   type LayoutPreset,
 } from "../layout/dockLayout";
-import { AgentsDialog } from "../settings/AgentsDialog";
 import { useAgentStore } from "../../stores/agentStore";
-import { HotkeysDialog } from "../settings/HotkeysDialog";
-import { TemplatesMenu } from "./TemplatesMenu";
+import { PresetMenu } from "../presets/PresetMenu";
+import { HistoryPopover } from "./HistoryPopover";
 import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "../ui";
+
+// Loaded when first opened.
+const AgentsDialog = React.lazy(() => import("../settings/AgentsDialog").then((m) => ({ default: m.AgentsDialog })));
+const HotkeysDialog = React.lazy(() => import("../settings/HotkeysDialog").then((m) => ({ default: m.HotkeysDialog })));
 
 interface EditorTopBarProps {
   onOpenExport: () => void;
@@ -119,7 +121,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     { kind: "separator" },
     { kind: "heading", label: `Layout · ${WORKSPACES[workspace].label}` },
     // Shorts has one arrangement of its own: only Reset applies there.
-    ...(workspace === "shorts" ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
+    ...(isShortsWorkspace(workspace) ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
       (preset): MenuEntry => ({
         label: LAYOUT_PRESETS[preset].label,
         icon: LayoutGrid,
@@ -153,7 +155,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             </MenuButton>
           )}
         />
-        <TemplatesMenu onError={onError} />
+        <PresetMenu onError={onError} />
       </div>
 
       {project && (
@@ -165,16 +167,17 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
           <div className="flex items-center gap-0.5 shrink-0">
             <IconButton
               icon={Undo2}
-              label={`Undo${shortcut("undo") ? ` (${shortcut("undo")})` : ""}`}
+              label={`Undo${project.undoLabel ? ` ${project.undoLabel}` : ""}${shortcut("undo") ? ` (${shortcut("undo")})` : ""}`}
               disabled={!project.undoAvailable}
               onClick={() => run(undoProject)}
             />
             <IconButton
               icon={Redo2}
-              label={`Redo${shortcut("redo") ? ` (${shortcut("redo")})` : ""}`}
+              label={`Redo${project.redoLabel ? ` ${project.redoLabel}` : ""}${shortcut("redo") ? ` (${shortcut("redo")})` : ""}`}
               disabled={!project.redoAvailable}
               onClick={() => run(redoProject)}
             />
+            <HistoryPopover onError={onError} />
           </div>
         </>
       )}
@@ -190,7 +193,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
             items={[
               { value: "edit", label: "Edit", title: "Edit the video on the timeline" },
               { value: "cleanup", label: "Cleanup", title: "Clean up: jump cuts, mouth noises and the transcript beside the preview and the timeline" },
-              { value: "shorts", label: "Shorts", title: "Shorts: vertical clips from this video, each with its own timeline and look" },
+              { value: "shorts", label: "Shorts", title: "Shorts from a take: your camera and voice, with footage and graphics from this video under it" },
+              { value: "clips", label: "Clips", title: "Clips: the best moments cut out of this video, each with its own timeline and look" },
             ]}
           />
         )}
@@ -200,14 +204,6 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
       <div className="flex items-center gap-2 shrink-0">
         {project ? (
           <>
-            <Button
-              variant="secondary"
-              icon={Scissors}
-              onClick={() => requestPanel("jumpCuts")}
-              title="Find the silent pauses and cut them out (jump cuts), in Cleanup beside the preview and timeline"
-            >
-              <span className="hidden xl:inline">Jump Cuts</span>
-            </Button>
             <Button
               variant="primary"
               icon={exporting ? Loader2 : Download}
@@ -230,8 +226,10 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
           </>
         )}
       </div>
-      {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
-      {agentsOpen && <AgentsDialog onClose={() => setAgentsOpen(false)} />}
+      <Suspense fallback={null}>
+        {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
+        {agentsOpen && <AgentsDialog onClose={() => setAgentsOpen(false)} />}
+      </Suspense>
     </header>
   );
 };

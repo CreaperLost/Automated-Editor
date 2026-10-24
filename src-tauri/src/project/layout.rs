@@ -28,15 +28,31 @@ pub const BACKGROUND_PRESETS: [&str; 6] =
 pub struct EditLayout {
     pub aspect_ratio: String,
     pub padding_px: u32,
-    pub background_type: String,
-    pub color_start: String,
-    pub color_end: String,
-    pub corner_radius_px: u32,
-    pub shadow_blur_px: u32,
-    pub shadow_opacity: f32,
+    /// The project's own background image; shown instead of the style's background.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wallpaper_asset: Option<String>,
+    // How the frame is dressed: never stored, put on from the project's style as the document
+    // is drawn (`style::dress`). `wallpaper` when the project has a wallpaper.
+    #[serde(skip)]
+    pub background_type: String,
+    #[serde(skip)]
+    pub color_start: String,
+    #[serde(skip)]
+    pub color_end: String,
+    #[serde(skip)]
     pub background_preset: String,
+    #[serde(skip)]
+    pub corner_radius_px: u32,
+    #[serde(skip)]
+    pub shadow_blur_px: u32,
+    #[serde(skip)]
+    pub shadow_opacity: f32,
+    #[serde(skip)]
+    pub webcam_border_color: String,
+    #[serde(skip)]
+    pub webcam_border_width: u32,
+    #[serde(skip)]
+    pub webcam_shadow: bool,
     /// Percent of the source trimmed from each screen edge.
     pub screen_crop_left: f32,
     pub screen_crop_top: f32,
@@ -44,11 +60,7 @@ pub struct EditLayout {
     pub screen_crop_bottom: f32,
     /// Screen size as a percent of the padded content area.
     pub screen_scale_pct: f32,
-    /// The camera's border, around a bubble or a card.
-    pub webcam_border_color: String,
-    pub webcam_border_width: u32,
     pub webcam_mirror: bool,
-    pub webcam_shadow: bool,
     /// Line every camera clip up with the face in it (from its face track), wherever the
     /// camera shows; off keeps the centre crop.
     pub face_framing: bool,
@@ -75,9 +87,8 @@ pub struct EditLayout {
     pub window_crop_off: Vec<crate::window_crop::CropOffRange>,
 }
 
-/// A new project's look: the screen a little smaller with rounded corners on the Forest
-/// background, the bottom of the screen (the taskbar) cropped off, and the camera with a border
-/// and a shadow, lined up with the face.
+/// A new project's framing: the screen a little smaller, the bottom of the screen (the taskbar)
+/// cropped off, the camera lined up with the face. The dressing is the Light style's.
 impl Default for EditLayout {
     fn default() -> Self {
         Self {
@@ -155,15 +166,6 @@ impl EditLayout {
         if self.padding_px > MAX_PADDING_PX {
             return Err("Canvas padding is out of range".into());
         }
-        if self.corner_radius_px > MAX_CORNER_RADIUS_PX {
-            return Err("Corner radius is out of range".into());
-        }
-        if self.shadow_blur_px > MAX_SHADOW_BLUR_PX {
-            return Err("Shadow blur is out of range".into());
-        }
-        if !self.shadow_opacity.is_finite() || !(0.0..=1.0).contains(&self.shadow_opacity) {
-            return Err("Shadow opacity is out of range".into());
-        }
         let in_range =
             |value: f32, min: f32, max: f32| value.is_finite() && (min..=max).contains(&value);
         for (edge, value) in [
@@ -180,31 +182,9 @@ impl EditLayout {
             return Err("Screen scale is out of range".into());
         }
         crate::shorts::validate_framing(&self.camera_clips)?;
-        match self.background_type.as_str() {
-            "solid" | "gradient" => {}
-            "preset" => {
-                if !BACKGROUND_PRESETS.contains(&self.background_preset.as_str()) {
-                    return Err(format!(
-                        "Unknown background preset: {}",
-                        self.background_preset
-                    ));
-                }
-            }
-            "wallpaper" => {
-                let asset = self
-                    .wallpaper_asset
-                    .as_deref()
-                    .ok_or("Wallpaper background requires a project asset")?;
-                validate_wallpaper_relative(asset)?;
-            }
-            other => return Err(format!("Unknown background type: {other}")),
+        if let Some(asset) = self.wallpaper_asset.as_deref() {
+            validate_wallpaper_relative(asset)?;
         }
-        parse_hex_rgb(&self.color_start)?;
-        parse_hex_rgb(&self.color_end)?;
-        if self.webcam_border_width > MAX_BORDER_WIDTH {
-            return Err("Webcam border width is out of range".into());
-        }
-        parse_hex_rgb(&self.webcam_border_color)?;
         if !in_range(
             self.window_crop_padding_pct,
             0.0,
@@ -411,9 +391,12 @@ mod tests {
         layout = EditLayout::default();
         layout.padding_px = 81;
         assert!(layout.validate().unwrap_err().contains("padding"));
+        // How the frame is dressed is the style's, never stored with the layout.
+        let stored = serde_json::to_value(EditLayout::default()).unwrap();
+        assert!(stored.get("colorStart").is_none() && stored.get("backgroundType").is_none());
         layout = EditLayout::default();
-        layout.color_start = "blue".into();
-        assert!(layout.validate().unwrap_err().contains("Color"));
+        layout.wallpaper_asset = Some("../outside.png".into());
+        assert!(layout.validate().is_err());
     }
 
     #[test]
@@ -458,11 +441,6 @@ mod tests {
             },
         );
         assert!(layout.validate().unwrap_err().contains("framing"));
-        layout = EditLayout::default();
-        layout.background_type = "preset".into();
-        layout.validate().unwrap();
-        layout.background_preset = "plaid".into();
-        assert!(layout.validate().unwrap_err().contains("preset"));
     }
 
     #[test]

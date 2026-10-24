@@ -26,7 +26,21 @@ gaps and the roadmap.
 ## Features
 
 - **Multi-track timeline:** screen and webcam video, microphone and system audio waveforms,
-  and a smart zoom track. Edits are non-destructive and support undo and redo.
+  and a smart zoom track. Edits are non-destructive.
+- **History:** undo and redo survive closing the app (kept in the project's `history/`, up to
+  2 GB, no step limit). An agent's whole run undoes as one step from the Agent panel, and
+  **History** in the top bar saves named checkpoints (the edit, the graphics' files and the
+  caption marks) to go back to; one is saved before every agent run.
+- **Presets and styles:** a **Preset** is what the app and the agent do for a kind of video
+  (Tutorial, Shorts, Clips, or your own): cleanup levels, captions, zooms, layouts, export
+  settings, the agent's method and your rules (Preset menu in the top bar). A **Style** is how
+  it looks (Light, Dark, or your own): colours, title and body fonts (installed, or a
+  .ttf/.otf/.woff/.woff2 file), a logo, the graphics look, the caption look and the frame
+  (Inspector, Style page). A project stores only what it changed from its preset, shown as
+  "changed here" chips you can reset. Agents use `library` and `preset`.
+- **Captions:** in the style's font, one emphasis word per caption in its accent colour, shown
+  pop, karaoke or static; they give way to full-frame graphics. Off by default in the video,
+  on in shorts.
 - **Smart zoom from mouse telemetry:** reads `telemetry/events.jsonl` and
   `telemetry/geometry.jsonl` and suggests zooms and pans from clicks, dwell points and click
   clusters. Suggestions can be accepted, dismissed, edited or added by hand.
@@ -51,7 +65,9 @@ gaps and the roadmap.
   are cut with the gap unless **Keep tagged sounds** is on. Suggestions
   start unchecked: transcription can miss words and tutorial clicks can be intentional.
   Noises inside recognized words are kept. **Transcript** editing removes selected words,
-  fillers, and retakes. Each pass has its own settings and review and can run independently,
+  fillers, and retakes. The retake rules also catch a small word said twice ("we we", "it's a
+  it's a") and a word broken off ("j- just"); words doubled for weight ("very very", "pretty
+  pretty") stay. Each pass has its own settings and review and can run independently,
   in any order. All cuts share timeline mapping and undo; timeline or transcript changes
   invalidate stale suggestions, including analyses still running.
 - **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
@@ -101,20 +117,38 @@ gaps and the roadmap.
   minutes for long recordings; temporary copies are cached for seeks and repeated clips.
   Requires FFmpeg with `adeclick`, including on macOS. Strong settings can soften consonants;
   this is general click repair, not a classifier for every mouth noise.
-- **Export:** H.264 video with AAC stereo audio at 720p, 1080p or 4K.
-- **Shorts layouts:** in the Shorts Studio a short is split (camera above the screen) by
-  default, with its own sections on its own timeline, as above. Agents use the `short_create`
-  (a short from two word ids), `layouts` with `short` and `export` `short` actions, and a
-  `shorts` template where they pick the moments themselves.
+- **Loudness and cuts:** new projects normalize to YouTube's -14 LUFS. A leveller turns down
+  only the 100 ms stretches whose peaks would reach the limiter, so quiet recordings reach the
+  target (two real edits went from -18.4 and -19.4 LUFS to -14.3 and -14.7, peaks at -1 dBFS).
+  A cut between two clips with sound to spare crossfades over 16 ms at equal power instead of
+  dipping to silence; elsewhere it fades out and in.
+- **Export:** H.264 video with AAC stereo audio, **Medium / High / Ultra** (1080p60, 1080p60
+  at max quality, 4K60) or Advanced settings, with a streamed log. Also subtitles (SRT, VTT),
+  the transcript (text, Markdown) and the sound alone (WAV). Graphics render at the export's
+  frame rate (twice as sharp for 1440p and 4K) in the background as you edit, so an export of
+  unchanged graphics starts at once.
+- **Clips:** the Clips tab cuts stretches of the video into vertical shorts, split (camera
+  above the screen) by default, with their own sections on their own timeline, as above.
+  Agents use `short_create` (a clip from two word ids), `layouts` with `short`, `export`
+  `short` and the Clips preset, where they pick the moments themselves.
+- **Shorts from a take** (the Shorts tab, the Shorts preset for agents): a new camera take,
+  cleaned like any recording, with the long video's footage, outside clips and
+  graphics under it (the Shorts tab's "Take and what plays under it", or the agent's
+  `short_footage`). Each graphic shows one of three ways, chosen as it is added so it renders
+  once: **Full** (the whole frame), **Split** (your face above, the graphic below, footage or
+  not) or **Over face** (your face fills the frame and the graphic is drawn over it, the
+  templates as a panel at the bottom). Footage plays at its own **speed** (0.25x to 4x) to fit
+  its words; trim by choosing a shorter stretch, jump-cut with several pieces; where it ends,
+  the camera comes back. Its sound is only the video's background, never its microphone.
 - **Check before export:** the export dialog lists what a viewer would notice, read from the
   edit itself (nothing is decoded): missing files, black frames, no sound, blips left between
   two cuts, words cut partway (beyond what word-edge refinement trims), many cuts close
-  together, zooms that flash by or jump because a cut took their easing, captions over the
+  together, zooms that flash by, captions over the
   webcam bubble, chapters that were cut or that YouTube would drop (fewer than 3, or one under
   10 s), loudness not normalized to YouTube's -14 LUFS, and agent proposals still waiting.
   Each finding jumps to its moment; safe ones have a Fix (cut the blip, close the gap, delete
-  a zoom that flashes, move a zoom so its easing plays, move the captions clear, remove the
-  chapter, normalize), each its own undo step.
+  a zoom that flashes, move the captions clear, remove the chapter, normalize), each its own
+  undo step; **Remove all blips** cuts every blip in one.
   Agents run the same check with the `check` action.
 - **Storyboard:** one small picture of the whole edit, a tile per scene: a finished frame
   (layout, webcam, zoom and graphics as exported) over its time, what it shows, the zoom, a
@@ -125,8 +159,10 @@ gaps and the roadmap.
   (`short` for a short's 9:16 one), instead of grabbing many frames.
 - **Motion graphics:** the Media panel's Graphics page adds full-screen graphics from
   templates made for tutorials (section title, step card, keyboard shortcut, key point, recap
-  checklist, end card) at the playhead, on a Graphics track. A graphic plays over everything
-  (screen, camera, captions) with its card fading in and out, and cuts never go through one:
+  checklist, end card) at the playhead, on a Graphics track, in a clean light app style
+  (rounded cards, hairlines, soft shadows). A graphic plays over everything (screen, camera,
+  captions) and cuts in and out (it eases only as an overlay over the full-screen camera), and
+  cuts never go through one:
   silence, filler and other passes skip the time it covers, a cut wholly inside it is refused,
   and cuts before it move it along. Its text and colours are edited in the Inspector. Each
   graphic is a [HyperFrames](https://github.com/heygen-com/hyperframes) composition kept as
@@ -138,6 +174,12 @@ gaps and the roadmap.
   download on first use into the app's data folder; nothing on `PATH` is used or changed.
   Agents use the `graphics`, `graphic_add` (at a time or a transcript word), `graphic_set`,
   `graphic_write_file`, `graphic_render` and `graphics_install` actions.
+- **One look for every graphic:** the style's graphics look (App, Calm or Bold, and five
+  sliders: size, roundness, speed, energy, density) with its colours and fonts dresses every
+  graphic in the video; a preview draws a few of the video's own graphics with a change first.
+  Templates take every size, corner, gap and timing from the look's `--look-*` tokens;
+  `graphic_check` flags a graphic's own colours, fonts, radii and timings, and **Bring in
+  line** rewrites them to the look. Agents use `library` `kind: style`.
 
 ## Platform status
 

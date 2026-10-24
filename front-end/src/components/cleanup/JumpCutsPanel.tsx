@@ -9,6 +9,8 @@ import { seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import { OpenedProject } from "../../lib/types";
 import { SILENCE_PRESETS as PRESETS, GAP_PRESETS, JumpCutPreset as Preset, JumpCutSettings, gapSettings, presetOf } from "../../lib/jumpCutConfig";
 import { soundSources } from "../../lib/sequence";
+import { saveCleanupSoon, useCleanupFromProject } from "../../lib/cleanupSettings";
+import { PresetMarks } from "../presets/PresetMarks";
 import { Button, IconButton, Segmented, cn } from "../ui";
 
 /** Scans every sound the timeline plays as speech at once (the backend's `ALL_SPEECH`). */
@@ -60,6 +62,8 @@ export const JumpCutsPanel: React.FC = () => {
     activePass: s.activePass, review: s.reviews[s.activePass], silenceConfig: s.silenceConfig, gapConfig: s.gapConfig,
     configureSilence: s.configureSilence, configureGaps: s.configureGaps, chooseSources: s.chooseSources, setActivePass: s.setActivePass,
   })));
+  // The levels start from the project's (its preset's unless changed there).
+  useCleanupFromProject(openedProject);
   const transcriptAssisted = activePass === "nonSpeech";
   const config: JumpCutSettings = transcriptAssisted ? { ...silenceConfig, ...gapConfig } : silenceConfig;
   const presets = transcriptAssisted ? GAP_PRESETS : PRESETS;
@@ -87,6 +91,7 @@ export const JumpCutsPanel: React.FC = () => {
   const changeConfig = (settings: JumpCutSettings) => {
     if (transcriptAssisted) configureGaps(gapSettings(settings));
     else configureSilence(settings);
+    saveCleanupSoon();
   };
 
   const handleRunDetection = async (settings: JumpCutSettings = config) => {
@@ -248,6 +253,7 @@ export const JumpCutsPanel: React.FC = () => {
             <p className="text-meta text-studio-500">
               {preset === "custom" ? "Your own settings (see Advanced)" : presets[preset].hint}.
             </p>
+            <PresetMarks part="cleanup" />
           </div>
 
           {individualSounds.length > 1 && (

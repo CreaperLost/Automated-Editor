@@ -365,7 +365,7 @@ pub struct CloseMatch {
     pub why: String,
 }
 
-/// The variables every graphic shares for its brand kit, left out of comparisons.
+/// The variables every graphic shares for its style, left out of comparisons.
 const KIT_VARIABLES: [&str; 3] = ["background", "text", "accent"];
 
 fn words(label: &str) -> BTreeSet<String> {

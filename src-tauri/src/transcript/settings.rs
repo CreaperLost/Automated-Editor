@@ -1,7 +1,7 @@
 //! App-wide transcription settings. The ElevenLabs key never goes in a project or in the
 //! settings file: it lives in the OS credential store (Windows Credential Manager, macOS
 //! Keychain), or in an owner-only file on other platforms. `ELEVENLABS_API_KEY` overrides it.
-use super::{align, parakeet, Language, ProviderKind};
+use super::{parakeet, ProviderKind, SpokenLanguage};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,10 +11,12 @@ const SETTINGS_FILE: &str = "transcription.json";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TranscriptSettings {
+    /// Parakeet (on this computer, English only), or online: the Scribe route tried first,
+    /// the other one when it has no key or fails (no credits).
     pub provider: ProviderKind,
-    /// What is spoken: sent to the provider, and the filler, retake and alignment passes
-    /// follow it. Greek is transcribed online only.
-    pub language: Language,
+    /// What is spoken: `auto` lets the online transcriber detect it, and the transcript keeps
+    /// what it heard; the filler, retake and review passes follow the transcript's language.
+    pub language: SpokenLanguage,
     /// ElevenLabs model id; empty uses the default.
     pub scribe_model: String,
     /// Words to bias recognition towards, such as game or product names.
@@ -24,20 +26,17 @@ pub struct TranscriptSettings {
     pub parakeet_model: parakeet::ParakeetModel,
     /// Folder holding the Parakeet ONNX files; empty uses the app data folder.
     pub parakeet_model_dir: String,
-    /// Align word times to the audio after transcribing, when the model is downloaded.
-    pub align_words: bool,
 }
 
 impl Default for TranscriptSettings {
     fn default() -> Self {
         Self {
-            provider: ProviderKind::Parakeet,
-            language: Language::English,
+            provider: ProviderKind::ElevenLabs,
+            language: SpokenLanguage::Auto,
             scribe_model: String::new(),
             keyterms: Vec::new(),
             parakeet_model: parakeet::ParakeetModel::Unified,
             parakeet_model_dir: String::new(),
-            align_words: false,
         }
     }
 }
@@ -45,10 +44,17 @@ impl Default for TranscriptSettings {
 impl TranscriptSettings {
     pub fn validate(&self) -> Result<(), String> {
         if self.provider == ProviderKind::Parakeet && !self.language.runs_locally() {
-            return Err(format!(
-                "{} is transcribed online: choose ElevenLabs Scribe or Scribe via OpenRouter",
-                self.language.label()
-            ));
+            return Err(match self.language {
+                SpokenLanguage::Auto => {
+                    "Parakeet transcribes English only: set the language to English, or \
+                     transcribe online to detect it"
+                        .to_string()
+                }
+                language => format!(
+                    "{} is transcribed online: Parakeet transcribes English only",
+                    language.label()
+                ),
+            });
         }
         if self.scribe_model.len() > 64 {
             return Err("Model id is too long".into());
@@ -87,12 +93,6 @@ pub struct TranscriptSettingsView {
     pub parakeet_model_bytes: u64,
     /// Both Parakeet models, so the choice shows what each needs before it is saved.
     pub parakeet_models: Vec<ParakeetModelStatus>,
-    /// Word alignment runs in this build (it shares Parakeet's ONNX Runtime).
-    pub aligner_available: bool,
-    pub aligner_model_present: bool,
-    pub aligner_model_dir: String,
-    /// Download size of the alignment model, in bytes.
-    pub aligner_model_bytes: u64,
     /// This build runs ONNX Runtime on CUDA, so the NVIDIA GPU pack is of use.
     pub gpu_pack_wanted: bool,
     /// An NVIDIA driver is installed.
@@ -167,10 +167,6 @@ pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
         })
         .collect(),
         parakeet_model_dir: model_dir.to_string_lossy().into_owned(),
-        aligner_available: align::compiled_in(),
-        aligner_model_present: align::model_present(&align::default_model_dir()),
-        aligner_model_dir: align::default_model_dir().to_string_lossy().into_owned(),
-        aligner_model_bytes: align::MODEL_BYTES,
         gpu_pack_wanted: crate::cuda::wanted(),
         nvidia_driver: crate::cuda::nvidia_driver(),
         gpu_pack_present: crate::cuda::present(&crate::cuda::default_dir()),
@@ -219,12 +215,24 @@ mod tests {
 
     #[test]
     fn invalid_settings_are_rejected() {
-        let mut s = TranscriptSettings::default();
-        s.language = Language::Greek;
+        // Parakeet hears English only: not Greek, and it can't detect a language either.
+        let mut s = TranscriptSettings {
+            provider: ProviderKind::Parakeet,
+            language: SpokenLanguage::Greek,
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
+        s.language = SpokenLanguage::Auto;
+        assert!(s.validate().is_err());
+        s.language = SpokenLanguage::English;
+        assert!(s.validate().is_ok());
         s.provider = ProviderKind::OpenRouter;
+        s.language = SpokenLanguage::Greek;
         assert!(s.validate().is_ok());
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"language\":\"el\""));
+        // Online and detected by default.
+        let json = serde_json::to_string(&TranscriptSettings::default()).unwrap();
+        assert!(json.contains("\"language\":\"auto\""), "{json}");
     }
 }

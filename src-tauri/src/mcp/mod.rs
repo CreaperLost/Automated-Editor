@@ -13,6 +13,8 @@ pub mod clients;
 pub(crate) mod frames;
 pub mod ipc;
 mod layouts;
+mod library;
+mod presets;
 mod propose;
 pub mod skill;
 pub mod storyboard;
@@ -48,6 +50,9 @@ pub trait Host: Send + Sync + 'static {
     fn project_changed(&self) {}
     /// The agent proposed, withdrew or undid something: the Agent panel reloads.
     fn proposals_changed(&self) {}
+    /// The agent started an export (of a short when `short`): the editor shows its progress as
+    /// if started there.
+    fn export_started(&self, _status: &crate::export::ExportStatus, _short: bool) {}
     /// Accept proposals as they arrive.
     fn autopilot(&self) -> bool {
         false
@@ -60,7 +65,7 @@ pub trait Host: Send + Sync + 'static {
     fn local_review_ready(&self) -> bool {
         crate::ai::local::ready()
     }
-    /// The app's settings folder; the user's answers to templates are kept in it.
+    /// The app's settings folder.
     fn config_dir(&self) -> std::path::PathBuf {
         crate::transcript::settings::config_dir()
     }
@@ -125,16 +130,57 @@ pub struct McpStatus {
 }
 
 /// A call an agent is waiting on, for the Agent panel.
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Working {
-    #[serde(skip)]
-    id: u64,
+    /// What [`stop_call`] takes.
+    pub id: u64,
     pub client: Option<String>,
     pub tool: String,
     /// 0 to 1, once the call has said.
     pub fraction: Option<f64>,
     pub message: Option<String>,
+    /// Asked to stop, and not finished yet.
+    pub stopping: bool,
+    #[serde(skip)]
+    stop: Arc<tools::Stop>,
+}
+
+impl PartialEq for Working {
+    fn eq(&self, other: &Self) -> bool {
+        (
+            self.id,
+            &self.client,
+            &self.tool,
+            self.fraction,
+            &self.message,
+            self.stopping,
+        ) == (
+            other.id,
+            &other.client,
+            &other.tool,
+            other.fraction,
+            &other.message,
+            other.stopping,
+        )
+    }
+}
+
+/// Stops the running call `id` (the user's Stop in the Agent panel). The call answers its agent
+/// that it was stopped at its next step; calls that don't run long simply finish.
+pub fn stop_call(dir: &Path, host: &dyn Host, id: u64) -> McpStatus {
+    let stop = {
+        let mut server = SERVER.lock();
+        server.working.iter_mut().find(|w| w.id == id).map(|w| {
+            w.stopping = true;
+            w.stop.clone()
+        })
+    };
+    if let Some(stop) = stop {
+        stop.stop(host.transcripts());
+        host.activity_changed();
+    }
+    status(dir)
 }
 
 struct Running {
@@ -344,29 +390,14 @@ async fn session(stream: impl ipc::Stream, host: Arc<dyn Host>, stop: Cancellati
     SERVER.lock().connected.retain(|(c, _)| *c != id);
 }
 
-const INSTRUCTIONS: &str = "AeroEdits is a video editor for screen-recorded tutorials. \
-You work on the project the user has open. When the user asks for an edit of a video (a \
-tutorial, a recording, a cleanup), call `template` first and follow the template it gives: \
-the steps, the questions to ask the user, how to report, and the export steps; never export \
-before the user says go. Run the cleanup one pass at a time: a dry run (`apply: false`), the \
-user's OK with its numbers, then the pass, unless the user said to do it automatically. \
-Chapters are the last edit, right before export. The routine work is the app's own actions, which run its built-in \
-passes and cost you almost nothing: status, scan, transcribe, mouth_noises, silence, fillers, \
-layouts, zooms, settings, chapters, shorts, export; each applies as one undo step and \
-answers in a line or two to pass on to the user. Times are microseconds on the edited \
-timeline (after every cut). Read transcripts (transcript_get) and frames (frame_render) only \
-for judgment calls, a thorough review the user chose, or when a step fails; then propose_cuts \
-and propose_edit store a batch with \
-your reason for the user to accept in the Agent panel. status and project_info give the open \
-project's `project` id: pass it on every call that changes something (propose_cuts, \
-propose_edit and undo_batch need it), and if a call says the project changed, read again \
-before going on. Prefer cuts by word id, which stay \
-valid while the user edits; check proposals_list for what they decided. Graphics (graphics, \
-graphic_add) play full screen over everything and cuts never go through them: add them after \
-the cuts, from the user's library first (each item says when to use it) or the templates, \
-before chapters; brand_kits are the user's colours and font. When the user likes a graphic you \
-wrote, offer to keep it: graphic_templatize, rewrite, graphic_check until it passes, then \
-library_save with their yes.";
+/// Kept short: some clients repeat it in front of every tool they look up. The rules come
+/// once, from `preset`.
+const INSTRUCTIONS: &str = "AeroEdits edits screen-recorded tutorials, on the project the user \
+has open. For an edit of a video, call `preset` first and follow it: it has the rules, the \
+steps, what to ask and the export steps; never export before the user says go. The app's \
+actions (scan, transcribe, silence, fillers, zooms, chapters, export, ...) do the work, each as \
+one undo step answering in a line or two. Times are microseconds on the edited timeline. Pass \
+the `project` id from `status` on every call that changes something.";
 
 #[derive(Clone)]
 struct Handler {
@@ -409,13 +440,9 @@ impl rmcp::ServerHandler for Handler {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::GetPromptResponse, rmcp::ErrorData> {
         self.note_client(&context);
-        skill::prompt_get(
-            &self.host.config_dir(),
-            &request.name,
-            request.arguments.as_ref(),
-        )
-        .map(Into::into)
-        .map_err(|error| rmcp::ErrorData::invalid_params(error, None))
+        skill::prompt_get(&request.name, request.arguments.as_ref())
+            .map(Into::into)
+            .map_err(|error| rmcp::ErrorData::invalid_params(error, None))
     }
 
     async fn call_tool(
@@ -438,6 +465,7 @@ impl rmcp::ServerHandler for Handler {
         let host = self.host.clone();
         let started = std::time::Instant::now();
         let agent = client.clone().unwrap_or_else(|| "agent".into());
+        let stop = Arc::new(tools::Stop::default());
         let call = {
             let mut server = SERVER.lock();
             server.next_call += 1;
@@ -448,10 +476,20 @@ impl rmcp::ServerHandler for Handler {
                 tool: tool.name.to_string(),
                 fraction: None,
                 message: None,
+                stopping: false,
+                stop: stop.clone(),
             });
             id
         };
         self.host.activity_changed();
+        // The client cancelled the call, or hung up: stop it.
+        let cancelled = {
+            let (ct, stop, host) = (context.ct.clone(), stop.clone(), self.host.clone());
+            tokio::spawn(async move {
+                ct.cancelled().await;
+                stop.stop(host.transcripts());
+            })
+        };
         // Progress goes to the agent in order, through one task, when it asked for it.
         let (progress_tx, mut progress_rx) =
             tokio::sync::mpsc::unbounded_channel::<(f64, String)>();
@@ -479,7 +517,8 @@ impl rmcp::ServerHandler for Handler {
                 let _ = progress_tx.send((fraction, message.to_string()));
             };
             let mut ctx = tools::Ctx::new(host.as_ref(), agent, host.autopilot())
-                .with_progress(Box::new(report));
+                .with_progress(Box::new(report))
+                .with_stop(stop);
             let out = tools::call(tool, &mut ctx, args);
             if ctx.project_was_changed() {
                 host.project_changed();
@@ -491,6 +530,8 @@ impl rmcp::ServerHandler for Handler {
         })
         .await
         .unwrap_or_else(|e| Err(format!("The tool stopped: {e}")));
+        // rmcp cancels the call's token once it answers, too.
+        cancelled.abort();
         let _ = forward.await;
         SERVER.lock().working.retain(|w| w.id != call);
         self.host.activity_changed();
@@ -560,24 +601,84 @@ pub(crate) fn server_info() -> rmcp::model::ServerConfig {
     .with_instructions(INSTRUCTIONS)
 }
 
-/// Every tool as `tools/list` lists it.
+/// Every tool as `tools/list` lists it: all but those behind `more`.
 pub(crate) fn tool_list() -> Vec<rmcp::model::Tool> {
-    tools::all().iter().map(tool_entry).collect()
+    tools::all()
+        .iter()
+        .filter(|tool| !tools::MORE.contains(&tool.name))
+        .map(tool_entry)
+        .collect()
 }
 
-fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
+pub(crate) fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
     let mut schema = match (tool.schema)() {
         serde_json::Value::Object(map) => map,
         _ => Default::default(),
     };
+    lean(&mut schema);
     if tools::takes_project(tool) {
         bind_to_project(&mut schema, tools::NEEDS_PROJECT.contains(&tool.name));
     }
-    let annotations = rmcp::model::ToolAnnotations::new()
+    let mut annotations = rmcp::model::ToolAnnotations::new()
         .read_only(tool.read_only)
         .destructive(tools::destructive(tool.name));
+    // Only the tools that go online say so: `false` on every other one would cost the tool
+    // list over a thousand characters on every connection.
+    if tools::online(tool.name) {
+        annotations = annotations.open_world(true);
+    }
     rmcp::model::Tool::new(tool.name, tool.description, Arc::new(schema))
         .with_annotations(annotations)
+}
+
+/// What agents are sent of a tool's schema, without what changes nothing about a call: the
+/// `$schema` and `title` labels, `format` hints, `default: null`; and "a string or null" said
+/// the short way (`type: ["string", "null"]`, the same thing). Agents read every tool's schema
+/// on each connection, so this is paid again and again. The `aeroedits do --help` text keeps
+/// the full schema.
+fn lean(schema: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+    schema.remove("$schema");
+    schema.remove("title");
+    schema.remove("format");
+    if schema.get("default") == Some(&Value::Null) {
+        schema.remove("default");
+    }
+    for (key, value) in schema.iter_mut() {
+        match (key.as_str(), value) {
+            // Maps of names to schemas: the names stay, each schema is made lean.
+            ("properties" | "$defs" | "definitions", Value::Object(named)) => {
+                for value in named.values_mut() {
+                    if let Value::Object(inner) = value {
+                        lean(inner);
+                    }
+                }
+            }
+            ("items" | "additionalProperties" | "not", Value::Object(inner)) => lean(inner),
+            ("anyOf" | "oneOf" | "allOf" | "prefixItems", Value::Array(list)) => {
+                for value in list {
+                    if let Value::Object(inner) = value {
+                        lean(inner);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Then: anyOf [{type: X}, {type: null}] → type [X, null].
+    if let Some(Value::Array(options)) = schema.get("anyOf") {
+        let null = serde_json::json!({ "type": "null" });
+        if options.len() == 2 && options.contains(&null) {
+            let other = options.iter().find(|o| **o != null).cloned();
+            if let Some(Value::Object(other)) = other {
+                if let (1, Some(Value::String(kind))) = (other.len(), other.get("type")) {
+                    let kind = kind.clone();
+                    schema.remove("anyOf");
+                    schema.insert("type".into(), serde_json::json!([kind, "null"]));
+                }
+            }
+        }
+    }
 }
 
 /// Adds the `project` argument [`tools::call`] takes out before a tool sees its arguments.
@@ -592,9 +693,7 @@ fn bind_to_project(schema: &mut serde_json::Map<String, serde_json::Value>, requ
             "project".into(),
             json!({
                 "type": "string",
-                "description": "The `project` id from project_info or status. The call is \
-                    refused if another project is open now, so a project switch can't redirect \
-                    it.",
+                "description": "The open project's id, from status.",
             }),
         );
     }
@@ -716,7 +815,6 @@ mod tests {
             ai_suggestions: Vec::new(),
             ai_model: None,
             caption_marks: Default::default(),
-            alignment: None,
         };
         crate::transcript::store::save_transcript(&folder, &transcript).unwrap();
         host
@@ -1090,7 +1188,7 @@ mod tests {
             .revision;
         let (code, out, err) = ask(&["silence", "--preset", "tight"]);
         assert_eq!(code, 0, "{out}{err}");
-        assert!(out.starts_with("Found 3 pauses"), "{out}");
+        assert!(out.starts_with("Found 4 pauses"), "{out}");
         assert!(
             err.contains("Finding silence in"),
             "progress goes to stderr: {err}"
@@ -1163,6 +1261,13 @@ mod tests {
             "params": {"name": "transcript_get", "arguments": {}}})
         };
 
+        // A client that asks the newer discovery first is told it is unknown, so it does the
+        // handshake (with its name) instead.
+        let discover = ask(
+            json!({"jsonrpc": "2.0", "id": "d-1", "method": "server/discover",
+            "params": {"_meta": {"io.modelcontextprotocol/clientInfo": {"name": "claude-ai"}}}}),
+        );
+        assert_eq!(discover["error"]["code"], -32601, "{discover}");
         // The app is closed: the handshake and the tools still come, from the bridge.
         let hello = ask(
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -1171,10 +1276,10 @@ mod tests {
         );
         assert_eq!(hello["result"]["serverInfo"]["name"], "aeroedits");
         assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
-        assert!(hello["result"]["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("one pass at a time"));
+        // Short, since some clients repeat it before every tool; the rules come from `preset`.
+        let instructions = hello["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("never export before the user says go"));
+        assert!(instructions.len() < 700, "{}", instructions.len());
         let tools = ask(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
         let names: Vec<&str> = tools["result"]["tools"]
             .as_array()
@@ -1189,7 +1294,7 @@ mod tests {
         // There is no one-call cleanup: agents run and report one pass at a time.
         assert!(!names.contains(&"cleanup"), "{names:?}");
         assert!(
-            names.contains(&"template") && names.contains(&"scan"),
+            names.contains(&"preset") && names.contains(&"scan"),
             "{names:?}"
         );
         assert!(
@@ -1199,11 +1304,11 @@ mod tests {
         assert!(hello["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("call `template` first"));
+            .contains("call `preset` first"));
         // Templates need no app either.
         let prompts = ask(json!({"jsonrpc": "2.0", "id": 20, "method": "prompts/list"}));
         assert_eq!(
-            prompts["result"]["prompts"][0]["title"], "Tutorial edit",
+            prompts["result"]["prompts"][0]["title"], "Tutorial",
             "{prompts}"
         );
         let prompt = ask(
@@ -1217,7 +1322,7 @@ mod tests {
             message.starts_with(r"Edit the recording C:\Rec\Lesson.aero in AeroEdits"),
             "{prompt}"
         );
-        assert!(message.contains("# Template: tutorial"), "{prompt}");
+        assert!(message.contains("# Preset: Tutorial"), "{prompt}");
         let missing = ask(
             json!({"jsonrpc": "2.0", "id": 22, "method": "prompts/get", "params": {"name": "vlog"}}),
         );
@@ -1248,5 +1353,102 @@ mod tests {
         let back = ask(call(6));
         assert!(text(&back).contains("Hello there."), "{back}");
         running.stop.cancel();
+    }
+
+    #[test]
+    fn lean_schemas_keep_what_a_call_can_be() {
+        let mut schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Args",
+            "type": "object",
+            "properties": {
+                // Parameters named like schema words stay.
+                "title": { "type": "string", "description": "kept" },
+                "format": { "anyOf": [{ "type": "integer", "format": "uint64" }, { "type": "null" }],
+                            "default": null, "minimum": 0 },
+                "kind": { "anyOf": [{ "$ref": "#/$defs/Kind" }, { "type": "null" }], "default": null },
+            },
+            "required": ["title"],
+            "$defs": { "Kind": { "title": "Kind", "enum": ["a", "b"], "default": "a" } },
+        });
+        let Value::Object(ref mut map) = schema else {
+            unreachable!()
+        };
+        lean(map);
+        assert_eq!(
+            schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "kept" },
+                    "format": { "type": ["integer", "null"], "minimum": 0 },
+                    "kind": { "anyOf": [{ "$ref": "#/$defs/Kind" }, { "type": "null" }] },
+                },
+                "required": ["title"],
+                "$defs": { "Kind": { "enum": ["a", "b"], "default": "a" } },
+            })
+        );
+        let mut simple =
+            json!({ "anyOf": [{ "type": "string" }, { "type": "null" }], "default": null });
+        let Value::Object(ref mut map) = simple else {
+            unreachable!()
+        };
+        lean(map);
+        assert_eq!(simple, json!({ "type": ["string", "null"] }));
+    }
+
+    #[test]
+    fn rarely_needed_tools_are_reached_through_more() {
+        let listed: Vec<String> = tool_list().iter().map(|t| t.name.to_string()).collect();
+        let more = tools::find("more").unwrap();
+        for name in tools::MORE {
+            assert!(tools::find(name).is_some(), "{name} is a tool");
+            assert!(!listed.contains(&name.to_string()), "{name} is listed");
+            assert!(
+                more.description.contains(name),
+                "`more` doesn't name {name}"
+            );
+        }
+        assert!(listed.contains(&"more".to_string()));
+        let host = tests_support::BareHost::default();
+        let mut ctx = tools::Ctx::new(&host, "agent", false);
+        let mut run = |args: serde_json::Value| {
+            tools::call(more, &mut ctx, args).map(|out| match &out[0] {
+                tools::Output::Text(text) => text.clone(),
+                tools::Output::Png(_) => String::new(),
+            })
+        };
+        // Without `args`: what the tool does and takes.
+        let help = run(serde_json::json!({ "tool": "speed" })).unwrap();
+        assert!(help.starts_with("speed: "), "{help}");
+        // With them: it runs as if called directly (here: no project open).
+        let ran = run(serde_json::json!({ "tool": "redo", "args": {} })).unwrap_err();
+        assert_eq!(ran, tools::NO_PROJECT_MESSAGE, "{ran}");
+        // Only the tools behind it.
+        assert!(run(serde_json::json!({ "tool": "status", "args": {} }))
+            .unwrap_err()
+            .contains("they are: layouts"));
+    }
+
+    #[test]
+    fn the_tool_list_stays_small() {
+        // Agents read it on every connection: 84,414 characters before 23 Oct 2026, 72,722
+        // after, 53,828 with the rarely needed tools behind `more`. 24 Oct: about 60,100 with
+        // `frame_render`'s sheets (COST-4: one call instead of a PNG per frame) and the online
+        // tools' `openWorldHint`, so the budget moved from 60,000 to 61,000. COST-2 (24 Oct):
+        // the layouts and the shorts' tools behind `more` too, 41,240. Measured in Claude
+        // Code, the whole list was 23,868 tokens; with its ToolSearch only the names are sent.
+        let list = tool_list();
+        if std::env::var("TOOL_SIZES").is_ok() {
+            for tool in &list {
+                eprintln!(
+                    "TOOL {} {}",
+                    tool.name,
+                    serde_json::to_string(tool).unwrap().len()
+                );
+            }
+        }
+        let size = serde_json::to_string(&list).unwrap().len();
+        assert!(size < 42_000, "the tool list grew to {size} characters");
     }
 }

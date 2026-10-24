@@ -115,6 +115,21 @@ pub fn proposal_undo_impl(
     })
 }
 
+/// Takes back everything the newest agent run did, as one step.
+pub fn proposal_undo_run_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+) -> Result<ProposalOutcome, String> {
+    let (project, proposals) = with_proposals(state, Some(&project_handle), |reader, p| {
+        proposals::undo_run(reader, p, expected_revision, None).map(|(project, _)| project)
+    })?;
+    Ok(ProposalOutcome {
+        project: Some(project),
+        proposals,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

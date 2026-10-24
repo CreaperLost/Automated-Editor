@@ -183,8 +183,9 @@ pub fn arguments(
 ) -> Result<Value, String> {
     let properties = schema.get("properties").cloned().unwrap_or_default();
     let mut out = Map::new();
-    // Plain words fill the required properties in order: `aeroedits do settings captions`; or
-    // the only property of a tool that requires none: `aeroedits do template tutorial`.
+    // Plain words fill the required properties in order: `aeroedits do settings captions`; or,
+    // for a tool that requires none, its only property or its `name`: `aeroedits do preset
+    // tutorial`.
     let mut required: Vec<&str> = schema
         .get("required")
         .and_then(Value::as_array)
@@ -194,6 +195,8 @@ pub fn arguments(
         if let Some(Value::Object(map)) = schema.get("properties") {
             if map.len() == 1 {
                 required.extend(map.keys().map(String::as_str));
+            } else if map.contains_key("name") {
+                required.push("name");
             }
         }
     }
@@ -621,9 +624,9 @@ mod tests {
         .unwrap();
         assert_eq!(args, json!({"area": "captions", "set": {"enabled": true}}));
 
-        // A tool with one optional option takes it as a plain word: `do template tutorial`.
+        // A tool with one optional option takes it as a plain word: `do preset tutorial`.
         let template =
-            serde_json::to_value(schemars::schema_for!(super::super::skill::TemplateArgs)).unwrap();
+            serde_json::to_value(schemars::schema_for!(super::super::skill::PresetArgs)).unwrap();
         assert_eq!(
             arguments(&template, &strings(&["tutorial"]), &[]).unwrap(),
             json!({"name": "tutorial"})

@@ -1,7 +1,7 @@
 //! Graphics: the renderer's install, the templates, and making and changing graphics in the
 //! open project.
 use super::{require_handle, AppState};
-use crate::graphics::{self, brands, gate, library, render, runtime, templates};
+use crate::graphics::{self, gate, library, render, runtime, templates};
 use crate::project::OpenedProject;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -52,6 +52,106 @@ pub struct GraphicCreated {
     pub clip_id: String,
 }
 
+/// One graphic for the video's timeline: where it comes from, where and how long it plays.
+pub struct VideoGraphic {
+    pub from: ShortGraphicFrom,
+    pub at_us: u64,
+    /// Default: the template's or library item's own.
+    pub length_us: Option<u64>,
+    pub name: Option<String>,
+    pub variables: Map<String, Value>,
+}
+
+/// A graphic `project_graphics_add_impl` placed.
+pub struct VideoGraphicPlaced {
+    pub asset_id: String,
+    pub clip_id: String,
+    pub name: String,
+    pub length_us: u64,
+    /// Where it came from, for the agent ("template key-point", "library hub").
+    pub said: String,
+}
+
+/// Makes `graphics` (templates or library copies) and places each on the video's timeline,
+/// all as one undo step; on an error nothing is placed and the folders made go again.
+pub fn project_graphics_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    graphics: Vec<VideoGraphic>,
+) -> Result<(OpenedProject, Vec<VideoGraphicPlaced>), String> {
+    if graphics.is_empty() {
+        return Err("Name a graphic to add".into());
+    }
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let root = reader.root().to_path_buf();
+    let mut folders = Vec::new();
+    let made = (|| {
+        let mut next = reader.document().clone();
+        let mut placed = Vec::new();
+        for (n, graphic) in graphics.iter().enumerate() {
+            let at = |error: String| {
+                if graphics.len() > 1 {
+                    format!("Graphic {}: {error}", n + 1)
+                } else {
+                    error
+                }
+            };
+            if matches!(graphic.from, ShortGraphicFrom::Video { .. }) {
+                return Err(at(
+                    "`graphic` copies one of the video's graphics into a take short \
+                     (`short_footage`)"
+                        .into(),
+                ));
+            }
+            let (asset, length, said) = crate::under_take::make_graphic(
+                &root,
+                &root,
+                &next,
+                &graphic.from,
+                graphic.length_us,
+                &graphic.name,
+                &graphic.variables,
+            )
+            .map_err(at)?;
+            folders.push(graphics::folder(&root, &asset.id));
+            let (document, clip_id) =
+                graphics::place(&next, asset.clone(), graphic.at_us, length).map_err(at)?;
+            next = document;
+            let length_us = next
+                .sequence
+                .clip(&clip_id)
+                .map_or(length, |(_, c)| c.duration_us);
+            placed.push(VideoGraphicPlaced {
+                asset_id: asset.id,
+                clip_id,
+                name: asset.name,
+                length_us,
+                said,
+            });
+        }
+        let project = reader.commit_document(expected_revision, next)?;
+        Ok::<_, String>((project, placed))
+    })();
+    let (project, placed) = match made {
+        Ok(done) => done,
+        Err(error) => {
+            for dir in &folders {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok((project, placed))
+}
+
 /// Makes a graphic from `template` and places it at `at_us`, one undo step. `length_us`
 /// defaults to the template's.
 #[allow(clippy::too_many_arguments)]
@@ -97,6 +197,55 @@ pub fn project_graphic_from_library_impl(
         at_us,
         length_us.unwrap_or(item.item.length_us),
     )
+}
+
+pub use crate::under_take::GraphicFrom as ShortGraphicFrom;
+
+/// Makes a graphic and places it on take short `short_id`'s own timeline at `at_us` (on the
+/// short), one undo step. A graphic of the video is copied, so changing it in the short leaves
+/// the video's alone; it renders at the short's 9:16 like any graphic there.
+#[allow(clippy::too_many_arguments)]
+pub fn project_short_graphic_add_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    from: ShortGraphicFrom,
+    at_us: u64,
+    length_us: Option<u64>,
+    mode: Option<crate::shorts::GraphicSlot>,
+) -> Result<GraphicCreated, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let root = reader.root().to_path_buf();
+    let item = crate::under_take::Under::Graphic {
+        from,
+        at_us,
+        length_us,
+        name: None,
+        variables: Map::new(),
+        mode,
+    };
+    let done = crate::under_take::put(&root, &root, reader.document(), &short_id, &[item])?;
+    let project = match reader.commit_document(expected_revision, done.document.clone()) {
+        Ok(project) => project,
+        Err(error) => {
+            done.discard();
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    let (asset_id, clip_id) = done.graphics[0].clone();
+    Ok(GraphicCreated {
+        project,
+        asset_id,
+        clip_id,
+    })
 }
 
 /// Makes a graphic in the project's folder with `make` and places it, one undo step; the
@@ -212,7 +361,7 @@ pub fn project_frame_thumbnail_impl(
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
     }
-    let (frame, _) = crate::mcp::frames::render(state, at_us, width.clamp(120, 640))?;
+    let (frame, _) = crate::mcp::frames::render(state, None, at_us, width.clamp(120, 640))?;
     use base64::Engine;
     Ok(format!(
         "data:image/png;base64,{}",
@@ -228,8 +377,8 @@ pub struct GraphicUpdated {
     pub project: Option<OpenedProject>,
 }
 
-/// Changes a graphic's variables and brand kit (its source: no undo step; it renders again)
-/// and, with `name`, its name (an edit). `brand` is `default` (the project's), `none` or a kit.
+/// Changes a graphic's variables and style (its source: no undo step; it renders again) and,
+/// with `name`, its name (an edit). `style` is `project` (the project's) or a style's name.
 #[allow(clippy::too_many_arguments)]
 pub fn project_graphic_set_impl(
     state: &AppState,
@@ -238,7 +387,7 @@ pub fn project_graphic_set_impl(
     asset_id: String,
     variables: Map<String, Value>,
     name: Option<String>,
-    brand: Option<String>,
+    style: Option<String>,
 ) -> Result<GraphicUpdated, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
@@ -251,12 +400,12 @@ pub fn project_graphic_set_impl(
         let declared = graphics::declarations(&dir)?;
         source.variables = graphics::merge_variables(&declared, &source.variables, &variables)?;
     }
-    let brand = brand
-        .map(|b| graphics::brand_choice(&brands::dir(), &b))
+    let style = style
+        .map(|s| graphics::style_choice(&s))
         .transpose()?
-        .filter(|b| *b != source.brand);
-    if let Some(brand) = &brand {
-        source.brand = brand.clone();
+        .filter(|s| *s != source.style);
+    if let Some(style) = &style {
+        source.style = style.clone();
     }
     let name = name
         .map(|n| n.trim().chars().take(80).collect::<String>())
@@ -270,7 +419,7 @@ pub fn project_graphic_set_impl(
         project = Some(reader.commit_document(expected_revision, next)?);
         source.name = name.clone();
     }
-    if !variables.is_empty() || name.is_some() || brand.is_some() {
+    if !variables.is_empty() || name.is_some() || style.is_some() {
         graphics::write_source(&dir, &source)?;
     }
     if project.is_some() {
@@ -286,86 +435,187 @@ pub fn project_graphic_set_impl(
     })
 }
 
+/// Sets look tokens of a graphic's own over its style's (`None` takes one back to the style's).
+/// Like its variables, its source changes in place (no undo step); it renders again.
+pub fn project_graphic_look_set_impl(
+    state: &AppState,
+    project_handle: String,
+    asset_id: String,
+    tokens: std::collections::BTreeMap<String, Option<String>>,
+) -> Result<graphics::GraphicView, String> {
+    let _guard = state.command_lock.lock();
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let asset = graphic_asset(reader, &asset_id)?;
+    let dir = graphics::folder(reader.root(), &asset.id);
+    let mut source = graphics::read_source(&dir)?;
+    for (name, value) in tokens {
+        match value {
+            Some(value) => source.look.insert(name, value.trim().to_string()),
+            None => source.look.remove(&name),
+        };
+    }
+    graphics::look::check_tokens(&source.look)?;
+    graphics::write_source(&dir, &source)?;
+    render::sources_changed();
+    graphics::view(reader.root(), &asset)
+}
+
 /// Forgets failed renders and looks at the graphics' files again (after a hand edit).
 pub fn graphics_render_again_impl() {
     render::sources_changed();
 }
 
-/// The brand kits, and the open project's default kit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrandsView {
-    pub kits: Vec<brands::BrandKitView>,
-    /// The project's default kit (it may have been removed since).
-    pub project_default: Option<String>,
-    pub folder: String,
-}
-
-pub fn graphics_brands_impl(
+/// What bringing the video's graphics in line with its look would change (graphics already in
+/// line are left out). Changes nothing.
+pub fn graphics_in_line_plan_impl(
     state: &AppState,
-    project_handle: Option<String>,
-) -> Result<BrandsView, String> {
-    let dir = brands::dir();
-    let project_default = match project_handle {
-        Some(handle) => {
-            let opened = state.opened_project.lock();
-            let reader = opened.as_ref().ok_or("No opened project")?;
-            require_handle(reader, &handle)?;
-            reader.document().graphics_brand.clone()
-        }
-        None => None,
-    };
-    Ok(BrandsView {
-        kits: brands::list(&dir)
-            .iter()
-            .map(|kit| brands::view(&dir, kit))
-            .collect(),
-        project_default,
-        folder: dir.display().to_string(),
-    })
+    project_handle: String,
+) -> Result<Vec<graphics::restyle::Plan>, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    Ok(graphics::restyle::plan(reader.root(), reader.document()))
 }
 
-/// Saves a brand kit (new, changed or renamed); graphics that use it render again.
-pub fn graphics_brand_save_impl(
-    kit: brands::BrandKitInput,
-) -> Result<brands::BrandKitView, String> {
-    let dir = brands::dir();
-    let saved = brands::save(&dir, &kit)?;
-    Ok(brands::view(&dir, &saved))
-}
-
-pub fn graphics_brand_remove_impl(name: String) -> Result<(), String> {
-    brands::remove(&brands::dir(), &name)
-}
-
-/// Sets the project's default brand kit (`None` for none), one undo step.
-pub fn project_graphics_brand_set_impl(
+/// Brings the graphics of `plans` (as `graphics_in_line_plan_impl` gave them) in line, one
+/// undo step; each changed graphic renders again.
+pub fn project_graphics_in_line_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
-    brand: Option<String>,
+    plans: Vec<graphics::restyle::Plan>,
 ) -> Result<OpenedProject, String> {
-    let brand = brand
-        .map(|b| b.trim().to_string())
-        .filter(|b| !b.is_empty());
-    if let Some(name) = &brand {
-        brands::load(&brands::dir(), name)?;
+    if plans.is_empty() {
+        return Err("Nothing to bring in line".into());
     }
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
-    if reader.document().graphics_brand == brand {
-        return Ok(reader.view_or_summary(None));
-    }
-    let mut next = reader.document().clone();
-    next.graphics_brand = brand;
-    let project = reader.commit_document(expected_revision, next)?;
+    let root = reader.root().to_path_buf();
+    let done = graphics::restyle::apply(&root, reader.document(), &plans)?;
+    let project = match reader.commit_document(expected_revision, done.document.clone()) {
+        Ok(project) => project,
+        Err(error) => {
+            done.discard();
+            return Err(error);
+        }
+    };
     state
         .playback
         .lock()
         .apply_document(&reader.history().current)?;
+    render::request_all(&root, &reader.history().current);
     Ok(project)
+}
+
+/// How a graphic of the video would look in another style.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookStill {
+    pub asset_id: String,
+    pub name: String,
+    /// A PNG data URL, 640 px wide.
+    pub image: String,
+}
+
+/// The most graphics a style's preview draws.
+const LOOK_PREVIEW_GRAPHICS: usize = 3;
+
+/// Stills of up to three of the video's graphics (the first of each, by where they play) in
+/// `style` instead of the project's, without changing anything. Takes a few seconds.
+pub fn style_preview_impl(
+    state: &AppState,
+    project_handle: String,
+    style: crate::style::Style,
+) -> Result<Vec<LookStill>, String> {
+    style.validate()?;
+    let specs: Vec<(String, render::Spec)> = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let document = reader.document().clone();
+        let portrait = crate::style::is_portrait(&document);
+        let canvas = document.layout.preview_dimensions()?;
+        let mut clips: Vec<&crate::sequence::Clip> = document
+            .sequence
+            .video_tracks()
+            .filter(|t| !t.hidden)
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+            .collect();
+        clips.sort_by_key(|c| c.start_us);
+        let mut seen = Vec::new();
+        clips.retain(|c| {
+            let new = !seen.contains(&c.asset);
+            seen.push(c.asset.clone());
+            new
+        });
+        clips
+            .into_iter()
+            .take(LOOK_PREVIEW_GRAPHICS)
+            .filter_map(|clip| {
+                let asset = document.asset(&clip.asset)?;
+                let mut spec = render::Spec::for_clip(
+                    reader.root(),
+                    &document,
+                    asset,
+                    clip,
+                    canvas,
+                    &[],
+                    Default::default(),
+                );
+                spec.dress(&style, portrait);
+                Some((asset.name.clone(), spec))
+            })
+            .collect()
+    };
+    if specs.is_empty() {
+        return Err("This video has no graphics to show the style on".into());
+    }
+    let cancel = AtomicBool::new(false);
+    let stills: Vec<Result<LookStill, String>> = std::thread::scope(|scope| {
+        let jobs: Vec<_> = specs
+            .iter()
+            .map(|(name, spec)| {
+                let cancel = &cancel;
+                scope.spawn(move || {
+                    // Past the entrance, before any exit.
+                    let at = (spec.length_us as f64 / 1e6 * 0.6).min(2.5);
+                    let png = render::still(spec, at, cancel)?;
+                    let small = image::load_from_memory(&png)
+                        .map_err(|e| e.to_string())?
+                        .thumbnail(640, 640);
+                    let mut out = std::io::Cursor::new(Vec::new());
+                    small
+                        .write_to(&mut out, image::ImageFormat::Png)
+                        .map_err(|e| e.to_string())?;
+                    use base64::Engine;
+                    Ok(LookStill {
+                        asset_id: spec.asset_id.clone(),
+                        name: name.clone(),
+                        image: format!(
+                            "data:image/png;base64,{}",
+                            base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+                        ),
+                    })
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| {
+                job.join()
+                    .unwrap_or_else(|_| Err("The preview stopped".into()))
+            })
+            .collect()
+    });
+    let mut out = Vec::new();
+    for still in stills {
+        out.push(still?);
+    }
+    Ok(out)
 }
 
 pub fn graphics_library_impl() -> Vec<library::LibraryView> {
@@ -575,6 +825,23 @@ pub fn graphics_library_remove_impl(id: String) -> Result<(), String> {
 pub(crate) mod tests {
     use super::*;
     use crate::sequence::edit::SequenceEdit;
+
+    #[test]
+    fn the_shorts_tab_names_where_a_graphic_comes_from() {
+        let from = |json: &str| serde_json::from_str::<ShortGraphicFrom>(json).unwrap();
+        assert!(matches!(
+            from(r#"{"kind":"video","graphic":"g-1"}"#),
+            ShortGraphicFrom::Video { graphic } if graphic == "g-1"
+        ));
+        assert!(matches!(
+            from(r#"{"kind":"library","id":"lib-2"}"#),
+            ShortGraphicFrom::Library { id } if id == "lib-2"
+        ));
+        assert!(matches!(
+            from(r#"{"kind":"template","template":"key-point"}"#),
+            ShortGraphicFrom::Template { template } if template == "key-point"
+        ));
+    }
 
     /// A project with a 4 s sound on the timeline (needs FFmpeg for the import); returns its
     /// handle and revision, or `None` without FFmpeg.

@@ -309,6 +309,12 @@ export const AgentsDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                     />
                   ))}
                 </div>
+                <p className="text-meta text-studio-400">
+                  Your agent app may ask you to allow each AeroEdits action the first time. That
+                  question is the agent app's, not AeroEdits'. Only transcribing, the filler and
+                  retake review, and installing the graphics renderer go online; they are marked
+                  so, so you can allow them once.
+                </p>
               </section>
 
               <section className="space-y-1.5">

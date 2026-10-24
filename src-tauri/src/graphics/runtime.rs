@@ -12,10 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub const NODE_VERSION: &str = "22.23.3";
+pub const NODE_VERSION: &str = "22.23.4";
 /// The version HyperFrames 0.8.162 itself pins (`CHROME_VERSION` in its browser manager).
 pub const CHROME_VERSION: &str = "152.0.7977.30";
 pub const HYPERFRAMES_VERSION: &str = "0.8.162";
+/// GSAP, the version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`): fetched from
+/// npm onto this computer when a graphic first uses it, never shipped with the app.
+pub const GSAP_VERSION: &str = "3.15.0";
+const GSAP_SHA256: &str = "d2e33ad202d4811e9084883f7ff9a27967ac4095caef51ca4c9d20697a253b1c";
 
 const PACKAGE_JSON: &str = include_str!("../../graphics/runtime/package.json");
 const PACKAGE_LOCK: &str = include_str!("../../graphics/runtime/package-lock.json");
@@ -70,7 +74,7 @@ fn platform() -> Result<Platform, String> {
             node: node(
                 "win-x64",
                 "zip",
-                "2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71",
+                "cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20",
             ),
             node_exe: "node.exe",
             npm_cli: "node_modules/npm/bin/npm-cli.js",
@@ -82,7 +86,7 @@ fn platform() -> Result<Platform, String> {
             node: node(
                 "win-arm64",
                 "zip",
-                "33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535",
+                "a8b8cd79cbbb3062435f449591d98dd63730bbbf30ce2d7cc3a6376c236cb111",
             ),
             node_exe: "node.exe",
             npm_cli: "node_modules/npm/bin/npm-cli.js",
@@ -93,7 +97,7 @@ fn platform() -> Result<Platform, String> {
             node: node(
                 "darwin-arm64",
                 "tar.gz",
-                "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
+                "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428",
             ),
             node_exe: "bin/node",
             npm_cli: "lib/node_modules/npm/bin/npm-cli.js",
@@ -107,7 +111,7 @@ fn platform() -> Result<Platform, String> {
             node: node(
                 "darwin-x64",
                 "tar.gz",
-                "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8",
+                "efcc2b0db6f94bf53eddb038fe2b370277a042bd29e4f19b8f8e23598795b819",
             ),
             node_exe: "bin/node",
             npm_cli: "lib/node_modules/npm/bin/npm-cli.js",
@@ -121,7 +125,7 @@ fn platform() -> Result<Platform, String> {
             node: node(
                 "linux-x64",
                 "tar.xz",
-                "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de",
+                "1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce",
             ),
             node_exe: "bin/node",
             npm_cli: "lib/node_modules/npm/bin/npm-cli.js",
@@ -284,9 +288,40 @@ pub fn install(
         });
         npm_ci(&node_dir, &platform, &package_dir, cancel)?;
     }
+    progress(InstallProgress {
+        step: "GSAP".into(),
+        bytes_done: 0,
+        bytes_total: None,
+    });
+    gsap_dist(cancel)?;
     let marker = serde_json::to_string_pretty(&pinned).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(MARKER), marker).map_err(|e| e.to_string())?;
     Ok(status())
+}
+
+/// The folder holding GSAP's files (`gsap.min.js`, its plugins), fetched once (1.7 MB) if
+/// missing. Graphics rendering at once wait for one fetch.
+pub fn gsap_dist(cancel: &AtomicBool) -> Result<PathBuf, String> {
+    static FETCHING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    let dir = runtime_dir();
+    let target = dir.join("gsap").join(GSAP_VERSION);
+    let dist = target.join("dist");
+    if dist.join("gsap.min.js").is_file() {
+        return Ok(dist);
+    }
+    let _one = FETCHING.lock();
+    if dist.join("gsap.min.js").is_file() {
+        return Ok(dist);
+    }
+    std::fs::create_dir_all(dir.join("gsap")).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let download = Download {
+        url: format!("https://registry.npmjs.org/gsap/-/gsap-{GSAP_VERSION}.tgz"),
+        sha256: GSAP_SHA256,
+        folder: "package".into(),
+    };
+    fetch_unpacked(&download, &dir, &target, "GSAP", cancel, &mut |_| {})
+        .map_err(|e| format!("GSAP is needed by this graphic and could not be fetched: {e}"))?;
+    Ok(dist)
 }
 
 /// Removes the whole runtime.
@@ -532,14 +567,38 @@ pub fn render_path() -> Result<std::ffi::OsString, String> {
 }
 
 pub fn hide_window(command: &mut Command) {
+    hide_window_at(command, false);
+}
+
+/// [`hide_window`], and with `low_priority` below normal priority, which the processes it starts
+/// (Chrome) inherit, so a background render leaves the editor responsive.
+pub fn hide_window_at(command: &mut Command, low_priority: bool) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        let priority = if low_priority {
+            BELOW_NORMAL_PRIORITY_CLASS
+        } else {
+            0
+        };
+        command.creation_flags(CREATE_NO_WINDOW | priority);
     }
-    #[cfg(not(windows))]
-    let _ = command;
+    // Niced instead; Chrome inherits it as on Windows.
+    #[cfg(unix)]
+    if low_priority {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: nice(2) only changes this child's own priority; it allocates nothing.
+        unsafe {
+            command.pre_exec(|| {
+                libc::nice(10);
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
+    let _ = (command, low_priority);
 }
 
 #[cfg(test)]

@@ -15,14 +15,15 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 40] = [
+pub static ACTIONS: [ToolDef; 38] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
             they are transcribed, mouth noises muted, zooms, layouts, captions, chapters, \
             shorts, whether each camera has a face track for framing shorts, and anything \
-            running. Call it first and after a cleanup.",
-        schema: schema::<NoArgs>,
+            running. Call it first and after a cleanup. With no project open, or `readiness`, \
+            it also says what this computer is ready for (keys, models, renderer).",
+        schema: schema::<StatusArgs>,
         read_only: true,
         run: status,
     },
@@ -57,8 +58,10 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "undo",
-        description: "Undoes the last change to the edit, whoever made it.",
-        schema: schema::<NoArgs>,
+        description: "Undoes the last change to the edit, whoever made it. `run: true` undoes \
+            everything you changed since your last `preset` call (your run) as one step, \
+            while the user has changed nothing since.",
+        schema: schema::<UndoArgs>,
         read_only: false,
         run: undo,
     },
@@ -70,33 +73,32 @@ pub static ACTIONS: [ToolDef; 40] = [
         run: redo,
     },
     ToolDef {
+        name: "checkpoint",
+        description: "Named moments to go back to: the edit, the graphics' files and the \
+            caption marks. `op`: list; save (with `name`); restore (with `id`; one undo step, \
+            and what is there now is saved first). The app saves one before each of your runs.",
+        schema: schema::<CheckpointArgs>,
+        read_only: false,
+        run: checkpoint,
+    },
+    ToolDef {
         name: "speed",
-        description: "Plays clips faster or slower, 0.25x to 8x, keeping their media and the             sound's pitch: a clip gets shorter or longer (with what it is linked to). Give             `clips` (ids from timeline_get) or a timeline range `fromUs`-`toUs` (every unlocked             track is split at its ends), and `speed` (1 is normal). Magnetic closes up or pushes             along; `ripple` overrides it (false leaves a gap or stops at the next clip).             `short` works on a short's own timeline. Without `speed` it lists what plays at             other speeds. Only when the user asks: never speed up waiting by yourself.",
+        description: "Plays clips faster or slower, 0.25x to 8x, keeping their media and the sound's pitch: a clip gets shorter or longer (with what it is linked to). Give `clips` (ids from timeline_get) or a timeline range `fromUs`-`toUs` (every unlocked track is split at its ends), and `speed` (1 is normal). Magnetic closes up or pushes along; `ripple` overrides it (false leaves a gap or stops at the next clip). `short` works on a short's own timeline. Without `speed` it lists what plays at other speeds. Only when the user asks: never speed up waiting by yourself.",
         schema: schema::<SpeedArgs>,
         read_only: false,
         run: speed,
     },
     ToolDef {
         name: "transcribe",
-        description: "Transcribes a sound with `provider` (parakeet: local and free; elevenlabs: \
-            Scribe, cloud, the user's ElevenLabs key; openrouter: the same Scribe through \
-            OpenRouter, the user's OpenRouter key), which becomes the saved choice; default the one in \
-            the transcription settings. Default sound: the speech on the timeline. Skips a sound \
-            already transcribed unless `force`. Takes a while; reports progress.",
+        description: "Transcribes a sound. By default (`provider: auto`) online with Scribe, \
+            which detects the language (English, Greek, ...): ElevenLabs first, OpenRouter when \
+            ElevenLabs has no key or credits. `parakeet` is local and free, English only. The \
+            answer says the language heard; the later passes follow it. Default sound: the \
+            speech on the timeline. Skips a sound already transcribed unless `force`. Takes a \
+            while; reports progress.",
         schema: schema::<TranscribeArgs>,
         read_only: false,
         run: transcribe,
-    },
-    ToolDef {
-        name: "align",
-        description: "Aligns a transcript's word times to the audio (20 ms, local model), so \
-            cuts at word edges stop clipping words or keeping pauses inside them. Transcribing \
-            already does this when the model is downloaded; use it for transcripts made before. \
-            Text and word ids stay; cuts already made stay; suggestions worked out from the old \
-            times go stale. Skips a transcript already aligned unless `force`.",
-        schema: schema::<AlignArgs>,
-        read_only: false,
-        run: align,
     },
     ToolDef {
         name: "mouth_noises",
@@ -128,7 +130,8 @@ pub static ACTIONS: [ToolDef; 40] = [
             auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
             else its built-in local model when downloaded, and otherwise uses the review you \
             saved with `fillers_review` (in-house: you read the transcript). `review: \
-            in-house`, `openrouter` or `local` forces one. `apply: false` only lists.",
+            in-house`, `openrouter` or `local` forces one. `apply: false` only lists. `auto` \
+            reuses a saved review.",
         schema: schema::<FillerArgs>,
         read_only: false,
         run: fillers,
@@ -155,7 +158,7 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "faces",
-        description: "Webcam face detection: finds the face in every camera stream (on this             computer, YuNet) so shorts frame each camera clip on it. Starts the cameras that             have no face track yet (and retries failed ones), waits until they are done unless             `wait: false`, and reports each camera: ready (and how much of it shows a face),             detecting, failed or missing. `redo: true` finds faces again even where a track             exists.",
+        description: "Webcam face detection: finds the face in every camera stream (on this computer, YuNet) so shorts frame each camera clip on it. Starts the cameras that have no face track yet (and retries failed ones), waits until they are done unless `wait: false`, and reports each camera: ready (and how much of it shows a face), detecting, failed or missing. `redo: true` finds faces again even where a track exists.",
         schema: schema::<FacesArgs>,
         read_only: false,
         run: faces,
@@ -165,7 +168,8 @@ pub static ACTIONS: [ToolDef; 40] = [
         description: "Zooms. Automatic ones from the recording's clicks: `op` `add` (default) \
             adds the suggested zooms, `reload` finds them again with the zoom settings \
             (dismissed ones too; manual ones stay), `dismiss` drops the suggestions; `settings` \
-            changes the zoom settings first; `apply: false` with `add` only reports. Single \
+            changes the zoom settings first; `apply: false` only reports what would be added, \
+            with `settings` tried but not saved. Single \
             zooms: `list` (ids, times, scale, centre), `create` (`startUs`, `endUs` on the edited \
             timeline, `scale`, `centerX`/`centerY` 0-1), `update` (`id` with `scale`, centre or \
             `fixed`), `remove` (`ids`). Each change is one undo step.",
@@ -175,10 +179,13 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "settings",
-        description: "Reads or changes settings. `area`: captions, layout (the style: \
-            background, corners, camera border, `faceFraming`; where things go is `layouts`), \
-            audio, zoom, transcription, ai, export, presets. Without `set` it shows the current \
-            values; `set` is a JSON object of just the fields to change (nested objects merge). \
+        description: "Reads or changes this project's settings (changes from its preset; \
+            `library` `kind: preset`). `area`: captions (enabled, position, size, words), layout \
+            (canvas, screen size and crop, cursor, `faceFraming`; where things go is `layouts`; \
+            how it looks is the style's), audio, zoom, cleanup (silence, gap and mouth-noise \
+            levels the passes start from), export (resolution, fps, quality), transcription, \
+            ai. Without `set` it shows the current values; `set` is a JSON object of \
+            just the fields to change (nested objects merge). \
             Telemetry polish: layout `webcamAutoHide` (on by default; the bubble fades while work \
             is under it), `windowCrop` (on by default) with `windowCropPaddingPct` and \
             `windowCropOff` (recording stretches `{media, sourceStartUs, sourceEndUs}` shown \
@@ -205,8 +212,8 @@ pub static ACTIONS: [ToolDef; 40] = [
         description: "Vertical shorts. `op` `find` (default): the app's AI pass finds moments \
             and saves them for the Shorts tab (when you can read the transcript, pick them \
             yourself with `short_create` instead). `remove` with `short` (id or title) removes \
-            one; `range` with `short`, `fromWord` and `toWord` sets the stretch it plays. One \
-            undo step each.",
+            one; `range` with `short`, `fromWord` and `toWord` sets the stretch it plays; \
+            `rename` with `short` and `title`. One undo step each.",
         schema: schema::<ShortsArgs>,
         read_only: false,
         run: shorts,
@@ -228,9 +235,11 @@ pub static ACTIONS: [ToolDef; 40] = [
             the open project's Media, as the Media panel's Import does. Use it for a take the \
             user recorded for a short, whatever its form: a camera video (often with its own \
             microphone) and, if they used one, a separate microphone file, or a .aero \
-            recording (its camera and microphone together). Never `open` a take. Answers each \
-            new media id and its streams. `roles` (`media`, `stream`, `role`) sets what streams \
-            stand for, after importing or on media already in the project.",
+            recording (its camera and microphone together). Never `open` a take. A short from a \
+            take is an edit of its own: read `preset` with `name: shorts` first, even when \
+            another preset was read already. Answers each new media id and its streams. `roles` \
+            (`media`, `stream`, `role`) sets what streams stand for, after importing or on media \
+            already in the project.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -244,22 +253,28 @@ pub static ACTIONS: [ToolDef; 40] = [
             them with `camera` and `voice`. A separate voice is lined up with \
             the camera's sound automatically. The short plays the take's camera and voice \
             with captions from the take's words; footage from the video goes under it with \
-            `short_footage`. Transcribe the voice next (`transcribe` with its stream).",
+            `short_footage`. Its steps are `preset` with `name: shorts`. Transcribe the voice \
+            next (`transcribe` with its stream).",
         schema: schema::<ShortFromTakeArgs>,
         read_only: false,
         run: short_from_take,
     },
     ToolDef {
         name: "short_footage",
-        description: "Footage under a short made from a take: what plays in the screen part \
-            while the take talks. `op: add` places `items`: each under the take's words \
+        description: "What plays under a short made from a take, while the take talks. \
+            `op: add` proposes `items` as one batch the user accepts in the Agent panel (put \
+            all your picks in one call, with a `reason`): each under the take's words \
             `fromWord`..`toWord` (ids from `transcript_get` with the take's voice as `stream`) \
             or seconds `atS`..`toS` on the short, showing the video as edited (only what it \
             keeps, its cuts included) from its word `sourceWord` (an id from the video's \
             transcript) or from `videoS` seconds on its timeline; the footage's game or \
-            desktop sound plays ducked under the voice (`sound: false` mutes it). Where no \
-            footage plays, the camera fills the frame. `op: remove` takes it off \
-            `fromS`..`toS` (all without them); `op: list` (default) lists it.",
+            desktop sound plays ducked under the voice (`sound: false` mutes it); or B-roll \
+            from an imported file (`media`, from `mediaS` seconds in); or a graphic over it \
+            all (`template`, `library`, or `graphic`: a copy of one of the video's, made for \
+            9:16), its own length without an end. Where nothing plays, the camera fills the \
+            frame. `op: remove` takes footage off `fromS`..`toS` (all without them); \
+            `op: sound` sets the footage and B-roll sound's `volumeDb` and `duckDb` (one \
+            track); `op: list` (default) lists it.",
         schema: schema::<ShortFootageArgs>,
         read_only: false,
         run: short_footage,
@@ -267,7 +282,7 @@ pub static ACTIONS: [ToolDef; 40] = [
     ToolDef {
         name: "check",
         description: "The check before export, the one the export dialog shows: black frames, \
-            blips and words cut partway, choppy stretches, zooms that flash or jump, captions \
+            blips and words cut partway, zooms that flash by, captions \
             over the webcam, chapters YouTube would drop, loudness, missing files, proposals \
             waiting. Each finding has an id, a time and, when one is safe, a fix. Without `fix` \
             it changes nothing; `fix` applies the fixes of those ids (or [\"all\"]), each as its \
@@ -280,7 +295,8 @@ pub static ACTIONS: [ToolDef; 40] = [
         name: "export",
         description: "Exports the video (the canvas size and frame rate unless given; next to the \
             project unless `destination`). Waits until done and reports progress unless `wait: \
-            false`, which returns a job id for export_status; `cancel` with that id stops it.",
+            false`, which returns a job id for export_status; `cancel` with that id stops it. \
+            `file` saves subtitles, the transcript or the sound alone instead.",
         schema: schema::<ExportArgs>,
         // Writes the video file (over `destination` if it exists).
         read_only: false,
@@ -288,8 +304,9 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "export_status",
-        description: "How the export started with `export` is going.",
-        schema: schema::<NoArgs>,
+        description: "How the export started with `export` is going. `waitS` waits for it to \
+            finish (up to 300 s) instead of checking again and again.",
+        schema: schema::<ExportStatusArgs>,
         read_only: true,
         run: export_status,
     },
@@ -299,7 +316,7 @@ pub static ACTIONS: [ToolDef; 40] = [
             their variables, types and defaults), the user's graphics library (templates saved \
             from earlier projects, each with when to use it: look there before writing a new \
             graphic) and the graphics in the project (id, where they play, their variables, \
-            brand kit, how their render is going). Graphics play full screen over everything \
+            style, how their render is going). Graphics play full screen over everything \
             (screen, camera, captions), and cuts never go through one, so add them as one of \
             the last passes, after the cuts are checked and before chapters.",
         schema: schema::<NoArgs>,
@@ -308,12 +325,12 @@ pub static ACTIONS: [ToolDef; 40] = [
     },
     ToolDef {
         name: "graphic_add",
-        description: "Adds a graphic from a template (or a copy of a library item, `library`) \
-            at a time on the edited timeline (`atUs`) or at a transcript word (`atWord`, an id \
-            from transcript_get), on a Graphics track above the video, one undo step. It plays \
-            for `lengthUs` (the template's or item's own by default) and renders in the \
-            background; `graphic_render` waits for it. `blank` starts an empty composition to \
-            write with graphic_write_file.",
+        description: "Adds graphics, all `items` in one call and one undo step: each from a \
+            template or a copy of a library item (`library`), at `atUs` on the edited timeline \
+            or at `atWord` (an id from transcript_get), on a Graphics track over the video, for \
+            `lengthUs` (default its own). They render in the background; `graphic_render` \
+            waits. `blank` starts an empty composition for graphic_write_file. Graphics under a \
+            take go in `short_footage` items.",
         schema: schema::<GraphicAddArgs>,
         read_only: false,
         run: graphic_add,
@@ -322,10 +339,10 @@ pub static ACTIONS: [ToolDef; 40] = [
         name: "graphic_set",
         description: "Changes a graphic: its variables (checked against what it declares; \
             null puts one back to its default), its name, its length on the timeline, its \
-            brand kit (`default` for the project's, `none`, or a kit from brand_kits), and with \
-            `short` the slot it plays in that short (`full` frame, the `camera` or `screen` \
-            part of the split, or `overScreen`: over the screen part, under the captions, its \
-            see-through parts showing the screen). It renders again by itself. `moveToUs` or \
+            style (`project` or a style from `library`), `look` tokens of its own, and with \
+            `short` how it shows there (`slot`: `full` frame, `screen` split beside the face, \
+            `overFace` over the face filling the frame, `camera`, or `overScreen` under the \
+            captions). It renders again by itself. `moveToUs` or \
             `moveToWord` moves it; `remove: true` takes it out of the project with its clips \
             (one undo step).",
         schema: schema::<GraphicSetArgs>,
@@ -335,26 +352,30 @@ pub static ACTIONS: [ToolDef; 40] = [
     ToolDef {
         name: "graphic_write_file",
         description: "Writes a file into a graphic's folder (index.html, or an image or font it \
-            uses), for a composition of your own; answers with HyperFrames' lint of it. Its \
-            folder is in `graphics`; with a shell you can write there directly. Rules: a \
+            uses), for a composition of your own; answers with HyperFrames' lint of it. \
+            `contents` is the whole file; `edits` change part of the one in the folder. The \
+            folder (in `graphics`) holds the only copy: keep none in your working folder or \
+            anywhere else. Rules: a \
             HyperFrames composition, full-screen over the video, laid out with vw/vh/vmin so it \
             fits 16:9 and 9:16; a transparent page with a background of your own; a graphic \
             that fills the frame never eases in or out: show it whole from the first frame to \
             the last, and fade or slide it in and out only when the root's data-entrance is \
             \"ease\" (the app sets that only for an overlay over the full-screen camera; mark a \
-            lower third or callout with data-overlay on the root); no network (no CDN scripts \
-            or web fonts); Web Animations or CSS, finite and paused; editable text as \
-            data-composition-variables.",
+            lower third or callout with data-overlay on the root); motion with GSAP 3.15 \
+            (`<script src=\"gsap.min.js\">`, plugins by file name; a CDN link to GSAP is made \
+            local) as one paused timeline in window.__timelines[\"graphic\"], or Web Animations \
+            with data-no-timeline on the root; no other network (no CDN scripts or web fonts); \
+            editable text as data-composition-variables.",
         schema: schema::<GraphicWriteArgs>,
         read_only: false,
         run: graphic_write_file,
     },
     ToolDef {
         name: "graphic_render",
-        description: "Renders the graphics (or one) for the video's canvas now, waiting, and \
-            reports each one's lint, render and whether it cuts in and out or eases (only an \
-            overlay over the full-screen camera eases). Look at the result with frame_render at \
-            a time inside the graphic.",
+        description: "Renders the graphics (or one) for the video's canvas now, or with `short` \
+            a short's for its 9:16 frame, waiting, and reports each one's lint, render and \
+            whether it cuts in and out or eases (only an overlay over the full-screen camera \
+            eases). Look at the result with frame_render (or storyboard) inside the graphic.",
         schema: schema::<GraphicRenderArgs>,
         // Writes renders into the project's graphics cache.
         read_only: false,
@@ -365,7 +386,7 @@ pub static ACTIONS: [ToolDef; 40] = [
         description: "Turns a graphic you wrote (one the user likes) toward a general template \
             for the user's library: returns its source, what the app already sees in it (network \
             references, missing brand colours, fixed text) and the rules to rewrite it by (text \
-            as variables, brand kit colours, timing from data-duration, viewport layout with a \
+            as variables, style colours, timing from data-duration, viewport layout with a \
             portrait block, a cut unless data-entrance is \"ease\", no network). Rewrite its \
             files, then graphic_check.",
         schema: schema::<GraphicOnlyArgs>,
@@ -377,7 +398,7 @@ pub static ACTIONS: [ToolDef; 40] = [
         description: "The library's gate for a graphic, run by the app (no model): HyperFrames' \
             check (lint, runtime, overflow, contrast) at 16:9 and 9:16 with its text and with \
             long text, stills at 3 s and 8 s (see-through at both ends, so its timing follows \
-            the clip), each text variable changing the picture, no network, brand kit colours. \
+            the clip), each text variable changing the picture, no network, style colours. \
             Answers pass or fail per check with why, and a contact sheet (both shapes, its text \
             and long text). Takes 30-90 s; an unchanged graphic answers at once.",
         schema: schema::<GraphicOnlyArgs>,
@@ -408,17 +429,6 @@ pub static ACTIONS: [ToolDef; 40] = [
         run: graphics_install,
     },
     ToolDef {
-        name: "brand_kit_set",
-        description: "Makes or changes one of the user's brand kits (app-wide, every project \
-            sees it): `name`, `background`, `text` and `accent` colours (#RRGGBB), `font`, and \
-            `fontFile` / `logo` as full paths to copy into the kit. Fields left out keep the \
-            kit's current values; `previous` renames a kit; `remove: true` deletes it. Graphics \
-            using it render again. Ask the user first: kits are theirs.",
-        schema: schema::<BrandKitSetArgs>,
-        read_only: false,
-        run: brand_kit_set,
-    },
-    ToolDef {
         name: "library_remove",
         description: "Removes an item (id or name, from `graphics`) from the user's graphics \
             library, for every project. Graphics already placed from it stay. Only at the \
@@ -438,24 +448,18 @@ pub static ACTIONS: [ToolDef; 40] = [
         run: transcript_fix,
     },
     ToolDef {
-        name: "brand_kits",
-        description: "The user's brand kits (background, text and accent colours, a font, a \
-            logo) and the project's default kit. A kit fills a graphic's `background`, `text` \
-            and `accent` variables where the graphic has not set them, and sets the font; a \
-            composition of your own can use var(--brand-accent), var(--brand-font), \
-            var(--brand-logo) and the others. Kits are made by the user in the Graphics tab.",
-        schema: schema::<NoArgs>,
-        read_only: true,
-        run: brand_kits,
-    },
-    ToolDef {
-        name: "brand_pick",
-        description: "Picks the brand kit the project's graphics use (`brand`: a kit's name, or \
-            `none`), one undo step; with `graphic`, picks that graphic's own instead \
-            (`default` follows the project's). Graphics render again.",
-        schema: schema::<BrandPickArgs>,
+        name: "captions",
+        description: "The caption lines as they show, numbered, with each line's emphasis word \
+            in *stars*; `short` for a short's. `emphasis`: per `line`, the `word` (as it reads \
+            there) drawn in the accent colour, the one word that makes a viewer keep watching (a \
+            number, a name, the twist, the verdict), never a small word; most lines get one, a \
+            flat line none. A line has one: a new pick replaces the old, `word` left out clears \
+            it. Kept on the transcript, so the video and its shorts share them; not an undo \
+            step. Where they sit and their size is `settings` `area: captions`; how they look \
+            (pop/karaoke/static, colours, box) is the project's style (`library`).",
+        schema: schema::<CaptionsArgs>,
         read_only: false,
-        run: brand_pick,
+        run: captions,
     },
 ];
 
@@ -669,9 +673,169 @@ pub(super) fn plural(n: usize, one: &str) -> String {
 // ---------------------------------------------------------------------------------------
 // Project.
 
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusArgs {
+    /// Also say what this computer is ready for: app version, keys set, models and runtimes
+    /// installed, and what is unavailable and why. Always given when no project is open.
+    #[serde(default)]
+    pub readiness: bool,
+}
+
 fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
-    text(status_text(ctx)?)
+    let args: StatusArgs = params(args)?;
+    let project = match status_text(ctx) {
+        Ok(lines) => lines,
+        Err(error) if error == super::tools::NO_PROJECT_MESSAGE => {
+            return text(format!(
+                "No project is open: `open` or `create` one.\n{}",
+                readiness_text()
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    text(if args.readiness {
+        format!("{project}\n{}", readiness_text())
+    } else {
+        project
+    })
+}
+
+/// What this computer is ready for, a line a part: what's missing says why and where to fix it.
+fn readiness_text() -> String {
+    let mut lines = vec![format!(
+        "Readiness: AeroEdits {}{}; agents reach it through this same program ({}).",
+        env!("CARGO_PKG_VERSION"),
+        if cfg!(debug_assertions) {
+            " (development build)"
+        } else {
+            ""
+        },
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "path unknown".into()),
+    )];
+    let view = tc::transcript_settings_get_impl();
+    let key = |source: &Option<String>| {
+        if source.is_some() {
+            "key set"
+        } else {
+            "no key"
+        }
+    };
+    lines.push(format!(
+        "Transcription online: ElevenLabs {}, OpenRouter {}{}.",
+        key(&view.elevenlabs_key_source),
+        key(&view.openrouter_key_source),
+        match not_ready(&view, crate::transcript::ProviderKind::ElevenLabs) {
+            Some(why) => format!(" ({why}; Greek needs one)"),
+            None => String::new(),
+        }
+    ));
+    lines.push(format!(
+        "Transcription local (Parakeet, English): {}.",
+        match not_ready(&view, crate::transcript::ProviderKind::Parakeet) {
+            None => "ready".to_string(),
+            Some(why) => format!("not ready: {why}"),
+        }
+    ));
+    if crate::cuda::wanted() {
+        lines.push(format!(
+            "GPU pack (CUDA, speeds up Parakeet): {}.",
+            if crate::cuda::present(&crate::cuda::default_dir()) {
+                "installed".to_string()
+            } else if !crate::cuda::nvidia_driver() {
+                "not needed: no NVIDIA graphics card driver".to_string()
+            } else {
+                format!(
+                    "not installed ({} MB download, Transcription settings in the app); \
+                     Parakeet runs on the CPU meanwhile",
+                    crate::cuda::download_bytes() / 1_000_000
+                )
+            }
+        ));
+    }
+    let ai = tc::ai_settings_get_impl();
+    let (provider, ai_key) = match ai.settings.provider {
+        crate::ai::AiProvider::OpenAi => ("OpenAI", &ai.openai_key_source),
+        crate::ai::AiProvider::OpenRouter => ("OpenRouter", &ai.openrouter_key_source),
+    };
+    lines.push(format!(
+        "AI key ({provider}): {}.",
+        if ai_key.is_some() {
+            "set, so chapters, shorts and the filler review can run"
+        } else {
+            "none, so no chapters or shorts from the app; you review fillers yourself"
+        }
+    ));
+    lines.push(format!(
+        "Local filler review model: {}.",
+        if !crate::ai::local::compiled_in() {
+            "not part of this build"
+        } else if crate::ai::local::ready() {
+            "ready"
+        } else {
+            "not downloaded (AI settings in the app)"
+        }
+    ));
+    lines.push(format!(
+        "Face model (framing shorts): {}.",
+        if !crate::face::yunet::compiled_in() {
+            "not part of this build"
+        } else if crate::face::yunet::model_present(&crate::face::yunet::default_model_dir()) {
+            "ready"
+        } else {
+            "downloads by itself the first time faces are tracked"
+        }
+    ));
+    let graphics = crate::graphics::runtime::status();
+    lines.push(format!(
+        "Graphics renderer (HyperFrames {}): {}.",
+        graphics.hyperframes,
+        if graphics.installed {
+            "installed".to_string()
+        } else if graphics.outdated {
+            "needs an update: `graphics_install`".to_string()
+        } else {
+            format!(
+                "not installed: `graphics_install` (about {} MB)",
+                graphics.download_mb
+            )
+        }
+    ));
+    lines.push(format!(
+        "FFmpeg: {}.",
+        if crate::media::ffmpeg::available() {
+            "found"
+        } else {
+            "missing, so nothing can be imported or exported (reinstall the app)"
+        }
+    ));
+    let skills: Vec<String> = super::skill::states()
+        .into_iter()
+        .filter(|s| s.available)
+        .map(|s| {
+            format!(
+                "{} {}",
+                match s.home {
+                    super::skill::SkillHome::ClaudeCode => "Claude Code",
+                    super::skill::SkillHome::Codex => "Codex",
+                },
+                match (s.installed, s.current) {
+                    (true, true) => "installed",
+                    (true, false) => "installed but from another version: reinstall it",
+                    _ => "not installed",
+                }
+            )
+        })
+        .collect();
+    if !skills.is_empty() {
+        lines.push(format!(
+            "Agent skill (Agent settings in the app): {}.",
+            skills.join(", ")
+        ));
+    }
+    lines.join("\n")
 }
 
 fn status_text(ctx: &Ctx) -> Result<String, String> {
@@ -738,6 +902,28 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
             document.chapters.len(),
             document.shorts.len(),
         ));
+        let changed = crate::preset::changed_count(document);
+        lines.push(format!(
+            "Preset: {}{} (its shorts: {}). Style: {}.",
+            crate::preset::of(document).name,
+            if changed == 0 {
+                String::new()
+            } else {
+                format!(", {} changed here", plural(changed, "value"))
+            },
+            crate::preset::store::resolve(&document.shorts_preset).name,
+            crate::style::of(document).name,
+        ));
+        let checkpoints = reader.history().steps().checkpoints();
+        if let Some(newest) = checkpoints.iter().rev().find(|c| !c.auto) {
+            lines.push(format!(
+                "Checkpoints: {}; newest named \"{}\" ({}, {}).",
+                checkpoints.len(),
+                newest.name,
+                newest.id,
+                newest.at
+            ));
+        }
         let faces = crate::face::status(reader.root(), document);
         if !faces.is_empty() {
             let each: Vec<String> = faces
@@ -788,7 +974,35 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
 
 /// A warning when an agent made chapters and the edit changed after: chapters read the final
 /// edit's words, so they come last, right before export.
+/// The edited length each project's chapters were last set or confirmed at, by project handle.
+/// Setting the same chapters again changes no revision, so the history can't tell it happened.
+static CHAPTERS_AT_LENGTH: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+
+fn chapters_made(open: &Open) {
+    if let Ok(mut made) = CHAPTERS_AT_LENGTH.lock() {
+        made.retain(|(handle, _)| handle != &open.handle);
+        made.push((open.handle.clone(), open.duration));
+    }
+}
+
 fn chapters_stale(ctx: &Ctx) -> Option<String> {
+    let open = current(ctx).ok()?;
+    let made_at = CHAPTERS_AT_LENGTH.lock().ok().and_then(|made| {
+        made.iter()
+            .find(|(h, _)| h == &open.handle)
+            .map(|(_, d)| *d)
+    });
+    if let Some(length) = made_at {
+        // Only cuts move what chapters point at; zooms, layouts or graphics don't.
+        return (length != open.duration).then(|| {
+            format!(
+                "Chapters were set when the edit was {} long and it is {} now: run `chapters` \
+                 again, as the last step before export.",
+                clock(length),
+                clock(open.duration)
+            )
+        });
+    }
     with_reader(ctx.state, |reader| {
         let document = reader.document();
         if document.chapters.is_empty() {
@@ -824,19 +1038,23 @@ pub struct ScanArgs {
     pub preset: Option<Preset>,
 }
 
-/// What the recording has and what each pass would do, for the questions a template asks.
+/// What the recording has and what each pass would do, for the questions a method asks.
 fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ScanArgs = params(args)?;
-    let preset = args.preset.unwrap_or_default();
+    // A level asked for, else the project's own levels.
+    let preset = args.preset;
     let (mut lines, transcribed, cameras, mouse) =
         with_reader(ctx.state, |reader| {
             let document = reader.document();
             let all = sounds(reader);
             let mut lines = vec![format!(
-                "Scan of \"{}\", {} long, measured with the {} preset; nothing was changed.",
+                "Scan of \"{}\", {} long, measured with {}; nothing was changed.",
                 reader.summary.name,
                 clock(document.duration_us()),
-                one_line(&preset).trim_matches('"'),
+                match preset {
+                    Some(level) => format!("the {} level", one_line(&level).trim_matches('"')),
+                    None => "the project's cleanup settings".into(),
+                },
             )];
             let describe = |s: &Sound| {
                 let mut notes = vec![if s.transcribed {
@@ -911,28 +1129,23 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         })?;
 
     let view = tc::transcript_settings_get_impl();
-    let ready = |kind, name: &str, about: &str| match not_ready(&view, kind) {
-        None => format!("{name} ready ({about})"),
-        Some(reason) => format!("{name} not ready: {reason}"),
+    let key = |source: &Option<String>| {
+        if source.is_some() {
+            "key set"
+        } else {
+            "no key"
+        }
     };
     lines.push(format!(
-        "Transcribers: {}; {}; {}. Saved choice: {}.",
-        ready(
-            crate::transcript::ProviderKind::Parakeet,
-            "parakeet",
-            "local, free"
-        ),
-        ready(
-            crate::transcript::ProviderKind::ElevenLabs,
-            "elevenlabs",
-            "Scribe, cloud, the user's key"
-        ),
-        ready(
-            crate::transcript::ProviderKind::OpenRouter,
-            "openrouter",
-            "the same Scribe through OpenRouter, the user's OpenRouter key"
-        ),
-        one_line(&view.settings.provider).trim_matches('"'),
+        "Transcribers: online by default (`provider: auto`, Scribe detects the language): \
+         ElevenLabs {}, then OpenRouter {}. Local: parakeet {} (free, English only, when the \
+         user asks).",
+        key(&view.elevenlabs_key_source),
+        key(&view.openrouter_key_source),
+        match not_ready(&view, crate::transcript::ProviderKind::Parakeet) {
+            None => "ready".to_string(),
+            Some(reason) => format!("not ready: {reason}"),
+        },
     ));
     let ai = tc::ai_settings_get_impl();
     let (provider, key) = match ai.settings.provider {
@@ -959,7 +1172,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         run_noises(
             ctx,
             NoiseArgs {
-                sensitivity: Some(preset.noise_sensitivity()),
+                sensitivity: preset.map(Preset::noise_sensitivity),
                 apply: dry,
                 ..Default::default()
             },
@@ -971,7 +1184,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         run_silence(
             ctx,
             SilenceArgs {
-                preset: Some(preset),
+                preset,
                 apply: dry,
                 ..Default::default()
             },
@@ -985,7 +1198,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 ctx,
                 SilenceArgs {
                     mode: SilenceMode::Gaps,
-                    preset: Some(preset),
+                    preset,
                     apply: dry,
                     ..Default::default()
                 },
@@ -993,7 +1206,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         );
         pass(
             &mut lines,
-            "Fillers and retakes (the rules, plus a saved in-house review)",
+            "Fillers and retakes (the rules, plus any saved review)",
             run_fillers(
                 ctx,
                 FillerArgs {
@@ -1038,7 +1251,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenArgs {
-    /// A project folder or a .aero recording folder.
+    /// A project folder (a .aero recording is made into one with `create`).
     pub path: String,
 }
 
@@ -1094,18 +1307,132 @@ fn create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     ))
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointArgs {
+    /// list, save or restore.
+    pub op: String,
+    /// For save: what to call it, such as "clean cut".
+    #[serde(default)]
+    pub name: Option<String>,
+    /// For restore: the checkpoint's id from list (`c-2`).
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+fn checkpoint(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: CheckpointArgs = params(args)?;
+    match args.op.trim() {
+        "list" => with_reader(ctx.state, |reader| {
+            let checkpoints = reader.history().steps().checkpoints();
+            if checkpoints.is_empty() {
+                return text("No checkpoints yet.".to_string());
+            }
+            let lines: Vec<String> = checkpoints
+                .iter()
+                .rev()
+                .map(|c| {
+                    format!(
+                        "{}: \"{}\", {}{}",
+                        c.id,
+                        c.name,
+                        c.at,
+                        if c.auto { " (saved by the app)" } else { "" }
+                    )
+                })
+                .collect();
+            text(lines.join("\n"))
+        }),
+        "save" => {
+            let name = args
+                .name
+                .filter(|n| !n.trim().is_empty())
+                .ok_or("save needs `name`: what to call this moment, such as \"clean cut\"")?;
+            let saved = {
+                let _guard = ctx.state.command_lock.lock();
+                let mut opened = ctx.state.opened_project.lock();
+                let reader = opened.as_mut().ok_or(super::tools::NO_PROJECT_MESSAGE)?;
+                reader.save_checkpoint(&name)?
+            };
+            text(format!(
+                "Saved checkpoint {} \"{}\": the edit, {} and the caption marks. \
+                 `checkpoint` op restore with this id goes back to it.",
+                saved.id,
+                saved.name,
+                plural(saved.graphics.len(), "graphic")
+            ))
+        }
+        "restore" => {
+            let id = args.id.ok_or("restore needs `id` (from op list)")?;
+            let before = opened(ctx)?;
+            let (what, view) = crate::commands::proposals::with_proposals(
+                ctx.state,
+                ctx.project.as_deref(),
+                |reader, proposals| {
+                    crate::proposals::restore_checkpoint(reader, proposals, before.revision, &id)
+                        .map(|(_, what)| what)
+                },
+            )?;
+            ctx.host.transcript_changed();
+            let mut answer = undone(ctx, &before, &what)?;
+            if let Some(warning) = view.warning {
+                answer.push(Output::Text(warning));
+            }
+            Ok(answer)
+        }
+        other => Err(format!("No op {other}: `op` is list, save or restore")),
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoArgs {
+    /// Undo your whole run as one step instead of the last change.
+    #[serde(default)]
+    pub run: bool,
+}
+
 fn undo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
+    let args: UndoArgs = params(args)?;
     let before = opened(ctx)?;
+    if args.run {
+        let (what, view) = crate::commands::proposals::with_proposals(
+            ctx.state,
+            ctx.project.as_deref(),
+            |reader, proposals| {
+                crate::proposals::undo_run(reader, proposals, before.revision, Some(&ctx.agent))
+                    .map(|(_, what)| what)
+            },
+        )?;
+        let mut answer = undone(ctx, &before, &format!("{what}."))?;
+        if let Some(warning) = view.warning {
+            answer.push(Output::Text(warning));
+        }
+        return Ok(answer);
+    }
+    let label = with_reader(ctx.state, |r| {
+        Ok(r.history().undo_label().map(str::to_string))
+    })?;
     commands::project_undo_impl(ctx.state, before.handle.clone(), before.revision, None)?;
-    undone(ctx, &before, "Undid the last change.")
+    let what = match label {
+        Some(label) => format!("Undid \"{label}\"."),
+        None => "Undid the last change.".into(),
+    };
+    undone(ctx, &before, &what)
 }
 
 fn redo(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     params::<NoArgs>(args)?;
     let before = opened(ctx)?;
+    let label = with_reader(ctx.state, |r| {
+        Ok(r.history().redo_label().map(str::to_string))
+    })?;
     commands::project_redo_impl(ctx.state, before.handle.clone(), before.revision, None)?;
-    undone(ctx, &before, "Redid the last undone change.")
+    let what = match label {
+        Some(label) => format!("Redid \"{label}\"."),
+        None => "Redid the last undone change.".into(),
+    };
+    undone(ctx, &before, &what)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1238,26 +1565,34 @@ pub struct TranscribeArgs {
     /// Transcribe again even if it already is.
     #[serde(default)]
     pub force: bool,
-    /// parakeet (local, free), elevenlabs (Scribe, cloud, the user's ElevenLabs key) or
-    /// openrouter (Scribe through OpenRouter, the user's OpenRouter key). It becomes the saved
-    /// choice. Default: the one in the transcription settings.
+    /// auto (default): online, ElevenLabs then OpenRouter. parakeet: on this computer, free,
+    /// English only. elevenlabs or openrouter: that online route first. The app's saved
+    /// settings stay as they are.
     #[serde(default)]
-    pub provider: Option<Transcriber>,
+    pub provider: Transcriber,
+    /// auto (default online: Scribe detects it), en or el. Parakeet is always English.
+    #[serde(default)]
+    pub language: Option<crate::transcript::SpokenLanguage>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Transcriber {
+    #[default]
+    Auto,
     Parakeet,
     Elevenlabs,
     Openrouter,
 }
 
 impl Transcriber {
+    /// Parakeet, or the online route tried first.
     fn kind(self) -> crate::transcript::ProviderKind {
         match self {
             Transcriber::Parakeet => crate::transcript::ProviderKind::Parakeet,
-            Transcriber::Elevenlabs => crate::transcript::ProviderKind::ElevenLabs,
+            Transcriber::Auto | Transcriber::Elevenlabs => {
+                crate::transcript::ProviderKind::ElevenLabs
+            }
             Transcriber::Openrouter => crate::transcript::ProviderKind::OpenRouter,
         }
     }
@@ -1274,11 +1609,13 @@ fn not_ready(
         Parakeet if !view.parakeet_model_present => Some(
             "the Parakeet model is not downloaded yet (Transcription settings in the app)".into(),
         ),
-        ElevenLabs if view.elevenlabs_key_source.is_none() => {
-            Some("no ElevenLabs key is set (Transcription settings in the app)".into())
-        }
-        OpenRouter if view.openrouter_key_source.is_none() => {
-            Some("no OpenRouter key is set (Transcription settings in the app)".into())
+        // Online, either route will do: the other is tried when the first has no key.
+        ElevenLabs | OpenRouter
+            if view.elevenlabs_key_source.is_none() && view.openrouter_key_source.is_none() =>
+        {
+            Some(
+                "no ElevenLabs or OpenRouter key is set (Transcription settings in the app)".into(),
+            )
         }
         _ => None,
     }
@@ -1301,24 +1638,29 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         ));
     }
     let view = tc::transcript_settings_get_impl();
-    let provider = args
-        .provider
-        .map_or(view.settings.provider, Transcriber::kind);
+    let provider = args.provider.kind();
     if let Some(reason) = not_ready(&view, provider) {
         return Err(format!("Can't transcribe with {provider:?}: {reason}."));
     }
-    if provider != view.settings.provider {
-        let mut settings = view.settings.clone();
-        settings.provider = provider;
-        tc::transcript_settings_set_impl(settings)?;
-    }
-    let result = tc::transcript_run_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        open.handle,
-        key.clone(),
-        &mut |p| ctx.progress(p.fraction, &p.message),
-    )?;
+    use crate::transcript::SpokenLanguage;
+    let language = match provider {
+        crate::transcript::ProviderKind::Parakeet => SpokenLanguage::English,
+        _ => args.language.unwrap_or(SpokenLanguage::Auto),
+    };
+    let result = ctx.transcript_job(|| {
+        tc::transcript_run_impl(
+            ctx.state,
+            ctx.host.transcripts(),
+            open.handle,
+            key.clone(),
+            tc::TranscribeWith {
+                provider: Some(provider),
+                language: Some(language),
+            },
+            &mut |p| ctx.progress(p.fraction, &p.message),
+        )
+    })?;
+    let provider = result.view.provider;
     ctx.host.transcript_changed();
     let kept = result
         .view
@@ -1334,43 +1676,6 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         line.push_str(&format!(" {diagnostic}"));
     }
     Ok(line)
-}
-
-#[derive(Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AlignArgs {
-    /// Sound key such as `rec-1.mic` (see status). Default: the speech on the timeline.
-    #[serde(default)]
-    pub stream: Option<String>,
-    /// Align again even if it already is.
-    #[serde(default)]
-    pub force: bool,
-}
-
-fn align(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: AlignArgs = params(args)?;
-    let open = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Speech)?;
-    let existing = with_reader(ctx.state, |reader| {
-        store::load_transcript(reader.root(), &key)
-    })?
-    .ok_or_else(|| format!("{key} is not transcribed yet: `transcribe` it first."))?;
-    if let (Some(info), false) = (&existing.alignment, args.force) {
-        return text(format!(
-            "{key} is already aligned ({} aligned, {} kept their times); `force: true` aligns \
-             it again.",
-            info.aligned_words, info.kept_words
-        ));
-    }
-    let result = tc::transcript_align_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        open.handle,
-        key.clone(),
-        &mut |p| ctx.progress(p.fraction, &p.message),
-    )?;
-    ctx.host.transcript_changed();
-    text(format!("{key}: {}", result.diagnostics.join(" ")))
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
@@ -1391,6 +1696,9 @@ pub struct NoiseArgs {
     /// false: only report what was found. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// Automatic mode: apply only if it looks right, else say why (no dry run first).
+    #[serde(default)]
+    pub guard: bool,
     /// A short (id or title): its own timeline and muted noises. Default: the take short the
     /// sound is the voice of, else the video.
     #[serde(default)]
@@ -1401,16 +1709,99 @@ fn mouth_noises(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(run_noises(ctx, params(args)?)?)
 }
 
+/// Automatic mode's check before a pass cuts `cut_us` from the video (`guard: true`): why it
+/// waits for the user instead, if it should. A pass cutting more than a quarter of the video,
+/// or the cleanup coming to more than a third of what was recorded for it (pauses aside), looks
+/// wrong. A take (`key` the voice of a take short) is cut much tighter: it is not guarded.
+fn cut_looks_wrong(
+    ctx: &Ctx,
+    before: &Open,
+    cut_us: u64,
+    key: Option<&str>,
+) -> Result<Option<String>, String> {
+    let (take, recorded) = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let take = key.is_some_and(|key| {
+            document
+                .shorts
+                .iter()
+                .any(|s| s.take.as_ref().is_some_and(|t| t.voice == key))
+        });
+        let on_video: std::collections::HashSet<&str> = document
+            .sequence
+            .clips()
+            .map(|(_, c)| c.asset.as_str())
+            .collect();
+        let recorded: u64 = reader
+            .recordings()
+            .filter(|a| on_video.contains(a.id.as_str()))
+            .map(|a| {
+                let paused: u64 = a
+                    .pauses
+                    .iter()
+                    .map(|p| p.end_us.saturating_sub(p.start_us))
+                    .sum();
+                a.duration_us.saturating_sub(paused)
+            })
+            .sum();
+        Ok((take, recorded))
+    })?;
+    if take {
+        return Ok(None);
+    }
+    let after = before.duration.saturating_sub(cut_us);
+    Ok(if cut_us.saturating_mul(4) > before.duration {
+        Some(format!(
+            "it would cut {} of {} (more than a quarter)",
+            clock(cut_us),
+            clock(before.duration)
+        ))
+    } else if recorded > 0 && recorded.saturating_sub(after).saturating_mul(3) > recorded {
+        Some(format!(
+            "the cleanup would come to {} of the {} recorded (more than a third)",
+            clock(recorded.saturating_sub(after)),
+            clock(recorded)
+        ))
+    } else {
+        None
+    })
+}
+
+/// The line that says a guarded pass waits for the user.
+fn held(reason: &str) -> String {
+    format!(
+        "Not applied: {reason}. Ask the user with these numbers; on their go, run it again \
+         without `guard`."
+    )
+}
+
+/// The voice of take short `short` (id or title), for a pass given a short but no stream.
+fn take_voice(ctx: &Ctx, short: Option<&str>) -> Result<Option<String>, String> {
+    match short {
+        Some(short) => Ok(short_named(ctx, short)?.take.map(|t| t.voice)),
+        None => Ok(None),
+    }
+}
+
 fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Speech)?;
+    let stream = match args.stream {
+        Some(stream) => Some(stream),
+        None => take_voice(ctx, args.short.as_deref())?,
+    };
+    let key = pick_sound(ctx, stream, Want::Speech)?;
     ctx.progress(0.1, &format!("Listening for mouth noises in {key}"));
     let scan = commands::noises::detect_mouth_noises_impl(
         ctx.state,
         before.handle.clone(),
         key.clone(),
         crate::dsp::noises::NoiseConfig {
-            sensitivity: args.sensitivity.unwrap_or(0.5),
+            sensitivity: match args.sensitivity {
+                Some(sensitivity) => sensitivity,
+                None => with_reader(ctx.state, |reader| {
+                    Ok(reader.document().cleanup.mouth_noise_sensitivity)
+                })?,
+            },
             padding_ms: args.padding_ms.unwrap_or(20),
         },
         args.short.clone(),
@@ -1452,7 +1843,12 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
                 .into(),
         );
     }
-    if args.apply.unwrap_or(true) && !chosen.is_empty() {
+    let hold = (args.guard && !scan.guarded && !chosen.is_empty())
+        .then(|| held("no transcript guards the words"));
+    if let Some(line) = &hold {
+        lines.push(line.clone());
+    }
+    if args.apply.unwrap_or(true) && hold.is_none() && !chosen.is_empty() {
         let ranges = chosen.iter().flat_map(|n| n.parts.clone()).collect();
         commands::noises::project_noise_mutes_impl(
             ctx.state,
@@ -1474,6 +1870,10 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
         ));
     } else if !chosen.is_empty() {
         lines.push(format!("{} would be muted.", chosen.len()));
+    } else if near > 0 {
+        lines.push(format!(
+            "None to mute: all {near} are next to words (`nearSpeech: true` mutes them too)."
+        ));
     }
     lines.extend(scan.diagnostics);
     applied(ctx, "mouth_noises", &before, lines)
@@ -1575,6 +1975,9 @@ pub struct SilenceArgs {
     /// false: only report what was found. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// Automatic mode: apply only if it looks right, else say why (no dry run first).
+    #[serde(default)]
+    pub guard: bool,
     /// A short made from a take (its id): clean its own timeline, the take, instead of the
     /// video's. Its speech is listened to unless `stream` says otherwise.
     #[serde(default)]
@@ -1590,7 +1993,29 @@ const ALL_SPEECH: &str = "speech";
 
 fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let preset = args.preset.unwrap_or_default();
+    // A level asked for, else the project's own (from its preset unless changed there).
+    let ours = with_reader(ctx.state, |reader| Ok(reader.document().cleanup.clone()))?;
+    let levels = match args.preset {
+        Some(preset) => {
+            let (threshold_db, min_duration_ms, padding_ms) = preset.silence();
+            let (gap_min, gap_padding, refine) = preset.gaps();
+            crate::preset::settings::CleanupSettings {
+                silence: crate::preset::settings::SilenceLevel {
+                    threshold_db,
+                    min_duration_ms,
+                    padding_ms,
+                },
+                gaps: crate::preset::settings::GapLevel {
+                    min_duration_ms: gap_min,
+                    padding_ms: gap_padding,
+                    refine_word_edges: refine,
+                    edge_threshold_db: ours.gaps.edge_threshold_db,
+                },
+                ..ours
+            }
+        }
+        None => ours,
+    };
     let short = args
         .short
         .as_deref()
@@ -1599,15 +2024,16 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
     let short = short.as_deref();
     let (result, described) = match args.mode {
         SilenceMode::Silence => {
-            let (threshold, min, padding) = preset.silence();
+            let level = &levels.silence;
             let config = crate::dsp::SilenceConfig {
-                threshold_db: args.threshold_db.unwrap_or(threshold),
-                min_duration_ms: args.min_duration_ms.unwrap_or(min),
-                padding_ms: args.padding_ms.unwrap_or(padding),
+                threshold_db: args.threshold_db.unwrap_or(level.threshold_db),
+                min_duration_ms: args.min_duration_ms.unwrap_or(level.min_duration_ms),
+                padding_ms: args.padding_ms.unwrap_or(level.padding_ms),
                 auto_level: args.auto_level,
                 window_ms: None,
                 step_ms: None,
                 channel_policy: None,
+                below_speech_db: None,
             };
             let key = match args.stream {
                 Some(key) if key == ALL_SPEECH => key,
@@ -1657,12 +2083,12 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
             (result, described)
         }
         SilenceMode::Gaps => {
-            let (min, padding, refine) = preset.gaps();
+            let level = &levels.gaps;
             let config = crate::transcript::pauses::TranscriptGapConfig {
-                min_duration_ms: args.min_duration_ms.unwrap_or(min),
-                padding_ms: args.padding_ms.unwrap_or(padding),
-                refine_word_edges: args.refine_word_edges.unwrap_or(refine),
-                edge_threshold_db: args.edge_threshold_db.unwrap_or(-42.0),
+                min_duration_ms: args.min_duration_ms.unwrap_or(level.min_duration_ms),
+                padding_ms: args.padding_ms.unwrap_or(level.padding_ms),
+                refine_word_edges: args.refine_word_edges.unwrap_or(level.refine_word_edges),
+                edge_threshold_db: args.edge_threshold_db.unwrap_or(level.edge_threshold_db),
                 keep_sound_events: args.keep_sound_events.unwrap_or(false),
             };
             // Every microphone: each needs its transcript, which the pass checks.
@@ -1709,7 +2135,15 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
         plural(chosen.len(), noun),
         total as f64 / 1e6
     )];
-    if args.apply.unwrap_or(true) && !chosen.is_empty() {
+    // A short's take is cut much tighter than a video: the guard is for the video.
+    let hold = match args.guard && short.is_none() && !chosen.is_empty() {
+        true => cut_looks_wrong(ctx, &before, total, None)?.map(|reason| held(&reason)),
+        false => None,
+    };
+    if let Some(line) = &hold {
+        lines.push(line.clone());
+    }
+    if args.apply.unwrap_or(true) && hold.is_none() && !chosen.is_empty() {
         let ranges = chosen
             .iter()
             .map(|s| crate::zoom::EditedRange {
@@ -1751,17 +2185,19 @@ pub struct FillerArgs {
     /// Which to cut: `filler`, `retake`. Default both.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
-    /// Whose review adds to the rules. `auto` (default): `openrouter` when the user has a key
-    /// set, else `local` when the built-in model is downloaded, else `in-house`. `local`:
-    /// the app's built-in model reads the flagged windows now (free, nothing leaves the
-    /// computer). `in-house`: the one you saved with `fillers_review` (nothing leaves the
-    /// computer). `openrouter`: the app sends the transcript to OpenRouter or OpenAI now (the
-    /// user's key, paid).
+    /// Whose review adds to the rules (see the tool's description). `local` and `in-house` send
+    /// nothing off the computer; `openrouter` uses the user's paid key.
     #[serde(default)]
     pub review: Option<FillerReview>,
     /// false: only list them. Default true.
     #[serde(default)]
     pub apply: Option<bool>,
+    /// Automatic mode: apply only if it looks right, else say why (no dry run first).
+    #[serde(default)]
+    pub guard: bool,
+    /// A take short (id or title): its voice's transcript, cut on the short's own timeline.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -1953,7 +2389,11 @@ fn fillers(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 
 fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
+    let stream = match args.stream {
+        Some(stream) => Some(stream),
+        None => take_voice(ctx, args.short.as_deref())?,
+    };
+    let key = pick_sound(ctx, stream, Want::Transcribed)?;
     let kinds = args.kinds.unwrap_or_else(|| {
         vec![
             TranscriptSuggestionKind::Filler,
@@ -1976,19 +2416,41 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         Some(FillerEngine::Local) => "the local review",
         _ => "the OpenRouter review",
     };
+    // A review of this sound still running (a caller that gave up waiting for it, or the
+    // app's own): wait for it and use what it saves, rather than starting another.
+    let running = format!("AI review of {key}");
+    let mut waited = false;
+    while ctx.host.transcripts().running.lock().as_deref() == Some(running.as_str()) {
+        if !waited {
+            ctx.progress(0.1, "Waiting for the review already running");
+            waited = true;
+        }
+        // Stopping this call leaves the review it waits on running.
+        ctx.stop_point()?;
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    // By default a saved review is used as it is (a call that timed out still saved its
+    // review); naming a review runs it again.
+    let saved = with_reader(ctx.state, |reader| {
+        Ok(store::load_transcript(reader.root(), &key)?.and_then(|t| t.ai_model))
+    })?;
+    let engine = engine.filter(|_| review != FillerReview::Auto || saved.is_none());
     let mut use_ai = engine.is_some();
     let mut fallback = None;
     let found = if let Some(engine) = engine {
         ctx.progress(0.1, &format!("Asking {name} for fillers and retakes"));
-        match tc::transcript_ai_suggest_impl(
-            ctx.state,
-            ctx.host.transcripts(),
-            before.handle.clone(),
-            key.clone(),
-            Some(engine),
-            &mut |p| ctx.progress(p.fraction, &p.message),
-        ) {
+        match ctx.transcript_job(|| {
+            tc::transcript_ai_suggest_impl(
+                ctx.state,
+                ctx.host.transcripts(),
+                before.handle.clone(),
+                key.clone(),
+                Some(engine),
+                &mut |p| ctx.progress(p.fraction, &p.message),
+            )
+        }) {
             Ok(found) => found,
+            Err(error) if ctx.stopped() => return Err(error),
             // Only by default: carry on with the in-house review and say why.
             Err(error) if review == FillerReview::Auto => {
                 use_ai = false;
@@ -2020,19 +2482,21 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         .filter(|s| s.source == SuggestionSource::Ai)
         .count();
     // Who made the saved review: the connected agent (in-house) or the OpenRouter model.
+    let describe = |r: &str| {
+        if r.starts_with(tc::IN_HOUSE) {
+            "the in-house review".to_string()
+        } else if r.starts_with("local/") {
+            format!("the local review ({r})")
+        } else {
+            format!("the OpenRouter review ({r})")
+        }
+    };
     let reviewer = chosen
         .iter()
         .find(|s| s.source == SuggestionSource::Ai)
         .and_then(|s| s.reviewer.as_deref())
-        .map(|r| {
-            if r.starts_with(tc::IN_HOUSE) {
-                "the in-house review".to_string()
-            } else if r.starts_with("local/") {
-                format!("the local review ({r})")
-            } else {
-                format!("the OpenRouter review ({r})")
-            }
-        })
+        .or(saved.as_deref())
+        .map(describe)
         .unwrap_or_else(|| "the review".into());
     let mut lines = vec![format!(
         "Found {} and {} in {key}{}.",
@@ -2043,6 +2507,9 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         } else if from_ai > 0 {
             // The review's finds are kept with the transcript.
             format!(" (rules, and {from_ai} from {reviewer})")
+        } else if saved.is_some() {
+            // A saved review that found nothing more is still a review: don't ask for another.
+            format!(" (rules; {reviewer}, saved, found nothing more)")
         } else {
             " (the rules only)".to_string()
         },
@@ -2053,7 +2520,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             name.trim_start_matches("the ")
         ));
     }
-    if !use_ai && from_ai == 0 {
+    if !use_ai && from_ai == 0 && saved.is_none() {
         lines.push(
             "The rules alone miss most fillers and retakes. Review the transcript in-house \
              first, unless it flagged nothing: `fillers_review` pages you through the words \
@@ -2070,7 +2537,20 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     if !examples.is_empty() {
         lines.push(format!("For example: {}.", examples.join("; ")));
     }
-    if args.apply.unwrap_or(true) && !chosen.is_empty() {
+    let hold = match args.guard && !chosen.is_empty() {
+        true => {
+            let cut: u64 = chosen
+                .iter()
+                .map(|s| s.edited_end_us.saturating_sub(s.edited_start_us))
+                .sum();
+            cut_looks_wrong(ctx, &before, cut, Some(&key))?.map(|reason| held(&reason))
+        }
+        false => None,
+    };
+    if let Some(line) = &hold {
+        lines.push(line.clone());
+    }
+    if args.apply.unwrap_or(true) && hold.is_none() && !chosen.is_empty() {
         let mut ids: Vec<String> = chosen.iter().flat_map(|s| s.word_ids.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -2128,6 +2608,10 @@ fn faces(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             fraction,
             &format!("Finding faces, {:.0}%", fraction * 100.0),
         );
+        // Detection runs in the app, not in this call: stopping the call only stops waiting.
+        if ctx.stopped() {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(500));
         status = commands::project_face_tracks_impl(ctx.state, before.handle.clone(), false)?;
     }
@@ -2210,7 +2694,7 @@ pub struct ZoomArgs {
     /// Zoom settings to change first, as in `settings zoom`, such as {"clickScale": 1.8}.
     #[serde(default)]
     pub settings: Option<Value>,
-    /// false with `add`: only report the suggestions. Default true.
+    /// false: only report what would be added (with `settings` tried, not saved). Default true.
     #[serde(default)]
     pub apply: Option<bool>,
 }
@@ -2380,17 +2864,37 @@ fn run_zooms(ctx: &Ctx, args: ZoomArgs) -> Result<String, String> {
     }
     let mut lines = Vec::new();
     if args.apply == Some(false) {
-        if args.op != ZoomOp::Add || args.settings.is_some() {
-            return Err("`apply: false` only reports the current suggestions: leave out `op` and `settings`".into());
+        if args.op == ZoomOp::Dismiss {
+            return Err(
+                "`apply: false` previews `add` or `reload`; `dismiss` has nothing to preview"
+                    .into(),
+            );
         }
-        let generation =
-            commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?;
+        // Other settings are tried without saving them: a dry run changes nothing.
+        let generation = match &args.settings {
+            Some(patch) => {
+                let current = with_reader(ctx.state, |reader| {
+                    Ok(reader.document().zoom_settings.clone())
+                })?;
+                let trial = patched("zoom", &current, patch)?;
+                commands::project_zoom_preview_impl(ctx.state, before.handle.clone(), &trial)?
+            }
+            None => {
+                commands::project_zoom_suggestions_impl(ctx.state, before.handle.clone(), None)?
+            }
+        };
         lines.push(if generation.suggestions.is_empty() {
             "No zoom suggestions to add.".to_string()
         } else {
             format!("Would add {}.", describe_zooms(&generation.suggestions))
         });
         lines.extend(generation.diagnostics);
+        if args.settings.is_some() {
+            lines.push(
+                "Nothing was saved: run it again without `apply: false` to use these settings."
+                    .into(),
+            );
+        }
         return Ok(lines.join("\n"));
     }
     if let Some(patch) = &args.settings {
@@ -2469,13 +2973,13 @@ pub enum Area {
     Transcription,
     Ai,
     Export,
-    Presets,
+    Cleanup,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsArgs {
-    /// captions, layout, audio, zoom, transcription, ai, export or presets.
+    /// captions, layout, audio, zoom, transcription, ai, export or cleanup.
     pub area: Area,
     /// Only the fields to change, such as {"enabled": true, "fontSizePct": 6}.
     #[serde(default)]
@@ -2496,11 +3000,6 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     let before = opened(ctx);
     match args.area {
-        Area::Presets | Area::Export => {
-            return Err(format!(
-                "{name} cannot be set here: pass these values to the actions instead"
-            ))
-        }
         Area::Transcription => {
             let next = patched(&name, &tc::transcript_settings_get_impl().settings, &patch)?;
             tc::transcript_settings_set_impl(next)?;
@@ -2513,6 +3012,7 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             let before = before.as_ref().map_err(Clone::clone)?;
             let (handle, revision) = (before.handle.clone(), before.revision);
             let document = with_reader(ctx.state, |reader| Ok(reader.document().clone()))?;
+            style_owned(area, &patch)?;
             match area {
                 Area::Captions => {
                     let next = patched(&name, &document.captions, &patch)?;
@@ -2530,6 +3030,14 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                     let next = patched(&name, &document.zoom_settings, &patch)?;
                     commands::project_zoom_settings_set_impl(ctx.state, handle, revision, next)?;
                 }
+                Area::Cleanup => {
+                    let next = patched(&name, &document.cleanup, &patch)?;
+                    commands::preset::project_cleanup_set_impl(ctx.state, handle, revision, next)?;
+                }
+                Area::Export => {
+                    let next = patched(&name, &document.export, &patch)?;
+                    commands::preset::project_export_set_impl(ctx.state, handle, revision, next)?;
+                }
                 _ => unreachable!("handled above"),
             }
         }
@@ -2546,6 +3054,50 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
 }
 
+/// Refuses fields that are how things look: they are the project's style's, never set here.
+fn style_owned(area: Area, patch: &Value) -> Result<(), String> {
+    let owned: &[&str] = match area {
+        Area::Captions => &[
+            "style",
+            "textColor",
+            "emphasis",
+            "emphasisColor",
+            "weight",
+            "outline",
+            "background",
+            "backgroundColor",
+            "backgroundOpacity",
+        ],
+        Area::Layout => &[
+            "backgroundType",
+            "backgroundPreset",
+            "colorStart",
+            "colorEnd",
+            "cornerRadiusPx",
+            "shadowBlurPx",
+            "shadowOpacity",
+            "webcamBorderColor",
+            "webcamBorderWidth",
+            "webcamShadow",
+        ],
+        _ => &[],
+    };
+    let named: Vec<&str> = owned
+        .iter()
+        .copied()
+        .filter(|key| patch.get(*key).is_some())
+        .collect();
+    if named.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is how it looks: that is the project's style (`library` `kind: style`), not a \
+             setting of the project",
+            named.join(", ")
+        ))
+    }
+}
+
 fn value<T: Serialize>(settings: &T) -> Value {
     serde_json::to_value(settings).unwrap_or_default()
 }
@@ -2554,7 +3106,8 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
     Ok(match area {
         Area::Transcription => value(&tc::transcript_settings_get_impl().settings),
         Area::Ai => value(&tc::ai_settings_get_impl().settings),
-        Area::Presets => {
+        Area::Cleanup => {
+            let ours = with_reader(ctx.state, |reader| Ok(value(&reader.document().cleanup)))?;
             let presets: Vec<Value> = [Preset::Gentle, Preset::Balanced, Preset::Tight, Preset::Aggressive]
                 .iter()
                 .map(|preset| {
@@ -2568,12 +3121,9 @@ fn current_settings(ctx: &Ctx, area: Area) -> Result<Value, String> {
                     })
                 })
                 .collect();
-            Value::Array(presets)
+            json!({ "project": ours, "levels": presets })
         }
-        Area::Export => {
-            let defaults = export_defaults(ctx)?;
-            value(&defaults)
-        }
+        Area::Export => with_reader(ctx.state, |reader| Ok(value(&reader.document().export)))?,
         area => with_reader(ctx.state, |reader| {
             let document = reader.document();
             Ok(match area {
@@ -2686,14 +3236,29 @@ fn set_chapters(ctx: &Ctx, before: &Open, args: ChaptersArgs) -> Result<Vec<Outp
         "Set {}:",
         plural(project.chapters.len(), "chapter")
     )];
-    lines.extend(project.chapters.iter().map(|c| {
-        format!(
-            "{} {}",
-            c.edited_us.map_or("(cut)".to_string(), clock),
-            c.title
-        )
-    }));
-    text(applied(ctx, "chapters", before, lines)?)
+    lines.extend(chapter_lines(&project.chapters));
+    let answer = applied(ctx, "chapters", before, lines)?;
+    if let Ok(now) = current(ctx) {
+        chapters_made(&now);
+    }
+    text(answer)
+}
+
+/// One line per chapter, as the export writes them: the first plays from 0:00 (YouTube's rule),
+/// wherever its word starts.
+fn chapter_lines(chapters: &[crate::chapters::Chapter]) -> Vec<String> {
+    let first = chapters.iter().filter_map(|c| c.edited_us).min();
+    chapters
+        .iter()
+        .map(|c| {
+            let at = match c.edited_us {
+                Some(at) if Some(at) == first => clock(0),
+                Some(at) => clock(at),
+                None => "(cut)".to_string(),
+            };
+            format!("{at} {}", c.title)
+        })
+        .collect()
 }
 
 fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -2704,24 +3269,24 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
     ctx.progress(0.1, "Asking the AI pass for chapters");
-    let project = tc::project_chapters_generate_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        before.handle.clone(),
-        key,
-    )?;
+    let project = ctx.transcript_job(|| {
+        tc::project_chapters_generate_impl(
+            ctx.state,
+            ctx.host.transcripts(),
+            before.handle.clone(),
+            key,
+        )
+    })?;
     let mut lines = vec![format!(
         "Made {}:",
         plural(project.chapters.len(), "chapter")
     )];
-    lines.extend(project.chapters.iter().map(|c| {
-        format!(
-            "{} {}",
-            c.edited_us.map_or("(cut)".to_string(), clock),
-            c.title
-        )
-    }));
-    text(applied(ctx, "chapters", &before, lines)?)
+    lines.extend(chapter_lines(&project.chapters));
+    let answer = applied(ctx, "chapters", &before, lines)?;
+    if let Ok(now) = current(ctx) {
+        chapters_made(&now);
+    }
+    text(answer)
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -2734,17 +3299,22 @@ pub enum ShortsOp {
     Remove,
     /// Set `short` to play from `fromWord` to `toWord`.
     Range,
+    /// Give `short` the title `title`.
+    Rename,
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortsArgs {
-    /// find (default), remove or range.
+    /// find (default), remove, range or rename.
     #[serde(default)]
     pub op: ShortsOp,
-    /// remove, range: the short's id or title.
+    /// remove, range, rename: the short's id or title.
     #[serde(default)]
     pub short: Option<String>,
+    /// rename: the new title (under 60 characters, also the file name).
+    #[serde(default)]
+    pub title: Option<String>,
     /// range: the first and last word, ids from `transcript_get`.
     #[serde(default)]
     pub from_word: Option<String>,
@@ -2781,6 +3351,17 @@ fn change_short(ctx: &Ctx, before: &Open, args: ShortsArgs) -> Result<Vec<Output
         if args.op == ShortsOp::Remove {
             let gone = shorts.remove(index);
             return Ok((shorts, format!("Removed short \"{}\".", gone.title)));
+        }
+        if args.op == ShortsOp::Rename {
+            let title = args
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .ok_or("`rename` needs `title`")?;
+            let was = std::mem::replace(&mut shorts[index].title, title.chars().take(60).collect());
+            let line = format!("Renamed short \"{was}\" to \"{}\".", shorts[index].title);
+            return Ok((shorts, line));
         }
         let short = &mut shorts[index];
         if short.take.is_some() {
@@ -2837,12 +3418,14 @@ fn shorts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
     ctx.progress(0.1, "Asking the AI pass for shorts");
-    let project = tc::project_shorts_generate_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        before.handle.clone(),
-        key,
-    )?;
+    let project = ctx.transcript_job(|| {
+        tc::project_shorts_generate_impl(
+            ctx.state,
+            ctx.host.transcripts(),
+            before.handle.clone(),
+            key,
+        )
+    })?;
     let mut lines = vec![format!(
         "Found {} for the Shorts Studio:",
         plural(project.shorts.len(), "short")
@@ -2902,7 +3485,9 @@ fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             .shorts
             .first()
             .map(|s| s.layout.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                crate::preset::store::resolve(&document.shorts_preset).short_layout()
+            });
         layout.graphic_slots.clear();
         layout.camera_clips.clear();
         let mut layouts = document
@@ -3135,16 +3720,22 @@ fn short_from_take(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     } else {
         format!("Next: `transcribe` with stream {}.", take.voice)
     });
+    lines.push(
+        "Unless the user named it, rename it after the take's words once they are read \
+         (`shorts` `op: rename`), never after the video."
+            .into(),
+    );
     text(applied(ctx, "short_from_take", &before, lines)?)
 }
 
-#[derive(Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[derive(Deserialize, JsonSchema, Clone, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FootageOp {
     #[default]
     List,
     Add,
     Remove,
+    Sound,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -3167,12 +3758,42 @@ pub struct FootageItemArgs {
     /// The sound whose transcript `sourceWord` is from; default the video's speech.
     #[serde(default)]
     pub source_stream: Option<String>,
-    /// ...or from `videoS` seconds on the video's timeline (the times `transcript_get` shows).
+    /// ...or from `videoS` seconds on the video's timeline (the times `transcript_get` shows)...
     #[serde(default)]
     pub video_s: Option<f64>,
-    /// Play the footage's game or desktop sound, ducked under the voice. Default true.
+    /// ...or B-roll from outside the video: an imported file's id (`media_import`, `status`),
+    /// from `mediaS` seconds into it (default 0).
+    #[serde(default)]
+    pub media: Option<String>,
+    #[serde(default)]
+    pub media_s: Option<f64>,
+    /// Play the footage's game or desktop sound, ducked under the voice (never its microphone).
+    /// Default true.
     #[serde(default)]
     pub sound: Option<bool>,
+    /// How fast the footage plays, 0.25-4 (default 1): 1.5 fits 1.5x the footage into the
+    /// gap, 0.75 stretches less to fill it. Trim by choosing a shorter stretch; jump-cut with
+    /// several items in a row.
+    #[serde(default)]
+    pub speed: Option<f64>,
+    /// For a graphic: how it shows. `full` (the whole frame: the graphic is the point),
+    /// `screen` (split: the face above, the graphic in the screen's part, footage or not) or
+    /// `overFace` (the face fills the frame and the graphic is drawn over it, see-through:
+    /// callouts, labels, arrows). Picked before it renders, so it renders once. Default full.
+    #[serde(default)]
+    pub mode: Option<crate::shorts::GraphicSlot>,
+    /// Or a graphic: a template name, a library item, or one of the video's graphics (its id
+    /// from `graphics`), with its `name` and `variables`.
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub library: Option<String>,
+    #[serde(default)]
+    pub graphic: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub variables: serde_json::Map<String, Value>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -3180,6 +3801,9 @@ pub struct FootageItemArgs {
 pub struct ShortFootageArgs {
     /// The short's id (or title).
     pub short: String,
+    /// For `add`: what the batch is for, in a sentence the user reads.
+    #[serde(default)]
+    pub reason: Option<String>,
     #[serde(default)]
     pub op: Option<FootageOp>,
     #[serde(default)]
@@ -3189,6 +3813,12 @@ pub struct ShortFootageArgs {
     pub from_s: Option<f64>,
     #[serde(default)]
     pub to_s: Option<f64>,
+    /// For `sound`: the footage and B-roll sound's volume, -30 to 12 dB (0 as recorded)...
+    #[serde(default)]
+    pub volume_db: Option<f32>,
+    /// ...and how far it is lowered while the voice talks, 3 to 30 dB.
+    #[serde(default)]
+    pub duck_db: Option<f32>,
 }
 
 fn to_us(seconds: f64) -> Result<u64, String> {
@@ -3198,28 +3828,40 @@ fn to_us(seconds: f64) -> Result<u64, String> {
     Ok((seconds * 1e6).round() as u64)
 }
 
-fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: ShortFootageArgs = params(args)?;
-    let before = opened(ctx)?;
-    let short = with_reader(ctx.state, |reader| {
+/// A short by its id or title.
+fn short_named(ctx: &Ctx, wanted: &str) -> Result<crate::shorts::Short, String> {
+    with_reader(ctx.state, |reader| {
         let shorts = &reader.document().shorts;
         shorts
             .iter()
-            .find(|s| s.id == args.short)
+            .find(|s| s.id == wanted)
             .or_else(|| {
                 shorts
                     .iter()
-                    .find(|s| s.title.eq_ignore_ascii_case(args.short.trim()))
+                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
             })
             .cloned()
-            .ok_or_else(|| format!("No short {}", args.short))
-    })?;
+            .ok_or_else(|| format!("No short {wanted}"))
+    })
+}
+
+/// A take short by its id or title: footage and graphics go on its own timeline.
+fn take_short_named(ctx: &Ctx, wanted: &str) -> Result<crate::shorts::Short, String> {
+    let short = short_named(ctx, wanted)?;
     if short.take.is_none() {
         return Err(format!(
-            "{} is cut from the video; footage goes under shorts made from a take (`short_from_take`)",
+            "{} is a clip cut from the video; footage and graphics of their own go on shorts made \
+             from a take (`short_from_take`)",
             short.id
         ));
     }
+    Ok(short)
+}
+
+fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: ShortFootageArgs = params(args)?;
+    let before = opened(ctx)?;
+    let short = take_short_named(ctx, &args.short)?;
     let list = |short: &crate::shorts::Short| -> Result<Vec<String>, String> {
         let placed = with_reader(ctx.state, |reader| {
             crate::take_short::placed(reader.document(), short)
@@ -3233,10 +3875,13 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Ok(placed
             .iter()
             .map(|f| {
-                let from = f
-                    .video_us
-                    .map(|v| format!("the video at {}", clock(v)))
-                    .unwrap_or_else(|| "a part of the video cut since".into());
+                let from = if f.outside {
+                    format!("{} at {}", f.media, clock(f.in_us))
+                } else {
+                    f.video_us
+                        .map(|v| format!("the video at {}", clock(v)))
+                        .unwrap_or_else(|| "a part of the video cut since".into())
+                };
                 format!(
                     "{}-{}: {from}{}",
                     clock(f.at_us),
@@ -3246,69 +3891,56 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             })
             .collect())
     };
+    let sound_line = |short: &crate::shorts::Short| -> Result<String, String> {
+        with_reader(ctx.state, |reader| {
+            Ok(
+                crate::take_short::footage_sound_mix(reader.document(), short)
+                    .map(|(_, volume, duck)| {
+                        format!("Footage sound: {volume:+} dB, lowered {duck} dB under the voice.")
+                    })
+                    .unwrap_or_default(),
+            )
+        })
+    };
     let change = match args.op.unwrap_or_default() {
-        FootageOp::List => return text(list(&short)?.join("\n")),
+        FootageOp::List => {
+            let mut lines = list(&short)?;
+            lines.push(sound_line(&short)?);
+            return text(lines.join("\n"));
+        }
+        FootageOp::Sound => {
+            let (track, volume, duck) = with_reader(ctx.state, |reader| {
+                crate::take_short::footage_sound_mix(reader.document(), &short)
+                    .ok_or_else(|| format!("{} has no footage sound track", short.id))
+            })?;
+            let mut audio = with_reader(ctx.state, |reader| Ok(reader.document().audio.clone()))?;
+            let (lo, hi) = crate::project::audio::TRACK_VOLUME_DB_RANGE;
+            let volume_db = args.volume_db.unwrap_or(volume);
+            if !(lo..=hi).contains(&volume_db) {
+                return Err(format!("volumeDb is {lo} to {hi}"));
+            }
+            let (lo, hi) = crate::project::audio::DUCK_DB_RANGE;
+            let duck_db = args.duck_db.unwrap_or(duck);
+            if !(lo..=hi).contains(&duck_db) {
+                return Err(format!("duckDb is {lo} to {hi}"));
+            }
+            let mix = audio.tracks.entry(track).or_default();
+            mix.volume_db = volume_db;
+            mix.duck_db = Some(duck_db);
+            commands::project_audio_update_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                audio,
+            )?;
+            let line = sound_line(&short)?;
+            return text(applied(ctx, "short_footage", &before, vec![line])?);
+        }
         FootageOp::Remove => commands::FootageChange::Remove {
             from_us: args.from_s.map(to_us).transpose()?,
             to_us: args.to_s.map(to_us).transpose()?,
         },
-        FootageOp::Add => {
-            let items = with_reader(ctx.state, |reader| {
-                let take = short.take.as_ref().ok_or("No take")?;
-                let take_words = store::load_transcript(reader.root(), &take.voice)?;
-                let mut out = Vec::new();
-                for item in &args.items {
-                    let (at_us, to) = match (&item.from_word, &item.to_word, item.at_s, item.to_s) {
-                        (Some(from), Some(to), _, _) => {
-                            let transcript = take_words.as_ref().ok_or_else(|| {
-                                format!(
-                                    "The take is not transcribed: `transcribe` with stream {}",
-                                    take.voice
-                                )
-                            })?;
-                            crate::take_short::words_at(&short, transcript, from, to)?
-                        }
-                        (_, _, Some(a), Some(b)) => (to_us(a)?, to_us(b)?),
-                        _ => {
-                            return Err("Each item needs `fromWord`/`toWord` or `atS`/`toS`".into())
-                        }
-                    };
-                    let video_us = match (&item.source_word, item.video_s) {
-                        (Some(word), _) => {
-                            let key = match &item.source_stream {
-                                Some(key) => key.clone(),
-                                None => video_speech(reader, &take.voice)?,
-                            };
-                            let transcript = store::load_transcript(reader.root(), &key)?
-                                .ok_or_else(|| format!("{key} is not transcribed"))?;
-                            let source = transcript
-                                .words
-                                .iter()
-                                .find(|w| &w.id == word)
-                                .ok_or_else(|| format!("No word {word} in {key}"))?;
-                            // Only what the video keeps: the word must be on its timeline.
-                            reader
-                                .document()
-                                .transcript_clock(&key)?
-                                .source_to_edited_us(source.source_start_us)
-                                .ok_or_else(|| {
-                                    format!("Word {word} was cut from the video; pick one it keeps")
-                                })?
-                        }
-                        (None, Some(seconds)) => to_us(seconds)?,
-                        _ => return Err("Each item needs `sourceWord` or `videoS`".into()),
-                    };
-                    out.push(crate::take_short::Footage {
-                        at_us,
-                        to_us: to,
-                        video_us,
-                        sound: item.sound.unwrap_or(true),
-                    });
-                }
-                Ok(out)
-            })?;
-            commands::FootageChange::Add { items }
-        }
+        FootageOp::Add => return propose_under(ctx, &short, &args),
     };
     let project = commands::project_short_footage_impl(
         ctx.state,
@@ -3327,27 +3959,126 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(applied(ctx, "short_footage", &before, lines)?)
 }
 
-/// The id of the take short `wanted` names (its id or title).
-fn take_short_id(ctx: &Ctx, wanted: &str) -> Result<String, String> {
-    with_reader(ctx.state, |reader| {
-        let shorts = &reader.document().shorts;
-        let short = shorts
-            .iter()
-            .find(|s| s.id == wanted)
-            .or_else(|| {
-                shorts
-                    .iter()
-                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
-            })
-            .ok_or_else(|| format!("No short {wanted}"))?;
-        if short.take.is_none() {
-            return Err(format!(
-                "{} is cut from the video: clean the video itself, and the short follows",
-                short.id
-            ));
+/// `short_footage` `op: add`: the items as one batch for the user (autopilot accepts it).
+fn propose_under(
+    ctx: &Ctx,
+    short: &crate::shorts::Short,
+    args: &ShortFootageArgs,
+) -> Result<Vec<Output>, String> {
+    use crate::under_take::{GraphicFrom, Under};
+    let items = with_reader(ctx.state, |reader| {
+        let take = short.take.as_ref().ok_or("No take")?;
+        let take_words = store::load_transcript(reader.root(), &take.voice)?;
+        let mut out = Vec::new();
+        for (n, item) in args.items.iter().enumerate() {
+            let at = |error: String| format!("Item {}: {error}", n + 1);
+            let (at_us, to) = match (&item.from_word, &item.to_word, item.at_s, item.to_s) {
+                (Some(from), to_word, _, _) => {
+                    let transcript = take_words.as_ref().ok_or_else(|| {
+                        format!(
+                            "The take is not transcribed: `transcribe` with stream {}",
+                            take.voice
+                        )
+                    })?;
+                    let last = to_word.as_deref().unwrap_or(from);
+                    let (a, b) =
+                        crate::take_short::words_at(short, transcript, from, last).map_err(at)?;
+                    (a, to_word.is_some().then_some(b))
+                }
+                (None, _, Some(a), b) => (to_us(a)?, b.map(to_us).transpose()?),
+                _ => {
+                    return Err(at(
+                        "give `fromWord` (and `toWord`) or `atS` (and `toS`)".into()
+                    ))
+                }
+            };
+            let graphic = match (&item.template, &item.library, &item.graphic) {
+                (None, None, None) => None,
+                (Some(template), None, None) => Some(GraphicFrom::Template {
+                    template: template.clone(),
+                }),
+                (None, Some(id), None) => Some(GraphicFrom::Library { id: id.clone() }),
+                (None, None, Some(graphic)) => Some(GraphicFrom::Video {
+                    graphic: graphic.clone(),
+                }),
+                _ => return Err(at("give one of `template`, `library` or `graphic`".into())),
+            };
+            if let Some(from) = graphic {
+                out.push(Under::Graphic {
+                    from,
+                    at_us,
+                    length_us: to.map(|t| t.saturating_sub(at_us)).filter(|l| *l > 0),
+                    name: item.name.clone(),
+                    variables: item.variables.clone(),
+                    mode: item.mode,
+                });
+                continue;
+            }
+            let to = to.ok_or_else(|| at("footage needs an end: `toWord` or `toS`".into()))?;
+            let video_us = match (&item.source_word, item.video_s) {
+                _ if item.media.is_some() => to_us(item.media_s.unwrap_or(0.0))?,
+                (Some(word), _) => {
+                    let key = match &item.source_stream {
+                        Some(key) => key.clone(),
+                        None => video_speech(reader, &take.voice)?,
+                    };
+                    let transcript = store::load_transcript(reader.root(), &key)?
+                        .ok_or_else(|| format!("{key} is not transcribed"))?;
+                    let source = transcript
+                        .words
+                        .iter()
+                        .find(|w| &w.id == word)
+                        .ok_or_else(|| at(format!("no word {word} in {key}")))?;
+                    // Only what the video keeps: the word must be on its timeline.
+                    reader
+                        .document()
+                        .transcript_clock(&key)?
+                        .source_to_edited_us(source.source_start_us)
+                        .ok_or_else(|| {
+                            at(format!(
+                                "word {word} was cut from the video; pick one it keeps"
+                            ))
+                        })?
+                }
+                (None, Some(seconds)) => to_us(seconds)?,
+                _ => {
+                    return Err(at(
+                        "give `sourceWord`, `videoS`, `media` or a graphic".into()
+                    ))
+                }
+            };
+            out.push(Under::Footage(crate::take_short::Footage {
+                at_us,
+                to_us: to,
+                video_us,
+                media: item.media.clone(),
+                sound: item.sound.unwrap_or(true),
+                speed: item.speed.unwrap_or(1.0),
+            }));
         }
-        Ok(short.id.clone())
+        Ok(out)
+    })?;
+    let reason = args
+        .reason
+        .clone()
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| format!("What plays under \"{}\"", short.title));
+    let (agent, id) = (ctx.agent.clone(), short.id.clone());
+    super::propose::propose(ctx, |reader, proposals| {
+        crate::proposals::propose_under(reader, proposals, &agent, &id, items, &reason)
     })
+}
+
+/// The id of the take short `wanted` names (its id or title), for cleaning its take.
+fn take_short_id(ctx: &Ctx, wanted: &str) -> Result<String, String> {
+    let short = short_named(ctx, wanted)?;
+    if short.take.is_none() {
+        return Err(format!(
+            "{} is cut from the video: clean the video itself, and the short follows",
+            short.id
+        ));
+    }
+    Ok(short.id)
 }
 
 /// The video's transcribed speech: the first transcribed sound on the main timeline that is
@@ -3389,14 +4120,13 @@ fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .collect();
     commands::project_check_fix_impl(ctx.state, before.handle.clone(), before.revision, ids)?;
     let after = commands::project_check_impl(ctx.state, before.handle.clone())?;
-    let lines = vec![
-        format!(
-            "Fixed {}, each its own undo step: {}.",
-            plural(fixed.len(), "finding"),
-            fixed.join("; ")
-        ),
-        crate::check::report_text(&after),
-    ];
+    let mut lines = vec![format!(
+        "Fixed {}, each its own undo step: {}.",
+        plural(fixed.len(), "finding"),
+        fixed.join("; ")
+    )];
+    // What is left, briefly: this is the check after the fixes, so no need to run it again.
+    lines.push(crate::check::left_text(&after));
     text(applied(ctx, "check", &before, lines)?)
 }
 
@@ -3419,17 +4149,18 @@ pub struct ExportArgs {
     /// Stop the export with this job id (from `wait: false` or export_status) instead.
     #[serde(default)]
     pub cancel: Option<String>,
+    /// Save another file instead of the video, of the video or of `short`: subtitles (`srt`,
+    /// `vtt`, from the captions as cut, hidden words left out), the transcript (`txt`, `md`
+    /// with the chapters as headings) or the sound alone (`wav`). `settings` don't apply.
+    #[serde(default)]
+    pub file: Option<crate::export::files::FileKind>,
 }
 
+/// The project's export settings (from its preset unless changed here).
 fn export_defaults(ctx: &Ctx) -> Result<crate::export::ExportSettings, String> {
     with_reader(ctx.state, |reader| {
-        let (width, height) = reader.document().layout.preview_dimensions()?;
-        Ok(crate::export::ExportSettings {
-            width,
-            height,
-            fps: reader.summary.fps,
-            ..Default::default()
-        })
+        let document = reader.document();
+        document.export.settings(&document.layout)
     })
 }
 
@@ -3440,6 +4171,15 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         return text(format!("Asked export {job} to stop: {:?}.", status.state));
     }
     let open = opened(ctx)?;
+    if let Some(kind) = args.file {
+        return export_files(
+            ctx,
+            &open.handle,
+            kind,
+            args.short.as_deref(),
+            args.destination,
+        );
+    }
     let defaults = export_defaults(ctx)?;
     let mut settings = match &args.settings {
         Some(patch) => patched("export", &defaults, patch)?,
@@ -3455,6 +4195,7 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .map(|w| format!("\n{w}"))
         .unwrap_or_default();
     let started = commands::export_start_impl(ctx.state, open.handle, settings)?;
+    ctx.host.export_started(&started, false);
     if args.wait == Some(false) {
         return text(format!(
             "Export {} started at revision {}; check it with export_status.{stale}",
@@ -3492,19 +4233,62 @@ fn wait_for_export(
                     0.0
                 };
                 ctx.progress(fraction, &format!("{doing}, {:.0}%", fraction * 100.0));
+                if ctx.stopped() {
+                    commands::export_cancel_impl(ctx.state, job_id.to_string())?;
+                    return Err(format!(
+                        "Stopped: export {job_id} was cancelled (the user, or your client, \
+                         cancelled the call) and no file was saved."
+                    ));
+                }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
         }
     }
 }
 
-/// Exports the short `wanted` (id or title) or "all", one after another.
-fn export_shorts(
+/// Saves the file `kind` of the video, or of the short `short` (id, title or "all").
+fn export_files(
     ctx: &Ctx,
     handle: &str,
-    wanted: &str,
-    mut settings: crate::export::ExportSettings,
+    kind: crate::export::files::FileKind,
+    short: Option<&str>,
+    destination: Option<String>,
 ) -> Result<Vec<Output>, String> {
+    let targets: Vec<(Option<String>, String)> = match short {
+        Some(wanted) => chosen_shorts(ctx, wanted)?
+            .into_iter()
+            .map(|(id, title)| (Some(id), format!("\"{title}\"")))
+            .collect(),
+        None => vec![(None, "The video".into())],
+    };
+    // One file name can't hold several shorts: each goes next to the project.
+    let destination = if targets.len() == 1 {
+        destination
+    } else {
+        None
+    };
+    let mut lines = Vec::new();
+    for (i, (id, label)) in targets.iter().enumerate() {
+        let path = commands::export_file_impl(
+            ctx.state,
+            handle.to_string(),
+            id.clone(),
+            kind,
+            destination.clone(),
+            &mut |done| {
+                ctx.progress(
+                    (i as f64 + done) / targets.len() as f64,
+                    &format!("Writing {label}, {:.0}%", done * 100.0),
+                )
+            },
+        )?;
+        lines.push(format!("{label}: {}", path.display()));
+    }
+    text(lines.join("\n"))
+}
+
+/// The shorts `wanted` names (id or title), or all of them for "all", as (id, title).
+fn chosen_shorts(ctx: &Ctx, wanted: &str) -> Result<Vec<(String, String)>, String> {
     let shorts: Vec<(String, String)> = with_reader(ctx.state, |reader| {
         Ok(reader
             .document()
@@ -3513,13 +4297,14 @@ fn export_shorts(
             .map(|s| (s.id.clone(), s.title.clone()))
             .collect())
     })?;
-    let chosen: Vec<&(String, String)> = if wanted.trim().eq_ignore_ascii_case("all") {
-        shorts.iter().collect()
+    let chosen: Vec<(String, String)> = if wanted.trim().eq_ignore_ascii_case("all") {
+        shorts.clone()
     } else {
         shorts
             .iter()
             .filter(|(id, title)| id == wanted || title.eq_ignore_ascii_case(wanted.trim()))
             .take(1)
+            .cloned()
             .collect()
     };
     if chosen.is_empty() {
@@ -3536,6 +4321,17 @@ fn export_shorts(
             )
         });
     }
+    Ok(chosen)
+}
+
+/// Exports the short `wanted` (id or title) or "all", one after another.
+fn export_shorts(
+    ctx: &Ctx,
+    handle: &str,
+    wanted: &str,
+    mut settings: crate::export::ExportSettings,
+) -> Result<Vec<Output>, String> {
+    let chosen = chosen_shorts(ctx, wanted)?;
     // Each short is named after itself next to the project; one file name can't hold them.
     settings.destination = None;
     let mut lines = Vec::new();
@@ -3546,6 +4342,7 @@ fn export_shorts(
             id.clone(),
             settings.clone(),
         )?;
+        ctx.host.export_started(&started, true);
         let doing = format!("Exporting short {} of {} ({title})", i + 1, chosen.len());
         let status = wait_for_export(ctx, &started.job_id, &doing)?;
         lines.push(format!(
@@ -3572,16 +4369,50 @@ fn export_failure(status: &crate::export::ExportStatus) -> String {
     format!("The export stopped: {message}")
 }
 
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStatusArgs {
+    /// Seconds to wait for the export to finish before answering, at most 300. Default 0.
+    #[serde(default)]
+    pub wait_s: Option<u64>,
+}
+
 fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
-    let status = commands::export_status_impl(ctx.state, None)?;
+    let args: ExportStatusArgs = params(args)?;
     use crate::export::ExportState::*;
+    let until = std::time::Instant::now()
+        + std::time::Duration::from_secs(args.wait_s.unwrap_or(0).min(300));
+    let status = loop {
+        let status = commands::export_status_impl(ctx.state, None)?;
+        // Stopping a wait answers at once; the export carries on (`export cancel` stops it).
+        if !matches!(status.state, Queued | Running)
+            || std::time::Instant::now() >= until
+            || ctx.stopped()
+        {
+            break status;
+        }
+        if let (Some(stage), 0) = (&status.stage, status.progress_numerator) {
+            ctx.progress(status.stage_fraction.unwrap_or(0.0), stage);
+        } else if status.progress_denominator > 0 {
+            let fraction = status.progress_numerator as f64 / status.progress_denominator as f64;
+            ctx.progress(fraction, &format!("Exporting, {:.0}%", fraction * 100.0));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
     text(match status.state {
         Idle => "No export has run since the app started.".to_string(),
-        Queued | Running => format!(
-            "Export {} running: {}/{} frames.",
-            status.job_id, status.progress_numerator, status.progress_denominator
-        ),
+        // Graphics render before the first frame, at 0 frames: say so, or it reads as stuck.
+        Queued | Running => match (&status.stage, status.progress_numerator) {
+            (Some(stage), 0) => format!(
+                "Export {} running: {stage} ({:.0}%), before its frames. It is working: wait.",
+                status.job_id,
+                status.stage_fraction.unwrap_or(0.0) * 100.0
+            ),
+            _ => format!(
+                "Export {} running: {}/{} frames.",
+                status.job_id, status.progress_numerator, status.progress_denominator
+            ),
+        },
         Completed => format!(
             "Export {} done: {}.",
             status.job_id,
@@ -3618,52 +4449,65 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Ok(open) => commands::graphics::project_graphics_list_impl(ctx.state, open.handle)?,
         Err(_) => Vec::new(),
     };
-    let mut out = json!({
-        "renderer": if runtime.installed {
+    // Templates and the library as a line each (AI-1: about 40 % fewer characters than JSON):
+    // the colours every one takes are said once, since the style sets them.
+    let mut lines = vec![format!(
+        "Renderer: {}.",
+        if runtime.installed {
             format!("installed (HyperFrames {})", runtime.hyperframes)
         } else {
             "not installed: ask the user, then call graphics_install".to_string()
-        },
-        "templates": templates.iter().map(|t| json!({
-            "name": t.name,
-            "label": t.label,
-            "description": t.description,
-            "lengthUs": t.length_us,
-            "variables": t.variables.iter().map(|v| {
-                let mut decl = json!({"id": v.id, "type": v.kind, "label": v.label, "default": v.default});
-                if !v.options.is_empty() {
-                    decl["options"] = json!(v.options.iter().map(|o| o.value.clone()).collect::<Vec<_>>());
-                }
-                decl
-            }).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
-    });
-    out["library"] = json!(
-        crate::graphics::library::list(&crate::graphics::library::dir())
-            .iter()
-            .map(|item| json!({
-                "id": item.id,
-                "name": item.item.name,
-                "label": item.item.label,
-                "useWhen": item.item.use_when,
-                "kind": if item.item.general { "template" } else { "as is (not general)" },
-                "version": item.item.version,
-                "lengthUs": item.item.length_us,
-                "variables": item.variables.iter().map(|v| {
-                    json!({"id": v.id, "type": v.kind, "default": v.default})
-                }).collect::<Vec<_>>(),
-            }))
-            .collect::<Vec<_>>()
+        }
+    )];
+    lines.push(
+        "Templates (name, length: what it is; its variables and their defaults; besides these, \
+         each takes the colours `background`, `text`, `accent`, which the style sets):"
+            .into(),
     );
+    lines.extend(templates.iter().map(|t| {
+        format!(
+            "- {}, {}: {} {}",
+            t.name,
+            seconds(t.length_us),
+            t.description,
+            variable_list(&t.variables)
+        )
+    }));
+    let library = crate::graphics::library::list(&crate::graphics::library::dir());
+    if library.is_empty() {
+        lines.push("Library: empty.".into());
+    } else {
+        lines.push(
+            "Library (name and id, length: when to use it; its variables and their defaults):"
+                .into(),
+        );
+        lines.extend(library.iter().map(|item| {
+            format!(
+                "- {} ({}), {}{}: {} {}",
+                item.item.name,
+                item.id,
+                seconds(item.item.length_us),
+                if item.item.general {
+                    ""
+                } else {
+                    ", as is (not general)"
+                },
+                item.item.use_when,
+                variable_list(&item.variables)
+            )
+        }));
+    }
+    let mut out = json!({});
     out["graphics"] = json!(in_project
         .iter()
-        .map(|g| json!({
+        .map(|g| {
+            let mut listed = json!({
             "id": g.graphic.asset_id,
             "name": g.graphic.name,
             "template": g.graphic.template,
             "folder": g.graphic.folder,
             "variables": g.graphic.variables,
-            "brand": g.graphic.brand.clone().unwrap_or_else(|| "default".into()),
+            "style": g.graphic.style.clone().unwrap_or_else(|| "project".into()),
             "plays": g.clips.iter().map(|(id, start, length)| json!({
                 "clip": id,
                 "at": clock(*start),
@@ -3671,14 +4515,76 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 "lengthUs": length,
             })).collect::<Vec<_>>(),
             "render": render_line(&g.graphic.render),
-        }))
+            });
+            // Look tokens of its own, only when it has some.
+            if !g.graphic.look.is_empty() {
+                listed["look"] = json!(g.graphic.look);
+            }
+            listed
+        })
         .collect::<Vec<_>>());
-    super::tools::pretty(&out)
+    let graphics = serde_json::to_string(&out["graphics"]).map_err(|e| e.to_string())?;
+    lines.push(format!("Graphics in the project: {graphics}"));
+    // The rules for graphics come with the list: only edits with graphics need them.
+    let shorts =
+        with_reader(ctx.state, |reader| Ok(!reader.document().shorts.is_empty())).unwrap_or(false);
+    text(format!(
+        "{}\n\n{}",
+        super::skill::graphics_guide(shorts),
+        lines.join("\n")
+    ))
 }
 
-#[derive(Deserialize, JsonSchema)]
+/// `4 s`, `10.6 s`.
+fn seconds(us: u64) -> String {
+    let s = us as f64 / 1e6;
+    match s.fract() {
+        f if f < 0.05 => format!("{s:.0} s"),
+        _ => format!("{s:.1} s"),
+    }
+}
+
+/// A graphic's variables in a line: `title "Setting up"`, `count 3`, `side (left|right) "left"`,
+/// without the colours the style sets.
+fn variable_list(variables: &[crate::graphics::VariableDecl]) -> String {
+    let listed: Vec<String> = variables
+        .iter()
+        .filter(|v| {
+            !(v.kind == "color" && matches!(v.id.as_str(), "background" | "text" | "accent"))
+        })
+        .map(|v| {
+            let options = match v.options.is_empty() {
+                true => String::new(),
+                false => format!(
+                    " ({})",
+                    v.options
+                        .iter()
+                        .map(|o| o.value.to_string().trim_matches('"').to_string())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
+            };
+            // A default of 3 or true says its type; a colour's reads as text.
+            let kind = match v.kind.as_str() {
+                "color" => " (color)",
+                _ => "",
+            };
+            match &v.default {
+                Value::Null => format!("{}{kind}{options}", v.id),
+                default => format!("{}{kind}{options} {default}", v.id),
+            }
+        })
+        .collect();
+    match listed.is_empty() {
+        true => "No variables.".into(),
+        false => format!("Variables: {}.", listed.join(", ")),
+    }
+}
+
+/// One graphic to add: from a template or the library, where and how long it plays.
+#[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct GraphicAddArgs {
+pub struct GraphicItem {
     /// A template name from `graphics` (title, step, shortcut, key-point, recap, end-card, blank).
     #[serde(default)]
     pub template: Option<String>,
@@ -3691,9 +4597,6 @@ pub struct GraphicAddArgs {
     /// Or: the transcript word it starts at (an id from transcript_get).
     #[serde(default)]
     pub at_word: Option<String>,
-    /// The sound whose transcript `atWord` is from; default the transcribed speech.
-    #[serde(default)]
-    pub stream: Option<String>,
     /// How long it plays; default the template's.
     #[serde(default)]
     pub length_us: Option<u64>,
@@ -3704,77 +4607,97 @@ pub struct GraphicAddArgs {
     pub variables: serde_json::Map<String, Value>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicAddArgs {
+    /// The old one-graphic shape (its fields at the top level), still read; not published.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub one: GraphicItem,
+    /// The graphics to add, in one undo step: send them all in one call.
+    #[serde(default)]
+    pub items: Vec<GraphicItem>,
+    /// The sound whose transcript `atWord` is from; default the transcribed speech.
+    #[serde(default)]
+    pub stream: Option<String>,
+    /// Not here: graphics under a take short go in `short_footage` items.
+    #[serde(default)]
+    pub short: Option<String>,
+}
+
 fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicAddArgs = params(args)?;
+    if args.short.is_some() {
+        return Err(
+            "Graphics under a take short go in `short_footage` items (`op: add` with \
+                    `template`, `library` or `graphic`), proposed as one batch"
+                .into(),
+        );
+    }
     let before = opened(ctx)?;
-    let at = match (args.at_us, &args.at_word) {
-        (Some(at), None) => at,
-        (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word)?,
-        _ => return Err("Give one of `atUs` or `atWord`".into()),
-    };
-    let (created, from) = match (&args.template, &args.library) {
-        (Some(template), None) => (
-            commands::graphics::project_graphic_create_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                template.clone(),
-                args.name,
-                args.variables,
-                at,
-                args.length_us,
-            )?,
-            template.clone(),
-        ),
-        (None, Some(item)) => {
-            let created = commands::graphics::project_graphic_from_library_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                item.clone(),
-                at,
-                args.length_us,
-            )?;
-            if args.name.is_some() || !args.variables.is_empty() {
-                commands::graphics::project_graphic_set_impl(
-                    ctx.state,
-                    before.handle.clone(),
-                    created.project.revision,
-                    created.asset_id.clone(),
-                    args.variables,
-                    args.name,
-                    None,
-                )?;
+    let single = args.one.template.is_some() || args.one.library.is_some();
+    let items: Vec<GraphicItem> = single
+        .then_some(args.one)
+        .into_iter()
+        .chain(args.items)
+        .collect();
+    if items.is_empty() {
+        return Err("Give `template` or `library` (or `items`)".into());
+    }
+    let several = items.len() > 1;
+    let mut graphics = Vec::with_capacity(items.len());
+    for (n, item) in items.into_iter().enumerate() {
+        let at = |error: String| {
+            if several {
+                format!("Graphic {}: {error}", n + 1)
+            } else {
+                error
             }
-            (created, format!("library {item}"))
-        }
-        _ => return Err("Give one of `template` or `library`".into()),
-    };
-    let (name, length) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        Ok((
-            document
-                .asset(&created.asset_id)
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            document
-                .sequence
-                .clip(&created.clip_id)
-                .map_or(0, |(_, c)| c.duration_us),
-        ))
-    })?;
-    let mut lines = vec![format!(
-        "Added graphic {} \"{name}\" ({}) at {} for {:.1} s, clip {}.",
-        created.asset_id,
-        from,
-        clock(at),
-        length as f64 / 1e6,
-        created.clip_id
-    )];
+        };
+        let at_us = match (item.at_us, &item.at_word) {
+            (Some(at), None) => at,
+            (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word).map_err(at)?,
+            _ => return Err(at("give one of `atUs` or `atWord`".into())),
+        };
+        let from = match (item.template, item.library) {
+            (Some(template), None) => commands::graphics::ShortGraphicFrom::Template { template },
+            (None, Some(id)) => commands::graphics::ShortGraphicFrom::Library { id },
+            _ => return Err(at("give one of `template` or `library`".into())),
+        };
+        graphics.push(commands::graphics::VideoGraphic {
+            from,
+            at_us,
+            length_us: item.length_us,
+            name: item.name,
+            variables: item.variables,
+        });
+    }
+    let starts: Vec<u64> = graphics.iter().map(|g| g.at_us).collect();
+    let (_, placed) = commands::graphics::project_graphics_add_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        graphics,
+    )?;
+    let mut lines: Vec<String> = placed
+        .iter()
+        .zip(&starts)
+        .map(|(g, at)| {
+            format!(
+                "Added graphic {} \"{}\" ({}) at {} for {:.1} s, clip {}.",
+                g.asset_id,
+                g.name,
+                g.said,
+                clock(*at),
+                g.length_us as f64 / 1e6,
+                g.clip_id
+            )
+        })
+        .collect();
     lines.push(if crate::graphics::runtime::status().installed {
-        "It renders in the background; graphic_render waits for it.".into()
+        "They render in the background; graphic_render waits for them.".into()
     } else {
-        "The renderer is not installed, so it shows as a placeholder: ask the user, then graphics_install.".into()
+        "The renderer is not installed, so they show as placeholders: ask the user, then graphics_install.".into()
     });
     text(applied(ctx, "graphic_add", &before, lines)?)
 }
@@ -3792,10 +4715,15 @@ pub struct GraphicSetArgs {
     /// How long its (first) clip plays.
     #[serde(default)]
     pub length_us: Option<u64>,
-    /// Its brand kit: `default` (the project's), `none`, or a kit's name from brand_kits.
+    /// Its style: `project` (the project's) or a style's name from `library`.
     #[serde(default)]
-    pub brand: Option<String>,
-    /// A short (id or title) to set the graphic's `slot` in.
+    pub style: Option<String>,
+    /// Graphics look tokens of its own over its style's, by name (`radius`, `ease`...); null
+    /// takes one back.
+    #[serde(default)]
+    pub look: std::collections::BTreeMap<String, Option<String>>,
+    /// A short (id or title): set the graphic's `slot` in it; for a short made from a take,
+    /// moves and lengths are on its own timeline too (`moveToWord` a word of the take).
     #[serde(default)]
     pub short: Option<String>,
     /// Where it plays in that short.
@@ -3837,7 +4765,7 @@ fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> Result<u64, 
 fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicSetArgs = params(args)?;
     let before = opened(ctx)?;
-    graphic_folder(ctx, &args.graphic)?;
+    let dir = graphic_folder(ctx, &args.graphic)?;
     if args.remove {
         commands::project_media_remove_impl(
             ctx.state,
@@ -3848,140 +4776,216 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         let line = format!("Removed graphic {} and its clips.", args.graphic);
         return text(applied(ctx, "graphic_set", &before, vec![line])?);
     }
+    // What can be wrong with the call is found before anything changes.
+    if args.slot.is_some() && args.short.is_none() {
+        return Err("`slot` needs `short`".into());
+    }
+    if let Some(style) = &args.style {
+        crate::graphics::style_choice(style)?;
+    }
+    if !args.look.is_empty() {
+        let tokens = args
+            .look
+            .iter()
+            .filter_map(|(name, value)| Some((name.clone(), value.clone()?)))
+            .collect();
+        crate::graphics::look::check_tokens(&tokens)?;
+    }
+    if !args.variables.is_empty() {
+        let source = crate::graphics::read_source(&dir)?;
+        let declared = crate::graphics::declarations(&dir)?;
+        crate::graphics::merge_variables(&declared, &source.variables, &args.variables)?;
+    }
     let mut lines = Vec::new();
-    let target = match (args.move_to_us, &args.move_to_word) {
-        (Some(at), None) => Some(at),
-        (None, Some(word)) => Some(word_edited_us(ctx, args.stream.clone(), word)?),
-        (None, None) => None,
-        _ => return Err("Give one of `moveToUs` or `moveToWord`".into()),
+    // A take short's graphics are on its own timeline: moves and lengths happen there, at its
+    // words. A clip's graphics are the video's.
+    let take = match &args.short {
+        Some(wanted) => Some(short_named(ctx, wanted)?).filter(|s| s.take.is_some()),
+        None => None,
     };
-    if let Some(target) = target {
-        let now = current(ctx)?;
-        let (clip, start) = with_reader(ctx.state, |reader| {
-            reader
-                .document()
-                .sequence
-                .clips()
-                .find(|(_, c)| c.asset == args.graphic)
-                .map(|(_, c)| (c.id.clone(), c.start_us))
-                .ok_or_else(|| format!("Graphic {} is not on the timeline", args.graphic))
-        })?;
-        commands::project_sequence_edit_impl(
-            ctx.state,
-            now.handle,
-            now.revision,
-            crate::sequence::edit::SequenceEdit::MoveClips {
-                clip_ids: vec![clip],
-                delta_us: target as i64 - start as i64,
-                track_id: None,
-                anchor_id: None,
-            },
-            None,
-        )?;
-        lines.push(format!(
-            "Moved graphic {} to {}.",
-            args.graphic,
-            clock(target)
-        ));
-    }
-    if !args.variables.is_empty() || args.name.is_some() || args.brand.is_some() {
-        let updated = commands::graphics::project_graphic_set_impl(
-            ctx.state,
-            before.handle.clone(),
-            before.revision,
-            args.graphic.clone(),
-            args.variables.clone(),
-            args.name.clone(),
-            args.brand.clone(),
-        )?;
-        lines.push(format!(
-            "Graphic {} \"{}\": {}{}.",
-            args.graphic,
-            updated.graphic.name,
-            serde_json::to_string(&updated.graphic.variables).unwrap_or_default(),
-            match &updated.graphic.brand {
-                Some(kit) => format!(", brand kit {kit}"),
-                None => ", the project's brand kit".into(),
-            }
-        ));
-    }
-    match (&args.short, args.slot) {
-        (Some(wanted), Some(slot)) => {
-            let now = current(ctx)?;
-            let (title, shorts) = with_reader(ctx.state, |reader| {
-                let document = reader.document();
-                let mut shorts = document.shorts.clone();
-                let short = shorts
-                    .iter_mut()
-                    .find(|s| s.id == *wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
-                    .ok_or_else(|| format!("No short {wanted} (see shorts)"))?;
-                let timeline = crate::shorts::short_timeline(document, short)?;
-                let clips: Vec<String> = timeline
+    let on_take = take.as_ref().map(|s| s.id.clone());
+    let clip_of = |ctx: &Ctx| {
+        with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let found = match &on_take {
+                Some(id) => document
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .and_then(|s| s.edit.as_ref())
+                    .and_then(|e| {
+                        e.sequence
+                            .clips()
+                            .find(|(_, c)| c.asset == args.graphic)
+                            .map(|(_, c)| (c.id.clone(), c.start_us))
+                    }),
+                None => document
                     .sequence
                     .clips()
-                    .filter(|(_, c)| c.asset == args.graphic)
-                    .map(|(_, c)| c.id.clone())
-                    .collect();
-                if clips.is_empty() {
-                    return Err(format!(
-                        "Graphic {} does not play in short \"{}\"",
-                        args.graphic, short.title
-                    ));
-                }
-                for clip in clips {
-                    if slot == crate::shorts::GraphicSlot::Full {
-                        short.layout.graphic_slots.remove(&clip);
-                    } else {
-                        short.layout.graphic_slots.insert(clip, slot);
-                    }
-                }
-                Ok((short.title.clone(), shorts))
+                    .find(|(_, c)| c.asset == args.graphic)
+                    .map(|(_, c)| (c.id.clone(), c.start_us)),
+            };
+            found.ok_or_else(|| match &on_take {
+                Some(id) => format!("Graphic {} does not play in short {id}", args.graphic),
+                None => format!("Graphic {} is not on the timeline", args.graphic),
+            })
+        })
+    };
+    let target = match (args.move_to_us, &args.move_to_word, &take) {
+        (Some(at), None, _) => Some(at),
+        (None, Some(word), Some(short)) => Some(with_reader(ctx.state, |reader| {
+            let voice = &short.take.as_ref().ok_or("No take")?.voice;
+            let transcript = store::load_transcript(reader.root(), voice)?.ok_or_else(|| {
+                format!("The take is not transcribed: `transcribe` with stream {voice}")
             })?;
-            commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
+            Ok(crate::take_short::words_at(short, &transcript, word, word)?.0)
+        })?),
+        (None, Some(word), None) => Some(word_edited_us(ctx, args.stream.clone(), word)?),
+        (None, None, _) => None,
+        _ => return Err("Give one of `moveToUs` or `moveToWord`".into()),
+    };
+    // Each change is its own step on the revision the one before left. One that still fails
+    // after others went in says what did go in.
+    let steps = (|| -> Result<(), String> {
+        if let Some(target) = target {
+            let now = current(ctx)?;
+            let (clip, start) = clip_of(ctx)?;
+            commands::project_sequence_edit_impl(
+                ctx.state,
+                now.handle,
+                now.revision,
+                crate::sequence::edit::SequenceEdit::MoveClips {
+                    clip_ids: vec![clip],
+                    delta_us: target as i64 - start as i64,
+                    track_id: None,
+                    anchor_id: None,
+                },
+                on_take.clone(),
+            )?;
             lines.push(format!(
-                "In short \"{title}\" it plays {}.",
-                match slot {
-                    crate::shorts::GraphicSlot::Full => "over the whole frame",
-                    crate::shorts::GraphicSlot::Camera => "in the camera's part",
-                    crate::shorts::GraphicSlot::Screen => "in the screen's part",
-                    crate::shorts::GraphicSlot::OverScreen => "over the screen, under the captions",
+                "Moved graphic {} to {}.",
+                args.graphic,
+                clock(target)
+            ));
+        }
+        if !args.variables.is_empty() || args.name.is_some() || args.style.is_some() {
+            let now = current(ctx)?;
+            let updated = commands::graphics::project_graphic_set_impl(
+                ctx.state,
+                now.handle,
+                now.revision,
+                args.graphic.clone(),
+                args.variables.clone(),
+                args.name.clone(),
+                args.style.clone(),
+            )?;
+            lines.push(format!(
+                "Graphic {} \"{}\": {}{}.",
+                args.graphic,
+                updated.graphic.name,
+                serde_json::to_string(&updated.graphic.variables).unwrap_or_default(),
+                match &updated.graphic.style {
+                    Some(style) => format!(", style {style}"),
+                    None => ", the project's style".into(),
                 }
             ));
         }
-        (None, None) => {}
-        _ => return Err("Give `short` and `slot` together".into()),
-    }
-    if let Some(length) = args.length_us {
-        let now = current(ctx)?;
-        let clip = with_reader(ctx.state, |reader| {
-            reader
-                .document()
-                .sequence
-                .clips()
-                .find(|(_, c)| c.asset == args.graphic)
-                .map(|(_, c)| (c.id.clone(), c.start_us))
-                .ok_or_else(|| "That graphic is not on the timeline".to_string())
-        })?;
-        let length = length.clamp(
-            crate::graphics::MIN_LENGTH_US,
-            crate::graphics::MAX_LENGTH_US,
-        );
-        commands::project_sequence_edit_impl(
-            ctx.state,
-            now.handle,
-            now.revision,
-            crate::sequence::edit::SequenceEdit::TrimClip {
-                clip_id: clip.0,
-                edge: crate::sequence::edit::Edge::End,
-                to_us: clip.1 + length,
-                ripple: None,
-            },
-            None,
-        )?;
-        lines.push(format!("It plays for {:.1} s.", length as f64 / 1e6));
+        if !args.look.is_empty() {
+            let now = current(ctx)?;
+            let view = commands::graphics::project_graphic_look_set_impl(
+                ctx.state,
+                now.handle,
+                args.graphic.clone(),
+                args.look.clone(),
+            )?;
+            lines.push(if view.look.is_empty() {
+                format!("Graphic {} takes its style's look.", args.graphic)
+            } else {
+                format!(
+                    "Graphic {} has look tokens of its own: {}.",
+                    args.graphic,
+                    serde_json::to_string(&view.look).unwrap_or_default()
+                )
+            });
+        }
+        match (&args.short, args.slot) {
+            (Some(wanted), Some(slot)) => {
+                let now = current(ctx)?;
+                let (title, shorts, size) = with_reader(ctx.state, |reader| {
+                    let document = reader.document();
+                    let mut shorts = document.shorts.clone();
+                    let short = shorts
+                        .iter_mut()
+                        .find(|s| s.id == *wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
+                        .ok_or_else(|| format!("No short {wanted} (see shorts)"))?;
+                    let timeline = crate::shorts::short_timeline(document, short)?;
+                    let clips: Vec<String> = timeline
+                        .sequence
+                        .clips()
+                        .filter(|(_, c)| c.asset == args.graphic)
+                        .map(|(_, c)| c.id.clone())
+                        .collect();
+                    if clips.is_empty() {
+                        return Err(format!(
+                            "Graphic {} does not play in short \"{}\"",
+                            args.graphic, short.title
+                        ));
+                    }
+                    for clip in clips {
+                        if slot == crate::shorts::GraphicSlot::Full {
+                            short.layout.graphic_slots.remove(&clip);
+                        } else {
+                            short.layout.graphic_slots.insert(clip, slot);
+                        }
+                    }
+                    let size = crate::shorts::graphic_box(document, short, slot);
+                    Ok((short.title.clone(), shorts, size))
+                })?;
+                commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
+                lines.push(format!(
+                    "In short \"{title}\" it plays {}, in {}.",
+                    slot.describe(),
+                    crate::shorts::describe_box(size)
+                ));
+            }
+            _ => {}
+        }
+        if let Some(length) = args.length_us {
+            let now = current(ctx)?;
+            let clip = clip_of(ctx)?;
+            let length = length.clamp(
+                crate::graphics::MIN_LENGTH_US,
+                crate::graphics::MAX_LENGTH_US,
+            );
+            commands::project_sequence_edit_impl(
+                ctx.state,
+                now.handle,
+                now.revision,
+                crate::sequence::edit::SequenceEdit::TrimClip {
+                    clip_id: clip.0,
+                    edge: crate::sequence::edit::Edge::End,
+                    to_us: clip.1 + length,
+                    ripple: None,
+                },
+                on_take.clone(),
+            )?;
+            lines.push(format!("It plays for {:.1} s.", length as f64 / 1e6));
+        }
+        Ok(())
+    })();
+    if let Err(error) = steps {
+        if lines.is_empty() {
+            return Err(error);
+        }
+        let done = applied(ctx, "graphic_set", &before, lines)?;
+        return Err(format!("{done}\nThen it stopped: {error}"));
     }
     if lines.is_empty() {
-        return Err("Give `variables`, `name`, `lengthUs`, `brand` or `short` and `slot`".into());
+        return Err(
+            "Give `variables`, `name`, `lengthUs`, `moveToUs`/`moveToWord`, `brand`, or `short` \
+             with `slot`"
+                .into(),
+        );
     }
     lines.push("It renders again by itself.".into());
     text(applied(ctx, "graphic_set", &before, lines)?)
@@ -3993,10 +4997,41 @@ pub struct GraphicWriteArgs {
     pub graphic: String,
     /// A path inside its folder, like index.html or assets/logo.svg.
     pub path: String,
-    /// The file's text (for a binary file, base64 with `base64: true`).
-    pub contents: String,
+    /// The whole file's text (for a binary file, base64 with `base64: true`).
+    #[serde(default)]
+    pub contents: Option<String>,
     #[serde(default)]
     pub base64: bool,
+    /// Or, to change part of the file in its folder: each `old` (found exactly once, as the
+    /// file is now) becomes `new`, in order; all or none.
+    #[serde(default)]
+    pub edits: Vec<TextEdit>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct TextEdit {
+    pub old: String,
+    pub new: String,
+}
+
+/// `text` with every edit applied in order, each `old` found exactly once.
+fn apply_edits(mut text: String, edits: &[TextEdit]) -> Result<String, String> {
+    for (n, edit) in edits.iter().enumerate() {
+        let found = if edit.old.is_empty() {
+            0
+        } else {
+            text.matches(&edit.old).count()
+        };
+        if found != 1 {
+            return Err(format!(
+                "Edit {}: its `old` is found {found} times in the file, not once; nothing was \
+                 written. Give more of the text around it.",
+                n + 1
+            ));
+        }
+        text = text.replacen(&edit.old, &edit.new, 1);
+    }
+    Ok(text)
 }
 
 fn graphic_folder(ctx: &Ctx, graphic: &str) -> Result<std::path::PathBuf, String> {
@@ -4013,13 +5048,20 @@ fn graphic_folder(ctx: &Ctx, graphic: &str) -> Result<std::path::PathBuf, String
 fn graphic_write_file(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicWriteArgs = params(args)?;
     let dir = graphic_folder(ctx, &args.graphic)?;
-    let bytes = if args.base64 {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD
-            .decode(args.contents.trim())
-            .map_err(|e| format!("Not base64: {e}"))?
-    } else {
-        args.contents.into_bytes()
+    let bytes = match (args.contents, args.edits.is_empty()) {
+        (Some(_), false) => return Err("Give `contents` or `edits`, not both".into()),
+        (None, true) => return Err("Give the file's `contents`, or `edits` to change it".into()),
+        (None, false) => {
+            let now = crate::graphics::read_file(&dir, &args.path)?;
+            apply_edits(now, &args.edits)?.into_bytes()
+        }
+        (Some(contents), true) if args.base64 => {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(contents.trim())
+                .map_err(|e| format!("Not base64: {e}"))?
+        }
+        (Some(contents), true) => contents.into_bytes(),
     };
     crate::graphics::write_file(&dir, &args.path, &bytes)?;
     let mut lines = vec![format!("Wrote {} ({} bytes).", args.path, bytes.len())];
@@ -4038,17 +5080,39 @@ pub struct GraphicRenderArgs {
     /// One graphic's id; default every graphic on the timeline.
     #[serde(default)]
     pub graphic: Option<String>,
+    /// A short (id or title): its graphics, rendered for its 9:16 frame or their part of its
+    /// split.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicRenderArgs = params(args)?;
+    let short = args
+        .short
+        .as_deref()
+        .map(|s| short_named(ctx, s))
+        .transpose()?;
     let (root, specs) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
+        // A short's graphics render on its own timeline at its own size, as its export does.
+        let shown;
+        let document = match &short {
+            Some(short) => {
+                shown = crate::shorts::short_document(
+                    reader.document(),
+                    short,
+                    commands::has_speech_transcript(reader),
+                )?;
+                &shown
+            }
+            None => reader.document(),
+        };
         let canvas = document.layout.preview_dimensions()?;
-        let specs: Vec<_> = crate::graphics::render::specs_for(reader.root(), document, canvas)
-            .into_iter()
-            .filter(|s| args.graphic.as_ref().is_none_or(|g| &s.asset_id == g))
-            .collect();
+        let specs: Vec<_> =
+            crate::graphics::render::specs_for(reader.root(), document, canvas, Default::default())
+                .into_iter()
+                .filter(|s| args.graphic.as_ref().is_none_or(|g| &s.asset_id == g))
+                .collect();
         Ok((reader.root().to_path_buf(), specs))
     })?;
     if specs.is_empty() {
@@ -4069,26 +5133,30 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     for spec in &specs {
         lines.push(format!(
-            "{} \"{}\" ({:.1} s): {}",
+            "{} \"{}\" ({:.1} s): {} x {} (data-mode {}), {}",
             spec.asset_id,
             spec.name,
             spec.length_us as f64 / 1e6,
+            spec.width,
+            spec.height,
+            spec.mode,
             match spec.entrance {
                 crate::graphics::Entrance::Cut => "cuts in and out",
                 crate::graphics::Entrance::Ease => "eases in and out over the full-screen camera",
             }
         ));
     }
-    let cancel = std::sync::atomic::AtomicBool::new(false);
     let started = std::time::Instant::now();
-    crate::graphics::render::ensure(&specs, &cancel, &mut |fraction, label| {
+    crate::graphics::render::ensure(&specs, ctx.stop_flag(), &mut |fraction, label, _| {
         ctx.progress(fraction, label)
+    })
+    .map_err(|error| match ctx.stopped() {
+        true => super::tools::STOPPED_MESSAGE.to_string(),
+        false => error,
     })?;
     lines.push(format!(
-        "{} rendered for the {}x{} canvas in {:.0} s; check them with frame_render inside each.",
+        "{} rendered, each at its box's size, in {:.0} s; check them with frame_render inside each.",
         plural(specs.len(), "graphic"),
-        specs[0].width,
-        specs[0].height,
         started.elapsed().as_secs_f64()
     ));
     text(lines.join("\n"))
@@ -4104,19 +5172,21 @@ pub struct GraphicOnlyArgs {
 /// How to turn a graphic into a template for the library. The gate (graphic_check) tests each
 /// point without a model.
 const TEMPLATE_RULES: &str = "Rewrite the files (graphic_write_file, or the folder directly), \
-keeping its look and motion, so it takes any text and fits anywhere:
+keeping its design and motion, so it takes any text, fits anywhere and takes the video's look:
 1. Text: every visible text and number becomes a variable in data-composition-variables on \
 <html> (type string, or number for counts), shown with data-var-text or set by the script from \
 window.__hyperframes.getVariables(). Defaults are good example text; a list is one string with \
 an item per line. No text written into the markup that no variable fills.
 2. Colours: only the shared color variables background, text and accent (declare all three and \
-use var(--background), var(--text), var(--accent)), so the user's brand kits apply. Tints come \
+use var(--background), var(--text), var(--accent)), so the user's styles apply. Tints come \
 from color-mix() or opacity, not new hex colours.
 3. Timing: read the length from the root's data-duration (parseFloat(root.dataset.duration) * \
 1000) and place every animation as a share of it: when it eases, in over about 300 ms and out \
 over the last 450 ms; nothing at fixed end times, so it fits any clip length.
 4. Layout: vw/vh/vmin with flex or grid, no px sizes; text wraps (max-width, never nowrap) and \
-long text still fits; an @media (orientation: portrait) block re-flows it for 9:16 shorts.
+long text still fits; an @media (orientation: portrait) block re-flows it for 9:16 shorts. \
+The same block lays it out in a part of a short's split up to 3:2 wide (1080x864 at most), so it \
+must fit there too.
 5. In and out: the page is transparent, with a card (var(--background)). A graphic that fills \
 the frame never eases in or out: the app sets data-entrance=\"cut\" on the root and the card \
 shows whole from the first frame to the last. Only a graphic over the full-screen camera eases: \
@@ -4126,7 +5196,8 @@ that covers only part of the frame (a lower third, a callout) puts data-overlay 
 without it the app treats it as full screen and always cuts it. A graphic meant to hold to the \
 end of its clip (an end card) puts data-holds-end on the root and, when it eases, fades in only.
 6. No network: no CDN scripts, web fonts or http(s) URLs; images and fonts go beside index.html.
-Then graphic_check, which renders it at 16:9 and 9:16, 3 s and 8 s, eased and cut, with long \
+7. The look: copy the [data-composition-id] block of --look-* tokens from the blank template \n(graphic_add blank) and take type, corners, borders, shadows, gaps and motion from it: \nvar(--look-font), var(--look-title), var(--look-body), var(--look-radius), var(--look-shadow), \nvar(--look-line), var(--look-muted), var(--look-gap)...; durations and easing from \ngetComputedStyle(root) (--look-duration, --look-stagger, --look-ease, --look-gsap-ease for \nGSAP). No font, radius or timing of its own, so one change to the video's look restyles it.
+Then graphic_check, which renders it at 16:9, 9:16 and a split part, 3 s and 8 s, eased and cut, with long \
 text and with each text variable changed, and says what fails. Fix and check again until it passes; then ask \
 the user to keep it and call library_save with a label, a one-line useWhen and lengthUs.";
 
@@ -4363,159 +5434,6 @@ fn graphics_install(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     ))
 }
 
-fn brand_kits(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
-    let handle = current(ctx).ok().map(|open| open.handle);
-    let has_project = handle.is_some();
-    let view = commands::graphics::graphics_brands_impl(ctx.state, handle)?;
-    let out = json!({
-        "kits": view.kits.iter().map(|kit| json!({
-            "name": kit.name,
-            "background": kit.background,
-            "text": kit.text,
-            "accent": kit.accent,
-            "font": kit.font,
-            "logo": kit.logo.is_some(),
-        })).collect::<Vec<_>>(),
-        "projectDefault": if has_project {
-            json!(view.project_default.unwrap_or_else(|| "none".into()))
-        } else {
-            json!("no project open")
-        },
-        "folder": view.folder,
-    });
-    super::tools::pretty(&out)
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct BrandPickArgs {
-    /// A kit's name from brand_kits, or `none`; with `graphic` also `default` (the project's).
-    pub brand: String,
-    /// One graphic's id; without it the project's default kit is set.
-    #[serde(default)]
-    pub graphic: Option<String>,
-}
-
-fn brand_pick(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: BrandPickArgs = params(args)?;
-    let before = opened(ctx)?;
-    let line = match &args.graphic {
-        Some(graphic) => {
-            let updated = commands::graphics::project_graphic_set_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                graphic.clone(),
-                Default::default(),
-                None,
-                Some(args.brand.clone()),
-            )?;
-            format!(
-                "Graphic {graphic} \"{}\" uses {}.",
-                updated.graphic.name,
-                match &updated.graphic.brand {
-                    Some(kit) if kit == crate::graphics::brands::NONE => "no brand kit".into(),
-                    Some(kit) => format!("brand kit {kit}"),
-                    None => "the project's brand kit".into(),
-                }
-            )
-        }
-        None => {
-            let brand = match args.brand.trim() {
-                crate::graphics::brands::NONE | "" => None,
-                crate::graphics::brands::DEFAULT => {
-                    return Err("Give a kit's name or `none` for the project".into())
-                }
-                name => Some(name.to_string()),
-            };
-            commands::graphics::project_graphics_brand_set_impl(
-                ctx.state,
-                before.handle.clone(),
-                before.revision,
-                brand.clone(),
-            )?;
-            match brand {
-                Some(kit) => format!("The project's graphics use brand kit {kit} by default."),
-                None => "The project's graphics use no brand kit by default.".into(),
-            }
-        }
-    };
-    text(applied(
-        ctx,
-        "brand_pick",
-        &before,
-        vec![line, "Graphics render again by themselves.".into()],
-    )?)
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct BrandKitSetArgs {
-    pub name: String,
-    /// The kit's name before, to rename it.
-    #[serde(default)]
-    pub previous: Option<String>,
-    #[serde(default)]
-    pub background: Option<String>,
-    #[serde(default)]
-    pub text: Option<String>,
-    #[serde(default)]
-    pub accent: Option<String>,
-    /// A font family name.
-    #[serde(default)]
-    pub font: Option<String>,
-    /// Full path of a font file to copy into the kit.
-    #[serde(default)]
-    pub font_file: Option<String>,
-    /// Full path of a logo to copy into the kit.
-    #[serde(default)]
-    pub logo: Option<String>,
-    /// Delete the kit.
-    #[serde(default)]
-    pub remove: bool,
-}
-
-fn brand_kit_set(_ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: BrandKitSetArgs = params(args)?;
-    let dir = crate::graphics::brands::dir();
-    if args.remove {
-        commands::graphics::graphics_brand_remove_impl(args.name.clone())?;
-        return text(format!("Removed brand kit {}.", args.name));
-    }
-    let existing = crate::graphics::brands::list(&dir)
-        .into_iter()
-        .find(|k| k.name == args.previous.as_deref().unwrap_or(&args.name));
-    let pick = |given: Option<String>, had: Option<&String>, what: &str| {
-        given
-            .or_else(|| had.cloned())
-            .ok_or_else(|| format!("A new kit needs `{what}` (#RRGGBB)"))
-    };
-    let kit = crate::graphics::brands::BrandKitInput {
-        name: args.name.clone(),
-        previous: args.previous.clone(),
-        background: pick(
-            args.background,
-            existing.as_ref().map(|k| &k.background),
-            "background",
-        )?,
-        text: pick(args.text, existing.as_ref().map(|k| &k.text), "text")?,
-        accent: pick(args.accent, existing.as_ref().map(|k| &k.accent), "accent")?,
-        font: args
-            .font
-            .or_else(|| existing.as_ref().map(|k| k.font.clone()))
-            .unwrap_or_default(),
-        font_file: args.font_file,
-        logo: args.logo,
-    };
-    let saved = commands::graphics::graphics_brand_save_impl(kit)?;
-    text(format!(
-        "Saved brand kit {}: {}.",
-        args.name,
-        serde_json::to_string(&saved).unwrap_or_default()
-    ))
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRemoveArgs {
@@ -4577,27 +5495,206 @@ fn transcript_fix(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             })
             .collect::<Result<Vec<_>, _>>()
     })?;
-    let mut lines = Vec::new();
-    for (fix, old) in args.fixes.iter().zip(old) {
-        crate::commands::transcript::transcript_set_word_text_impl(
-            ctx.state,
-            open.handle.clone(),
-            key.clone(),
-            fix.word.clone(),
-            fix.text.clone(),
-            None,
-        )?;
-        lines.push(format!(
-            "{}: \"{old}\" -> \"{}\"",
-            fix.word,
-            fix.text.trim()
-        ));
-    }
+    // One load and one save for the whole batch: every fix goes in, or none does.
+    let fixes: Vec<(String, String)> = args
+        .fixes
+        .iter()
+        .map(|fix| (fix.word.clone(), fix.text.clone()))
+        .collect();
+    crate::commands::transcript::transcript_set_words_text_impl(
+        ctx.state,
+        &open.handle,
+        &key,
+        &fixes,
+    )?;
+    let lines: Vec<String> = args
+        .fixes
+        .iter()
+        .zip(old)
+        .map(|(fix, old)| format!("{}: \"{old}\" -> \"{}\"", fix.word, fix.text.trim()))
+        .collect();
     ctx.changed_project();
     text(format!(
         "Fixed {}:\n{}",
         plural(lines.len(), "word"),
         lines.join("\n")
+    ))
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionPick {
+    /// The line's number, as listed.
+    pub line: usize,
+    /// The word as it reads in the line; left out clears the line's emphasis.
+    #[serde(default)]
+    pub word: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionsArgs {
+    /// Emphasis words to set; without it the lines are listed.
+    #[serde(default)]
+    pub emphasis: Vec<CaptionPick>,
+    /// A short (id or title): its caption lines.
+    #[serde(default)]
+    pub short: Option<String>,
+    /// List only the lines from here (seconds on the edited timeline).
+    #[serde(default)]
+    pub from_s: Option<f64>,
+    /// ...to here.
+    #[serde(default)]
+    pub to_s: Option<f64>,
+}
+
+/// A word as it reads, for matching what an agent wrote: letters and digits, lower case.
+fn plain_word(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    let args: CaptionsArgs = params(args)?;
+    let open = opened(ctx)?;
+    let picked = args
+        .short
+        .as_deref()
+        .map(|s| short_named(ctx, s))
+        .transpose()?;
+    let short = picked.as_ref().map(|s| s.id.clone());
+    let track = commands::transcript::project_caption_cues_impl(
+        ctx.state,
+        open.handle.clone(),
+        short.clone(),
+    )?;
+    let Some(track_id) = track.track_id.clone() else {
+        return Err("No captions yet: nothing is transcribed.".into());
+    };
+    if args.emphasis.is_empty() {
+        let from = args.from_s.map(|s| (s.max(0.0) * 1e6) as u64).unwrap_or(0);
+        let to = args
+            .to_s
+            .map(|s| (s.max(0.0) * 1e6) as u64)
+            .unwrap_or(u64::MAX);
+        let (settings, look) = with_reader(ctx.state, |reader| {
+            let document = match &picked {
+                Some(short) => crate::shorts::short_document(reader.document(), short, true)?,
+                None => reader.document().clone(),
+            };
+            Ok((
+                document.captions.clone(),
+                crate::captions::CaptionLook::of(&document),
+            ))
+        })?;
+        let mut lines = vec![format!(
+            "{} caption lines ({}{}, {}; emphasis in {}, font {}).",
+            track.cues.len(),
+            if settings.enabled { "on" } else { "off" },
+            if short.is_some() {
+                " in this short"
+            } else {
+                ""
+            },
+            settings.style.label(),
+            look.accent,
+            look.face.label
+        )];
+        let mut without = 0;
+        for (i, cue) in track.cues.iter().enumerate() {
+            if cue.emphasis.is_none() {
+                without += 1;
+            }
+            if cue.end_us <= from || cue.start_us >= to {
+                continue;
+            }
+            let words: Vec<&str> = cue.text.split(' ').collect();
+            let text = if words.len() == cue.word_ids.len() {
+                cue.word_ids
+                    .iter()
+                    .zip(&words)
+                    .map(|(id, w)| {
+                        if cue.emphasis.as_ref() == Some(id) {
+                            format!("*{w}*")
+                        } else {
+                            w.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                cue.text.clone()
+            };
+            let covered = if cue.under_graphic {
+                " (a full-frame graphic covers it there: not shown)"
+            } else {
+                ""
+            };
+            lines.push(format!("{i} {} {text}{covered}", clock(cue.start_us)));
+        }
+        lines.push(format!("{without} without an emphasis word."));
+        return text(lines.join("\n"));
+    }
+    // Each pick names a line and one of its words.
+    let mut on = Vec::new();
+    let mut off = Vec::new();
+    let mut said = Vec::new();
+    for pick in &args.emphasis {
+        let cue = track.cues.get(pick.line).ok_or_else(|| {
+            format!(
+                "There is no line {} (there are {}); list them again",
+                pick.line,
+                track.cues.len()
+            )
+        })?;
+        match pick
+            .word
+            .as_deref()
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+        {
+            None => {
+                off.extend(cue.emphasis.clone());
+                said.push(format!("{}: none", pick.line));
+            }
+            Some(word) => {
+                let wanted = plain_word(word);
+                let index = cue
+                    .text
+                    .split(' ')
+                    .position(|w| plain_word(w) == wanted)
+                    .filter(|i| *i < cue.word_ids.len())
+                    .ok_or_else(|| {
+                        format!(
+                            "Line {} (\"{}\") has no word \"{word}\"",
+                            pick.line, cue.text
+                        )
+                    })?;
+                on.push(cue.word_ids[index].clone());
+                said.push(format!("{}: {word}", pick.line));
+            }
+        }
+    }
+    use crate::commands::transcript::CaptionEdit;
+    for (word_ids, on) in [(off, false), (on, true)] {
+        if word_ids.is_empty() {
+            continue;
+        }
+        commands::transcript::transcript_caption_edit_impl(
+            ctx.state,
+            open.handle.clone(),
+            track_id.clone(),
+            CaptionEdit::Emphasis { word_ids, on },
+            short.clone(),
+        )?;
+    }
+    ctx.changed_project();
+    text(format!(
+        "Emphasis set on {}: {}.",
+        plural(said.len(), "line"),
+        said.join(", ")
     ))
 }
 
@@ -4638,6 +5735,44 @@ mod tests {
             .and_then(|rest| rest.split('"').next())
             .unwrap()
             .to_string()
+    }
+
+    #[test]
+    fn a_graphic_file_changes_in_place_by_edits() {
+        let edit = |old: &str, new: &str| TextEdit {
+            old: old.into(),
+            new: new.into(),
+        };
+        let page = "<h1>Old title</h1><p>Old title below</p>".to_string();
+        let done = apply_edits(
+            page.clone(),
+            &[edit("<h1>Old", "<h1>New"), edit("below", "under")],
+        );
+        assert_eq!(done.unwrap(), "<h1>New title</h1><p>Old title under</p>");
+        // Ambiguous or missing text changes nothing.
+        let twice = apply_edits(page.clone(), &[edit("Old title", "x")]).unwrap_err();
+        assert!(
+            twice.contains("2 times") && twice.contains("nothing was written"),
+            "{twice}"
+        );
+        assert!(apply_edits(page, &[edit("", "x")]).is_err());
+        // Reading for edits stays inside the graphic's folder.
+        let dir = tempfile::tempdir().unwrap();
+        crate::graphics::write_file(dir.path(), "index.html", b"<p>hi</p>").unwrap();
+        assert_eq!(
+            crate::graphics::read_file(dir.path(), "index.html").unwrap(),
+            "<p>hi</p>"
+        );
+        assert!(crate::graphics::read_file(dir.path(), "../outside.html").is_err());
+    }
+
+    #[test]
+    #[ignore]
+    fn dump_graphics_answer() {
+        let host = crate::mcp::tests_support::BareHost::default();
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let out = call(&ctx, "graphics", json!({})).unwrap();
+        eprintln!("LEN {}\n{out}", out.len());
     }
 
     #[test]
@@ -4700,6 +5835,122 @@ mod tests {
             listed.starts_with(&format!("Found 2 fillers and 0 retakes in {key}")),
             "{listed}"
         );
+    }
+
+    #[test]
+    fn an_agent_run_is_undone_as_one_step_with_its_batches() {
+        use crate::project::history::as_agent;
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let agent =
+            |name: &str, args: Value| as_agent("claude-code", name, || call(&ctx, name, args));
+        let start = length(&ctx);
+        agent("fillers", json!({})).unwrap();
+        agent(
+            "settings",
+            json!({ "area": "captions", "set": { "enabled": true } }),
+        )
+        .unwrap();
+        assert!(length(&ctx) < start);
+
+        let undone = agent("undo", json!({ "run": true })).unwrap();
+        assert!(
+            undone.starts_with("Undid claude-code's run: 2 changes"),
+            "{undone}"
+        );
+        assert_eq!(length(&ctx), start);
+        assert!(history(&ctx)
+            .iter()
+            .all(|b| b.status == crate::proposals::Status::Undone));
+        // The run undo is itself a step, so Undo brings the run back.
+        let back = call(&ctx, "undo", json!({})).unwrap();
+        assert!(
+            back.starts_with("Undid \"Undo claude-code's run (2 changes)\""),
+            "{back}"
+        );
+        assert!(length(&ctx) < start);
+        // A new workflow starts a new run: only what came after `preset` goes.
+        agent("preset", json!({})).unwrap();
+        agent(
+            "settings",
+            json!({ "area": "captions", "set": { "fontSizePct": 7 } }),
+        )
+        .unwrap();
+        let undone = agent("undo", json!({ "run": true })).unwrap();
+        assert!(
+            undone.starts_with("Undid claude-code's run: 1 change"),
+            "{undone}"
+        );
+        assert!(length(&ctx) < start);
+        // Not another agent's run.
+        let other = as_agent("codex", "undo", || {
+            call(&ctx, "undo", json!({ "run": true }))
+        });
+        assert!(other.is_err());
+    }
+
+    #[test]
+    fn the_app_saves_a_checkpoint_before_an_agent_run_and_the_agent_can_go_back_to_it() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let mut ctx = Ctx::new(&host, "claude-code", false);
+        let mut through_the_server = |name: &str, args: Value| {
+            let tool = crate::mcp::tools::find(name).unwrap();
+            crate::mcp::tools::call(tool, &mut ctx, args).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .filter_map(|o| match o {
+                        Output::Text(text) => Some(text),
+                        Output::Png(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        };
+        let start = through_the_server("status", json!({})).unwrap();
+        assert!(!start.contains("Checkpoints:"), "{start}");
+        through_the_server("fillers", json!({})).unwrap();
+        through_the_server(
+            "settings",
+            json!({ "area": "captions", "set": { "enabled": true } }),
+        )
+        .unwrap();
+        let listed = through_the_server("checkpoint", json!({ "op": "list" })).unwrap();
+        // One for the run, not one per call.
+        assert_eq!(listed.lines().count(), 1, "{listed}");
+        assert!(
+            listed.starts_with("c-1: \"Before claude-code's run\""),
+            "{listed}"
+        );
+
+        let saved =
+            through_the_server("checkpoint", json!({ "op": "save", "name": "Cleaned" })).unwrap();
+        assert!(
+            saved.starts_with("Saved checkpoint c-2 \"Cleaned\""),
+            "{saved}"
+        );
+        let status = through_the_server("status", json!({})).unwrap();
+        assert!(
+            status.contains("Checkpoints: 2; newest named \"Cleaned\" (c-2"),
+            "{status}"
+        );
+
+        let back =
+            through_the_server("checkpoint", json!({ "op": "restore", "id": "c-1" })).unwrap();
+        assert!(
+            back.starts_with("Went back to checkpoint \"Before claude-code's run\"."),
+            "{back}"
+        );
+        assert!(back.contains("Length 0:03"), "{back}");
+        let captions = through_the_server("settings", json!({ "area": "captions" })).unwrap();
+        assert!(captions.contains("\"enabled\":false"), "{captions}");
     }
 
     #[test]
@@ -4794,8 +6045,33 @@ mod tests {
         assert!(listed[0].can_undo);
 
         let undone = call(&ctx, "undo", json!({})).unwrap();
-        assert!(undone.starts_with("Undid the last change."), "{undone}");
+        assert!(undone.starts_with("Undid \"Cut "), "{undone}");
         assert_eq!(length(&ctx), before);
+    }
+
+    #[test]
+    fn a_saved_review_that_found_nothing_is_not_asked_for_again() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, key) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let page = call(&ctx, "fillers_review", json!({ "review": "thorough" })).unwrap();
+        let stamp = review_stamp(&page);
+        call(
+            &ctx,
+            "fillers_review",
+            json!({ "cuts": [], "stamp": stamp }),
+        )
+        .unwrap();
+        let dry = call(&ctx, "fillers", json!({ "apply": false })).unwrap();
+        assert!(
+            dry.starts_with(&format!("Found 1 filler and 0 retakes in {key}"))
+                && dry.contains("the in-house review, saved, found nothing more")
+                && !dry.contains("`fillers_review`"),
+            "{dry}"
+        );
     }
 
     #[test]
@@ -4892,7 +6168,7 @@ mod tests {
         );
         // Each change was one undo step.
         let undone = call(&ctx, "undo", json!({})).unwrap();
-        assert!(undone.starts_with("Undid the last change."), "{undone}");
+        assert!(undone.starts_with("Undid \"Zooms\"."), "{undone}");
         assert!(call(&ctx, "zooms", json!({ "op": "list" }))
             .unwrap()
             .contains("2.0x"));
@@ -4964,10 +6240,304 @@ mod tests {
                 .unwrap_err()
                 .contains("needs `fromWord`")
         );
-        let removed = call(&ctx, "shorts", json!({ "op": "remove", "short": "whole" })).unwrap();
-        assert!(removed.starts_with("Removed short \"Whole\""), "{removed}");
+        let renamed = call(
+            &ctx,
+            "shorts",
+            json!({ "op": "rename", "short": "whole", "title": "The whole lesson" }),
+        )
+        .unwrap();
+        assert!(renamed.contains("to \"The whole lesson\""), "{renamed}");
+        let removed = call(
+            &ctx,
+            "shorts",
+            json!({ "op": "remove", "short": "The whole lesson" }),
+        )
+        .unwrap();
+        assert!(
+            removed.starts_with("Removed short \"The whole lesson\""),
+            "{removed}"
+        );
         let shorts = with_reader(ctx.state, |r| Ok(r.document().shorts.len())).unwrap();
         assert_eq!(shorts, 0);
+    }
+
+    #[test]
+    fn an_agent_puts_graphics_under_a_take() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        // A graphic on the video, and a short made from a take (here the voice file alone).
+        call(
+            &ctx,
+            "graphic_add",
+            json!({ "template": "step", "atUs": 0, "lengthUs": 1_000_000 }),
+        )
+        .unwrap();
+        let (video_graphic, voice) = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let graphic = document
+                .assets
+                .iter()
+                .find(|a| a.is_graphic())
+                .unwrap()
+                .id
+                .clone();
+            let voice = document
+                .assets
+                .iter()
+                .find(|a| !a.is_graphic())
+                .unwrap()
+                .id
+                .clone();
+            Ok((graphic, voice))
+        })
+        .unwrap();
+        call(
+            &ctx,
+            "short_from_take",
+            json!({ "title": "Take", "media": [voice] }),
+        )
+        .unwrap();
+        // Everything under the take goes as one batch: a template, and a copy of the video's
+        // own graphic with new text. Nothing changes until the user accepts it.
+        let revision = |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
+        let handle = with_reader(ctx.state, |r| Ok(r.summary.project_handle.clone())).unwrap();
+        let batch_of = |said: &str| {
+            said.split_whitespace()
+                .find(|w| w.starts_with("b-"))
+                .unwrap()
+                .trim_end_matches('.')
+                .to_string()
+        };
+        let before = revision(&ctx);
+        let proposed = call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "add", "reason": "Graphics for the take",
+                    "items": [
+                        { "atS": 0.5, "toS": 1.5, "template": "title", "mode": "overFace" },
+                        { "atS": 2.0, "graphic": video_graphic,
+                          "variables": { "title": "In the short" } }
+                    ] }),
+        )
+        .unwrap();
+        assert!(
+            proposed.contains("Proposed b-")
+                && proposed.contains("(template title)")
+                && proposed.contains("a copy of the video's")
+                && proposed.contains("over the face, which fills the frame"),
+            "{proposed}"
+        );
+        assert_eq!(revision(&ctx), before, "proposing changes nothing");
+        let graphics_made = |ctx: &Ctx| {
+            with_reader(ctx.state, |r| {
+                Ok(r.document()
+                    .assets
+                    .iter()
+                    .filter(|a| a.is_graphic())
+                    .count())
+            })
+            .unwrap()
+        };
+        assert_eq!(graphics_made(&ctx), 1, "the check leaves no graphic behind");
+        let first = batch_of(&proposed);
+        commands::proposals::proposal_accept_impl(
+            ctx.state,
+            handle.clone(),
+            before,
+            first.clone(),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(revision(&ctx), before + 1, "accepted as one undo step");
+        // The title's mode came with it, set before it ever rendered.
+        let modes = with_reader(ctx.state, |r| {
+            Ok(r.document().shorts[0]
+                .layout
+                .graphic_slots
+                .values()
+                .copied()
+                .collect::<Vec<_>>())
+        })
+        .unwrap();
+        assert_eq!(modes, vec![crate::shorts::GraphicSlot::OverFace]);
+        let (on_video, in_short, copy_title) = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let graphics = |clips: Vec<&crate::sequence::Clip>| {
+                clips
+                    .iter()
+                    .filter(|c| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+                    .count()
+            };
+            let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+            let own = &short.edit.as_ref().unwrap().sequence;
+            // The copy is the one placed at 2 s.
+            let copy = own
+                .clips()
+                .find(|(_, c)| c.start_us == 2_000_000)
+                .map(|(_, c)| c.asset.clone())
+                .unwrap();
+            assert_ne!(copy, video_graphic);
+            let source =
+                crate::graphics::read_source(&crate::graphics::folder(reader.root(), &copy)).ok();
+            Ok((
+                graphics(document.sequence.clips().map(|(_, c)| c).collect()),
+                graphics(own.clips().map(|(_, c)| c).collect()),
+                source.and_then(|s| s.variables.get("title").cloned()),
+            ))
+        })
+        .unwrap();
+        assert_eq!(on_video, 1, "the video keeps its one graphic");
+        assert_eq!(in_short, 2);
+        // The copy took the new text; the video's graphic is its own.
+        assert_eq!(copy_title, Some(json!("In the short")));
+        // A batch made before the short changed can't be accepted as it is.
+        let second = batch_of(
+            &call(
+                &ctx,
+                "short_footage",
+                json!({ "short": "Take", "op": "add",
+                        "items": [{ "atS": 1.5, "toS": 2.0, "template": "key-point" }] }),
+            )
+            .unwrap(),
+        );
+        commands::proposals::proposal_undo_impl(ctx.state, handle.clone(), before + 1, first)
+            .unwrap();
+        let stale = commands::proposals::proposal_accept_impl(
+            ctx.state,
+            handle.clone(),
+            revision(&ctx),
+            second,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(stale.contains("propose it again"), "{stale}");
+        // Under autopilot it lands at once.
+        let auto = Ctx::new(&host, "claude-code", true);
+        let landed = call(
+            &auto,
+            "short_footage",
+            json!({ "short": "Take", "op": "add",
+                    "items": [{ "atS": 1.0, "template": "key-point" }] }),
+        )
+        .unwrap();
+        assert!(landed.contains("autopilot accepted it"), "{landed}");
+        // The footage and B-roll sound share one track: its volume and ducking are set once.
+        let listed = call(&ctx, "short_footage", json!({ "short": "Take" })).unwrap();
+        assert!(
+            listed.contains("Footage sound: +0 dB, lowered 12 dB"),
+            "{listed}"
+        );
+        let sound = call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "sound", "volumeDb": -6, "duckDb": 18 }),
+        )
+        .unwrap();
+        assert!(
+            sound.contains("Footage sound: -6 dB, lowered 18 dB"),
+            "{sound}"
+        );
+        assert!(call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "sound", "duckDb": 50 })
+        )
+        .is_err());
+        let ducked = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+            let timeline = crate::shorts::short_timeline(document, short)?;
+            let track = crate::take_short::footage_sound_track(short)
+                .unwrap()
+                .id
+                .clone();
+            Ok(timeline.audio.tracks[&track].clone())
+        })
+        .unwrap();
+        assert_eq!((ducked.volume_db, ducked.duck_db), (-6.0, Some(18.0)));
+        // graphic_add points to short_footage; a clip cut from the video takes neither.
+        assert!(call(
+            &ctx,
+            "graphic_add",
+            json!({ "short": "Take", "template": "title", "atUs": 0 })
+        )
+        .unwrap_err()
+        .contains("short_footage"));
+        call(
+            &ctx,
+            "short_create",
+            json!({ "title": "Clip", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
+        )
+        .unwrap();
+        let refused = call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Clip", "op": "add", "items": [{ "atS": 0.0, "template": "title" }] }),
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains("is a clip cut from the video"),
+            "{refused}"
+        );
+        assert!(call(
+            &ctx,
+            "graphic_add",
+            json!({ "graphic": video_graphic, "atUs": 0 })
+        )
+        .is_err());
+
+        // A graphic under the take moves and lengthens on the short's own timeline.
+        let under = |ctx: &Ctx| {
+            with_reader(ctx.state, |reader| {
+                let document = reader.document();
+                let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+                Ok(short
+                    .edit
+                    .as_ref()
+                    .unwrap()
+                    .sequence
+                    .clips()
+                    .find(|(_, c)| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+                    .map(|(_, c)| (c.asset.clone(), c.start_us, c.duration_us))
+                    .unwrap())
+            })
+            .unwrap()
+        };
+        let (key_point, ..) = under(&ctx);
+        let on_video = with_reader(ctx.state, |r| Ok(r.document().sequence.clone())).unwrap();
+        let set = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": key_point, "short": "Take", "moveToUs": 300_000,
+                    "lengthUs": 800_000 }),
+        )
+        .unwrap();
+        assert!(
+            set.contains("Moved graphic") && set.contains("0.8 s"),
+            "{set}"
+        );
+        assert_eq!(under(&ctx), (key_point.clone(), 300_000, 800_000));
+        let after = with_reader(ctx.state, |r| Ok(r.document().sequence.clone())).unwrap();
+        assert_eq!(after, on_video, "the video's timeline is left alone");
+        // A batch whose graphic would play over that one is refused, with the times.
+        let overlap = call(
+            &ctx,
+            "short_footage",
+            json!({ "short": "Take", "op": "add",
+                    "items": [{ "atS": 0.5, "toS": 1.0, "template": "title" }] }),
+        )
+        .unwrap_err();
+        assert!(
+            overlap.contains("would overlap")
+                && overlap.contains("play together at 0:00.50-0:01.00"),
+            "{overlap}"
+        );
     }
 
     #[test]
@@ -5010,6 +6580,27 @@ mod tests {
         assert!(moved.contains("Moved graphic"), "{moved}");
         assert_eq!(graphic(&ctx).unwrap().1, Some(1_600_000));
         assert_eq!(length(&ctx), total, "moving a graphic changes nothing else");
+        // Moved and renamed in one call: both go in.
+        let both = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "moveToWord": "w-0", "name": "Renamed" }),
+        )
+        .unwrap();
+        assert!(
+            both.contains("Moved graphic") && both.contains("\"Renamed\""),
+            "{both}"
+        );
+        assert_eq!(graphic(&ctx).unwrap().1, Some(0));
+        // A call with a wrong part changes nothing, not even the parts that were right.
+        let wrong = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "moveToWord": "w-3", "style": "No Such Style" }),
+        )
+        .unwrap_err();
+        assert!(wrong.contains("There is no style"), "{wrong}");
+        assert_eq!(graphic(&ctx).unwrap().1, Some(0));
         let removed = call(
             &ctx,
             "graphic_set",
@@ -5019,6 +6610,46 @@ mod tests {
         assert!(removed.starts_with("Removed graphic"), "{removed}");
         assert!(graphic(&ctx).is_none());
         assert_eq!(length(&ctx), total);
+    }
+
+    #[test]
+    fn word_fixes_go_in_together_or_not_at_all() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let words = |ctx: &Ctx| {
+            let key = pick_sound(ctx, None, Want::Transcribed).unwrap();
+            with_reader(ctx.state, |reader| {
+                let transcript = store::load_transcript(reader.root(), &key)?.unwrap();
+                Ok(transcript
+                    .words
+                    .iter()
+                    .take(2)
+                    .map(|w| w.text.clone())
+                    .collect::<Vec<_>>())
+            })
+            .unwrap()
+        };
+        let before = words(&ctx);
+        let refused = call(
+            &ctx,
+            "transcript_fix",
+            json!({ "fixes": [{ "word": "w-0", "text": "First" }, { "word": "w-1", "text": " " }] }),
+        )
+        .unwrap_err();
+        assert!(refused.contains("cannot be empty"), "{refused}");
+        assert_eq!(words(&ctx), before, "the good fix waits for the bad one");
+        let fixed = call(
+            &ctx,
+            "transcript_fix",
+            json!({ "fixes": [{ "word": "w-0", "text": "First" }, { "word": "w-1", "text": "Second" }] }),
+        )
+        .unwrap();
+        assert!(fixed.starts_with("Fixed 2 words"), "{fixed}");
+        assert_eq!(words(&ctx), ["First", "Second"]);
     }
 
     #[test]
@@ -5036,7 +6667,10 @@ mod tests {
                     "variables": { "title": "Install" } }),
         )
         .unwrap();
-        assert!(added.contains("(step) at 0:00.00 for 1.0 s"), "{added}");
+        assert!(
+            added.contains("(template step) at 0:00.00 for 1.0 s"),
+            "{added}"
+        );
         assert_eq!(history(&ctx)[0].action.as_deref(), Some("graphic_add"));
         let id = with_reader(ctx.state, |reader| {
             Ok(reader
@@ -5070,20 +6704,146 @@ mod tests {
         .unwrap();
         assert!(set.contains("\"step\":4") && set.contains("1.5 s"), "{set}");
 
-        // Brand kits: the graphic's own choice and the project's default.
+        // Styles: the graphic's own and the project's.
         let own = call(
             &ctx,
-            "brand_pick",
-            json!({ "graphic": id, "brand": "none" }),
+            "graphic_set",
+            json!({ "graphic": id, "style": "Dark" }),
         )
         .unwrap();
-        assert!(own.contains("uses no brand kit"), "{own}");
-        let missing = call(&ctx, "brand_pick", json!({ "brand": "No Such Kit" })).unwrap_err();
-        assert!(missing.contains("There is no brand kit"), "{missing}");
-        let project = call(&ctx, "brand_pick", json!({ "brand": "none" })).unwrap();
-        assert!(project.contains("use no brand kit by default"), "{project}");
+        assert!(own.contains("style Dark"), "{own}");
+        let missing = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "No Such Style" }),
+        )
+        .unwrap_err();
+        assert!(missing.contains("There is no style"), "{missing}");
+        let project = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "dark" }),
+        )
+        .unwrap();
+        assert!(project.contains("dressed in style Dark"), "{project}");
+        assert_eq!(history(&ctx)[0].action.as_deref(), Some("library"));
+        let ours = with_reader(ctx.state, |r| Ok(r.document().style.clone())).unwrap();
+        assert_eq!(ours, "Dark");
         let listed = call(&ctx, "graphics", json!({})).unwrap();
-        assert!(listed.contains("\"brand\": \"none\""), "{listed}");
+        assert!(listed.contains("\"style\":\"Dark\""), "{listed}");
+        // The graphics rules come with the list, once, instead of in every edit's rules.
+        assert!(listed.starts_with("# Graphics"), "{listed}");
+        call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "style": "project" }),
+        )
+        .unwrap();
+
+        // A style: shown, never changed when built in, copied and changed app-wide.
+        let shown = call(&ctx, "library", json!({ "kind": "style", "op": "show" })).unwrap();
+        assert!(
+            shown.contains("\"accent\"") && shown.contains("radius"),
+            "{shown}"
+        );
+        // The project wears Light: a change to it goes into a copy the project then wears.
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "Light" }),
+        )
+        .unwrap();
+        let built_in = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "set": { "graphics": { "speed": 1.5 } } }),
+        )
+        .unwrap();
+        assert!(built_in.contains("style My light"), "{built_in}");
+        let ours = with_reader(ctx.state, |r| Ok(r.document().style.clone())).unwrap();
+        assert_eq!(ours, "My light");
+        assert_eq!(
+            crate::style::store::load("Light").unwrap().graphics.speed,
+            1.0
+        );
+        let bad = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "saveAs": "Mine", "set": { "graphics": { "speed": 9 } } }),
+        )
+        .unwrap_err();
+        assert!(bad.contains("speed"), "{bad}");
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "saveAs": "Mine", "set": { "graphics": { "preset": "calm" } } }),
+        )
+        .unwrap();
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "use", "name": "Mine" }),
+        )
+        .unwrap();
+        let listed = call(&ctx, "library", json!({ "kind": "style" })).unwrap();
+        assert!(listed.contains("\"name\": \"Mine\""), "{listed}");
+
+        // A graphic's own tokens put it out of line: one batch brings it back.
+        let own = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "look": { "radius": "0" } }),
+        )
+        .unwrap();
+        assert!(own.contains("\"radius\":\"0\""), "{own}");
+        let listed = call(&ctx, "graphics", json!({})).unwrap();
+        assert!(listed.contains("\"look\":{\"radius\":\"0\"}"), "{listed}");
+        let check = call(&ctx, "library", json!({ "kind": "style", "op": "check" })).unwrap();
+        assert!(check.contains("Step card"), "{check}");
+        let proposed = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "bring_in_line" }),
+        )
+        .unwrap();
+        assert!(
+            proposed.contains("Proposed b-") && proposed.contains("its own look (radius)"),
+            "{proposed}"
+        );
+        let batch = proposed
+            .split_whitespace()
+            .find(|w| w.starts_with("b-"))
+            .unwrap()
+            .trim_end_matches('.')
+            .to_string();
+        let (handle, revision) = with_reader(ctx.state, |r| {
+            Ok((r.summary.project_handle.clone(), r.document().revision))
+        })
+        .unwrap();
+        commands::proposals::proposal_accept_impl(ctx.state, handle, revision, batch, None, false)
+            .unwrap();
+        let in_line = with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let graphic = document.assets.iter().find(|a| a.is_graphic()).unwrap();
+            let on_timeline = document
+                .sequence
+                .clips()
+                .any(|(_, c)| c.asset == graphic.id);
+            let source =
+                crate::graphics::read_source(&crate::graphics::folder(reader.root(), &graphic.id))?;
+            Ok((graphic.id.clone(), on_timeline, source.look.is_empty()))
+        })
+        .unwrap();
+        assert_ne!(in_line.0, id, "a copy, so undo has the old one");
+        assert!(in_line.1 && in_line.2, "{in_line:?}");
+        assert!(call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "bring_in_line" })
+        )
+        .unwrap_err()
+        .contains("nothing to bring in line"));
+        let id = in_line.0;
         let slot = call(
             &ctx,
             "graphic_set",
@@ -5103,6 +6863,66 @@ mod tests {
         let refused = call(&ctx, "fillers", json!({})).unwrap_err();
         assert!(refused.contains("A graphic plays here"), "{refused}");
         assert_eq!(length(&ctx), before);
+    }
+
+    #[test]
+    fn automatic_passes_hold_what_looks_wrong_and_graphics_go_in_one_call() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "codex", false);
+        let before = length(&ctx);
+        // Everything quieter than -10 dB "is silence": far more than a quarter, held.
+        let held = call(
+            &ctx,
+            "silence",
+            json!({ "guard": true, "thresholdDb": -10.0, "minDurationMs": 50 }),
+        )
+        .unwrap();
+        assert!(held.contains("Not applied: it would cut"), "{held}");
+        assert!(held.contains("more than a quarter"), "{held}");
+        assert_eq!(length(&ctx), before, "a held pass changes nothing");
+        // A pass that looks right applies in the same one call: muting, guarded by the words.
+        let muted = call(&ctx, "mouth_noises", json!({ "guard": true })).unwrap();
+        assert!(muted.contains("Muted 1."), "{muted}");
+
+        // Two graphics in one call are one undo step.
+        let revision = |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
+        let at = revision(&ctx);
+        let added = call(
+            &ctx,
+            "graphic_add",
+            json!({ "items": [
+                { "template": "title", "atWord": "w-0", "lengthUs": 1_000_000 },
+                { "template": "key-point", "atUs": 1_500_000, "lengthUs": 1_000_000 }
+            ] }),
+        )
+        .unwrap();
+        assert_eq!(added.matches("Added graphic").count(), 2, "{added}");
+        assert_eq!(revision(&ctx), at + 1, "{added}");
+        let graphics = with_reader(ctx.state, |r| {
+            Ok(r.document()
+                .assets
+                .iter()
+                .filter(|a| a.is_graphic())
+                .count())
+        })
+        .unwrap();
+        assert_eq!(graphics, 2);
+        // One bad item places none of them.
+        let bad = call(
+            &ctx,
+            "graphic_add",
+            json!({ "items": [
+                { "template": "title", "atUs": 0 },
+                { "template": "no-such-template", "atUs": 0 }
+            ] }),
+        )
+        .unwrap_err();
+        assert!(bad.starts_with("Graphic 2:"), "{bad}");
+        assert_eq!(revision(&ctx), at + 1);
     }
 
     #[test]
@@ -5173,14 +6993,15 @@ mod tests {
         let report = call(&ctx, "scan", json!({})).unwrap();
         let has = |part: &str| assert!(report.contains(part), "{part} in:\n{report}");
         assert!(
-            report
-                .starts_with("Scan of \"Lesson\", 0:04.00 long, measured with the balanced preset"),
+            report.starts_with(
+                "Scan of \"Lesson\", 0:04.00 long, measured with the project's cleanup settings"
+            ),
             "{report}"
         );
         has(&format!("Microphones: 1, {key} (transcribed)."));
         has("Cameras: none, so no webcam questions.");
         has("Mouse data: none");
-        has("Transcribers: parakeet ");
+        has("Transcribers: online by default");
         has("AI key: ");
         has("Mouth noises: Found 1 mouth noise");
         has("1 would be muted.");
@@ -5188,7 +7009,7 @@ mod tests {
         has("Silence from the audio: Found 3 pauses");
         has("Gaps from the transcript: Found ");
         // The scan's dry run never spends the AI key, and says the review finds more.
-        has("Fillers and retakes (the rules, plus a saved in-house review): Found 1 filler and 0 retakes");
+        has("Fillers and retakes (the rules, plus any saved review): Found 1 filler and 0 retakes");
         has("(the rules only)");
         assert!(
             !report.contains("Webcam focus:") && !report.contains("Zooms:"),
@@ -5217,7 +7038,26 @@ mod tests {
         );
         let zooms = call(&ctx, "zooms", json!({ "apply": false })).unwrap();
         assert!(zooms.starts_with("No zoom suggestions to add."), "{zooms}");
-        assert!(call(&ctx, "zooms", json!({ "apply": false, "op": "reload" })).is_err());
+        assert!(call(&ctx, "zooms", json!({ "apply": false, "op": "dismiss" })).is_err());
+        // A dry run tries other settings without saving them.
+        let before = call(&ctx, "settings", json!({ "area": "zoom" })).unwrap();
+        let tried = call(
+            &ctx,
+            "zooms",
+            json!({ "apply": false, "settings": { "minHoldMs": 7000, "clickScale": 2.0 } }),
+        )
+        .unwrap();
+        assert!(tried.contains("Nothing was saved"), "{tried}");
+        assert_eq!(
+            call(&ctx, "settings", json!({ "area": "zoom" })).unwrap(),
+            before
+        );
+        assert!(call(
+            &ctx,
+            "zooms",
+            json!({ "apply": false, "settings": { "nope": 1 } })
+        )
+        .is_err());
     }
 
     #[test]
@@ -5254,14 +7094,34 @@ mod tests {
             error.contains("Unknown captions setting enabeld") && error.contains("enabled"),
             "{error}"
         );
-        let presets = call(&ctx, "settings", json!({ "area": "presets" })).unwrap();
+        let presets = call(&ctx, "settings", json!({ "area": "cleanup" })).unwrap();
         assert!(
             presets.contains("\"preset\":\"tight\"") && presets.contains("\"thresholdDb\":-36.0"),
             "{presets}"
         );
         let export = call(&ctx, "settings", json!({ "area": "export" })).unwrap();
-        assert!(export.contains("\"width\":1920"), "{export}");
-        assert!(call(&ctx, "settings", json!({ "area": "presets", "set": {} })).is_err());
+        assert!(export.contains("\"resolution\":\"1080p\""), "{export}");
+        // The project's cleanup and export settings can be changed, one undo step each.
+        let set = call(
+            &ctx,
+            "settings",
+            json!({ "area": "cleanup", "set": { "silence": { "paddingMs": 60 } } }),
+        )
+        .unwrap();
+        assert!(set.contains("\"paddingMs\":60"), "{set}");
+        let set = call(
+            &ctx,
+            "settings",
+            json!({ "area": "export", "set": { "resolution": "4K" } }),
+        )
+        .unwrap();
+        assert!(set.contains("\"resolution\":\"4K\""), "{set}");
+        assert!(call(
+            &ctx,
+            "settings",
+            json!({ "area": "export", "set": { "fps": 7 } })
+        )
+        .is_err());
     }
 
     #[test]
@@ -5407,6 +7267,35 @@ mod tests {
             cleared.contains("No sections: the base shows throughout."),
             "{cleared}"
         );
+    }
+
+    #[test]
+    fn subtitles_transcript_and_sound_are_saved_next_to_the_project() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "agent", false);
+        let saved = call(&ctx, "export", json!({ "file": "srt" })).unwrap();
+        assert!(saved.starts_with("The video: "), "{saved}");
+        let srt = std::fs::read_to_string(dir.path().join("Lesson.srt")).unwrap();
+        assert!(
+            srt.starts_with("1\r\n00:00:00,000 --> 00:00:01,190\r\nHello um there.\r\n\r\n2\r\n00:00:01,600 --> "),
+            "{srt}"
+        );
+        call(&ctx, "export", json!({ "file": "md" })).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("Lesson.md")).unwrap(),
+            "# Lesson\n\nHello um there. So next step now.\n"
+        );
+        call(&ctx, "export", json!({ "file": "wav" })).unwrap();
+        let wav = std::fs::read(dir.path().join("Lesson.wav")).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(wav.len(), 44 + 4 * 48_000 * 4);
+        assert!(call(&ctx, "export", json!({ "file": "srt", "short": "x" }))
+            .unwrap_err()
+            .contains("No shorts yet"));
     }
 
     #[test]

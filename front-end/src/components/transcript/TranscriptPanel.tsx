@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, AudioWaveform, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
 import { api, isTauriEnvironment } from "../../lib/ipc";
@@ -10,9 +10,15 @@ import {
   TranscriptionProgress,
   TranscriptView,
 } from "../../lib/types";
-import { TranscriptSettingsModal } from "./TranscriptSettingsModal";
 import { soundSources } from "../../lib/sequence";
-import { Badge, Button, IconButton, Notice, Segmented, cn } from "../ui";
+import { buildTimeIndex, findAt } from "../../lib/transcriptIndex";
+import { Badge, Button, IconButton, Notice, cn } from "../ui";
+import { useLineWindow } from "./useLineWindow";
+
+// Loaded when first opened.
+const TranscriptSettingsModal = React.lazy(() =>
+  import("./TranscriptSettingsModal").then((m) => ({ default: m.TranscriptSettingsModal })),
+);
 
 /** Every sound in the project, speech first, as `{ id, label, placed }`; in a short, only the
  *  sounds its own timeline plays. */
@@ -29,7 +35,6 @@ function formatTime(us: number): string {
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
-type ReviewFilter = "all" | "filler" | "retake";
 
 /** Lines break at pauses, sentence ends, speaker changes and jumps in time. */
 const LINE_PAUSE_US = 1_000_000;
@@ -228,10 +233,10 @@ export const TranscriptPanel: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const [showRejected, setShowRejected] = useState(false);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const activeRef = useRef<HTMLSpanElement | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   const handle = openedProject?.projectHandle;
   const captionsVersion = useProjectStore((s) => s.captionsVersion);
@@ -382,23 +387,41 @@ export const TranscriptPanel: React.FC = () => {
   }, [pending]);
   const wordIndex = useMemo(() => new Map(words.map((w, i) => [w.id, i])), [words]);
   const reviewed = suggestions.filter(
-    (s) => (reviewFilter === "all" || s.kind === reviewFilter) && (showRejected ? s.dismissed : !s.dismissed),
+    (s) => (showRejected ? s.dismissed : !s.dismissed),
   );
   const rejectedCount = suggestions.length - pending.length;
 
+  // Indexed once per transcript, so the playhead finds its word and line by binary search
+  // instead of walking every word on every frame.
+  const wordTimes = useMemo(() => buildTimeIndex(words.map((w) => ({ start: w.editedStartUs, end: w.editedEndUs }))), [words]);
+  const lineTimes = useMemo(() => buildTimeIndex(lines.map((l) => ({ start: l.startUs, end: l.endUs }))), [lines]);
+  const lineOfWord = useMemo(() => {
+    const of = new Int32Array(words.length).fill(-1);
+    lines.forEach((line, n) => line.words.forEach(({ i }) => (of[i] = n)));
+    return of;
+  }, [words, lines]);
+
   // The word and line under the playhead: the panel re-renders when they change, not on
   // every tick of the playhead.
-  const activeIndex = useProjectStore((s) =>
-    words.findIndex(
-      (w) => w.editedStartUs !== null && w.editedEndUs !== null && s.currentTimeUs >= w.editedStartUs && s.currentTimeUs < w.editedEndUs,
-    ),
-  );
-  const playingLine = useProjectStore((s) =>
-    lines.findIndex((line) => line.startUs !== null && line.endUs !== null && s.currentTimeUs >= line.startUs && s.currentTimeUs < line.endUs),
-  );
+  const activeIndex = useProjectStore((s) => findAt(wordTimes, s.currentTimeUs));
+  const playingLine = useProjectStore((s) => findAt(lineTimes, s.currentTimeUs));
+
+  // Only the lines on screen are drawn.
+  const lineKeys = useMemo(() => lines.map((line) => line.words[0].w.id), [lines]);
+  const lineWindow = useLineWindow(lineKeys, scrollerRef);
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: "nearest" });
+    if (activeIndex < 0) return;
+    if (activeRef.current) {
+      activeRef.current.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    // Its line is not drawn: scroll to where it is, then to the word once it is drawn.
+    lineWindow.scrollToLine(lineOfWord[activeIndex] ?? -1);
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => activeRef.current?.scrollIntoView({ block: "nearest" })),
+    );
+    return () => cancelAnimationFrame(frame);
   }, [activeIndex]);
 
   const selectedIds = useMemo(() => {
@@ -463,7 +486,7 @@ export const TranscriptPanel: React.FC = () => {
           setError(null);
           setNotice(
             ai.localAvailable
-              ? "Download the local model under Filler and retake review, then press Find with AI again."
+              ? "Download the local model under Filler and retake review, then press Review again."
               : "This build has no local model: choose OpenRouter / OpenAI under Filler and retake review.",
           );
           setSettingsOpen(true);
@@ -475,7 +498,7 @@ export const TranscriptPanel: React.FC = () => {
         if (!source && !(ai.localAvailable && ai.localPresent)) {
           setError(null);
           setNotice(
-            `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under OpenRouter review, then press Find with AI again. Or choose the local model, or ask your connected agent to review them in-house.`,
+            `Add your ${ai.settings.provider === "openAi" ? "OpenAI" : "OpenRouter"} API key under OpenRouter review, then press Review again. Or choose the local model, or ask your connected agent to review them in-house.`,
           );
           setSettingsOpen(true);
           return;
@@ -496,7 +519,7 @@ export const TranscriptPanel: React.FC = () => {
       // Another track, or the words moved (a cut, undo) while the AI read them: its answer is
       // about words no longer shown as they were.
       if (!stillShowing(handle, trackId) || generation !== refreshGeneration.current) {
-        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Find with AI again.");
+        if (stillShowing(handle, trackId)) setNotice("The transcript changed during the AI review. Press Review again.");
         return;
       }
       setSuggestions(next);
@@ -538,32 +561,6 @@ export const TranscriptPanel: React.FC = () => {
     const index = selectedIds.length === 1 ? wordIndex.get(selectedIds[0]) : undefined;
     if (index === undefined) return;
     setEditing({ index, text: words[index].text });
-  };
-
-  /** Times every word against the audio; text and cuts already made stay. */
-  const alignWords = async () => {
-    if (!handle || !trackId) return;
-    setRunning(true);
-    setError(null);
-    setNotice(null);
-    setProgress(null);
-    try {
-      const result = await api.transcriptAlign(handle, trackId);
-      bumpCaptions();
-      if (!stillShowing(handle, trackId)) return;
-      setView(result.view);
-      const nextSuggestions = await api.transcriptSuggestions(handle, trackId);
-      if (!stillShowing(handle, trackId)) return;
-      setSuggestions(nextSuggestions);
-      setNotice(result.diagnostics.join(" · "));
-    } catch (err) {
-      const message = errorMessage(err);
-      setError(message);
-      if (message.includes("transcription settings")) setSettingsOpen(true);
-    } finally {
-      setRunning(false);
-      setProgress(null);
-    }
   };
 
   /** Takes the punctuation off every word; captions follow. */
@@ -694,16 +691,6 @@ export const TranscriptPanel: React.FC = () => {
               .,?<span className="sr-only"> Remove punctuation</span>
             </Button>
           )}
-          {view && !view.alignment && (
-            <IconButton
-              size="sm"
-              icon={AudioWaveform}
-              label="Align words to the audio"
-              title="Time every word against the audio (to 20 ms), so cuts at word edges keep whole words and drop the pauses beside them. Text and cuts already made stay."
-              disabled={running}
-              onClick={() => void alignWords()}
-            />
-          )}
           {view && (
             <IconButton
               size="sm"
@@ -799,10 +786,11 @@ export const TranscriptPanel: React.FC = () => {
 
       <div className="flex-1 min-h-0 flex">
       <div
+        ref={scrollerRef}
         tabIndex={0}
         onKeyDown={onKeyDown}
         lang={view?.language === "el" ? "el" : "en"}
-        className="flex-1 min-w-0 overflow-y-auto px-3 py-3 space-y-1 text-reading text-studio-200 outline-none select-none"
+        className="flex-1 min-w-0 overflow-y-auto px-3 py-3 text-reading text-studio-200 outline-none select-none"
       >
         {!view && !running && (
           <p className="text-body text-studio-500 max-w-prose">
@@ -812,71 +800,58 @@ export const TranscriptPanel: React.FC = () => {
             you can keep or cut each one.
           </p>
         )}
-        {lines.map((line, lineIndex) => {
+        {lines.length > 0 && <div style={{ height: lineWindow.above }} aria-hidden />}
+        {lines.slice(lineWindow.first, lineWindow.last).map((line, k) => {
+          const lineIndex = lineWindow.first + k;
           // Each line gets only what concerns it, so a change elsewhere leaves it alone.
           const first = line.words[0].i;
           const last = line.words[line.words.length - 1].i;
           const lo = selectionRange ? Math.max(selectionRange[0], first) : -1;
           const hi = selectionRange ? Math.min(selectionRange[1], last) : -1;
           const inLine = lo <= hi && lo >= 0;
+          const key = lineKeys[lineIndex];
           return (
-            <TranscriptLineRow
-              key={line.words[0].w.id}
-              line={line}
-              lineIndex={lineIndex}
-              playing={lineIndex === playingLine}
-              active={activeIndex >= first && activeIndex <= last ? activeIndex : -1}
-              selFrom={inLine ? lo : -1}
-              selTo={inLine ? hi : -1}
-              editing={editing && editing.index >= first && editing.index <= last ? editing : null}
-              suggestionKind={suggestionKind}
-              activeRef={activeRef}
-              actions={lineActions}
-            />
+            <div key={key} ref={lineWindow.measure(key)} className="pb-1">
+              <TranscriptLineRow
+                line={line}
+                lineIndex={lineIndex}
+                playing={lineIndex === playingLine}
+                active={activeIndex >= first && activeIndex <= last ? activeIndex : -1}
+                selFrom={inLine ? lo : -1}
+                selTo={inLine ? hi : -1}
+                editing={editing && editing.index >= first && editing.index <= last ? editing : null}
+                suggestionKind={suggestionKind}
+                activeRef={activeRef}
+                actions={lineActions}
+              />
+            </div>
           );
         })}
+        {lines.length > 0 && <div style={{ height: lineWindow.below }} aria-hidden />}
       </div>
       {reviewOpen && view && (
         <aside className="w-80 shrink-0 border-l border-studio-800 flex flex-col min-h-0 bg-studio-900" aria-label="Suggestion review">
-          <div className="shrink-0 p-3 space-y-2 border-b border-studio-800">
-            <div className="flex items-center gap-2">
-              <Segmented<"all" | "filler" | "retake">
-                label="Show"
-                size="sm"
-                className="flex-1"
-                value={reviewFilter}
-                onChange={setReviewFilter}
-                options={[
-                  { value: "all", label: "All" },
-                  { value: "filler", label: "Fillers" },
-                  { value: "retake", label: "Retakes" },
-                ]}
-              />
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowRejected(!showRejected)}
-                disabled={rejectedCount === 0 && !showRejected}
-                title="Rejected suggestions stay out of Cut all"
-              >
-                {showRejected ? "Back" : `Rejected ${rejectedCount}`}
-              </Button>
-            </div>
+          <div className="shrink-0 p-3 flex items-center gap-2 border-b border-studio-800">
             <Button
               size="sm"
               variant="secondary"
               icon={Sparkles}
-              className="w-full"
+              className="flex-1"
               disabled={running}
               onClick={() => void runAiReview()}
-              title="Ask the local model, or OpenRouter / OpenAI (chosen in Transcription and AI settings), to find filler words and retakes in context. The local model sends nothing anywhere."
+              title="Find filler words and retakes in context with the local model, or OpenRouter / OpenAI (chosen in Transcription and AI settings). The local model sends nothing anywhere."
             >
-              Find with AI
+              Review
             </Button>
-            <p className="text-meta text-studio-500">
-              Or in-house: ask your connected agent to review the fillers and retakes. It reads the transcript itself
-              (fillers_review), so nothing goes to OpenRouter; its finds show here marked In-house.
-            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowRejected(!showRejected)}
+              disabled={rejectedCount === 0 && !showRejected}
+              title="Rejected suggestions stay out of Cleanup"
+            >
+              {showRejected ? "Back" : `Rejected ${rejectedCount}`}
+            </Button>
           </div>
           <ul className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5">
             {reviewed.length === 0 && (
@@ -959,7 +934,7 @@ export const TranscriptPanel: React.FC = () => {
               </li>
             ))}
           </ul>
-          {!showRejected && reviewed.length > 1 && (
+          {!showRejected && reviewed.length > 0 && (
             <div className="shrink-0 p-3 border-t border-studio-800 space-y-1.5">
               <Button
                 variant="danger"
@@ -972,7 +947,7 @@ export const TranscriptPanel: React.FC = () => {
                   )
                 }
               >
-                Cut all {reviewed.length}
+                Cleanup {reviewed.length}
               </Button>
               <p className="text-meta text-studio-500 text-center">Every track loses the same time. Undo brings it back.</p>
             </div>
@@ -981,7 +956,11 @@ export const TranscriptPanel: React.FC = () => {
       )}
       </div>
 
-      {settingsOpen && <TranscriptSettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <TranscriptSettingsModal detected={view?.language ?? null} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 };

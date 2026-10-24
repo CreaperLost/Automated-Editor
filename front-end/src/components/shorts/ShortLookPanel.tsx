@@ -1,10 +1,9 @@
 import React from "react";
-import { Camera, Captions, Monitor, Palette, Shapes, Trash2 } from "lucide-react";
+import { Camera, Captions, Monitor, Shapes, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { assetById, videoTracks } from "../../lib/sequence";
 import type { GraphicSlot } from "../../lib/types";
-import { BACKGROUND_PRESETS, presetBackgroundCss } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import {
   applyLookToAll,
@@ -25,7 +24,8 @@ import { Switch } from "../ui";
 const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
   ["full", "Full", "The whole frame, over everything"],
   ["camera", "Camera", "The camera's part of the base layout, over everything there"],
-  ["screen", "Screen", "The screen's part of the base layout, over everything there"],
+  ["screen", "Split", "Your face above, the graphic in the screen's part (the split shows while it plays)"],
+  ["overFace", "Over face", "Your face fills the frame and the graphic is drawn over it, see-through"],
   ["overScreen", "Over screen", "Over the screen's part, under the captions; its see-through parts show the screen"],
 ];
 
@@ -209,57 +209,10 @@ export const ShortLookPanel: React.FC = () => {
             />
           </InspectorSection>
 
-          <InspectorSection id="short-background" title="Background" icon={Palette}>
-            <div className="grid grid-cols-5 gap-0.5 bg-studio-900 border border-studio-700 rounded-control p-0.5">
-              {(
-                [
-                  ["project", "Video's"],
-                  ["solid", "Colour"],
-                  ["gradient", "Gradient"],
-                  ["preset", "Built-in"],
-                  ["wallpaper", "Image"],
-                ] as const
-              ).map(([kind, label]) => (
-                <button
-                  key={kind}
-                  type="button"
-                  aria-pressed={layout.backgroundType === kind}
-                  onClick={() => changeLayout({ backgroundType: kind })}
-                  disabled={kind === "wallpaper" && !project.layout?.wallpaperAsset}
-                  title={kind === "wallpaper" && !project.layout?.wallpaperAsset ? "Choose an image in the editor's Background settings first" : undefined}
-                  className={`${segmented(layout.backgroundType === kind)} !text-meta disabled:opacity-40`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            {(layout.backgroundType === "solid" || layout.backgroundType === "gradient") && (
-              <div className="flex gap-2">
-                <input type="color" aria-label="Background colour" value={layout.backgroundColorStart} onChange={(e) => changeLayout({ backgroundColorStart: e.target.value })} className="h-control flex-1 bg-studio-850 border border-studio-700 rounded-control cursor-pointer" />
-                {layout.backgroundType === "gradient" && (
-                  <input type="color" aria-label="Background end colour" value={layout.backgroundColorEnd} onChange={(e) => changeLayout({ backgroundColorEnd: e.target.value })} className="h-control flex-1 bg-studio-850 border border-studio-700 rounded-control cursor-pointer" />
-                )}
-              </div>
-            )}
-            {layout.backgroundType === "preset" && (
-              <div className="grid grid-cols-3 gap-1">
-                {BACKGROUND_PRESETS.map((preset) => (
-                  <button
-                    key={preset.key}
-                    type="button"
-                    aria-pressed={layout.backgroundPreset === preset.key}
-                    onClick={() => changeLayout({ backgroundPreset: preset.key })}
-                    className={`h-10 rounded-control border text-meta text-white/90 flex items-end p-1.5 ${
-                      layout.backgroundPreset === preset.key ? "border-accent-fg shadow-[0_0_0_2px_rgb(var(--accent-hover)/0.7)]" : "border-studio-700"
-                    }`}
-                    style={{ background: presetBackgroundCss(preset.key) }}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </InspectorSection>
+          <p className="px-3 py-2 text-meta text-studio-500 leading-relaxed border-b border-studio-800">
+            The background and how captions look at 9:16 are the project&apos;s style (the Inspector&apos;s Style page,
+            &ldquo;At 9:16&rdquo;).
+          </p>
 
           <InspectorSection
             id="short-captions"
@@ -310,7 +263,7 @@ export const ShortLookPanel: React.FC = () => {
                 </label>
               </div>
             )}
-            <p className="text-meta text-studio-500">Colours and font come from the editor's Captions settings; edit caption text on the short's timeline.</p>
+            <p className="text-meta text-studio-500">Colours come from the editor's Captions settings, the font and accent from the brand kit; edit caption text and emphasis on the short's timeline.</p>
           </InspectorSection>
 
           <div className="flex flex-col gap-2 p-4">

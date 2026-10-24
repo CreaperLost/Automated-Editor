@@ -18,10 +18,25 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-/// Graphics render at this rate; playback and export read them at their own.
+/// A graphic outside an edit renders at this rate; in one, at its export settings' rate.
 pub const RENDER_FPS: u32 = 30;
 /// The long side of the canvas a graphic renders at; export scales it to the output.
 pub const RENDER_LONG_SIDE: u32 = 1920;
+
+/// The fastest a graphic renders.
+const MAX_FINAL_FPS: u32 = 60;
+
+/// Which render a view plays: the draft the preview and storyboard use (at the export
+/// settings' frame rate), or the final one an export of `fps` frames a second needs (at its
+/// frame rate, and twice as sharp when the export is larger than the draft). An export never plays a draft.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Quality {
+    #[default]
+    Draft,
+    Final {
+        fps: u32,
+    },
+}
 
 /// One graphic, as it plays on one canvas for one length.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -32,16 +47,24 @@ pub struct Spec {
     pub dir: PathBuf,
     /// Where its renders go.
     pub cache: PathBuf,
+    /// The composition's size: what the graphic lays itself out in.
     pub width: u32,
     pub height: u32,
+    /// Pixels per composition pixel: 2 renders the same layout at twice the size, as Chrome
+    /// draws a page on a high-density screen.
+    pub density: u32,
     pub fps: u32,
     pub length_us: u64,
     /// How it comes on and goes off where it plays: a cut, or an ease over the camera.
     pub entrance: super::Entrance,
-    /// The app's brand kits folder.
-    pub brands: PathBuf,
-    /// The project's brand kit, for a graphic that has not picked its own.
-    pub default_brand: Option<String>,
+    /// The style it takes (its own, else the project's), by name and as JSON.
+    pub style_name: String,
+    pub style_json: String,
+    /// The style's graphics look as CSS, with the graphic's own tokens over it.
+    pub look: String,
+    /// How it shows (`data-mode` on its root): `full`, `split` beside the face in a short, or
+    /// `over` a picture that shows through.
+    pub mode: &'static str,
 }
 
 /// The size a graphic renders at for a canvas of `width` x `height` (preview canvases are
@@ -51,6 +74,22 @@ pub fn render_size(width: u32, height: u32) -> (u32, u32) {
     let scale = RENDER_LONG_SIDE as f64 / w.max(h);
     let even = |v: f64| ((v * scale).round() as u32).max(2) & !1;
     (even(w), even(h))
+}
+
+/// The canvas a graphic renders for: the edit's own when the view has its shape. Views of the
+/// edit (the preview at the window's size, storyboard tiles, the export) round its shape a
+/// pixel or two differently, and each rounding would be a render of its own.
+pub fn shared_canvas(edit: Option<(u32, u32)>, view: (u32, u32)) -> (u32, u32) {
+    let same_shape = |(a, b): (u32, u32)| {
+        let (a, b, w, h) = (
+            a as f64,
+            b as f64,
+            view.0.max(1) as f64,
+            view.1.max(1) as f64,
+        );
+        ((a / b) / (w / h) - 1.0).abs() < 0.02
+    };
+    edit.filter(|edit| same_shape(*edit)).unwrap_or(view)
 }
 
 impl Spec {
@@ -68,18 +107,22 @@ impl Spec {
             cache: super::cache_folder(root, &asset.id),
             width,
             height,
+            density: 1,
             fps: RENDER_FPS,
             length_us: length_us.max(100_000),
             entrance: super::Entrance::Cut,
-            brands: super::brands::dir(),
-            default_brand: None,
+            style_name: crate::style::DEFAULT.into(),
+            style_json: serde_json::to_string(&crate::style::Style::default()).unwrap_or_default(),
+            look: super::look::Look::default().css(&Default::default()),
+            mode: "full",
         }
     }
 
     /// The same graphic and length rendered for a canvas of its own: `document`'s render size
-    /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), the
-    /// document's brand kit, and how it comes on and goes off there. `full_camera` is where the
-    /// camera fills the frame ([`super::full_camera_ranges`] of `document`).
+    /// for `canvas` with the slot `clip_id` plays in (a part of a short's split), its style
+    /// (its own or the document's), and how it comes on and goes off there. `full_camera` is where the
+    /// camera fills the frame ([`super::full_camera_ranges`] of `document`). `quality` picks
+    /// the draft or an export's final render.
     pub fn for_clip(
         root: &Path,
         document: &crate::project::revision::EditDocument,
@@ -87,12 +130,15 @@ impl Spec {
         clip: &crate::sequence::Clip,
         canvas: (u32, u32),
         full_camera: &[(u64, u64)],
+        quality: Quality,
     ) -> Self {
-        let mut spec = Self::new(root, asset, canvas, clip.duration_us);
+        let shared = shared_canvas(document.layout.preview_dimensions().ok(), canvas);
+        let mut spec = Self::new(root, asset, shared, clip.duration_us);
         let mut whole_frame = true;
         if let Some(short) = &document.short_layout {
-            whole_frame =
-                crate::shorts::graphic_slot(short, &clip.id) == crate::shorts::GraphicSlot::Full;
+            let slot = crate::shorts::graphic_slot(short, &clip.id);
+            whole_frame = slot == crate::shorts::GraphicSlot::Full;
+            spec.mode = slot.data_mode();
             let (_, _, w, h) =
                 crate::shorts::graphic_rect(document, &clip.id, spec.width, spec.height);
             spec.width = (w & !1).max(2);
@@ -102,19 +148,57 @@ impl Spec {
         // it unless its composition says it is an overlay.
         spec.entrance =
             super::entrance_for(full_camera, clip, || whole_frame && !overlay_of(&spec.dir));
-        spec.default_brand = document.graphics_brand.clone();
+        spec.dress(
+            &crate::style::of(document),
+            crate::style::is_portrait(document),
+        );
+        // At the frame rate the export settings ask for, the draft too: a 1080p export then
+        // plays the preview's render instead of making its own.
+        let fps = match quality {
+            Quality::Final { fps } => fps,
+            Quality::Draft => document.export.fps,
+        };
+        spec.fps = fps.clamp(1, MAX_FINAL_FPS);
+        if let Quality::Final { .. } = quality {
+            // Larger than the draft: twice as sharp, where HyperFrames can (a whole 16:9 or
+            // 9:16 frame; it renders only at its own sizes).
+            if canvas.0.max(canvas.1) > RENDER_LONG_SIDE && density_preset(&spec).is_some() {
+                spec.density = 2;
+            }
+        }
         spec
     }
 
-    /// The kit this render uses, if it has one and the kit is there.
-    fn brand(&self) -> Option<super::brands::BrandKit> {
-        let own = super::read_source(&self.dir).ok()?.brand;
-        let name = super::brands::effective(own.as_deref(), self.default_brand.as_deref())?;
-        super::brands::load(&self.brands, name).ok()
+    /// Takes `project`'s style, or the graphic's own when it picked one, on a canvas of that
+    /// shape, with the graphic's own look tokens over it.
+    pub fn dress(&mut self, project: &crate::style::Style, portrait: bool) {
+        let source = super::read_source(&self.dir).ok();
+        let style = source
+            .as_ref()
+            .and_then(|s| s.style.as_deref())
+            .and_then(crate::style::store::cached)
+            .unwrap_or_else(|| project.clone());
+        let own = source.map(|s| s.look).unwrap_or_default();
+        self.look = style.graphics_for(portrait).css(&own);
+        self.style_name = style.name.clone();
+        self.style_json = serde_json::to_string(&style).unwrap_or_default();
     }
 
+    /// The style this render takes.
+    fn style(&self) -> crate::style::Style {
+        let mut style: crate::style::Style =
+            serde_json::from_str(&self.style_json).unwrap_or_default();
+        style.name = self.style_name.clone();
+        style
+    }
+
+    /// Renders are named by their size in pixels.
     fn prefix(&self) -> String {
-        format!("{}x{}-", self.width, self.height)
+        format!(
+            "{}x{}-",
+            self.width * self.density,
+            self.height * self.density
+        )
     }
 
     /// The file name up to the source hash: everything about the output (canvas, length, fps,
@@ -136,8 +220,15 @@ impl Spec {
     /// Whether a newer request for `self` makes a waiting render of `other` pointless: the same
     /// graphic rendered for the same output, from older source. The same graphic at another
     /// length (the video and a short) or canvas is a different render and must stay queued.
+    /// A split graphic at another size is the split moved (dragging it asks for every size on the
+    /// way): only the newest size is worth making.
     fn supersedes(&self, other: &Spec) -> bool {
-        self.asset_id == other.asset_id && self.stem() == other.stem()
+        let resized = self.mode == "split"
+            && other.mode == "split"
+            && self.length_us == other.length_us
+            && self.fps == other.fps
+            && self.entrance == other.entrance;
+        self.asset_id == other.asset_id && (resized || self.stem() == other.stem())
     }
 
     /// What names this render: the source files and everything about the output.
@@ -145,13 +236,19 @@ impl Spec {
         let mut hasher = Sha256::new();
         hasher.update(runtime::HYPERFRAMES_VERSION.as_bytes());
         hasher.update(format!(
-            "{}x{}@{}:{}:{}",
+            "{}x{}x{}@{}:{}:{}",
             self.width,
             self.height,
+            self.density,
             self.fps,
             self.length_us,
             self.entrance.as_str()
         ));
+        // A part of a short's split lays out as a phone frame; over a picture, without its
+        // background. (Left out for the whole frame, so those renders keep their names.)
+        if self.mode != "full" {
+            hasher.update(format!("mode {}", self.mode));
+        }
         let mut files = Vec::new();
         list_files(&self.dir, &self.dir, &mut files)?;
         files.sort();
@@ -162,16 +259,13 @@ impl Spec {
             hasher.update((bytes.len() as u64).to_le_bytes());
             hasher.update(&bytes);
         }
-        // The brand kit, so changing the kit (or picking another) renders it again.
-        match self.brand() {
-            Some(kit) => {
-                hasher.update(b"brand\0");
-                hasher.update(kit.name.as_bytes());
-                hasher.update([0]);
-                hasher.update(super::brands::fingerprint(&self.brands, &kit));
-            }
-            None => hasher.update(b"no brand\0"),
-        }
+        // The style, so changing it (or picking another) renders it again.
+        hasher.update(b"style\0");
+        hasher.update(crate::style::brand::fingerprint(&self.style()));
+        // The look, so changing it renders every graphic again; and how it shows.
+        hasher.update(b"look\0");
+        hasher.update(self.look.as_bytes());
+        hasher.update(self.mode.as_bytes());
         let digest = hasher.finalize();
         Ok(digest.iter().take(8).map(|b| format!("{b:02x}")).collect())
     }
@@ -234,12 +328,21 @@ pub struct RenderState {
 struct Job {
     spec: Spec,
     hash: String,
+    /// Made ahead for an export ([`request_export`]): waits behind every preview render, and
+    /// renders with fewer Chrome workers.
+    export: bool,
 }
+
+/// Chrome workers a render made ahead for an export uses (HyperFrames picks 4 or so itself):
+/// slower, but it leaves the rest of the computer to the user.
+const EXPORT_AHEAD_WORKERS: u32 = 2;
 
 #[derive(Default)]
 struct Queue {
     waiting: VecDeque<Job>,
-    running: Option<(String, String, f64)>,
+    /// The asset, the render's file name, how far along, and whether it is made ahead for an
+    /// export.
+    running: Option<(String, String, f64, bool)>,
     /// Renders that failed, by file name, with why; not tried again until a source changes.
     failed: HashMap<String, String>,
     /// The latest error by asset, for the editor.
@@ -330,6 +433,52 @@ fn hash_of(spec: &Spec) -> Result<String, String> {
 
 /// Whether the graphic in `dir` says it covers only part of the frame, read once per
 /// generation (a source change bumps it): placing graphics asks for every frame.
+/// Where graphics fill the whole frame on `document`'s timeline, in edited time, merged: a
+/// short's graphics shown full (not split or over the face), a video's unless the composition is
+/// an overlay. Captions give way there, whether or not they are on.
+pub fn whole_frame_ranges(
+    root: &Path,
+    document: &crate::project::revision::EditDocument,
+) -> Vec<(u64, u64)> {
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    for track in document.sequence.video_tracks().filter(|t| !t.hidden) {
+        for clip in &track.clips {
+            if !document.asset(&clip.asset).is_some_and(|a| a.is_graphic()) {
+                continue;
+            }
+            let fills = match &document.short_layout {
+                Some(short) => {
+                    crate::shorts::graphic_slot(short, &clip.id) == crate::shorts::GraphicSlot::Full
+                }
+                None => !overlay_of(&super::folder(root, &clip.asset)),
+            };
+            if fills && clip.end_us() > clip.start_us {
+                ranges.push((clip.start_us, clip.end_us()));
+            }
+        }
+    }
+    ranges.sort();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (a, b) in ranges {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
+}
+
+/// Whether `at` falls in one of `ranges` (sorted, from [`whole_frame_ranges`]).
+pub fn in_ranges(ranges: &[(u64, u64)], at: u64) -> bool {
+    let i = ranges.partition_point(|r| r.0 <= at);
+    i > 0 && at < ranges[i - 1].1
+}
+
+/// Whether `[start, end)` meets one of `ranges`.
+pub fn meets_ranges(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
+    ranges.iter().any(|&(a, b)| a < end && start < b)
+}
+
 fn overlay_of(dir: &Path) -> bool {
     static OVERLAYS: OnceLock<Mutex<(u64, HashMap<PathBuf, bool>)>> = OnceLock::new();
     let now = generation();
@@ -355,53 +504,146 @@ pub fn lookup(spec: &Spec) -> Lookup {
         return Lookup::Ready(path);
     }
     request(spec, &hash);
-    match latest(spec) {
+    match latest_cached(spec) {
         Some((path, length)) => Lookup::Stale(path, length),
         None => Lookup::Pending,
     }
 }
 
-/// The newest render for `spec`'s canvas, with its length.
+/// Asks for the render of every graphic in `document` that is missing one for the preview
+/// (after a change that restyles them all: the look, the style), so they render now rather
+/// than when the playhead reaches each.
+pub fn request_all(root: &Path, document: &crate::project::revision::EditDocument) {
+    let Ok(canvas) = document.layout.preview_dimensions() else {
+        return;
+    };
+    for spec in specs_for(root, document, canvas, Quality::Draft) {
+        lookup(&spec);
+    }
+}
+
+/// Asks, behind every preview render, for the renders `document`'s export needs (its export
+/// settings' size and frame rate), so an export finds them made instead of rendering them
+/// first. Called whenever the edit changes; what is made or asked for already is skipped.
+pub fn request_export(root: &Path, document: &crate::project::revision::EditDocument) {
+    let Ok(settings) = document.export.settings(&document.layout) else {
+        return;
+    };
+    let quality = Quality::Final { fps: settings.fps };
+    for spec in specs_for(root, document, (settings.width, settings.height), quality) {
+        let Ok(hash) = hash_of(&spec) else {
+            continue;
+        };
+        if !spec.cache.join(spec.file_name(&hash)).is_file() {
+            enqueue(&spec, &hash, true);
+        }
+    }
+}
+
+/// [`latest`], found once per generation (a render finishing or a source changing bumps it):
+/// a graphic waiting for its render asks on every frame it plays.
+fn latest_cached(spec: &Spec) -> Option<(PathBuf, u64)> {
+    type Found = HashMap<(PathBuf, String), Option<(PathBuf, u64)>>;
+    static LATEST: OnceLock<Mutex<(u64, Found)>> = OnceLock::new();
+    let now = generation();
+    let key = (spec.cache.clone(), spec.prefix());
+    let mut found = LATEST
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if found.0 != now {
+        *found = (now, HashMap::new());
+    }
+    match found.1.get(&key) {
+        // Cleaning the cache may have taken it since.
+        Some(Some((path, length))) if path.is_file() => Some((path.clone(), *length)),
+        Some(None) => None,
+        _ => {
+            let latest = latest(spec);
+            found.1.insert(key, latest.clone());
+            latest
+        }
+    }
+}
+
+/// The newest render for `spec`'s canvas, with its length. A split graphic whose split moved has
+/// none at its new size yet: the newest at its width (the split's part spans the short's width)
+/// stands in, stretched a little, rather than the placeholder.
 fn latest(spec: &Spec) -> Option<(PathBuf, u64)> {
-    let prefix = spec.prefix();
-    std::fs::read_dir(&spec.cache)
-        .ok()?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let rest = name.strip_prefix(&prefix)?.strip_suffix(".webm")?;
-            let length_ms: u64 = rest.split('-').next()?.parse().ok()?;
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, entry.path(), length_ms * 1000))
-        })
-        .max_by_key(|(modified, _, _)| *modified)
-        .map(|(_, path, length)| (path, length))
+    let newest = |prefix: &str, same_height: bool| {
+        std::fs::read_dir(&spec.cache)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let rest = name.strip_prefix(prefix)?.strip_suffix(".webm")?;
+                // `{height}-{length}-...` when only the width was matched.
+                let rest = match same_height {
+                    true => rest,
+                    false => rest.split_once('-')?.1,
+                };
+                let length_ms: u64 = rest.split('-').next()?.parse().ok()?;
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, entry.path(), length_ms * 1000))
+            })
+            .max_by_key(|(modified, _, _)| *modified)
+            .map(|(_, path, length)| (path, length))
+    };
+    newest(&spec.prefix(), true).or_else(|| {
+        (spec.mode == "split")
+            .then(|| newest(&format!("{}x", spec.width * spec.density), false))
+            .flatten()
+    })
 }
 
 fn request(spec: &Spec, hash: &str) {
+    enqueue(spec, hash, false);
+}
+
+/// Puts `job` in line: last if made ahead for an export, else after the preview's renders and
+/// before those.
+fn place(waiting: &mut VecDeque<Job>, job: Job) {
+    let at = match job.export {
+        true => waiting.len(),
+        false => waiting
+            .iter()
+            .position(|j| j.export)
+            .unwrap_or(waiting.len()),
+    };
+    waiting.insert(at, job);
+}
+
+/// Queues `spec`'s render: a preview's after the other preview renders and before every one
+/// made ahead for an export (`export`), which go last.
+fn enqueue(spec: &Spec, hash: &str, export: bool) {
     let r = renderer();
     let name = spec.file_name(hash);
     let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
+    let same = |j: &Job| j.spec.asset_id == spec.asset_id && j.spec.file_name(&j.hash) == name;
     // Two graphics from the same template and values share a name, but each has its own cache.
     if queue.failed.contains_key(&name)
         || queue.elsewhere.contains(&spec.cache.join(&name))
         || queue
             .running
             .as_ref()
-            .is_some_and(|(id, n, _)| *id == spec.asset_id && *n == name)
-        || queue
-            .waiting
-            .iter()
-            .any(|j| j.spec.asset_id == spec.asset_id && j.spec.file_name(&j.hash) == name)
+            .is_some_and(|(id, n, _, _)| *id == spec.asset_id && *n == name)
+        // Waiting already, and no sooner wanted: a preview asking for one made ahead for an
+        // export (the same render, at a 1080p export) moves it up.
+        || queue.waiting.iter().any(|j| same(j) && (export || !j.export))
     {
         return;
     }
+    queue.waiting.retain(|j| !same(j));
     // A newer request for the same graphic and output replaces one still waiting.
     queue.waiting.retain(|j| !spec.supersedes(&j.spec));
-    queue.waiting.push_back(Job {
-        spec: spec.clone(),
-        hash: hash.to_string(),
-    });
+    place(
+        &mut queue.waiting,
+        Job {
+            spec: spec.clone(),
+            hash: hash.to_string(),
+            export,
+        },
+    );
     if !queue.worker {
         queue.worker = true;
         std::thread::Builder::new()
@@ -428,6 +670,7 @@ fn work() {
                         job.spec.asset_id.clone(),
                         job.spec.file_name(&job.hash),
                         0.0,
+                        job.export,
                     ));
                     break job;
                 }
@@ -435,7 +678,16 @@ fn work() {
             }
         };
         let name = job.spec.file_name(&job.hash);
-        let result = render_now(&job.spec, &name, &r.cancel, &mut |fraction| {
+        // Every render here is in the background: below normal priority, and one made ahead
+        // for an export with fewer workers too.
+        let limits = Limits {
+            workers: job.export.then_some(EXPORT_AHEAD_WORKERS),
+            low_priority: true,
+        };
+        let result = render_now(&job.spec, &name, &r.cancel, limits, &mut |event| {
+            let Event::Progress(fraction) = event else {
+                return;
+            };
             let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(running) = queue.running.as_mut() {
                 running.2 = fraction;
@@ -452,7 +704,10 @@ fn work() {
                 }
                 Err(error) => {
                     queue.failed.insert(name, error.clone());
-                    queue.errors.insert(job.spec.asset_id.clone(), error);
+                    // The export says itself when its render fails; the editor shows the preview's.
+                    if !job.export {
+                        queue.errors.insert(job.spec.asset_id.clone(), error);
+                    }
                 }
             }
         }
@@ -463,8 +718,9 @@ fn work() {
 }
 
 pub fn state_of(asset_id: &str) -> RenderState {
+    // What the editor shows is the preview's render; one made ahead for an export is quiet.
     let queue = renderer().queue.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((id, _, progress)) = &queue.running {
+    if let Some((id, _, progress, false)) = &queue.running {
         if id == asset_id {
             return RenderState {
                 state: "rendering".into(),
@@ -473,7 +729,11 @@ pub fn state_of(asset_id: &str) -> RenderState {
             };
         }
     }
-    if queue.waiting.iter().any(|j| j.spec.asset_id == asset_id) {
+    if queue
+        .waiting
+        .iter()
+        .any(|j| j.spec.asset_id == asset_id && !j.export)
+    {
         return RenderState {
             state: "queued".into(),
             ..Default::default()
@@ -492,12 +752,22 @@ pub fn state_of(asset_id: &str) -> RenderState {
     }
 }
 
+/// HyperFrames' name for rendering `spec`'s composition at twice its size, if it has one.
+fn density_preset(spec: &Spec) -> Option<&'static str> {
+    match (spec.width, spec.height) {
+        (1920, 1080) => Some("landscape-4k"),
+        (1080, 1920) => Some("portrait-4k"),
+        _ => None,
+    }
+}
+
 /// The renders `document` needs on a canvas of `canvas` (width, height): one per graphic clip
-/// on a shown video track, in the slot it plays in.
+/// on a shown video track, in the slot it plays in, at `quality`.
 pub fn specs_for(
     root: &Path,
     document: &crate::project::revision::EditDocument,
     canvas: (u32, u32),
+    quality: Quality,
 ) -> Vec<Spec> {
     let mut specs: Vec<Spec> = Vec::new();
     let full_camera = super::full_camera_ranges(document);
@@ -506,7 +776,7 @@ pub fn specs_for(
             let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
                 continue;
             };
-            let spec = Spec::for_clip(root, document, asset, clip, canvas, &full_camera);
+            let spec = Spec::for_clip(root, document, asset, clip, canvas, &full_camera, quality);
             if !specs.contains(&spec) {
                 specs.push(spec);
             }
@@ -516,13 +786,15 @@ pub fn specs_for(
 }
 
 /// Renders whatever of `specs` is missing, waiting for each (for export). Reports the overall
-/// fraction done.
+/// fraction done with what it is rendering, and each line HyperFrames prints as it comes.
+/// Returns each spec's render, of its source as it was when asked.
 pub fn ensure(
     specs: &[Spec],
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(f64, &str),
-) -> Result<(), String> {
-    let todo = missing(specs)?;
+    progress: &mut dyn FnMut(f64, &str, Option<&str>),
+) -> Result<Vec<(Spec, PathBuf)>, String> {
+    let named = named(specs)?;
+    let todo = missing(&named);
     let count = todo.len();
     // Renders made here, so a second graphic with the same source copies the first's.
     let mut made: Vec<PathBuf> = Vec::new();
@@ -530,8 +802,12 @@ pub fn ensure(
         if cancel.load(Ordering::Relaxed) {
             return Err("Export cancelled".into());
         }
-        let label = format!("Rendering graphic \"{}\"", spec.name);
-        progress(index as f64 / count as f64, &label);
+        let label = format!(
+            "Rendering graphic {} of {count}: \"{}\"",
+            index + 1,
+            spec.name
+        );
+        progress(index as f64 / count as f64, &label, None);
         // Wait for the queue's render of it if it is running now, else make it here, with the
         // worker kept off it until this one is done.
         let target = spec.cache.join(&name);
@@ -545,28 +821,97 @@ pub fn ensure(
                 continue;
             }
         }
-        render_now(&spec, &name, cancel, &mut |fraction| {
-            progress((index as f64 + fraction) / count as f64, &label)
-        })
+        let mut done = index as f64 / count as f64;
+        render_now(
+            &spec,
+            &name,
+            cancel,
+            Limits::default(),
+            &mut |event| match event {
+                Event::Progress(fraction) => {
+                    done = (index as f64 + fraction) / count as f64;
+                    progress(done, &label, None)
+                }
+                Event::Line(line) => progress(done, &label, Some(line)),
+            },
+        )
         .map_err(|e| format!("Graphic \"{}\" did not render: {e}", spec.name))?;
         made.push(target);
         renderer().generation.fetch_add(1, Ordering::SeqCst);
     }
-    Ok(())
+    Ok(named
+        .into_iter()
+        .map(|(spec, name)| {
+            let path = spec.cache.join(name);
+            (spec, path)
+        })
+        .collect())
 }
 
-/// The renders of `specs` not in their caches yet, each once, with their file names. Two
-/// graphics from the same template and values share a name but not a cache: both are needed.
-fn missing(specs: &[Spec]) -> Result<Vec<(Spec, String)>, String> {
+/// Each of `specs` with its render's file name, from its source as it is now.
+fn named(specs: &[Spec]) -> Result<Vec<(Spec, String)>, String> {
+    specs
+        .iter()
+        .map(|spec| Ok((spec.clone(), spec.file_name(&spec.hash()?))))
+        .collect()
+}
+
+/// The renders of `named` not in their caches yet, each once. Two graphics from the same
+/// template and values share a name but not a cache: both are needed.
+fn missing(named: &[(Spec, String)]) -> Vec<(Spec, String)> {
     let mut todo: Vec<(Spec, String)> = Vec::new();
-    for spec in specs {
-        let name = spec.file_name(&spec.hash()?);
-        let path = spec.cache.join(&name);
+    for (spec, name) in named {
+        let path = spec.cache.join(name);
         if !path.is_file() && !todo.iter().any(|(s, n)| s.cache.join(n) == path) {
-            todo.push((spec.clone(), name));
+            todo.push((spec.clone(), name.clone()));
         }
     }
-    Ok(todo)
+    todo
+}
+
+/// An export's own hold on the renders it plays: each linked (or copied) into a folder of its
+/// own in its cache, so a source changed or a newer render landing meanwhile (which removes the
+/// one it replaces) cannot change the video partway. The folders go when this is dropped.
+pub struct Pinned {
+    pub renders: HashMap<Spec, PathBuf>,
+    _dirs: Vec<tempfile::TempDir>,
+}
+
+/// Pins `renders` (from [`ensure`]) for one export.
+pub fn pin(renders: Vec<(Spec, PathBuf)>) -> Result<Pinned, String> {
+    let mut dirs: Vec<tempfile::TempDir> = Vec::new();
+    let mut pinned = HashMap::new();
+    for (spec, path) in renders {
+        let dir = match dirs
+            .iter()
+            .find(|d| d.path().parent() == Some(spec.cache.as_path()))
+        {
+            Some(dir) => dir.path().to_path_buf(),
+            None => {
+                let dir = tempfile::Builder::new()
+                    .prefix(".export-")
+                    .tempdir_in(&spec.cache)
+                    .map_err(|e| format!("{}: {e}", spec.cache.display()))?;
+                let path = dir.path().to_path_buf();
+                dirs.push(dir);
+                path
+            }
+        };
+        let held = dir.join(path.file_name().unwrap_or_default());
+        if !held.is_file() && std::fs::hard_link(&path, &held).is_err() {
+            std::fs::copy(&path, &held).map_err(|e| {
+                format!(
+                    "Graphic \"{}\" lost its render before the export: {e}",
+                    spec.name
+                )
+            })?;
+        }
+        pinned.insert(spec, held);
+    }
+    Ok(Pinned {
+        renders: pinned,
+        _dirs: dirs,
+    })
 }
 
 /// Copies another graphic's identical render into `spec`'s cache as `name`.
@@ -600,7 +945,7 @@ impl Drop for Claim {
 fn claim(name: &str, target: &Path, cancel: &AtomicBool) -> Claim {
     let r = renderer();
     let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
-    while (queue.running.as_ref().is_some_and(|(_, n, _)| n == name)
+    while (queue.running.as_ref().is_some_and(|(_, n, _, _)| n == name)
         || queue.elsewhere.contains(target))
         && !cancel.load(Ordering::Relaxed)
     {
@@ -614,12 +959,28 @@ fn claim(name: &str, target: &Path, cancel: &AtomicBool) -> Claim {
     Claim(target.to_path_buf())
 }
 
+/// What a render says as it goes: how far along it is, or a line HyperFrames printed.
+enum Event<'a> {
+    Progress(f64),
+    Line(&'a str),
+}
+
+/// How much of the computer a render may take: none of these for one an export waits on.
+#[derive(Clone, Copy, Default)]
+struct Limits {
+    /// Chrome workers; HyperFrames picks when none.
+    workers: Option<u32>,
+    /// Below normal priority (Windows; Chrome inherits it), so the editor stays responsive.
+    low_priority: bool,
+}
+
 /// Renders `spec` into its cache as `name`, now, on this thread.
 fn render_now(
     spec: &Spec,
     name: &str,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(f64),
+    limits: Limits,
+    on: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let paths = runtime::paths()?;
     let ffmpeg = crate::media::ffmpeg::ffmpeg_path()?;
@@ -648,39 +1009,13 @@ fn render_now(
     ));
     let _ = std::fs::remove_dir_all(&work);
     let stage = work.join("s");
-    copy_dir(&spec.dir, &stage)?;
     let result = (|| {
-        // The render's own copy takes the canvas and length; the source keeps its own.
-        let entry = stage.join(super::ENTRY);
-        let html =
-            std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
-        let sized = super::size_composition(
-            &html,
-            spec.width,
-            spec.height,
-            spec.length_us as f64 / 1e6,
-            spec.entrance,
-        );
-        std::fs::write(&entry, sized).map_err(|e| e.to_string())?;
-        let source = super::read_source(&spec.dir)?;
-        // The brand kit fills the colours the graphic left to it and sets the font.
-        let values = match spec.brand() {
-            Some(kit) => {
-                super::brands::stage(&spec.brands, &kit, &stage)?;
-                let declared = super::declarations(&stage).unwrap_or_default();
-                super::brands::fill_variables(&source.variables, &declared, &kit)
-            }
-            None => source.variables,
-        };
-        let variables = stage.join(".aeroedits-variables.json");
-        std::fs::write(
-            &variables,
-            serde_json::to_string(&values).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        let (_, variables) = stage_render(spec, &stage, cancel)?;
         let part = work.join("out.webm");
+        let resolution = (spec.density > 1).then(|| density_preset(spec)).flatten();
         run_hyperframes(
-            &paths, ffmpeg, ffprobe, &stage, &part, &variables, spec.fps, cancel, progress,
+            &paths, ffmpeg, ffprobe, &stage, &part, &variables, spec.fps, resolution, limits,
+            cancel, on,
         )?;
         // Into the project under a temporary name first, so a render is whole or absent.
         let target = spec.cache.join(name);
@@ -695,6 +1030,104 @@ fn render_now(
         std::fs::rename(&landing, &target).map_err(|e| format!("{}: {e}", target.display()))?;
         remove_superseded(spec, name);
         Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+/// Copies `spec`'s graphic into `stage` as it renders: sized to its canvas and length, with
+/// the video's look, GSAP beside it when it loads it, and its style. Returns the values of
+/// its variables (the kit's colours where the graphic left them) and the file they are in.
+fn stage_render(
+    spec: &Spec,
+    stage: &Path,
+    cancel: &AtomicBool,
+) -> Result<(serde_json::Map<String, serde_json::Value>, PathBuf), String> {
+    copy_dir(&spec.dir, stage)?;
+    // The render's own copy takes the canvas and length; the source keeps its own.
+    let entry = stage.join(super::ENTRY);
+    let html = std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
+    let sized = super::size_composition(
+        &html,
+        spec.width,
+        spec.height,
+        spec.length_us as f64 / 1e6,
+        spec.entrance,
+    );
+    // The video's look, after the composition's own defaults for the same tokens.
+    let sized = super::look::inject_css(&sized, &spec.look);
+    let sized = super::with_root_attribute(&sized, "data-mode", spec.mode);
+    let split = |css: &str| match spec.mode {
+        "split" => super::as_split_part(css, spec.width, spec.height),
+        _ => css.to_string(),
+    };
+    std::fs::write(&entry, split(&sized)).map_err(|e| e.to_string())?;
+    // Its own style sheets beside it lay out for the split part the same way.
+    if spec.mode == "split" {
+        for sheet in std::fs::read_dir(stage)
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
+            let path = sheet.path();
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("css"))
+            {
+                if let Ok(css) = std::fs::read_to_string(&path) {
+                    std::fs::write(&path, split(&css)).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+    // GSAP, when the composition loads it, beside it (fetched once).
+    super::gsap::stage(stage, cancel)?;
+    let source = super::read_source(&spec.dir)?;
+    // The style's brand fills the colours the graphic left to it and sets the fonts.
+    let style = spec.style();
+    let own_colors = ["text", "background"]
+        .iter()
+        .any(|id| source.variables.contains_key(*id));
+    crate::style::brand::stage(&style, stage, own_colors)?;
+    let declared = super::declarations(stage).unwrap_or_default();
+    let values = crate::style::brand::fill_variables(&source.variables, &declared, &style);
+    let variables = stage.join(".aeroedits-variables.json");
+    std::fs::write(
+        &variables,
+        serde_json::to_string(&values).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((values, variables))
+}
+
+/// One still of `spec`'s graphic `at_s` seconds in, as a PNG: what it would look like with its
+/// look and kit, without rendering it (a look's preview). Takes a few seconds.
+pub fn still(spec: &Spec, at_s: f64, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
+    let paths = runtime::paths()?;
+    static STILLS: AtomicU64 = AtomicU64::new(0);
+    let work = runtime::runtime_dir().join("work").join(format!(
+        "still-{}-{}",
+        std::process::id(),
+        STILLS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&work);
+    let stage = work.join("s");
+    let result = (|| {
+        let (values, _) = stage_render(spec, &stage, cancel)?;
+        // A snapshot takes no variables file: they go in as the declarations' defaults.
+        let entry = stage.join(super::ENTRY);
+        let html =
+            std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
+        std::fs::write(&entry, super::with_defaults(&html, &values)?).map_err(|e| e.to_string())?;
+        let shots = work.join("shots");
+        let at = format!("{:.2}", at_s.clamp(0.0, spec.length_us as f64 / 1e6));
+        super::gate::snapshot(&paths, &stage, &at, &shots, cancel)?;
+        let png = std::fs::read_dir(&shots)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "png"))
+            .ok_or("The graphic did not draw")?;
+        std::fs::read(&png).map_err(|e| e.to_string())
     })();
     let _ = std::fs::remove_dir_all(&work);
     result
@@ -767,8 +1200,10 @@ fn run_hyperframes(
     output: &Path,
     variables: &Path,
     fps: u32,
+    resolution: Option<&str>,
+    limits: Limits,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(f64),
+    on: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let mut command = Command::new(&paths.node);
     command
@@ -777,7 +1212,20 @@ fn run_hyperframes(
         .arg(project)
         .arg("--output")
         .arg(output)
-        .args(["--format", "webm", "--fps", &fps.to_string()])
+        .args(["--format", "webm", "--fps", &fps.to_string()]);
+    // The same layout at a larger size: Chrome draws at a higher device pixel ratio.
+    if let Some(resolution) = resolution {
+        command.args(["--resolution", resolution]);
+    }
+    if let Some(workers) = limits.workers {
+        command.args(["--workers", &workers.to_string()]);
+    }
+    // Chrome's drawElementImage instead of a screenshot per frame: 32 s instead of 40 s for an
+    // 8 s graphic at 60 fps on Windows (24 Oct 2026), where HyperFrames leaves it off; frames
+    // differ only in rounding (PSNR 43-45 dB). It falls back to screenshots by itself where it
+    // cannot run.
+    command.arg("--experimental-fast-capture=true");
+    command
         .arg("--variables-file")
         .arg(variables)
         .arg("--frames-cache-dir")
@@ -793,7 +1241,7 @@ fn run_hyperframes(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    runtime::hide_window(&mut command);
+    runtime::hide_window_at(&mut command, limits.low_priority);
     let mut child = command
         .spawn()
         .map_err(|e| format!("Could not start the graphics renderer: {e}"))?;
@@ -825,9 +1273,13 @@ fn run_hyperframes(
                     .ok()
                     .and_then(|v| v["pct"].as_f64())
                 {
-                    progress((pct / 100.0).clamp(0.0, 1.0));
+                    on(Event::Progress((pct / 100.0).clamp(0.0, 1.0)));
                 }
-            } else if !line.contains("[INFO]") && !line.trim().is_empty() {
+            } else if !line.trim().is_empty() {
+                on(Event::Line(strip_ansi(&line).trim_end()));
+                if line.contains("[INFO]") {
+                    continue;
+                }
                 tail.push_back(line);
                 if tail.len() > 12 {
                     tail.pop_front();
@@ -846,9 +1298,11 @@ fn run_hyperframes(
     };
     let _ = reader.join();
     while let Ok(line) = lines_rx.try_recv() {
-        if !line.starts_with("@hf-progress") && !line.contains("[INFO]") && !line.trim().is_empty()
-        {
-            tail.push_back(line);
+        if !line.starts_with("@hf-progress") && !line.trim().is_empty() {
+            on(Event::Line(strip_ansi(&line).trim_end()));
+            if !line.contains("[INFO]") {
+                tail.push_back(line);
+            }
         }
     }
     let errors = errors.join().unwrap_or_default();
@@ -947,12 +1401,58 @@ mod tests {
             cache: cache.to_path_buf(),
             width: 1920,
             height: 1080,
+            density: 1,
             fps: 30,
             length_us,
             entrance: super::super::Entrance::Cut,
-            brands: dir.join("brands"),
-            default_brand: None,
+            style_name: "Light".into(),
+            style_json: serde_json::to_string(&crate::style::Style::default()).unwrap(),
+            look: String::new(),
+            mode: "full",
         }
+    }
+
+    /// A newer render landing mid-export removes the one it replaces from the cache; the
+    /// export's pinned copy plays on, and goes when the export is done.
+    #[test]
+    fn a_pinned_render_outlives_the_one_that_replaces_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let spec = spec(dir.path(), &cache, 4_000_000);
+        let old = spec.file_name("old");
+        std::fs::write(cache.join(&old), b"old render").unwrap();
+        let pinned = pin(vec![(spec.clone(), cache.join(&old))]).unwrap();
+        let held = pinned.renders[&spec].clone();
+
+        let new = spec.file_name("new");
+        std::fs::write(cache.join(&new), b"new render").unwrap();
+        remove_superseded(&spec, &new);
+        assert!(!cache.join(&old).exists());
+        assert_eq!(std::fs::read(&held).unwrap(), b"old render");
+        // The pin folder is not taken for a render.
+        assert_eq!(latest(&spec).unwrap().0, cache.join(&new));
+
+        drop(pinned);
+        assert!(!held.exists());
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn renders_made_ahead_for_an_export_wait_behind_the_previews() {
+        let dir = tempfile::tempdir().unwrap();
+        let job = |hash: &str, export| Job {
+            spec: spec(dir.path(), dir.path(), 4_000_000),
+            hash: hash.into(),
+            export,
+        };
+        let mut waiting = VecDeque::new();
+        place(&mut waiting, job("export-a", true));
+        place(&mut waiting, job("preview-a", false));
+        place(&mut waiting, job("export-b", true));
+        place(&mut waiting, job("preview-b", false));
+        let order: Vec<&str> = waiting.iter().map(|j| j.hash.as_str()).collect();
+        assert_eq!(order, ["preview-a", "preview-b", "export-a", "export-b"]);
     }
 
     #[test]
@@ -968,6 +1468,15 @@ mod tests {
         other_canvas.width = 1080;
         other_canvas.height = 1920;
         assert!(!video.supersedes(&other_canvas));
+        // A split graphic at a new size is the split moved: the older size is dropped.
+        let split = |height| Spec {
+            width: 1080,
+            height,
+            mode: "split",
+            ..spec(dir.path(), &cache, 4_000_000)
+        };
+        assert!(split(1248).supersedes(&split(1152)));
+        assert!(!split(1248).supersedes(&other_canvas));
         let mut eased = spec(dir.path(), &cache, 4_000_000);
         eased.entrance = super::super::Entrance::Ease;
         assert!(!video.supersedes(&eased));
@@ -977,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn the_name_changes_with_the_brand_kit() {
+    fn the_name_changes_with_the_style() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("index.html"),
@@ -985,43 +1494,54 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("graphic.json"), "{\"name\":\"T\"}").unwrap();
-        let brands = tempfile::tempdir().unwrap();
         let mut a = spec(dir.path(), &dir.path().join("cache"), 4_000_000);
-        a.brands = brands.path().to_path_buf();
-        let plain = a.hash().unwrap();
-        let kit = |accent: &str| super::super::brands::BrandKitInput {
-            name: "Acme".into(),
-            background: "#000000".into(),
-            text: "#FFFFFF".into(),
-            accent: accent.into(),
-            ..Default::default()
-        };
-        super::super::brands::save(&a.brands, &kit("#FF0000")).unwrap();
-        // A missing default kit is no kit.
-        a.default_brand = Some("Gone".into());
-        assert_eq!(a.hash().unwrap(), plain);
-        a.default_brand = Some("Acme".into());
-        let branded = a.hash().unwrap();
-        assert_ne!(branded, plain);
-        super::super::brands::save(
-            &a.brands,
-            &super::super::brands::BrandKitInput {
-                previous: Some("Acme".into()),
-                ..kit("#00FF00")
-            },
-        )
-        .unwrap();
-        assert_ne!(a.hash().unwrap(), branded, "a changed kit renders again");
-        // The graphic's own "none" wins over the project's kit.
+        let light = a.hash().unwrap();
+        let dark = crate::style::builtin().remove(1);
+        a.dress(&dark, false);
+        let darker = a.hash().unwrap();
+        assert_ne!(darker, light);
+        let mut changed = dark.clone();
+        changed.brand.colors.accent = "#00FF00".into();
+        a.dress(&changed, false);
+        assert_ne!(a.hash().unwrap(), darker, "a changed style renders again");
+        // On a tall canvas the look is scaled.
+        a.dress(&dark, true);
+        assert_ne!(a.hash().unwrap(), darker);
+        // The graphic's own style wins over the project's.
         std::fs::write(
             dir.path().join("graphic.json"),
-            "{\"name\":\"T\",\"brand\":\"none\"}",
+            "{\"name\":\"T\",\"style\":\"Light\"}",
         )
         .unwrap();
-        let none = a.hash().unwrap();
-        assert_ne!(none, plain, "graphic.json changed");
-        a.default_brand = None;
-        assert_eq!(a.hash().unwrap(), none);
+        a.dress(&dark, false);
+        assert_eq!(a.style_name, "Light");
+    }
+
+    #[test]
+    fn every_view_of_the_edit_asks_for_one_render() {
+        // A short's storyboard tile (176 x 312) used to render at 1082 x 1920 and its export
+        // at 1080 x 1920: the same graphic twice.
+        let short = Some((1080, 1920));
+        for view in [
+            (176, 312),
+            (176, 313),
+            (607, 1080),
+            (1080, 1920),
+            (2160, 3840),
+        ] {
+            assert_eq!(
+                render_size_of(shared_canvas(short, view)),
+                (1080, 1920),
+                "{view:?}"
+            );
+        }
+        // A view of another shape keeps its own.
+        assert_eq!(shared_canvas(short, (1920, 1080)), (1920, 1080));
+        assert_eq!(shared_canvas(None, (176, 312)), (176, 312));
+    }
+
+    fn render_size_of(canvas: (u32, u32)) -> (u32, u32) {
+        render_size(canvas.0, canvas.1)
     }
 
     #[test]
@@ -1102,7 +1622,7 @@ mod tests {
             4_000_000,
         );
         b.asset_id = "g2".into();
-        let todo = missing(&[a.clone(), b.clone(), a.clone()]).unwrap();
+        let todo = missing(&named(&[a.clone(), b.clone(), a.clone()]).unwrap());
         assert_eq!(todo.len(), 2, "each graphic needs its own render");
         assert_eq!(
             todo[0].1, todo[1].1,
@@ -1113,7 +1633,7 @@ mod tests {
         std::fs::create_dir_all(&a.cache).unwrap();
         std::fs::write(&made, b"webm").unwrap();
         copy_render(&made, &b, &todo[1].1).unwrap();
-        assert!(missing(&[a, b]).unwrap().is_empty());
+        assert!(missing(&named(&[a, b]).unwrap()).is_empty());
     }
 
     #[test]
@@ -1192,10 +1712,22 @@ mod tests {
             super::super::create(root.path(), "title", None, variables.as_object().unwrap())
                 .unwrap();
         let cancel = AtomicBool::new(false);
-        for canvas in [(1280, 720), (540, 960)] {
-            let spec = Spec::new(root.path(), &asset, canvas, 3_000_000);
+        // The draft for two canvases, then a 4K export's final render: the 1080p layout at
+        // twice the density, 60 frames a second.
+        // Easing in, so the first frame is see-through (a cut shows the card at once).
+        let draft = |canvas| Spec {
+            entrance: super::super::Entrance::Ease,
+            ..Spec::new(root.path(), &asset, canvas, 3_000_000)
+        };
+        let final_4k = Spec {
+            density: 2,
+            fps: 60,
+            ..draft((1920, 1080))
+        };
+        for spec in [draft((1280, 720)), draft((540, 960)), final_4k] {
+            let canvas = (spec.width * spec.density, spec.height * spec.density);
             let started = std::time::Instant::now();
-            ensure(std::slice::from_ref(&spec), &cancel, &mut |f, label| {
+            ensure(std::slice::from_ref(&spec), &cancel, &mut |f, label, _| {
                 eprintln!("{label}: {:.0}%", f * 100.0)
             })
             .unwrap();
@@ -1207,7 +1739,12 @@ mod tests {
                 panic!("no render for {canvas:?}");
             };
             let probe = crate::media::ffmpeg::probe_video(&path).unwrap();
-            assert_eq!((probe.width, probe.height), (spec.width, spec.height));
+            assert_eq!((probe.width, probe.height), canvas);
+            eprintln!("{canvas:?} at {} fps: {}", spec.fps, path.display());
+            if let Some(out) = std::env::var_os("AEROEDITS_GRAPHICS_OUT") {
+                let out = Path::new(&out).join(path.file_name().unwrap());
+                std::fs::copy(&path, out).unwrap();
+            }
             let frame = crate::media::ffmpeg::decode_bgra_limited(
                 &path,
                 1_500_000,

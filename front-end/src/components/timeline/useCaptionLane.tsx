@@ -2,9 +2,16 @@ import React, { useEffect, useState } from "react";
 import { Captions } from "lucide-react";
 import { Button } from "../ui";
 import { api } from "../../lib/ipc";
-import type { CaptionEdit, CaptionTrackView } from "../../lib/types";
+import type { CaptionCueView, CaptionEdit, CaptionTrackView } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import { HeaderRow, ResizeGrip, type TimelineView } from "./timelineShared";
+
+/** A caption's words, each with whether it is the emphasis word. */
+function emphasized(cue: CaptionCueView): [string, boolean][] {
+  const words = cue.text.split(" ");
+  if (words.length !== cue.wordIds.length) return [[cue.text, false]];
+  return words.map((word, i) => [word, cue.wordIds[i] === cue.emphasis]);
+}
 
 /**
  * The caption track: the captioned transcript's cues, editable in place. Double-click to edit
@@ -79,6 +86,18 @@ export function useCaptionLane({
     if (!cue || selected === 0) return;
     void edit({ kind: "merge", wordId: cue.wordIds[0] });
   };
+  /** The word at the playhead becomes the caption's emphasis word, or stops being it. */
+  const emphasizeWord = () => {
+    if (!cue) return;
+    const now = view.nowUs();
+    const index = cue.wordStartsUs.filter((start) => start <= now).length - 1;
+    if (index < 0 || now >= cue.endUs) {
+      onError("Put the playhead on the word of the caption to draw in the accent.");
+      return;
+    }
+    const wordId = cue.wordIds[index];
+    void edit({ kind: "emphasis", wordIds: [wordId], on: cue.emphasis !== wordId });
+  };
   const hideCue = () => {
     if (!cue) return;
     void edit({ kind: "hide", wordIds: cue.wordIds, hidden: true });
@@ -139,6 +158,14 @@ export function useCaptionLane({
             <Button
               size="sm"
               variant="ghost"
+              onClick={emphasizeWord}
+              title="Draw the word at the playhead in the accent (the caption's emphasis word); again to stop"
+            >
+              Emphasis
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={hideCue}
               className="text-danger-fg hover:!bg-danger/15"
               title={`Hide this caption (the sound stays)${hint("deleteSelection")}`}
@@ -170,13 +197,13 @@ export function useCaptionLane({
                 isSelected
                   ? "bg-caption-fill border-accent-fg ring-2 ring-accent-hover/70 z-10"
                   : "bg-caption-fill/90 border-caption/60 hover:border-caption"
-              }`}
+              } ${item.underGraphic ? "opacity-50 border-dashed" : ""}`}
               style={{
                 left: view.pct(Math.max(0, startUs)),
                 width: view.pct(Math.max(1, endUs - startUs)),
                 minWidth: editing ? 160 : undefined,
               }}
-              title={`${item.text}\nDouble-click to edit the text, drag to move it, drag an edge to retime. With it selected: S splits at the playhead, Delete hides it.`}
+              title={`${item.text}${item.underGraphic ? "\nA graphic fills the frame over this caption, so it isn't shown there." : ""}\nDouble-click to edit the text, drag to move it, drag an edge to retime. With it selected: S splits at the playhead, Delete hides it.`}
               onClick={(event) => {
                 event.stopPropagation();
                 setSelected(index);
@@ -208,7 +235,14 @@ export function useCaptionLane({
                   className="w-full bg-studio-950 text-meta text-white px-1.5 h-6 rounded outline-none border border-caption"
                 />
               ) : (
-                <span className="text-meta text-studio-100 truncate pointer-events-none">{item.text}</span>
+                <span className="text-meta text-studio-100 truncate pointer-events-none">
+                  {emphasized(item).map(([word, on], i) => (
+                    <React.Fragment key={i}>
+                      {i > 0 && " "}
+                      {on ? <strong className="text-accent-fg">{word}</strong> : word}
+                    </React.Fragment>
+                  ))}
+                </span>
               )}
               {!editing &&
                 (["start", "end"] as const).map((side) => (

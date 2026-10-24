@@ -34,9 +34,15 @@ export const WORKSPACES = {
   edit: { label: "Edit", preset: "editing" as LayoutPreset },
   cleanup: { label: "Cleanup", preset: "transcript" as LayoutPreset },
   shorts: { label: "Shorts", preset: null },
+  clips: { label: "Clips", preset: null },
 } as const;
 
 export type Workspace = keyof typeof WORKSPACES;
+
+/** Shorts (made from a take) and Clips (cut from the video) share their panels and arrangement. */
+export function isShortsWorkspace(workspace: Workspace): workspace is "shorts" | "clips" {
+  return workspace === "shorts" || workspace === "clips";
+}
 
 /** The panels only Shorts has, and the editor's panels Shorts has too. */
 const SHORTS_ONLY: readonly DockPanelId[] = ["shorts", "shortLook"];
@@ -54,7 +60,7 @@ const SHORTS_PANELS: readonly DockPanelId[] = [
 /** The panels `workspace` shows. */
 export function workspacePanels(workspace: Workspace): DockPanelId[] {
   const all = Object.keys(DOCK_PANELS) as DockPanelId[];
-  return workspace === "shorts" ? [...SHORTS_PANELS] : all.filter((id) => !SHORTS_ONLY.includes(id));
+  return isShortsWorkspace(workspace) ? [...SHORTS_PANELS] : all.filter((id) => !SHORTS_ONLY.includes(id));
 }
 
 /** Edit keeps the key layouts were always saved under. */
@@ -167,7 +173,7 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
       api.fromJSON(JSON.parse(stored));
       const ids = new Set(api.panels.map((p) => p.id));
       const wanted = workspacePanels(workspace);
-      if (workspace === "shorts") {
+      if (isShortsWorkspace(workspace)) {
         if (wanted.every((id) => ids.has(id)) && ids.size === wanted.length) return;
         throw new Error("Shorts layout without its panels");
       }
@@ -227,7 +233,7 @@ export function setActiveDockApi(api: DockviewApi | null) {
 }
 
 export function applyPresetToWorkspace(preset: LayoutPreset) {
-  if (!activeApi || activeWorkspace === "shorts") return;
+  if (!activeApi || isShortsWorkspace(activeWorkspace)) return;
   applyPreset(activeApi, preset);
   saveLayout(activeApi);
 }

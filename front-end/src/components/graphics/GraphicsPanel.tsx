@@ -12,7 +12,6 @@ import type {
   GraphicsInstallProgress,
   GraphicsRuntimeStatus,
 } from "../../lib/types";
-import { BrandKits } from "./BrandKits";
 import { formatSeconds, libraryChanged, useGraphicsLibrary, useGraphicsUpdates } from "./graphicsEvents";
 
 const MB = 1024 * 1024;
@@ -261,7 +260,10 @@ export const GraphicsPanel: React.FC = () => {
         </section>
       )}
 
-      <BrandKits onError={setError} />
+      <p className="px-1 text-meta text-studio-500 leading-relaxed">
+        How every graphic looks (colours, fonts, sizes, corners, motion) is the project&apos;s style: the
+        Inspector&apos;s Style page.
+      </p>
 
       {ready && runtime && (
         <div className="flex items-center gap-2 px-1 pt-2 text-meta text-studio-500 border-t border-studio-800">
@@ -408,7 +410,7 @@ const ProjectGraphicRow: React.FC<{
   const first = graphic.clips[0];
   const settled = graphic.render.state !== "rendering" && graphic.render.state !== "queued";
   const key = first
-    ? `${handle}:${graphic.assetId}:${first[1]}:${first[2]}:${JSON.stringify(graphic.variables)}:${graphic.brand}:${graphic.render.state}`
+    ? `${handle}:${graphic.assetId}:${first[1]}:${first[2]}:${JSON.stringify(graphic.variables)}:${graphic.style}:${graphic.render.state}`
     : "";
   const [thumbnail, setThumbnail] = useState<string | undefined>(() => thumbnails.get(key));
   useEffect(() => {

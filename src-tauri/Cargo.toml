@@ -16,7 +16,9 @@ path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# Exact float parsing: a document read back must be the one written (the undo history
+# names states by their JSON).
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 thiserror = "1.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -49,10 +51,15 @@ ort = { version = "=2.0.0-rc.13", optional = true, default-features = false }
 # OpenMP: it would need the MSVC OpenMP runtime next to the app.
 llama-cpp-2 = { version = "=0.1.160", optional = true, default-features = false, features = ["common", "vulkan"] }
 fontdue = "0.9"
+# Reads an installed font's family and weight, to find a brand kit's font for captions.
+ttf-parser = "0.25"
 # Checks the graphics runtime's downloads and names graphic renders.
 sha2 = "0.10"
+# Compresses the edit history's saved states (already in the tree through png).
+flate2 = "1.1"
 # Names the fields of an agent's settings change that the settings do not have.
 serde_ignored = "0.1"
+wuff = "0.2.9"
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }

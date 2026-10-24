@@ -76,6 +76,18 @@ pub enum Change {
     },
     /// Timeline edits applied in order, all or nothing.
     Edits { edits: Vec<SequenceEdit> },
+    /// Footage, graphics and files put under take short `short`, all or nothing. It holds
+    /// while the short and the video's timeline are as they were (`stamp`).
+    Under {
+        short: String,
+        stamp: String,
+        items: Vec<crate::under_take::Under>,
+    },
+    /// Graphics brought in line with the video's look (`graphics::restyle`), all or nothing.
+    /// It holds while each graphic's files are as they were planned on.
+    Restyle {
+        items: Vec<crate::graphics::restyle::Plan>,
+    },
     /// One of the app's own actions the agent ran (jump cuts, fillers, zooms, ...), applied
     /// at once like a click; kept so the user sees it and can undo it.
     Action { action: String },
@@ -132,7 +144,7 @@ pub enum Status {
     Rejected,
     /// The agent took it back, or undid it.
     Withdrawn,
-    /// An action that was undone.
+    /// An action that was undone, or any batch undone with the agent's run.
     Undone,
 }
 
@@ -706,6 +718,77 @@ pub fn propose_edits(
     })
 }
 
+/// Proposes putting `items` under take short `short`, checked on a copy of the edit.
+pub fn propose_under(
+    reader: &ProjectReader,
+    proposals: &mut Proposals,
+    agent: &str,
+    short: &str,
+    items: Vec<crate::under_take::Under>,
+    reason: &str,
+) -> Result<String, String> {
+    if items.len() > MAX_EDITS {
+        return Err(format!("At most {MAX_EDITS} items in one batch"));
+    }
+    let document = reader.document();
+    let summary = crate::under_take::check(reader.root(), document, short, &items)?;
+    proposals.add(Batch {
+        id: String::new(),
+        agent: agent.to_string(),
+        reason: check_reason(reason)?,
+        created_at: now(),
+        base_revision: document.revision,
+        change: Change::Under {
+            short: short.to_string(),
+            stamp: crate::under_take::stamp(document, short),
+            items,
+        },
+        status: Status::Pending,
+        decided_at: None,
+        auto: false,
+        applied_revision: None,
+        summary,
+    })
+}
+
+/// Proposes bringing the video's graphics in line with its look (every graphic that is not).
+pub fn propose_restyle(
+    reader: &ProjectReader,
+    proposals: &mut Proposals,
+    agent: &str,
+    reason: &str,
+) -> Result<String, String> {
+    let document = reader.document();
+    let items = crate::graphics::restyle::plan(reader.root(), document);
+    if items.is_empty() {
+        return Err(
+            "Every graphic follows the video's look already: nothing to bring in line".into(),
+        );
+    }
+    let summary = items.iter().map(|p| p.line()).collect();
+    proposals.add(Batch {
+        id: String::new(),
+        agent: agent.to_string(),
+        reason: check_reason(reason)?,
+        created_at: now(),
+        base_revision: document.revision,
+        change: Change::Restyle { items },
+        status: Status::Pending,
+        decided_at: None,
+        auto: false,
+        applied_revision: None,
+        summary,
+    })
+}
+
+/// Whether restyle `items` can still be applied: each graphic's files as planned on.
+fn restyle_holds(root: &Path, items: &[crate::graphics::restyle::Plan]) -> bool {
+    items.iter().all(|p| {
+        crate::graphics::gate::source_hash(&crate::graphics::folder(root, &p.graphic))
+            .is_ok_and(|hash| hash == p.stamp)
+    })
+}
+
 // ---------------------------------------------------------------------------------------
 // Deciding.
 
@@ -774,6 +857,47 @@ pub fn accept(
                 Vec::new(),
             )
         }
+        Change::Under {
+            short,
+            stamp,
+            items,
+        } => {
+            if batch.status != Status::Pending {
+                return Err(format!("{id} is already decided"));
+            }
+            if crate::under_take::stamp(document, short) != *stamp {
+                return Err(format!(
+                    "{id} was made before {short} or the video changed. Ask the agent to                      propose it again."
+                ));
+            }
+            let root = reader.root().to_path_buf();
+            let done = crate::under_take::put(&root, &root, document, short, items)?;
+            match reader.commit_document(expected_revision, done.document.clone()) {
+                Ok(project) => (Some(project), Vec::new()),
+                Err(error) => {
+                    done.discard();
+                    return Err(error);
+                }
+            }
+        }
+        Change::Restyle { items } => {
+            if batch.status != Status::Pending {
+                return Err(format!("{id} is already decided"));
+            }
+            let root = reader.root().to_path_buf();
+            let done = crate::graphics::restyle::apply(&root, document, items)?;
+            match reader.commit_document(expected_revision, done.document.clone()) {
+                Ok(project) => {
+                    // Every changed graphic is new: render them now.
+                    crate::graphics::render::request_all(&root, &reader.history().current);
+                    (Some(project), Vec::new())
+                }
+                Err(error) => {
+                    done.discard();
+                    return Err(error);
+                }
+            }
+        }
         Change::Cuts {
             stream,
             words,
@@ -833,7 +957,7 @@ pub fn accept(
     }
     match &mut batch.change {
         Change::Action { .. } => {}
-        Change::Edits { .. } => {
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
             batch.status = Status::Accepted;
             batch.decided_at = Some(now());
         }
@@ -867,17 +991,19 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } => match (batch.status, rejected) {
-            (Status::Pending, true) => {
-                batch.status = Status::Rejected;
-                batch.decided_at = Some(now());
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
+            match (batch.status, rejected) {
+                (Status::Pending, true) => {
+                    batch.status = Status::Rejected;
+                    batch.decided_at = Some(now());
+                }
+                (Status::Rejected, false) => {
+                    batch.status = Status::Pending;
+                    batch.decided_at = None;
+                }
+                _ => return Err(format!("{id} is already decided")),
             }
-            (Status::Rejected, false) => {
-                batch.status = Status::Pending;
-                batch.decided_at = None;
-            }
-            _ => return Err(format!("{id} is already decided")),
-        },
+        }
         Change::Cuts { items, .. } => {
             let (from, to) = if rejected {
                 (ItemState::Pending, ItemState::Rejected)
@@ -946,14 +1072,109 @@ pub fn undo(
     }
     let summary = reader.undo(expected_revision)?;
     let batch = proposals.get_mut(id)?;
+    set_undone(batch, |r| r == applied, by_agent.is_some());
+    Ok(summary)
+}
+
+/// Undoes the newest agent run as one step (`ProjectReader::undo_run`); the batches it
+/// accepted are undone as `undo` does one. Says what was taken back.
+pub fn undo_run(
+    reader: &mut ProjectReader,
+    proposals: &mut Proposals,
+    expected_revision: u64,
+    by_agent: Option<&str>,
+) -> Result<(OpenedProject, String), String> {
+    let current = reader.document().revision;
+    if current != expected_revision {
+        return Err("Stale edit revision".into());
+    }
+    if let Some(agent) = by_agent {
+        let run = reader.history().steps().run_to_undo()?;
+        if run.agent != agent {
+            return Err(format!("The last run was {}'s, not yours", run.agent));
+        }
+    }
+    let (summary, run) = reader.undo_run(expected_revision)?;
+    let mut batches = 0;
+    for batch in &mut proposals.batches {
+        let Some(applied) = batch.applied_revision else {
+            continue;
+        };
+        if applied > run.since_revision && applied <= current {
+            set_undone(batch, |r| r > run.since_revision, by_agent.is_some());
+            // Undoing the run takes all of it away: nothing comes back to wait.
+            batch.status = Status::Undone;
+            batch.decided_at = Some(now());
+            batches += 1;
+        }
+    }
+    let what = format!(
+        "Undid {}'s run: {} change{}{}",
+        run.agent,
+        run.changes,
+        if run.changes == 1 { "" } else { "s" },
+        match batches {
+            0 => String::new(),
+            1 => ", 1 batch".into(),
+            n => format!(", {n} batches"),
+        }
+    );
+    Ok((summary, what))
+}
+
+/// Goes back to checkpoint `id` (`ProjectReader::restore_checkpoint`). What was waiting was
+/// worked out on the edit as it was, so it is withdrawn. Says what was done.
+pub fn restore_checkpoint(
+    reader: &mut ProjectReader,
+    proposals: &mut Proposals,
+    expected_revision: u64,
+    id: &str,
+) -> Result<(OpenedProject, String), String> {
+    let (summary, checkpoint, restored) = reader.restore_checkpoint(expected_revision, id)?;
+    if restored.graphics > 0 {
+        // Their files changed back: render them now rather than when the playhead gets there.
+        crate::graphics::render::request_all(reader.root(), &reader.history().current);
+    }
+    let mut withdrawn = 0;
+    for batch in &mut proposals.batches {
+        if batch.status == Status::Pending {
+            batch.status = Status::Withdrawn;
+            batch.decided_at = Some(now());
+            batch.summary.push(format!(
+                "Withdrawn: the edit went back to checkpoint \"{}\".",
+                checkpoint.name
+            ));
+            withdrawn += 1;
+        }
+    }
+    let mut what = format!("Went back to checkpoint \"{}\".", checkpoint.name);
+    let side = restored.summary();
+    if !side.is_empty() {
+        what.push(' ');
+        what.push_str(&side);
+    }
+    if withdrawn > 0 {
+        what.push_str(&format!(
+            " {withdrawn} waiting batch{} withdrawn.",
+            if withdrawn == 1 { "" } else { "es" }
+        ));
+    }
+    Ok((summary, what))
+}
+
+/// Batch `batch` is undone, with its items accepted at revisions `undone` names: for the user
+/// what it did waits again; for the agent (`by_agent`) it is withdrawn.
+fn set_undone(batch: &mut Batch, undone: impl Fn(u64) -> bool, by_agent: bool) {
     batch.applied_revision = None;
     batch.auto = false;
     match &mut batch.change {
         Change::Action { .. } => batch.status = Status::Undone,
-        Change::Edits { .. } => batch.status = Status::Pending,
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
+            batch.status = Status::Pending
+        }
         Change::Cuts { items, .. } => {
             for item in items.iter_mut() {
-                if item.state == ItemState::Accepted && item.revision == Some(applied) {
+                if item.state == ItemState::Accepted && item.revision.is_some_and(&undone) {
                     item.state = ItemState::Pending;
                     item.revision = None;
                 }
@@ -962,11 +1183,10 @@ pub fn undo(
             batch.settle();
         }
     }
-    if by_agent.is_some() && batch.status != Status::Undone {
+    if by_agent && batch.status != Status::Undone {
         batch.status = Status::Withdrawn;
     }
     batch.decided_at = (batch.status != Status::Pending).then(now);
-    Ok(summary)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1004,7 +1224,8 @@ pub struct BatchView {
     pub reason: String,
     pub created_at: String,
     pub base_revision: u64,
-    /// `cuts`, `edits`, or `action` (one of the app's actions the agent ran).
+    /// `cuts`, `edits`, `under` (things put under a take short), `restyle` (graphics brought
+    /// in line with the look), or `action` (one of the app's actions the agent ran).
     pub kind: &'static str,
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1019,6 +1240,9 @@ pub struct BatchView {
     /// For an action the agent ran: which (`silence`, `fillers`, ...).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// For `under`: the take short it goes under.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short: Option<String>,
     pub items: Vec<ItemView>,
     /// Made for an older revision and can no longer be accepted as it is.
     pub stale: bool,
@@ -1035,6 +1259,9 @@ pub struct ProposalsView {
     pub revision: u64,
     /// Newest first.
     pub batches: Vec<BatchView>,
+    /// The newest agent run still in the undo history, to undo as one step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<crate::project::history::RunView>,
     /// Set when a change was made but the proposals file could not be saved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
@@ -1064,6 +1291,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                 stream: None,
                 edits: None,
                 action: None,
+                short: None,
                 items: Vec::new(),
                 stale: false,
                 can_undo: batch.applied_revision == Some(document.revision),
@@ -1077,6 +1305,17 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                     out.edits = Some(edits.clone());
                     out.stale =
                         batch.status == Status::Pending && batch.base_revision != document.revision;
+                }
+                Change::Under { short, stamp, .. } => {
+                    out.kind = "under";
+                    out.short = Some(short.clone());
+                    out.stale = batch.status == Status::Pending
+                        && crate::under_take::stamp(document, short) != *stamp;
+                }
+                Change::Restyle { items } => {
+                    out.kind = "restyle";
+                    out.stale =
+                        batch.status == Status::Pending && !restyle_holds(reader.root(), items);
                 }
                 Change::Cuts {
                     stream,
@@ -1115,6 +1354,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
         project_handle: reader.summary.project_handle.clone(),
         revision: document.revision,
         batches,
+        last_run: reader.history().steps().last_run(),
         warning: None,
     }
 }

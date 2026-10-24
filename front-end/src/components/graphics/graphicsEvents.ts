@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, isTauriEnvironment } from "../../lib/ipc";
-import type { BrandsView, GraphicLibraryItem } from "../../lib/types";
+import type { GraphicLibraryItem, StylesView } from "../../lib/types";
 
 /** Calls `onUpdate` (throttled) whenever a graphic render moves along, finishes or fails. */
 export function useGraphicsUpdates(onUpdate: () => void) {
@@ -56,26 +56,26 @@ export function useGraphicsLibrary() {
   return items;
 }
 
-const BRANDS_CHANGED = "aeroedits-brands-changed";
+const STYLES_CHANGED = "aeroedits-styles-changed";
 
-/** Tells every `useBrands` the kits changed (saved, renamed, removed). */
-export const brandsChanged = () => window.dispatchEvent(new Event(BRANDS_CHANGED));
+/** Tells every `useStyles` the styles changed (saved, renamed, removed). */
+export const stylesChanged = () => window.dispatchEvent(new Event(STYLES_CHANGED));
 
-/** The brand kits and the project's default kit, kept current. */
-export function useBrands(projectHandle: string | undefined, revision: number | undefined) {
-  const [brands, setBrands] = useState<BrandsView>();
+/** The styles and the project's style, kept current. */
+export function useStyles(projectHandle: string | undefined, revision: number | undefined) {
+  const [styles, setStyles] = useState<StylesView>();
   const load = useCallback(() => {
     if (!isTauriEnvironment()) return;
     void api
-      .graphicsBrands(projectHandle)
-      .then(setBrands)
+      .styles(projectHandle)
+      .then(setStyles)
       .catch(() => undefined);
   }, [projectHandle]);
-  // The project's default is in the edit, so it follows undo too.
+  // The project's style is in the edit, so it follows undo too.
   useEffect(load, [load, revision]);
   useEffect(() => {
-    window.addEventListener(BRANDS_CHANGED, load);
-    return () => window.removeEventListener(BRANDS_CHANGED, load);
+    window.addEventListener(STYLES_CHANGED, load);
+    return () => window.removeEventListener(STYLES_CHANGED, load);
   }, [load]);
-  return brands;
+  return styles;
 }

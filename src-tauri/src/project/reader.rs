@@ -105,6 +105,11 @@ pub struct OpenedProject {
     pub preview_available: bool,
     pub undo_available: bool,
     pub redo_available: bool,
+    /// What undo and redo would take back or bring back, e.g. "Cut 12.3 s".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redo_label: Option<String>,
     #[serde(default)]
     pub zooms: Vec<ZoomKeyframe>,
     #[serde(default)]
@@ -129,6 +134,12 @@ pub struct OpenedProject {
     /// Set when this is short `id`'s own timeline (the sequence is the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
+    /// What the cleanup passes and the Export dialog start from (from the project's preset
+    /// unless changed here).
+    #[serde(default)]
+    pub cleanup: crate::preset::settings::CleanupSettings,
+    #[serde(default)]
+    pub export: crate::preset::settings::ExportPreferences,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -567,7 +578,8 @@ impl ProjectReader {
                 Self::starting_document(&root, &project_file)?
             }
         };
-        let history = EditHistory::new(document);
+        let (history, note) = EditHistory::open(&root, document);
+        diagnostics.extend(note);
         let mut reader = Self {
             summary: OpenedProject {
                 project_handle: uuid::Uuid::new_v4().to_string(),
@@ -582,6 +594,8 @@ impl ProjectReader {
                 preview_available: false,
                 undo_available: false,
                 redo_available: false,
+                undo_label: None,
+                redo_label: None,
                 zooms: Vec::new(),
                 dismissed_zoom_ids: Vec::new(),
                 zoom_settings: Default::default(),
@@ -593,6 +607,8 @@ impl ProjectReader {
                 chapters: Vec::new(),
                 shorts: Vec::new(),
                 short_view: None,
+                cleanup: Default::default(),
+                export: Default::default(),
             },
             root,
             history,
@@ -608,7 +624,10 @@ impl ProjectReader {
     /// recording keeps its id (transcripts are kept under it).
     fn starting_document(root: &Path, file: &ProjectFile) -> Result<EditDocument, String> {
         let Some(recording) = &file.recording else {
-            return Ok(EditDocument::default());
+            return Ok(EditDocument {
+                audio: crate::project::AudioSettings::for_new_project(),
+                ..EditDocument::default()
+            });
         };
         let folder = dunce::canonicalize(recording).map_err(|_| {
             format!(
@@ -623,7 +642,8 @@ impl ProjectReader {
             &folder,
             crate::sequence::sources::new_asset_id(true),
         )?;
-        let document = EditDocument::from_recording(asset)?;
+        let mut document = EditDocument::from_recording(asset)?;
+        document.audio = crate::project::AudioSettings::for_new_project();
         revision::save_edit_document(root, &document)?;
         Ok(document)
     }
@@ -755,6 +775,70 @@ impl ProjectReader {
         self.history.undo(expected_revision, &self.root)?;
         self.index_recordings_quietly();
         Ok(self.done())
+    }
+
+    /// Takes back the newest agent run as one step (see [`EditHistory::undo_run`]).
+    pub fn undo_run(
+        &mut self,
+        expected_revision: u64,
+    ) -> Result<(OpenedProject, crate::project::history::RunUndo), String> {
+        let run = self.history.undo_run(expected_revision, &self.root)?;
+        self.index_recordings_quietly();
+        Ok((self.done(), run))
+    }
+
+    /// The agents' next step starts a new run.
+    pub fn end_agent_run(&mut self) {
+        self.history.end_run();
+    }
+
+    /// Saves a checkpoint named `name` (see [`EditHistory::save_checkpoint`]).
+    pub fn save_checkpoint(
+        &mut self,
+        name: &str,
+    ) -> Result<crate::project::history::Checkpoint, String> {
+        self.history.save_checkpoint(&self.root, name, false)
+    }
+
+    /// Before `agent` changes something: a checkpoint, when this starts a new run of its.
+    pub fn checkpoint_before_agent(&mut self, agent: &str) {
+        if self.history.steps().continues_run(Some(agent)) || self.history.steps().run_saved(agent)
+        {
+            return;
+        }
+        let name = format!("Before {agent}'s run");
+        match self.history.save_checkpoint(&self.root, &name, true) {
+            Ok(_) => self.history.steps_mut().saved_before_run(agent),
+            Err(error) => eprintln!("history: no checkpoint before {agent}'s run: {error}"),
+        }
+    }
+
+    /// Goes back to checkpoint `id` (see [`EditHistory::restore_checkpoint`]).
+    pub fn restore_checkpoint(
+        &mut self,
+        expected_revision: u64,
+        id: &str,
+    ) -> Result<
+        (
+            OpenedProject,
+            crate::project::history::Checkpoint,
+            crate::project::checkpoint::Restored,
+        ),
+        String,
+    > {
+        let (checkpoint, restored) =
+            self.history
+                .restore_checkpoint(expected_revision, &self.root, id)?;
+        self.index_recordings_quietly();
+        Ok((self.done(), checkpoint, restored))
+    }
+
+    pub fn rename_checkpoint(&mut self, id: &str, name: &str) -> Result<(), String> {
+        self.history.rename_checkpoint(&self.root, id, name)
+    }
+
+    pub fn delete_checkpoint(&mut self, id: &str) -> Result<(), String> {
+        self.history.delete_checkpoint(&self.root, id)
     }
 
     pub fn redo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
@@ -939,17 +1023,6 @@ impl ProjectReader {
         Ok(self.done())
     }
 
-    pub fn apply_template(
-        &mut self,
-        expected_revision: u64,
-        template: &crate::templates::Template,
-        short: Option<&str>,
-    ) -> Result<OpenedProject, String> {
-        self.history
-            .apply_template(expected_revision, template, short, &self.root)?;
-        Ok(self.done())
-    }
-
     pub fn update_captions(
         &mut self,
         expected_revision: u64,
@@ -1105,6 +1178,8 @@ impl ProjectReader {
             .unwrap_or(30);
         self.summary.undo_available = self.history.undo_available();
         self.summary.redo_available = self.history.redo_available();
+        self.summary.undo_label = self.history.undo_label().map(str::to_string);
+        self.summary.redo_label = self.history.redo_label().map(str::to_string);
         self.summary.zooms = document.zooms_with_ranges();
         self.summary.dismissed_zoom_ids = document.dismissed_zoom_ids.clone();
         self.summary.zoom_settings = document.zoom_settings.clone();
@@ -1113,6 +1188,8 @@ impl ProjectReader {
         self.summary.audio = document.audio.clone();
         self.summary.noise_mutes = document.noise_mutes.clone();
         self.summary.captions = document.captions.clone();
+        self.summary.cleanup = document.cleanup.clone();
+        self.summary.export = document.export.clone();
         let mut chapters = document.chapters.clone();
         crate::chapters::attach_edited(&mut chapters, document);
         self.summary.chapters = chapters;
@@ -1258,7 +1335,10 @@ mod tests {
         let manifest = fs::read(bundle.root_path().join("manifest.json")).unwrap();
         let project = project_for(bundle.root_path(), &dir.path().join("Projects"));
         let reader = ProjectReader::open(&project).unwrap();
-        let mixer = crate::media::audio::AudioMixer::new(reader.root(), reader.document()).unwrap();
+        // The samples as recorded, without a new project's loudness normalization.
+        let mut document = reader.document().clone();
+        document.audio.normalize = false;
+        let mixer = crate::media::audio::AudioMixer::new(reader.root(), &document).unwrap();
         // 998,000 us = frame 47,904. The old file ends and the new file starts there.
         let samples = mixer.read_frames(47_894, 30).unwrap();
         for (i, stereo) in samples.chunks_exact(2).enumerate() {
@@ -1320,6 +1400,51 @@ mod tests {
             &[],
         )
         .is_err());
+    }
+
+    /// On a case-insensitive volume a destination differing from a source only in case is that
+    /// source, and an export there would replace the original media.
+    #[cfg(windows)]
+    #[test]
+    fn an_export_never_replaces_a_source_named_in_another_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::project::folder::create_project_folder(dir.path(), "case", None).unwrap();
+        let media = dir.path().join("media");
+        fs::create_dir_all(&media).unwrap();
+        let original = media.join("Original.wav");
+        fs::write(&original, b"original").unwrap();
+        let source = Asset {
+            id: "a".into(),
+            name: "Original.wav".into(),
+            kind: crate::sequence::AssetKind::Audio,
+            path: original.to_string_lossy().into_owned(),
+            streams: Vec::new(),
+            duration_us: 1_000_000,
+            width: 0,
+            height: 0,
+            pauses: Vec::new(),
+            missing: false,
+        };
+        let requested = media.join("original.wav");
+        assert!(crate::export::resolve_destination(
+            &root,
+            "case",
+            0,
+            Some(requested.to_str().unwrap()),
+            std::slice::from_ref(&source),
+        )
+        .is_err());
+        // A new file beside it is still fine.
+        let beside = media.join("edited.wav");
+        assert!(crate::export::resolve_destination(
+            &root,
+            "case",
+            0,
+            Some(beside.to_str().unwrap()),
+            &[source],
+        )
+        .is_ok());
+        assert_eq!(fs::read(&original).unwrap(), b"original");
     }
 
     /// A recording with pauses opens as one linked clip set per recorded stretch, keeps its

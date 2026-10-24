@@ -4,7 +4,17 @@
   - It plays full screen over the video (16:9, or a short's 9:16), so lay it out in the
     viewport with vw/vh/vmin and an @media (orientation: portrait) block; AeroEdits sets the
     root's data-width, data-height and data-duration to the canvas and clip when it renders.
+  - The look: every graphic in a video shares one. Take sizes, corners, borders, shadows, gaps
+    and motion from the --look-* tokens below (AeroEdits sets them for the video after this
+    block), and colours from var(--background), var(--text), var(--accent) and the roles
+    --look-muted, --look-line, --look-tint, --look-wash, --look-shadow. Never write a colour,
+    font, radius or duration of your own: graphic_check flags them. Classes .pill, .title,
+    .muted and .card below are the look's building blocks.
   - Keep the page transparent and draw your own background (#card-back below).
+  - How it shows: AeroEdits sets data-mode on the root. "full": the whole frame. "split": a
+    part of a short's frame beside the face. "over": drawn over a picture that shows through
+    (over the face in a short), so leave the background out and keep to a part of the frame
+    (the [data-mode="over"] rules below show one way).
   - In and out: a graphic that fills the frame never eases in or out; it cuts. Only a graphic
     laid over the full-screen camera eases. AeroEdits decides which from where the graphic
     plays and sets data-entrance on the root to "cut" or "ease": show the card whole from the
@@ -15,8 +25,13 @@
     fine either way.
   - A graphic that holds to the end of its clip (an end card) says so with data-holds-end on
     the root and, when it eases, fades in only.
-  - No network: no CDN scripts or web fonts. Use the Web Animations API (element.animate,
-    finite, fill "both", paused) or CSS; put any images next to this file.
+  - Motion: GSAP 3.15 works offline. Load it by file name (<script src="gsap.min.js">, a plugin
+    as SplitText.min.js, CustomEase.min.js...); AeroEdits puts the files beside this one when
+    it renders, and turns a CDN link to GSAP into that name. Build one paused timeline as long
+    as the clip and register it as window.__timelines["graphic"]; HyperFrames seeks it. Take
+    durations and easing from the look (see gsap.defaults below). The Web Animations API
+    (paused, finite) works too: then mark the root data-no-timeline.
+  - No other network: no CDN scripts or web fonts; put any images next to this file.
   - Declare what should be editable in data-composition-variables on <html>; read values with
     data-var-text / var(--id) or window.__hyperframes.getVariables().
 -->
@@ -24,9 +39,9 @@
   lang="en"
   data-composition-variables='[
     {"id":"title","type":"string","label":"Title","default":"Your title"},
-    {"id":"background","type":"color","label":"Background","default":"#0F172A"},
-    {"id":"text","type":"color","label":"Text","default":"#F8FAFC"},
-    {"id":"accent","type":"color","label":"Accent","default":"#FACC15"}
+    {"id":"background","type":"color","label":"Background","default":"#FFFFFF"},
+    {"id":"text","type":"color","label":"Text","default":"#1D1D1F"},
+    {"id":"accent","type":"color","label":"Accent","default":"#0071E3"}
   ]'
 >
   <head>
@@ -38,38 +53,176 @@
       body {
         margin: 0;
         background: transparent;
-        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      /* The look: AeroEdits sets these for the whole video after this block (the defaults here
+         are its "App" look). Sizes, corners, gaps and motion come from them, colours from the
+         background, text and accent variables (the brand kit's). */
+      [data-composition-id] {
+        --look-font: var(--brand-font, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif);
+        --look-align: center;
+        --look-body: 3.8vmin;
+        --look-border: 0.12vmin;
+        --look-distance: 1.8vmin;
+        --look-duration: 700;
+        --look-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --look-entry: rise;
+        --look-gap: 2.2vmin;
+        --look-gsap-ease: expo.out;
+        --look-heading: 5.2vmin;
+        --look-label: 3vmin;
+        --look-label-case: none;
+        --look-label-tracking: 0em;
+        --look-leading: 1.15;
+        --look-line-mix: 8%;
+        --look-margin: 8vw;
+        --look-muted-mix: 62%;
+        --look-out: 350;
+        --look-pad: 2.6vmin;
+        --look-radius: 2.6vmin;
+        --look-radius-small: 1.4vmin;
+        --look-shadow-mix: 5%;
+        --look-stagger: 90;
+        --look-tint-mix: 10%;
+        --look-title: 8vmin;
+        --look-title-tracking: -0.035em;
+        --look-title-weight: 650;
+        --look-wash-mix: 5%;
+        --look-muted: color-mix(in srgb, var(--text, #1D1D1F) var(--look-muted-mix), var(--background, #FFFFFF));
+        --look-line: color-mix(in srgb, var(--text, #1D1D1F) var(--look-line-mix), var(--background, #FFFFFF));
+        --look-tint: color-mix(in srgb, var(--accent, #0071E3) var(--look-tint-mix), var(--background, #FFFFFF));
+        --look-wash: color-mix(in srgb, var(--accent, #0071E3) var(--look-wash-mix), transparent);
+        --look-shadow: 0 1vmin 3vmin color-mix(in srgb, var(--text, #1D1D1F) var(--look-shadow-mix), transparent);
       }
       #root {
         position: relative;
         width: 100%;
         height: 100%;
         overflow: hidden;
-        color: var(--text, #f8fafc);
+        color: var(--text, #1d1d1f);
+        font-family: var(--look-font);
+        -webkit-font-smoothing: antialiased;
       }
       #card-back {
         position: absolute;
         inset: 0;
-        background: var(--background, #0f172a);
+        background: var(--background, #ffffff);
+      }
+      #card-back::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 15% 90%, var(--look-wash), transparent 60%),
+          radial-gradient(ellipse at 90% 5%, var(--look-wash), transparent 55%);
       }
       .layout {
         position: absolute;
         inset: 0;
-        display: grid;
-        place-items: center;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: var(--look-gap);
+        padding: 0 var(--look-margin);
+        text-align: center;
       }
-      h1 {
+      [data-align="left"] .layout {
+        align-items: flex-start;
+        text-align: left;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 1vmin;
+        padding: 0.7vmin 1.8vmin;
+        border-radius: 99vmin;
+        background: var(--look-tint);
+        color: var(--accent, #0071e3);
+        font-size: var(--look-label);
+        font-weight: 600;
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
+      }
+      .pill:empty {
+        display: none;
+      }
+      .title {
         margin: 0;
-        font-size: 10vmin;
-        font-weight: 800;
+        font-size: var(--look-title);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: var(--look-leading);
+        max-width: 80vw;
+        max-height: calc(var(--look-title) * var(--look-leading) * 3);
+        overflow-wrap: anywhere;
       }
+      .muted {
+        margin: 0;
+        font-size: var(--look-body);
+        line-height: 1.35;
+        color: var(--look-muted);
+        max-width: 70vw;
+        max-height: calc(var(--look-body) * 1.35 * 2);
+        overflow-wrap: anywhere;
+      }
+      .muted:empty {
+        display: none;
+      }
+      .card {
+        box-sizing: border-box;
+        background: var(--background, #ffffff);
+        border: var(--look-border) solid var(--look-line);
+        border-radius: var(--look-radius);
+        box-shadow: var(--look-shadow);
+      }
+      /* Over a picture that shows through (over the face in a short, data-mode="over"): no
+         background of its own; the content sits on a panel in the lower part of the frame. */
+      [data-mode="over"] #card-back {
+        display: none;
+      }
+      [data-mode="over"] .layout {
+        inset: auto 6% 8% 6%;
+        padding: calc(var(--look-pad) * 1.6) calc(var(--look-pad) * 1.8);
+        border-radius: calc(var(--look-radius) * 1.3);
+        background: var(--background, #ffffff);
+        box-shadow: var(--look-shadow), 0 2vmin 6vmin color-mix(in srgb, var(--text, #1d1d1f) 22%, transparent);
+      }
+      [data-mode="over"] .layout > * {
+        zoom: 0.8;
+      }
+      [data-mode="over"] .layout .card {
+        border: none;
+        box-shadow: none;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding: 0 calc(var(--look-margin) * 0.8);
+          gap: calc(var(--look-gap) * 1.2);
+        }
+        .pill {
+          font-size: calc(var(--look-label) * 1.35);
+          padding: 1vmin 2.4vmin;
+        }
+        .title {
+          font-size: calc(var(--look-title) * 1.35);
+          max-width: none;
+          max-height: calc(var(--look-title) * 1.35 * var(--look-leading) * 4);
+        }
+        .muted {
+          font-size: calc(var(--look-body) * 1.4);
+          max-width: none;
+          max-height: calc(var(--look-body) * 1.4 * 1.35 * 3);
+        }
+      }
+
     </style>
+    <script src="gsap.min.js"></script>
   </head>
   <body>
     <div
       id="root"
       data-composition-id="graphic"
-      data-no-timeline
       data-start="0"
       data-width="1920"
       data-height="1080"
@@ -77,32 +230,31 @@
     >
       <div id="card-back"></div>
       <div class="layout" id="layout">
-        <h1 id="title" data-var-text="title">Your title</h1>
+        <h1 class="title" id="title" data-var-text="title">Your title</h1>
       </div>
     </div>
     <script>
+
       const root = document.getElementById("root");
-      const length = (parseFloat(root.dataset.duration) || 4) * 1000;
-      const outAt = Math.max(1200, length - 450);
+      const length = parseFloat(root.dataset.duration) || 4;
+      // The video's look: durations and easing for every tween.
+      const style = getComputedStyle(root);
+      const token = (name, fallback) => style.getPropertyValue(`--look-${name}`).trim() || fallback;
+      const seconds = parseFloat(token("duration", "700")) / 1000;
+      const out = parseFloat(token("out", "350")) / 1000;
+      gsap.defaults({ duration: seconds, ease: token("gsap-ease", "expo.out") });
+      root.dataset.align = token("align", "center");
+      // One paused timeline, exactly as long as the clip; HyperFrames seeks it.
+      const tl = gsap.timeline({ paused: true });
+      tl.from("#title", { y: token("distance", "1.8vmin"), opacity: 0 }, 0.15);
       // Full screen: cut in and out unless AeroEdits asks for an ease (see the note above).
-      const eases = root.dataset.entrance === "ease";
-      const fade = (id, delay) =>
-        document
-          .getElementById(id)
-          .animate(
-            [
-              { opacity: 0 },
-              { opacity: 1, offset: 300 / length },
-              { opacity: 1, offset: outAt / length },
-              { opacity: 0 },
-            ],
-            { duration: length, delay, fill: "both", iterations: 1 },
-          )
-          .pause();
-      if (eases) {
-        fade("card-back", 0);
-        fade("layout", 0);
+      if (root.dataset.entrance === "ease") {
+        tl.from(["#card-back", "#layout"], { opacity: 0, duration: 0.3, ease: "power1.out" }, 0);
+        tl.to(["#card-back", "#layout"], { opacity: 0, duration: out, ease: "power1.in" }, Math.max(1.2, length - out));
       }
+      tl.set({}, {}, length);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["graphic"] = tl;
     </script>
   </body>
 </html>

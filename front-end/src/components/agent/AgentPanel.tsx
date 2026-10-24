@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from "react";
-import { Bot, Check, Loader2, Play, Scissors, Settings2, Undo2, X } from "lucide-react";
+import { Bot, Check, Clapperboard, Loader2, Play, Scissors, Settings2, Undo2, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import type { ProposalBatch, ProposalItem, ProposalOutcome } from "../../lib/types";
 import { useAgentStore } from "../../stores/agentStore";
 import { useProjectStore } from "../../stores/projectStore";
+import { selectShort } from "../../stores/shortsStore";
+import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { formatTimeUs } from "../../hooks/useTimeline";
 import { Badge, Button, IconButton, Notice, PanelHeader, Segmented, Switch, cn, type Tone } from "../ui";
 
@@ -46,6 +48,8 @@ const ACTION_LABEL: Record<string, string> = {
 function kindLabel(batch: ProposalBatch) {
   if (batch.kind === "cuts") return "Cuts";
   if (batch.kind === "edits") return "Edits";
+  if (batch.kind === "under") return "Under a take";
+  if (batch.kind === "restyle") return "Bring in line";
   return ACTION_LABEL[batch.action ?? ""] ?? batch.action ?? "Action";
 }
 
@@ -163,8 +167,12 @@ const BatchCard: React.FC<{
         )}
         {batch.stale && waiting && (
           <p className="text-meta text-danger-fg">
-            The edit changed after revision {batch.baseRevision}, so this can no longer be applied as proposed. Ask the agent to
-            propose it again.
+            {batch.kind === "under"
+              ? "The short or the video changed since, so this can no longer be applied as proposed."
+              : batch.kind === "restyle"
+                ? "A graphic was changed since, so this can no longer be applied as proposed."
+                : `The edit changed after revision ${batch.baseRevision}, so this can no longer be applied as proposed.`}{" "}
+            Ask the agent to propose it again.
           </p>
         )}
       </div>
@@ -209,6 +217,21 @@ const BatchCard: React.FC<{
           {waiting && (
             <Button size="sm" variant="ghost" icon={X} disabled={busy} onClick={() => onReject(batch)}>
               Reject{batch.kind === "cuts" && batch.status === "pending" && chosen.length < choosable.length ? " all" : ""}
+            </Button>
+          )}
+          {batch.short && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Clapperboard}
+              className={batch.canUndo ? undefined : "ml-auto"}
+              title="Open the short in the Shorts tab"
+              onClick={() => {
+                useWorkspaceStore.getState().setWorkspace("shorts");
+                selectShort(batch.short);
+              }}
+            >
+              Show the short
             </Button>
           )}
           {batch.canUndo && (
@@ -289,6 +312,15 @@ export const AgentPanel: React.FC = () => {
     );
   };
 
+  const lastRun = shownHere ? proposals?.lastRun : undefined;
+  const undoRun = () => {
+    if (!openedProject || !lastRun) return;
+    void run(
+      () => api.proposalUndoRun(openedProject.projectHandle, openedProject.revision),
+      `Undid ${lastRun.agent}'s run (${lastRun.changes} change${lastRun.changes === 1 ? "" : "s"}). Undo brings it back.`,
+    );
+  };
+
   const connected = status?.connected ?? [];
   const detail = !status?.enabled
     ? "Agents off"
@@ -331,15 +363,32 @@ export const AgentPanel: React.FC = () => {
       )}
       {(status?.working ?? []).length > 0 && (
         <ul className="shrink-0 px-3 pt-2.5 space-y-1.5" aria-label="Running now">
-          {status!.working.map((call, i) => (
-            <li key={`${call.tool}-${i}`} className="rounded-control border border-accent/30 bg-accent/10 px-2.5 py-1.5">
+          {status!.working.map((call) => (
+            <li key={call.id} className="rounded-control border border-accent/30 bg-accent/10 px-2.5 py-1.5">
               <div className="flex items-center gap-1.5 text-meta">
                 <Loader2 className="w-3.5 h-3.5 text-accent-fg animate-spin shrink-0" aria-hidden />
                 <span className="text-studio-300">{call.client ?? "agent"}</span>
                 <span className="font-mono text-studio-100">{call.tool}</span>
-                {call.fraction !== null && (
-                  <span className="ml-auto font-mono tabular-nums text-studio-400">{Math.round(call.fraction * 100)}%</span>
-                )}
+                <span className="ml-auto flex items-center gap-1.5">
+                  {call.fraction !== null && (
+                    <span className="font-mono tabular-nums text-studio-400">{Math.round(call.fraction * 100)}%</span>
+                  )}
+                  {call.stopping ? (
+                    <span className="text-studio-400">Stopping…</span>
+                  ) : (
+                    <IconButton
+                      icon={X}
+                      size="sm"
+                      label={`Stop ${call.tool}`}
+                      onClick={() =>
+                        void api
+                          .mcpStopCall(call.id)
+                          .then(setStatus)
+                          .catch((err) => setError(errorMessage(err)))
+                      }
+                    />
+                  )}
+                </span>
               </div>
               {call.message && <p className="mt-0.5 text-meta text-studio-400 truncate">{call.message}</p>}
               {call.fraction !== null && (
@@ -350,6 +399,40 @@ export const AgentPanel: React.FC = () => {
             </li>
           ))}
         </ul>
+      )}
+
+      {openedProject && lastRun && (
+        <div className="shrink-0 mx-3 mt-2.5 rounded-control border border-studio-800 bg-studio-850 px-2.5 py-2">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 text-meta">
+              <p className="text-studio-200 truncate" title={lastRun.agent}>
+                Last run by {lastRun.agent}
+              </p>
+              <p className="text-studio-500">
+                {lastRun.changes} change{lastRun.changes === 1 ? "" : "s"} ·{" "}
+                {lastRun.undone ? (lastRun.blockedBy ? "undone" : "undone; Undo brings it back") : since(lastRun.endedAt)}
+              </p>
+            </div>
+            {lastRun.canUndo && (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={Undo2}
+                disabled={busy}
+                onClick={undoRun}
+                className="ml-auto shrink-0"
+                title="Takes back everything it changed as one step; Undo brings it back"
+              >
+                Undo the run
+              </Button>
+            )}
+          </div>
+          {!lastRun.canUndo && !lastRun.undone && lastRun.blockedBy && (
+            <p className="mt-1 text-meta text-studio-500">
+              {lastRun.blockedBy} came after it, so it can&rsquo;t be undone in one step. Undo that first.
+            </p>
+          )}
+        </div>
       )}
 
       <div className="shrink-0 px-3 pt-2.5">

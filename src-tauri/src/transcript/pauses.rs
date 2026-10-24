@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 
 /// Secondary sound protection stays conservative even when microphone cuts get tighter.
 pub const PC_AUDIO_PADDING_MS: u32 = 80;
-/// How far a cut before the first word or after the last may reach past the recorded audio.
-const EDGE_SLACK_US: u64 = 1_000_000;
+/// A stretch without audio at least this long is the recorder paused, not a dropout: the dead
+/// air on both sides of it goes like the recording's own start and end.
+const RECORDING_PAUSE_US: u64 = 5_000_000;
+/// Where the cut after the last word ends: past any recording, and exact as a JavaScript number.
+pub(crate) const OPEN_END_US: u64 = 1 << 52;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptGapConfig {
@@ -40,20 +43,13 @@ impl TranscriptGapConfig {
     }
 }
 
-/// Source-time candidates only. The dead air before the first word and after the last one
-/// (settling in, reaching for the stop button) is cut too, but only where the recording
-/// really has audio and the edge word is a confident anchor. Tagged sounds between words are
-/// cut with the gap unless `keep_sound_events`; then they stay intact.
-pub(crate) fn gap_ranges(
-    transcript: &Transcript,
-    covered: &[(u64, u64)],
-    config: &TranscriptGapConfig,
-) -> Vec<(u64, u64)> {
-    // Merging overlapping tokens prevents an inner word from exposing the tail of an
-    // outer word as a gap. Zero-length tokens are still protected.
+/// The words as spans in source time, each marked whether it is a confident anchor. Merging
+/// overlapping tokens prevents an inner word from exposing the tail of an outer word as a gap.
+/// Zero-length tokens are still protected.
+fn word_spans(transcript: &Transcript, keep_sound_events: bool) -> Vec<(u64, u64, bool)> {
     let mut spans: Vec<(u64, u64, bool)> = Vec::new();
     for word in &transcript.words {
-        if word.kind == WordKind::AudioEvent && !config.keep_sound_events {
+        if word.kind == WordKind::AudioEvent && !keep_sound_events {
             continue;
         }
         let anchor = word.kind == WordKind::Word
@@ -67,6 +63,17 @@ pub(crate) fn gap_ranges(
             _ => spans.push((word.source_start_us, word.source_end_us, anchor)),
         }
     }
+    spans
+}
+
+/// Source-time candidates only: the gaps between words, plus [`edge_ranges`]. Tagged sounds
+/// between words are cut with the gap unless `keep_sound_events`; then they stay intact.
+pub(crate) fn gap_ranges(
+    transcript: &Transcript,
+    covered: &[(u64, u64)],
+    config: &TranscriptGapConfig,
+) -> Vec<(u64, u64)> {
+    let spans = word_spans(transcript, config.keep_sound_events);
     let covered = merge_ranges(covered.to_vec());
     let padding = u64::from(config.padding_ms) * 1_000;
     let mut gaps = Vec::new();
@@ -93,40 +100,61 @@ pub(crate) fn gap_ranges(
         }
         gaps.push((start, end));
     }
-    let min_us = u64::from(config.min_duration_ms) * 1_000;
-    // The covered stretch holding `at`, which the edge gap may not leave, except past the
-    // recording's outermost audio by `EDGE_SLACK_US`: the picture often runs a few frames
-    // longer than the microphone, and those frames would stay as a sliver.
-    let coverage = |at: u64| covered.iter().position(|&(a, b)| a <= at && at <= b);
+    gaps.extend(edge_ranges(
+        transcript,
+        &covered,
+        config.padding_ms,
+        config.min_duration_ms,
+        config.keep_sound_events,
+    ));
+    gaps.sort_unstable();
+    gaps
+}
+
+/// The dead air at the recording's start and end and on both sides of each pause in it
+/// (settling in, reaching for the stop button): before the first word, after the last, and
+/// between the words either side of a pause, keeping `padding_ms` next to the words; the head
+/// only when at least `min_duration_ms` long. Only next to a confident word, and cut even where
+/// the microphone has no audio to show for it: the picture often starts before it and runs on
+/// after it, and would stay as a sliver. No other sound's veto keeps these (but other speech
+/// does: someone else may talk there).
+pub(crate) fn edge_ranges(
+    transcript: &Transcript,
+    covered: &[(u64, u64)],
+    padding_ms: u32,
+    min_duration_ms: u32,
+    keep_sound_events: bool,
+) -> Vec<(u64, u64)> {
+    let spans = word_spans(transcript, keep_sound_events);
+    let covered = merge_ranges(covered.to_vec());
+    let padding = u64::from(padding_ms) * 1_000;
+    let min_us = u64::from(min_duration_ms) * 1_000;
+    let mut edges = Vec::new();
     if let Some(&(first, _, true)) = spans.first() {
-        if let Some(i) = coverage(first) {
-            let a = covered[i].0;
-            let start = if i == 0 {
-                a.saturating_sub(EDGE_SLACK_US)
-            } else {
-                a
-            };
-            let end = first.saturating_sub(padding);
-            if first - a >= min_us && end > start {
-                gaps.insert(0, (start, end));
-            }
+        let end = first.saturating_sub(padding);
+        if first >= min_us && end > 0 {
+            edges.push((0, end));
+        }
+    }
+    for pair in spans.windows(2) {
+        let ((_, left, left_anchor), (right, _, right_anchor)) = (pair[0], pair[1]);
+        let heard: u64 = covered
+            .iter()
+            .map(|&(a, b)| b.min(right).saturating_sub(a.max(left)))
+            .sum();
+        let (start, end) = (left.saturating_add(padding), right.saturating_sub(padding));
+        if left_anchor
+            && right_anchor
+            && (right - left).saturating_sub(heard) >= RECORDING_PAUSE_US
+            && end > start
+        {
+            edges.push((start, end));
         }
     }
     if let Some(&(_, last, true)) = spans.last() {
-        if let Some(i) = coverage(last) {
-            let b = covered[i].1;
-            let end = if i + 1 == covered.len() {
-                b.saturating_add(EDGE_SLACK_US)
-            } else {
-                b
-            };
-            let start = last.saturating_add(padding);
-            if b - last >= min_us && end > start {
-                gaps.push((start, end));
-            }
-        }
+        edges.push((last.saturating_add(padding), OPEN_END_US));
     }
-    gaps
+    edges
 }
 
 /// The silence pass can use saved words as an additional guard without requiring ASR.
@@ -343,11 +371,11 @@ mod tests {
             test_word("hello", 200, 1000),
             test_word("world", 2000, 2800),
         ]);
-        // 200 ms before "hello" is under the minimum; 1.2 s after "world" is not, and that cut
-        // reaches a little past the audio, where the picture may run on.
+        // 200 ms before "hello" is under the minimum; everything after "world" goes, past the
+        // audio, where the picture may run on.
         assert_eq!(
             gap_ranges(&t, &[(0, 4_000_000)], &config()),
-            vec![(1_120_000, 1_880_000), (2_920_000, 5_000_000)]
+            vec![(1_120_000, 1_880_000), (2_920_000, OPEN_END_US)]
         );
         let tight = TranscriptGapConfig {
             padding_ms: 0,
@@ -355,26 +383,48 @@ mod tests {
         };
         assert_eq!(
             gap_ranges(&t, &[(0, 4_000_000)], &tight),
-            vec![(1_000_000, 2_000_000), (2_800_000, 5_000_000)]
+            vec![(1_000_000, 2_000_000), (2_800_000, OPEN_END_US)]
         );
-        // Seconds of settling in before the first word go, from where the audio starts.
+        // Seconds of settling in before the first word go, from the very start: also where the
+        // microphone starts late or drops out (FIX-4).
         let late = transcript(vec![
             test_word("hello", 3000, 3500),
             test_word("world", 4500, 5000),
         ]);
+        let expected = vec![
+            (0, 2_880_000),
+            (3_620_000, 4_380_000),
+            (5_120_000, OPEN_END_US),
+        ];
+        for covered in [
+            vec![(1_000_000, 5_000_000)],
+            vec![(0, 1_000_000), (2_000_000, 5_000_000)],
+            vec![(2_900_000, 5_000_000)],
+        ] {
+            assert_eq!(gap_ranges(&late, &covered, &config()), expected);
+        }
+    }
+
+    #[test]
+    fn a_recording_pause_is_cut_across_but_a_dropout_is_not() {
+        let t = transcript(vec![
+            test_word("end", 1000, 2000),
+            test_word("start", 20_000, 21_000),
+        ]);
+        // The recorder paused from 2.5 s to 19 s: the dead air either side goes, so no sliver
+        // of picture stays at the join.
         assert_eq!(
-            gap_ranges(&late, &[(1_000_000, 5_000_000)], &config()),
-            vec![(0, 2_880_000), (3_620_000, 4_380_000)]
+            gap_ranges(&t, &[(0, 2_500_000), (19_000_000, 22_000_000)], &config()),
+            vec![
+                (0, 880_000),
+                (2_120_000, 19_880_000),
+                (21_120_000, OPEN_END_US)
+            ]
         );
-        // A dropout in the audio is never cut across: the cut starts where the audio resumes.
+        // A second without audio is a dropout: the picture there may matter, so it stays.
         assert_eq!(
-            gap_ranges(&late, &[(0, 1_000_000), (2_000_000, 5_000_000)], &config()),
-            vec![(2_000_000, 2_880_000), (3_620_000, 4_380_000)]
-        );
-        // Not where the recording has no audio to show for it.
-        assert_eq!(
-            gap_ranges(&late, &[(2_900_000, 5_000_000)], &config()),
-            vec![(3_620_000, 4_380_000)]
+            gap_ranges(&t, &[(0, 2_500_000), (3_500_000, 22_000_000)], &config()),
+            vec![(0, 880_000), (21_120_000, OPEN_END_US)]
         );
     }
     #[test]
@@ -389,7 +439,7 @@ mod tests {
         let covered = [(0, 11_000_000)];
         assert_eq!(
             gap_ranges(&t, &covered, &config()),
-            vec![(1_120_000, 9_380_000), (10_120_000, 12_000_000)],
+            vec![(1_120_000, 9_380_000), (10_120_000, OPEN_END_US)],
             "the typing goes with the gap"
         );
         let keep = TranscriptGapConfig {
@@ -398,7 +448,7 @@ mod tests {
         };
         assert_eq!(
             gap_ranges(&t, &covered, &keep),
-            vec![(10_120_000, 12_000_000)]
+            vec![(10_120_000, OPEN_END_US)]
         );
     }
 
@@ -408,11 +458,13 @@ mod tests {
             test_word("hello", 200, 1000),
             test_word("world", 2000, 2800),
         ]);
+        // Only the dead air after the confident last word goes.
+        let tail = vec![(2_920_000, OPEN_END_US)];
         t.words[0].confidence = Some(0.3);
-        assert!(gap_ranges(&t, &[(0, 2_800_000)], &config()).is_empty());
+        assert_eq!(gap_ranges(&t, &[(0, 2_800_000)], &config()), tail);
         t.words[0].confidence = None;
         t.words[0].source_end_us = t.words[0].source_start_us;
-        assert!(gap_ranges(&t, &[(0, 2_800_000)], &config()).is_empty());
+        assert_eq!(gap_ranges(&t, &[(0, 2_800_000)], &config()), tail);
     }
 
     #[test]
@@ -426,12 +478,12 @@ mod tests {
         cfg.padding_ms = 0;
         assert_eq!(
             gap_ranges(&t, &[(0, 230_000)], &cfg),
-            vec![(100_000, 130_000)]
+            vec![(100_000, 130_000), (230_000, OPEN_END_US)]
         );
         cfg.padding_ms = 10;
         assert_eq!(
             gap_ranges(&t, &[(0, 230_000)], &cfg),
-            vec![(110_000, 120_000)]
+            vec![(110_000, 120_000), (240_000, OPEN_END_US)]
         );
         assert_eq!(
             protect_words(vec![(0, 300_000)], &t, 0),
@@ -457,9 +509,12 @@ mod tests {
         };
         assert_eq!(
             gap_ranges(&refined, &[(0, 800_000)], &cfg),
-            vec![(300_000, 500_000)]
+            vec![(300_000, 500_000), (800_000, OPEN_END_US)]
         );
-        assert!(gap_ranges(&t, &[(0, 800_000)], &cfg).is_empty());
+        assert_eq!(
+            gap_ranges(&t, &[(0, 800_000)], &cfg),
+            vec![(800_000, OPEN_END_US)]
+        );
     }
 
     #[test]
@@ -521,7 +576,7 @@ mod tests {
                 ..config()
             },
         );
-        assert_eq!(gaps, vec![(600_000, 860_000), (1_240_000, 3_000_000)]);
+        assert_eq!(gaps, vec![(600_000, 860_000), (1_240_000, OPEN_END_US)]);
         assert!(tight.words[0].source_end_us == 300_000);
         // A stop consonant's short closure stays inside the word, and so does a quiet word.
         let t = transcript(vec![
@@ -546,8 +601,13 @@ mod tests {
             test_word("hello", 200, 1000),
             test_word("world", 2000, 2800),
         ]);
-        assert!(gap_ranges(&t, &[(0, 1_500_000), (1_600_000, 2_800_000)], &config()).is_empty());
-        assert!(gap_ranges(&t, &[(0, 2_100_000)], &config()).is_empty());
+        // Only the dead air after the last word goes: the gap between has no audio to show.
+        let tail = (2_920_000, OPEN_END_US);
+        assert_eq!(
+            gap_ranges(&t, &[(0, 1_500_000), (1_600_000, 2_800_000)], &config()),
+            vec![tail]
+        );
+        assert_eq!(gap_ranges(&t, &[(0, 2_100_000)], &config()), vec![tail]);
         let mut event = test_word("(laughter)", 1400, 1600);
         event.kind = WordKind::AudioEvent;
         t.words.insert(1, event);
@@ -555,10 +615,10 @@ mod tests {
             keep_sound_events: true,
             ..config()
         };
-        assert!(gap_ranges(&t, &[(0, 2_800_000)], &keep).is_empty());
+        assert_eq!(gap_ranges(&t, &[(0, 2_800_000)], &keep), vec![tail]);
         assert_eq!(
             gap_ranges(&t, &[(0, 2_800_000)], &config()),
-            vec![(1_120_000, 1_880_000)]
+            vec![(1_120_000, 1_880_000), tail]
         );
     }
     #[test]
@@ -568,14 +628,15 @@ mod tests {
             test_word("inner", 500, 700),
             test_word("next", 2000, 2800),
         ]);
-        assert!(gap_ranges(&t, &[(0, 2_800_000)], &config()).is_empty());
+        let tail = (2_920_000, OPEN_END_US);
+        assert_eq!(gap_ranges(&t, &[(0, 2_800_000)], &config()), vec![tail]);
         let short = transcript(vec![
             test_word("a", 990, 1000),
             test_word("world", 2000, 2800),
         ]);
         assert_eq!(
             gap_ranges(&short, &[(0, 2_800_000)], &config()),
-            vec![(0, 870_000), (1_120_000, 1_880_000)]
+            vec![(0, 870_000), (1_120_000, 1_880_000), tail]
         );
     }
     #[test]

@@ -171,6 +171,14 @@ pub async fn relay(
                         hello = message.get("params").cloned().unwrap_or_default();
                         write_line(&mut output, &reply(id, initialize_result(&hello))).await?;
                     }
+                    // Newer clients (Claude Code 2.1.3xx) ask this before `initialize`. Answered
+                    // as unknown so they fall back to the handshake, which carries their name;
+                    // passed on, it would connect to the app before the name is known.
+                    ("server/discover", Some(id)) => {
+                        let unknown = json!({ "jsonrpc": "2.0", "id": id,
+                            "error": { "code": -32601, "message": "Method not found" } });
+                        write_line(&mut output, &unknown).await?;
+                    }
                     ("notifications/initialized", None) => {}
                     ("ping", Some(id)) => write_line(&mut output, &reply(id, json!({}))).await?,
                     ("tools/list", Some(id)) => {
@@ -186,8 +194,7 @@ pub async fn relay(
                         let params = message.get("params");
                         let name = params.and_then(|p| p.get("name")).and_then(Value::as_str).unwrap_or_default();
                         let arguments = params.and_then(|p| p.get("arguments")).and_then(Value::as_object);
-                        let config = crate::transcript::settings::config_dir();
-                        let answer = match super::skill::prompt_get(&config, name, arguments) {
+                        let answer = match super::skill::prompt_get(name, arguments) {
                             Ok(prompt) => reply(id, serde_json::to_value(prompt).unwrap_or_default()),
                             Err(error) => json!({ "jsonrpc": "2.0", "id": id,
                                 "error": { "code": -32602, "message": error } }),

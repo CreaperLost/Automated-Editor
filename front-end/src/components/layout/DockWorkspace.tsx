@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import {
   DockviewDefaultTab,
   DockviewReact,
@@ -10,21 +10,14 @@ import {
 import "dockview-react/dist/styles/dockview.css";
 import "./dockTheme.css";
 import { InspectorPanel } from "../inspector/InspectorPanel";
-import { MediaPanel } from "../media/MediaPanel";
-import { ZoomPanel } from "../zoom/ZoomPanel";
-import { ChaptersPanel } from "../chapters/ChaptersPanel";
-import { AgentPanel } from "../agent/AgentPanel";
 import { useAgentStore } from "../../stores/agentStore";
 import { TimelineStudio } from "../timeline/TimelineStudio";
 import { TranscriptPanel } from "../transcript/TranscriptPanel";
 import { StagePanel } from "./StagePanel";
-import { JumpCutsPanel } from "../cleanup/JumpCutsPanel";
-import { NoisesPanel } from "../cleanup/NoisesPanel";
-import { ShortsListPanel } from "../shorts/ShortsListPanel";
-import { ShortLookPanel } from "../shorts/ShortLookPanel";
 import { useShortsWorkspace } from "../shorts/useShortsWorkspace";
 import { useProjectStore } from "../../stores/projectStore";
 import {
+  isShortsWorkspace,
   restoreLayout,
   saveLayout,
   setActiveDockApi,
@@ -42,7 +35,22 @@ const THEME: DockviewTheme = {
   gap: 6,
 };
 
-const fill = (node: React.ReactNode) => <div className="h-full w-full min-h-0 min-w-0 overflow-hidden">{node}</div>;
+const fill = (node: React.ReactNode) => (
+  <div className="h-full w-full min-h-0 min-w-0 overflow-hidden">
+    <Suspense fallback={null}>{node}</Suspense>
+  </div>
+);
+
+// The Edit layout's own panels (preview, transcript, timeline, inspector) come with the editor;
+// the rest load the first time they are shown.
+const MediaPanel = React.lazy(() => import("../media/MediaPanel").then((m) => ({ default: m.MediaPanel })));
+const ZoomPanel = React.lazy(() => import("../zoom/ZoomPanel").then((m) => ({ default: m.ZoomPanel })));
+const ChaptersPanel = React.lazy(() => import("../chapters/ChaptersPanel").then((m) => ({ default: m.ChaptersPanel })));
+const AgentPanel = React.lazy(() => import("../agent/AgentPanel").then((m) => ({ default: m.AgentPanel })));
+const JumpCutsPanel = React.lazy(() => import("../cleanup/JumpCutsPanel").then((m) => ({ default: m.JumpCutsPanel })));
+const NoisesPanel = React.lazy(() => import("../cleanup/NoisesPanel").then((m) => ({ default: m.NoisesPanel })));
+const ShortsListPanel = React.lazy(() => import("../shorts/ShortsListPanel").then((m) => ({ default: m.ShortsListPanel })));
+const ShortLookPanel = React.lazy(() => import("../shorts/ShortLookPanel").then((m) => ({ default: m.ShortLookPanel })));
 
 const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
   preview: () => fill(<StagePanel />),
@@ -89,7 +97,7 @@ const Tab: React.FC<IDockviewPanelHeaderProps> = (props) => <DockviewDefaultTab 
 /// onto its middle to share a tab group; drag the gaps between panels to resize them.
 export const DockWorkspace: React.FC = () => {
   const workspace = useWorkspaceStore((s) => s.workspace);
-  useShortsWorkspace(workspace === "shorts");
+  useShortsWorkspace(isShortsWorkspace(workspace) ? workspace : null);
   const apiRef = useRef<DockviewApi | null>(null);
   // The workspace whose layout is showing, and a pending save of it.
   const shown = useRef(workspace);
@@ -114,6 +122,8 @@ export const DockWorkspace: React.FC = () => {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     apiRef.current?.getPanel("agent")?.api.setTitle(waiting > 0 ? `Agent (${waiting})` : "Agent");
+    // One list panel, named after the tab it is in.
+    apiRef.current?.getPanel("shorts")?.api.setTitle(workspace === "clips" ? "Clips" : "Shorts");
   }, [waiting, ready, workspace]);
 
   const onReady = (event: DockviewReadyEvent) => {

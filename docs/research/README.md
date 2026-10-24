@@ -7,7 +7,7 @@ Background for the roadmap. Nothing in this folder is a decision; decisions are 
 |---|---|
 | [competitors.md](competitors.md) | Other products and agent toolkits (Resolve, Premiere MCPs, ChatCut, Gling, Borumi, Tella, Higgsfield/AE, Tandem, Herk Edit Kit, Astra Premiere, HyperFrames upstream): what we take, what we refuse |
 | [creator-workflows.md](creator-workflows.md) | The AI-editing video research condensed: ten findings, six workflow types, tricks worth stealing, tutorial-graphics workflows, numbers with caveats, the artefact index, corrections |
-| [revoice.md](revoice.md) + [revoice-lab-scripts/](revoice-lab-scripts/README.md) | The paused re-voicing / lip-sync lab: what was tested, the licence rule, when to revisit |
+| [revoice.md](revoice.md) | The paused re-voicing / lip-sync lab: what was tested, the licence rule, when to revisit (its scripts are in git) |
 | [evidence/](evidence/) | Raw captions, the video dossier and the scripts that fetch them. Read only to check a claim |
 
 **Evidence grades used across the docs.** *Code*: checked in this repo. *Log*: our own

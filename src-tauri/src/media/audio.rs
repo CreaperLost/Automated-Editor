@@ -48,6 +48,30 @@ fn sinc_table(cutoff: f64) -> std::sync::Arc<Vec<f64>> {
         .clone()
 }
 
+/// How a span's sound comes in or goes out at one of its ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    /// Where its sound starts or ends anyway, or carries straight on into the next clip.
+    Hard,
+    /// Faded over [`FADE_US`] to silence: a cut with nothing to blend into.
+    Fade,
+    /// Played [`FADE_US`] past the cut and blended with the clip on the other side over twice
+    /// that, at equal power: the room tone carries on, with no dip to silence at the cut.
+    Cross,
+}
+
+/// The gain `distance_us` into an edge of kind `edge`.
+fn edge_gain(edge: Edge, distance_us: f64) -> f64 {
+    match edge {
+        Edge::Hard => 1.0,
+        Edge::Fade => (distance_us / FADE_US as f64).clamp(0.0, 1.0),
+        Edge::Cross => {
+            let x = (distance_us / (2 * FADE_US) as f64).clamp(0.0, 1.0);
+            (x * std::f64::consts::FRAC_PI_2).sin()
+        }
+    }
+}
+
 /// One clip of sound where it plays, faded where it does not join on to its neighbour.
 #[derive(Clone)]
 struct Span {
@@ -55,8 +79,8 @@ struct Span {
     edited_end: u64,
     source_start: u64,
     source_end: u64,
-    fade_in: bool,
-    fade_out: bool,
+    fade_in: Edge,
+    fade_out: Edge,
     /// The audio track it plays on: its mix gain, ducking and noise reduction.
     lane: String,
     gain: f64,
@@ -107,8 +131,8 @@ impl Span {
             edited_end: SOURCE_END_US,
             source_start: 0,
             source_end: SOURCE_END_US,
-            fade_in: false,
-            fade_out: false,
+            fade_in: Edge::Hard,
+            fade_out: Edge::Hard,
             lane: self.lane.clone(),
             gain: 1.0,
             segments: self.segments.clone(),
@@ -292,14 +316,41 @@ impl AudioMixer {
                         (stretches, clip.edited_start, clip.in_us)
                     }
                 };
+                let fade_in = clip.in_us > 0 && !joined;
+                let fade_out = clip.in_us + clip.len < clip.source_end
+                    && !lane.clips.get(i + 1).is_some_and(|next| joins(clip, next));
+                // A cut between two clips that meet, each with sound to spare past it,
+                // crossfades: each plays on [`FADE_US`] into the other's side.
+                let crosses = |a: &LaneClip, b: &LaneClip| {
+                    a.edited_start + a.edited_len == b.edited_start
+                        && a.speed == 1.0
+                        && b.speed == 1.0
+                        && !joins(a, b)
+                        && a.in_us + a.len + FADE_US <= a.source_end
+                        && b.in_us >= FADE_US
+                        // Long enough that spans stay in order on the lane once widened.
+                        && a.edited_len >= 4 * FADE_US
+                        && b.edited_len >= 4 * FADE_US
+                };
+                let cross_in = i > 0 && crosses(&lane.clips[i - 1], clip);
+                let cross_out = lane
+                    .clips
+                    .get(i + 1)
+                    .is_some_and(|next| crosses(clip, next));
+                let edge = |fade: bool, cross: bool| match (fade, cross) {
+                    (_, true) => Edge::Cross,
+                    (true, false) => Edge::Fade,
+                    (false, false) => Edge::Hard,
+                };
+                let before = if cross_in { FADE_US } else { 0 };
+                let after = if cross_out { FADE_US } else { 0 };
                 spans.push(Span {
-                    edited_start: clip.edited_start,
-                    edited_end: clip.edited_start + clip.edited_len,
-                    source_start: clip.in_us,
-                    source_end: clip.in_us + clip.len,
-                    fade_in: clip.in_us > 0 && !joined,
-                    fade_out: clip.in_us + clip.len < clip.source_end
-                        && !lane.clips.get(i + 1).is_some_and(|next| joins(clip, next)),
+                    edited_start: clip.edited_start - before,
+                    edited_end: clip.edited_start + clip.edited_len + after,
+                    source_start: clip.in_us - before,
+                    source_end: clip.in_us + clip.len + after,
+                    fade_in: edge(fade_in, cross_in),
+                    fade_out: edge(fade_out, cross_out),
                     lane: lane.id.clone(),
                     gain: lane.gain,
                     segments: clip.segments.clone(),
@@ -376,8 +427,12 @@ impl AudioMixer {
         }
         Ok(out
             .into_iter()
-            .map(|s| match &self.polish {
-                Some(plan) => plan.finish(s),
+            .enumerate()
+            .map(|(i, s)| match &self.polish {
+                Some(plan) => {
+                    let frame = start + i as u64 / 2;
+                    plan.finish(s, frame as f64 * 1e6 / SAMPLE_RATE as f64)
+                }
                 None => s,
             })
             .map(|s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
@@ -395,13 +450,8 @@ impl AudioMixer {
         let b = end.min(ceil_frame(span.edited_end));
         for frame in a..b {
             let t = frame as f64 * 1e6 / SAMPLE_RATE as f64;
-            let mut gain = 1.0f64;
-            if span.fade_in {
-                gain = gain.min(((t - span.edited_start as f64) / FADE_US as f64).clamp(0.0, 1.0));
-            }
-            if span.fade_out {
-                gain = gain.min(((span.edited_end as f64 - t) / FADE_US as f64).clamp(0.0, 1.0));
-            }
+            let mut gain = edge_gain(span.fade_in, t - span.edited_start as f64)
+                .min(edge_gain(span.fade_out, span.edited_end as f64 - t));
             // A stretched span's mutes are in the sound it stretches (see `sound`).
             if span.speed == 1.0 && !span.mutes.is_empty() {
                 let source = span.source_start as f64 + (t - span.edited_start as f64);
@@ -1377,7 +1427,8 @@ mod tests {
         let mut b = mixer.read_frames(4_700, 100).unwrap();
         b.extend(mixer.read_frames(4_800, 200).unwrap());
         assert_eq!(a, b);
-        assert!(a[202].abs() < 100);
+        // At the cut: both sides of a crossfade, never a dip.
+        assert!(a[202] >= 16_000, "{}", a[202]);
         doc.assets[0].duration_us = 3_600_000_000;
         clips(&mut doc, &[(0, 0, 3_600_000_000)]);
         let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
@@ -1389,9 +1440,9 @@ mod tests {
     }
 
     /// Clips that carry straight on from each other play through without a dip; a real cut
-    /// fades in and out.
+    /// crossfades where both sides have sound to spare, and fades out and in where not.
     #[test]
-    fn joined_clips_play_through_and_cuts_fade() {
+    fn joined_clips_play_through_and_cuts_crossfade() {
         let (dir, mut doc) = fixture(48_000, 1, vec![16384; 48_000]);
         clips(&mut doc, &[(0, 0, 500_000), (500_000, 500_000, 500_000)]);
         let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
@@ -1400,7 +1451,17 @@ mod tests {
             pcm.iter().all(|&s| (s as i32 - 16384).abs() <= 2),
             "{pcm:?}"
         );
+        // A cut: over the 16 ms around it both sides play, at equal power (on one steady tone,
+        // which adds in phase, up to 3 dB louder at the middle), never dipping.
         clips(&mut doc, &[(0, 0, 500_000), (500_000, 600_000, 400_000)]);
+        let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
+        let pcm = mixer.read_frames(24_000 - 480, 960).unwrap();
+        assert!(pcm.iter().all(|&s| s >= 16_000), "the cut never dips");
+        assert!(pcm.iter().all(|&s| s <= 23_200), "{:?}", pcm.iter().max());
+        // Frame 480, left channel: the cut.
+        assert!(pcm[960] > 23_000, "both sides at the cut: {}", pcm[960]);
+        // Nothing before the second clip's first sound: it can only fade in.
+        clips(&mut doc, &[(0, 0, 500_000), (500_000, 0, 400_000)]);
         let mixer = AudioMixer::new(dir.path(), &doc).unwrap();
         let pcm = mixer.read_frames(24_000 - 10, 20).unwrap();
         assert!(pcm.iter().any(|&s| (s as i32) < 8_000), "the cut fades");
@@ -1474,6 +1535,62 @@ mod tests {
             .max()
             .unwrap();
         assert!(peak < 100, "aliased signal peak={peak}");
+    }
+
+    /// Mixes a whole edit, normalized to `AEROEDITS_LOUDNESS_TARGET` (default -14), as export
+    /// does, and prints the loudness it reaches and how often the limiter works. Run on a copy
+    /// of a project folder, never the original.
+    #[test]
+    #[ignore = "set AEROEDITS_LOUDNESS_PROBE to a copied project folder"]
+    fn loudness_probe() {
+        use crate::dsp::loudness::{integrated_lufs, KWeighting};
+        let root = std::path::PathBuf::from(std::env::var("AEROEDITS_LOUDNESS_PROBE").unwrap());
+        let target: f32 = std::env::var("AEROEDITS_LOUDNESS_TARGET")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-14.0);
+        let reader = crate::project::ProjectReader::open(&root).unwrap();
+        let mut doc = reader.document().clone();
+        let measure = |doc: &EditDocument| {
+            let mixer = AudioMixer::new(&root, doc).unwrap();
+            let mut filters = [KWeighting::new(SAMPLE_RATE), KWeighting::new(SAMPLE_RATE)];
+            let (mut blocks, mut sum, mut n) = (Vec::new(), 0.0, 0usize);
+            let (mut limited, mut peak, mut frames) = (0usize, 0i16, 0usize);
+            let mut at = 0;
+            while at < mixer.total_frames {
+                let pcm = mixer.read_frames(at, CHUNK_FRAMES).unwrap();
+                for frame in pcm.chunks(2) {
+                    for (c, &s) in frame.iter().enumerate() {
+                        let y = filters[c].process(s as f32 / 32768.0);
+                        sum += y * y;
+                        peak = peak.max(s.saturating_abs());
+                        limited += (s.unsigned_abs() as f64 / 32767.0 > 0.708) as usize;
+                    }
+                    n += 1;
+                    frames += 1;
+                    if n == 4_800 {
+                        blocks.push(sum / n as f64);
+                        (sum, n) = (0.0, 0);
+                    }
+                }
+                at += CHUNK_FRAMES as u64;
+            }
+            (
+                integrated_lufs(&blocks).unwrap_or(f64::NAN),
+                20.0 * (peak as f64 / 32767.0).log10(),
+                limited as f64 / (2 * frames).max(1) as f64 * 100.0,
+            )
+        };
+        doc.audio.normalize = false;
+        let (raw, raw_peak, _) = measure(&doc);
+        doc.audio.normalize = true;
+        doc.audio.target_lufs = target;
+        let (lufs, peak, limited) = measure(&doc);
+        println!(
+            "PROBE {:.0}s raw {raw:.1} LUFS (peak {raw_peak:.1} dBFS) -> {lufs:.1} LUFS for {target} \
+             (peak {peak:.1} dBFS, {limited:.2}% of samples in the limiter)",
+            doc.duration_us() as f64 / 1e6
+        );
     }
 
     /// Mixes a short's sound as playback does and lists its quiet stretches. Run on a copy of a

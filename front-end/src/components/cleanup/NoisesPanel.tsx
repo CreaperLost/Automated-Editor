@@ -9,6 +9,7 @@ import { soundSources } from "../../lib/sequence";
 import type { FoundNoise, NoiseKind } from "../../lib/types";
 import { Button, IconButton, Segmented, cn } from "../ui";
 import { requestPanel } from "../layout/dockLayout";
+import { saveCleanupSoon, useCleanupFromProject } from "../../lib/cleanupSettings";
 
 const KIND_LABELS: Record<NoiseKind, string> = { click: "Click", knock: "Pop", mouth: "Mouth noise", breath: "Breath" };
 
@@ -43,6 +44,8 @@ export const NoisesPanel: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const { sensitivity, paddingMs, key, scan, selected, filter, busy, error, notice } = useNoiseStore();
+  // The sensitivity starts from the project's (its preset's unless changed there).
+  useCleanupFromProject(openedProject);
   const [applying, setApplying] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
@@ -187,7 +190,10 @@ export const NoisesPanel: React.FC = () => {
         {settingsOpen && (
           <div className="space-y-3">
             {slider("Sensitivity", "Noise sensitivity", sensitivity, `${Math.round(sensitivity * 100)}%`, 0, 1, 0.05,
-              (value) => useNoiseStore.getState().configure({ sensitivity: value }),
+              (value) => {
+                useNoiseStore.getState().configure({ sensitivity: value });
+                saveCleanupSoon();
+              },
               "Higher also finds fainter noises; listen before muting them.")}
             {slider("Room around each noise", "Room muted around each noise", paddingMs, `${paddingMs} ms`, 0, 100, 5,
               (value) => useNoiseStore.getState().configure({ paddingMs: value }),

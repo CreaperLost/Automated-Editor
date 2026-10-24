@@ -72,7 +72,8 @@ pub fn transcribe_segments(
     let span = last.saturating_sub(first).max(1) as f64;
     let label = transcriber.kind().label();
     let mut words = Vec::new();
-    let mut language = None;
+    // What each chunk heard, by how many words it heard in it: the most words win.
+    let mut heard: Vec<(String, usize)> = Vec::new();
     progress(TranscriptionProgress {
         track_id: track_id.into(),
         fraction: 0.0,
@@ -95,6 +96,13 @@ pub fn transcribe_segments(
                 return Err("Transcription cancelled".into());
             }
             let result = transcriber.transcribe_chunk(&chunk)?;
+            if let Some(code) = &result.language {
+                let count = result.words.len();
+                match heard.iter_mut().find(|(c, _)| c == code) {
+                    Some(entry) => entry.1 += count,
+                    None => heard.push((code.clone(), count)),
+                }
+            }
             let chunk_end = chunk.source_start_us + chunk.duration_us();
             for mut word in result.words {
                 word.source_start_us =
@@ -105,9 +113,6 @@ pub fn transcribe_segments(
                     word.text = word.text.trim().to_string();
                     words.push(word);
                 }
-            }
-            if language.is_none() {
-                language = result.language;
             }
             Ok(())
         },
@@ -124,6 +129,10 @@ pub fn transcribe_segments(
         fraction: 1.0,
         message: "Saving transcript".into(),
     });
+    let language = heard
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(code, _)| code);
     let transcript = Transcript::new(
         track_id.into(),
         transcriber.kind(),

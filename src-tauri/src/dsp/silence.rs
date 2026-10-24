@@ -38,6 +38,10 @@ pub struct SilenceConfig {
     pub step_ms: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_policy: Option<String>,
+    /// Keeps the threshold at least this far below the speech level (the 95th percentile of
+    /// the sounding windows): a quiet microphone's word tails are not silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below_speech_db: Option<f32>,
 }
 
 impl Default for SilenceConfig {
@@ -50,6 +54,7 @@ impl Default for SilenceConfig {
             window_ms: None,
             step_ms: None,
             channel_policy: None,
+            below_speech_db: None,
         }
     }
 }
@@ -216,10 +221,28 @@ pub(crate) fn silent_runs(blocks: &[LevelBlock], threshold_db: f32) -> Vec<(u64,
 /// The threshold `config` asks for over these levels: fixed, or set from them (see
 /// [`SilenceConfig::auto_level`]).
 pub(crate) fn resolve_threshold(blocks: &[LevelBlock], config: &SilenceConfig) -> f32 {
-    config
+    let threshold = config
         .auto_level
         .and_then(|level| auto_threshold(blocks, level))
-        .unwrap_or(config.threshold_db)
+        .unwrap_or(config.threshold_db);
+    match (config.below_speech_db, speech_level(blocks)) {
+        (Some(below), Some(speech)) => threshold.min(speech - below),
+        _ => threshold,
+    }
+}
+
+/// The speech level: the 95th percentile of the sounding windows (digital silence left out).
+fn speech_level(blocks: &[LevelBlock]) -> Option<f32> {
+    let mut levels: Vec<f32> = blocks
+        .iter()
+        .flat_map(|block| block.windows.iter().map(|&(_, db)| db))
+        .filter(|&db| db > DIGITAL_SILENCE_DB)
+        .collect();
+    if levels.len() < AUTO_MIN_WINDOWS {
+        return None;
+    }
+    levels.sort_by(f32::total_cmp);
+    Some(levels[((levels.len() - 1) as f32 * 0.95) as usize])
 }
 
 /// `level` of the way from the noise floor (10th percentile of the sounding windows) to the
@@ -726,6 +749,32 @@ mod tests {
         }];
         assert!(auto_threshold(&near_zero, 0.2).unwrap() < -100.0);
         assert!((auto_threshold(&near_zero, 1.0).unwrap() + 26.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn word_edges_of_a_quiet_microphone_are_not_silence() {
+        // Speech peaking at -26 dB with a tail at -45 dB: a fixed -42 dB edge would cut the
+        // tail; 24 dB below the speech level keeps it. A loud microphone keeps -42 dB.
+        let blocks = |speech: f32| {
+            [LevelBlock {
+                end_us: 1_000_000,
+                windows: (0..100)
+                    .map(|i| (i * 10_000, if i % 2 == 0 { speech } else { speech - 19.0 }))
+                    .collect(),
+            }]
+        };
+        let edges = SilenceConfig {
+            threshold_db: -42.0,
+            below_speech_db: Some(24.0),
+            ..SilenceConfig::default()
+        };
+        assert_eq!(resolve_threshold(&blocks(-26.0), &edges), -50.0);
+        assert_eq!(resolve_threshold(&blocks(-10.0), &edges), -42.0);
+        let fixed = SilenceConfig {
+            threshold_db: -42.0,
+            ..SilenceConfig::default()
+        };
+        assert_eq!(resolve_threshold(&blocks(-26.0), &fixed), -42.0);
     }
 
     #[test]

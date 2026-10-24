@@ -9,6 +9,7 @@ import {
   exportShorts,
   findShorts,
   newShort,
+  ofKind,
   removeShort,
   renameShort,
   selectShort,
@@ -26,66 +27,79 @@ function formatTime(us: number): string {
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
-/// The shorts of the video: pick one to show and edit it, rename, tick for export; new ones
-/// by hand or from the AI provider.
+/// The list of one tab: in Shorts the shorts made from a take (your camera and voice, footage
+/// from the video under it), in Clips the clips cut from the video. Pick one to show and edit
+/// it, rename, tick for export; new ones from a take, or by hand or the AI provider.
 export const ShortsListPanel: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
   const selected = useSelectedShort();
-  const { busy, error, notice, checked, exports, renaming } = useShortsStore();
+  const { busy, error, notice, checked, exports, renaming, kind } = useShortsStore();
   const hasMain = useShortsStore((s) => !!s.main);
   const [takeOpen, setTakeOpen] = useState(false);
   if (!project) return null;
 
-  const shorts = project.shorts ?? [];
+  const shorts = (project.shorts ?? []).filter((s) => ofKind(s, kind));
+  const takes = kind === "shorts";
   const hasSpeech = soundSources(project).length > 0;
-  const toExport = checked.size > 0 ? shorts.filter((s) => checked.has(s.id)) : shorts;
+  const toExport = shorts.some((s) => checked.has(s.id)) ? shorts.filter((s) => checked.has(s.id)) : shorts;
   const exporting = Object.values(exports).some((e) => e.state === "running" || e.state === "waiting");
   const setRenaming = (id: string | null) => useShortsStore.setState({ renaming: id });
+  // A Shorts tab with nothing in it opens on what it is for.
+  const showTake = takes && (takeOpen || shorts.length === 0);
 
   return (
     <div className="h-full flex flex-col min-h-0 text-label">
       <div className="shrink-0 flex flex-wrap gap-1.5 p-2 border-b border-studio-800">
-        <Button size="sm" variant="secondary" icon={Plus} disabled={!!busy || !hasMain} onClick={newShort} className="flex-1">
-          New short
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={busy === "Finding shorts" ? Loader2 : Sparkles}
-          className={`flex-1 ${busy === "Finding shorts" ? "[&>svg]:animate-spin" : ""}`}
-          disabled={!!busy || !hasSpeech}
-          onClick={findShorts}
-          title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the list (undoable)."
-        >
-          Find with AI
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={Video}
-          className="w-full"
-          disabled={!!busy}
-          aria-expanded={takeOpen}
-          onClick={() => setTakeOpen((open) => !open)}
-          title="A short you recorded again: your camera and voice, with footage from this video under it"
-        >
-          From a take…
-        </Button>
-        {takeOpen && (
-          <div className="w-full">
-            <TakeForm onDone={() => setTakeOpen(false)} />
-          </div>
+        {takes ? (
+          <>
+            <Button
+              size="sm"
+              variant={showTake ? "ghost" : "secondary"}
+              icon={Video}
+              className="w-full"
+              disabled={!!busy}
+              aria-expanded={showTake}
+              onClick={() => setTakeOpen((open) => !(open || shorts.length === 0))}
+              title="Your camera and voice telling one part of this video; footage and graphics from it go under the take"
+            >
+              New short from a take
+            </Button>
+            {showTake && (
+              <div className="w-full">
+                <TakeForm onDone={() => setTakeOpen(false)} />
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <Button size="sm" variant="secondary" icon={Plus} disabled={!!busy || !hasMain} onClick={newShort} className="flex-1">
+              New clip
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={busy === "Finding shorts" ? Loader2 : Sparkles}
+              className={`flex-1 ${busy === "Finding shorts" ? "[&>svg]:animate-spin" : ""}`}
+              disabled={!!busy || !hasSpeech}
+              onClick={findShorts}
+              title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the clips (undoable)."
+            >
+              Find with AI
+            </Button>
+          </>
         )}
-        <Button
-          size="sm"
-          variant="primary"
-          icon={Download}
-          className="w-full"
-          disabled={toExport.length === 0 || exporting}
-          onClick={() => void exportShorts(toExport.map((s) => s.id))}
-        >
-          Export {checked.size > 0 ? `${checked.size} selected` : `all ${shorts.length}`}
-        </Button>
+        {shorts.length > 0 && (
+          <Button
+            size="sm"
+            variant="primary"
+            icon={Download}
+            className="w-full"
+            disabled={exporting}
+            onClick={() => void exportShorts(toExport.map((s) => s.id))}
+          >
+            Export {shorts.some((s) => checked.has(s.id)) ? `${toExport.length} selected` : `all ${shorts.length}`}
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -99,11 +113,11 @@ export const ShortsListPanel: React.FC = () => {
         </Notice>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5" aria-label="Shorts" role="list">
-        {shorts.length === 0 && (
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5" aria-label={takes ? "Shorts" : "Clips"} role="list">
+        {shorts.length === 0 && !takes && (
           <p className="p-2 text-studio-500 leading-relaxed">
-            No shorts yet. Transcribe the video, then press Find with AI, or start one with New short and shape it on
-            its timeline.
+            No clips yet. Transcribe the video, then press Find with AI, or start one with New clip and shape it on its
+            timeline.
           </p>
         )}
         {shorts.map((s) => {

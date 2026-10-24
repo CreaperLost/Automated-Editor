@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Palette, Camera, Monitor } from "lucide-react";
+import { Image as ImageIcon, Camera, Monitor } from "lucide-react";
 import { InspectorSection, NumberGrid, RangeRow } from "./InspectorSection";
 import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "../shorts/CameraFraming";
@@ -11,31 +11,23 @@ import { api } from "../../lib/ipc";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { AudioSection } from "../audio/AudioSection";
 import { CaptionsSection } from "../captions/CaptionsSection";
+import { StylePanel } from "../style/StylePanel";
+import { PresetMarks } from "../presets/PresetMarks";
 import { Button, Field, Notice, Segmented, Switch, Tabs, cn } from "../ui";
-import { BACKGROUND_PRESETS, ScreenCrop, layoutFromSettings, presetBackgroundCss } from "../../lib/types";
+import { ScreenCrop, layoutFromSettings } from "../../lib/types";
 
-type InspectorTab = "clip" | "video" | "audio" | "captions";
+type InspectorTab = "clip" | "video" | "audio" | "captions" | "style";
 const TAB_KEY = "aeroedits.inspectorTab.v1";
 
 function loadTab(): InspectorTab {
   try {
     const stored = window.localStorage.getItem(TAB_KEY);
-    if (stored === "video" || stored === "audio" || stored === "captions") return stored;
+    if (stored === "video" || stored === "audio" || stored === "captions" || stored === "style") return stored;
   } catch {
     // Storage unavailable: start on Video.
   }
   return "video";
 }
-
-/** The camera border's ready colours (the editor's indigo first: it is the default). */
-const CAMERA_BORDER_COLORS = [
-  { label: "Indigo", value: "#6366f1" },
-  { label: "Black", value: "#000000" },
-  { label: "White", value: "#ffffff" },
-  { label: "Red", value: "#ef4444" },
-  { label: "Blue", value: "#3b82f6" },
-  { label: "Green", value: "#22c55e" },
-];
 
 /// The inspector: what the selected clip does (when a track clip is selected), and how the
 /// whole video looks, sounds and is captioned, one page each.
@@ -122,57 +114,30 @@ export const InspectorPanel: React.FC = () => {
       .then((source) => {
         if (!source) return;
         const layout = layoutFromSettings(canvas, cameraBubble, opened.layout);
-        layout.backgroundType = "wallpaper";
         return api
           .projectLayoutUpdate(opened.projectHandle, opened.revision, layout, source)
           .then((updated) => {
             applyOpenedProject(updated);
-            updateCanvas({ backgroundType: "wallpaper" });
             setPersistError(undefined);
           });
       })
       .catch((err) => setPersistError(String(err)));
   };
 
-  const gradientPresets = [
-    { label: "Indigo Cosmic", start: "#312e81", end: "#0f172a" },
-    { label: "Electric Violet", start: "#4c1d95", end: "#1e1b4b" },
-    { label: "Deep Obsidian", start: "#27272a", end: "#09090b" },
-    { label: "Emerald Matrix", start: "#064e3b", end: "#022c22" },
-    { label: "Sunset Velvet", start: "#881337", end: "#1e1b4b" },
-    { label: "Cyber Ocean", start: "#0c4a6e", end: "#0f172a" },
-  ];
-
-  /** A background swatch: a gradient or built-in background to pick. */
-  const swatch = (key: string, label: string, background: string, selected: boolean, onClick: () => void) => (
-    <button
-      key={key}
-      type="button"
-      onClick={onClick}
-      aria-pressed={selected}
-      className={cn(
-        "h-12 rounded-control border text-left p-2 flex flex-col justify-end transition-shadow",
-        selected
-          ? "border-accent-fg shadow-[0_0_0_2px_rgb(var(--accent-hover)/0.7)]"
-          : "border-studio-700 hover:border-studio-500",
-      )}
-      style={{ background }}
-    >
-      <span className="text-meta font-medium text-white/90 drop-shadow truncate">{label}</span>
-    </button>
-  );
-
-  const colorInput = (label: string, value: string, onChange: (value: string) => void) => (
-    <label className="block space-y-1">
-      <span className="text-label text-studio-400">{label}</span>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full h-control bg-studio-850 border border-studio-700 rounded-control cursor-pointer"
-      />
-    </label>
-  );
+  /** Back to the style's background: the project's image is forgotten. */
+  const removeWallpaper = () => {
+    const opened = openedRef.current;
+    if (!opened) return;
+    const layout = layoutFromSettings(canvas, cameraBubble, { ...opened.layout, wallpaperAsset: null } as typeof opened.layout);
+    layout.wallpaperAsset = null;
+    void api
+      .projectLayoutUpdate(opened.projectHandle, opened.revision, layout)
+      .then((updated) => {
+        applyOpenedProject(updated);
+        setPersistError(undefined);
+      })
+      .catch((err) => setPersistError(String(err)));
+  };
 
   return (
     <div className="studio-inspector min-w-0 h-full flex flex-col bg-studio-900 select-none">
@@ -186,7 +151,8 @@ export const InspectorPanel: React.FC = () => {
             ...(clipSelected ? [{ value: "clip" as const, label: "Clip", title: "The selected clip on a track" }] : []),
             { value: "video", label: "Video", title: "Screen, background and camera" },
             { value: "audio", label: "Audio", title: "Volume, noise reduction and ducking" },
-            { value: "captions", label: "Captions", title: "Caption style and placement" },
+            { value: "captions", label: "Captions", title: "Where captions sit and how many words they hold" },
+            { value: "style", label: "Style", title: "How graphics, captions and the frame look" },
           ]}
         />
       </div>
@@ -222,6 +188,7 @@ export const InspectorPanel: React.FC = () => {
                 </Button>
               }
             >
+              <PresetMarks part="layout" />
               <Field label="Canvas">
                 <Segmented
                   label="Canvas aspect ratio"
@@ -240,22 +207,6 @@ export const InspectorPanel: React.FC = () => {
                 max={100}
                 unit="%"
                 onChange={(screenScalePct) => setCanvas({ screenScalePct })}
-              />
-              <RangeRow
-                label="Corner radius"
-                value={canvas.cornerRadiusPx}
-                min={0}
-                max={32}
-                unit="px"
-                onChange={(cornerRadiusPx) => setCanvas({ cornerRadiusPx })}
-              />
-              <RangeRow
-                label="Drop shadow"
-                value={canvas.shadowBlurPx}
-                min={0}
-                max={40}
-                unit="px"
-                onChange={(shadowBlurPx) => setCanvas({ shadowBlurPx })}
               />
 
               <Field label="Cursor">
@@ -338,79 +289,26 @@ export const InspectorPanel: React.FC = () => {
               />
             </InspectorSection>
 
-            <InspectorSection id="background" title="Background" icon={Palette}>
-              <Segmented
-                label="Background type"
-                size="sm"
-                className="w-full"
-                value={canvas.backgroundType}
-                onChange={(kind) => {
-                  if (kind !== "wallpaper") {
-                    setCanvas({ backgroundType: kind });
-                    return;
-                  }
-                  if (openedProject?.layout?.wallpaperAsset) {
-                    setCanvas({ backgroundType: "wallpaper" });
-                    return;
-                  }
-                  pickWallpaper();
-                }}
-                options={[
-                  { value: "solid", label: "Solid" },
-                  { value: "gradient", label: "Gradient" },
-                  { value: "preset", label: "Built-in" },
-                  { value: "wallpaper", label: "Image" },
-                ]}
-              />
-
-              {/* Only the selected type's controls are shown. */}
-              {canvas.backgroundType === "solid" &&
-                colorInput("Color", canvas.colorStart, (colorStart) => setCanvas({ colorStart }))}
-
-              {canvas.backgroundType === "gradient" && (
-                <>
-                  <div className="grid grid-cols-2 gap-2">
-                    {gradientPresets.map((preset) =>
-                      swatch(
-                        preset.label,
-                        preset.label,
-                        `linear-gradient(135deg, ${preset.start}, ${preset.end})`,
-                        canvas.colorStart === preset.start && canvas.colorEnd === preset.end,
-                        () => setCanvas({ colorStart: preset.start, colorEnd: preset.end }),
-                      ),
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {colorInput("Start", canvas.colorStart, (colorStart) => setCanvas({ colorStart }))}
-                    {colorInput("End", canvas.colorEnd, (colorEnd) => setCanvas({ colorEnd }))}
-                  </div>
-                </>
-              )}
-
-              {canvas.backgroundType === "preset" && (
-                <div className="grid grid-cols-3 gap-2">
-                  {BACKGROUND_PRESETS.map((preset) =>
-                    swatch(preset.key, preset.label, presetBackgroundCss(preset.key), canvas.backgroundPreset === preset.key, () =>
-                      setCanvas({ backgroundPreset: preset.key }),
-                    ),
-                  )}
-                </div>
-              )}
-
-              {canvas.backgroundType === "wallpaper" && (
-                <div className="space-y-1.5">
-                  <Button variant="secondary" className="w-full" onClick={pickWallpaper}>
-                    Choose image…
+            <InspectorSection id="wallpaper" title="Background image" icon={ImageIcon}>
+              <p className="text-meta text-studio-500">
+                The background is the style&apos;s (Style page). An image of your own shows instead, in this project only.
+              </p>
+              <div className="flex gap-2">
+                <Button variant="secondary" className="flex-1" onClick={pickWallpaper}>
+                  {openedProject?.layout?.wallpaperAsset ? "Another image…" : "Choose image…"}
+                </Button>
+                {openedProject?.layout?.wallpaperAsset && (
+                  <Button variant="ghost" onClick={removeWallpaper}>
+                    Use the style&apos;s
                   </Button>
-                  <p className="text-meta text-studio-500">Copied into the project, so the export never depends on an outside file.</p>
-                </div>
-              )}
+                )}
+              </div>
             </InspectorSection>
 
             <LayoutsSection />
 
             <InspectorSection id="webcam" title="Camera" icon={Camera}>
-              <p className="text-meta text-studio-500">How the camera looks wherever a layout puts it.</p>
+              <p className="text-meta text-studio-500">Its border and shadow are the style&apos;s (Style page).</p>
               <Field label="Framing">
                 <Switch
                   checked={cameraBubble.faceFraming}
@@ -435,50 +333,8 @@ export const InspectorPanel: React.FC = () => {
                 />
               )}
               <>
-                  <RangeRow
-                    label="Border"
-                    value={cameraBubble.borderWidth}
-                    min={0}
-                    max={8}
-                    unit="px"
-                    onChange={(borderWidth) => setCamera({ borderWidth })}
-                  />
-                  {cameraBubble.borderWidth > 0 && (
-                    <div className="space-y-1">
-                      <span className="text-label text-studio-400">Border colour</span>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {CAMERA_BORDER_COLORS.map(({ label, value }) => {
-                          const chosen = cameraBubble.borderColor.toLowerCase() === value;
-                          return (
-                            <button
-                              key={value}
-                              type="button"
-                              aria-label={`${label} border`}
-                              aria-pressed={chosen}
-                              title={label}
-                              onClick={() => setCamera({ borderColor: value })}
-                              className={cn(
-                                "h-7 w-7 rounded-full border transition-shadow",
-                                chosen ? "border-accent-fg shadow-[0_0_0_2px_rgb(var(--accent-hover)/0.8)]" : "border-studio-600 hover:border-studio-400",
-                              )}
-                              style={{ background: value }}
-                            />
-                          );
-                        })}
-                        <input
-                          type="color"
-                          aria-label="Another border colour"
-                          title="Another colour"
-                          value={cameraBubble.borderColor.toLowerCase()}
-                          onChange={(e) => setCamera({ borderColor: e.target.value })}
-                          className="h-7 w-9 bg-studio-850 border border-studio-700 rounded-control cursor-pointer"
-                        />
-                      </div>
-                    </div>
-                  )}
                   <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
                     <Switch checked={cameraBubble.mirror} onChange={(mirror) => setCamera({ mirror })} label="Mirror" />
-                    <Switch checked={cameraBubble.shadow} onChange={(shadow) => setCamera({ shadow })} label="Shadow" />
                   </div>
                   <Field label="Out of the way">
                     <Switch
@@ -495,6 +351,7 @@ export const InspectorPanel: React.FC = () => {
 
         {tab === "audio" && <AudioSection />}
         {tab === "captions" && <CaptionsSection />}
+        {tab === "style" && <StylePanel />}
       </div>
     </div>
   );

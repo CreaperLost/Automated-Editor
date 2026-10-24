@@ -144,7 +144,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   addRecentProject: (path) => {
     const clean = path.trim();
     if (!clean) return;
-    const current = get().recentProjects.filter((p) => p !== clean);
+    // The same folder can come as C:/a or C:\A (an agent's path, the folder picker's).
+    const key = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const current = get().recentProjects.filter((p) => key(p) !== key(clean));
     const updated = [clean, ...current].slice(0, MAX_RECENT_PROJECTS);
     saveStoredRecentProjects(updated);
     set({ recentProjects: updated });
@@ -265,6 +267,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const current = get().openedProject;
     // A window showing a short turns every project it is handed into that short's view.
     const viewShort = get().viewShort;
+    // A short's view asked for before the window moved on (back to the video, or to another
+    // short) arrives late: what shows now is not that short.
+    if (project.shortView && project.shortView !== viewShort) return;
     // A short removed by this revision has no view: the project as it is shows the list without it.
     const removed =
       !!viewShort &&

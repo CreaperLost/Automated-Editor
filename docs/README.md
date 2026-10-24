@@ -1,7 +1,8 @@
 # AeroEdits docs: start here
 
-Consolidated on 21 Oct 2026 from 61 overlapping files into the set below. Each fact lives in
-one place; other docs link to it instead of restating it.
+Consolidated on 21 Oct 2026 from 61 overlapping files into the set below, and cleaned up on
+24 Oct (built plans folded in and deleted, fixed gaps removed). Each fact lives in one place;
+other docs link to it instead of restating it.
 
 ## Read in this order
 
@@ -19,7 +20,7 @@ one place; other docs link to it instead of restating it.
 
 | Folder | What goes there |
 |---|---|
-| [plans/](plans/) | One plan per piece of work that is being built or about to be: design, decisions, build log. [ai-readiness](plans/ai-readiness.md) (the agent system, built), [layouts](plans/layouts.md) (built; follow-ups), [shorts](plans/shorts.md) (partly built; next phases), [local-review-eval](plans/local-review-eval.md) (measurement + data in `review-eval/`) |
+| [plans/](plans/) | One plan per piece of work that is being built or about to be: design, decisions, build log. [layouts](plans/layouts.md) (built; follow-ups LAY-1…4 open), [shorts](plans/shorts.md) (partly built; next phases), [evaluation](plans/evaluation.md) (EVAL-1: real agent edits, measured; runner in `eval/`), [local-review-eval](plans/local-review-eval.md) (measurement + data in `review-eval/`). Built plans are deleted; read one with `git log --diff-filter=D -- docs/plans/` |
 | [contracts/](contracts/) | File formats shared with the AeroShoot recorder: [keyboard](contracts/keyboard-telemetry.md), [windows](contracts/window-telemetry.md) |
 | [research/](research/README.md) | Competitors, creator workflows, the paused re-voice lab, and the raw evidence |
 | [images/](images/) | The two diagrams (plain SVG with light and dark colours; edit by hand) |

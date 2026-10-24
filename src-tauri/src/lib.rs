@@ -18,6 +18,7 @@ pub mod media_bin;
 mod parity;
 mod perf;
 pub mod playback;
+pub mod preset;
 pub mod project;
 pub mod proposals;
 pub mod render;
@@ -25,11 +26,12 @@ pub mod secrets;
 pub mod sequence;
 pub mod shorts;
 pub mod sound_effects;
+pub mod style;
 pub mod take_short;
 pub mod telemetry;
-pub mod templates;
 pub mod timeline;
 pub mod transcript;
+pub mod under_take;
 pub mod window_crop;
 pub mod zoom;
 
@@ -348,7 +350,7 @@ fn project_layouts_change(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn layout_favourites_list() -> Vec<layouts::favourites::Favourite> {
-    layouts::favourites::list(&templates::dir())
+    layouts::favourites::list(&layouts::favourites::dir())
 }
 
 #[cfg(feature = "tauri-app")]
@@ -357,13 +359,13 @@ fn layout_favourite_save(
     name: String,
     layout: layouts::Layout,
 ) -> Result<Vec<layouts::favourites::Favourite>, String> {
-    layouts::favourites::save(&templates::dir(), &name, layout)
+    layouts::favourites::save(&layouts::favourites::dir(), &name, layout)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn layout_favourite_remove(id: String) -> Result<Vec<layouts::favourites::Favourite>, String> {
-    layouts::favourites::remove(&templates::dir(), &id)
+    layouts::favourites::remove(&layouts::favourites::dir(), &id)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -984,47 +986,6 @@ fn project_shorts_set(
     commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
 }
 
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn templates_list() -> Vec<templates::Template> {
-    templates::list(&templates::dir())
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn template_save(
-    state: State<'_, AppState>,
-    project_handle: String,
-    name: String,
-    short_id: Option<String>,
-) -> Result<Vec<templates::Template>, String> {
-    commands::template_save_impl(&state, project_handle, name, short_id)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn template_delete(template_id: String) -> Result<Vec<templates::Template>, String> {
-    templates::remove(&templates::dir(), &template_id)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn template_apply(
-    state: State<'_, AppState>,
-    project_handle: String,
-    expected_revision: u64,
-    template_id: String,
-    short_id: Option<String>,
-) -> Result<project::OpenedProject, String> {
-    commands::template_apply_impl(
-        &state,
-        project_handle,
-        expected_revision,
-        template_id,
-        short_id,
-    )
-}
-
 /// Async: lining up the take's sounds reads them, which must not hold the main thread.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -1122,45 +1083,6 @@ async fn short_preview_frame(
     .map_err(|e| e.to_string())?
 }
 
-/// The storyboard of the open edit (or a short): the sheet as a PNG data URL, with where
-/// each tile sits on it.
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn storyboard_render(
-    app: tauri::AppHandle,
-    project_handle: String,
-    short_id: Option<String>,
-    max_tiles: Option<usize>,
-) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let open = state
-            .opened_project
-            .lock()
-            .as_ref()
-            .map(|reader| reader.summary.project_handle.clone());
-        if open.as_deref() != Some(project_handle.as_str()) {
-            return Err("That project is no longer open".to_string());
-        }
-        let args = mcp::storyboard::StoryboardArgs {
-            short: short_id,
-            max_tiles,
-            ..Default::default()
-        };
-        let board = mcp::storyboard::build(&state, &args, &|_, _| {})?;
-        use base64::Engine;
-        let mut value = serde_json::to_value(&board).map_err(|e| e.to_string())?;
-        value["image"] = format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&board.png)
-        )
-        .into();
-        Ok(value)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 /// The project open in the editor, for windows that open after it (the Shorts Studio).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -1200,6 +1122,14 @@ impl mcp::Host for McpHost {
     fn proposals_changed(&self) {
         use tauri::Emitter;
         let _ = self.0.emit("aeroedits-proposals-updated", ());
+    }
+
+    fn export_started(&self, status: &crate::export::ExportStatus, short: bool) {
+        use tauri::Emitter;
+        // The editor follows the job, and opens its Export dialog for the video
+        // (front-end/src/App.tsx).
+        let payload = serde_json::json!({ "status": status, "short": short });
+        let _ = self.0.emit("aeroedits-agent-export", payload);
     }
 
     fn transcripts(&self) -> &commands::transcript::TranscriptState {
@@ -1278,6 +1208,17 @@ fn mcp_skill_install(
     installed: bool,
 ) -> Result<mcp::McpStatus, String> {
     mcp::set_skill_installed(&transcript::settings::config_dir(), home, installed)
+}
+
+/// The Agent panel's Stop on a running agent call.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_stop_call(app: tauri::AppHandle, id: u64) -> mcp::McpStatus {
+    mcp::stop_call(
+        &transcript::settings::config_dir(),
+        mcp_host(&app).as_ref(),
+        id,
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1367,6 +1308,83 @@ fn proposal_undo(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn proposal_undo_run(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+) -> Result<commands::proposals::ProposalOutcome, String> {
+    use tauri::Emitter;
+    let outcome =
+        commands::proposals::proposal_undo_run_impl(&state, project_handle, expected_revision)?;
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    Ok(outcome)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_history(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::project_history_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_save(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    name: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::checkpoint_save_impl(&state, project_handle, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_rename(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    id: String,
+    name: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::checkpoint_rename_impl(&state, project_handle, id, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_delete(
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    id: String,
+) -> Result<commands::history::HistoryView, String> {
+    commands::history::checkpoint_delete_impl(&state, project_handle, id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn checkpoint_restore(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    id: String,
+) -> Result<commands::history::RestoreOutcome, String> {
+    use tauri::Emitter;
+    let outcome =
+        commands::history::checkpoint_restore_impl(&state, project_handle, expected_revision, id)?;
+    // Graphic files and caption marks may have come back too.
+    let _ = app.emit("aeroedits-proposals-updated", ());
+    let _ = app.emit("aeroedits-graphics-updated", ());
+    let _ = app.emit(
+        "aeroedits-captions-changed",
+        serde_json::json!({ "source": "checkpoint" }),
+    );
+    Ok(outcome)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn ai_settings_get() -> ai::AiSettingsView {
     commands::transcript::ai_settings_get_impl()
 }
@@ -1445,30 +1463,7 @@ async fn transcript_run(
             &app.state::<commands::transcript::TranscriptState>(),
             project_handle,
             track_id,
-            &mut |progress| {
-                let _ = emitter.emit("transcript-progress", progress);
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn transcript_align(
-    app: tauri::AppHandle,
-    project_handle: String,
-    track_id: String,
-) -> Result<commands::transcript::TranscriptRunResult, String> {
-    use tauri::Emitter;
-    tauri::async_runtime::spawn_blocking(move || {
-        let emitter = app.clone();
-        commands::transcript::transcript_align_impl(
-            &app.state::<AppState>(),
-            &app.state::<commands::transcript::TranscriptState>(),
-            project_handle,
-            track_id,
+            Default::default(),
             &mut |progress| {
                 let _ = emitter.emit("transcript-progress", progress);
             },
@@ -1742,6 +1737,37 @@ async fn project_graphic_create(
     .map_err(|e| e.to_string())?
 }
 
+/// Makes a graphic (a template, a library item, or a copy of one of the video's) and places it
+/// on take short `short_id`'s own timeline at `at_us`, one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn project_short_graphic_add(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: String,
+    from: commands::graphics::ShortGraphicFrom,
+    at_us: u64,
+    length_us: Option<u64>,
+    mode: Option<shorts::GraphicSlot>,
+) -> Result<commands::graphics::GraphicCreated, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::project_short_graphic_add_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            short_id,
+            from,
+            at_us,
+            length_us,
+            mode,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_graphic_get(
@@ -1790,7 +1816,7 @@ fn project_graphic_set(
     asset_id: String,
     variables: serde_json::Map<String, serde_json::Value>,
     name: Option<String>,
-    brand: Option<String>,
+    style: Option<String>,
 ) -> Result<commands::graphics::GraphicUpdated, String> {
     commands::graphics::project_graphic_set_impl(
         &state,
@@ -1799,50 +1825,200 @@ fn project_graphic_set(
         asset_id,
         variables,
         name,
-        brand,
+        style,
     )
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn graphics_brands(
+fn project_graphic_look_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    asset_id: String,
+    tokens: std::collections::BTreeMap<String, Option<String>>,
+) -> Result<graphics::GraphicView, String> {
+    commands::graphics::project_graphic_look_set_impl(&state, project_handle, asset_id, tokens)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn presets(
     state: State<'_, AppState>,
     project_handle: Option<String>,
-) -> Result<commands::graphics::BrandsView, String> {
-    commands::graphics::graphics_brands_impl(&state, project_handle)
+) -> Result<commands::preset::PresetsView, String> {
+    commands::preset::presets_impl(&state, project_handle)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn graphics_brand_save(
-    kit: graphics::brands::BrandKitInput,
-) -> Result<graphics::brands::BrandKitView, String> {
-    commands::graphics::graphics_brand_save_impl(kit)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn graphics_brand_remove(name: String) -> Result<(), String> {
-    commands::graphics::graphics_brand_remove_impl(name)
-}
-
-#[cfg(feature = "tauri-app")]
-#[tauri::command]
-fn project_graphics_brand_set(
+fn project_preset_set(
     state: State<'_, AppState>,
     project_handle: String,
     expected_revision: u64,
-    brand: Option<String>,
+    name: String,
+    shorts: bool,
 ) -> Result<project::OpenedProject, String> {
-    commands::graphics::project_graphics_brand_set_impl(
+    commands::preset::project_preset_set_impl(
         &state,
         project_handle,
         expected_revision,
-        brand,
+        name,
+        shorts,
     )
 }
 
-/// A logo or font file for a brand kit.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_preset_reset(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    part: Option<String>,
+    field: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::project_preset_reset_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        part,
+        field,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_save_from_project(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    name: Option<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::preset_save_from_project_impl(&state, project_handle, expected_revision, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_save(
+    state: State<'_, AppState>,
+    input: preset::store::PresetInput,
+) -> Result<preset::PresetView, String> {
+    commands::preset::preset_save_impl(&state, input)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_cleanup_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    cleanup: preset::settings::CleanupSettings,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::project_cleanup_set_impl(&state, project_handle, expected_revision, cleanup)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_export_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    export: preset::settings::ExportPreferences,
+) -> Result<project::OpenedProject, String> {
+    commands::preset::project_export_set_impl(&state, project_handle, expected_revision, export)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_rename(
+    state: State<'_, AppState>,
+    name: String,
+    to: String,
+) -> Result<preset::PresetView, String> {
+    commands::preset::preset_rename_impl(&state, name, to)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_remove(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    commands::preset::preset_remove_impl(&state, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn styles(
+    state: State<'_, AppState>,
+    project_handle: Option<String>,
+) -> Result<commands::style::StylesView, String> {
+    commands::style::styles_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_save(
+    state: State<'_, AppState>,
+    input: style::store::StyleInput,
+) -> Result<style::StyleView, String> {
+    commands::style::style_save_impl(&state, input)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_remove(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    commands::style::style_remove_impl(&state, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_style_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    name: String,
+) -> Result<project::OpenedProject, String> {
+    commands::style::project_style_set_impl(&state, project_handle, expected_revision, name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn graphics_in_line_plan(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<Vec<graphics::restyle::Plan>, String> {
+    commands::graphics::graphics_in_line_plan_impl(&state, project_handle)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphics_in_line(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    plans: Vec<graphics::restyle::Plan>,
+) -> Result<project::OpenedProject, String> {
+    commands::graphics::project_graphics_in_line_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        plans,
+    )
+}
+
+/// Stills of a few of the video's graphics in another style (a few seconds).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn style_preview(
+    app: tauri::AppHandle,
+    project_handle: String,
+    style: style::Style,
+) -> Result<Vec<commands::graphics::LookStill>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::graphics::style_preview_impl(&app.state::<AppState>(), project_handle, style)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A logo or font file for a style.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_brand_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
@@ -1987,6 +2163,31 @@ fn export_start(
     settings: export::ExportSettings,
 ) -> Result<export::ExportStatus, String> {
     commands::export_start_impl(&state, project_handle, settings)
+}
+
+/// Saves subtitles, the transcript or the sound alone; answers with the file's path.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn export_file(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: Option<String>,
+    kind: export::files::FileKind,
+    destination: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::export_file_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            short_id,
+            kind,
+            destination,
+            &mut |_| {},
+        )
+        .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2189,14 +2390,28 @@ pub fn run() {
             graphics_templates,
             graphics_render_again,
             project_graphic_create,
+            project_short_graphic_add,
             project_graphic_get,
             project_graphics_list,
             project_frame_thumbnail,
             project_graphic_set,
-            graphics_brands,
-            graphics_brand_save,
-            graphics_brand_remove,
-            project_graphics_brand_set,
+            project_graphic_look_set,
+            presets,
+            project_preset_set,
+            project_preset_reset,
+            preset_save_from_project,
+            preset_save,
+            preset_remove,
+            preset_rename,
+            project_cleanup_set,
+            project_export_set,
+            styles,
+            style_save,
+            style_remove,
+            project_style_set,
+            style_preview,
+            graphics_in_line_plan,
+            project_graphics_in_line,
             pick_brand_file,
             graphics_library,
             graphics_library_remove,
@@ -2258,6 +2473,7 @@ pub fn run() {
             media_interop_status,
             media_run_parity,
             export_start,
+            export_file,
             export_status,
             export_cancel,
             detect_silence,
@@ -2272,10 +2488,17 @@ pub fn run() {
             mcp_status,
             mcp_set_enabled,
             mcp_set_autopilot,
+            mcp_stop_call,
             proposals_list,
             proposal_accept,
             proposal_reject,
             proposal_undo,
+            proposal_undo_run,
+            project_history,
+            checkpoint_save,
+            checkpoint_rename,
+            checkpoint_delete,
+            checkpoint_restore,
             mcp_app_connect,
             mcp_skill_install,
             ai_settings_get,
@@ -2287,20 +2510,14 @@ pub fn run() {
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,
-            templates_list,
-            template_save,
-            template_delete,
-            template_apply,
             project_short_from_take,
             project_short_footage,
             project_shorts_generate,
             project_short_export,
             short_preview_frame,
-            storyboard_render,
             project_current,
             transcript_get,
             transcript_run,
-            transcript_align,
             transcript_cancel,
             transcript_delete,
             transcript_suggestions,

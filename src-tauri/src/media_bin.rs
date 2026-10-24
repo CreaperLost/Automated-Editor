@@ -161,7 +161,12 @@ fn describe(root: &Path, id: &str, file: &Path, kind: AssetKind) -> Result<Descr
                 (0, 0, false)
             };
             let mut names = ffmpeg::audio_stream_names(file)?;
-            names.truncate(MAX_AUDIO_STREAMS + 1);
+            // A video's picture is a stream too: only as many sounds as fit beside it.
+            let room = match kind {
+                AssetKind::Video => crate::sequence::MAX_STREAMS - 1,
+                _ => crate::sequence::MAX_STREAMS,
+            };
+            names.truncate((MAX_AUDIO_STREAMS + 1).min(room));
             if names.is_empty() && kind == AssetKind::Audio {
                 return Err("The file has no audio stream".into());
             }
@@ -244,7 +249,7 @@ pub fn decode_image_cached(path: &Path, max: (u32, u32)) -> Result<VideoFrame, S
     static CACHE: Mutex<Vec<(Key, VideoFrame)>> = Mutex::new(Vec::new());
     let meta = fs::metadata(path).map_err(|e| format!("Unreadable image: {e}"))?;
     let key: Key = (path.to_path_buf(), meta.len(), meta.modified().ok(), max);
-    {
+    let larger = {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(index) = cache.iter().position(|(k, _)| *k == key) {
             let entry = cache.remove(index);
@@ -252,8 +257,20 @@ pub fn decode_image_cached(path: &Path, max: (u32, u32)) -> Result<VideoFrame, S
             cache.push(entry);
             return Ok(frame);
         }
-    }
-    let frame = fit_within(decode_image(path)?, max);
+        // Another size of the same file, at least as large as this one wants: shrunk from it
+        // instead of decoding the file again.
+        let covers = |(w, h): (u32, u32)| {
+            (w == 0 || (max.0 > 0 && w >= max.0)) && (h == 0 || (max.1 > 0 && h >= max.1))
+        };
+        cache
+            .iter()
+            .find(|(k, _)| (&k.0, k.1, k.2) == (&key.0, key.1, key.2) && covers(k.3))
+            .map(|(_, frame)| frame.clone())
+    };
+    let frame = match larger {
+        Some(frame) => fit_within(frame, max),
+        None => decode_image_within(path, max)?,
+    };
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     // Another version of the file (it changed) is not wanted again; other sizes may be.
     cache.retain(|(k, _)| k.0 != key.0 || (k.1, k.2) == (key.1, key.2));
@@ -297,18 +314,45 @@ fn fit_within(frame: VideoFrame, (max_w, max_h): (u32, u32)) -> VideoFrame {
     }
 }
 
+/// The largest image side read at all; a bigger picture is refused rather than decoded.
+const MAX_IMAGE_SIDE: u32 = 20_000;
+/// What decoding one image may allocate.
+const MAX_IMAGE_DECODE_BYTES: u64 = 512 << 20;
+
 /// Decodes an image asset to a BGRA frame no larger than the working-set limit.
 pub fn decode_image(path: &Path) -> Result<VideoFrame, String> {
-    let mut image = image::open(path)
-        .map_err(|e| format!("Unreadable image: {e}"))?
-        .to_rgba8();
-    let (w, h) = image.dimensions();
-    if w > MAX_FRAME_DIM || h > MAX_FRAME_DIM {
-        let scale = MAX_FRAME_DIM as f64 / w.max(h) as f64;
-        let nw = ((w as f64 * scale) as u32).max(1);
-        let nh = ((h as f64 * scale) as u32).max(1);
-        image = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Triangle);
+    decode_image_within(path, (0, 0))
+}
+
+/// [`decode_image`] scaled once, straight to fit inside `max` (0 for no limit) as well. It is
+/// shrunk in the file's own pixel format before it becomes four bytes a pixel, so a large
+/// photo for a small preview never holds a full-size BGRA copy.
+fn decode_image_within(path: &Path, (max_w, max_h): (u32, u32)) -> Result<VideoFrame, String> {
+    let unreadable = |e: &dyn std::fmt::Display| format!("Unreadable image: {e}");
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|e| unreadable(&e))?
+        .with_guessed_format()
+        .map_err(|e| unreadable(&e))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
+    reader.limits(limits);
+    let mut decoded = reader.decode().map_err(|e| unreadable(&e))?;
+    let (w, h) = (decoded.width(), decoded.height());
+    let mut scale = (MAX_FRAME_DIM as f64 / w.max(h) as f64).min(1.0);
+    if max_w > 0 {
+        scale = scale.min(max_w as f64 / w as f64);
     }
+    if max_h > 0 {
+        scale = scale.min(max_h as f64 / h as f64);
+    }
+    if scale < 1.0 {
+        let nw = ((w as f64 * scale).round() as u32).max(1);
+        let nh = ((h as f64 * scale).round() as u32).max(1);
+        decoded = decoded.resize_exact(nw, nh, image::imageops::FilterType::Triangle);
+    }
+    let image = decoded.to_rgba8();
     let (width, height) = image.dimensions();
     let mut data = image.into_raw();
     for pixel in data.chunks_exact_mut(4) {
@@ -359,6 +403,29 @@ mod tests {
         assert_eq!(kind_for(Path::new("x.jpeg")), Some(AssetKind::Image));
         assert_eq!(kind_for(Path::new("x.mp3")), Some(AssetKind::Audio));
         assert_eq!(kind_for(Path::new("x.exe")), None);
+    }
+
+    #[test]
+    fn a_small_preview_of_a_big_image_is_scaled_once_and_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("photo.png");
+        image::RgbImage::from_pixel(800, 400, image::Rgb([255, 0, 0]))
+            .save(&source)
+            .unwrap();
+        let big = decode_image_cached(&source, (400, 400)).unwrap();
+        assert_eq!((big.width, big.height), (400, 200));
+        assert_eq!(big.stride, 400 * 4);
+        // BGRA: red is the third byte.
+        assert_eq!(&big.data.as_slice()[..4], &[0, 0, 255, 255]);
+        // A smaller size is shrunk from the one decoded, to the same shape.
+        let small = decode_image_cached(&source, (100, 100)).unwrap();
+        assert_eq!((small.width, small.height), (100, 50));
+        // A bigger one than any held is decoded again from the file.
+        let full = decode_image_cached(&source, (0, 0)).unwrap();
+        assert_eq!((full.width, full.height), (800, 400));
+        // The file changed: what was held for it is not used.
+        fs::write(&source, b"not an image").unwrap();
+        assert!(decode_image_cached(&source, (100, 100)).is_err());
     }
 
     #[test]

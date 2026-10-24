@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { LayoutGrid, Sparkles, Star, Trash2, X } from "lucide-react";
 import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
 import { Button, Field, Segmented, Switch, cn } from "../ui";
@@ -17,6 +17,7 @@ import {
   useLayoutsStore,
 } from "../../stores/layoutsStore";
 import { formatTimeUs } from "../../hooks/useTimeline";
+import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import {
   BUILT_IN_LAYOUTS,
   DEFAULT_LAYOUT_TRACK,
@@ -30,14 +31,13 @@ import {
 /** How long the inspector waits after a slider moves before saving it (one undo step). */
 const SAVE_MS = 200;
 
-/** A change that waits a moment, so a dragged slider saves once. */
+/**
+ * A change that waits a moment, so a dragged slider saves once. One still waiting when the
+ * section closes (another Inspector page, another workspace) is saved then, not lost.
+ */
 function useLater() {
-  const timer = useRef<number>();
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  return (work: () => void) => {
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(work, SAVE_MS);
-  };
+  const { schedule } = useDebouncedSave(SAVE_MS);
+  return (work: () => void) => schedule(() => work());
 }
 
 const Tile: React.FC<{

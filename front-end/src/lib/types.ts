@@ -131,10 +131,7 @@ export interface ZoomKeyframe {
 
 /** How the camera is dressed wherever a layout puts it (where it goes is the layout's). */
 export interface CameraBubbleSettings {
-  borderColor: string;
-  borderWidth: number;
   mirror: boolean;
-  shadow: boolean;
   /** Fade the bubble out while you click, drag, scroll, rest the pointer or type under it. */
   autoHide: boolean;
   /** Line every camera clip up with the face in it. */
@@ -341,15 +338,8 @@ export interface ScreenCrop {
 }
 
 export interface CanvasSettings {
-  backgroundType: "gradient" | "solid" | "wallpaper" | "preset";
-  backgroundPreset: BackgroundPreset;
-  colorStart: string;
-  colorEnd: string;
   screenCrop: ScreenCrop;
   screenScalePct: number; // 40 to 100
-  cornerRadiusPx: number; // 0 to 32
-  shadowBlurPx: number; // 0 to 40
-  shadowOpacity: number; // 0.0 to 1.0
   aspectRatio: "16:9" | "9:16" | "4:3" | "1:1";
   /** Draw the recorded mouse pointer (recordings that left it out of the video). */
   cursorVisible: boolean;
@@ -421,12 +411,15 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   mouthClicks: false,
   mouthClickStrength: 35,
   normalize: false,
-  targetLufs: -16,
+  targetLufs: -14,
   noiseReduction: false,
   noiseReductionDb: 12,
   duckSystemAudio: false,
   duckDb: 12,
 };
+
+/** How caption words come on screen: popping in as said, lighting up as said, or still. */
+export type CaptionStyle = "pop" | "karaoke" | "static";
 
 /** Captions burned into playback and export from a track's transcript. */
 export interface CaptionSettings {
@@ -438,14 +431,6 @@ export interface CaptionSettings {
   offsetPct: number;
   /** Text size, 2 to 15 % of the canvas height. */
   fontSizePct: number;
-  textColor: string;
-  highlightWords: boolean;
-  highlightColor: string;
-  outline: boolean;
-  background: boolean;
-  backgroundColor: string;
-  /** 0 to 1. */
-  backgroundOpacity: number;
   uppercase: boolean;
   /** Most words on screen at once, 1 to 12. */
   maxWords: number;
@@ -458,13 +443,6 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
   position: "bottom",
   offsetPct: 8,
   fontSizePct: 5.5,
-  textColor: "#FFFFFF",
-  highlightWords: true,
-  highlightColor: "#FACC15",
-  outline: true,
-  background: false,
-  backgroundColor: "#000000",
-  backgroundOpacity: 0.55,
   uppercase: false,
   maxWords: 6,
   maxLines: 1,
@@ -473,23 +451,14 @@ export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
 export interface EditLayout {
   aspectRatio: string;
   paddingPx: number;
-  backgroundType?: string;
-  colorStart?: string;
-  colorEnd?: string;
-  cornerRadiusPx?: number;
-  shadowBlurPx?: number;
-  shadowOpacity?: number;
+  /** The project's own background image, shown instead of its style's background. */
   wallpaperAsset?: string | null;
-  backgroundPreset?: string;
   screenCropLeft?: number;
   screenCropTop?: number;
   screenCropRight?: number;
   screenCropBottom?: number;
   screenScalePct?: number;
-  webcamBorderColor?: string;
-  webcamBorderWidth?: number;
   webcamMirror?: boolean;
-  webcamShadow?: boolean;
   faceFraming?: boolean;
   /** Camera clips (by clip id) framed by hand, -1 to 1 each way from the centre. */
   cameraClips?: Record<string, { offsetX: number; offsetY: number }>;
@@ -530,17 +499,7 @@ export function presetBackgroundCss(key: BackgroundPreset): string {
 
 export function canvasFromLayout(layout: EditLayout): CanvasSettings {
   const aspect = layout.aspectRatio;
-  const preset = BACKGROUND_PRESETS.find((p) => p.key === layout.backgroundPreset);
   return {
-    backgroundType:
-      layout.backgroundType === "solid" ||
-      layout.backgroundType === "wallpaper" ||
-      layout.backgroundType === "preset"
-        ? layout.backgroundType
-        : "gradient",
-    backgroundPreset: preset?.key ?? "aurora",
-    colorStart: layout.colorStart ?? "#312e81",
-    colorEnd: layout.colorEnd ?? "#0f172a",
     screenCrop: {
       left: layout.screenCropLeft ?? 0,
       top: layout.screenCropTop ?? 0,
@@ -555,9 +514,6 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
         (layout.screenScalePct ?? 100) * Math.max(0, (1080 - 2 * (layout.paddingPx ?? 0)) / 1080),
       ),
     ),
-    cornerRadiusPx: layout.cornerRadiusPx ?? 0,
-    shadowBlurPx: layout.shadowBlurPx ?? 0,
-    shadowOpacity: layout.shadowOpacity ?? 0.5,
     aspectRatio:
       aspect === "9:16" || aspect === "4:3" || aspect === "1:1" || aspect === "16:9"
         ? aspect
@@ -573,10 +529,7 @@ export function canvasFromLayout(layout: EditLayout): CanvasSettings {
 
 export function cameraFromLayout(layout: EditLayout): CameraBubbleSettings {
   return {
-    borderColor: layout.webcamBorderColor ?? "#6366f1",
-    borderWidth: layout.webcamBorderWidth ?? 0,
     mirror: layout.webcamMirror ?? true,
-    shadow: layout.webcamShadow ?? false,
     autoHide: layout.webcamAutoHide ?? true,
     faceFraming: layout.faceFraming ?? true,
   };
@@ -593,23 +546,13 @@ export function layoutFromSettings(
   return {
     aspectRatio: canvas.aspectRatio,
     paddingPx: 0,
-    backgroundType: canvas.backgroundType,
-    backgroundPreset: canvas.backgroundPreset,
     screenCropLeft: canvas.screenCrop.left,
     screenCropTop: canvas.screenCrop.top,
     screenCropRight: canvas.screenCrop.right,
     screenCropBottom: canvas.screenCrop.bottom,
     screenScalePct: canvas.screenScalePct,
-    colorStart: canvas.colorStart,
-    colorEnd: canvas.colorEnd,
-    cornerRadiusPx: canvas.cornerRadiusPx,
-    shadowBlurPx: canvas.shadowBlurPx,
-    shadowOpacity: canvas.shadowOpacity,
     wallpaperAsset: wallpaperAsset ?? undefined,
-    webcamBorderColor: camera.borderColor,
-    webcamBorderWidth: camera.borderWidth,
     webcamMirror: camera.mirror,
-    webcamShadow: camera.shadow,
     faceFraming: camera.faceFraming,
     cameraClips: current?.cameraClips,
     cursorVisible: canvas.cursorVisible,
@@ -810,42 +753,192 @@ export interface GraphicView {
   variables: Record<string, unknown>;
   declarations: GraphicVariable[];
   render: GraphicRenderState;
-  /** Its own brand kit: null follows the project's default, "none" is no kit. */
-  brand: string | null;
+  /** Its own style: null follows the project's. */
+  style: string | null;
+  /** Graphics look tokens of its own over its style's. */
+  look?: Record<string, string>;
 }
 
-/** An app-level brand kit the graphics take their colours, font and logo from. */
-export interface BrandKit {
+/** A style's graphics look: design tokens every graphic takes (src-tauri graphics/look.rs). */
+export interface GraphicsLook {
+  /** app, calm or bold. */
+  preset: string;
+  /** Multiples of the preset's: type size, corner radius, speed, travel, spacing. */
+  size: number;
+  roundness: number;
+  speed: number;
+  energy: number;
+  density: number;
+  /** Tokens set by hand, by name without `--look-`. */
+  tokens?: Record<string, string>;
+}
+
+export interface ShortsLook {
+  size: number;
+  energy: number;
+  speed: number;
+}
+
+export const DEFAULT_SHORTS_LOOK: ShortsLook = { size: 1.15, energy: 1.25, speed: 1.1 };
+
+export const SHORTS_LOOK_CONTROLS = [
+  { id: "size", label: "Size", hint: "Type sizes at 9:16, times the style's" },
+  { id: "energy", label: "Energy", hint: "How far things travel at 9:16, times the style's" },
+  { id: "speed", label: "Speed", hint: "How fast things come in at 9:16, times the style's" },
+] as const;
+
+/** What bringing one graphic in line with the look changes (src-tauri graphics/restyle.rs). */
+export interface InLinePlan {
+  graphic: string;
   name: string;
-  background: string;
-  text: string;
-  accent: string;
-  /** A font family; empty keeps each graphic's own. */
-  font: string;
-  /** The kit's own font and logo file names. */
-  fontFile: string | null;
-  logo: string | null;
+  stamp: string;
+  changes: string[];
+  /** What stays its own (colours in scripts, colours the kit has nothing close to). */
+  left?: string[];
+}
+
+export const LOOK_CONTROLS = [
+  { id: "size", label: "Size", min: 0.75, max: 1.35, hint: "Type sizes" },
+  { id: "roundness", label: "Roundness", min: 0, max: 2.5, hint: "Corner radii (0 is square)" },
+  { id: "speed", label: "Speed", min: 0.5, max: 2, hint: "How fast things come in" },
+  { id: "energy", label: "Energy", min: 0, max: 2, hint: "How far things travel as they come in (0 only fades)" },
+  { id: "density", label: "Density", min: 0.7, max: 1.4, hint: "Padding, gaps and margins" },
+] as const;
+
+export interface LookPreset {
+  name: string;
+  label: string;
+  description: string;
+}
+
+/** A background a style's frame draws (a project's wallpaper image wins over it). */
+export interface StyleBackground {
+  type: "solid" | "gradient" | "preset";
+  preset: BackgroundPreset;
+  colorStart: string;
+  colorEnd: string;
+}
+
+export interface StyleFont {
+  /** A font family, like Inter; empty is the system's. */
+  family: string;
+  /** The style's own font file, or a full path to copy in when saving. */
+  file?: string | null;
+}
+
+/** How a video looks: brand, graphics, captions, frame and the 9:16 variant (src-tauri style/mod.rs). */
+export interface Style {
+  brand: {
+    colors: { background: string; text: string; accent: string; muted: string };
+    fonts: { title: StyleFont; body: StyleFont };
+    /** The style's own logo file, or a full path to copy in when saving. */
+    logo?: string | null;
+  };
+  graphics: GraphicsLook;
+  captions: {
+    style: CaptionStyle;
+    /** 100 to 900; 0 takes the graphics' title weight. */
+    weight: number;
+    emphasis: boolean;
+    /** Empty takes the brand's accent. */
+    emphasisColor: string;
+    textColor: string;
+    outline: boolean;
+    box: { on: boolean; color: string; opacity: number };
+  };
+  frame: {
+    background: StyleBackground;
+    screen: { cornerRadiusPx: number; shadowBlurPx: number; shadowOpacity: number };
+    camera: { borderColor: string; borderWidth: number; shadow: boolean };
+  };
+  portrait: {
+    graphics: ShortsLook;
+    /** Absent keeps the captions' own. */
+    captionStyle?: CaptionStyle | null;
+    /** Absent keeps the frame's. */
+    background?: StyleBackground | null;
+  };
+}
+
+export interface StyleView {
+  name: string;
+  builtin: boolean;
+  style: Style;
+  folder: string | null;
   logoPath: string | null;
+}
+
+export interface StylesView {
+  styles: StyleView[];
+  /** The open project's style. */
+  projectStyle: string | null;
+  lookPresets: LookPreset[];
+  tokenNames: string[];
+  backgrounds: BackgroundPreset[];
+  /** The project's graphics with a style or tokens of their own: [name, style, tokens]. */
+  own: [string, string | null, string[]][];
   folder: string;
 }
 
-/** A kit to save: `logo`/`fontFile` are the kit's own file (kept), a full path to copy, or null. */
-export interface BrandKitInput {
+/** What the app and the agent do for one kind of video (src-tauri preset/mod.rs). */
+export interface Preset {
+  description: string;
+  /** The style a project made with it wears. */
+  style: string;
+  /** Edit settings by part (layout, captions, zoomSettings, audio, layouts): only what differs from the app's. */
+  values: Record<string, Record<string, unknown>>;
+  /** What a new short starts with. */
+  short: Record<string, unknown>;
+  /** The choices the agent's method asks about (cleanup, review depth, graphics, export). */
+  choices: Record<string, unknown>;
+}
+
+export interface PresetView {
+  name: string;
+  builtin: boolean;
+  preset: Preset;
+  /** The agent's steps (Markdown). */
+  method: string;
+  /** The user's own rules for this kind of video (Markdown). */
+  rules: string;
+  folder: string | null;
+}
+
+/** A setting's part of the edit, as presets name them. */
+export type PresetPart = "layout" | "captions" | "zoomSettings" | "audio" | "layouts" | "cleanup" | "export";
+
+export interface PresetsView {
+  presets: PresetView[];
+  projectPreset: string | null;
+  shortsPreset: string | null;
+  /** What the open project changed from its preset, by part (its own files and clips left out). */
+  changes: Partial<Record<PresetPart, Record<string, unknown>>>;
+  changed: number;
+  /** The preset's value of every setting, by part. */
+  inherited: Partial<Record<PresetPart, Record<string, unknown>>>;
+  folder: string;
+}
+
+export interface PresetInput {
   name: string;
   previous?: string | null;
-  background: string;
-  text: string;
-  accent: string;
-  font: string;
-  fontFile: string | null;
-  logo: string | null;
+  preset: Preset;
+  method: string;
+  rules: string;
 }
 
-export interface BrandsView {
-  kits: BrandKit[];
-  /** The open project's default kit (it may have been removed since). */
-  projectDefault: string | null;
-  folder: string;
+/** A style to save: `previous` renames one (a built-in is copied, never changed). */
+export interface StyleInput {
+  name: string;
+  previous?: string | null;
+  style: Style;
+}
+
+export interface LookStill {
+  assetId: string;
+  name: string;
+  /** A PNG data URL. */
+  image: string;
 }
 
 /** A graphic saved to the app's library to use in other projects. */
@@ -926,7 +1019,7 @@ export interface GraphicLibrarySaved {
 }
 
 /** Where a graphic plays in a short. */
-export type GraphicSlot = "full" | "camera" | "screen" | "overScreen";
+export type GraphicSlot = "full" | "camera" | "screen" | "overScreen" | "overFace";
 
 export interface GraphicListed extends GraphicView {
   /** [clip id, start, length] on the timeline. */
@@ -1016,26 +1109,29 @@ export type SequenceEdit =
   /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
   | { kind: "restoreCuts"; clipIds: string[] };
 
-/** Saved settings any project can take on (src-tauri/src/templates.rs). */
-export interface Template {
-  id: string;
-  name: string;
-  layout: EditLayout;
-  captions: CaptionSettings;
-  zoomSettings: ZoomSettings;
-  /** The video's base layout and how its sections are picked. */
-  base: Layout;
-  pick: PickSettings;
-  graphicsBrand?: string;
-  /** A short's look and base layout; absent when saved without a short. */
-  shortLook?: ShortLayout;
-  shortBase?: Layout;
+/** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
+/** What the cleanup passes start from (src-tauri preset/settings.rs). */
+export interface CleanupSettings {
+  silence: { thresholdDb: number; minDurationMs: number; paddingMs: number };
+  gaps: { minDurationMs: number; paddingMs: number; refineWordEdges: boolean; edgeThresholdDb: number };
+  /** 0 to 1. */
+  mouthNoiseSensitivity: number;
 }
 
-/** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
+/** What the Export dialog starts with. */
+export interface ExportPreferences {
+  resolution: string;
+  fps: number;
+  quality: "standard" | "high" | "max" | "custom";
+  mbps: number;
+}
+
 export interface OpenedProject {
   projectHandle: string;
   revision: number;
+  /** From the project's preset unless changed here. */
+  cleanup?: CleanupSettings;
+  export?: ExportPreferences;
   name: string;
   projectPath?: string;
   /** Where the timeline ends. */
@@ -1048,6 +1144,9 @@ export interface OpenedProject {
   previewAvailable: boolean;
   undoAvailable: boolean;
   redoAvailable: boolean;
+  /** What undo and redo would take back or bring back, e.g. "Cut 12.3 s". */
+  undoLabel?: string;
+  redoLabel?: string;
   zooms?: ProjectZoom[];
   dismissedZoomIds?: string[];
   layout?: EditLayout;
@@ -1072,6 +1171,10 @@ export interface CaptionCueView {
   text: string;
   wordIds: string[];
   wordStartsUs: number[];
+  /** Its word drawn in the accent, when one is picked. */
+  emphasis?: string;
+  /** A graphic fills the frame over some of it; the caption gives way there. */
+  underGraphic?: boolean;
 }
 
 export interface CaptionTrackView {
@@ -1086,7 +1189,8 @@ export type CaptionEdit =
   | { kind: "retime"; wordIds: string[]; startUs: number; endUs: number }
   | { kind: "split"; wordId: string }
   | { kind: "merge"; wordId: string }
-  | { kind: "hide"; wordIds: string[]; hidden: boolean };
+  | { kind: "hide"; wordIds: string[]; hidden: boolean }
+  | { kind: "emphasis"; wordIds: string[]; on: boolean };
 
 /** A span of the edited timeline. */
 export interface EditedSpan {
@@ -1261,6 +1365,9 @@ export interface ExportFailure {
 
 export type ExportQuality = "standard" | "high" | "max";
 
+/** The edit's other files: subtitles, the transcript, the sound alone. */
+export type ExportFileKind = "srt" | "vtt" | "txt" | "md" | "wav";
+
 export interface ExportSettings {
   videoCodec: "h264";
   audioCodec: "aac";
@@ -1288,6 +1395,18 @@ export interface ExportStatus {
   outputPath: string | null;
   failure: ExportFailure | null;
   diagnostics: string[];
+  /** What it does before the frames (rendering a graphic), and how far along that is. */
+  stage?: string | null;
+  stageFraction?: number | null;
+  /** Its log so far. */
+  log?: ExportLogLine[];
+}
+
+export interface ExportLogLine {
+  /** Seconds since the export started. */
+  secs: number;
+  level: "info" | "warn" | "error";
+  text: string;
 }
 
 export interface SegmentSummary {
@@ -1312,7 +1431,8 @@ export interface SegmentPage {
 export type TranscriptProvider = "parakeet" | "elevenlabs" | "openrouter";
 
 /** What is spoken. Greek is transcribed online only (Scribe or Scribe via OpenRouter). */
-export type TranscriptLanguage = "en" | "el";
+/** What is spoken: `auto` lets the online transcriber detect it. */
+export type TranscriptLanguage = "auto" | "en" | "el";
 
 /** Which Parakeet transcribes English: the most accurate words, or every um and stutter. */
 export type ParakeetModel = "unified" | "verbatim";
@@ -1324,8 +1444,6 @@ export interface TranscriptSettings {
   scribeModel: string;
   keyterms: string[];
   parakeetModelDir: string;
-  /** Align word times to the audio after transcribing, when the model is downloaded. */
-  alignWords: boolean;
 }
 
 export interface TranscriptSettingsView {
@@ -1348,19 +1466,6 @@ export interface TranscriptSettingsView {
   gpuPackBytes: number;
   /** Why the GPU is not in use, once a model tried it. */
   gpuProblem: string | null;
-  /** Word alignment runs in this build (it shares Parakeet's ONNX Runtime). */
-  alignerAvailable: boolean;
-  alignerModelPresent: boolean;
-  alignerModelDir: string;
-  alignerModelBytes: number;
-}
-
-/** What word alignment did to a transcript. */
-export interface TranscriptAlignment {
-  model: string;
-  version: number;
-  alignedWords: number;
-  keptWords: number;
 }
 
 export interface TranscriptViewWord {
@@ -1391,8 +1496,6 @@ export interface TranscriptView {
   createdAt: string;
   revision: number;
   words: TranscriptViewWord[];
-  /** Set once the word times were aligned to the audio. */
-  alignment?: TranscriptAlignment | null;
 }
 
 export interface TranscriptRunResult {
@@ -1461,10 +1564,13 @@ export interface ProposalBatch {
   reason: string;
   createdAt: string;
   baseRevision: number;
-  /** `action`: one of the app's own actions the agent ran, applied at once. */
-  kind: "cuts" | "edits" | "action";
+  /** `action`: one of the app's own actions the agent ran, applied at once; `under`: footage,
+   *  graphics and files under a take short. */
+  kind: "cuts" | "edits" | "under" | "restyle" | "action";
   /** For an action: which (`silence`, `fillers`, ...). */
   action?: string;
+  /** For `under`: the take short it goes under. */
+  short?: string;
   status: ProposalStatus;
   decidedAt?: string;
   /** Accepted by autopilot. */
@@ -1487,8 +1593,59 @@ export interface ProposalsView {
   revision: number;
   /** Newest first. */
   batches: ProposalBatch[];
+  /** The newest agent run still in the undo history, to undo as one step. */
+  lastRun?: AgentRun;
   /** A change was made but the Agent panel's history could not be saved. */
   warning?: string;
+}
+
+/** The History popover: checkpoints and recent steps, newest first. */
+export interface HistoryView {
+  projectHandle: string;
+  checkpoints: HistoryCheckpoint[];
+  steps: HistoryStep[];
+}
+
+export interface HistoryCheckpoint {
+  id: string;
+  name: string;
+  by: "user" | "agent";
+  agent?: string;
+  /** Saved by the app before an agent run (the newest few are kept). */
+  auto: boolean;
+  at: string;
+  graphics: number;
+}
+
+export interface HistoryStep {
+  label: string;
+  by: "user" | "agent";
+  agent?: string;
+  at: string;
+  /** Undone: Redo brings it back. */
+  undone: boolean;
+}
+
+export interface CheckpointRestoreOutcome {
+  project: OpenedProject;
+  proposals: ProposalsView;
+  history: HistoryView;
+  message: string;
+}
+
+/** Everything one agent changed in one go (since its last template call, with no change of yours between). */
+export interface AgentRun {
+  agent: string;
+  /** Its steps still in the undo history. */
+  changes: number;
+  startedAt: string;
+  endedAt: string;
+  /** Nothing came after it, so it can be undone as one step. */
+  canUndo: boolean;
+  /** It was undone as one step; Undo brings it back while nothing came after. */
+  undone: boolean;
+  /** Why it cannot: the changes made after it. */
+  blockedBy?: string;
 }
 
 export interface ProposalOutcome {
@@ -1533,40 +1690,6 @@ export interface CheckReport {
   findings: CheckFinding[];
 }
 
-/** One scene of a storyboard (`mcp/storyboard.rs`), numbered from 1 as on the sheet. */
-export interface StoryboardTile {
-  n: number;
-  from: string;
-  to: string;
-  fromUs: number;
-  toUs: number;
-  /** The moment the tile's frame shows. */
-  atUs: number;
-  kind: string;
-  /** The zoom in the frame. */
-  zoom?: number;
-  /** Zooms starting within the tile. */
-  zooms?: number;
-  graphic?: string;
-  chapter?: string;
-  say?: string;
-}
-
-/** A contact sheet of the edit, a tile per scene, in rows of `cols` tiles. */
-export interface Storyboard {
-  /** The sheet as a PNG data URL. */
-  image: string;
-  width: number;
-  height: number;
-  cols: number;
-  gap: number;
-  tileWidth: number;
-  /** The frame and its caption strip. */
-  tileHeight: number;
-  revision: number;
-  tiles: StoryboardTile[];
-}
-
 export interface ShortLayout {
   /** Camera clips (by clip id) framed by hand, each placed -1 to 1 each way from the centre.
    *  Every other camera clip is lined up with the face as it starts (zooming in a little when
@@ -1586,11 +1709,6 @@ export interface ShortLayout {
   captionLines: number;
   /** Caption size as a percentage of the short's height; 0 uses the editor's. */
   captionSizePct: number;
-  /** "project" (the video's own background), "solid", "gradient", "preset" or "wallpaper". */
-  backgroundType: "project" | "solid" | "gradient" | "preset" | "wallpaper";
-  backgroundColorStart: string;
-  backgroundColorEnd: string;
-  backgroundPreset: string;
   /** Where each graphic plays, by clip id; one not listed plays full frame. */
   graphicSlots?: Record<string, GraphicSlot>;
 }
@@ -1659,7 +1777,18 @@ export interface Footage {
   videoUs: number;
   /** Its game or desktop sound, ducked under the voice; default on. */
   sound?: boolean;
+  /** An imported file instead of the video (`videoUs` is then where in the file). */
+  media?: string;
+  /** How fast it plays, 0.25 to 4 (default 1): what it takes from the video is the gap times this. */
+  speed?: number;
 }
+
+/** Where a graphic placed under a take comes from. */
+export type ShortGraphicFrom =
+  | { kind: "template"; template: string; name?: string | null; variables?: Record<string, unknown> }
+  | { kind: "library"; id: string }
+  /** A copy of one of the video's graphics, its text changeable apart from the video's. */
+  | { kind: "video"; graphic: string };
 
 export type FootageChange =
   | { op: "add"; items: Footage[] }
@@ -1692,11 +1821,15 @@ export interface McpActivity {
 
 /** A call an agent is waiting on. */
 export interface McpWorking {
+  /** What `mcpStopCall` takes. */
+  id: number;
   client: string | null;
   tool: string;
   /** 0 to 1, once the call has said. */
   fraction: number | null;
   message: string | null;
+  /** Asked to stop, and not finished yet. */
+  stopping: boolean;
 }
 
 /** An agent app AeroEdits can add itself to. */

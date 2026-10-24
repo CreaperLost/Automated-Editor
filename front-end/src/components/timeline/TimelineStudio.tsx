@@ -18,14 +18,12 @@ import {
   Magnet,
   Mic,
   Monitor,
-  MonitorPlay,
   Music,
   Plus,
   RotateCcw,
   Scissors,
   Trash2,
   Unlink,
-  Video,
   Volume2,
   VolumeX,
   X,
@@ -95,6 +93,9 @@ import { useLayoutLane } from "./useLayoutLane";
 /** The playhead now, read when needed: the timeline itself does not re-render as it moves. */
 const nowUs = () => useProjectStore.getState().currentTimeUs;
 
+/** Waveforms being read now (`<project handle>\n<sound>`), so each is asked for once. */
+const waveformReads = new Set<string>();
+
 /**
  * Something drawn at the playhead. Only this re-renders as the playhead moves, not the
  * timeline with all its clips.
@@ -153,7 +154,9 @@ function rowBoxes(): RowBox[] {
  * long timeline, tens of ms a pointer move).
  */
 function rowAtPoint(boxes: RowBox[], x: number, y: number): Row | null {
-  const hit = boxes.find(({ rect }) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom);
+  const inside = ({ rect }: RowBox) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+  // A new-track row is drawn over the lane above the video tracks, so it wins where they overlap.
+  const hit = boxes.find((box) => box.row.kind === "new" && inside(box)) ?? boxes.find(inside);
   return hit?.row ?? null;
 }
 
@@ -551,10 +554,11 @@ export const TimelineStudio: React.FC = () => {
   const [editing, setEditing] = useState(false);
   const suppressClick = useRef(false);
 
+  // A range belongs to the timeline it was made on: another project's, or another short's.
   useEffect(() => {
     setRange(null);
     setEditError(undefined);
-  }, [openedProject?.projectHandle]);
+  }, [openedProject?.projectHandle, openedProject?.shortView]);
   useEffect(() => {
     setRange((current) => (current && current.endUs > durationUs ? null : current));
   }, [openedProject?.revision, durationUs]);
@@ -652,6 +656,13 @@ export const TimelineStudio: React.FC = () => {
   };
   const snapUs = () => (pxPerUs > 0 ? SNAP_PX / pxPerUs : 0);
   const view: TimelineView = { durationUs: spanUs, pxPerUs, nowUs, pct, clientXToUs, snapUs, seekToUs };
+  // The time drawn: the visible stretch with half a view or more either side (all of it
+  // before the timeline has a size).
+  const drawnUs = (() => {
+    if (!(pxPerUs > 0) || viewportPx <= 0) return { from: 0, to: Number.MAX_SAFE_INTEGER };
+    const fromPx = (windowStep - 1) * (viewportPx / 2);
+    return { from: Math.max(0, fromPx / pxPerUs), to: (fromPx + viewportPx * 2.5) / pxPerUs };
+  })();
 
   const zoomTimeline = (factor: number, anchor?: { timeUs: number; offsetPx: number }) => {
     const next = Math.min(MAX_TIMELINE_ZOOM, Math.max(MIN_TIMELINE_ZOOM, timelineZoom * factor));
@@ -958,28 +969,6 @@ export const TimelineStudio: React.FC = () => {
   const restoreCut = useRef((_clipId: string) => {});
   restoreCut.current = (clipId) => void edit({ kind: "restoreCuts", clipIds: [clipId] });
 
-  // ---- Layouts over the selection ------------------------------------------------------------
-  const hasCamera = useMemo(
-    () =>
-      (openedProject?.sequence.tracks ?? [])
-        .filter((t) => t.kind === "video")
-        .some((track) => track.clips.some((c) => clipRole(openedProject, track, c) === "webcam")),
-    [openedProject],
-  );
-  /** The camera alone over the selection, or the base kept there. */
-  const layoutOverSelection = (cameraOnly: boolean) => {
-    if (!selection) return;
-    void runEdit((project) =>
-      api.projectLayoutsChange(project.projectHandle, project.revision, project.shortView ?? null, {
-        op: "add",
-        startUs: selection.startUs,
-        endUs: selection.endUs,
-        layout: cameraOnly ? { kind: "cameraOnly", sizePct: 100, punchIn: 1 } : null,
-        name: cameraOnly ? "Camera only" : null,
-      }),
-    );
-  };
-
   // ---- Lanes on top: captions and zooms ------------------------------------------------------
   const zooms = useZoomLane({
     view,
@@ -1007,7 +996,7 @@ export const TimelineStudio: React.FC = () => {
     suppressClick,
     hint,
   });
-  const soundEffects = useSoundEffectsLane({ view, onError: setEditError });
+  const soundEffects = useSoundEffectsLane({ view, drawn: drawnUs, onError: setEditError });
   const layoutLane = useLayoutLane({ view });
 
   // ---- Keyboard -----------------------------------------------------------------------------
@@ -1129,20 +1118,26 @@ export const TimelineStudio: React.FC = () => {
     }
     return keys;
   }, [openedProject?.revision, openedProject?.projectHandle, openedProject?.shortView]);
+  // Only the sounds themselves, so an edit that keeps them asks for nothing.
+  const soundList = [...soundKeys.keys()].sort().join("\n");
   useEffect(() => {
-    if (!openedProject) return;
-    let active = true;
-    for (const key of soundKeys.keys()) {
-      if (waveforms[key]) continue;
+    const handle = openedProject?.projectHandle;
+    if (!handle || !soundList) return;
+    for (const key of soundList.split("\n")) {
+      if (useProjectStore.getState().waveforms[key]) continue;
+      const id = `${handle}\n${key}`;
+      if (waveformReads.has(id)) continue;
+      waveformReads.add(id);
+      // Kept whenever the project is still open, even if the timeline asked again meanwhile.
       void api
-        .projectWaveformOverview(openedProject.projectHandle, key)
-        .then((overview) => active && setWaveform(key, overview))
-        .catch((err) => console.warn("[Timeline] Waveform failed:", err));
+        .projectWaveformOverview(handle, key)
+        .then((overview) => {
+          if (useProjectStore.getState().openedProject?.projectHandle === handle) setWaveform(key, overview);
+        })
+        .catch((err) => console.warn("[Timeline] Waveform failed:", err))
+        .finally(() => waveformReads.delete(id));
     }
-    return () => {
-      active = false;
-    };
-  }, [openedProject?.projectHandle, soundKeys]);
+  }, [openedProject?.projectHandle, soundList]);
 
   // ---- Dragging clips: move (along and between tracks) or trim an edge -----------------------
   const dragRef = useRef<ClipDrag | null>(null);
@@ -1525,36 +1520,43 @@ export const TimelineStudio: React.FC = () => {
       />
     );
   };
-  const addTrackButton = (audio: boolean) => (
-    <div key={audio ? "add-audio" : "add-video"} className="px-2 flex items-center" style={{ height: NEW_TRACK_ROW_PX }}>
-      <Button
-        size="sm"
-        variant="ghost"
-        icon={Plus}
+  // Small "kind icon +" buttons on the Tracks heading.
+  const addTrackButton = (audio: boolean) => {
+    const KindIcon = audio ? AudioLines : Film;
+    return (
+      <button
+        type="button"
         disabled={!openedProject || editing || (audio ? audioTracks : videoTracks).length >= 16}
         onClick={() => void edit({ kind: "addTrack", trackKind: audio ? "audio" : "video" })}
-        className="text-studio-400"
+        className="h-6 px-1.5 inline-flex items-center gap-0.5 rounded text-studio-400 hover:text-studio-100 hover:bg-studio-800 disabled:opacity-40 disabled:pointer-events-none"
         title={audio ? "Add an audio track below the others" : "Add a video track above the others: it draws over the ones below"}
+        aria-label={audio ? "Add audio track" : "Add video track"}
       >
-        {audio ? "Add audio track" : "Add video track"}
-      </Button>
-    </div>
-  );
+        <KindIcon className="w-3.5 h-3.5" />
+        <Plus className="w-3 h-3" />
+      </button>
+    );
+  };
+  // Header spacer matching the audio lanes' drop-for-a-new-track row; both show only while
+  // dragging. The video one is drawn over the lane above it and takes no room.
+  const newTrackSpacer = (audio: boolean) =>
+    audio && dragKinds?.audio && <div key="add-audio" style={{ height: NEW_TRACK_ROW_PX }} />;
 
   // ---- Lanes ---------------------------------------------------------------------------------
   const newTrackRow = (audio: boolean) => {
     const shown = audio ? dragKinds?.audio : dragKinds?.video;
+    if (!shown) return null;
     return (
       <div
         key={audio ? "new-audio" : "new-video"}
         data-track-row={audio ? "new-audio" : "new-video"}
-        className={cn(
-          "relative rounded-md flex items-center px-2 text-meta transition-colors",
-          shown ? "border border-dashed border-accent/60 bg-accent/5 text-studio-300" : "border border-transparent text-transparent",
-        )}
-        style={{ height: NEW_TRACK_ROW_PX }}
+        className={`relative rounded-md flex items-center px-2 text-meta border border-dashed border-accent/60 text-studio-300 ${audio ? "bg-accent/5" : "z-20 bg-studio-900"}`}
+        // Above the video tracks it covers the bottom of the lane above instead of pushing the
+        // tracks down: they would move under the pointer as a drag starts, and a small nudge of a
+        // clip on the top track would drop it on a new track.
+        style={audio ? { height: NEW_TRACK_ROW_PX } : { height: NEW_TRACK_ROW_PX, marginTop: -NEW_TRACK_ROW_PX }}
       >
-        <span className="pointer-events-none truncate">{shown ? `Drop here for a new ${audio ? "audio" : "video"} track` : ""}</span>
+        <span className="pointer-events-none truncate">{`Drop here for a new ${audio ? "audio" : "video"} track`}</span>
         {ghostsOn({ kind: "new", audio })}
       </div>
     );
@@ -1602,13 +1604,6 @@ export const TimelineStudio: React.FC = () => {
     );
   };
 
-  // The time drawn: the visible stretch with half a view or more either side (all of it
-  // before the timeline has a size).
-  const drawnUs = (() => {
-    if (!(pxPerUs > 0) || viewportPx <= 0) return { from: 0, to: Number.MAX_SAFE_INTEGER };
-    const fromPx = (windowStep - 1) * (viewportPx / 2);
-    return { from: Math.max(0, fromPx / pxPerUs), to: (fromPx + viewportPx * 2.5) / pxPerUs };
-  })();
   /** The clips of a track (in order) that overlap the drawn time, with their positions. */
   const inView = (clips: Clip[]) => {
     let lo = 0;
@@ -1740,26 +1735,6 @@ export const TimelineStudio: React.FC = () => {
           </Button>
         )}
 
-        <ToolbarDivider />
-        <Button
-          variant="ghost"
-          icon={Video}
-          disabled={!openedProject || editing || !selection || !hasCamera}
-          onClick={() => layoutOverSelection(true)}
-          title="Show the camera alone over the selection (a layout section; more layouts in the inspector's Layouts)"
-        >
-          Camera only
-        </Button>
-        <Button
-          variant="ghost"
-          icon={MonitorPlay}
-          disabled={!openedProject || editing || !selection}
-          onClick={() => layoutOverSelection(false)}
-          title="Show the base layout over the selection, and keep picked layouts away from it"
-        >
-          Base layout
-        </Button>
-
         <span className="flex-1 min-w-2" />
         {(pendingCount > 0 || zoomDiagnostics.length > 0 || persistedCount > 0) && (
           <Badge tone="zoom" className="hidden xl:inline-flex" title="Review and change zooms on the Zooms track or in the Zoom panel">
@@ -1829,16 +1804,20 @@ export const TimelineStudio: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
         <div className="flex min-h-full">
           <div className="w-64 shrink-0 flex flex-col border-r border-studio-800 bg-studio-900">
-            <div className="h-8 shrink-0 border-b border-studio-800 px-3 flex items-center text-meta font-semibold uppercase tracking-wide text-studio-500">Tracks</div>
+            <div className="h-8 shrink-0 border-b border-studio-800 pl-3 pr-1.5 flex items-center text-meta font-semibold uppercase tracking-wide text-studio-500">
+              <span className="flex-1">Tracks</span>
+              {addTrackButton(false)}
+              {addTrackButton(true)}
+            </div>
             <div className="flex-1 space-y-2 py-2">
               {captions.header}
               {zooms.header}
               {layoutLane.header}
-              {addTrackButton(false)}
+              {newTrackSpacer(false)}
               {[...videoTracks].reverse().map(trackHeader)}
               {audioTracks.map(trackHeader)}
               {soundEffects.header}
-              {addTrackButton(true)}
+              {newTrackSpacer(true)}
             </div>
           </div>
 

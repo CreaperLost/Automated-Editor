@@ -1,12 +1,22 @@
 import React, { useEffect, useState } from "react";
-import { CheckCircle2, Download, Film, FolderOpen, X, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, Download, Film, FolderOpen, X, XCircle } from "lucide-react";
 import { api, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { FILE_MANAGER } from "../../lib/projectActions";
+import { useProjectStore } from "../../stores/projectStore";
+import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { CheckPanel } from "./CheckPanel";
-import { StoryboardPanel } from "./StoryboardPanel";
+import { ExportLog } from "./ExportLog";
 import { Button, IconButton, Segmented, cn } from "../ui";
-import type { ExportQuality, ExportSettings, ExportStatus } from "../../lib/types";
+import type {
+  ExportFileKind,
+  ExportPreferences,
+  ExportQuality,
+  ExportSettings,
+  ExportStatus,
+  OpenedProject,
+} from "../../lib/types";
+import { PresetMarks } from "../presets/PresetMarks";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
 const RESOLUTIONS = [
@@ -22,35 +32,36 @@ const QUALITIES: { key: ExportQuality | "custom"; label: string; hint: string }[
   { key: "max", label: "Max", hint: "Near lossless. Large files." },
   { key: "custom", label: "Bitrate", hint: "Set the average video bitrate yourself." },
 ];
+const OTHER_FILES: { kind: ExportFileKind; label: string; hint: string }[] = [
+  { kind: "srt", label: "SRT", hint: "Subtitles for YouTube and most players" },
+  { kind: "vtt", label: "VTT", hint: "Subtitles for the web (WebVTT)" },
+  { kind: "md", label: "Transcript", hint: "The words as Markdown, chapters as headings" },
+  { kind: "txt", label: "Text", hint: "The words as plain text" },
+  { kind: "wav", label: "Audio", hint: "The sound alone, as a WAV file" },
+];
 const MIN_MBPS = 1;
 const MAX_MBPS = 200;
-const STORAGE_KEY = "aeroedits.exportPreferences";
 
-interface ExportPreferences {
-  resolution: string;
-  fps: number;
-  quality: ExportQuality | "custom";
-  mbps: number;
-}
+const DEFAULT_PREFERENCES: ExportPreferences = { resolution: "1080p", fps: 60, quality: "high", mbps: 16 };
 
-const DEFAULT_PREFERENCES: ExportPreferences = { resolution: "1080p", fps: 30, quality: "high", mbps: 16 };
+/** The export page's three buttons. Settings that fit none of them are shown under Advanced. */
+const TIERS = [
+  { key: "medium", label: "Medium", detail: "1080p · 60 fps · normal quality", prefs: { resolution: "1080p", fps: 60, quality: "high" } },
+  { key: "high", label: "High", detail: "1080p · 60 fps · max quality", prefs: { resolution: "1080p", fps: 60, quality: "max" } },
+  { key: "ultra", label: "Ultra", detail: "4K · 60 fps · max quality", prefs: { resolution: "4K", fps: 60, quality: "max" } },
+] as const;
 
-function loadPreferences(): ExportPreferences {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null");
-    if (stored && typeof stored === "object") return { ...DEFAULT_PREFERENCES, ...stored };
-  } catch {
-    // Storage can be unavailable; the defaults still work.
-  }
-  return DEFAULT_PREFERENCES;
-}
+const tierOf = (p: ExportPreferences) =>
+  TIERS.find((t) => t.prefs.resolution === p.resolution && t.prefs.fps === p.fps && t.prefs.quality === p.quality);
 
-function savePreferences(preferences: ExportPreferences) {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
-  } catch {
-    // Not remembering the choice is harmless.
-  }
+/** Keeps the choices as `project`'s export settings (its preset's unless changed here). */
+function savePreferences(project: OpenedProject, preferences: ExportPreferences) {
+  if (JSON.stringify(project.export) === JSON.stringify(preferences)) return;
+  if (preferences.mbps < MIN_MBPS || preferences.mbps > MAX_MBPS || !Number.isFinite(preferences.mbps)) return;
+  void api
+    .projectExportSet(project.projectHandle, project.revision, preferences)
+    .then((updated) => useProjectStore.getState().applyOpenedProject(updated))
+    .catch(() => undefined);
 }
 
 /** Mirrors `fit_export_size` in src-tauri/src/project/layout.rs for the size label. */
@@ -94,20 +105,29 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   onCancel,
   onClose,
 }) => {
-  const [preferences, setPreferences] = useState(loadPreferences);
-  const update = (patch: Partial<ExportPreferences>) =>
-    setPreferences((current) => {
-      const next = { ...current, ...patch };
-      savePreferences(next);
-      return next;
-    });
+  const [preferences, setPreferences] = useState<ExportPreferences>(
+    () => useProjectStore.getState().openedProject?.export ?? DEFAULT_PREFERENCES,
+  );
+  // Saved a moment after the last change, to the project it was made in.
+  const { schedule } = useDebouncedSave(500);
+  const update = (patch: Partial<ExportPreferences>) => {
+    const next = { ...preferences, ...patch };
+    setPreferences(next);
+    schedule((project) => savePreferences(project, next));
+  };
+  const tier = tierOf(preferences);
+  // Settings the buttons don't cover (a preset's own, say) open Advanced.
+  const [advanced, setAdvanced] = useState(() => !tierOf(preferences));
 
   const exporting = exportJob?.state === "queued" || exportJob?.state === "running";
   const resolution = RESOLUTIONS.find((r) => r.label === preferences.resolution) ?? RESOLUTIONS[1];
   const custom = preferences.quality === "custom";
   const mbpsValid = Number.isFinite(preferences.mbps) && preferences.mbps >= MIN_MBPS && preferences.mbps <= MAX_MBPS;
-  const progress =
-    exportJob && exportJob.progressDenominator > 0
+  // Before its frames an export renders the graphics: that step's own progress shows then.
+  const preparing = !!exportJob && exportJob.progressNumerator === 0 && exportJob.stageFraction != null;
+  const progress = preparing
+    ? Math.min(1, exportJob.stageFraction ?? 0)
+    : exportJob && exportJob.progressDenominator > 0
       ? Math.min(1, exportJob.progressNumerator / exportJob.progressDenominator)
       : 0;
 
@@ -153,6 +173,24 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       if (url) URL.revokeObjectURL(url);
     };
   }, []);
+
+  // Subtitles, transcript and sound go beside the video, named like it.
+  const projectHandle = useProjectStore((s) => s.openedProject?.projectHandle);
+  const [saving, setSaving] = useState<ExportFileKind>();
+  const [saved, setSaved] = useState<{ path?: string; error?: string }>();
+  const saveFile = async (kind: ExportFileKind) => {
+    if (!projectHandle) return;
+    setSaving(kind);
+    setSaved(undefined);
+    try {
+      const beside = destination ? destination.replace(/\.[^./\\]*$/, "") + `.${kind}` : null;
+      setSaved({ path: await api.exportFile(projectHandle, kind, null, beside) });
+    } catch (err) {
+      setSaved({ error: String(err) });
+    } finally {
+      setSaving(undefined);
+    }
+  };
 
   const field = (label: string, control: React.ReactNode, hint?: React.ReactNode) => (
     <div className="space-y-1.5">
@@ -207,8 +245,59 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               </div>
             </div>
 
+            <PresetMarks part="export" />
+
             {/* The choices */}
             <fieldset disabled={exporting} className="space-y-5 min-w-0 disabled:opacity-60">
+              {field(
+                "Quality",
+                <div role="radiogroup" aria-label="Export quality" className="grid grid-cols-3 gap-2">
+                  {TIERS.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={tier?.key === t.key}
+                      onClick={() => update(t.prefs)}
+                      className={cn(
+                        "rounded-control border px-3 py-2.5 text-left transition-colors",
+                        tier?.key === t.key
+                          ? "border-accent bg-accent/15 text-studio-100"
+                          : "border-studio-700 bg-studio-850 text-studio-300 hover:border-studio-500",
+                      )}
+                    >
+                      <div className="text-body font-medium">{t.label}</div>
+                      <div className="text-meta text-studio-400">{t.detail}</div>
+                    </button>
+                  ))}
+                </div>,
+                tier ? undefined : "Your own settings, under Advanced.",
+              )}
+              {field(
+                "Save to",
+                <div className="flex items-center gap-2">
+                  <span
+                    className="ui-field flex-1 min-w-0 flex items-center truncate font-mono !text-meta select-text"
+                    title={destination}
+                  >
+                    {destination || "Next to the project folder"}
+                  </span>
+                  <Button variant="secondary" icon={FolderOpen} onClick={onChooseDestination}>
+                    Change…
+                  </Button>
+                </div>,
+              )}
+              <button
+                type="button"
+                aria-expanded={advanced}
+                onClick={() => setAdvanced(!advanced)}
+                className="inline-flex items-center gap-1 text-label text-studio-400 hover:text-studio-100"
+              >
+                {advanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                Advanced
+              </button>
+              {advanced && (
+              <div className="space-y-5 border-l border-studio-800 pl-4">
               {field(
                 "Resolution",
                 <Segmented
@@ -231,9 +320,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 />,
               )}
               {field(
-                "Quality",
+                "Encoding",
                 <Segmented
-                  label="Quality"
+                  label="Encoding quality"
                   className="w-full"
                   value={preferences.quality}
                   onChange={(q) => update({ quality: q })}
@@ -266,34 +355,45 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 </label>
               )}
               {field(
-                "Save to",
-                <div className="flex items-center gap-2">
-                  <span
-                    className="ui-field flex-1 min-w-0 flex items-center truncate font-mono !text-meta select-text"
-                    title={destination}
-                  >
-                    {destination || "Next to the project folder"}
-                  </span>
-                  <Button variant="secondary" icon={FolderOpen} onClick={onChooseDestination}>
-                    Change…
-                  </Button>
+                "Other files",
+                <div className="flex flex-wrap gap-2">
+                  {OTHER_FILES.map((file) => (
+                    <Button
+                      key={file.kind}
+                      size="sm"
+                      variant="secondary"
+                      title={file.hint}
+                      disabled={saving !== undefined}
+                      onClick={() => void saveFile(file.kind)}
+                    >
+                      {saving === file.kind ? "Saving…" : file.label}
+                    </Button>
+                  ))}
                 </div>,
+                saved?.error ? (
+                  <span role="alert" className="text-danger-fg">
+                    {saved.error}
+                  </span>
+                ) : saved?.path ? (
+                  <span className="flex items-center gap-2">
+                    <span className="flex-1 min-w-0 truncate font-mono select-text" title={saved.path}>
+                      Saved {saved.path}
+                    </span>
+                    <button type="button" className="shrink-0 underline hover:text-studio-200" onClick={() => void api.showInFinder(saved.path!)}>
+                      Show
+                    </button>
+                  </span>
+                ) : (
+                  "Subtitles and the transcript follow the cuts, as the captions do. Saved beside the video."
+                ),
+              )}
+              </div>
               )}
             </fieldset>
           </div>
 
           <div className="px-6 pb-6">
             <CheckPanel
-              disabled={exporting}
-              onShow={(timeUs) => {
-                seekPlayback(timeUs);
-                onClose();
-              }}
-            />
-          </div>
-
-          <div className="px-6 pb-6">
-            <StoryboardPanel
               disabled={exporting}
               onShow={(timeUs) => {
                 seekPlayback(timeUs);
@@ -317,6 +417,12 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
+              {exporting && exportJob.stage && (
+                <p className="text-meta text-studio-400 truncate" title={exportJob.stage}>
+                  {exportJob.stage}
+                  {preparing ? " (graphics render first)" : ""}
+                </p>
+              )}
               {exportJob.failure && (
                 <p role="alert" className="text-label text-danger-fg">
                   {exportJob.failure.message}
@@ -332,6 +438,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                   </Button>
                 </div>
               )}
+              <ExportLog lines={exportJob.log ?? []} failed={exportJob.state === "failed"} />
             </div>
           )}
         </div>

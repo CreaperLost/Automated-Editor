@@ -3,19 +3,23 @@ import { api, setEditTarget } from "../../lib/ipc";
 import { focusShortPlayback, releaseShortPlayback } from "../../lib/playbackControl";
 import { switchStage } from "../../lib/switchTiming";
 import { useProjectStore } from "../../stores/projectStore";
-import { pickShort, resetShorts, setShortsError, useShortsStore } from "../../stores/shortsStore";
+import { pickShort, resetShorts, setShortKind, setShortsError, useShortsStore, type ShortKind } from "../../stores/shortsStore";
 
 /**
  * While Shorts is the workspace, the picked short is what the window shows and edits: the
  * project store holds its view (so the preview, timeline and inspector work on it), edits go
  * to it and playback plays it. Leaving Shorts puts the whole video back, at its old place.
  */
-export function useShortsWorkspace(active: boolean) {
+export function useShortsWorkspace(kind: ShortKind | null) {
+  const active = kind !== null;
   const handle = useProjectStore((s) => s.openedProject?.projectHandle);
   const revision = useProjectStore((s) => s.openedProject?.revision);
   const shorts = useProjectStore((s) => s.openedProject?.shorts);
   const selectedId = useShortsStore((s) => s.selectedId);
-  const target = active ? pickShort(shorts, selectedId)?.id : undefined;
+  useEffect(() => {
+    if (kind) setShortKind(kind);
+  }, [kind]);
+  const target = kind ? pickShort(shorts, selectedId, kind)?.id : undefined;
 
   // Another project opened, or none: nothing of the old one's shorts carries over.
   const shownHandle = useRef(handle);
