@@ -87,9 +87,9 @@ from the UI. Low priority, but worth knowing when a user asks "what did the agen
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| 55 tools' schemas are sent on every connection: 72,722 characters after the 23 Oct trim; a further cut would mean shorter descriptions or on-demand schemas | Code: `mcp/mod.rs` `lean` | [AGT-4](roadmap.md#agt-4) |
+| Clients without tool search are sent the whole tool list: 30 tools, 41,240 characters (about 16k tokens) since 24 Oct; Claude Code with `ToolSearch` pays only the names | Measured 24 Oct (roadmap Done) | [COST-2](roadmap.md#cost-2) |
 | No readiness report without a project (versions, runtimes, why something is unavailable); "not connected", "no project", "runtime missing" and "failed" look alike | Log; research: Resolve, Premiere MCPs | [AGT-4](roadmap.md#agt-4) |
-| No long-job contract: progress exists, cancellation and resumable analysis don't | Code: actions dispatch blocking work with a progress callback | [AGT-4](roadmap.md#agt-4) |
+| No resumable analysis: progress and stopping a call exist (24 Oct), resuming a stopped job doesn't | Code: actions dispatch blocking work with a progress callback | [AGT-4](roadmap.md#agt-4) |
 | No per-run report of time and cost (0 matches for `cost|usd|token_usage` in `src/ai`) | Code | [EVAL-1](roadmap.md#eval-1) |
 | `proposals_list` reports a rejection but not the user's reason | Code | [NOTE-1](roadmap.md#note-1) |
 | API keys are out of the agent's reach by design, so in a fresh setup `transcribe`, `fillers`, `chapters` and `shorts` depend on state the agent can't fix. Keep it that way; `status`/readiness must say so plainly | Code | [AGT-4](roadmap.md#agt-4) |

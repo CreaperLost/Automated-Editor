@@ -1,22 +1,13 @@
 # Preset: Tutorial
 
-A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, the webcam and zooms
-where they help, no captions, chapters at the end. Run the steps in order, with one line to the
-user after each action.
+A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, zooms where they
+help, no captions, chapters at the end. Run the steps in order, with one line to the user after
+each action.
 
 <!-- steps -->
-Two ways to run it:
-
-- **Step by step (the default).** Before each cleanup pass, show its dry run and get the
-  user's OK.
-- **Automatic**, when the user says so ("do it automatically", "auto", "no questions",
-  "same as last time"), at the start or at any point. You then make each choice yourself: the
-  preset's choices if there are any, otherwise the defaults below. You still run each pass's dry
-  run first, report one line per pass, and stop to ask when a result looks wrong (see step 4).
-  Export still waits for the user's go.
-
-And two depths of review, asked once per video with the first questions (automatic: the saved
-answer, else fast):
+Step by step by default; automatic (the rules' Automatically) when the user says so, at the
+start or at any point ("same as last time" too). Two depths of review, the choices' `review`
+(asked with the first questions only when the choices have none; automatic: fast):
 
 - **Fast (the default).** The cleanup passes and their reviews only look where the rules
   flagged something (an um, a "so", a phrase said twice). Quick and cheap, but a sentence the
@@ -26,10 +17,8 @@ answer, else fast):
   that matters. Ask: "Review: fast / thorough (reads every word and checks the joins, slower)".
 <!-- /steps -->
 <!-- auto -->
-You are running it automatically: make each choice yourself (the preset's choices, else the
-defaults below), report one line per pass, stop and ask when a pass says "Not applied" or a
-result looks wrong (step 4). The review is fast unless the choices say thorough. Export
-still waits for the user's go.
+You are running it automatically (the rules' Automatically); also stop and ask when a result
+looks wrong (step 4). The review is fast unless the choices say thorough.
 <!-- /auto -->
 
 ## 1. Project (automatic)
@@ -38,19 +27,20 @@ still waits for the user's go.
   Otherwise work on the open project.
 - `status`. Tell the user the length and what the recording has.
 
-## 2. Transcription (ask)
+## 2. Transcription (automatic)
 
 - `scan` gives an overview: the microphones, cameras and mouse data. Tell the user what the
   recording has in a line or two.
 - Don't ask the language: `transcribe` (default `provider: auto`) runs online with Scribe,
   which detects it (English, Greek, ...), ElevenLabs first and OpenRouter when ElevenLabs has
-  no key or credits. Its answer says what it heard; the later passes follow it. Use
-  `provider: parakeet` (on this computer, free, English only) only when the user asks for a
-  local or free transcription of an English video.
+  no key or credits; the later passes follow what it heard. Use `provider: parakeet` (on this computer, free, English only) only when the user asks
+  for a local or free transcription of an English video.
 <!-- steps -->
-- With these questions, ask the review depth: fast (default) or thorough (see the top).
-- Two or more microphones: ask which to transcribe: the presenter's (default), or all of
-  them (needed to cut gaps between words across all of them).
+- Only when the choices have no `review`: ask the review depth, fast (default) or thorough
+  (see the top).
+- Two or more microphones, and the choices' `silence.microphones` unset: ask which to
+  transcribe: the presenter's (default), or all of them (needed to cut gaps between words
+  across all of them).
 <!-- /steps -->
 - `transcribe` (with `stream` for each microphone). It can take a few minutes, so tell the
   user, and pass on the language it heard.
@@ -58,21 +48,17 @@ still waits for the user's go.
 ## 3. Cleanup, one pass at a time
 
 The passes below, in this order: each changes what the next finds (muted noises count as
-silence; cut silence changes the gaps), so each is measured right before it runs.
+silence; cut silence changes the gaps), so each is measured right before it runs. A pass the
+choices hold runs as set (or is skipped), the gap pass and zooms included.
 <!-- steps -->
-For every pass:
-
-1. Dry run: the action with `apply: false` and the default (or saved) settings.
-2. Ask one question with its numbers and choices, default first, for example: "Silence
-   (balanced): 112 pauses, 1:42 in all, 12:04 → 10:22. Cut? yes / gentler / tighter / skip".
-   Always offer "do the rest automatically". If the user picks other settings, dry-run those
-   and ask again in one line, unless they said to just do it.
-3. Run the pass with the chosen settings, then one line: what it did, length before → after.
+For every other pass, the rules' one pass at a time, asked like "Silence (balanced): 112
+pauses, 1:42 in all, 12:04 → 10:22. Cut? yes / gentler / tighter / skip", always offering "do
+the rest automatically". Other settings picked: dry-run those and ask again in one line, unless
+they said to just do it.
 <!-- /steps -->
 
-Automatic: step 3 only, with the preset's choices or the defaults and `guard: true` on
-`mouth_noises`, `silence` and `fillers` (the app checks section 4's first and last rules and
-applies nothing when one fails); layouts and zooms apply directly.
+Automatic: `guard: true` on `mouth_noises`, `silence` and `fillers` applies nothing that fails
+section 4's first or last rule; layouts and zooms apply directly.
 
 The passes:
 
@@ -108,11 +94,12 @@ The passes:
      with `review: "thorough"` instead. Then dry-run `fillers` the same way.
    Choices: yes / fillers only (`kinds: ["filler"]`) / skip. Then `fillers`. When the user
    wants nothing sent to OpenRouter, use `review: local`.
-5. **Layouts** (only with a camera; `scan` says how many): first, the base layout: keep the
-   camera bubble (default) / side by side / no camera (`layouts` `op: base` with `layout`
-   "Side by side" or "Screen only"). Then **picked sections**: `layouts` `op: pick` with
-   `apply: false` first (the camera alone where the speaker talks and the mouse rests:
-   sections and their total). Choices: yes (`op: pick`) / skip.
+5. **Layouts: only when the user talks about layouts or the camera.** Otherwise skip this pass
+   and don't mention it. When they do (`layouts` is behind `more`): the base layout, keep the camera bubble (default) / side
+   by side / no camera (`layouts` `op: base` with `layout` "Side by side" or "Screen only");
+   **picked sections**, `layouts` `op: pick` with `apply: false` first (the camera alone where
+   the speaker talks and the mouse rests: sections and their total). Choices: yes (`op: pick`) /
+   skip.
 6. **Zooms** (only with mouse data): `zooms` with `apply: false` (count, average length, how
    far in; add `settings` to try others: nothing is saved). Choices: yes / fewer and longer /
    shorter / skip. "Fewer and longer" raises `minHoldMs` and `mergeGapMs` (default 5000 each),
@@ -141,9 +128,10 @@ After the passes, on the cut edit:
    each with its time and why, at most ten, worst first.
 <!-- /thorough -->
 <!-- steps -->
-After the passes, when the user answered differently from the preset's choices, save them as
-its choices with `library` (`kind: preset`, `op: set`, `set: {"choices": {...}}`), in this
-shape (a built-in preset goes into a copy the project then follows):
+<!-- nochoices -->
+After the passes, save the user's answers as the preset's choices with `library` (`kind:
+preset`, `op: set`, `set: {"choices": {...}}`), in this shape (a built-in preset goes into a
+copy the project then follows):
 
 ```json
 {
@@ -152,12 +140,12 @@ shape (a built-in preset goes into a copy the project then follows):
   "silence": { "apply": true, "preset": "balanced", "microphones": "all" },
   "gaps": { "apply": false, "preset": "balanced" },
   "fillers": { "apply": true },
-  "webcam": { "keep": true, "focus": true },
   "zooms": { "apply": true, "settings": { "minHoldMs": 5000, "mergeGapMs": 5000, "clickScale": 1.6 } },
   "graphics": { "apply": false },
   "export": { "resolution": "1080p", "quality": "high" }
 }
 ```
+<!-- /nochoices -->
 <!-- /steps -->
 
 ## 4. When a result looks wrong (also in automatic)
@@ -177,43 +165,42 @@ watching, never a small word, none on a flat line), after the cuts.
 
 ## 6. Graphics (ask)
 
-Graphics come after the cuts, on the final timeline: they play full screen over everything and
-no cut goes through one. A full-screen graphic cuts in and out, never eases; only one laid over
-the full-screen camera eases (the app decides; `graphics` gives the rules with its list). Ask
-whether the user wants graphics (default no in automatic mode unless the choices say yes). If yes:
+Graphics come after the cuts, on the final timeline (`graphics` gives their rules with its
+list). The choices' `graphics.apply` decides without a question (false: skip, and say so in a line); with
+no choice, ask whether the user wants graphics (automatic: no). If yes:
 
 1. `graphics`: the templates, the user's library and their variables. If the renderer is not
    installed, ask before `graphics_install` (a 200 MB download). The project's style
    (`status`; `library` `kind: style`) gives every graphic its colours, fonts and look, so
    leave `background`, `text` and `accent` unset. If the user has styles of their own and the
    project wears a built-in one, ask which (`library` `op: use`).
-2. Read `transcript_get` and propose a short list, one line each with its time, template and
-   text. The user's library comes first: an item whose `useWhen` fits the moment beats a
-   bundled template (it is how they like it). Otherwise a `title` where a new section starts,
-   `step` cards for numbered steps, `shortcut` when a key combination is named, `key-point` for
-   a rule worth remembering, `recap` near the end, `end-card` last. Few and short (about one a
-   minute at most, 3–5 s each), never over a part where the screen must be seen. Ask: add them
-   all / pick / skip.
+2. Read `transcript_get` and propose them as a table, one row each:
+
+   | Start | End | Template | What it shows | Said there |
+   |---|---|---|---|---|
+   | 2:14 | 2:19 | key-point | "Reset the chat. Keep the plan." | "...you can clear the chat and it still has the plan..." |
+
+   The user's library comes first (an item whose `useWhen` fits beats a bundled template).
+   Otherwise a `title` where a new section starts, `step` cards for numbered steps, `shortcut`
+   when a key combination is named, `key-point` for a rule worth remembering, `recap` near the
+   end, `end-card` last. Few and short (about one a minute at most, 3–5 s each), never over a
+   part where the screen must be seen. Ask: add them all / pick / skip.
 3. One `graphic_add` with `items`, each with `atWord` (the word it starts at) and its
-   `variables` (`library` with the item's name for a library one), then `graphic_render` and look at one or two with
-   `frame_render` inside them. Report one line.
+   `variables` (`library` with the item's name for a library one), then `graphic_render`, and
+   look at one or two with `frame_render` `graphic` (a sheet across each). Report one line.
 4. If you wrote a graphic of your own and the user likes it, offer to keep it in their library
-   for later videos; on a yes follow the graphics rules: `graphic_templatize`, rewrite, `graphic_check`
-   until it passes, then `library_save` (ask about a close item it names).
+   (the graphics rules say how).
 
 ## 7. Chapters (automatic, last edit)
 
-Chapters come last, once everything else is cut, since they follow the final edit. Read
-`transcript_get`, pick where each topic starts (at least 3, each 10 s or longer, the first at the
-start), and send `chapters` with `set`: a `title` and the `atWord` each starts at. Use the app's
-own pass (`chapters` without `set`) only if the user asks for it.
+Once everything else is cut, write the chapters as the rules' Chapters say.
 
 ## 8. Check, status and summary (automatic)
 
 Run `check`. Errors and warnings with a fix: apply them in automatic mode (`fix` with their
 ids), otherwise list them and ask. Notes (such as loudness) are the
-user's call: list them, fix only at the user's word. Then `storyboard`: one image of the whole
-edit; name any tile that looks wrong (by number) and what you would do. Then `status`, and sum
+user's call: list them, fix only at the user's word. Then `storyboard` (the rules' Looking at
+the edit) and say what you would do about a tile that looks wrong. Then `status`, and sum
 up the edit. Keep four kinds of claim apart, under these headings, and never let one stand in
 for another (a storyboard is not a review of the whole edit; a clean `check` reads the edit, not
 the sound):

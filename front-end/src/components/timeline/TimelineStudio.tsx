@@ -93,6 +93,9 @@ import { useLayoutLane } from "./useLayoutLane";
 /** The playhead now, read when needed: the timeline itself does not re-render as it moves. */
 const nowUs = () => useProjectStore.getState().currentTimeUs;
 
+/** Waveforms being read now (`<project handle>\n<sound>`), so each is asked for once. */
+const waveformReads = new Set<string>();
+
 /**
  * Something drawn at the playhead. Only this re-renders as the playhead moves, not the
  * timeline with all its clips.
@@ -549,10 +552,11 @@ export const TimelineStudio: React.FC = () => {
   const [editing, setEditing] = useState(false);
   const suppressClick = useRef(false);
 
+  // A range belongs to the timeline it was made on: another project's, or another short's.
   useEffect(() => {
     setRange(null);
     setEditError(undefined);
-  }, [openedProject?.projectHandle]);
+  }, [openedProject?.projectHandle, openedProject?.shortView]);
   useEffect(() => {
     setRange((current) => (current && current.endUs > durationUs ? null : current));
   }, [openedProject?.revision, durationUs]);
@@ -1112,20 +1116,26 @@ export const TimelineStudio: React.FC = () => {
     }
     return keys;
   }, [openedProject?.revision, openedProject?.projectHandle, openedProject?.shortView]);
+  // Only the sounds themselves, so an edit that keeps them asks for nothing.
+  const soundList = [...soundKeys.keys()].sort().join("\n");
   useEffect(() => {
-    if (!openedProject) return;
-    let active = true;
-    for (const key of soundKeys.keys()) {
-      if (waveforms[key]) continue;
+    const handle = openedProject?.projectHandle;
+    if (!handle || !soundList) return;
+    for (const key of soundList.split("\n")) {
+      if (useProjectStore.getState().waveforms[key]) continue;
+      const id = `${handle}\n${key}`;
+      if (waveformReads.has(id)) continue;
+      waveformReads.add(id);
+      // Kept whenever the project is still open, even if the timeline asked again meanwhile.
       void api
-        .projectWaveformOverview(openedProject.projectHandle, key)
-        .then((overview) => active && setWaveform(key, overview))
-        .catch((err) => console.warn("[Timeline] Waveform failed:", err));
+        .projectWaveformOverview(handle, key)
+        .then((overview) => {
+          if (useProjectStore.getState().openedProject?.projectHandle === handle) setWaveform(key, overview);
+        })
+        .catch((err) => console.warn("[Timeline] Waveform failed:", err))
+        .finally(() => waveformReads.delete(id));
     }
-    return () => {
-      active = false;
-    };
-  }, [openedProject?.projectHandle, soundKeys]);
+  }, [openedProject?.projectHandle, soundList]);
 
   // ---- Dragging clips: move (along and between tracks) or trim an edge -----------------------
   const dragRef = useRef<ClipDrag | null>(null);
@@ -1508,36 +1518,39 @@ export const TimelineStudio: React.FC = () => {
       />
     );
   };
-  const addTrackButton = (audio: boolean) => (
-    <div key={audio ? "add-audio" : "add-video"} className="px-2 flex items-center" style={{ height: NEW_TRACK_ROW_PX }}>
-      <Button
-        size="sm"
-        variant="ghost"
-        icon={Plus}
+  // Small "kind icon +" buttons on the Tracks heading.
+  const addTrackButton = (audio: boolean) => {
+    const KindIcon = audio ? AudioLines : Film;
+    return (
+      <button
+        type="button"
         disabled={!openedProject || editing || (audio ? audioTracks : videoTracks).length >= 16}
         onClick={() => void edit({ kind: "addTrack", trackKind: audio ? "audio" : "video" })}
-        className="text-studio-400"
+        className="h-6 px-1.5 inline-flex items-center gap-0.5 rounded text-studio-400 hover:text-studio-100 hover:bg-studio-800 disabled:opacity-40 disabled:pointer-events-none"
         title={audio ? "Add an audio track below the others" : "Add a video track above the others: it draws over the ones below"}
+        aria-label={audio ? "Add audio track" : "Add video track"}
       >
-        {audio ? "Add audio track" : "Add video track"}
-      </Button>
-    </div>
-  );
+        <KindIcon className="w-3.5 h-3.5" />
+        <Plus className="w-3 h-3" />
+      </button>
+    );
+  };
+  // Header spacer matching a lane's drop-for-a-new-track row; both show only while dragging.
+  const newTrackSpacer = (audio: boolean) =>
+    (audio ? dragKinds?.audio : dragKinds?.video) && <div key={audio ? "add-audio" : "add-video"} style={{ height: NEW_TRACK_ROW_PX }} />;
 
   // ---- Lanes ---------------------------------------------------------------------------------
   const newTrackRow = (audio: boolean) => {
     const shown = audio ? dragKinds?.audio : dragKinds?.video;
+    if (!shown) return null;
     return (
       <div
         key={audio ? "new-audio" : "new-video"}
         data-track-row={audio ? "new-audio" : "new-video"}
-        className={cn(
-          "relative rounded-md flex items-center px-2 text-meta transition-colors",
-          shown ? "border border-dashed border-accent/60 bg-accent/5 text-studio-300" : "border border-transparent text-transparent",
-        )}
+        className="relative rounded-md flex items-center px-2 text-meta border border-dashed border-accent/60 bg-accent/5 text-studio-300"
         style={{ height: NEW_TRACK_ROW_PX }}
       >
-        <span className="pointer-events-none truncate">{shown ? `Drop here for a new ${audio ? "audio" : "video"} track` : ""}</span>
+        <span className="pointer-events-none truncate">{`Drop here for a new ${audio ? "audio" : "video"} track`}</span>
         {ghostsOn({ kind: "new", audio })}
       </div>
     );
@@ -1785,16 +1798,20 @@ export const TimelineStudio: React.FC = () => {
       <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
         <div className="flex min-h-full">
           <div className="w-64 shrink-0 flex flex-col border-r border-studio-800 bg-studio-900">
-            <div className="h-8 shrink-0 border-b border-studio-800 px-3 flex items-center text-meta font-semibold uppercase tracking-wide text-studio-500">Tracks</div>
+            <div className="h-8 shrink-0 border-b border-studio-800 pl-3 pr-1.5 flex items-center text-meta font-semibold uppercase tracking-wide text-studio-500">
+              <span className="flex-1">Tracks</span>
+              {addTrackButton(false)}
+              {addTrackButton(true)}
+            </div>
             <div className="flex-1 space-y-2 py-2">
               {captions.header}
               {zooms.header}
               {layoutLane.header}
-              {addTrackButton(false)}
+              {newTrackSpacer(false)}
               {[...videoTracks].reverse().map(trackHeader)}
               {audioTracks.map(trackHeader)}
               {soundEffects.header}
-              {addTrackButton(true)}
+              {newTrackSpacer(true)}
             </div>
           </div>
 

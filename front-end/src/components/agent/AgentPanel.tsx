@@ -363,15 +363,32 @@ export const AgentPanel: React.FC = () => {
       )}
       {(status?.working ?? []).length > 0 && (
         <ul className="shrink-0 px-3 pt-2.5 space-y-1.5" aria-label="Running now">
-          {status!.working.map((call, i) => (
-            <li key={`${call.tool}-${i}`} className="rounded-control border border-accent/30 bg-accent/10 px-2.5 py-1.5">
+          {status!.working.map((call) => (
+            <li key={call.id} className="rounded-control border border-accent/30 bg-accent/10 px-2.5 py-1.5">
               <div className="flex items-center gap-1.5 text-meta">
                 <Loader2 className="w-3.5 h-3.5 text-accent-fg animate-spin shrink-0" aria-hidden />
                 <span className="text-studio-300">{call.client ?? "agent"}</span>
                 <span className="font-mono text-studio-100">{call.tool}</span>
-                {call.fraction !== null && (
-                  <span className="ml-auto font-mono tabular-nums text-studio-400">{Math.round(call.fraction * 100)}%</span>
-                )}
+                <span className="ml-auto flex items-center gap-1.5">
+                  {call.fraction !== null && (
+                    <span className="font-mono tabular-nums text-studio-400">{Math.round(call.fraction * 100)}%</span>
+                  )}
+                  {call.stopping ? (
+                    <span className="text-studio-400">Stopping…</span>
+                  ) : (
+                    <IconButton
+                      icon={X}
+                      size="sm"
+                      label={`Stop ${call.tool}`}
+                      onClick={() =>
+                        void api
+                          .mcpStopCall(call.id)
+                          .then(setStatus)
+                          .catch((err) => setError(errorMessage(err)))
+                      }
+                    />
+                  )}
+                </span>
               </div>
               {call.message && <p className="mt-0.5 text-meta text-studio-400 truncate">{call.message}</p>}
               {call.fraction !== null && (

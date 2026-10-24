@@ -10,23 +10,31 @@ through `more`.
 
 ## The preset's choices
 
-When the preset shows choices, ask once: "Same settings as last time?" and list them in a line
-or two. On yes, run automatically with them. When the user answers differently, save the
-answers as the preset's choices (`library`, `kind: preset`, `op: set`), so next time is one
-question.
+A choice the preset holds runs as set: don't ask about it. Run the pass with it and say in one
+line what ran ("Silence, balanced, all microphones: cut 1:42, 12:04 → 10:22"). Ask only what the
+preset has no choice for, or what the user brings up. When the user changes a choice, save the
+answers as the preset's choices (`library`, `kind: preset`, `op: set`), so next time asks
+nothing.
+
+Settled, never asked: going online. Transcription and the filler and retake review run online
+as the method says, with the keys the app has. If the user's client asks them to allow a tool
+call, that is the client's question, not yours: don't ask it again in words.
+
+Never raise layouts or the webcam (picked sections, the camera alone when the mouse rests, a
+base layout) unless the user talks about them: leave them as the project has them.
 
 <!-- steps -->
 ## One pass at a time
 
-Each pass: its dry run (`apply: false`), the user's OK with those numbers, the pass, one line
-about what it did. There is no one-call cleanup. Each pass changes what the next finds, so
-don't ask about later passes with earlier numbers.
+Each pass the preset has no choice for: its dry run (`apply: false`), the user's OK with those
+numbers, the pass, one line about what it did. There is no one-call cleanup. Each pass changes
+what the next finds, so don't ask about later passes with earlier numbers.
 <!-- /steps -->
 
 ## Automatically
 
-When the user says so ("auto", "no questions", "just do it", yes to "same as last time?"), make
-each choice yourself: the preset's choices, else the method's defaults. Run each pass once, no
+When the user says so ("auto", "no questions", "just do it"), make each choice yourself: the
+preset's choices, else the method's defaults. Run each pass once, no
 dry run: the cutting passes (`mouth_noises`, `silence`, `fillers`) with `guard: true`, which
 apply only if the result looks right and otherwise say why ("Not applied"): then stop and ask.
 Report one line per pass, still never export without the user's go.
@@ -36,7 +44,8 @@ Report one line per pass, still never export without the user's go.
 
 Ask a step's questions in one message, numbered, each with its choices (default first) and the
 numbers that matter from `scan`. Use your client's question tool if it has one. Skip questions
-that don't apply (no camera: no webcam questions; one microphone: no microphone question).
+that don't apply (one microphone: no microphone question) and questions the preset's choices
+answer.
 Change nothing the user hasn't agreed to, apart from steps the method marks automatic.
 <!-- /steps -->
 
@@ -70,10 +79,8 @@ user asks. If anything is cut after them, set them again before export.
 
 ## Telemetry polish
 
-In `settings` `area: layout`, on by default (leave on unless asked): `webcamAutoHide` (the
-bubble fades while activity is under it) and `windowCrop` (crops to the front window;
-`windowCropOff` lists stretches shown whole). In `area: audio`, off by default (only when
-asked): `soundEffects`, quiet clicks and a few whooshes.
+Change only when asked: `settings` `area: layout` `webcamAutoHide` and `windowCrop` (on;
+`windowCropOff` lists stretches shown whole), `area: audio` `soundEffects` (off).
 
 ## Looking at the edit
 

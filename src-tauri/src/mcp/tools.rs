@@ -31,6 +31,34 @@ pub enum Output {
 /// Where a long tool call reports how far it got: a fraction (0 to 1) and a short message.
 pub type Progress<'a> = Box<dyn Fn(f64, &str) + Send + Sync + 'a>;
 
+/// What a stopped call answers.
+pub const STOPPED_MESSAGE: &str = "Stopped before it finished (the user, or your client, \
+    cancelled the call). Nothing was changed by it.";
+
+/// How a running call is stopped: by the agent's client (`notifications/cancelled`, or hanging
+/// up) or by the user in the Agent panel. Long calls look at it between steps.
+#[derive(Debug, Default)]
+pub struct Stop {
+    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The call is running one of the app's transcription jobs (transcription, the AI review,
+    /// chapters, shorts), which stop through the jobs' own flag.
+    transcript_job: std::sync::atomic::AtomicBool,
+}
+
+impl Stop {
+    pub fn stop(&self, transcripts: &crate::commands::transcript::TranscriptState) {
+        use std::sync::atomic::Ordering;
+        self.stopped.store(true, Ordering::SeqCst);
+        if self.transcript_job.load(Ordering::SeqCst) {
+            crate::commands::transcript::transcript_cancel_impl(transcripts);
+        }
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stopped.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 /// What a tool call knows about its caller, and what it changed.
 pub struct Ctx<'a> {
     pub state: &'a AppState,
@@ -43,6 +71,7 @@ pub struct Ctx<'a> {
     /// The project the call was meant for (its `project` id), when it said.
     pub project: Option<String>,
     progress: Option<Progress<'a>>,
+    stop: std::sync::Arc<Stop>,
     project_changed: std::cell::Cell<bool>,
     proposals_changed: std::cell::Cell<bool>,
 }
@@ -56,6 +85,7 @@ impl<'a> Ctx<'a> {
             autopilot,
             project: None,
             progress: None,
+            stop: Default::default(),
             project_changed: Default::default(),
             proposals_changed: Default::default(),
         }
@@ -64,6 +94,46 @@ impl<'a> Ctx<'a> {
     pub fn with_progress(mut self, progress: Progress<'a>) -> Self {
         self.progress = Some(progress);
         self
+    }
+
+    pub fn with_stop(mut self, stop: std::sync::Arc<Stop>) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    /// The call was stopped: a long call gives up at its next step.
+    pub fn stopped(&self) -> bool {
+        self.stop.stopped()
+    }
+
+    /// Err([`STOPPED_MESSAGE`]) once the call was stopped.
+    pub fn stop_point(&self) -> Result<(), String> {
+        if self.stopped() {
+            return Err(STOPPED_MESSAGE.into());
+        }
+        Ok(())
+    }
+
+    /// The flag a render or a job given one looks at.
+    pub fn stop_flag(&self) -> &std::sync::atomic::AtomicBool {
+        &self.stop.stopped
+    }
+
+    /// Runs one of the app's transcription jobs: stopping the call stops it too, and its error
+    /// then reads as stopped.
+    pub fn transcript_job<T>(
+        &self,
+        job: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        use std::sync::atomic::Ordering;
+        self.stop_point()?;
+        self.stop.transcript_job.store(true, Ordering::SeqCst);
+        let result = job();
+        self.stop.transcript_job.store(false, Ordering::SeqCst);
+        match result {
+            Err(_) if self.stopped() => Err(STOPPED_MESSAGE.into()),
+            other => other,
+        }
     }
 
     /// Tells the caller how far a long call got.
@@ -123,6 +193,15 @@ pub fn destructive(name: &str) -> bool {
     DESTRUCTIVE.contains(&name)
 }
 
+/// Tools that may reach the internet: online transcription, the filler and retake review,
+/// downloading the graphics renderer. Sent to clients as `openWorldHint: true`, so a client can
+/// ask the user to allow these once.
+pub const ONLINE: &[&str] = &["transcribe", "fillers", "graphics_install"];
+
+pub fn online(name: &str) -> bool {
+    ONLINE.contains(&name)
+}
+
 /// Every tool: the reading and proposing ones here, then the app's actions.
 pub fn all() -> &'static [ToolDef] {
     static ALL: std::sync::OnceLock<Vec<ToolDef>> = std::sync::OnceLock::new();
@@ -145,6 +224,16 @@ pub fn find(name: &str) -> Option<&'static ToolDef> {
 /// one's schema is paid for on every edit); `more` names them, gives their parameters and runs
 /// them. The CLI and direct calls reach them as before. Name each in `more`'s description.
 pub const MORE: &[&str] = &[
+    // COST-2 (24 Oct): what a tutorial edit doesn't use, about a third of the list: the
+    // layouts (only when the user raises them) and the shorts' tools.
+    "layouts",
+    "media_import",
+    "short_from_take",
+    "shorts",
+    "faces",
+    "short_footage",
+    "timeline_get",
+    "undo_batch",
     "redo",
     "checkpoint",
     "playhead_get",
@@ -267,7 +356,11 @@ static TOOLS: [ToolDef; 15] = [
         name: "more",
         description: "Tools an edit rarely needs, left out of this list to save tokens: `tool` \
             alone gives one's description and arguments; with `args` it runs, as if called \
-            directly. redo (the undo taken back); checkpoint (named moments to go back to); playhead_get (where the user's playhead is); \
+            directly. Shorts: media_import (bring files in), short_from_take (a short from a \
+            new take), shorts (find, rename, remove shorts), faces (frame the camera on the \
+            face), short_footage (graphics and clips on a short). layouts (camera and screen \
+            sections, only when the user raises them); timeline_get (every clip); undo_batch \
+            (undo one of your batches); redo (the undo taken back); checkpoint (named moments to go back to); playhead_get (where the user's playhead is); \
             layout_get (a layout's details); telemetry_get (mouse and keys at a time); speed \
             (play a stretch faster or slower, only when asked); transcript_fix (a misheard \
             word); captions (the caption lines and their emphasis words); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
@@ -318,9 +411,9 @@ static TOOLS: [ToolDef; 15] = [
     },
     ToolDef {
         name: "frame_render",
-        description: "A PNG of the finished frame at a moment of the edited timeline, as it \
-            will export: layout, zooms, cursor, overlays and captions included. Use it to check \
-            what is on screen before and after placing something.",
+        description: "The finished frame at a moment of the edited timeline as it will export \
+            (layout, zooms, cursor, overlays, captions), as a PNG; for motion, one sheet of \
+            `moments` or across a `graphic`.",
         schema: schema::<FrameParams>,
         read_only: true,
         run: frame_render,
@@ -785,8 +878,15 @@ fn playhead_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct FrameParams {
     /// The moment, in edited microseconds.
-    pub at_us: u64,
-    /// Image width in pixels, 240 to 1920. Default 960.
+    #[serde(default)]
+    pub at_us: Option<u64>,
+    /// Up to 24.
+    #[serde(default)]
+    pub moments: Option<Vec<u64>>,
+    /// A graphic's id.
+    #[serde(default)]
+    pub graphic: Option<String>,
+    /// One frame's width in pixels, 240 to 1920. Default 960. A sheet sizes its own tiles.
     #[serde(default)]
     pub width: Option<u32>,
     /// A short (id or title): its 9:16 frame at `atUs` on the short's own timeline.
@@ -804,12 +904,50 @@ pub struct AtParams {
 fn frame_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let state = ctx.state;
     let args: FrameParams = params(args)?;
+    let short = args.short.as_deref();
+    let moments = match (&args.moments, &args.graphic) {
+        (Some(moments), None) => Some(moments.clone()),
+        (None, Some(graphic)) => {
+            let (document, _, _) = super::frames::document(state, short)?;
+            let clip = document
+                .sequence
+                .video_tracks()
+                .flat_map(|t| &t.clips)
+                .filter(|c| c.asset == *graphic)
+                .min_by_key(|c| c.start_us)
+                .ok_or_else(|| format!("Graphic {graphic} is not on the timeline"))?;
+            // A frame a second, 4 to 12.
+            let count = (clip.duration_us / 1_000_000).clamp(4, 12) as usize;
+            Some(super::storyboard::spread(
+                clip.start_us,
+                clip.end_us(),
+                count,
+            ))
+        }
+        (Some(_), Some(_)) => return Err("Give moments or graphic, not both".into()),
+        (None, None) => None,
+    };
+    if let Some(moments) = moments {
+        let (png, width, height, cols, drawn) = super::storyboard::sheet(state, short, &moments)?;
+        let times: Vec<String> = drawn.iter().map(|&at| clock(at)).collect();
+        return Ok(vec![
+            Output::Png(png),
+            Output::Text(format!(
+                "{} frames, {width}x{height}, left to right in rows of {cols}: {}.",
+                drawn.len(),
+                times.join(", ")
+            )),
+        ]);
+    }
+    let at_us = args
+        .at_us
+        .ok_or("Give atUs, or moments, or a graphic's id")?;
     // A 9:16 short is narrow: its default width keeps about the same pixel count.
     let width = args
         .width
         .unwrap_or(if args.short.is_some() { 540 } else { 960 })
         .clamp(240, 1920);
-    let (frame, at) = super::frames::render(state, args.short.as_deref(), args.at_us, width)?;
+    let (frame, at) = super::frames::render(state, short, at_us, width)?;
     let png = super::frames::png(&frame)?;
     Ok(vec![
         Output::Png(png),
@@ -873,6 +1011,34 @@ mod tests {
             caption_break: false,
             caption_join: false,
         }
+    }
+
+    #[test]
+    fn a_stopped_call_stops_its_transcription_job_and_says_so() {
+        use super::super::Host;
+        use std::sync::atomic::Ordering;
+        let host = super::super::tests_support::BareHost::default();
+        let stop = std::sync::Arc::new(Stop::default());
+        let ctx = Ctx::new(&host, "agent", false).with_stop(stop.clone());
+        // Stopped while the job runs: the job's own flag is set, and its error reads as stopped.
+        let out: Result<(), String> = ctx.transcript_job(|| {
+            stop.stop(host.transcripts());
+            assert!(host.transcripts().cancel.load(Ordering::SeqCst));
+            Err("Transcription cancelled".into())
+        });
+        assert_eq!(out.unwrap_err(), STOPPED_MESSAGE);
+        // Once stopped, the next job doesn't start.
+        let ran = std::cell::Cell::new(false);
+        let next: Result<(), String> = ctx.transcript_job(|| {
+            ran.set(true);
+            Ok(())
+        });
+        assert!(next.is_err() && !ran.get());
+        // A stop outside a job leaves the app's own transcription alone.
+        let other = std::sync::Arc::new(Stop::default());
+        host.transcripts().cancel.store(false, Ordering::SeqCst);
+        other.stop(host.transcripts());
+        assert!(!host.transcripts().cancel.load(Ordering::SeqCst));
     }
 
     #[test]

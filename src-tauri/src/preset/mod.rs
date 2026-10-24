@@ -83,7 +83,6 @@ fn tutorial_choices() -> Map<String, Value> {
         "silence": { "apply": true, "preset": "balanced", "microphones": "all" },
         "gaps": { "apply": false, "preset": "balanced" },
         "fillers": { "apply": true },
-        "webcam": { "keep": true, "focus": true },
         "zooms": { "apply": true, "settings": { "minHoldMs": 5000, "mergeGapMs": 5000, "clickScale": 1.6 } },
         "graphics": { "apply": false },
         "export": { "resolution": "1080p", "quality": "high" }
@@ -103,7 +102,7 @@ pub fn builtin() -> Vec<Preset> {
         Preset {
             name: DEFAULT.into(),
             description: "A screen-recorded tutorial, long form (16:9): clean speech, steady \
-                pacing, the webcam and zooms where they help, no captions, chapters."
+                pacing, zooms where they help, no captions, chapters."
                 .into(),
             style: crate::style::DEFAULT.into(),
             // A new project's sound is loudness-normalized (`AudioSettings::for_new_project`).

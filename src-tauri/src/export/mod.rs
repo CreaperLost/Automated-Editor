@@ -126,7 +126,43 @@ pub struct ExportStatus {
     pub output_path: Option<String>,
     pub failure: Option<ExportFailure>,
     pub diagnostics: Vec<String>,
+    /// What it is doing before the frames (rendering a graphic), with how far along that is.
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub stage_fraction: Option<f64>,
+    /// Its log, as it happens: the export page streams it.
+    #[serde(default)]
+    pub log: Vec<ExportLogLine>,
 }
+
+/// One line of an export's log.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportLogLine {
+    /// Seconds since the export started.
+    pub secs: f64,
+    pub level: ExportLogLevel,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportLogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// What an export says as it goes, besides its frames.
+pub enum ExportNote {
+    /// The step before the frames, and how far along it is (none: unknown).
+    Stage(String, Option<f64>),
+    Line(ExportLogLevel, String),
+}
+
+/// An export's log keeps its last lines only.
+const MAX_LOG_LINES: usize = 400;
 
 impl ExportStatus {
     pub fn idle() -> Self {
@@ -144,7 +180,22 @@ impl ExportStatus {
             output_path: None,
             failure: None,
             diagnostics: Vec::new(),
+            stage: None,
+            stage_fraction: None,
+            log: Vec::new(),
         }
+    }
+
+    /// Adds a line to the log, `started` being when the export began.
+    fn log(&mut self, started: std::time::Instant, level: ExportLogLevel, text: String) {
+        if self.log.len() >= MAX_LOG_LINES {
+            self.log.remove(0);
+        }
+        self.log.push(ExportLogLine {
+            secs: (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+            level,
+            text,
+        });
     }
 }
 
@@ -291,6 +342,8 @@ pub struct SceneEvaluator {
     full_camera: std::cell::OnceCell<Vec<(u64, u64)>>,
     /// The graphics renders it plays: the draft, or an export's final ones.
     graphics_quality: crate::graphics::render::Quality,
+    /// An export's own copies of the renders it prepared, played in place of the cache's.
+    pinned_graphics: std::collections::HashMap<crate::graphics::render::Spec, PathBuf>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The captions' typeface and accent, from the style and the look.
@@ -574,6 +627,7 @@ impl SceneEvaluator {
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
+            pinned_graphics: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
             caption_look: std::cell::OnceCell::new(),
             caption_free: std::cell::OnceCell::new(),
@@ -622,6 +676,15 @@ impl SceneEvaluator {
     /// Plays graphics from the renders `quality` names (an export's final ones).
     pub fn with_graphics_quality(mut self, quality: crate::graphics::render::Quality) -> Self {
         self.graphics_quality = quality;
+        self
+    }
+
+    /// Plays each graphic from the render pinned for it (see [`crate::graphics::render::pin`]).
+    pub fn with_pinned_graphics(
+        mut self,
+        renders: std::collections::HashMap<crate::graphics::render::Spec, PathBuf>,
+    ) -> Self {
+        self.pinned_graphics = renders;
         self
     }
 
@@ -1089,6 +1152,12 @@ impl SceneEvaluator {
         );
         // Never past a render's last frame.
         let last_frame = 1_000_000 / spec.fps as u64;
+        if let Some(path) = self.pinned_graphics.get(&spec) {
+            return Some(PictureJob::Video(
+                path.clone(),
+                local_us.min(spec.length_us.saturating_sub(last_frame)),
+            ));
+        }
         match render::lookup(&spec) {
             Lookup::Ready(path) => Some(PictureJob::Video(
                 path,
@@ -2082,7 +2151,16 @@ pub fn resolve_destination(
         message: "Export destination is missing a file name".into(),
     })?;
     let resolved = canonical_parent.join(file_name);
-    if resolved.starts_with(&project_root) || is_inside_bundle(&resolved, Some(&project_root)) {
+    // An existing destination is checked as the file it really is: on a case-insensitive
+    // volume `original.wav` is `Original.wav`, and a link is what it points at.
+    let identity = if resolved.exists() {
+        dunce::canonicalize(&resolved).map_err(|e| ExportFailure::Io {
+            message: e.to_string(),
+        })?
+    } else {
+        resolved.clone()
+    };
+    if identity.starts_with(&project_root) || is_inside_bundle(&identity, Some(&project_root)) {
         return Err(ExportFailure::SourcePath {
             message: "Export destination cannot be inside the project bundle".into(),
         });
@@ -2092,9 +2170,9 @@ pub fn resolve_destination(
         let source = PathBuf::from(&asset.path);
         let canonical = dunce::canonicalize(&source).unwrap_or(source);
         let clash = if asset.is_recording() {
-            resolved.starts_with(&canonical)
+            identity.starts_with(&canonical)
         } else {
-            resolved == canonical
+            identity == canonical
         };
         if clash {
             return Err(ExportFailure::SourcePath {
@@ -2150,6 +2228,9 @@ fn status_from(
         output_path: None,
         failure,
         diagnostics: Vec::new(),
+        stage: None,
+        stage_fraction: None,
+        log: Vec::new(),
     }
 }
 
@@ -2301,11 +2382,23 @@ pub fn run_job(
     status: Arc<Mutex<ExportStatus>>,
     gate: &EncoderGate,
 ) {
+    let started = std::time::Instant::now();
     {
         let mut slot = status.lock();
         slot.state = ExportState::Running;
+        let s = &captured.settings;
+        let text = format!(
+            "Export started: {}x{} at {} fps, {} and {}, to {}",
+            s.width,
+            s.height,
+            s.fps,
+            s.video_codec,
+            s.audio_codec,
+            captured.dest.display()
+        );
+        slot.log(started, ExportLogLevel::Info, text);
     }
-    match run_export(
+    let result = run_export_logged(
         &captured,
         &cancel,
         |done, total| {
@@ -2314,23 +2407,43 @@ pub fn run_job(
             slot.progress_denominator = total;
             slot.state = ExportState::Running;
         },
-        gate,
-    ) {
-        Ok(path) => {
+        &mut |note| {
             let mut slot = status.lock();
+            match note {
+                ExportNote::Stage(text, fraction) => {
+                    slot.stage = Some(text);
+                    slot.stage_fraction = fraction;
+                }
+                ExportNote::Line(level, text) => slot.log(started, level, text),
+            }
+        },
+        gate,
+    );
+    let mut slot = status.lock();
+    slot.stage = None;
+    slot.stage_fraction = None;
+    match result {
+        Ok(path) => {
             slot.state = ExportState::Completed;
             slot.output_path = Some(path.to_string_lossy().into());
             slot.progress_numerator = slot.progress_denominator.max(1);
             slot.failure = None;
+            let text = format!("Done in {:.0} s", started.elapsed().as_secs_f64());
+            slot.log(started, ExportLogLevel::Info, text);
         }
         Err(failure) => {
             let cancelled = matches!(failure, ExportFailure::Cancelled { .. });
-            let mut slot = status.lock();
             slot.state = if cancelled {
                 ExportState::Cancelled
             } else {
                 ExportState::Failed
             };
+            let (level, what) = if cancelled {
+                (ExportLogLevel::Warn, "Cancelled")
+            } else {
+                (ExportLogLevel::Error, "Failed")
+            };
+            slot.log(started, level, format!("{what}: {}", failure.message()));
             slot.failure = Some(failure);
             slot.output_path = None;
         }
@@ -2356,7 +2469,18 @@ pub fn run_export(
     on_progress: impl FnMut(u32, u32),
     gate: &EncoderGate,
 ) -> Result<PathBuf, ExportFailure> {
-    let result = export_to_temp(captured, cancel, on_progress, gate);
+    run_export_logged(captured, cancel, on_progress, &mut |_| {}, gate)
+}
+
+/// [`run_export`], telling `note` what it is doing as it goes, for the export's log.
+pub fn run_export_logged(
+    captured: &CapturedExport,
+    cancel: &AtomicBool,
+    on_progress: impl FnMut(u32, u32),
+    note: &mut dyn FnMut(ExportNote),
+    gate: &EncoderGate,
+) -> Result<PathBuf, ExportFailure> {
+    let result = export_to_temp(captured, cancel, on_progress, note, gate);
     // Decoder processes opened for the export are not needed once it ends.
     crate::media::release_decoders();
     result
@@ -2366,6 +2490,7 @@ fn export_to_temp(
     captured: &CapturedExport,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(u32, u32),
+    note: &mut dyn FnMut(ExportNote),
     gate: &EncoderGate,
 ) -> Result<PathBuf, ExportFailure> {
     let _slot = gate
@@ -2403,14 +2528,71 @@ fn export_to_temp(
         (captured.settings.width, captured.settings.height),
         graphics_quality,
     );
-    crate::graphics::render::ensure(&graphics, cancel, &mut |_, _| on_progress(0, frames))
-        .map_err(|message| {
-            if cancel.load(Ordering::SeqCst) {
-                ExportFailure::Cancelled { message }
-            } else {
-                ExportFailure::Native { message }
+    if !graphics.is_empty() {
+        note(ExportNote::Line(
+            ExportLogLevel::Info,
+            format!(
+                "{} graphic{} at the export's quality ({} fps): rendering those not rendered yet",
+                graphics.len(),
+                if graphics.len() == 1 { "" } else { "s" },
+                captured.settings.fps
+            ),
+        ));
+    }
+    // Each graphic's label comes once as it starts; it is logged then and when it ends.
+    let mut current: Option<(String, std::time::Instant)> = None;
+    let mut rendered = 0;
+    let ensured =
+        crate::graphics::render::ensure(&graphics, cancel, &mut |fraction, label, line| {
+            // HyperFrames' own output, as it prints it.
+            if let Some(line) = line {
+                note(ExportNote::Line(ExportLogLevel::Info, format!("  {line}")));
+                return;
             }
-        })?;
+            if current.as_ref().map(|(l, _)| l.as_str()) != Some(label) {
+                if let Some((done, at)) = current.take() {
+                    note(ExportNote::Line(
+                        ExportLogLevel::Info,
+                        format!("{done}: done in {:.0} s", at.elapsed().as_secs_f64()),
+                    ));
+                }
+                note(ExportNote::Line(ExportLogLevel::Info, label.to_string()));
+                current = Some((label.to_string(), std::time::Instant::now()));
+                rendered += 1;
+            }
+            note(ExportNote::Stage(label.to_string(), Some(fraction)));
+        });
+    if let Some((done, at)) = current.take() {
+        let (level, how) = match &ensured {
+            Ok(_) => (ExportLogLevel::Info, "done"),
+            Err(_) => (ExportLogLevel::Error, "stopped"),
+        };
+        note(ExportNote::Line(
+            level,
+            format!("{done}: {how} after {:.0} s", at.elapsed().as_secs_f64()),
+        ));
+    }
+    let renders = ensured.map_err(|message| {
+        if cancel.load(Ordering::SeqCst) {
+            ExportFailure::Cancelled { message }
+        } else {
+            ExportFailure::Native { message }
+        }
+    })?;
+    // Held to the end: the video plays these renders whatever changes meanwhile.
+    let pinned = crate::graphics::render::pin(renders)
+        .map_err(|message| ExportFailure::Native { message })?;
+    if !graphics.is_empty() && rendered == 0 {
+        note(ExportNote::Line(
+            ExportLogLevel::Info,
+            "Every graphic was rendered already".into(),
+        ));
+    }
+    note(ExportNote::Stage("Writing frames".into(), None));
+    note(ExportNote::Line(
+        ExportLogLevel::Info,
+        format!("Writing {frames} frames"),
+    ));
     let mixer = AudioMixer::new(&captured.root, &captured.document)
         .map_err(|message| ExportFailure::Io { message })?;
     let (sample_rate, channels) = if mixer.has_audio() {
@@ -2431,6 +2613,7 @@ fn export_to_temp(
         captured.settings.fps,
     ))
     .with_graphics_quality(graphics_quality)
+    .with_pinned_graphics(pinned.renders.clone())
     // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
     // pipe, and no conversion on the CPU.
     .with_nv12_output(ExportWriter::takes_nv12());
@@ -3743,6 +3926,7 @@ mod tests {
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
+            pinned_graphics: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
             caption_look: std::cell::OnceCell::new(),
             caption_free: std::cell::OnceCell::new(),
@@ -3827,6 +4011,7 @@ mod tests {
             camera_framing: Default::default(),
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
+            pinned_graphics: Default::default(),
             caption_cues: std::cell::OnceCell::new(),
             caption_look: std::cell::OnceCell::new(),
             caption_free: std::cell::OnceCell::new(),
@@ -4309,15 +4494,16 @@ mod tests {
             Spec::for_clip(dir.path(), &document, &card, &clip, canvas, &[], quality)
         };
         let draft = spec((1920, 1080), Quality::Draft);
+        // At the export settings' frame rate (60 by default).
         assert_eq!(
             (draft.width, draft.height, draft.density, draft.fps),
-            (1920, 1080, 1, 30)
+            (1920, 1080, 1, 60)
         );
-        // A 1080p export at 30 fps plays the preview's own render.
-        assert_eq!(spec((1920, 1080), Quality::Final { fps: 30 }), draft);
-        // At 60 fps, and at twice the density for 1440p and 4K: the same layout, sharper.
-        let smooth = spec((1920, 1080), Quality::Final { fps: 60 });
-        assert_eq!((smooth.density, smooth.fps), (1, 60));
+        // A 1080p export at that rate plays the preview's own render.
+        assert_eq!(spec((1920, 1080), Quality::Final { fps: 60 }), draft);
+        // At another rate, and at twice the density for 1440p and 4K: the same layout, sharper.
+        let other = spec((1920, 1080), Quality::Final { fps: 30 });
+        assert_eq!((other.density, other.fps), (1, 30));
         for canvas in [(2560, 1440), (3840, 2160)] {
             let sharp = spec(canvas, Quality::Final { fps: 30 });
             assert_eq!((sharp.width, sharp.height, sharp.density), (1920, 1080, 2));

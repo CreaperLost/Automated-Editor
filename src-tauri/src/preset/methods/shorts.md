@@ -10,6 +10,9 @@ about, so the action comes from the video while the take does the talking. Then 
 Step by step by default; automatic when the user says so ("auto", "no questions"): then use
 the defaults below, report in one message and go on. Export still waits for the user's go.
 
+The shorts' own tools (`media_import`, `short_from_take`, `shorts`, `faces`, `short_footage`)
+are behind `more`: `more` with `tool` alone gives one's arguments, with `args` it runs it.
+
 ## 1. Project (automatic)
 
 - `status`. The long video needs a transcript (that is how you find its footage): if it has
@@ -101,7 +104,9 @@ Pick how each one shows, with its kind, before it is made (it renders once, for 
 `overFace` (the face fills the frame, the graphic drawn over it) for a label, a stamp, a
 callout or arrows: then write it as an overlay (no full background; the templates do this for
 you as a panel at the bottom). Don't cover the face with full-frame graphics for long: keep
-them short, or split. Add them to the plan with their mode; ask for an OK (automatic: go).
+them short, or split. Each shows what its words say (the claim, the number, the name), not
+just the topic. Add them to the plan as a table (start, end, template, mode, what it shows,
+the words it sits on); ask for an OK (automatic: go).
 
 ## 6b. Caption emphasis (automatic)
 

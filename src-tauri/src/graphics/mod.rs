@@ -96,9 +96,31 @@ pub fn read_source(dir: &Path) -> Result<GraphicSource, String> {
 pub fn write_source(dir: &Path, source: &GraphicSource) -> Result<(), String> {
     let text = serde_json::to_string_pretty(source).map_err(|e| e.to_string())?;
     let path = dir.join(SOURCE_FILE);
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    write_shared(&path, (text + "\n").as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     render::sources_changed();
     Ok(())
+}
+
+/// Writes a graphic's file, which a background render may be reading at that moment: Windows
+/// refuses the write while it is open there (a sharing violation), so it is tried again for up
+/// to two seconds.
+fn write_shared(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    const SHARING_VIOLATION: i32 = 32;
+    const LOCK_VIOLATION: i32 = 33;
+    let mut tries = 0;
+    loop {
+        match std::fs::write(path, contents) {
+            Err(e)
+                if tries < 20
+                    && matches!(e.raw_os_error(), Some(SHARING_VIOLATION | LOCK_VIOLATION)) =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            done => return done,
+        }
+    }
 }
 
 /// The variables `index.html` declares, in its order.
@@ -525,7 +547,7 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
         .then(|| std::str::from_utf8(contents).ok().and_then(gsap::localize))
         .flatten();
     let contents = localized.as_ref().map_or(contents, |html| html.as_bytes());
-    std::fs::write(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
+    write_shared(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
     render::sources_changed();
     Ok(())
 }

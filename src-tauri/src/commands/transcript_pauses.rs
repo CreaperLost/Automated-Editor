@@ -201,12 +201,31 @@ pub fn detect_non_speech_gaps_for(
     let min_us = u64::from(config.min_duration_ms).saturating_sub(2 * padding) * 1_000;
     let gaps = if guard_secondary {
         let primary_count = sounds[0].1.len();
-        guarded_primary_gaps(
+        let mut gaps = guarded_primary_gaps(
             &lists[..primary_count],
             &lists[primary_count..],
             min_us,
             config.padding_ms,
-        )
+        );
+        // The dead air before the first word and after the last goes whatever the protected
+        // source plays there.
+        let (_, clips, transcript) = &sounds[0];
+        if let Some(saved) = transcript {
+            let edges = pauses::edge_ranges(
+                saved,
+                &found[0].0.covered,
+                config.padding_ms,
+                config.min_duration_ms,
+                config.keep_sound_events,
+            );
+            gaps.extend(
+                clips
+                    .iter()
+                    .flat_map(|clip| edges.iter().filter_map(|&(a, b)| clip.timeline_range(a, b))),
+            );
+            gaps = pauses::merge_ranges(gaps);
+        }
+        gaps
     } else {
         common_pauses(&lists, min_us)
     };
@@ -762,8 +781,9 @@ mod tests {
             .collect();
         assert_eq!(
             ranges,
-            vec![(4_120_000, 4_875_000)],
-            "PC sounds between its words are protected just like PC speech"
+            vec![(4_120_000, 4_875_000), (7_620_000, 8_000_000)],
+            "PC sounds between its words are protected just like PC speech, but not after the \
+             last word (FIX-4)"
         );
         assert!(combined.suggestions.iter().all(|gap| !gap.selected));
         let single = detect_transcript_pauses_impl(
@@ -939,11 +959,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             legacy.suggestions.len(),
-            1,
-            "Only the real silence belongs to the silence pass"
+            2,
+            "Only the real silence belongs to the silence pass, and the dead air after the \
+             last word (FIX-4)"
         );
         assert!(legacy.suggestions[0].start_us >= 4_000_000);
         assert!(legacy.suggestions[0].end_us <= 5_000_000);
+        assert!(legacy.suggestions[1].start_us >= 7_500_000);
         // A transcript can change without advancing the timeline revision. Both completed
         // scans and applying their results must reject changed, regenerated, or deleted words.
         let saved = store::load_transcript(&folder, &mic_key).unwrap().unwrap();

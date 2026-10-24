@@ -144,7 +144,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   addRecentProject: (path) => {
     const clean = path.trim();
     if (!clean) return;
-    const current = get().recentProjects.filter((p) => p !== clean);
+    // The same folder can come as C:/a or C:\A (an agent's path, the folder picker's).
+    const key = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const current = get().recentProjects.filter((p) => key(p) !== key(clean));
     const updated = [clean, ...current].slice(0, MAX_RECENT_PROJECTS);
     saveStoredRecentProjects(updated);
     set({ recentProjects: updated });

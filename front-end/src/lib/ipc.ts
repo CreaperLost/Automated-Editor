@@ -359,6 +359,8 @@ export const api = {
   mcpSkillInstall: (home: McpSkillHome, installed: boolean) =>
     invokeTauri<McpStatus>("mcp_skill_install", { home, installed }),
   mcpSetAutopilot: (autopilot: boolean) => invokeTauri<McpStatus>("mcp_set_autopilot", { autopilot }),
+  /** Stops a running agent call: it answers its agent that it was stopped, at its next step. */
+  mcpStopCall: (id: number) => invokeTauri<McpStatus>("mcp_stop_call", { id }),
   /** Agents' proposal batches, newest first, as they would land in the edit now. */
   proposalsList: (projectHandle: string) => invokeTauri<ProposalsView>("proposals_list", { projectHandle }),
   /** Accepts a batch (or only `itemIds` of a cut batch) as one undo step. */

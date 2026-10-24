@@ -18,17 +18,17 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-/// Graphics render at this rate; playback and export read them at their own.
+/// A graphic outside an edit renders at this rate; in one, at its export settings' rate.
 pub const RENDER_FPS: u32 = 30;
 /// The long side of the canvas a graphic renders at; export scales it to the output.
 pub const RENDER_LONG_SIDE: u32 = 1920;
 
-/// The fastest a graphic renders for an export.
+/// The fastest a graphic renders.
 const MAX_FINAL_FPS: u32 = 60;
 
-/// Which render a view plays: the draft the preview and storyboard use, or the final one an
-/// export of `fps` frames a second needs (at its frame rate, and twice as sharp when the
-/// export is larger than the draft). An export never plays a draft.
+/// Which render a view plays: the draft the preview and storyboard use (at the export
+/// settings' frame rate), or the final one an export of `fps` frames a second needs (at its
+/// frame rate, and twice as sharp when the export is larger than the draft). An export never plays a draft.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Quality {
     #[default]
@@ -152,8 +152,14 @@ impl Spec {
             &crate::style::of(document),
             crate::style::is_portrait(document),
         );
-        if let Quality::Final { fps } = quality {
-            spec.fps = fps.clamp(1, MAX_FINAL_FPS);
+        // At the frame rate the export settings ask for, the draft too: a 1080p export then
+        // plays the preview's render instead of making its own.
+        let fps = match quality {
+            Quality::Final { fps } => fps,
+            Quality::Draft => document.export.fps,
+        };
+        spec.fps = fps.clamp(1, MAX_FINAL_FPS);
+        if let Quality::Final { .. } = quality {
             // Larger than the draft: twice as sharp, where HyperFrames can (a whole 16:9 or
             // 9:16 frame; it renders only at its own sizes).
             if canvas.0.max(canvas.1) > RENDER_LONG_SIDE && density_preset(&spec).is_some() {
@@ -322,12 +328,21 @@ pub struct RenderState {
 struct Job {
     spec: Spec,
     hash: String,
+    /// Made ahead for an export ([`request_export`]): waits behind every preview render, and
+    /// renders with fewer Chrome workers.
+    export: bool,
 }
+
+/// Chrome workers a render made ahead for an export uses (HyperFrames picks 4 or so itself):
+/// slower, but it leaves the rest of the computer to the user.
+const EXPORT_AHEAD_WORKERS: u32 = 2;
 
 #[derive(Default)]
 struct Queue {
     waiting: VecDeque<Job>,
-    running: Option<(String, String, f64)>,
+    /// The asset, the render's file name, how far along, and whether it is made ahead for an
+    /// export.
+    running: Option<(String, String, f64, bool)>,
     /// Renders that failed, by file name, with why; not tried again until a source changes.
     failed: HashMap<String, String>,
     /// The latest error by asset, for the editor.
@@ -507,6 +522,24 @@ pub fn request_all(root: &Path, document: &crate::project::revision::EditDocumen
     }
 }
 
+/// Asks, behind every preview render, for the renders `document`'s export needs (its export
+/// settings' size and frame rate), so an export finds them made instead of rendering them
+/// first. Called whenever the edit changes; what is made or asked for already is skipped.
+pub fn request_export(root: &Path, document: &crate::project::revision::EditDocument) {
+    let Ok(settings) = document.export.settings(&document.layout) else {
+        return;
+    };
+    let quality = Quality::Final { fps: settings.fps };
+    for spec in specs_for(root, document, (settings.width, settings.height), quality) {
+        let Ok(hash) = hash_of(&spec) else {
+            continue;
+        };
+        if !spec.cache.join(spec.file_name(&hash)).is_file() {
+            enqueue(&spec, &hash, true);
+        }
+    }
+}
+
 /// [`latest`], found once per generation (a render finishing or a source changing bumps it):
 /// a graphic waiting for its render asks on every frame it plays.
 fn latest_cached(spec: &Spec) -> Option<(PathBuf, u64)> {
@@ -564,29 +597,53 @@ fn latest(spec: &Spec) -> Option<(PathBuf, u64)> {
 }
 
 fn request(spec: &Spec, hash: &str) {
+    enqueue(spec, hash, false);
+}
+
+/// Puts `job` in line: last if made ahead for an export, else after the preview's renders and
+/// before those.
+fn place(waiting: &mut VecDeque<Job>, job: Job) {
+    let at = match job.export {
+        true => waiting.len(),
+        false => waiting
+            .iter()
+            .position(|j| j.export)
+            .unwrap_or(waiting.len()),
+    };
+    waiting.insert(at, job);
+}
+
+/// Queues `spec`'s render: a preview's after the other preview renders and before every one
+/// made ahead for an export (`export`), which go last.
+fn enqueue(spec: &Spec, hash: &str, export: bool) {
     let r = renderer();
     let name = spec.file_name(hash);
     let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
+    let same = |j: &Job| j.spec.asset_id == spec.asset_id && j.spec.file_name(&j.hash) == name;
     // Two graphics from the same template and values share a name, but each has its own cache.
     if queue.failed.contains_key(&name)
         || queue.elsewhere.contains(&spec.cache.join(&name))
         || queue
             .running
             .as_ref()
-            .is_some_and(|(id, n, _)| *id == spec.asset_id && *n == name)
-        || queue
-            .waiting
-            .iter()
-            .any(|j| j.spec.asset_id == spec.asset_id && j.spec.file_name(&j.hash) == name)
+            .is_some_and(|(id, n, _, _)| *id == spec.asset_id && *n == name)
+        // Waiting already, and no sooner wanted: a preview asking for one made ahead for an
+        // export (the same render, at a 1080p export) moves it up.
+        || queue.waiting.iter().any(|j| same(j) && (export || !j.export))
     {
         return;
     }
+    queue.waiting.retain(|j| !same(j));
     // A newer request for the same graphic and output replaces one still waiting.
     queue.waiting.retain(|j| !spec.supersedes(&j.spec));
-    queue.waiting.push_back(Job {
-        spec: spec.clone(),
-        hash: hash.to_string(),
-    });
+    place(
+        &mut queue.waiting,
+        Job {
+            spec: spec.clone(),
+            hash: hash.to_string(),
+            export,
+        },
+    );
     if !queue.worker {
         queue.worker = true;
         std::thread::Builder::new()
@@ -613,6 +670,7 @@ fn work() {
                         job.spec.asset_id.clone(),
                         job.spec.file_name(&job.hash),
                         0.0,
+                        job.export,
                     ));
                     break job;
                 }
@@ -620,7 +678,16 @@ fn work() {
             }
         };
         let name = job.spec.file_name(&job.hash);
-        let result = render_now(&job.spec, &name, &r.cancel, &mut |fraction| {
+        // Every render here is in the background: below normal priority, and one made ahead
+        // for an export with fewer workers too.
+        let limits = Limits {
+            workers: job.export.then_some(EXPORT_AHEAD_WORKERS),
+            low_priority: true,
+        };
+        let result = render_now(&job.spec, &name, &r.cancel, limits, &mut |event| {
+            let Event::Progress(fraction) = event else {
+                return;
+            };
             let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(running) = queue.running.as_mut() {
                 running.2 = fraction;
@@ -637,7 +704,10 @@ fn work() {
                 }
                 Err(error) => {
                     queue.failed.insert(name, error.clone());
-                    queue.errors.insert(job.spec.asset_id.clone(), error);
+                    // The export says itself when its render fails; the editor shows the preview's.
+                    if !job.export {
+                        queue.errors.insert(job.spec.asset_id.clone(), error);
+                    }
                 }
             }
         }
@@ -648,8 +718,9 @@ fn work() {
 }
 
 pub fn state_of(asset_id: &str) -> RenderState {
+    // What the editor shows is the preview's render; one made ahead for an export is quiet.
     let queue = renderer().queue.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((id, _, progress)) = &queue.running {
+    if let Some((id, _, progress, false)) = &queue.running {
         if id == asset_id {
             return RenderState {
                 state: "rendering".into(),
@@ -658,7 +729,11 @@ pub fn state_of(asset_id: &str) -> RenderState {
             };
         }
     }
-    if queue.waiting.iter().any(|j| j.spec.asset_id == asset_id) {
+    if queue
+        .waiting
+        .iter()
+        .any(|j| j.spec.asset_id == asset_id && !j.export)
+    {
         return RenderState {
             state: "queued".into(),
             ..Default::default()
@@ -711,13 +786,15 @@ pub fn specs_for(
 }
 
 /// Renders whatever of `specs` is missing, waiting for each (for export). Reports the overall
-/// fraction done.
+/// fraction done with what it is rendering, and each line HyperFrames prints as it comes.
+/// Returns each spec's render, of its source as it was when asked.
 pub fn ensure(
     specs: &[Spec],
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(f64, &str),
-) -> Result<(), String> {
-    let todo = missing(specs)?;
+    progress: &mut dyn FnMut(f64, &str, Option<&str>),
+) -> Result<Vec<(Spec, PathBuf)>, String> {
+    let named = named(specs)?;
+    let todo = missing(&named);
     let count = todo.len();
     // Renders made here, so a second graphic with the same source copies the first's.
     let mut made: Vec<PathBuf> = Vec::new();
@@ -725,8 +802,12 @@ pub fn ensure(
         if cancel.load(Ordering::Relaxed) {
             return Err("Export cancelled".into());
         }
-        let label = format!("Rendering graphic \"{}\"", spec.name);
-        progress(index as f64 / count as f64, &label);
+        let label = format!(
+            "Rendering graphic {} of {count}: \"{}\"",
+            index + 1,
+            spec.name
+        );
+        progress(index as f64 / count as f64, &label, None);
         // Wait for the queue's render of it if it is running now, else make it here, with the
         // worker kept off it until this one is done.
         let target = spec.cache.join(&name);
@@ -740,28 +821,91 @@ pub fn ensure(
                 continue;
             }
         }
-        render_now(&spec, &name, cancel, &mut |fraction| {
-            progress((index as f64 + fraction) / count as f64, &label)
-        })
+        let mut done = index as f64 / count as f64;
+        render_now(
+            &spec,
+            &name,
+            cancel,
+            Limits::default(),
+            &mut |event| match event {
+                Event::Progress(fraction) => {
+                    done = (index as f64 + fraction) / count as f64;
+                    progress(done, &label, None)
+                }
+                Event::Line(line) => progress(done, &label, Some(line)),
+            },
+        )
         .map_err(|e| format!("Graphic \"{}\" did not render: {e}", spec.name))?;
         made.push(target);
         renderer().generation.fetch_add(1, Ordering::SeqCst);
     }
-    Ok(())
+    Ok(named
+        .into_iter()
+        .map(|(spec, name)| {
+            let path = spec.cache.join(name);
+            (spec, path)
+        })
+        .collect())
 }
 
-/// The renders of `specs` not in their caches yet, each once, with their file names. Two
-/// graphics from the same template and values share a name but not a cache: both are needed.
-fn missing(specs: &[Spec]) -> Result<Vec<(Spec, String)>, String> {
+/// Each of `specs` with its render's file name, from its source as it is now.
+fn named(specs: &[Spec]) -> Result<Vec<(Spec, String)>, String> {
+    specs
+        .iter()
+        .map(|spec| Ok((spec.clone(), spec.file_name(&spec.hash()?))))
+        .collect()
+}
+
+/// The renders of `named` not in their caches yet, each once. Two graphics from the same
+/// template and values share a name but not a cache: both are needed.
+fn missing(named: &[(Spec, String)]) -> Vec<(Spec, String)> {
     let mut todo: Vec<(Spec, String)> = Vec::new();
-    for spec in specs {
-        let name = spec.file_name(&spec.hash()?);
-        let path = spec.cache.join(&name);
+    for (spec, name) in named {
+        let path = spec.cache.join(name);
         if !path.is_file() && !todo.iter().any(|(s, n)| s.cache.join(n) == path) {
-            todo.push((spec.clone(), name));
+            todo.push((spec.clone(), name.clone()));
         }
     }
-    Ok(todo)
+    todo
+}
+
+/// An export's own hold on the renders it plays: each linked (or copied) into a folder of its
+/// own in its cache, so a source changed or a newer render landing meanwhile (which removes the
+/// one it replaces) cannot change the video partway. The folders go when this is dropped.
+pub struct Pinned {
+    pub renders: HashMap<Spec, PathBuf>,
+    _dirs: Vec<tempfile::TempDir>,
+}
+
+/// Pins `renders` (from [`ensure`]) for one export.
+pub fn pin(renders: Vec<(Spec, PathBuf)>) -> Result<Pinned, String> {
+    let mut dirs: Vec<tempfile::TempDir> = Vec::new();
+    let mut pinned = HashMap::new();
+    for (spec, path) in renders {
+        let dir = match dirs.iter().find(|d| d.path().parent() == Some(spec.cache.as_path())) {
+            Some(dir) => dir.path().to_path_buf(),
+            None => {
+                let dir = tempfile::Builder::new()
+                    .prefix(".export-")
+                    .tempdir_in(&spec.cache)
+                    .map_err(|e| format!("{}: {e}", spec.cache.display()))?;
+                let path = dir.path().to_path_buf();
+                dirs.push(dir);
+                path
+            }
+        };
+        let held = dir.join(path.file_name().unwrap_or_default());
+        if !held.is_file() && std::fs::hard_link(&path, &held).is_err() {
+            std::fs::copy(&path, &held).map_err(|e| {
+                format!("Graphic \"{}\" lost its render before the export: {e}", spec.name)
+            })?;
+        }
+        pinned.insert(spec, held);
+    }
+    Ok(Pinned {
+        renders: pinned,
+        _dirs: dirs,
+    })
 }
 
 /// Copies another graphic's identical render into `spec`'s cache as `name`.
@@ -795,7 +939,7 @@ impl Drop for Claim {
 fn claim(name: &str, target: &Path, cancel: &AtomicBool) -> Claim {
     let r = renderer();
     let mut queue = r.queue.lock().unwrap_or_else(|e| e.into_inner());
-    while (queue.running.as_ref().is_some_and(|(_, n, _)| n == name)
+    while (queue.running.as_ref().is_some_and(|(_, n, _, _)| n == name)
         || queue.elsewhere.contains(target))
         && !cancel.load(Ordering::Relaxed)
     {
@@ -809,12 +953,28 @@ fn claim(name: &str, target: &Path, cancel: &AtomicBool) -> Claim {
     Claim(target.to_path_buf())
 }
 
+/// What a render says as it goes: how far along it is, or a line HyperFrames printed.
+enum Event<'a> {
+    Progress(f64),
+    Line(&'a str),
+}
+
+/// How much of the computer a render may take: none of these for one an export waits on.
+#[derive(Clone, Copy, Default)]
+struct Limits {
+    /// Chrome workers; HyperFrames picks when none.
+    workers: Option<u32>,
+    /// Below normal priority (Windows; Chrome inherits it), so the editor stays responsive.
+    low_priority: bool,
+}
+
 /// Renders `spec` into its cache as `name`, now, on this thread.
 fn render_now(
     spec: &Spec,
     name: &str,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(f64),
+    limits: Limits,
+    on: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let paths = runtime::paths()?;
     let ffmpeg = crate::media::ffmpeg::ffmpeg_path()?;
@@ -848,8 +1008,8 @@ fn render_now(
         let part = work.join("out.webm");
         let resolution = (spec.density > 1).then(|| density_preset(spec)).flatten();
         run_hyperframes(
-            &paths, ffmpeg, ffprobe, &stage, &part, &variables, spec.fps, resolution, cancel,
-            progress,
+            &paths, ffmpeg, ffprobe, &stage, &part, &variables, spec.fps, resolution, limits,
+            cancel, on,
         )?;
         // Into the project under a temporary name first, so a render is whole or absent.
         let target = spec.cache.join(name);
@@ -1035,8 +1195,9 @@ fn run_hyperframes(
     variables: &Path,
     fps: u32,
     resolution: Option<&str>,
+    limits: Limits,
     cancel: &AtomicBool,
-    progress: &mut dyn FnMut(f64),
+    on: &mut dyn FnMut(Event),
 ) -> Result<(), String> {
     let mut command = Command::new(&paths.node);
     command
@@ -1050,6 +1211,14 @@ fn run_hyperframes(
     if let Some(resolution) = resolution {
         command.args(["--resolution", resolution]);
     }
+    if let Some(workers) = limits.workers {
+        command.args(["--workers", &workers.to_string()]);
+    }
+    // Chrome's drawElementImage instead of a screenshot per frame: 32 s instead of 40 s for an
+    // 8 s graphic at 60 fps on Windows (24 Oct 2026), where HyperFrames leaves it off; frames
+    // differ only in rounding (PSNR 43-45 dB). It falls back to screenshots by itself where it
+    // cannot run.
+    command.arg("--experimental-fast-capture=true");
     command
         .arg("--variables-file")
         .arg(variables)
@@ -1066,7 +1235,7 @@ fn run_hyperframes(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    runtime::hide_window(&mut command);
+    runtime::hide_window_at(&mut command, limits.low_priority);
     let mut child = command
         .spawn()
         .map_err(|e| format!("Could not start the graphics renderer: {e}"))?;
@@ -1098,9 +1267,13 @@ fn run_hyperframes(
                     .ok()
                     .and_then(|v| v["pct"].as_f64())
                 {
-                    progress((pct / 100.0).clamp(0.0, 1.0));
+                    on(Event::Progress((pct / 100.0).clamp(0.0, 1.0)));
                 }
-            } else if !line.contains("[INFO]") && !line.trim().is_empty() {
+            } else if !line.trim().is_empty() {
+                on(Event::Line(strip_ansi(&line).trim_end()));
+                if line.contains("[INFO]") {
+                    continue;
+                }
                 tail.push_back(line);
                 if tail.len() > 12 {
                     tail.pop_front();
@@ -1119,9 +1292,11 @@ fn run_hyperframes(
     };
     let _ = reader.join();
     while let Ok(line) = lines_rx.try_recv() {
-        if !line.starts_with("@hf-progress") && !line.contains("[INFO]") && !line.trim().is_empty()
-        {
-            tail.push_back(line);
+        if !line.starts_with("@hf-progress") && !line.trim().is_empty() {
+            on(Event::Line(strip_ansi(&line).trim_end()));
+            if !line.contains("[INFO]") {
+                tail.push_back(line);
+            }
         }
     }
     let errors = errors.join().unwrap_or_default();
@@ -1229,6 +1404,49 @@ mod tests {
             look: String::new(),
             mode: "full",
         }
+    }
+
+    /// A newer render landing mid-export removes the one it replaces from the cache; the
+    /// export's pinned copy plays on, and goes when the export is done.
+    #[test]
+    fn a_pinned_render_outlives_the_one_that_replaces_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let spec = spec(dir.path(), &cache, 4_000_000);
+        let old = spec.file_name("old");
+        std::fs::write(cache.join(&old), b"old render").unwrap();
+        let pinned = pin(vec![(spec.clone(), cache.join(&old))]).unwrap();
+        let held = pinned.renders[&spec].clone();
+
+        let new = spec.file_name("new");
+        std::fs::write(cache.join(&new), b"new render").unwrap();
+        remove_superseded(&spec, &new);
+        assert!(!cache.join(&old).exists());
+        assert_eq!(std::fs::read(&held).unwrap(), b"old render");
+        // The pin folder is not taken for a render.
+        assert_eq!(latest(&spec).unwrap().0, cache.join(&new));
+
+        drop(pinned);
+        assert!(!held.exists());
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn renders_made_ahead_for_an_export_wait_behind_the_previews() {
+        let dir = tempfile::tempdir().unwrap();
+        let job = |hash: &str, export| Job {
+            spec: spec(dir.path(), dir.path(), 4_000_000),
+            hash: hash.into(),
+            export,
+        };
+        let mut waiting = VecDeque::new();
+        place(&mut waiting, job("export-a", true));
+        place(&mut waiting, job("preview-a", false));
+        place(&mut waiting, job("export-b", true));
+        place(&mut waiting, job("preview-b", false));
+        let order: Vec<&str> = waiting.iter().map(|j| j.hash.as_str()).collect();
+        assert_eq!(order, ["preview-a", "preview-b", "export-a", "export-b"]);
     }
 
     #[test]
@@ -1398,7 +1616,7 @@ mod tests {
             4_000_000,
         );
         b.asset_id = "g2".into();
-        let todo = missing(&[a.clone(), b.clone(), a.clone()]).unwrap();
+        let todo = missing(&named(&[a.clone(), b.clone(), a.clone()]).unwrap());
         assert_eq!(todo.len(), 2, "each graphic needs its own render");
         assert_eq!(
             todo[0].1, todo[1].1,
@@ -1409,7 +1627,7 @@ mod tests {
         std::fs::create_dir_all(&a.cache).unwrap();
         std::fs::write(&made, b"webm").unwrap();
         copy_render(&made, &b, &todo[1].1).unwrap();
-        assert!(missing(&[a, b]).unwrap().is_empty());
+        assert!(missing(&named(&[a, b]).unwrap()).is_empty());
     }
 
     #[test]
@@ -1503,7 +1721,7 @@ mod tests {
         for spec in [draft((1280, 720)), draft((540, 960)), final_4k] {
             let canvas = (spec.width * spec.density, spec.height * spec.density);
             let started = std::time::Instant::now();
-            ensure(std::slice::from_ref(&spec), &cancel, &mut |f, label| {
+            ensure(std::slice::from_ref(&spec), &cancel, &mut |f, label, _| {
                 eprintln!("{label}: {:.0}%", f * 100.0)
             })
             .unwrap();

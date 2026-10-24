@@ -52,7 +52,7 @@ build with exactly the same crates. `cargo update` happens only in a review.
 | Component | Version | Where | Notes |
 |---|---|---|---|
 | **HyperFrames** | **0.8.162** | `src-tauri/graphics/runtime/package.json` + lock, `graphics/runtime.rs` | Stays pinned (decided 21 Oct). Recheck at each review: changelog, our gate on every bundled template, render determinism |
-| Node.js (graphics runtime) | 22.23.3 | `graphics/runtime.rs` `NODE_VERSION` | Separate from the build's Node |
+| Node.js (graphics runtime) | 22.23.4 | `graphics/runtime.rs` `NODE_VERSION` | Separate from the build's Node |
 | chrome-headless-shell | 152.0.7977.30 | `graphics/runtime.rs` `CHROME_VERSION` | Must match what HyperFrames pins; bump together |
 | GSAP | 3.15.0 (sha256-pinned npm tarball) | `graphics/runtime.rs` `GSAP_VERSION`, `graphics/gsap.rs` | The version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`); bump together. Fetched from npm onto the user's computer when a graphic first loads it (and at runtime install), never shipped in the repo or installer: its licence is GreenSock's "Standard 'no charge' licence" ("free, even for commercial use" per its README; the full terms at gsap.com/standard-license did not load on 22 Oct, so redistribution terms are unread) |
 | GSAP | not yet | — | To be vendored and pinned by [GFX-2](roadmap.md#gfx-2) |

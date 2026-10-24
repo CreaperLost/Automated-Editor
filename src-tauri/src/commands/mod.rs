@@ -267,7 +267,7 @@ pub fn detect_silence_for(
             reader.document().revision,
         )
     };
-    let mut result = crate::project::silence::detect_track_silence_with_words(
+    let (mut result, _) = crate::project::silence::detect_track_silence_with_words(
         &ctx,
         &config,
         transcript.as_ref(),
@@ -409,6 +409,7 @@ fn detect_combined_silence(
             })
             .collect::<Result<Vec<_>, String>>()
     })?;
+    let (found, edges): (Vec<_>, Vec<_>) = found.into_iter().unzip();
     let lists: Vec<crate::project::silence::PlaysAndPauses> = sounds
         .iter()
         .zip(&found)
@@ -433,7 +434,17 @@ fn detect_combined_silence(
             }
         }
     }
-    let pauses = crate::project::silence::common_pauses(&lists, min_us);
+    let mut pauses = crate::project::silence::common_pauses(&lists, min_us);
+    // Two chosen sounds: the first is the voice, and the dead air before its first word and
+    // after its last goes whatever the other plays there (all speech: someone else may talk).
+    if track_ids.is_some() {
+        pauses.extend(sounds[0].1.iter().flat_map(|clip| {
+            edges[0]
+                .iter()
+                .filter_map(|&(a, b)| clip.timeline_range(a, b))
+        }));
+        pauses = crate::transcript::pauses::merge_ranges(pauses);
+    }
     let first = &found[0];
     let dependencies = sounds
         .iter()
@@ -1716,6 +1727,33 @@ pub fn project_check_fix_impl(
     let report = project_check_impl(state, project_handle.clone())?;
     if report.revision != expected_revision {
         return Err("The edit changed since the check; check again".into());
+    }
+    // `blips`: every blip between two cuts goes in one cut, one undo step.
+    if ids.iter().any(|id| id == "blips") {
+        let ranges: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.kind == crate::check::Kind::Fragment)
+            .filter_map(|f| match f.fix {
+                Some(crate::check::Fix::Cut { start_us, end_us }) => {
+                    Some(crate::zoom::EditedRange { start_us, end_us })
+                }
+                _ => None,
+            })
+            .collect();
+        if ranges.is_empty() {
+            return Err("No blips to remove".into());
+        }
+        return project_sequence_edit_impl(
+            state,
+            project_handle,
+            expected_revision,
+            SequenceEdit::DeleteRange {
+                ranges,
+                ripple: Some(true),
+            },
+            None,
+        );
     }
     let all = ids.iter().any(|id| id == "all");
     let mut fixes = Vec::new();

@@ -130,16 +130,44 @@ pub struct McpStatus {
 }
 
 /// A call an agent is waiting on, for the Agent panel.
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Working {
-    #[serde(skip)]
-    id: u64,
+    /// What [`stop_call`] takes.
+    pub id: u64,
     pub client: Option<String>,
     pub tool: String,
     /// 0 to 1, once the call has said.
     pub fraction: Option<f64>,
     pub message: Option<String>,
+    /// Asked to stop, and not finished yet.
+    pub stopping: bool,
+    #[serde(skip)]
+    stop: Arc<tools::Stop>,
+}
+
+impl PartialEq for Working {
+    fn eq(&self, other: &Self) -> bool {
+        (self.id, &self.client, &self.tool, self.fraction, &self.message, self.stopping)
+            == (other.id, &other.client, &other.tool, other.fraction, &other.message, other.stopping)
+    }
+}
+
+/// Stops the running call `id` (the user's Stop in the Agent panel). The call answers its agent
+/// that it was stopped at its next step; calls that don't run long simply finish.
+pub fn stop_call(dir: &Path, host: &dyn Host, id: u64) -> McpStatus {
+    let stop = {
+        let mut server = SERVER.lock();
+        server.working.iter_mut().find(|w| w.id == id).map(|w| {
+            w.stopping = true;
+            w.stop.clone()
+        })
+    };
+    if let Some(stop) = stop {
+        stop.stop(host.transcripts());
+        host.activity_changed();
+    }
+    status(dir)
 }
 
 struct Running {
@@ -424,6 +452,7 @@ impl rmcp::ServerHandler for Handler {
         let host = self.host.clone();
         let started = std::time::Instant::now();
         let agent = client.clone().unwrap_or_else(|| "agent".into());
+        let stop = Arc::new(tools::Stop::default());
         let call = {
             let mut server = SERVER.lock();
             server.next_call += 1;
@@ -434,10 +463,20 @@ impl rmcp::ServerHandler for Handler {
                 tool: tool.name.to_string(),
                 fraction: None,
                 message: None,
+                stopping: false,
+                stop: stop.clone(),
             });
             id
         };
         self.host.activity_changed();
+        // The client cancelled the call, or hung up: stop it.
+        let cancelled = {
+            let (ct, stop, host) = (context.ct.clone(), stop.clone(), self.host.clone());
+            tokio::spawn(async move {
+                ct.cancelled().await;
+                stop.stop(host.transcripts());
+            })
+        };
         // Progress goes to the agent in order, through one task, when it asked for it.
         let (progress_tx, mut progress_rx) =
             tokio::sync::mpsc::unbounded_channel::<(f64, String)>();
@@ -465,7 +504,8 @@ impl rmcp::ServerHandler for Handler {
                 let _ = progress_tx.send((fraction, message.to_string()));
             };
             let mut ctx = tools::Ctx::new(host.as_ref(), agent, host.autopilot())
-                .with_progress(Box::new(report));
+                .with_progress(Box::new(report))
+                .with_stop(stop);
             let out = tools::call(tool, &mut ctx, args);
             if ctx.project_was_changed() {
                 host.project_changed();
@@ -477,6 +517,8 @@ impl rmcp::ServerHandler for Handler {
         })
         .await
         .unwrap_or_else(|e| Err(format!("The tool stopped: {e}")));
+        // rmcp cancels the call's token once it answers, too.
+        cancelled.abort();
         let _ = forward.await;
         SERVER.lock().working.retain(|w| w.id != call);
         self.host.activity_changed();
@@ -564,9 +606,14 @@ pub(crate) fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
     if tools::takes_project(tool) {
         bind_to_project(&mut schema, tools::NEEDS_PROJECT.contains(&tool.name));
     }
-    let annotations = rmcp::model::ToolAnnotations::new()
+    let mut annotations = rmcp::model::ToolAnnotations::new()
         .read_only(tool.read_only)
         .destructive(tools::destructive(tool.name));
+    // Only the tools that go online say so: `false` on every other one would cost the tool
+    // list over a thousand characters on every connection.
+    if tools::online(tool.name) {
+        annotations = annotations.open_world(true);
+    }
     rmcp::model::Tool::new(tool.name, tool.description, Arc::new(schema))
         .with_annotations(annotations)
 }
@@ -1128,7 +1175,7 @@ mod tests {
             .revision;
         let (code, out, err) = ask(&["silence", "--preset", "tight"]);
         assert_eq!(code, 0, "{out}{err}");
-        assert!(out.starts_with("Found 3 pauses"), "{out}");
+        assert!(out.starts_with("Found 4 pauses"), "{out}");
         assert!(
             err.contains("Finding silence in"),
             "progress goes to stderr: {err}"
@@ -1367,13 +1414,17 @@ mod tests {
         // Only the tools behind it.
         assert!(run(serde_json::json!({ "tool": "status", "args": {} }))
             .unwrap_err()
-            .contains("they are: redo"));
+            .contains("they are: layouts"));
     }
 
     #[test]
     fn the_tool_list_stays_small() {
         // Agents read it on every connection: 84,414 characters before 23 Oct 2026, 72,722
-        // after, 53,828 with the rarely needed tools behind `more`.
+        // after, 53,828 with the rarely needed tools behind `more`. 24 Oct: about 60,100 with
+        // `frame_render`'s sheets (COST-4: one call instead of a PNG per frame) and the online
+        // tools' `openWorldHint`, so the budget moved from 60,000 to 61,000. COST-2 (24 Oct):
+        // the layouts and the shorts' tools behind `more` too, 41,240. Measured in Claude
+        // Code, the whole list was 23,868 tokens; with its ToolSearch only the names are sent.
         let list = tool_list();
         if std::env::var("TOOL_SIZES").is_ok() {
             for tool in &list {
@@ -1385,6 +1436,6 @@ mod tests {
             }
         }
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 60_000, "the tool list grew to {size} characters");
+        assert!(size < 42_000, "the tool list grew to {size} characters");
     }
 }

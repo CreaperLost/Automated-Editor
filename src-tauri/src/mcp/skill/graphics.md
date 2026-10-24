@@ -21,10 +21,18 @@ turned into that name), build one paused timeline as long as the clip and regist
 `data-no-timeline` on the root. Nothing else may reach the network.
 
 Look first at what exists: the list below has the bundled templates and the user's library,
-each library item with a `useWhen` line; pick one whose `useWhen` fits and fill in its
-variables. Write a composition of your own (`graphic_add` with `blank`, then
+each library item with when to use it; pick one that fits and fill in its variables. Write a composition of your own (`graphic_add` with `blank`, then
 `graphic_write_file`) only when nothing there does the job. Ask before `graphics_install`.
-After adding, `graphic_render`, then look with `frame_render` (with `short` for a short's).
+After adding, `graphic_render`, then look at its motion in one `frame_render` with `graphic`
+(its id: a sheet of frames across it; `short` for a short's), never a call per frame.
+
+Each graphic carries the sentence it sits on: the claim, the number, the step or the names said
+there, in the speaker's words, shortened. Read the words around its `atWord` first. A title
+that only names the topic ("Memory", "Tools") or a line any video could use is not a graphic:
+show what this sentence says ("Reset the chat. Keep the plan."), the numbers it gives, the
+three things it lists, the before and after it describes. If a sentence has nothing to show,
+it gets no graphic. Propose graphics as a table, one row each: start, end, template (or
+library item), what it shows in one line, and the words it sits on.
 
 When the user likes a graphic you wrote, offer to keep it. On a yes: `graphic_templatize` (its
 source and the rules: text as variables, the style's colours, timing from `data-duration`, a
@@ -48,6 +56,7 @@ and can use `var(--brand-accent)`, `var(--brand-background)`, `var(--brand-text)
 copies a library item in. Items marked "as is" fail the check: look at one with `frame_render`
 before relying on it.
 
+<!-- shorts -->
 In a short, a graphic shows one of three ways: `full` (the whole frame), `screen` (split: the
 face above, the graphic in the screen's part, footage or not) or `overFace` (the face fills the
 frame and the graphic is drawn over it, see-through); also `camera` and `overScreen`. Pick it
@@ -60,3 +69,4 @@ the split, so the box can turn about square or landscape; it renders again at th
 3:2 wide the box takes your `@media (orientation: portrait)` rules, as a part of a phone frame;
 wider, your landscape ones. Write for the box you are told, in vw/vh/vmin, never for the 9:16
 frame.
+<!-- /shorts -->

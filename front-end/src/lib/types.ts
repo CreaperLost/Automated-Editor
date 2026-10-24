@@ -1395,6 +1395,18 @@ export interface ExportStatus {
   outputPath: string | null;
   failure: ExportFailure | null;
   diagnostics: string[];
+  /** What it does before the frames (rendering a graphic), and how far along that is. */
+  stage?: string | null;
+  stageFraction?: number | null;
+  /** Its log so far. */
+  log?: ExportLogLine[];
+}
+
+export interface ExportLogLine {
+  /** Seconds since the export started. */
+  secs: number;
+  level: "info" | "warn" | "error";
+  text: string;
 }
 
 export interface SegmentSummary {
@@ -1809,11 +1821,15 @@ export interface McpActivity {
 
 /** A call an agent is waiting on. */
 export interface McpWorking {
+  /** What `mcpStopCall` takes. */
+  id: number;
   client: string | null;
   tool: string;
   /** 0 to 1, once the call has said. */
   fraction: number | null;
   message: string | null;
+  /** Asked to stop, and not finished yet. */
+  stopping: boolean;
 }
 
 /** An agent app AeroEdits can add itself to. */

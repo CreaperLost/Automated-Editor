@@ -11,6 +11,9 @@ Step by step by default; automatic when the user says so ("auto", "no questions"
 the defaults below, show the picks in one message and go on. Export still waits for the user's
 go.
 
+`faces`, `shorts` and `layouts` are behind `more`: `more` with `tool` alone gives one's
+arguments, with `args` it runs it.
+
 ## 1. Project (automatic)
 
 - `status`. Shorts need a transcript: if nothing is transcribed, `transcribe` (online, the

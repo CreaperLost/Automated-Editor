@@ -58,6 +58,70 @@ Rerun EVAL-1 from [plans/evaluation.md](plans/evaluation.md) after each cost or 
   and look tools → `library`); a real edit with a style of his own (fonts, logo) checked in an
   export.
 
+### From George's real edit, 23 Oct — built 24 Oct, left: trying it in the dev app
+
+All ten were built on 24 Oct (see [Done](#done)): AGT-5, FIX-4, FIX-5, UI-4, GFX-6, FIX-6,
+COST-4, UI-5, UI-6 and UI-7. The Rust tests and the front-end typecheck pass.
+**Tried in the dev app 24 Oct** (a copy of the 22 Oct recording, through MCP and the UI): FIX-4
+(the edit starts at the first word), FIX-5 (fixed then: a saved review that found nothing read
+as "the rules only" and asked for an in-house review), COST-4, UI-4, UI-5, UI-6, UI-7 and GFX-7
+(the export reused both graphics' renders; Node 22.23.4 installs). Not tried: FIX-6, **Remove
+all blips**, UI-5's drag row; graphic renders took 57 s and 93 s for 5 s and 6 s graphics while
+the installed app rendered too, to be timed alone. Left:
+- Try each in the dev app; the EVAL-1 rerun judges AGT-5, COST-4 and GFX-6 (its counts for
+  them are in [plans/evaluation.md](plans/evaluation.md#rerun)).
+- UI-5: the drop-for-a-new-track row now appears only while dragging; above the video tracks it
+  may move them down 28 px as a drag starts. Check it feels right.
+- UI-4: **Review** runs from the panel's button, not on opening the panel, so an OpenRouter
+  review is never paid for by just looking.
+
+<a id="gfx-7"></a>
+### GFX-7 · Graphics ready before export — S/M
+
+On 23 Oct the export spent about 15 minutes rendering 15 graphics again at 60 fps before its
+first frame. Measured 24 Oct on one 8 s graphic (1080p, 480 frames, RTX 3060, 12 threads): 40 s
+as the app renders it (WebM, 60 fps, 4 Chrome workers by default). Capture is the cost, not the
+encode: a PNG sequence (no encode) takes 31 s, `--vp9-cpu-used 8` 46 s (no gain), ProRes 55 s
+(173 MB), 8 workers 40 s, 2 workers 50 s. What helps: **30 fps** 24 s (-40 %), and
+**`--experimental-fast-capture=true`** 32 s (-20 %; on its own it only turns on on macOS).
+- **Built 24 Oct (not yet tried in the dev app):** whenever the edit changes, every graphic's
+  export render (the project's export size and frame rate) is queued in the background behind
+  the preview's (`render::request_export`, from the playback engine's rebuild), with 2 Chrome
+  workers instead of about 4; every background render runs at below-normal priority (Windows;
+  Chrome inherits it). An export render waiting or running doesn't show as "rendering" in the
+  editor, and its failure isn't shown there (the export says it). Fast capture is on for every
+  render: its frames differ from screenshots only in rounding (PSNR 43-45 dB on 240 frames).
+  Writing a graphic's files retries for up to 2 s while a render is reading them (Windows refused
+  the write; it made `graphics_are_added_at_a_word_changed_and_skipped_by_cuts` fail now and
+  then).
+- **Frame rate (George, 24 Oct: "native to the settings"):** every render of a graphic in an
+  edit, the preview's too, is at the export settings' frame rate (60 at most), so a 1080p
+  export plays the preview's renders and makes none of its own; a larger export still renders
+  twice as sharp. Background renders are niced on macOS and Linux as well.
+- **Left:** try it in the dev app (a preview render at 60 fps takes about 40 s instead of 24 s
+  for an 8 s graphic, but there is one render instead of two).
+- **Done when:** exporting a project whose graphics are unchanged spends no time on them.
+
+<a id="ai-budget"></a>
+### AI-1 · What an agent reads in an edit: about 100k tokens at most — S/M (a preference)
+
+George, 24 Oct: what an agent reads in a whole edit (the tool list, the guides and every tool
+answer, images included) should stay at about 100k tokens or less. A preference to steer by,
+not a hard limit: no test fails on it. Our source code doesn't count.
+- **Now (24 Oct, about 4 characters a token):** before any work, the tool list is about 15k
+  tokens (60,100 characters) and the preset and graphics guides about 10k more. EVAL-1 run 1
+  (23 Oct) had a 52k-token context in T1, Claude Code's own prompt (about 15k) included.
+- **Reported (24 Oct):** [plans/eval/tokens.py](plans/eval/tokens.py), run by
+  [plans/eval/run.sh](plans/eval/run.sh) after each turn: the context at each turn's first and
+  last call and our tool answers by tool. Run 3 (23 Oct) ended at 57,964 tokens; its biggest
+  answers were `template` (3,740), the storyboard (3,900 with its image) and `graphics` (3,500).
+- **Trimmed 24 Oct:** the tutorial method no longer repeats the rules' chapters section and
+  the graphics guide (about 900 characters less in every tutorial edit).
+- **Trimmed 24 Oct:** the tutorial guide (−10 % step by step), `graphics` (−45 %), the
+  storyboard's tile list and the tool list (COST-2, −31 %); see Done.
+- **Next:** an EVAL-1 run to see the new totals; then transcripts (read once) and images
+  (COST-1, COST-4).
+
 ---
 
 ## Next
@@ -123,8 +187,8 @@ Editing Skill, Tao's motion skill, Jason's blueprint artifact) before designing 
 <a id="agt-4"></a>
 ### AGT-4 · Readiness report and long jobs — S/M
 
-- **Schema cost and readiness: done 23 Oct** (see Done). **Left:** cancellation for long
-  jobs. Smaller candidates to weigh here: a "state screenshot" (canvas +
+- **Schema cost and readiness: done 23 Oct; stopping long calls: done 24 Oct** (see Done).
+  **Left:** try a Stop in the dev app. Smaller candidates to weigh here: a "state screenshot" (canvas +
   timeline + inspector at one moment), a time budget per stage that stops and asks, a diagnose
   action for a broken timeline. **Was:** backlog #16.
 
@@ -390,11 +454,11 @@ Raised 23 Oct as long-term direction. Every item here is measured against
   WebP) for the rough idea, and a sharper board of one stretch only where something looks off.
   Measure tokens per reviewed minute and what the agent still catches.
 <a id="cost-2"></a>
-- **COST-2 · Tools on demand (S/M).** Today 55 tools, 72,722 characters (~18k tokens) in the
-  list, about 330 tokens a tool. Claude Code already loads an MCP tool's schema only when it is
-  used; other clients send the whole list. Measure per client (Claude app, Codex, Claude Code),
-  then send a small core set (status, template, scan, transcribe, the cleanup passes, chapters,
-  check, export) with the rest named in a line each and described on request.
+- **COST-2 · Tools on demand (S/M).** Measured and cut 24 Oct (see Done): 30 tools, 41,240
+  characters (about 16k tokens); Claude Code with `ToolSearch` pays about 1.7k for the names.
+  Left: measure Codex and the Claude app; then, if a client sends the whole list, change the
+  list to the open project's preset (`notifications/tools/list_changed`: the shorts' tools only
+  in a shorts edit) rather than more behind `more`.
 <a id="cost-3"></a>
 - **COST-3 · Cheaper reviewers (M).** Hand narrow judgement jobs (looking at a board, filler
   windows, chapter titles, checking a graphic) to a smaller model or a lower reasoning effort,
@@ -423,6 +487,18 @@ Raised 23 Oct as long-term direction. Every item here is measured against
   `architecture.md` so new work starts from them. Seen so far: the same Tauri event-listener
   effect written out in `App.tsx` and several panels; line-ending-safe edits; Clips and Shorts
   must share one set of short panels (SHT-5).
+<a id="qual-2"></a>
+- **QUAL-2 · Review the tests (M), later, not urgent.** Asked for 23 Oct. Go through the Rust
+  and front-end tests: drop ones that guard behaviour that is gone or was replaced (old
+  project formats, removed alignment, superseded passes), merge near-duplicates, and keep the
+  ones that pin decisions. Note how long the suite takes before and after.
+<a id="qual-3"></a>
+- **QUAL-3 · Build times and caching (S/M), later, not urgent.** Asked for 23 Oct: builds feel
+  slow (a `cargo check` of the app takes about 3 minutes after a small change). Measure a clean
+  build, a one-line change and `cargo tauri dev` rebuilds (`cargo build --timings`); look at
+  what is missing: a compiler cache (sccache), a faster linker, splitting the big crate so a
+  change rebuilds less, dev profile settings (`opt-level` and debug info per package), and
+  caching in the release/installer build.
 
 ### Ideas not yet scheduled
 
@@ -444,6 +520,65 @@ editor already tolerates both.
 ## Done
 
 Most recent first. Details live in git history and the plans.
+
+- **24 Oct 2026** — **AGT-4 long jobs, COST-2 tools on demand, AI-1 trims** (tests pass; not
+  tried in the dev app or in an EVAL-1 run yet).
+  - **AGT-4 stopping a call.** A running agent call stops when its client cancels it
+    (`notifications/cancelled`, which Claude Code sends on Esc), when the agent hangs up, or at
+    the user's **Stop** beside it in the Agent panel. `transcribe`, the `fillers` review,
+    `chapters` and `shorts` stop their app job; `export` cancels its export; `graphic_render`
+    stops rendering; waiting in `faces`, `export_status` and `fillers` (on a review already
+    running) just stops waiting. The agent is told "Stopped ... Nothing was changed by it".
+    Short calls simply finish.
+  - **COST-2 measured (Claude Code 2.1.308, headless, Haiku 5.5):** the context before any work
+    is 3,821 tokens without AeroEdits, 5,566 with it when Claude Code's `ToolSearch` is on (the
+    names only; the default in an interactive session), 27,689 when it is off: the whole list
+    was 23,868 tokens (about 2.5 characters a token, not 4). EVAL-1's `run.sh` turns it off
+    (`--tools ""`), so EVAL pays the whole list, as clients without tool search do. Codex is not
+    installed here and the Claude app's chat can't be measured from outside: both still to do.
+  - **COST-2 smaller list:** `layouts`, `media_import`, `short_from_take`, `shorts`, `faces`,
+    `short_footage`, `timeline_get` and `undo_batch` went behind `more` (a tutorial edit uses
+    none of them; the shorts and clips methods say so): 38 → 30 tools, 60,100 → 41,240
+    characters (about 16k tokens instead of 24k where the whole list is sent).
+  - **AI-1 trims:** the tutorial guide 19,585 → 17,703 characters step by step and 14,983 →
+    14,368 automatic (the automatic mode, "choices run as set" and the dry-run loop were each
+    said two or three times; the choices' JSON shape only shows while the preset has none);
+    `graphics` 14,797 → 8,115 (templates and library as a line each, the colours every one
+    takes said once, the shorts part of its rules only for a project with shorts); the
+    storyboard's tiles as a line each instead of JSON.
+
+- **24 Oct 2026** — **The fixes from George's 23 Oct edit** (not yet tried in the dev app).
+  - <a id="fix-4"></a>**FIX-4** the dead air before the first word, after the last and on both
+    sides of a recording pause (a stretch without audio of 5 s or more) is cut by the gap pass
+    and the silence pass, past where the microphone stops (no sliver of picture stays), and no
+    protected sound (the computer's) keeps it; other speech still does
+    (`transcript::pauses::edge_ranges`). Shorter dropouts are still never cut across.
+  - <a id="fix-5"></a>**FIX-5** a filler and retake review runs once: `fillers` uses the saved
+    one (also from a call whose caller gave up, which never stopped it) or waits for the one
+    still running; naming a review (`review: openrouter` or `local`) runs it again.
+  - <a id="agt-5"></a>**AGT-5** what the preset's choices hold runs as set with one line, no
+    question; going online is never asked; layouts and the webcam only when the user brings
+    them up (`webcam` left the tutorial choices). The three online tools carry `openWorldHint`
+    (the others say nothing, which keeps the tool list under its 60,000-character budget), and
+    the AI agents dialog says the client's own allow prompts are the client's.
+  - <a id="gfx-6"></a>**GFX-6** graphics are proposed as a table (start, end, template, what it
+    shows, the words it sits on), each showing what its sentence says, in the tutorial and
+    shorts methods and the graphics guide.
+  - <a id="cost-4"></a>**COST-4** `frame_render` takes `moments` (up to 24) or a `graphic` (a
+    frame a second across it, 4 to 12), returning one contact sheet, each tile labelled with its
+    time.
+  - <a id="ui-7"></a>**UI-7** the export page's **Log** streams the export (each graphic's start
+    and time, the frames, the end or the error; open on a failure, copyable), and its bar and
+    `export_status` show the graphics step's own progress instead of 0 %. HyperFrames' own
+    output lines are in the log too, indented, as it prints them (24 Oct).
+  - <a id="ui-6"></a>**UI-6** the export page: **Medium / High / Ultra** (1080p60 high, 1080p60
+    max, 4K60 max), Save to and the checks; **Advanced** holds resolution, frame rate, encoding
+    and the other files, open when the settings fit no button. New projects export 1080p60.
+    **Remove all blips** in the checks, one undo step.
+  - <a id="ui-4"></a>**UI-4** the transcript review panel: **Review**, the list, **Cleanup**.
+  - <a id="ui-5"></a>**UI-5** add-track buttons (film +, waveform +) on the Tracks heading.
+  - <a id="fix-6"></a>**FIX-6** "Open the styles folder" (and the presets folder) did nothing
+    until a style (preset) of the user's own was saved, as the folder did not exist yet.
 
 - **23 Oct 2026** — **ORG-1 presets and styles, all four phases**
   ([plans/presets-and-styles.md](plans/presets-and-styles.md)).

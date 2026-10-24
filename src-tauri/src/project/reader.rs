@@ -1402,6 +1402,51 @@ mod tests {
         .is_err());
     }
 
+    /// On a case-insensitive volume a destination differing from a source only in case is that
+    /// source, and an export there would replace the original media.
+    #[cfg(windows)]
+    #[test]
+    fn an_export_never_replaces_a_source_named_in_another_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::project::folder::create_project_folder(dir.path(), "case", None).unwrap();
+        let media = dir.path().join("media");
+        fs::create_dir_all(&media).unwrap();
+        let original = media.join("Original.wav");
+        fs::write(&original, b"original").unwrap();
+        let source = Asset {
+            id: "a".into(),
+            name: "Original.wav".into(),
+            kind: crate::sequence::AssetKind::Audio,
+            path: original.to_string_lossy().into_owned(),
+            streams: Vec::new(),
+            duration_us: 1_000_000,
+            width: 0,
+            height: 0,
+            pauses: Vec::new(),
+            missing: false,
+        };
+        let requested = media.join("original.wav");
+        assert!(crate::export::resolve_destination(
+            &root,
+            "case",
+            0,
+            Some(requested.to_str().unwrap()),
+            std::slice::from_ref(&source),
+        )
+        .is_err());
+        // A new file beside it is still fine.
+        let beside = media.join("edited.wav");
+        assert!(crate::export::resolve_destination(
+            &root,
+            "case",
+            0,
+            Some(beside.to_str().unwrap()),
+            &[source],
+        )
+        .is_ok());
+        assert_eq!(fs::read(&original).unwrap(), b"original");
+    }
+
     /// A recording with pauses opens as one linked clip set per recorded stretch, keeps its
     /// asset id across opens, and a recording folder itself is not a project.
     #[test]

@@ -27,6 +27,8 @@ pub struct StylesView {
 
 pub fn styles_impl(state: &AppState, project_handle: Option<String>) -> Result<StylesView, String> {
     let dir = store::dir();
+    // Made before a style of the user's own is saved, so "Open the styles folder" has one.
+    let _ = std::fs::create_dir_all(&dir);
     let (project_style, own) = match project_handle {
         Some(handle) => {
             let opened = state.opened_project.lock();

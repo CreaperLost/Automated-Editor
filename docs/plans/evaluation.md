@@ -186,3 +186,19 @@ real agent: undo its run, go back to its checkpoint.
 Same inputs, same messages (T1, T2, S1, then the user's answer to what the agent asks), a
 fresh project. Compare calls, cost per turn and the corrections needed. Rerun after each cost
 or quality change (COST-1..3, a lighter tool list, a cheaper model).
+
+**Running it:** [eval/run.sh](eval/run.sh) runs one turn (`EVAL_DIR` is the run's folder in
+scratch, with `mcp.json` pointing at the dev app's `--mcp-stdio`); after each turn it prints
+[eval/tokens.py](eval/tokens.py)'s report of what the agent read: the context at each turn's first
+and last call, and our tool answers by tool (text and images). **AI-1** (24 Oct, a preference,
+not a limit): a whole edit's context at its last call about 100k tokens or less. Run 3 of 23 Oct,
+measured afterwards: T1 25,508 → 43,568 tokens (our answers about 10,800: `template` 3,740, the
+storyboard 3,900 with its image, `transcript_get` 2,200), T2 ends at 57,964 (`graphics` 3,500,
+three `frame_render`s 1,160): within it.
+
+Also count (AGT-5, 24 Oct): questions about anything the preset's choices hold (each is a
+failure: going online, the gap pass, zooms, the review depth, graphics); any mention of layouts
+or the webcam the user did not bring up (a failure); `frame_render` calls in a row for one
+graphic or zoom instead of one sheet (COST-4). And judge the graphics (GFX-6): proposed as a
+table; for each, does it show what its sentence says (claim, number, step), or only the
+topic? Count the ones that only name the topic.

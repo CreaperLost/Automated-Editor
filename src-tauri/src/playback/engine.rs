@@ -345,6 +345,9 @@ fn tick(
         crate::media::profile("rebuild: document", rebuild_started);
         let mixer = AudioMixer::new(&root, &document).map_err(error)?;
         crate::media::profile("rebuild: mixer", rebuild_started);
+        // The edit changed: the graphics' export renders are made in the background now, so an
+        // export finds them ready.
+        crate::graphics::render::request_export(&root, &document);
         let (width, height) = document.layout.preview_dimensions().map_err(error)?;
         let (width, height) = quality.canvas(width, height);
         // Keep the GPU device and background across seeks; recreating them dominated seek time.

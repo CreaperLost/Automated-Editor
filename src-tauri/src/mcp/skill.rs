@@ -20,7 +20,23 @@ const SKILL: &str = include_str!("skill/SKILL.md");
 const RULES: &str = include_str!("skill/rules.md");
 const EXPORT: &str = include_str!("skill/export.md");
 /// How to work with graphics, given with the `graphics` list (only edits with graphics need it).
-pub const GRAPHICS: &str = include_str!("skill/graphics.md");
+const GRAPHICS: &str = include_str!("skill/graphics.md");
+
+/// The graphics rules `graphics` gives: the `<!-- shorts -->` block (how graphics show in a
+/// 9:16 short) only for a project with shorts.
+pub fn graphics_guide(shorts: bool) -> String {
+    let mut out = Vec::new();
+    let mut dropping = false;
+    for line in GRAPHICS.trim().lines() {
+        match line.trim() {
+            "<!-- shorts -->" => dropping = !shorts,
+            "<!-- /shorts -->" => dropping = false,
+            _ if !dropping => out.push(line.trim_end_matches('\r')),
+            _ => {}
+        }
+    }
+    out.join("\n").trim_end().to_string()
+}
 /// Files older versions installed beside SKILL.md; they are taken out so no agent reads them.
 const LEGACY_FILES: [&str; 4] = [
     "export.md",
@@ -81,9 +97,10 @@ fn compose(name: &str, auto: bool, export: bool) -> Result<String, String> {
         )
     } else {
         format!(
-            "## Choices ({})\n\nThe preset's choices: ask once whether to use them again. After \
-             the user answers differently, save them with `library` (`kind: preset`, `op: set`, \
-             `set: {{\"choices\": {{...}}}}`).\n\n```json\n{}\n```",
+            "## Choices ({})\n\nThe preset's choices: run them as set without asking, one line \
+             each on what ran. When the user answers otherwise, save them in this shape with \
+             `library` (`kind: preset`, `op: set`, `set: {{\"choices\": {{...}}}}`; a built-in \
+             preset goes into a copy the project then follows).\n\n```json\n{}\n```",
             preset.name,
             serde_json::to_string_pretty(&choices).unwrap_or_default()
         )
@@ -109,13 +126,14 @@ fn compose(name: &str, auto: bool, export: bool) -> Result<String, String> {
         preset.method.trim(),
     )
     .replace("\r\n", "\n");
-    Ok(for_mode(&whole, auto, thorough))
+    Ok(for_mode(&whole, auto, thorough, !choices.is_empty()))
 }
 
 /// `text` without the blocks this run doesn't need: `<!-- steps -->` (a run step by step only),
 /// `<!-- auto -->` (an automatic run only), `<!-- thorough -->` (a thorough review only, kept
-/// step by step since the user is asked). The marker lines themselves never reach agents.
-fn for_mode(text: &str, auto: bool, thorough: bool) -> String {
+/// step by step since the user is asked), `<!-- nochoices -->` (only while the preset has no
+/// choices: once it has, they are shown as they are). The marker lines never reach agents.
+fn for_mode(text: &str, auto: bool, thorough: bool, has_choices: bool) -> String {
     let mut out = Vec::new();
     let mut dropping: Option<&str> = None;
     for line in text.lines() {
@@ -132,11 +150,12 @@ fn for_mode(text: &str, auto: bool, thorough: bool) -> String {
         if let Some(kind) = marker
             .strip_prefix("<!-- ")
             .and_then(|m| m.strip_suffix(" -->"))
-            .filter(|k| matches!(*k, "steps" | "auto" | "thorough"))
+            .filter(|k| matches!(*k, "steps" | "auto" | "thorough" | "nochoices"))
         {
             let drop = match kind {
                 "steps" => auto,
                 "auto" => !auto,
+                "nochoices" => has_choices,
                 _ => auto && !thorough,
             };
             if drop && dropping.is_none() {
@@ -526,8 +545,9 @@ mod tests {
             !auto.contains("1. Dry run:") && !auto.contains("<!--"),
             "{auto}"
         );
+        // Under 80 % before AI-1's trims (24 Oct), which took most from the step-by-step parts.
         assert!(
-            auto.len() * 5 < guide.len() * 4,
+            auto.len() * 100 < guide.len() * 85,
             "{} vs {}",
             auto.len(),
             guide.len()

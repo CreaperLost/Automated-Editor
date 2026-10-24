@@ -1210,6 +1210,13 @@ fn mcp_skill_install(
     mcp::set_skill_installed(&transcript::settings::config_dir(), home, installed)
 }
 
+/// The Agent panel's Stop on a running agent call.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn mcp_stop_call(app: tauri::AppHandle, id: u64) -> mcp::McpStatus {
+    mcp::stop_call(&transcript::settings::config_dir(), mcp_host(&app).as_ref(), id)
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn mcp_set_autopilot(app: tauri::AppHandle, autopilot: bool) -> Result<mcp::McpStatus, String> {
@@ -2477,6 +2484,7 @@ pub fn run() {
             mcp_status,
             mcp_set_enabled,
             mcp_set_autopilot,
+            mcp_stop_call,
             proposals_list,
             proposal_accept,
             proposal_reject,

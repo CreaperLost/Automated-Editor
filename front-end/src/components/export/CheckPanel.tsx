@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, Loader2, Wand2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, Loader2, Scissors, Wand2, XCircle } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { useProjectStore } from "../../stores/projectStore";
 import { Button, cn } from "../ui";
@@ -66,6 +66,7 @@ export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
 
   const findings = report?.findings ?? [];
   const fixable = findings.filter((f) => f.fixLabel);
+  const blips = fixable.filter((f) => f.kind === "fragment");
   const counts = (["error", "warning", "info"] as const)
     .map((severity) => {
       const n = findings.filter((f) => f.severity === severity).length;
@@ -91,6 +92,18 @@ export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
           {counts}
         </span>
         <span className="flex-1" />
+        {blips.length > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={Scissors}
+            disabled={disabled || fixing !== undefined}
+            onClick={() => void fix(["blips"], "blips")}
+            title="Cuts every blip between two cuts, as one undo step"
+          >
+            {fixing === "blips" ? "Removing…" : `Remove all blips (${blips.length})`}
+          </Button>
+        )}
         {fixable.length > 1 && (
           <Button
             size="sm"

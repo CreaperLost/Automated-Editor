@@ -270,14 +270,18 @@ pub fn detect_track_silence(
     ctx: &WaveformTrackContext,
     config: &SilenceConfig,
 ) -> Result<SilenceDetectionResult, String> {
-    detect_track_silence_with_words(ctx, config, None)
+    detect_track_silence_with_words(ctx, config, None).map(|(result, _)| result)
 }
 
+/// The silences in a sound, its words kept. With words, also the dead air before the first,
+/// after the last and around each recording pause, however noisy
+/// ([`crate::transcript::pauses::edge_ranges`]), which also come back on their own in source
+/// time, for callers that let no other sound keep them.
 pub(crate) fn detect_track_silence_with_words(
     ctx: &WaveformTrackContext,
     config: &SilenceConfig,
     transcript: Option<&crate::transcript::Transcript>,
-) -> Result<SilenceDetectionResult, String> {
+) -> Result<(SilenceDetectionResult, Vec<(u64, u64)>), String> {
     let SilenceScan {
         source_ranges,
         sample_rate,
@@ -295,6 +299,7 @@ pub(crate) fn detect_track_silence_with_words(
             .collect(),
     )?;
 
+    let mut edges = Vec::new();
     let source_ranges = if let Some(transcript) = transcript {
         // Parakeet's words swallow the pauses next to them: guarded as they are, the pauses
         // inside them would never be cut.
@@ -310,7 +315,18 @@ pub(crate) fn detect_track_silence_with_words(
         } else {
             transcript
         };
-        crate::transcript::pauses::protect_words(source_ranges, words, config.padding_ms)
+        // Tagged sounds stay, as this pass keeps whatever it hears.
+        edges = crate::transcript::pauses::edge_ranges(
+            words,
+            &covered,
+            config.padding_ms,
+            config.min_duration_ms,
+            true,
+        );
+        let mut ranges =
+            crate::transcript::pauses::protect_words(source_ranges, words, config.padding_ms);
+        ranges.extend(edges.iter().copied());
+        crate::transcript::pauses::merge_ranges(ranges)
     } else {
         source_ranges
     };
@@ -339,19 +355,22 @@ pub(crate) fn detect_track_silence_with_words(
         suggestion.id = format!("silence-{}", index + 1);
     }
 
-    Ok(SilenceDetectionResult {
-        track_id: ctx.track_id.clone(),
-        sample_rate,
-        channels,
-        channel_policy: channel_policy_name(policy),
-        suggestions,
-        diagnostics,
-        thresholds: vec![SoundThreshold {
+    Ok((
+        SilenceDetectionResult {
             track_id: ctx.track_id.clone(),
-            threshold_db,
-        }],
-        transcript_dependencies: transcript.map(|t| vec![t.dependency()]).unwrap_or_default(),
-    })
+            sample_rate,
+            channels,
+            channel_policy: channel_policy_name(policy),
+            suggestions,
+            diagnostics,
+            thresholds: vec![SoundThreshold {
+                track_id: ctx.track_id.clone(),
+                threshold_db,
+            }],
+            transcript_dependencies: transcript.map(|t| vec![t.dependency()]).unwrap_or_default(),
+        },
+        edges,
+    ))
 }
 
 /// Where a sound plays on the timeline, and its pauses there.

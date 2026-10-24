@@ -47,6 +47,8 @@ pub fn presets_impl(
         }
         None => (None, None, Map::new(), 0, Map::new()),
     };
+    // Made before a preset of the user's own is saved, so "Open the presets folder" has one.
+    let _ = std::fs::create_dir_all(store::dir());
     Ok(PresetsView {
         presets: store::list().iter().map(preset::view).collect(),
         project_preset,
@@ -145,7 +147,11 @@ pub fn project_export_set_impl(
 
 /// Renames the user's preset `name` to `to`; projects that follow it keep following it (their
 /// old name for it leads to it, see `preset::store`).
-pub fn preset_rename_impl(_state: &AppState, name: String, to: String) -> Result<PresetView, String> {
+pub fn preset_rename_impl(
+    _state: &AppState,
+    name: String,
+    to: String,
+) -> Result<PresetView, String> {
     let current = store::load(&name)?;
     if preset::is_builtin(&current.name) {
         return Err(format!("{} is built in and keeps its name", current.name));
@@ -356,7 +362,9 @@ pub fn preset_patch_impl(
                 (
                     r.summary.project_handle.clone(),
                     r.document().revision,
-                    preset::of(r.document()).name.eq_ignore_ascii_case(&current.name),
+                    preset::of(r.document())
+                        .name
+                        .eq_ignore_ascii_case(&current.name),
                 )
             })
         };

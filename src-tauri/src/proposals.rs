@@ -761,7 +761,9 @@ pub fn propose_restyle(
     let document = reader.document();
     let items = crate::graphics::restyle::plan(reader.root(), document);
     if items.is_empty() {
-        return Err("Every graphic follows the video's look already: nothing to bring in line".into());
+        return Err(
+            "Every graphic follows the video's look already: nothing to bring in line".into(),
+        );
     }
     let summary = items.iter().map(|p| p.line()).collect();
     proposals.add(Batch {
@@ -989,17 +991,19 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => match (batch.status, rejected) {
-            (Status::Pending, true) => {
-                batch.status = Status::Rejected;
-                batch.decided_at = Some(now());
+        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
+            match (batch.status, rejected) {
+                (Status::Pending, true) => {
+                    batch.status = Status::Rejected;
+                    batch.decided_at = Some(now());
+                }
+                (Status::Rejected, false) => {
+                    batch.status = Status::Pending;
+                    batch.decided_at = None;
+                }
+                _ => return Err(format!("{id} is already decided")),
             }
-            (Status::Rejected, false) => {
-                batch.status = Status::Pending;
-                batch.decided_at = None;
-            }
-            _ => return Err(format!("{id} is already decided")),
-        },
+        }
         Change::Cuts { items, .. } => {
             let (from, to) = if rejected {
                 (ItemState::Pending, ItemState::Rejected)

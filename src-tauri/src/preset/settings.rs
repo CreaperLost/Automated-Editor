@@ -104,9 +104,10 @@ pub struct ExportPreferences {
 
 impl Default for ExportPreferences {
     fn default() -> Self {
+        // The export page's Medium (UI-6): 1080p, 60 fps, normal quality.
         Self {
             resolution: "1080p".into(),
-            fps: 30,
+            fps: 60,
             quality: "high".into(),
             mbps: 16,
         }
@@ -122,13 +123,19 @@ pub const RESOLUTIONS: [(&str, u32, u32); 4] = [
 
 impl ExportPreferences {
     pub fn validate(&self) -> Result<(), String> {
-        if !RESOLUTIONS.iter().any(|(name, _, _)| *name == self.resolution) {
+        if !RESOLUTIONS
+            .iter()
+            .any(|(name, _, _)| *name == self.resolution)
+        {
             return Err("Export resolution is 720p, 1080p, 1440p or 4K".into());
         }
         if ![24, 25, 30, 60].contains(&self.fps) {
             return Err("Export frame rate is 24, 25, 30 or 60".into());
         }
-        if !matches!(self.quality.as_str(), "standard" | "high" | "max" | "custom") {
+        if !matches!(
+            self.quality.as_str(),
+            "standard" | "high" | "max" | "custom"
+        ) {
             return Err("Export quality is standard, high, max or custom".into());
         }
         if !(1..=200).contains(&self.mbps) {

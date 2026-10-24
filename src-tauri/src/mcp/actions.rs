@@ -83,7 +83,7 @@ pub static ACTIONS: [ToolDef; 38] = [
     },
     ToolDef {
         name: "speed",
-        description: "Plays clips faster or slower, 0.25x to 8x, keeping their media and the             sound's pitch: a clip gets shorter or longer (with what it is linked to). Give             `clips` (ids from timeline_get) or a timeline range `fromUs`-`toUs` (every unlocked             track is split at its ends), and `speed` (1 is normal). Magnetic closes up or pushes             along; `ripple` overrides it (false leaves a gap or stops at the next clip).             `short` works on a short's own timeline. Without `speed` it lists what plays at             other speeds. Only when the user asks: never speed up waiting by yourself.",
+        description: "Plays clips faster or slower, 0.25x to 8x, keeping their media and the sound's pitch: a clip gets shorter or longer (with what it is linked to). Give `clips` (ids from timeline_get) or a timeline range `fromUs`-`toUs` (every unlocked track is split at its ends), and `speed` (1 is normal). Magnetic closes up or pushes along; `ripple` overrides it (false leaves a gap or stops at the next clip). `short` works on a short's own timeline. Without `speed` it lists what plays at other speeds. Only when the user asks: never speed up waiting by yourself.",
         schema: schema::<SpeedArgs>,
         read_only: false,
         run: speed,
@@ -130,7 +130,8 @@ pub static ACTIONS: [ToolDef; 38] = [
             auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
             else its built-in local model when downloaded, and otherwise uses the review you \
             saved with `fillers_review` (in-house: you read the transcript). `review: \
-            in-house`, `openrouter` or `local` forces one. `apply: false` only lists.",
+            in-house`, `openrouter` or `local` forces one. `apply: false` only lists. `auto` \
+            reuses a saved review.",
         schema: schema::<FillerArgs>,
         read_only: false,
         run: fillers,
@@ -157,7 +158,7 @@ pub static ACTIONS: [ToolDef; 38] = [
     },
     ToolDef {
         name: "faces",
-        description: "Webcam face detection: finds the face in every camera stream (on this             computer, YuNet) so shorts frame each camera clip on it. Starts the cameras that             have no face track yet (and retries failed ones), waits until they are done unless             `wait: false`, and reports each camera: ready (and how much of it shows a face),             detecting, failed or missing. `redo: true` finds faces again even where a track             exists.",
+        description: "Webcam face detection: finds the face in every camera stream (on this computer, YuNet) so shorts frame each camera clip on it. Starts the cameras that have no face track yet (and retries failed ones), waits until they are done unless `wait: false`, and reports each camera: ready (and how much of it shows a face), detecting, failed or missing. `redo: true` finds faces again even where a track exists.",
         schema: schema::<FacesArgs>,
         read_only: false,
         run: faces,
@@ -1200,7 +1201,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         );
         pass(
             &mut lines,
-            "Fillers and retakes (the rules, plus a saved in-house review)",
+            "Fillers and retakes (the rules, plus any saved review)",
             run_fillers(
                 ctx,
                 FillerArgs {
@@ -1245,7 +1246,7 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenArgs {
-    /// A project folder or a .aero recording folder.
+    /// A project folder (a .aero recording is made into one with `create`).
     pub path: String,
 }
 
@@ -1641,17 +1642,19 @@ fn run_transcribe(ctx: &Ctx, args: TranscribeArgs) -> Result<String, String> {
         crate::transcript::ProviderKind::Parakeet => SpokenLanguage::English,
         _ => args.language.unwrap_or(SpokenLanguage::Auto),
     };
-    let result = tc::transcript_run_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        open.handle,
-        key.clone(),
-        tc::TranscribeWith {
-            provider: Some(provider),
-            language: Some(language),
-        },
-        &mut |p| ctx.progress(p.fraction, &p.message),
-    )?;
+    let result = ctx.transcript_job(|| {
+        tc::transcript_run_impl(
+            ctx.state,
+            ctx.host.transcripts(),
+            open.handle,
+            key.clone(),
+            tc::TranscribeWith {
+                provider: Some(provider),
+                language: Some(language),
+            },
+            &mut |p| ctx.progress(p.fraction, &p.message),
+        )
+    })?;
     let provider = result.view.provider;
     ctx.host.transcript_changed();
     let kept = result
@@ -2385,19 +2388,41 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         Some(FillerEngine::Local) => "the local review",
         _ => "the OpenRouter review",
     };
+    // A review of this sound still running (a caller that gave up waiting for it, or the
+    // app's own): wait for it and use what it saves, rather than starting another.
+    let running = format!("AI review of {key}");
+    let mut waited = false;
+    while ctx.host.transcripts().running.lock().as_deref() == Some(running.as_str()) {
+        if !waited {
+            ctx.progress(0.1, "Waiting for the review already running");
+            waited = true;
+        }
+        // Stopping this call leaves the review it waits on running.
+        ctx.stop_point()?;
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    // By default a saved review is used as it is (a call that timed out still saved its
+    // review); naming a review runs it again.
+    let saved = with_reader(ctx.state, |reader| {
+        Ok(store::load_transcript(reader.root(), &key)?.and_then(|t| t.ai_model))
+    })?;
+    let engine = engine.filter(|_| review != FillerReview::Auto || saved.is_none());
     let mut use_ai = engine.is_some();
     let mut fallback = None;
     let found = if let Some(engine) = engine {
         ctx.progress(0.1, &format!("Asking {name} for fillers and retakes"));
-        match tc::transcript_ai_suggest_impl(
-            ctx.state,
-            ctx.host.transcripts(),
-            before.handle.clone(),
-            key.clone(),
-            Some(engine),
-            &mut |p| ctx.progress(p.fraction, &p.message),
-        ) {
+        match ctx.transcript_job(|| {
+            tc::transcript_ai_suggest_impl(
+                ctx.state,
+                ctx.host.transcripts(),
+                before.handle.clone(),
+                key.clone(),
+                Some(engine),
+                &mut |p| ctx.progress(p.fraction, &p.message),
+            )
+        }) {
             Ok(found) => found,
+            Err(error) if ctx.stopped() => return Err(error),
             // Only by default: carry on with the in-house review and say why.
             Err(error) if review == FillerReview::Auto => {
                 use_ai = false;
@@ -2429,19 +2454,21 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         .filter(|s| s.source == SuggestionSource::Ai)
         .count();
     // Who made the saved review: the connected agent (in-house) or the OpenRouter model.
+    let describe = |r: &str| {
+        if r.starts_with(tc::IN_HOUSE) {
+            "the in-house review".to_string()
+        } else if r.starts_with("local/") {
+            format!("the local review ({r})")
+        } else {
+            format!("the OpenRouter review ({r})")
+        }
+    };
     let reviewer = chosen
         .iter()
         .find(|s| s.source == SuggestionSource::Ai)
         .and_then(|s| s.reviewer.as_deref())
-        .map(|r| {
-            if r.starts_with(tc::IN_HOUSE) {
-                "the in-house review".to_string()
-            } else if r.starts_with("local/") {
-                format!("the local review ({r})")
-            } else {
-                format!("the OpenRouter review ({r})")
-            }
-        })
+        .or(saved.as_deref())
+        .map(describe)
         .unwrap_or_else(|| "the review".into());
     let mut lines = vec![format!(
         "Found {} and {} in {key}{}.",
@@ -2452,6 +2479,9 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         } else if from_ai > 0 {
             // The review's finds are kept with the transcript.
             format!(" (rules, and {from_ai} from {reviewer})")
+        } else if saved.is_some() {
+            // A saved review that found nothing more is still a review: don't ask for another.
+            format!(" (rules; {reviewer}, saved, found nothing more)")
         } else {
             " (the rules only)".to_string()
         },
@@ -2462,7 +2492,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             name.trim_start_matches("the ")
         ));
     }
-    if !use_ai && from_ai == 0 {
+    if !use_ai && from_ai == 0 && saved.is_none() {
         lines.push(
             "The rules alone miss most fillers and retakes. Review the transcript in-house \
              first, unless it flagged nothing: `fillers_review` pages you through the words \
@@ -2550,6 +2580,10 @@ fn faces(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             fraction,
             &format!("Finding faces, {:.0}%", fraction * 100.0),
         );
+        // Detection runs in the app, not in this call: stopping the call only stops waiting.
+        if ctx.stopped() {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(500));
         status = commands::project_face_tracks_impl(ctx.state, before.handle.clone(), false)?;
     }
@@ -2938,7 +2972,6 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     let before = opened(ctx);
     match args.area {
-
         Area::Transcription => {
             let next = patched(&name, &tc::transcript_settings_get_impl().settings, &patch)?;
             tc::transcript_settings_set_impl(next)?;
@@ -3208,12 +3241,14 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
     ctx.progress(0.1, "Asking the AI pass for chapters");
-    let project = tc::project_chapters_generate_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        before.handle.clone(),
-        key,
-    )?;
+    let project = ctx.transcript_job(|| {
+        tc::project_chapters_generate_impl(
+            ctx.state,
+            ctx.host.transcripts(),
+            before.handle.clone(),
+            key,
+        )
+    })?;
     let mut lines = vec![format!(
         "Made {}:",
         plural(project.chapters.len(), "chapter")
@@ -3355,12 +3390,14 @@ fn shorts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
     ctx.progress(0.1, "Asking the AI pass for shorts");
-    let project = tc::project_shorts_generate_impl(
-        ctx.state,
-        ctx.host.transcripts(),
-        before.handle.clone(),
-        key,
-    )?;
+    let project = ctx.transcript_job(|| {
+        tc::project_shorts_generate_impl(
+            ctx.state,
+            ctx.host.transcripts(),
+            before.handle.clone(),
+            key,
+        )
+    })?;
     let mut lines = vec![format!(
         "Found {} for the Shorts Studio:",
         plural(project.shorts.len(), "short")
@@ -4163,6 +4200,13 @@ fn wait_for_export(
                     0.0
                 };
                 ctx.progress(fraction, &format!("{doing}, {:.0}%", fraction * 100.0));
+                if ctx.stopped() {
+                    commands::export_cancel_impl(ctx.state, job_id.to_string())?;
+                    return Err(format!(
+                        "Stopped: export {job_id} was cancelled (the user, or your client, \
+                         cancelled the call) and no file was saved."
+                    ));
+                }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
         }
@@ -4307,10 +4351,16 @@ fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         + std::time::Duration::from_secs(args.wait_s.unwrap_or(0).min(300));
     let status = loop {
         let status = commands::export_status_impl(ctx.state, None)?;
-        if !matches!(status.state, Queued | Running) || std::time::Instant::now() >= until {
+        // Stopping a wait answers at once; the export carries on (`export cancel` stops it).
+        if !matches!(status.state, Queued | Running)
+            || std::time::Instant::now() >= until
+            || ctx.stopped()
+        {
             break status;
         }
-        if status.progress_denominator > 0 {
+        if let (Some(stage), 0) = (&status.stage, status.progress_numerator) {
+            ctx.progress(status.stage_fraction.unwrap_or(0.0), stage);
+        } else if status.progress_denominator > 0 {
             let fraction = status.progress_numerator as f64 / status.progress_denominator as f64;
             ctx.progress(fraction, &format!("Exporting, {:.0}%", fraction * 100.0));
         }
@@ -4318,10 +4368,18 @@ fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     };
     text(match status.state {
         Idle => "No export has run since the app started.".to_string(),
-        Queued | Running => format!(
-            "Export {} running: {}/{} frames.",
-            status.job_id, status.progress_numerator, status.progress_denominator
-        ),
+        // Graphics render before the first frame, at 0 frames: say so, or it reads as stuck.
+        Queued | Running => match (&status.stage, status.progress_numerator) {
+            (Some(stage), 0) => format!(
+                "Export {} running: {stage} ({:.0}%), before its frames. It is working: wait.",
+                status.job_id,
+                status.stage_fraction.unwrap_or(0.0) * 100.0
+            ),
+            _ => format!(
+                "Export {} running: {}/{} frames.",
+                status.job_id, status.progress_numerator, status.progress_denominator
+            ),
+        },
         Completed => format!(
             "Export {} done: {}.",
             status.job_id,
@@ -4358,43 +4416,51 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Ok(open) => commands::graphics::project_graphics_list_impl(ctx.state, open.handle)?,
         Err(_) => Vec::new(),
     };
-    let mut out = json!({
-        "renderer": if runtime.installed {
+    // Templates and the library as a line each (AI-1: about 40 % fewer characters than JSON):
+    // the colours every one takes are said once, since the style sets them.
+    let mut lines = vec![format!(
+        "Renderer: {}.",
+        if runtime.installed {
             format!("installed (HyperFrames {})", runtime.hyperframes)
         } else {
             "not installed: ask the user, then call graphics_install".to_string()
-        },
-        "templates": templates.iter().map(|t| json!({
-            "name": t.name,
-            "label": t.label,
-            "description": t.description,
-            "lengthUs": t.length_us,
-            "variables": t.variables.iter().map(|v| {
-                let mut decl = json!({"id": v.id, "type": v.kind, "label": v.label, "default": v.default});
-                if !v.options.is_empty() {
-                    decl["options"] = json!(v.options.iter().map(|o| o.value.clone()).collect::<Vec<_>>());
-                }
-                decl
-            }).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
-    });
-    out["library"] = json!(
-        crate::graphics::library::list(&crate::graphics::library::dir())
-            .iter()
-            .map(|item| json!({
-                "id": item.id,
-                "name": item.item.name,
-                "label": item.item.label,
-                "useWhen": item.item.use_when,
-                "kind": if item.item.general { "template" } else { "as is (not general)" },
-                "version": item.item.version,
-                "lengthUs": item.item.length_us,
-                "variables": item.variables.iter().map(|v| {
-                    json!({"id": v.id, "type": v.kind, "default": v.default})
-                }).collect::<Vec<_>>(),
-            }))
-            .collect::<Vec<_>>()
+        }
+    )];
+    lines.push(
+        "Templates (name, length: what it is; its variables and their defaults; besides these, \
+         each takes the colours `background`, `text`, `accent`, which the style sets):"
+            .into(),
     );
+    lines.extend(templates.iter().map(|t| {
+        format!(
+            "- {}, {}: {} {}",
+            t.name,
+            seconds(t.length_us),
+            t.description,
+            variable_list(&t.variables)
+        )
+    }));
+    let library = crate::graphics::library::list(&crate::graphics::library::dir());
+    if library.is_empty() {
+        lines.push("Library: empty.".into());
+    } else {
+        lines.push(
+            "Library (name and id, length: when to use it; its variables and their defaults):"
+                .into(),
+        );
+        lines.extend(library.iter().map(|item| {
+            format!(
+                "- {} ({}), {}{}: {} {}",
+                item.item.name,
+                item.id,
+                seconds(item.item.length_us),
+                if item.item.general { "" } else { ", as is (not general)" },
+                item.item.use_when,
+                variable_list(&item.variables)
+            )
+        }));
+    }
+    let mut out = json!({});
     out["graphics"] = json!(in_project
         .iter()
         .map(|g| {
@@ -4420,12 +4486,62 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             listed
         })
         .collect::<Vec<_>>());
+    let graphics = serde_json::to_string(&out["graphics"]).map_err(|e| e.to_string())?;
+    lines.push(format!("Graphics in the project: {graphics}"));
     // The rules for graphics come with the list: only edits with graphics need them.
-    let list = serde_json::to_string(&out).map_err(|e| e.to_string())?;
+    let shorts = with_reader(ctx.state, |reader| Ok(!reader.document().shorts.is_empty()))
+        .unwrap_or(false);
     text(format!(
-        "{}\n\n{list}",
-        super::skill::GRAPHICS.trim().replace("\r\n", "\n")
+        "{}\n\n{}",
+        super::skill::graphics_guide(shorts),
+        lines.join("\n")
     ))
+}
+
+/// `4 s`, `10.6 s`.
+fn seconds(us: u64) -> String {
+    let s = us as f64 / 1e6;
+    match s.fract() {
+        f if f < 0.05 => format!("{s:.0} s"),
+        _ => format!("{s:.1} s"),
+    }
+}
+
+/// A graphic's variables in a line: `title "Setting up"`, `count 3`, `side (left|right) "left"`,
+/// without the colours the style sets.
+fn variable_list(variables: &[crate::graphics::VariableDecl]) -> String {
+    let listed: Vec<String> = variables
+        .iter()
+        .filter(|v| {
+            !(v.kind == "color" && matches!(v.id.as_str(), "background" | "text" | "accent"))
+        })
+        .map(|v| {
+            let options = match v.options.is_empty() {
+                true => String::new(),
+                false => format!(
+                    " ({})",
+                    v.options
+                        .iter()
+                        .map(|o| o.value.to_string().trim_matches('"').to_string())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
+            };
+            // A default of 3 or true says its type; a colour's reads as text.
+            let kind = match v.kind.as_str() {
+                "color" => " (color)",
+                _ => "",
+            };
+            match &v.default {
+                Value::Null => format!("{}{kind}{options}", v.id),
+                default => format!("{}{kind}{options} {default}", v.id),
+            }
+        })
+        .collect();
+    match listed.is_empty() {
+        true => "No variables.".into(),
+        false => format!("Variables: {}.", listed.join(", ")),
+    }
 }
 
 /// One graphic to add: from a template or the library, where and how long it plays.
@@ -4955,10 +5071,13 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             }
         ));
     }
-    let cancel = std::sync::atomic::AtomicBool::new(false);
     let started = std::time::Instant::now();
-    crate::graphics::render::ensure(&specs, &cancel, &mut |fraction, label| {
+    crate::graphics::render::ensure(&specs, ctx.stop_flag(), &mut |fraction, label, _| {
         ctx.progress(fraction, label)
+    })
+    .map_err(|error| match ctx.stopped() {
+        true => super::tools::STOPPED_MESSAGE.to_string(),
+        false => error,
     })?;
     lines.push(format!(
         "{} rendered, each at its box's size, in {:.0} s; check them with frame_render inside each.",
@@ -5544,6 +5663,15 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn dump_graphics_answer() {
+        let host = crate::mcp::tests_support::BareHost::default();
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let out = call(&ctx, "graphics", json!({})).unwrap();
+        eprintln!("LEN {}\n{out}", out.len());
+    }
+
+    #[test]
     fn candidate_review_shows_only_the_windows() {
         if !crate::media::ffmpeg::available() {
             return;
@@ -5815,6 +5943,26 @@ mod tests {
         let undone = call(&ctx, "undo", json!({})).unwrap();
         assert!(undone.starts_with("Undid \"Cut "), "{undone}");
         assert_eq!(length(&ctx), before);
+    }
+
+    #[test]
+    fn a_saved_review_that_found_nothing_is_not_asked_for_again() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, key) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let page = call(&ctx, "fillers_review", json!({ "review": "thorough" })).unwrap();
+        let stamp = review_stamp(&page);
+        call(&ctx, "fillers_review", json!({ "cuts": [], "stamp": stamp })).unwrap();
+        let dry = call(&ctx, "fillers", json!({ "apply": false })).unwrap();
+        assert!(
+            dry.starts_with(&format!("Found 1 filler and 0 retakes in {key}"))
+                && dry.contains("the in-house review, saved, found nothing more")
+                && !dry.contains("`fillers_review`"),
+            "{dry}"
+        );
     }
 
     #[test]
@@ -6736,8 +6884,9 @@ mod tests {
         let report = call(&ctx, "scan", json!({})).unwrap();
         let has = |part: &str| assert!(report.contains(part), "{part} in:\n{report}");
         assert!(
-            report
-                .starts_with("Scan of \"Lesson\", 0:04.00 long, measured with the project's cleanup settings"),
+            report.starts_with(
+                "Scan of \"Lesson\", 0:04.00 long, measured with the project's cleanup settings"
+            ),
             "{report}"
         );
         has(&format!("Microphones: 1, {key} (transcribed)."));
@@ -6751,7 +6900,7 @@ mod tests {
         has("Silence from the audio: Found 3 pauses");
         has("Gaps from the transcript: Found ");
         // The scan's dry run never spends the AI key, and says the review finds more.
-        has("Fillers and retakes (the rules, plus a saved in-house review): Found 1 filler and 0 retakes");
+        has("Fillers and retakes (the rules, plus any saved review): Found 1 filler and 0 retakes");
         has("(the rules only)");
         assert!(
             !report.contains("Webcam focus:") && !report.contains("Zooms:"),
@@ -6851,10 +7000,19 @@ mod tests {
         )
         .unwrap();
         assert!(set.contains("\"paddingMs\":60"), "{set}");
-        let set = call(&ctx, "settings", json!({ "area": "export", "set": { "resolution": "4K" } }))
-            .unwrap();
+        let set = call(
+            &ctx,
+            "settings",
+            json!({ "area": "export", "set": { "resolution": "4K" } }),
+        )
+        .unwrap();
         assert!(set.contains("\"resolution\":\"4K\""), "{set}");
-        assert!(call(&ctx, "settings", json!({ "area": "export", "set": { "fps": 7 } })).is_err());
+        assert!(call(
+            &ctx,
+            "settings",
+            json!({ "area": "export", "set": { "fps": 7 } })
+        )
+        .is_err());
     }
 
     #[test]

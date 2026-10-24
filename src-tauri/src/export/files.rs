@@ -114,7 +114,8 @@ fn paragraphs(cues: &[CaptionCue], chapters: &[(u64, String)]) -> Vec<(Option<us
             opens = Some(next_chapter);
             next_chapter += 1;
         }
-        let paused = last_end.is_some_and(|end| cue.start_us.saturating_sub(end) >= PARAGRAPH_PAUSE_US);
+        let paused =
+            last_end.is_some_and(|end| cue.start_us.saturating_sub(end) >= PARAGRAPH_PAUSE_US);
         match out.last_mut() {
             Some((_, text)) if opens.is_none() && !paused => {
                 text.push(' ');
@@ -158,7 +159,8 @@ pub fn markdown(title: &str, cues: &[CaptionCue], chapters: &[(u64, String)]) ->
 }
 
 /// Writes the mixed sound of the edit to `path` as a WAV file, calling `on_progress` with the
-/// share done. Written beside the destination first, then renamed over it.
+/// share done. Written to a file of its own beside the destination first (so two saves to one
+/// place never write into each other), then renamed over it.
 pub fn write_wav(
     mixer: &AudioMixer,
     path: &Path,
@@ -169,10 +171,16 @@ pub fn write_wav(
     if data_bytes + 36 > crate::project::pcm::MAX_WAV_BYTES {
         return Err("The edit is too long for a WAV file (over six hours)".into());
     }
-    let partial = path.with_extension("wav.part");
-    let result = (|| {
-        let file = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
-        let mut out = std::io::BufWriter::new(file);
+    let dir = path.parent().ok_or("The destination has no folder")?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    // Removed when dropped, so a failed save leaves nothing behind.
+    let partial = tempfile::Builder::new()
+        .prefix(&format!("{name}."))
+        .suffix(".part")
+        .tempfile_in(dir)
+        .map_err(|e| e.to_string())?;
+    {
+        let mut out = std::io::BufWriter::new(partial.as_file());
         let mut header = Vec::with_capacity(44);
         header.extend_from_slice(b"RIFF");
         header.extend_from_slice(&((36 + data_bytes) as u32).to_le_bytes());
@@ -200,13 +208,11 @@ pub fn write_wav(
             on_progress(frame as f64 / mixer.total_frames as f64);
         }
         out.flush().map_err(|e| e.to_string())?;
-        drop(out);
-        std::fs::rename(&partial, path).map_err(|e| e.to_string())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&partial);
     }
-    result
+    partial
+        .persist(path)
+        .map(|_| ())
+        .map_err(|e| e.error.to_string())
 }
 
 #[cfg(test)]
