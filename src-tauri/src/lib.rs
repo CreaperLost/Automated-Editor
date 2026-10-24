@@ -1214,7 +1214,11 @@ fn mcp_skill_install(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn mcp_stop_call(app: tauri::AppHandle, id: u64) -> mcp::McpStatus {
-    mcp::stop_call(&transcript::settings::config_dir(), mcp_host(&app).as_ref(), id)
+    mcp::stop_call(
+        &transcript::settings::config_dir(),
+        mcp_host(&app).as_ref(),
+        id,
+    )
 }
 
 #[cfg(feature = "tauri-app")]

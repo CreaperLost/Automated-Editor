@@ -148,8 +148,21 @@ pub struct Working {
 
 impl PartialEq for Working {
     fn eq(&self, other: &Self) -> bool {
-        (self.id, &self.client, &self.tool, self.fraction, &self.message, self.stopping)
-            == (other.id, &other.client, &other.tool, other.fraction, &other.message, other.stopping)
+        (
+            self.id,
+            &self.client,
+            &self.tool,
+            self.fraction,
+            &self.message,
+            self.stopping,
+        ) == (
+            other.id,
+            &other.client,
+            &other.tool,
+            other.fraction,
+            &other.message,
+            other.stopping,
+        )
     }
 }
 

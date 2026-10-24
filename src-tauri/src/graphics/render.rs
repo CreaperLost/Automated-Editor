@@ -882,7 +882,10 @@ pub fn pin(renders: Vec<(Spec, PathBuf)>) -> Result<Pinned, String> {
     let mut dirs: Vec<tempfile::TempDir> = Vec::new();
     let mut pinned = HashMap::new();
     for (spec, path) in renders {
-        let dir = match dirs.iter().find(|d| d.path().parent() == Some(spec.cache.as_path())) {
+        let dir = match dirs
+            .iter()
+            .find(|d| d.path().parent() == Some(spec.cache.as_path()))
+        {
             Some(dir) => dir.path().to_path_buf(),
             None => {
                 let dir = tempfile::Builder::new()
@@ -897,7 +900,10 @@ pub fn pin(renders: Vec<(Spec, PathBuf)>) -> Result<Pinned, String> {
         let held = dir.join(path.file_name().unwrap_or_default());
         if !held.is_file() && std::fs::hard_link(&path, &held).is_err() {
             std::fs::copy(&path, &held).map_err(|e| {
-                format!("Graphic \"{}\" lost its render before the export: {e}", spec.name)
+                format!(
+                    "Graphic \"{}\" lost its render before the export: {e}",
+                    spec.name
+                )
             })?;
         }
         pinned.insert(spec, held);

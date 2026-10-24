@@ -602,10 +602,7 @@ pub fn storyboard(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     // AI-1: lines instead of JSON, about half the characters for the same facts.
     let mut lines = vec![header];
     lines.extend(board.tiles.iter().map(tile_line));
-    Ok(vec![
-        Output::Png(board.png),
-        Output::Text(lines.join("\n")),
-    ])
+    Ok(vec![Output::Png(board.png), Output::Text(lines.join("\n"))])
 }
 
 /// `3. 0:12.40-0:20.00 (12400000..20000000) at 15000000: screen, zoom 1.6, gfx Title | "said"`.
@@ -618,7 +615,10 @@ fn tile_line(tile: &Tile) -> String {
         line.push_str(&format!(", zoom {zoom:.1}"));
     }
     if tile.zooms > 0 {
-        line.push_str(&format!(", {} starting", super::actions::plural(tile.zooms, "zoom")));
+        line.push_str(&format!(
+            ", {} starting",
+            super::actions::plural(tile.zooms, "zoom")
+        ));
     }
     if let Some(graphic) = &tile.graphic {
         line.push_str(&format!(", gfx {graphic}"));

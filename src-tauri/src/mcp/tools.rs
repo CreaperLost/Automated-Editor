@@ -121,10 +121,7 @@ impl<'a> Ctx<'a> {
 
     /// Runs one of the app's transcription jobs: stopping the call stops it too, and its error
     /// then reads as stopped.
-    pub fn transcript_job<T>(
-        &self,
-        job: impl FnOnce() -> Result<T, String>,
-    ) -> Result<T, String> {
+    pub fn transcript_job<T>(&self, job: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         use std::sync::atomic::Ordering;
         self.stop_point()?;
         self.stop.transcript_job.store(true, Ordering::SeqCst);

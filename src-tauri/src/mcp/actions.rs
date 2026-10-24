@@ -4487,7 +4487,11 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 item.item.name,
                 item.id,
                 seconds(item.item.length_us),
-                if item.item.general { "" } else { ", as is (not general)" },
+                if item.item.general {
+                    ""
+                } else {
+                    ", as is (not general)"
+                },
                 item.item.use_when,
                 variable_list(&item.variables)
             )
@@ -4522,8 +4526,8 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let graphics = serde_json::to_string(&out["graphics"]).map_err(|e| e.to_string())?;
     lines.push(format!("Graphics in the project: {graphics}"));
     // The rules for graphics come with the list: only edits with graphics need them.
-    let shorts = with_reader(ctx.state, |reader| Ok(!reader.document().shorts.is_empty()))
-        .unwrap_or(false);
+    let shorts =
+        with_reader(ctx.state, |reader| Ok(!reader.document().shorts.is_empty())).unwrap_or(false);
     text(format!(
         "{}\n\n{}",
         super::skill::graphics_guide(shorts),
@@ -5013,7 +5017,11 @@ pub struct TextEdit {
 /// `text` with every edit applied in order, each `old` found exactly once.
 fn apply_edits(mut text: String, edits: &[TextEdit]) -> Result<String, String> {
     for (n, edit) in edits.iter().enumerate() {
-        let found = if edit.old.is_empty() { 0 } else { text.matches(&edit.old).count() };
+        let found = if edit.old.is_empty() {
+            0
+        } else {
+            text.matches(&edit.old).count()
+        };
         if found != 1 {
             return Err(format!(
                 "Edit {}: its `old` is found {found} times in the file, not once; nothing was \
@@ -5736,11 +5744,17 @@ mod tests {
             new: new.into(),
         };
         let page = "<h1>Old title</h1><p>Old title below</p>".to_string();
-        let done = apply_edits(page.clone(), &[edit("<h1>Old", "<h1>New"), edit("below", "under")]);
+        let done = apply_edits(
+            page.clone(),
+            &[edit("<h1>Old", "<h1>New"), edit("below", "under")],
+        );
         assert_eq!(done.unwrap(), "<h1>New title</h1><p>Old title under</p>");
         // Ambiguous or missing text changes nothing.
         let twice = apply_edits(page.clone(), &[edit("Old title", "x")]).unwrap_err();
-        assert!(twice.contains("2 times") && twice.contains("nothing was written"), "{twice}");
+        assert!(
+            twice.contains("2 times") && twice.contains("nothing was written"),
+            "{twice}"
+        );
         assert!(apply_edits(page, &[edit("", "x")]).is_err());
         // Reading for edits stays inside the graphic's folder.
         let dir = tempfile::tempdir().unwrap();
@@ -6045,7 +6059,12 @@ mod tests {
         let ctx = Ctx::new(&host, "claude-code", false);
         let page = call(&ctx, "fillers_review", json!({ "review": "thorough" })).unwrap();
         let stamp = review_stamp(&page);
-        call(&ctx, "fillers_review", json!({ "cuts": [], "stamp": stamp })).unwrap();
+        call(
+            &ctx,
+            "fillers_review",
+            json!({ "cuts": [], "stamp": stamp }),
+        )
+        .unwrap();
         let dry = call(&ctx, "fillers", json!({ "apply": false })).unwrap();
         assert!(
             dry.starts_with(&format!("Found 1 filler and 0 retakes in {key}"))
