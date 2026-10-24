@@ -1,7 +1,7 @@
 //! What a checkpoint keeps beside the edit, and putting it back: each graphic's source folder
 //! (`graphics/<id>/`, its renders are named by those files so they follow) and each
 //! transcript's caption marks. The edit itself is a state in the history (`history.rs`).
-//! Plan: `docs/plans/history.md`.
+//! Design: `docs/architecture.md`, "Checkpoints".
 use super::history::{CaptionSnapshot, Checkpoint, History, StepMeta, MAX_FILE_BYTES};
 use super::reader::safe_path;
 use crate::graphics::GRAPHICS_DIR;

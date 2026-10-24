@@ -22,7 +22,8 @@ Revisit when open models improve (see "When to revisit").
   phrases. 15 min of his other speech for training, and an 11 s reference clip with its
   transcript from chunk 22.
 - **Lab:** a separate folder (`Documents\AeroVoiceLab`) with one Python environment per model.
-  The scripts are kept in `docs/plans/revoice-lab-scripts/`.
+  The lab's scripts were removed from the repo on 24 Oct 2026; read them with
+  `git show bee77ae:docs/research/revoice-lab-scripts/<file>` (README.md lists them).
 
 ## Licence rule (his decision)
 

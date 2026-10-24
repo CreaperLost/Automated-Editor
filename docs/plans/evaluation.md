@@ -181,6 +181,46 @@ real agent: undo its run, go back to its checkpoint.
 - Undone-run graphics left as folders on disk are a small open point: nothing lists or plays
   them, but they take space until the project is cleaned.
 
+## Run 4 (24 Oct): after ORG-1, COST-2 and the 23 Oct edit's fixes
+
+T1, T2, then S1 in the same session and project ("Now make a short from a take I recorded:
+<path>. Clean it up, put footage and graphics under it where they help, and stop before
+export."). Same inputs, a fresh project, commit 046b260 + bee77ae.
+
+| | Run 3 | Run 4 |
+|---|---|---|
+| T1 tutorial edit | 14 calls, 2:42, $0.228 | 13 calls, 1:44, $0.191 |
+| T2 graphics | 11 calls, 4:47, $0.148 | 5 calls, 3:21 (mostly rendering), $0.080 |
+| **Tutorial** | **25 calls, $0.375** | **18 calls, $0.271 (−28 %)** |
+| S1 short from the take | — | 13 calls, 0:50, $0.122 |
+
+- **Context (AI-1):** T1 19.3k tokens at its first call, 36.8k at its last; T2 ends at 44.6k,
+  S1 at 53.6k, Claude Code's own prompt included (run 3's T1 alone was about 52k). Biggest
+  answers: `preset` 3.8k, `storyboard` 3.6k (with its image), `transcript_get` 2.1k,
+  `graphics` 2.1k.
+- **Same edit:** 7:10 → 5:46.10, 114 mouth noises muted, 121 pauses (70.3 s), 23 fillers and
+  5 retakes (14 from the OpenRouter review), 12 zooms, 5 chapters, one blip fixed by `check`.
+  T2: six key-point cards in one `graphic_add` (GFX-6's table in its message), the library
+  rightly unused (its items are about AI agents); it looked at one of the six.
+- **AGT-5 / COST-4 / GFX-6 judged:** the preset's choices ran without a question (AGT-5);
+  `frame_render` with one graphic was one small sheet (450 tokens, COST-4); graphics were
+  proposed as a table and added in one call (GFX-6).
+- **S1 found four problems, fixed 24 Oct:**
+  - The agent never read the Shorts preset (the session had the Tutorial's), so it titled the
+    short "TX Flow squad bounty" (the video's first chapter) before transcribing, and ran
+    silence before mouth noises at Balanced instead of tight gaps. `media_import` and
+    `short_from_take` now say to read `preset` `shorts` first, and `short_from_take`'s answer
+    says to rename the short after the take's words.
+  - `mouth_noises` with `short` and no `stream` listened to the long video's microphone (found
+    nothing). It now takes the take's voice, as `silence` does.
+  - After the cut, all 12 noises sat next to words, so none were muted and the answer said
+    nothing about it. It now says "None to mute: all 12 are next to words".
+  - The agent read `fillers` as unable to work on a short (it has no `short`): it works with
+    the take's `stream`, and now takes `short` too. Checked on this project: the take's
+    "a-" retake cut on the short's own timeline.
+- **Left as it is:** the take's 58 s of pauses in 100 s were real (119 words; takes are not
+  guarded); the graphics batch waited for an accept, as under step-by-step it should.
+
 ## Rerun
 
 Same inputs, same messages (T1, T2, S1, then the user's answer to what the agent asks), a

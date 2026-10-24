@@ -1,9 +1,10 @@
 # Architecture: how AeroEdits is built
 
-The system as it stands on 21 Oct 2026, condensed from the finished plans (Premiere-style
-tracks, the 4 Oct performance pass, AI readiness phases 0–3, layouts). Repository
-layout, build and test commands are in the [root README](../README.md). Why things are the way
-they are is in [decisions.md](decisions.md).
+The system as it stands on 24 Oct 2026, condensed from the finished plans (Premiere-style
+tracks, the 4 Oct performance pass, AI readiness, history and checkpoints, presets and styles).
+Those plans were deleted once built; git keeps them (`git log --diff-filter=D -- docs/plans/`).
+Repository layout, build and test commands are in the [root README](../README.md). Why things are
+the way they are is in [decisions.md](decisions.md).
 
 ## Stack
 
@@ -54,7 +55,7 @@ mounted at `recordings/<asset id>/`.
   first, no step limit. Steps are named from what changed (`history::describe`) and marked as
   an agent's while its MCP call runs (`history::as_agent`, a thread-local set in `tools::call`).
 - **Agent runs.** An agent's steps carry a run id while the same agent keeps editing within 15
-  minutes with nothing of the user's between; `template` starts a new run. Undoing a run
+  minutes with nothing of the user's between; `preset` starts a new run. Undoing a run
   (Agent panel, MCP `undo` `run: true`) restores the state from before it as one new step and
   marks its batches undone.
 - **Checkpoints** (`project/checkpoint.rs`): the edit's state, each graphic's source files
@@ -63,8 +64,7 @@ mounted at `recordings/<asset id>/`.
   every agent run (newest five kept). Going back is one step (when the edit differs), puts the
   graphic files and caption marks back (marks only onto the same words), asks for the graphics'
   renders, withdraws waiting batches, and saves what was there first as a checkpoint. Graphic
-  source edits are not undo steps (GFX-4). Plan and build log:
-  [plans/history.md](plans/history.md).
+  source edits are not undo steps (GFX-4).
 - **Shorts** are windows anchored in source time that follow the video's edits until edited on
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
   from the video under it (`take_short.rs`), each piece at its own speed. Their own layout
@@ -112,7 +112,30 @@ mounted at `recordings/<asset id>/`.
 
 ## The agent connection (MCP)
 
-`src-tauri/src/mcp/`. Full history and measurements in [plans/ai-readiness.md](plans/ai-readiness.md).
+`src-tauri/src/mcp/`. Measurements of real agent edits are in
+[plans/evaluation.md](plans/evaluation.md).
+
+The principles it was built on (AI readiness, 13 Oct):
+
+1. **The app is a tool server, the agent is the editor.** The agent decides; the app does
+   everything deterministic (cuts, rendering, alpha, compositing, mapping times through edits).
+2. **The agent proposes, the app checks, the user accepts** for judgement calls; built-in passes
+   apply directly, one undo step each. Autopilot accepts proposals automatically.
+3. **Text first, pixels when needed.** The compact transcript and telemetry are the working
+   surface; frames, sheets and the storyboard only at decision points.
+4. **Check the output, not the plan:** graphics over the real footage, cuts against the
+   transcript.
+5. **Pin to meaning, not to time:** graphics, footage and notes hang off words or recording
+   time, so later cuts don't knock them out of place.
+6. **One source for the look:** the style feeds every graphic, caption and the frame.
+
+Why MCP only: it works with any agent, costs the app nothing, stays inside every provider's
+terms, keeps secrets out of the app and keeps it testable. Coding agents are the main target;
+the app renders graphics itself and offers `graphic_write_file`, so a client without a shell
+still works. MCP sampling is not relied on (clients support it unevenly). Ideas were taken from
+browser-use/video-use (packed transcript, self-checks), adukhan98/video-edit (brand intake,
+storyboard approval), kamgasimo/ai-video-editor (pinned HyperFrames, cut lists with evidence) and
+zhuyansen/awesome-claude-video-skills.
 
 - **Transport.** Agents start `aeroedits --mcp-stdio` (`bridge.rs`). The bridge answers
   `initialize`, `ping` and `tools/list` itself (so the client sees tools while the app is closed)
@@ -140,6 +163,11 @@ mounted at `recordings/<asset id>/`.
 - **Actions** apply directly like a button, one undo step each, listed in the Agent panel
   history. Detection actions take `apply: false`. Long jobs send MCP progress notifications.
   Requests on one connection run concurrently; agents that need order wait for each reply.
+- **Tools on demand** (COST-2): rarely needed tools (the shorts tools, `faces`, `layouts`,
+  `checkpoint`, ...) are behind `more`, which gives a tool's arguments or runs it, so every
+  session's tool list stays small. Not `tools/list_changed`: Codex doesn't refresh a list
+  mid-session. Long calls stop when the client cancels them or the user presses Stop in the
+  Agent panel (`tools::Stop`, checked between steps).
 - **The skill** (`mcp/skill/`: `SKILL.md`, `rules.md`, `export.md`, `graphics.md`) is compiled
   in; with the preset's method (`preset/methods/*.md` for the built-ins, `method.md` for the
   user's) it is served by the `preset` tool, as MCP prompts and server instructions, and installed
@@ -152,7 +180,7 @@ mounted at `recordings/<asset id>/`.
 
 ## Graphics
 
-`src-tauri/src/graphics/`. Decided in Graphics v1 ([ai-readiness](plans/ai-readiness.md#graphics-v1-agreed-2026-10-15)).
+`src-tauri/src/graphics/`. Decided in Graphics v1 (15 Oct; see [decisions](decisions.md)).
 
 - **Asset:** a HyperFrames project in `graphics/<id>/` (`index.html`, `graphic.json` with
   variables, its own style if any, its own look tokens, length). Variables are declared with `data-composition-variables`.
@@ -164,10 +192,16 @@ mounted at `recordings/<asset id>/`.
 - **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.162 with its own
   Node 22 and chrome-headless-shell (`runtime.rs`, hash-checked, ~200 MB download, ~500 MB on
   disk); WebM VP9 alpha decoded with `libvpx-vp9` forced; cache key over source files, canvas,
-  length, fps, density, style (settings and files) and version. The preview plays a **draft** (30 fps, 1920 px long
-  side); an export renders **final** ones at its own fps, and at twice the density (HyperFrames
-  `--resolution landscape-4k` / `portrait-4k`, same layout) when larger than 1080p. Renders stage in `<runtime>/work/<hash12>/` (long project paths
-  broke Windows' 260-char limit). Export waits for pending renders. A render takes ~16–28 s.
+  length, fps, density, style (settings and files) and version. Every render of a graphic in an
+  edit, the preview's too, is at the export settings' frame rate (60 at most), so a 1080p export
+  plays the preview's renders; a larger export renders at twice the density (HyperFrames
+  `--resolution landscape-4k` / `portrait-4k`, same layout). Whenever the edit changes, each
+  graphic's export render is queued in the background behind the preview's
+  (`render::request_export`; 2 Chrome workers, below-normal priority, fast capture), so an
+  export of unchanged graphics starts writing frames at once (GFX-7). An export pins the renders
+  it starts with (`render::pin`, hard links in a `.export-*` folder) and fails rather than play a
+  placeholder. Renders stage in `<runtime>/work/<hash12>/` (long project paths broke Windows'
+  260-char limit). An 8 s graphic at 1080p60 takes about 40 s on an RTX 3060.
 - **The look** (`look.rs`): a style's graphics look (preset, five global controls, hand-set
   tokens; scaled at 9:16), injected into every render after the composition's own defaults as `--look-*`
   properties on `[data-composition-id]`, where HyperFrames puts the colour variables the roles
@@ -274,7 +308,8 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
   Edit source with an editor tool, not `sed`/heredocs; restore CRLF with
   `sed -i 's/\r\?$/\r/' <path>` if a shell rewrite slipped in.
 - Don't run `cargo test`/`cargo build` while `cargo tauri dev` is building (shared `target/debug`
-  race: a false "cannot find function run"). Stop the dev app before editing Rust.
+  race: a false "cannot find function run"). Stop the dev app before editing Rust: a save
+  rebuilds and restarts it, ending a running agent turn or export.
 - Test on **copies** of recordings from `Documents\AeroShootRec\*.aero` (delete `project.json` in
   the copy), never originals. Use your own session's `mcp__aeroedits__*` tools read-only; test write
   tools on a scratch project. To try one-click connect without touching real settings, start the

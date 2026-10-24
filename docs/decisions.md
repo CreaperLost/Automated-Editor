@@ -8,7 +8,7 @@ settled table with the date and update the roadmap item it blocks.
 
 | Decision | Date | Where it came from |
 |---|---|---|
-| AI only through the user's own agent over MCP / CLI. No chat panel in the app, no model calls on that path | 13 Oct | [ai-readiness](plans/ai-readiness.md#decisions-2026-10-13) |
+| AI only through the user's own agent over MCP / CLI. No chat panel in the app, no model calls on that path | 13 Oct | ai-readiness (the plan is in git; the design is in [architecture](architecture.md#the-agent-connection-mcp)) |
 | Transport: `aeroedits --mcp-stdio` bridge → a named pipe only this OS account can open (macOS: 0700 socket, peer uid checked). No port, no token, no script tool | 13 Oct | ai-readiness |
 | The existing in-app AI passes stay (transcription, fillers/retakes, chapters, shorts); the agent is a second source of the same suggestions | 13 Oct | ai-readiness |
 | HyperFrames is the only graphics engine; the app runs renders; WebM VP9 alpha is the render cache, ProRes 4444 for macOS and for handing a graphic to another editor | 13 Oct | ai-readiness |
@@ -16,9 +16,10 @@ settled table with the date and update the roadmap item it blocks.
 | Window telemetry never holds titles or contents | 18 Oct | [window-telemetry](contracts/window-telemetry.md) |
 | Agent judgement calls are proposals the user accepts; built-in passes apply directly (one undo step each) | 14 Oct | ai-readiness 2b |
 | One set of actions, two doors: every action is an MCP tool and an `aeroedits do` command | 14 Oct | ai-readiness 2b |
-| No one-call cleanup: each pass is dry-run, approved, then run; "auto" makes the choices but still dry-runs | 15 Oct | ai-readiness 2d |
+| No one-call cleanup: each pass runs on its own, one undo step each. Step by step, each is dry-run and approved first; automatic mode runs each with `guard: true` instead (the app holds a pass that looks wrong and says why) | 15 Oct, guard 23 Oct | ai-readiness 2d, [EVAL-1 run 2](plans/evaluation.md#run-2-23-oct-fewer-calls) |
 | Chapters last, right before export | 15 Oct | ai-readiness 2d |
 | Graphics come after the cuts, are never chopped, play full screen over everything (or in a short's slot); slots, not safe zones | 15 Oct | ai-readiness § Graphics v1 |
+| A full-screen graphic hides the camera bubble and the captions while it plays | 13 Oct | ai-readiness |
 | Graphics runtime (Node, Chrome, HyperFrames, pinned and hash-checked) downloads on first use; nothing on `PATH` is used or changed | 15 Oct | ai-readiness |
 | A graphic is saved to the library only at the user's word; the gate decides "template" vs "as is" | 16 Oct | ai-readiness |
 | **No migration:** old project files are never converted or kept compatible; old fields are deleted | 4 Oct | premiere-tracks; repeated in every plan |
@@ -27,8 +28,8 @@ settled table with the date and update the roadmap item it blocks.
 | Sound effects (clicks, whooshes) off by default | 20 Oct | backlog |
 | Fillers/retakes default to rules + AI review; OpenRouter/OpenAI when a key is set, local Qwen 4B only without one; `apply: true` is not the default for either | 21 Oct | [local-review-eval](plans/local-review-eval.md) |
 | Greek is transcribed online only until a local model is good enough | 20 Oct | backlog |
-| **Presets and styles:** saved things become four: Style (how it looks: brand, graphics, caption look, frame look), Preset (what the app and agent do for a kind of video, incl. caption position and words per caption, the agent's method and rules), Layout, Project (only its own changes). "Template" stops being a user-facing word for settings. Replaces brand kits, saved looks, the Templates menu, saved answers; folds in STY-1, UI-3, AGT-3 | 23 Oct | [plans/presets-and-styles.md](plans/presets-and-styles.md), [ORG-1](roadmap.md#org-1) |
-| Undo history lives in the project (`history/`), up to 2 GB, no step limit; a checkpoint before every agent run (newest five kept); graphic source edits are kept only in checkpoints until GFX-4 | 23 Oct | [plans/history.md](plans/history.md#decisions-george-23-oct-2026) |
+| **Presets and styles:** saved things become four: Style (how it looks: brand, graphics, caption look, frame look), Preset (what the app and agent do for a kind of video, incl. caption position and words per caption, the agent's method and rules), Layout, Project (only its own changes). "Template" stops being a user-facing word for settings. Replaces brand kits, saved looks, the Templates menu, saved answers; folds in STY-1, UI-3, AGT-3. How it was built: [below](#presets-and-styles-as-built-23-oct) | 23 Oct | [ORG-1](roadmap.md#org-1) |
+| Undo history lives in the project (`history/`), up to 2 GB, no step limit; a checkpoint before every agent run (newest five kept); graphic source edits are kept only in checkpoints until GFX-4 | 23 Oct | [SAFE-2](roadmap.md#safe-2) |
 | Layouts: one shared style per timeline, layouts only arrange; sections anchored in recording time; favourites copied when applied; default transition Auto; moves play inside the section; face centring on every camera slot; shorts keep their own base and sections; bubble on a 3×3 grid with S/M/L; side by side has fit and fill; layouts bound to keys by the user, no fixed slots | 21 Oct | [plans/layouts.md](plans/layouts.md#decisions-21-oct-2026) |
 | Re-voicing and lip sync paused until a local, commercially licensed stack is good enough | 18 Oct | [research/revoice.md](research/revoice.md) |
 | Licence rule for any bundled model: MIT, Apache-2.0, GPL-3.0 (as a separate component), OpenRAIL. Never non-commercial, research-only or revenue-capped | 18 Oct | research/revoice.md |
@@ -50,7 +51,44 @@ settled table with the date and update the roadmap item it blocks.
 | **Graphics start app-like:** the default brand colours and every template take the light style of George's library graphics (white, #1D1D1F text, #0071E3 accent, rounded cards, hairlines, soft shadows); the old navy and yellow kit is gone. Dark AeroEdits-UI colours were offered and turned down | 22 Oct | George, [GFX-5](roadmap.md#done) |
 | **Shorts graphic modes come after GFX-5, and each graphic renders once for its mode:** a graphic in a short shows over the whole frame (fine when it is the point), split beside the face, or as a card over the face. The mode is picked before the first render, since re-rendering per mode costs; changing it later is on request | 22 Oct | George, [SHT-4](roadmap.md#sht-4) |
 | **Fit modes for take shorts need a design talk first** (speed or freeze to fit footage under a take) | 22 Oct | George, [SHT-4](roadmap.md#sht-4) |
-| **No automatic folder watch.** Nothing runs when a recording finishes: each video may be a tutorial or something else. Instead, after opening a project, the user can pick a template (tutorial, shorts…) and have its saved method run, on request ([AUTO-1](roadmap.md#auto-1)) | 21 Oct | Q-WATCH |
+| **No automatic folder watch.** Nothing runs when a recording finishes: each video may be a tutorial or something else. Instead, after opening a project, the user can pick a preset (tutorial, shorts…) and have its saved method run, on request ([AUTO-1](roadmap.md#auto-1)) | 21 Oct | Q-WATCH |
+
+### Presets and styles: as built (23 Oct)
+
+Claude's choices while building [ORG-1](roadmap.md#org-1), listed for George. His answers
+(23 Oct): cleanup levels and export settings go in the preset; his own presets can be renamed;
+every other choice stays as built.
+
+- **Style JSON:** `brand` (colours background, text, accent, muted; fonts title and body, each a
+  family and an optional file; logo), `graphics` (the look), `captions`, `frame`, `portrait`.
+  Every part optional, falling back to Light's. Muted is a real colour (`--look-muted`). Body
+  text takes the body font; titles and captions the title font.
+- **Built-in styles and presets are read-only.** The first change to Light makes "My light"
+  (an agent saving choices into Tutorial makes "My tutorial"), and the project follows the copy.
+- **Light** is the look from before ORG-1 (GFX-5 graphics, the Forest background, indigo camera
+  border, white outlined captions, pop at 9:16); **Dark** is near-black with a blue accent.
+- **Editing a style saves as you go** and is not an undo step (styles are app-wide); picking
+  another style is. The style editor is the Inspector's **Style** page.
+- **A project's own wallpaper image** wins over the style's background. **9:16** (any short,
+  any 9:16 canvas) defaults captions to pop and may have its own background; shorts have no
+  background or caption style of their own.
+- **A missing style falls back to Light, a missing preset to Tutorial,** silently; renamed ones
+  are followed through `renamed.json`.
+- **A preset holds** layout, captions (behaviour), zoom settings, audio, layouts, cleanup levels,
+  export settings, what a new short starts with, the method's `choices`, a default style,
+  `method.md` and `rules.md` (the user's rules win over the method). **A project stores only its
+  changes** (`presetChanges`); a change to the preset reaches it on the next open. Never counted
+  as changes: the wallpaper file, hand-framed camera clips, window-crop stretches, the captioned
+  track, layout sections, per-track mixes.
+- **"Changed here" chips** at the top of each settings section, each a reset, plus "all back".
+- **The Preset menu** replaces Templates: follow another preset (changes stay), the shorts'
+  preset, save, save as, rename (own presets), method and rules, folder, remove. A project
+  picks two presets: its own and one for its new shorts.
+- **Agents:** `template` became `preset`; one `library` tool (`kind` style, preset, layout);
+  `settings` refuses look fields and calls the silence levels `cleanup`; `status` names the
+  preset, the shorts' preset and the style. Old `agents/answers/*.json` and `templates.json`
+  are no longer read (left on disk).
+- **Not done:** "changed here" for the Layouts section and a short's settings.
 
 ### Not doing
 

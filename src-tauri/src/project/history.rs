@@ -4,7 +4,7 @@
 //! stored JSON with `revision` zeroed, so going back and forth writes nothing new.
 //! `history/log.jsonl` is append-only: a header, then one line per commit, undo, redo or drop.
 //! Opening replays it, checks it against `project.json` and rewrites it compactly.
-//! Plan: `docs/plans/history.md`.
+//! Design: `docs/architecture.md`, "History on disk".
 use super::reader::{open_regular, safe_path};
 use super::revision::{stored_form, EditDocument, MAX_EDIT_BYTES};
 use serde::{Deserialize, Serialize};

@@ -154,7 +154,9 @@ function rowBoxes(): RowBox[] {
  * long timeline, tens of ms a pointer move).
  */
 function rowAtPoint(boxes: RowBox[], x: number, y: number): Row | null {
-  const hit = boxes.find(({ rect }) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom);
+  const inside = ({ rect }: RowBox) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+  // A new-track row is drawn over the lane above the video tracks, so it wins where they overlap.
+  const hit = boxes.find((box) => box.row.kind === "new" && inside(box)) ?? boxes.find(inside);
   return hit?.row ?? null;
 }
 
@@ -1535,9 +1537,10 @@ export const TimelineStudio: React.FC = () => {
       </button>
     );
   };
-  // Header spacer matching a lane's drop-for-a-new-track row; both show only while dragging.
+  // Header spacer matching the audio lanes' drop-for-a-new-track row; both show only while
+  // dragging. The video one is drawn over the lane above it and takes no room.
   const newTrackSpacer = (audio: boolean) =>
-    (audio ? dragKinds?.audio : dragKinds?.video) && <div key={audio ? "add-audio" : "add-video"} style={{ height: NEW_TRACK_ROW_PX }} />;
+    audio && dragKinds?.audio && <div key="add-audio" style={{ height: NEW_TRACK_ROW_PX }} />;
 
   // ---- Lanes ---------------------------------------------------------------------------------
   const newTrackRow = (audio: boolean) => {
@@ -1547,8 +1550,11 @@ export const TimelineStudio: React.FC = () => {
       <div
         key={audio ? "new-audio" : "new-video"}
         data-track-row={audio ? "new-audio" : "new-video"}
-        className="relative rounded-md flex items-center px-2 text-meta border border-dashed border-accent/60 bg-accent/5 text-studio-300"
-        style={{ height: NEW_TRACK_ROW_PX }}
+        className={`relative rounded-md flex items-center px-2 text-meta border border-dashed border-accent/60 text-studio-300 ${audio ? "bg-accent/5" : "z-20 bg-studio-900"}`}
+        // Above the video tracks it covers the bottom of the lane above instead of pushing the
+        // tracks down: they would move under the pointer as a drag starts, and a small nudge of a
+        // clip on the top track would drop it on a new track.
+        style={audio ? { height: NEW_TRACK_ROW_PX } : { height: NEW_TRACK_ROW_PX, marginTop: -NEW_TRACK_ROW_PX }}
       >
         <span className="pointer-events-none truncate">{`Drop here for a new ${audio ? "audio" : "video"} track`}</span>
         {ghostsOn({ kind: "new", audio })}

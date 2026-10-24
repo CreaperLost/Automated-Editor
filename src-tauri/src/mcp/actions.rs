@@ -180,7 +180,7 @@ pub static ACTIONS: [ToolDef; 38] = [
     ToolDef {
         name: "settings",
         description: "Reads or changes this project's settings (changes from its preset; \
-            `library` `kind: preset`). `area`: captions (on, position, size, words), layout \
+            `library` `kind: preset`). `area`: captions (enabled, position, size, words), layout \
             (canvas, screen size and crop, cursor, `faceFraming`; where things go is `layouts`; \
             how it looks is the style's), audio, zoom, cleanup (silence, gap and mouth-noise \
             levels the passes start from), export (resolution, fps, quality), transcription, \
@@ -235,9 +235,11 @@ pub static ACTIONS: [ToolDef; 38] = [
             the open project's Media, as the Media panel's Import does. Use it for a take the \
             user recorded for a short, whatever its form: a camera video (often with its own \
             microphone) and, if they used one, a separate microphone file, or a .aero \
-            recording (its camera and microphone together). Never `open` a take. Answers each \
-            new media id and its streams. `roles` (`media`, `stream`, `role`) sets what streams \
-            stand for, after importing or on media already in the project.",
+            recording (its camera and microphone together). Never `open` a take. A short from a \
+            take is an edit of its own: read `preset` with `name: shorts` first, even when \
+            another preset was read already. Answers each new media id and its streams. `roles` \
+            (`media`, `stream`, `role`) sets what streams stand for, after importing or on media \
+            already in the project.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -251,7 +253,8 @@ pub static ACTIONS: [ToolDef; 38] = [
             them with `camera` and `voice`. A separate voice is lined up with \
             the camera's sound automatically. The short plays the take's camera and voice \
             with captions from the take's words; footage from the video goes under it with \
-            `short_footage`. Transcribe the voice next (`transcribe` with its stream).",
+            `short_footage`. Its steps are `preset` with `name: shorts`. Transcribe the voice \
+            next (`transcribe` with its stream).",
         schema: schema::<ShortFromTakeArgs>,
         read_only: false,
         run: short_from_take,
@@ -1772,9 +1775,21 @@ fn held(reason: &str) -> String {
     )
 }
 
+/// The voice of take short `short` (id or title), for a pass given a short but no stream.
+fn take_voice(ctx: &Ctx, short: Option<&str>) -> Result<Option<String>, String> {
+    match short {
+        Some(short) => Ok(short_named(ctx, short)?.take.map(|t| t.voice)),
+        None => Ok(None),
+    }
+}
+
 fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Speech)?;
+    let stream = match args.stream {
+        Some(stream) => Some(stream),
+        None => take_voice(ctx, args.short.as_deref())?,
+    };
+    let key = pick_sound(ctx, stream, Want::Speech)?;
     ctx.progress(0.1, &format!("Listening for mouth noises in {key}"));
     let scan = commands::noises::detect_mouth_noises_impl(
         ctx.state,
@@ -1855,6 +1870,10 @@ fn run_noises(ctx: &Ctx, args: NoiseArgs) -> Result<String, String> {
         ));
     } else if !chosen.is_empty() {
         lines.push(format!("{} would be muted.", chosen.len()));
+    } else if near > 0 {
+        lines.push(format!(
+            "None to mute: all {near} are next to words (`nearSpeech: true` mutes them too)."
+        ));
     }
     lines.extend(scan.diagnostics);
     applied(ctx, "mouth_noises", &before, lines)
@@ -2176,6 +2195,9 @@ pub struct FillerArgs {
     /// Automatic mode: apply only if it looks right, else say why (no dry run first).
     #[serde(default)]
     pub guard: bool,
+    /// A take short (id or title): its voice's transcript, cut on the short's own timeline.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -2367,7 +2389,11 @@ fn fillers(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
 
 fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     let before = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
+    let stream = match args.stream {
+        Some(stream) => Some(stream),
+        None => take_voice(ctx, args.short.as_deref())?,
+    };
+    let key = pick_sound(ctx, stream, Want::Transcribed)?;
     let kinds = args.kinds.unwrap_or_else(|| {
         vec![
             TranscriptSuggestionKind::Filler,
@@ -3694,6 +3720,11 @@ fn short_from_take(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     } else {
         format!("Next: `transcribe` with stream {}.", take.voice)
     });
+    lines.push(
+        "Unless the user named it, rename it after the take's words once they are read \
+         (`shorts` `op: rename`), never after the video."
+            .into(),
+    );
     text(applied(ctx, "short_from_take", &before, lines)?)
 }
 
