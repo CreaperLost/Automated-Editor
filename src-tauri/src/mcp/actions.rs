@@ -349,8 +349,10 @@ pub static ACTIONS: [ToolDef; 38] = [
     ToolDef {
         name: "graphic_write_file",
         description: "Writes a file into a graphic's folder (index.html, or an image or font it \
-            uses), for a composition of your own; answers with HyperFrames' lint of it. Its \
-            folder is in `graphics`; with a shell you can write there directly. Rules: a \
+            uses), for a composition of your own; answers with HyperFrames' lint of it. \
+            `contents` is the whole file; `edits` change part of the one in the folder. The \
+            folder (in `graphics`) holds the only copy: keep none in your working folder or \
+            anywhere else. Rules: a \
             HyperFrames composition, full-screen over the video, laid out with vw/vh/vmin so it \
             fits 16:9 and 9:16; a transparent page with a background of your own; a graphic \
             that fills the frame never eases in or out: show it whole from the first frame to \
@@ -4960,10 +4962,37 @@ pub struct GraphicWriteArgs {
     pub graphic: String,
     /// A path inside its folder, like index.html or assets/logo.svg.
     pub path: String,
-    /// The file's text (for a binary file, base64 with `base64: true`).
-    pub contents: String,
+    /// The whole file's text (for a binary file, base64 with `base64: true`).
+    #[serde(default)]
+    pub contents: Option<String>,
     #[serde(default)]
     pub base64: bool,
+    /// Or, to change part of the file in its folder: each `old` (found exactly once, as the
+    /// file is now) becomes `new`, in order; all or none.
+    #[serde(default)]
+    pub edits: Vec<TextEdit>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct TextEdit {
+    pub old: String,
+    pub new: String,
+}
+
+/// `text` with every edit applied in order, each `old` found exactly once.
+fn apply_edits(mut text: String, edits: &[TextEdit]) -> Result<String, String> {
+    for (n, edit) in edits.iter().enumerate() {
+        let found = if edit.old.is_empty() { 0 } else { text.matches(&edit.old).count() };
+        if found != 1 {
+            return Err(format!(
+                "Edit {}: its `old` is found {found} times in the file, not once; nothing was \
+                 written. Give more of the text around it.",
+                n + 1
+            ));
+        }
+        text = text.replacen(&edit.old, &edit.new, 1);
+    }
+    Ok(text)
 }
 
 fn graphic_folder(ctx: &Ctx, graphic: &str) -> Result<std::path::PathBuf, String> {
@@ -4980,13 +5009,20 @@ fn graphic_folder(ctx: &Ctx, graphic: &str) -> Result<std::path::PathBuf, String
 fn graphic_write_file(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicWriteArgs = params(args)?;
     let dir = graphic_folder(ctx, &args.graphic)?;
-    let bytes = if args.base64 {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD
-            .decode(args.contents.trim())
-            .map_err(|e| format!("Not base64: {e}"))?
-    } else {
-        args.contents.into_bytes()
+    let bytes = match (args.contents, args.edits.is_empty()) {
+        (Some(_), false) => return Err("Give `contents` or `edits`, not both".into()),
+        (None, true) => return Err("Give the file's `contents`, or `edits` to change it".into()),
+        (None, false) => {
+            let now = crate::graphics::read_file(&dir, &args.path)?;
+            apply_edits(now, &args.edits)?.into_bytes()
+        }
+        (Some(contents), true) if args.base64 => {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(contents.trim())
+                .map_err(|e| format!("Not base64: {e}"))?
+        }
+        (Some(contents), true) => contents.into_bytes(),
     };
     crate::graphics::write_file(&dir, &args.path, &bytes)?;
     let mut lines = vec![format!("Wrote {} ({} bytes).", args.path, bytes.len())];
@@ -5660,6 +5696,29 @@ mod tests {
             .and_then(|rest| rest.split('"').next())
             .unwrap()
             .to_string()
+    }
+
+    #[test]
+    fn a_graphic_file_changes_in_place_by_edits() {
+        let edit = |old: &str, new: &str| TextEdit {
+            old: old.into(),
+            new: new.into(),
+        };
+        let page = "<h1>Old title</h1><p>Old title below</p>".to_string();
+        let done = apply_edits(page.clone(), &[edit("<h1>Old", "<h1>New"), edit("below", "under")]);
+        assert_eq!(done.unwrap(), "<h1>New title</h1><p>Old title under</p>");
+        // Ambiguous or missing text changes nothing.
+        let twice = apply_edits(page.clone(), &[edit("Old title", "x")]).unwrap_err();
+        assert!(twice.contains("2 times") && twice.contains("nothing was written"), "{twice}");
+        assert!(apply_edits(page, &[edit("", "x")]).is_err());
+        // Reading for edits stays inside the graphic's folder.
+        let dir = tempfile::tempdir().unwrap();
+        crate::graphics::write_file(dir.path(), "index.html", b"<p>hi</p>").unwrap();
+        assert_eq!(
+            crate::graphics::read_file(dir.path(), "index.html").unwrap(),
+            "<p>hi</p>"
+        );
+        assert!(crate::graphics::read_file(dir.path(), "../outside.html").is_err());
     }
 
     #[test]

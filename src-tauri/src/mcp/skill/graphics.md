@@ -22,7 +22,9 @@ turned into that name), build one paused timeline as long as the clip and regist
 
 Look first at what exists: the list below has the bundled templates and the user's library,
 each library item with when to use it; pick one that fits and fill in its variables. Write a composition of your own (`graphic_add` with `blank`, then
-`graphic_write_file`) only when nothing there does the job. Ask before `graphics_install`.
+`graphic_write_file`) only when nothing there does the job; change it with `graphic_write_file`
+`edits`. Its folder in the project holds its only copy: write no copies, drafts or notes into
+your working folder (it may be someone's code) or anywhere else. Ask before `graphics_install`.
 After adding, `graphic_render`, then look at its motion in one `frame_render` with `graphic`
 (its id: a sheet of frames across it; `short` for a short's), never a call per frame.
 

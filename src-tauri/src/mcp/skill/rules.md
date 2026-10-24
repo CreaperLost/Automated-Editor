@@ -103,4 +103,5 @@ Graphics: `graphics` gives their rules with the list.
 
 `status` gives the open project's `project` id: pass it on every call that changes something.
 If a call answers that the project changed, nothing was changed: read `status` again and ask
-before going on.
+before going on. What you make goes into the project through the tools: write no files of
+your own (copies, drafts, notes) into your working folder, which may be someone's code.

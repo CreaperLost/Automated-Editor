@@ -512,9 +512,9 @@ pub fn place_on(
     Ok((placed, clip_id))
 }
 
-/// Writes `contents` to `relative` inside a graphic's folder, for agents without a shell.
-/// Only plain relative paths inside the folder; `graphic.json` goes through the variables.
-pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
+/// `relative` as a plain path inside a graphic's folder (not `graphic.json`, which goes through
+/// the variables).
+fn plain_path(relative: &str) -> Result<&Path, String> {
     let path = Path::new(relative);
     let plain = !relative.is_empty()
         && relative.len() <= 200
@@ -530,6 +530,21 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
     if relative.eq_ignore_ascii_case(SOURCE_FILE) {
         return Err("graphic.json is changed through the graphic's variables".into());
     }
+    Ok(path)
+}
+
+/// The text of `relative` inside a graphic's folder, for an agent changing part of it.
+pub fn read_file(dir: &Path, relative: &str) -> Result<String, String> {
+    let path = plain_path(relative)?;
+    no_links(dir, path)?;
+    std::fs::read_to_string(dir.join(path))
+        .map_err(|e| format!("Could not read {relative} in the graphic's folder: {e}"))
+}
+
+/// Writes `contents` to `relative` inside a graphic's folder, for agents without a shell.
+/// Only plain relative paths inside the folder; `graphic.json` goes through the variables.
+pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
+    let path = plain_path(relative)?;
     if contents.len() as u64 > MAX_SOURCE_BYTES {
         return Err("That file is too big for a graphic".into());
     }
