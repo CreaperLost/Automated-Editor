@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub static ACTIONS: [ToolDef; 38] = [
+pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "status",
         description: "Where the open project stands, in a few lines: length, sounds and whether \
@@ -189,7 +189,8 @@ pub static ACTIONS: [ToolDef; 38] = [
             Telemetry polish: layout `webcamAutoHide` (on by default; the bubble fades while work \
             is under it), `windowCrop` (on by default) with `windowCropPaddingPct` and \
             `windowCropOff` (recording stretches `{media, sourceStartUs, sourceEndUs}` shown \
-            uncropped), and audio `soundEffects` (off by default; `clicks`, `whooshes`, `muted`, \
+            uncropped). Audio `musicUnderSpeechDb` (~18 dB), \
+            `soundEffects` (off by default; `clicks`, `whooshes`, `muted`, \
             `volumeDb`). API keys are not reachable here.",
         schema: schema::<SettingsArgs>,
         read_only: false,
@@ -208,28 +209,6 @@ pub static ACTIONS: [ToolDef; 38] = [
         run: chapters,
     },
     ToolDef {
-        name: "shorts",
-        description: "Vertical shorts. `op` `find` (default): the app's AI pass finds moments \
-            and saves them for the Shorts tab (when you can read the transcript, pick them \
-            yourself with `short_create` instead). `remove` with `short` (id or title) removes \
-            one; `range` with `short`, `fromWord` and `toWord` sets the stretch it plays; \
-            `rename` with `short` and `title`. One undo step each.",
-        schema: schema::<ShortsArgs>,
-        read_only: false,
-        run: shorts,
-    },
-    ToolDef {
-        name: "short_create",
-        description: "Makes a vertical short from the words `fromWord` to `toWord` (ids from \
-            `transcript_get`) with your `title`, for when you pick the moments yourself rather \
-            than with `shorts`. It takes the look of the shorts already made and picks its \
-            layout sections (`layouts` `pick`) unless `scenes: false`. 3 s to 3 min; 20-60 s \
-            works best.",
-        schema: schema::<ShortCreateArgs>,
-        read_only: false,
-        run: short_create,
-    },
-    ToolDef {
         name: "media_import",
         description: "Imports files (videos, sounds, pictures, or .aero recording folders) into \
             the open project's Media, as the Media panel's Import does. Use it for a take the \
@@ -239,7 +218,8 @@ pub static ACTIONS: [ToolDef; 38] = [
             take is an edit of its own: read `preset` with `name: shorts` first, even when \
             another preset was read already. Answers each new media id and its streams. `roles` \
             (`media`, `stream`, `role`) sets what streams stand for, after importing or on media \
-            already in the project.",
+            already in the project; music and sound effects get `music` / `effects` and their \
+            `licences` (music must need no credit).",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -450,12 +430,14 @@ pub static ACTIONS: [ToolDef; 38] = [
     ToolDef {
         name: "captions",
         description: "The caption lines as they show, numbered, with each line's emphasis word \
-            in *stars*; `short` for a short's. `emphasis`: per `line`, the `word` (as it reads \
+            in *stars*; `short` for a short's or clip's. `emphasis`: per `line`, the `word` (as it reads \
             there) drawn in the accent colour, the one word that makes a viewer keep watching (a \
             number, a name, the twist, the verdict), never a small word; most lines get one, a \
             flat line none. A line has one: a new pick replaces the old, `word` left out clears \
-            it. Kept on the transcript, so the video and its shorts share them; not an undo \
-            step. Where they sit and their size is `settings` `area: captions`; how they look \
+            it. `split` starts a new line at a word, `join` puts a line on the one before, \
+            `hide` hides a word (or a whole line) from the captions. On the video these are \
+            kept on the transcript (not undo steps); in a `short` they are its own (undo \
+            steps), and caption text stays shared. Where they sit and their size is `settings` `area: captions`; how they look \
             (pop/karaoke/static, colours, box) is the project's style (`library`).",
         schema: schema::<CaptionsArgs>,
         read_only: false,
@@ -575,14 +557,14 @@ fn sounds(reader: &ProjectReader) -> Vec<Sound> {
     out
 }
 
-enum Want {
+pub(super) enum Want {
     /// Speech on the timeline, else any sound there.
     Speech,
     /// A transcribed sound, speech on the timeline first.
     Transcribed,
 }
 
-fn pick_sound(ctx: &Ctx, stream: Option<String>, want: Want) -> Result<String, String> {
+pub(super) fn pick_sound(ctx: &Ctx, stream: Option<String>, want: Want) -> Result<String, String> {
     with_reader(ctx.state, |reader| {
         let all = sounds(reader);
         if let Some(key) = stream {
@@ -763,9 +745,9 @@ fn readiness_text() -> String {
     lines.push(format!(
         "AI key ({provider}): {}.",
         if ai_key.is_some() {
-            "set, so chapters, shorts and the filler review can run"
+            "set, so chapters, finding clips and the filler review can run"
         } else {
-            "none, so no chapters or shorts from the app; you review fillers yourself"
+            "none, so no chapters or found clips from the app; you review fillers yourself"
         }
     ));
     lines.push(format!(
@@ -890,7 +872,7 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
         }
         lines.push(format!("Sounds: {}.", sound_lines.join("; ")));
         lines.push(format!(
-            "Zooms: {} in the edit. Layout: {}, {}. Captions: {}. Chapters: {}. Shorts: {}.",
+            "Zooms: {} in the edit. Layout: {}, {}. Captions: {}. Chapters: {}. Shorts (from a take): {}. Clips (cut from the video): {}.",
             document.zooms.len(),
             super::layouts::describe(&document.layouts.base),
             plural(document.layouts.sections.len(), "section"),
@@ -900,11 +882,12 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
                 "off"
             },
             document.chapters.len(),
-            document.shorts.len(),
+            document.shorts.iter().filter(|s| s.take.is_some()).count(),
+            document.shorts.iter().filter(|s| s.take.is_none()).count(),
         ));
         let changed = crate::preset::changed_count(document);
         lines.push(format!(
-            "Preset: {}{} (its shorts: {}). Style: {}.",
+            "Preset: {}{} (its shorts: {}, its clips: {}). Style: {}.",
             crate::preset::of(document).name,
             if changed == 0 {
                 String::new()
@@ -912,6 +895,7 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
                 format!(", {} changed here", plural(changed, "value"))
             },
             crate::preset::store::resolve(&document.shorts_preset).name,
+            crate::preset::store::resolve(&document.clips_preset).name,
             crate::style::of(document).name,
         ));
         let checkpoints = reader.history().steps().checkpoints();
@@ -1153,9 +1137,9 @@ fn scan(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         crate::ai::AiProvider::OpenRouter => ("OpenRouter", &ai.openrouter_key_source),
     };
     lines.push(if key.is_some() {
-        format!("AI key: {provider} key set (chapters and shorts can run). `fillers` runs the rules and the {provider} review together.")
+        format!("AI key: {provider} key set (chapters and finding clips can run). `fillers` runs the rules and the {provider} review together.")
     } else {
-        format!("AI key: none for {provider}, so no chapters or shorts. Fillers and retakes are reviewed in-house by you (`fillers_review`), then `fillers` cuts them with the rules' finds.")
+        format!("AI key: none for {provider}, so no chapters or found clips. Fillers and retakes are reviewed in-house by you (`fillers_review`), then `fillers` cuts them with the rules' finds.")
     });
 
     // Each pass as a dry run; one that can't run says why and the rest go on.
@@ -1453,7 +1437,7 @@ pub struct SpeedArgs {
     /// Overrides magnetic for this change.
     #[serde(default)]
     pub ripple: Option<bool>,
-    /// A short's id, for its own timeline instead of the video's.
+    /// A short's or clip's id, for its own timeline instead of the video's.
     #[serde(default)]
     pub short: Option<String>,
 }
@@ -1699,7 +1683,7 @@ pub struct NoiseArgs {
     /// Automatic mode: apply only if it looks right, else say why (no dry run first).
     #[serde(default)]
     pub guard: bool,
-    /// A short (id or title): its own timeline and muted noises. Default: the take short the
+    /// A short or clip (id or title): its own timeline and muted noises. Default: the take short the
     /// sound is the voice of, else the video.
     #[serde(default)]
     pub short: Option<String>,
@@ -3289,265 +3273,6 @@ fn chapters(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(answer)
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum ShortsOp {
-    /// The app's AI pass finds moments.
-    #[default]
-    Find,
-    /// Remove `short`.
-    Remove,
-    /// Set `short` to play from `fromWord` to `toWord`.
-    Range,
-    /// Give `short` the title `title`.
-    Rename,
-}
-
-#[derive(Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortsArgs {
-    /// find (default), remove, range or rename.
-    #[serde(default)]
-    pub op: ShortsOp,
-    /// remove, range, rename: the short's id or title.
-    #[serde(default)]
-    pub short: Option<String>,
-    /// rename: the new title (under 60 characters, also the file name).
-    #[serde(default)]
-    pub title: Option<String>,
-    /// range: the first and last word, ids from `transcript_get`.
-    #[serde(default)]
-    pub from_word: Option<String>,
-    #[serde(default)]
-    pub to_word: Option<String>,
-    /// Sound key of a transcript. Default: the transcribed speech.
-    #[serde(default)]
-    pub stream: Option<String>,
-}
-
-/// Removes a short or sets the stretch of the video it plays.
-fn change_short(ctx: &Ctx, before: &Open, args: ShortsArgs) -> Result<Vec<Output>, String> {
-    let wanted = args
-        .short
-        .ok_or("Give `short`: its id or title (see status)")?;
-    let words = match (&args.from_word, &args.to_word) {
-        (Some(a), Some(b)) => Some((a.clone(), b.clone())),
-        _ => None,
-    };
-    if args.op == ShortsOp::Range && words.is_none() {
-        return Err("`range` needs `fromWord` and `toWord`".into());
-    }
-    let key = match words {
-        Some(_) => Some(pick_sound(ctx, args.stream, Want::Transcribed)?),
-        None => None,
-    };
-    let (shorts, line) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        let mut shorts = document.shorts.clone();
-        let index = shorts
-            .iter()
-            .position(|s| s.id == wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
-            .ok_or_else(|| format!("No short {wanted} (see status)"))?;
-        if args.op == ShortsOp::Remove {
-            let gone = shorts.remove(index);
-            return Ok((shorts, format!("Removed short \"{}\".", gone.title)));
-        }
-        if args.op == ShortsOp::Rename {
-            let title = args
-                .title
-                .as_deref()
-                .map(str::trim)
-                .filter(|t| !t.is_empty())
-                .ok_or("`rename` needs `title`")?;
-            let was = std::mem::replace(&mut shorts[index].title, title.chars().take(60).collect());
-            let line = format!("Renamed short \"{was}\" to \"{}\".", shorts[index].title);
-            return Ok((shorts, line));
-        }
-        let short = &mut shorts[index];
-        if short.take.is_some() {
-            return Err(format!(
-                "Short \"{}\" is made from a take; change it in the Shorts tab",
-                short.title
-            ));
-        }
-        // A new stretch follows the video again, as Resync does: its own cuts go.
-        let dropped = short.edit.take().is_some();
-        let (Some(key), Some((from, to))) = (&key, &words) else {
-            unreachable!()
-        };
-        let transcript =
-            store::load_transcript(reader.root(), key)?.ok_or("That sound is not transcribed")?;
-        let word = |id: &str| {
-            transcript
-                .words
-                .iter()
-                .find(|w| w.id == id)
-                .ok_or_else(|| format!("No word {id} in the transcript of {key}"))
-        };
-        let (first, last) = (word(from)?, word(to)?);
-        if last.source_end_us <= first.source_start_us {
-            return Err("`toWord` must come after `fromWord`".into());
-        }
-        short.source_start_us = first.source_start_us;
-        short.source_end_us = last.source_end_us;
-        short.media = Some(document.stream_ref(key)?.asset);
-        crate::shorts::edited_range_in(short, document)
-            .ok_or("A word at one end was cut from the video; pick words that are kept")?;
-        Ok((
-            shorts.clone(),
-            format!(
-                "Short \"{}\" now plays {from}..{to}{}.",
-                shorts[index].title,
-                if dropped {
-                    ", following the video again (its own cuts are gone; undo brings them back)"
-                } else {
-                    ""
-                }
-            ),
-        ))
-    })?;
-    commands::project_shorts_set_impl(ctx.state, before.handle.clone(), before.revision, shorts)?;
-    text(applied(ctx, "shorts", before, vec![line])?)
-}
-
-fn shorts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: ShortsArgs = params(args)?;
-    let before = opened(ctx)?;
-    if args.op != ShortsOp::Find {
-        return change_short(ctx, &before, args);
-    }
-    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
-    ctx.progress(0.1, "Asking the AI pass for shorts");
-    let project = ctx.transcript_job(|| {
-        tc::project_shorts_generate_impl(
-            ctx.state,
-            ctx.host.transcripts(),
-            before.handle.clone(),
-            key,
-        )
-    })?;
-    let mut lines = vec![format!(
-        "Found {} for the Shorts Studio:",
-        plural(project.shorts.len(), "short")
-    )];
-    lines.extend(project.shorts.iter().map(|s| {
-        format!(
-            "\"{}\" ({:.0} s): {}",
-            s.title,
-            s.source_end_us.saturating_sub(s.source_start_us) as f64 / 1e6,
-            s.reason
-        )
-    }));
-    text(applied(ctx, "shorts", &before, lines)?)
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortCreateArgs {
-    pub title: String,
-    /// The first and last word, ids from `transcript_get`.
-    pub from_word: String,
-    pub to_word: String,
-    /// The sound whose transcript the ids are from; default the speech that is transcribed.
-    #[serde(default)]
-    pub stream: Option<String>,
-    /// Why it works on its own, in a sentence (shown in the Shorts Studio).
-    #[serde(default)]
-    pub reason: Option<String>,
-    /// Pick its scenes right away. Default true.
-    #[serde(default)]
-    pub scenes: Option<bool>,
-}
-
-fn short_create(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let args: ShortCreateArgs = params(args)?;
-    let before = opened(ctx)?;
-    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
-    let (shorts, short) = with_reader(ctx.state, |reader| {
-        let document = reader.document();
-        let transcript =
-            store::load_transcript(reader.root(), &key)?.ok_or("That sound is not transcribed")?;
-        let word = |id: &str| {
-            transcript
-                .words
-                .iter()
-                .find(|w| w.id == id)
-                .ok_or_else(|| format!("No word {id} in the transcript of {key}"))
-        };
-        let (first, last) = (word(&args.from_word)?, word(&args.to_word)?);
-        if last.source_end_us <= first.source_start_us {
-            return Err("`toWord` must come after `fromWord`".into());
-        }
-        let source = document.stream_ref(&key)?;
-        // The look and base layout of the shorts made so far, so they match; each short has
-        // its own sections.
-        let mut layout = document
-            .shorts
-            .first()
-            .map(|s| s.layout.clone())
-            .unwrap_or_else(|| {
-                crate::preset::store::resolve(&document.shorts_preset).short_layout()
-            });
-        layout.graphic_slots.clear();
-        layout.camera_clips.clear();
-        let mut layouts = document
-            .shorts
-            .first()
-            .map(|s| s.layouts.clone())
-            .unwrap_or_else(crate::layouts::LayoutTrack::for_short);
-        layouts.sections.clear();
-        let base = format!("short-{}", first.source_start_us / 1000);
-        let id = (1..)
-            .map(|n| {
-                if n == 1 {
-                    base.clone()
-                } else {
-                    format!("{base}-{n}")
-                }
-            })
-            .find(|id| !document.shorts.iter().any(|s| &s.id == id))
-            .unwrap_or(base);
-        let short = crate::shorts::Short {
-            id,
-            title: args.title.trim().to_string(),
-            source_start_us: first.source_start_us,
-            source_end_us: last.source_end_us,
-            reason: args.reason.unwrap_or_default().trim().to_string(),
-            layout,
-            layouts,
-            media: Some(source.asset),
-            edit: None,
-            take: None,
-            length_us: None,
-            edited_start_us: None,
-            edited_end_us: None,
-        };
-        let (start, end) = crate::shorts::edited_range_in(&short, document)
-            .ok_or("A word at one end was cut from the video; pick words that are kept")?;
-        let length =
-            crate::shorts::slice_sequence(&document.sequence, &document.assets, start, end)
-                .duration_us();
-        if !(crate::shorts::MIN_SHORT_US..=crate::shorts::MAX_SHORT_US).contains(&length) {
-            return Err(format!(
-                "That is {:.1} s; a short is 3 s to 3 min",
-                length as f64 / 1e6
-            ));
-        }
-        let mut shorts = document.shorts.clone();
-        shorts.push(short.clone());
-        Ok((shorts, short))
-    })?;
-    commands::project_shorts_set_impl(ctx.state, before.handle.clone(), before.revision, shorts)?;
-    let mut lines = vec![format!("Made short {} \"{}\".", short.id, short.title)];
-    if args.scenes != Some(false) {
-        match super::layouts::run_pick(ctx, Some(short.id.clone()), None, true) {
-            Ok(picked) => lines.extend(picked.lines().take(2).map(String::from)),
-            Err(why) => lines.push(format!("Layouts not picked: {why}.")),
-        }
-    }
-    text(applied(ctx, "short_create", &before, lines)?)
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaImportArgs {
@@ -3557,6 +3282,21 @@ pub struct MediaImportArgs {
     /// What streams stand for, set after importing (or alone, for media already imported).
     #[serde(default)]
     pub roles: Vec<MediaRoleArgs>,
+    /// Licences of music and sound files (after importing, or alone).
+    #[serde(default)]
+    pub licences: Vec<MediaLicenceArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaLicenceArgs {
+    /// The media id.
+    pub media: String,
+    /// cc0, publicDomain, noCredit (free without credit), creditRequired or unknown.
+    pub kind: crate::sequence::LicenceKind,
+    /// Where it came from (a site, a pack, the user's own).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -3566,18 +3306,20 @@ pub struct MediaRoleArgs {
     pub media: String,
     /// Its stream, such as `picture`, `camera` or `audio:0`.
     pub stream: String,
-    /// screen, webcam, overlay (pictures); mic (speech) or background (sounds).
+    /// screen, webcam, overlay (pictures); mic (speech), background (game, desktop), music
+    /// or effects (sounds).
     pub role: crate::sequence::Role,
 }
 
 fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: MediaImportArgs = params(args)?;
-    if args.paths.is_empty() && args.roles.is_empty() {
-        return Err("Give `paths` to import, `roles` to set, or both".into());
+    if args.paths.is_empty() && args.roles.is_empty() && args.licences.is_empty() {
+        return Err("Give `paths` to import, `roles` or `licences` to set, or both".into());
     }
     let before = opened(ctx)?;
     if args.paths.is_empty() {
-        let lines = set_roles(ctx, args.roles)?;
+        let mut lines = set_roles(ctx, args.roles)?;
+        lines.extend(set_licences(ctx, args.licences)?);
         return text(applied(ctx, "media_import", &before, lines)?);
     }
     let known: std::collections::HashSet<String> = with_reader(ctx.state, |reader| {
@@ -3611,7 +3353,34 @@ fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ));
     }
     lines.extend(set_roles(ctx, args.roles)?);
+    lines.extend(set_licences(ctx, args.licences)?);
     text(applied(ctx, "media_import", &before, lines)?)
+}
+
+/// Sets licences, one undo step per media.
+fn set_licences(ctx: &Ctx, licences: Vec<MediaLicenceArgs>) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    for licence in licences {
+        let now = opened(ctx)?;
+        let kind = licence.kind;
+        commands::project_media_licence_impl(
+            ctx.state,
+            now.handle,
+            now.revision,
+            licence.media.clone(),
+            Some(crate::sequence::Licence {
+                kind,
+                source: licence.source,
+            }),
+        )?;
+        let warn = if kind.needs_no_credit() {
+            ""
+        } else {
+            " It needs credit or is unknown: don't use it as music unless the user says so."
+        };
+        lines.push(format!("Set the licence of {}.{warn}", licence.media));
+    }
+    Ok(lines)
 }
 
 /// Sets stream roles, one undo step per media.
@@ -3830,29 +3599,16 @@ fn to_us(seconds: f64) -> Result<u64, String> {
 
 /// A short by its id or title.
 fn short_named(ctx: &Ctx, wanted: &str) -> Result<crate::shorts::Short, String> {
-    with_reader(ctx.state, |reader| {
-        let shorts = &reader.document().shorts;
-        shorts
-            .iter()
-            .find(|s| s.id == wanted)
-            .or_else(|| {
-                shorts
-                    .iter()
-                    .find(|s| s.title.eq_ignore_ascii_case(wanted.trim()))
-            })
-            .cloned()
-            .ok_or_else(|| format!("No short {wanted}"))
-    })
+    super::clips::named(ctx, wanted)
 }
 
-/// A take short by its id or title: footage and graphics go on its own timeline.
+/// A short made from a take by its id or title: footage and graphics go on its own timeline.
 fn take_short_named(ctx: &Ctx, wanted: &str) -> Result<crate::shorts::Short, String> {
     let short = short_named(ctx, wanted)?;
     if short.take.is_none() {
         return Err(format!(
-            "{} is a clip cut from the video; footage and graphics of their own go on shorts made \
-             from a take (`short_from_take`)",
-            short.id
+            "\"{}\" is a clip (cut from the video): it shows the video itself, so footage, B-roll and graphics under a take go only on shorts made from a take (`short_from_take`). A graphic in a clip is `graphic_add` on the video, then `graphic_set` with `short` for how it shows there.",
+            short.title
         ));
     }
     Ok(short)
@@ -4074,8 +3830,8 @@ fn take_short_id(ctx: &Ctx, wanted: &str) -> Result<String, String> {
     let short = short_named(ctx, wanted)?;
     if short.take.is_none() {
         return Err(format!(
-            "{} is cut from the video: clean the video itself, and the short follows",
-            short.id
+            "\"{}\" is a clip cut from the video: clean the video itself, then `clips` with `op: range` (or the Clips tab's \"Take the video's cuts again\") brings the cleaned words into it",
+            short.title
         ));
     }
     Ok(short.id)
@@ -4142,8 +3898,9 @@ pub struct ExportArgs {
     /// false: start it and return; check with export_status. Default true.
     #[serde(default)]
     pub wait: Option<bool>,
-    /// Export vertical shorts instead of the video: a short's id or title, or "all". They go
-    /// next to the project, named after it and the short (1080x1920), one after another.
+    /// Export vertical shorts or clips instead of the video: one's id or title, "shorts" (every
+    /// short made from a take), "clips" (every clip) or "all". They go next to the project,
+    /// named after it and the short (1080x1920), one after another.
     #[serde(default)]
     pub short: Option<String>,
     /// Stop the export with this job id (from `wait: false` or export_status) instead.
@@ -4195,6 +3952,10 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .map(|w| format!("\n{w}"))
         .unwrap_or_default();
     let started = commands::export_start_impl(ctx.state, open.handle, settings)?;
+    // Refused before it began (a folder that doesn't exist, say): say so, not "started".
+    if started.state == crate::export::ExportState::Failed {
+        return Err(export_failure(&started).replace("stopped", "did not start"));
+    }
     ctx.host.export_started(&started, false);
     if args.wait == Some(false) {
         return text(format!(
@@ -4289,17 +4050,30 @@ fn export_files(
 
 /// The shorts `wanted` names (id or title), or all of them for "all", as (id, title).
 fn chosen_shorts(ctx: &Ctx, wanted: &str) -> Result<Vec<(String, String)>, String> {
-    let shorts: Vec<(String, String)> = with_reader(ctx.state, |reader| {
+    let shorts: Vec<(String, String, bool)> = with_reader(ctx.state, |reader| {
         Ok(reader
             .document()
             .shorts
             .iter()
-            .map(|s| (s.id.clone(), s.title.clone()))
+            .map(|s| (s.id.clone(), s.title.clone(), s.take.is_some()))
             .collect())
     })?;
-    let chosen: Vec<(String, String)> = if wanted.trim().eq_ignore_ascii_case("all") {
-        shorts.clone()
+    let every = |take: Option<bool>| -> Vec<(String, String)> {
+        shorts
+            .iter()
+            .filter(|(_, _, t)| take.is_none_or(|take| *t == take))
+            .map(|(id, title, _)| (id.clone(), title.clone()))
+            .collect()
+    };
+    let wanted_kind = wanted.trim().to_ascii_lowercase();
+    let chosen: Vec<(String, String)> = if wanted_kind == "all" {
+        every(None)
+    } else if wanted_kind == "shorts" {
+        every(Some(true))
+    } else if wanted_kind == "clips" {
+        every(Some(false))
     } else {
+        let shorts = every(None);
         shorts
             .iter()
             .filter(|(id, title)| id == wanted || title.eq_ignore_ascii_case(wanted.trim()))
@@ -4309,13 +4083,18 @@ fn chosen_shorts(ctx: &Ctx, wanted: &str) -> Result<Vec<(String, String)>, Strin
     };
     if chosen.is_empty() {
         return Err(if shorts.is_empty() {
-            "No shorts yet: `short_create` or `shorts` makes them.".into()
+            "No shorts or clips yet: `short_from_take` makes a short, `clips` a clip.".into()
         } else {
             format!(
-                "No short {wanted}. Shorts: {}",
+                "No short or clip {wanted}. There are: {}",
                 shorts
                     .iter()
-                    .map(|(id, title)| format!("{id} \"{title}\""))
+                    .map(|(id, title, take)| {
+                        format!(
+                            "{id} \"{title}\" ({})",
+                            if *take { "short" } else { "clip" }
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -4722,7 +4501,7 @@ pub struct GraphicSetArgs {
     /// takes one back.
     #[serde(default)]
     pub look: std::collections::BTreeMap<String, Option<String>>,
-    /// A short (id or title): set the graphic's `slot` in it; for a short made from a take,
+    /// A short or clip (id or title): set the graphic's `slot` in it; for a short made from a take,
     /// moves and lengths are on its own timeline too (`moveToWord` a word of the take).
     #[serde(default)]
     pub short: Option<String>,
@@ -5080,7 +4859,7 @@ pub struct GraphicRenderArgs {
     /// One graphic's id; default every graphic on the timeline.
     #[serde(default)]
     pub graphic: Option<String>,
-    /// A short (id or title): its graphics, rendered for its 9:16 frame or their part of its
+    /// A short or clip (id or title): its graphics, rendered for its 9:16 frame or their part of its
     /// split.
     #[serde(default)]
     pub short: Option<String>,
@@ -5534,10 +5313,19 @@ pub struct CaptionPick {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionsArgs {
-    /// Emphasis words to set; without it the lines are listed.
+    /// Emphasis words to set; without these the lines are listed.
     #[serde(default)]
     pub emphasis: Vec<CaptionPick>,
-    /// A short (id or title): its caption lines.
+    /// A new line starts at each `word` of `line`.
+    #[serde(default)]
+    pub split: Vec<CaptionPick>,
+    /// These lines join the line before them.
+    #[serde(default)]
+    pub join: Vec<usize>,
+    /// Hides `word` of `line` from the captions, or the whole line without `word`.
+    #[serde(default)]
+    pub hide: Vec<CaptionPick>,
+    /// A short or clip (id or title): its caption lines.
     #[serde(default)]
     pub short: Option<String>,
     /// List only the lines from here (seconds on the edited timeline).
@@ -5573,7 +5361,11 @@ fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let Some(track_id) = track.track_id.clone() else {
         return Err("No captions yet: nothing is transcribed.".into());
     };
-    if args.emphasis.is_empty() {
+    if args.emphasis.is_empty()
+        && args.split.is_empty()
+        && args.join.is_empty()
+        && args.hide.is_empty()
+    {
         let from = args.from_s.map(|s| (s.max(0.0) * 1e6) as u64).unwrap_or(0);
         let to = args
             .to_s
@@ -5637,64 +5429,105 @@ fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         lines.push(format!("{without} without an emphasis word."));
         return text(lines.join("\n"));
     }
-    // Each pick names a line and one of its words.
-    let mut on = Vec::new();
-    let mut off = Vec::new();
-    let mut said = Vec::new();
-    for pick in &args.emphasis {
-        let cue = track.cues.get(pick.line).ok_or_else(|| {
+    // Each pick names a line and one of its words as listed now: all are found before any
+    // change renumbers the lines.
+    let line = |n: usize| {
+        track.cues.get(n).ok_or_else(|| {
             format!(
-                "There is no line {} (there are {}); list them again",
-                pick.line,
+                "There is no line {n} (there are {}); list them again",
                 track.cues.len()
             )
-        })?;
-        match pick
+        })
+    };
+    let word_of = |pick: &CaptionPick| -> Result<Option<String>, String> {
+        let cue = line(pick.line)?;
+        let Some(word) = pick
             .word
             .as_deref()
             .map(str::trim)
             .filter(|w| !w.is_empty())
-        {
-            None => {
-                off.extend(cue.emphasis.clone());
-                said.push(format!("{}: none", pick.line));
-            }
-            Some(word) => {
-                let wanted = plain_word(word);
-                let index = cue
-                    .text
-                    .split(' ')
-                    .position(|w| plain_word(w) == wanted)
-                    .filter(|i| *i < cue.word_ids.len())
-                    .ok_or_else(|| {
-                        format!(
-                            "Line {} (\"{}\") has no word \"{word}\"",
-                            pick.line, cue.text
-                        )
-                    })?;
-                on.push(cue.word_ids[index].clone());
-                said.push(format!("{}: {word}", pick.line));
-            }
+        else {
+            return Ok(None);
+        };
+        let wanted = plain_word(word);
+        let index = cue
+            .text
+            .split(' ')
+            .position(|w| plain_word(w) == wanted)
+            .filter(|i| *i < cue.word_ids.len())
+            .ok_or_else(|| {
+                format!(
+                    "Line {} (\"{}\") has no word \"{word}\"",
+                    pick.line, cue.text
+                )
+            })?;
+        Ok(Some(cue.word_ids[index].clone()))
+    };
+    use crate::commands::transcript::CaptionEdit;
+    let mut edits = Vec::new();
+    let mut on = Vec::new();
+    let mut off = Vec::new();
+    for pick in &args.emphasis {
+        match word_of(pick)? {
+            None => off.extend(line(pick.line)?.emphasis.clone()),
+            Some(id) => on.push(id),
         }
     }
-    use crate::commands::transcript::CaptionEdit;
     for (word_ids, on) in [(off, false), (on, true)] {
-        if word_ids.is_empty() {
-            continue;
+        if !word_ids.is_empty() {
+            edits.push(CaptionEdit::Emphasis { word_ids, on });
         }
+    }
+    for pick in &args.split {
+        let word_id = word_of(pick)?.ok_or("`split` needs the word a new line starts at")?;
+        edits.push(CaptionEdit::Split { word_id });
+    }
+    for &n in &args.join {
+        let word_id = line(n)?
+            .word_ids
+            .first()
+            .cloned()
+            .ok_or("That line is empty")?;
+        edits.push(CaptionEdit::Merge { word_id });
+    }
+    let mut hidden = Vec::new();
+    for pick in &args.hide {
+        match word_of(pick)? {
+            Some(id) => hidden.push(id),
+            None => hidden.extend(line(pick.line)?.word_ids.iter().cloned()),
+        }
+    }
+    if !hidden.is_empty() {
+        edits.push(CaptionEdit::Hide {
+            word_ids: hidden,
+            hidden: true,
+        });
+    }
+    for edit in edits {
         commands::transcript::transcript_caption_edit_impl(
             ctx.state,
             open.handle.clone(),
             track_id.clone(),
-            CaptionEdit::Emphasis { word_ids, on },
+            edit,
             short.clone(),
         )?;
     }
     ctx.changed_project();
+    let said: Vec<String> = [
+        ("emphasis set", args.emphasis.len()),
+        ("split", args.split.len()),
+        ("joined", args.join.len()),
+        ("hidden", args.hide.len()),
+    ]
+    .into_iter()
+    .filter(|(_, n)| *n > 0)
+    .map(|(what, n)| format!("{} {what}", plural(n, "line")))
+    .collect();
+    let now = commands::transcript::project_caption_cues_impl(ctx.state, open.handle, short)?;
     text(format!(
-        "Emphasis set on {}: {}.",
-        plural(said.len(), "line"),
-        said.join(", ")
+        "Captions: {}; {} now (list them again for the new numbers).",
+        said.join(", "),
+        plural(now.cues.len(), "line")
     ))
 }
 
@@ -6224,41 +6057,108 @@ mod tests {
 
         call(
             &ctx,
-            "short_create",
-            json!({ "title": "Whole", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
+            "clips",
+            json!({ "op": "create", "title": "Whole", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
         )
         .unwrap();
+        let listed = call(&ctx, "clips", json!({})).unwrap();
+        assert!(
+            listed.starts_with("1 clip:") && listed.contains("\"Whole\""),
+            "{listed}"
+        );
+        // Exports pick by kind: "clips" is every clip, "shorts" every short (none here).
+        assert_eq!(chosen_shorts(&ctx, "clips").unwrap().len(), 1);
+        assert_eq!(chosen_shorts(&ctx, "all").unwrap().len(), 1);
+        assert!(chosen_shorts(&ctx, "shorts").is_err());
+        // Shorts are the ones made from a take: listing them changes nothing and finds none.
+        let revision = with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
+        let shorts = call(&ctx, "shorts", json!({})).unwrap();
+        assert!(shorts.starts_with("No shorts made from a take"), "{shorts}");
+        assert_eq!(
+            with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap(),
+            revision
+        );
+        let wrong = call(&ctx, "shorts", json!({ "op": "remove", "short": "Whole" })).unwrap_err();
+        assert!(
+            wrong.contains("is a clip (cut from the video)") && wrong.contains("`clips`"),
+            "{wrong}"
+        );
         let ranged = call(
             &ctx,
-            "shorts",
-            json!({ "op": "range", "short": "Whole", "fromWord": "w-0", "toWord": "w-6" }),
+            "clips",
+            json!({ "op": "range", "clip": "Whole", "fromWord": "w-0", "toWord": "w-6" }),
         )
         .unwrap();
         assert!(ranged.contains("now plays w-0..w-6"), "{ranged}");
         assert!(
-            call(&ctx, "shorts", json!({ "op": "range", "short": "Whole" }))
+            call(&ctx, "clips", json!({ "op": "range", "clip": "Whole" }))
                 .unwrap_err()
-                .contains("needs `fromWord`")
+                .contains("Give `fromWord` and `toWord`")
         );
         let renamed = call(
             &ctx,
-            "shorts",
-            json!({ "op": "rename", "short": "whole", "title": "The whole lesson" }),
+            "clips",
+            json!({ "op": "rename", "clip": "whole", "title": "The whole lesson" }),
         )
         .unwrap();
         assert!(renamed.contains("to \"The whole lesson\""), "{renamed}");
         let removed = call(
             &ctx,
-            "shorts",
-            json!({ "op": "remove", "short": "The whole lesson" }),
+            "clips",
+            json!({ "op": "remove", "clip": "The whole lesson" }),
         )
         .unwrap();
         assert!(
-            removed.starts_with("Removed short \"The whole lesson\""),
+            removed.starts_with("Removed clip \"The whole lesson\""),
             "{removed}"
         );
         let shorts = with_reader(ctx.state, |r| Ok(r.document().shorts.len())).unwrap();
         assert_eq!(shorts, 0);
+    }
+
+    #[test]
+    fn a_shorts_caption_breaks_are_its_own_and_undo() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        call(
+            &ctx,
+            "clips",
+            json!({ "op": "create", "title": "Whole", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
+        )
+        .unwrap();
+        let count = |short: bool| {
+            let args = if short {
+                json!({ "short": "Whole" })
+            } else {
+                json!({})
+            };
+            let listed = call(&ctx, "captions", args).unwrap();
+            listed.split(' ').next().unwrap().parse::<usize>().unwrap()
+        };
+        let (video, short) = (count(false), count(true));
+        // The first line's second word starts a new line, in the short only.
+        let listed = call(&ctx, "captions", json!({ "short": "Whole" })).unwrap();
+        let first = listed.lines().nth(1).unwrap();
+        let word = first.split(' ').nth(3).unwrap().trim_matches('*');
+        let split = call(
+            &ctx,
+            "captions",
+            json!({ "short": "Whole", "split": [{ "line": 0, "word": word }] }),
+        )
+        .unwrap();
+        assert!(split.starts_with("Captions: 1 line split"), "{split}");
+        assert_eq!((count(false), count(true)), (video, short + 1));
+        let step = with_reader(ctx.state, |r| {
+            Ok(r.history().steps().undo_step().unwrap().label.clone())
+        })
+        .unwrap();
+        assert_eq!(step, "Short captions");
+        call(&ctx, "undo", json!({})).unwrap();
+        assert_eq!(count(true), short);
     }
 
     #[test]
@@ -6301,6 +6201,24 @@ mod tests {
             json!({ "title": "Take", "media": [voice] }),
         )
         .unwrap();
+        let listed = call(&ctx, "shorts", json!({})).unwrap();
+        assert!(
+            listed.starts_with("1 short made from a take:") && listed.contains("\"Take\""),
+            "{listed}"
+        );
+        let wrong = call(
+            &ctx,
+            "clips",
+            json!({ "op": "rename", "clip": "Take", "title": "x" }),
+        )
+        .unwrap_err();
+        assert!(
+            wrong.contains("is a short (made from a take)") && wrong.contains("`shorts`"),
+            "{wrong}"
+        );
+        assert!(call(&ctx, "clips", json!({}))
+            .unwrap()
+            .starts_with("No clips yet"));
         // Everything under the take goes as one batch: a template, and a copy of the video's
         // own graphic with new text. Nothing changes until the user accepts it.
         let revision = |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
@@ -6471,8 +6389,8 @@ mod tests {
         .contains("short_footage"));
         call(
             &ctx,
-            "short_create",
-            json!({ "title": "Clip", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
+            "clips",
+            json!({ "op": "create", "title": "Clip", "fromWord": "w-0", "toWord": "w-6", "scenes": false }),
         )
         .unwrap();
         let refused = call(
@@ -6482,7 +6400,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            refused.contains("is a clip cut from the video"),
+            refused.contains("is a clip (cut from the video)"),
             "{refused}"
         );
         assert!(call(
@@ -6850,7 +6768,7 @@ mod tests {
             json!({ "graphic": id, "short": "nope", "slot": "camera" }),
         )
         .unwrap_err();
-        assert!(slot.contains("No short nope"), "{slot}");
+        assert!(slot.contains("No short or clip nope"), "{slot}");
         assert!(call(
             &ctx,
             "graphic_set",
@@ -7216,20 +7134,20 @@ mod tests {
         let ctx = Ctx::new(&host, "agent", false);
         let made = call(
             &ctx,
-            "short_create",
-            json!({ "title": "Next step", "fromWord": "w-0", "toWord": "w-6", "reason": "A tip" }),
+            "clips",
+            json!({ "op": "create", "title": "Next step", "fromWord": "w-0", "toWord": "w-6", "reason": "A tip" }),
         )
         .unwrap();
         // The voice is a file, not a recording: there is no mouse data to pick layouts from.
-        assert!(made.contains("Made short short-0 \"Next step\""), "{made}");
+        assert!(made.contains("Made clip clip-0 \"Next step\""), "{made}");
         assert!(made.contains("Layouts not picked"), "{made}");
         assert!(call(
             &ctx,
-            "short_create",
-            json!({ "title": "Too short", "fromWord": "w-0", "toWord": "w-1" })
+            "clips",
+            json!({ "op": "create", "title": "Too short", "fromWord": "w-0", "toWord": "w-1" })
         )
         .unwrap_err()
-        .contains("a short is 3 s to 3 min"));
+        .contains("a clip is 3 s to 3 min"));
 
         let set = call(
             &ctx,
@@ -7241,7 +7159,7 @@ mod tests {
             set.contains("s1 0:00.00-0:01.50 Camera only: Camera only (100 %) (by hand)"),
             "{set}"
         );
-        let listed = call(&ctx, "layouts", json!({ "short": "short-0" })).unwrap();
+        let listed = call(&ctx, "layouts", json!({ "short": "clip-0" })).unwrap();
         assert!(
             listed.contains("base Side by side (camera first, 35 %)"),
             "{listed}"
@@ -7253,16 +7171,11 @@ mod tests {
         assert!(call(
             &ctx,
             "layouts",
-            json!({ "short": "short-0", "op": "add", "sections": [{ "fromS": 0, "toS": 1, "layout": "Nope" }] }),
+            json!({ "short": "clip-0", "op": "add", "sections": [{ "fromS": 0, "toS": 1, "layout": "Nope" }] }),
         )
         .unwrap_err()
         .contains("No layout \"Nope\""));
-        let cleared = call(
-            &ctx,
-            "layouts",
-            json!({ "short": "short-0", "op": "clear" }),
-        )
-        .unwrap();
+        let cleared = call(&ctx, "layouts", json!({ "short": "clip-0", "op": "clear" })).unwrap();
         assert!(
             cleared.contains("No sections: the base shows throughout."),
             "{cleared}"
@@ -7295,7 +7208,7 @@ mod tests {
         assert_eq!(wav.len(), 44 + 4 * 48_000 * 4);
         assert!(call(&ctx, "export", json!({ "file": "srt", "short": "x" }))
             .unwrap_err()
-            .contains("No shorts yet"));
+            .contains("No shorts or clips yet"));
     }
 
     #[test]

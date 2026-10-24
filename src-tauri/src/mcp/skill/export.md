@@ -4,6 +4,9 @@
    wants them) or it says they are out of date, set them now and show them to the user. Then
    run `check`. Tell the user about any error or warning and fix it with their go (`check` with
    `fix`, whose answer already says what is left); an error stops the export.
+   You can't hear the cuts: `joins` `find`, plus `add` for any cut you doubt, then ask the user
+   to listen in the Joins panel. Read the marks back (`joins`) and fix those marked FIX first.
+   Skip it only when the user says so.
 1. Ask first: "Export now?" with the choices, default first:
    - Resolution: 1080p (default), 720p, 1440p, 4K. The canvas shape in `status` sets the
      orientation: 1080p is 1920x1080 for 16:9, 1080x1920 for 9:16, 1080x1080 for 1:1,
@@ -22,4 +25,7 @@
    unless the user agrees.
 6. Other files, only when the user asks: `export` with `file` `srt` or `vtt` (subtitles),
    `txt` or `md` (the transcript; `md` has the chapters as headings) or `wav` (the sound
-   alone), and `short` for a short's. They go next to the project, named after it.
+   alone), and `short` for a short's or clip's. They go next to the project, named after it.
+7. Shorts and clips: `export` with `short`: one's id or title, `"shorts"` (every short made
+   from a take), `"clips"` (every clip), or `"all"` (both) only when the user asked for
+   everything.

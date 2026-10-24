@@ -177,13 +177,14 @@ also a CLI command, `aeroedits do <tool> --key value`. Tools return **text and P
 | Group | In the list | Behind `more` | Applies how |
 |---|---|---|---|
 | Guide | `preset`, `library` (styles, presets, layouts), `more` | — | Choosing a style or preset is one undo step |
-| Read | `project_info`, `transcript_get` | `timeline_get`, `playhead_get`, `telemetry_get`, `layout_get`, `captions` | — |
+| Read | `project_info`, `transcript_get` | `timeline_get`, `playhead`, `source_search`, `telemetry_get`, `layout_get`, `captions` | — |
 | Look | `frame_render`, `timeline_view`, `storyboard` | — | — |
 | Propose | `propose_cuts`, `proposals_list` | `propose_edit`, `proposal_withdraw`, `undo_batch` | Waits for the user in the Agent panel (unless autopilot) |
 | Project | `status`, `scan`, `open`, `create`, `undo` (`run: true`: the agent's whole run), `settings` | `redo`, `checkpoint`, `media_import` | Directly, one undo step each; the app saves a checkpoint before each agent run |
 | Speech | `transcribe`, `mouth_noises`, `silence`, `fillers`, `fillers_review` | `speed`, `transcript_fix` | Directly; `apply: false` is a dry run, `guard: true` the automatic check; word fixes are not undo steps |
 | Picture | `zooms` (automatic and single zooms) | `layouts`, `faces` | Directly; dry run available |
-| Shorts | — | `shorts`, `short_create`, `short_from_take`, `short_footage` | Directly; footage and graphics under a take as a batch |
+| Shorts (from a take) | — | `short_from_take`, `short_footage`, `shorts` (list, rename, remove) | Directly; footage and graphics under a take as a batch |
+| Clips (cut from the video) | — | `clips` (list, create, find, range, rename, remove) | Directly; `find` only adds clips |
 | Graphics | `graphics`, `graphic_add`, `graphic_set` (incl. move, remove, style), `graphic_render` | `graphics_install`, `graphic_write_file`, `graphic_check`, `graphic_templatize`, `library_save`, `library_remove` | Directly (source edits and the library have no undo; checkpoints keep the files) |
 | Finish | `chapters`, `check`, `export`, `export_status` | — | Directly; export only on the user's go |
 

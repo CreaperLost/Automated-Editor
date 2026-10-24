@@ -174,7 +174,7 @@ pub fn track_type(role: Role) -> TrackType {
         Role::Screen | Role::Overlay => TrackType::Screen,
         Role::Webcam => TrackType::Webcam,
         Role::Mic => TrackType::MicAudio,
-        Role::Background => TrackType::SystemAudio,
+        Role::Background | Role::Music | Role::Effects => TrackType::SystemAudio,
     }
 }
 
@@ -245,6 +245,7 @@ pub fn recording_asset(folder: &Path, id: String) -> Result<Asset, String> {
                 .unwrap_or_else(|| "Recording".into())
         });
     Ok(Asset {
+        licence: None,
         id,
         name,
         kind: AssetKind::Recording,

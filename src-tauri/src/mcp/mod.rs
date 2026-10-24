@@ -10,12 +10,15 @@ mod actions;
 pub mod bridge;
 pub mod cli;
 pub mod clients;
+mod clips;
 pub(crate) mod frames;
 pub mod ipc;
 mod layouts;
 mod library;
 mod presets;
 mod propose;
+mod review;
+mod search;
 pub mod skill;
 pub mod storyboard;
 #[cfg(test)]
@@ -53,6 +56,11 @@ pub trait Host: Send + Sync + 'static {
     /// The agent started an export (of a short when `short`): the editor shows its progress as
     /// if started there.
     fn export_started(&self, _status: &crate::export::ExportStatus, _short: bool) {}
+    /// The agent changed the joins to listen to: the Joins panel reloads and comes forward.
+    fn joins_changed(&self) {}
+    /// The agent moved the user's preview to `_at_us` to show them a moment: the editor
+    /// leaves Shorts for the video and brings the playhead into view.
+    fn show_moment(&self, _at_us: u64) {}
     /// Accept proposals as they arrive.
     fn autopilot(&self) -> bool {
         false
@@ -1438,6 +1446,10 @@ mod tests {
         // tools' `openWorldHint`, so the budget moved from 60,000 to 61,000. COST-2 (24 Oct):
         // the layouts and the shorts' tools behind `more` too, 41,240. Measured in Claude
         // Code, the whole list was 23,868 tokens; with its ToolSearch only the names are sent.
+        // 24 Oct, later: `more` names shorts and clips apart (the right tool and arguments
+        // matter more than size now, George said), 42,036; the budget moved to 44,000.
+        // REV-1 put `joins` in the list (the export steps use it); `source_search` and
+        // `playhead` sit behind `more`.
         let list = tool_list();
         if std::env::var("TOOL_SIZES").is_ok() {
             for tool in &list {
@@ -1449,6 +1461,6 @@ mod tests {
             }
         }
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 42_000, "the tool list grew to {size} characters");
+        assert!(size < 44_000, "the tool list grew to {size} characters");
     }
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Captions, Copy, Eye, FolderOpen, Frame, Loader2, Palette, Pencil, Smartphone, Sparkles, Trash2, Wand2 } from "lucide-react";
-import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { InspectorSection, MoreSettings, RangeRow } from "../inspector/InspectorSection";
 import { CAPTION_STYLES, CAPTION_WEIGHTS, ColorRow, Toggle } from "../captions/CaptionsSection";
 import { Button, Field, IconButton, Notice, Segmented, cn } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
@@ -397,18 +397,20 @@ export const StylePanel: React.FC = () => {
         <p className="text-meta text-studio-500 leading-relaxed">
           {view.lookPresets.find((p) => p.name === s.graphics.preset)?.description}
         </p>
-        {LOOK_CONTROLS.map((control) => (
-          <RangeRow
-            key={control.id}
-            label={control.label}
-            value={s.graphics[control.id]}
-            min={control.min}
-            max={control.max}
-            step={0.05}
-            unit="×"
-            onChange={(value) => set("graphics", { [control.id]: value })}
-          />
-        ))}
+        <MoreSettings>
+          {LOOK_CONTROLS.map((control) => (
+            <RangeRow
+              key={control.id}
+              label={control.label}
+              value={s.graphics[control.id]}
+              min={control.min}
+              max={control.max}
+              step={0.05}
+              unit="×"
+              onChange={(value) => set("graphics", { [control.id]: value })}
+            />
+          ))}
+        </MoreSettings>
         {stills && stills.length > 0 && (
           <div className="grid grid-cols-3 gap-1">
             {stills.map((still) => (
@@ -449,20 +451,22 @@ export const StylePanel: React.FC = () => {
             options={CAPTION_STYLES.map(([value, label, title]) => ({ value, label, title }))}
           />
         </Field>
-        <label className="flex items-center justify-between text-label text-studio-400">
-          <span>Weight</span>
-          <select
-            value={s.captions.weight}
-            onChange={(e) => set("captions", { weight: Number(e.target.value) })}
-            className="bg-studio-800 text-studio-100 text-label rounded px-1.5 py-0.5 border border-studio-700"
-          >
-            {CAPTION_WEIGHTS.map(([weight, label]) => (
-              <option key={weight} value={weight}>
-                {weight === 0 ? "The graphics' titles" : label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MoreSettings>
+          <label className="flex items-center justify-between text-label text-studio-400">
+            <span>Weight</span>
+            <select
+              value={s.captions.weight}
+              onChange={(e) => set("captions", { weight: Number(e.target.value) })}
+              className="bg-studio-800 text-studio-100 text-label rounded px-1.5 py-0.5 border border-studio-700"
+            >
+              {CAPTION_WEIGHTS.map(([weight, label]) => (
+                <option key={weight} value={weight}>
+                  {weight === 0 ? "The graphics' titles" : label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </MoreSettings>
         <ColorRow label="Text colour" value={s.captions.textColor} onChange={(textColor) => set("captions", { textColor })} />
         <Toggle
           label="Emphasis word in colour"
@@ -470,47 +474,51 @@ export const StylePanel: React.FC = () => {
           checked={s.captions.emphasis}
           onChange={(emphasis) => set("captions", { emphasis })}
         />
-        {s.captions.emphasis && (
-          <label className="flex items-center justify-between text-label text-studio-400">
-            <span>Emphasis colour</span>
-            <span className="flex items-center gap-2">
-              <button
-                type="button"
-                className="text-meta text-studio-400 hover:text-white hover:underline"
-                onClick={() => set("captions", { emphasisColor: s.captions.emphasisColor ? "" : "#FACC15" })}
-              >
-                {s.captions.emphasisColor ? "Use the accent" : "The accent"}
-              </button>
-              {s.captions.emphasisColor && (
-                <input
-                  type="color"
-                  value={s.captions.emphasisColor.toLowerCase()}
-                  onChange={(e) => set("captions", { emphasisColor: e.target.value.toUpperCase() })}
-                  className="w-12 h-6 bg-studio-850 border border-studio-800 rounded cursor-pointer"
-                />
-              )}
-            </span>
-          </label>
-        )}
-        <Toggle label="Outline" checked={s.captions.outline} onChange={(outline) => set("captions", { outline })} />
-        <Toggle
-          label="Box behind the text"
-          checked={s.captions.box.on}
-          onChange={(on) => set("captions", { box: { ...s.captions.box, on } })}
-        />
-        {s.captions.box.on && (
-          <>
-            <ColorRow label="Box colour" value={s.captions.box.color} onChange={(color) => set("captions", { box: { ...s.captions.box, color } })} />
-            <RangeRow
-              label="Box opacity"
-              value={Math.round(s.captions.box.opacity * 100)}
-              min={0}
-              max={100}
-              unit="%"
-              onChange={(pct) => set("captions", { box: { ...s.captions.box, opacity: pct / 100 } })}
-            />
-          </>
-        )}
+        <MoreSettings>
+          {s.captions.emphasis && (
+            <label className="flex items-center justify-between text-label text-studio-400">
+              <span>Emphasis colour</span>
+              <span className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-meta text-studio-400 hover:text-white hover:underline"
+                  onClick={() => set("captions", { emphasisColor: s.captions.emphasisColor ? "" : "#FACC15" })}
+                >
+                  {s.captions.emphasisColor ? "Use the accent" : "The accent"}
+                </button>
+                {s.captions.emphasisColor && (
+                  <input
+                    type="color"
+                    value={s.captions.emphasisColor.toLowerCase()}
+                    onChange={(e) => set("captions", { emphasisColor: e.target.value.toUpperCase() })}
+                    className="w-12 h-6 bg-studio-850 border border-studio-800 rounded cursor-pointer"
+                  />
+                )}
+              </span>
+            </label>
+          )}
+        </MoreSettings>
+        <MoreSettings>
+          <Toggle label="Outline" checked={s.captions.outline} onChange={(outline) => set("captions", { outline })} />
+          <Toggle
+            label="Box behind the text"
+            checked={s.captions.box.on}
+            onChange={(on) => set("captions", { box: { ...s.captions.box, on } })}
+          />
+          {s.captions.box.on && (
+            <>
+              <ColorRow label="Box colour" value={s.captions.box.color} onChange={(color) => set("captions", { box: { ...s.captions.box, color } })} />
+              <RangeRow
+                label="Box opacity"
+                value={Math.round(s.captions.box.opacity * 100)}
+                min={0}
+                max={100}
+                unit="%"
+                onChange={(pct) => set("captions", { box: { ...s.captions.box, opacity: pct / 100 } })}
+              />
+            </>
+          )}
+        </MoreSettings>
       </InspectorSection>
 
       <InspectorSection id="style-frame" title="Frame" icon={Frame}>
@@ -518,58 +526,62 @@ export const StylePanel: React.FC = () => {
         {openedProject.layout?.wallpaperAsset && (
           <p className="text-meta text-studio-500">This project shows its own image instead (Video page).</p>
         )}
-        <RangeRow
-          label="Screen corners"
-          value={s.frame.screen.cornerRadiusPx}
-          min={0}
-          max={32}
-          unit="px"
-          onChange={(cornerRadiusPx) => set("frame", { screen: { ...s.frame.screen, cornerRadiusPx } })}
-        />
-        <RangeRow
-          label="Screen shadow"
-          value={s.frame.screen.shadowBlurPx}
-          min={0}
-          max={40}
-          unit="px"
-          onChange={(shadowBlurPx) => set("frame", { screen: { ...s.frame.screen, shadowBlurPx } })}
-        />
-        <RangeRow
-          label="Camera border"
-          value={s.frame.camera.borderWidth}
-          min={0}
-          max={8}
-          unit="px"
-          onChange={(borderWidth) => set("frame", { camera: { ...s.frame.camera, borderWidth } })}
-        />
-        {s.frame.camera.borderWidth > 0 && (
-          <ColorRow
-            label="Border colour"
-            value={s.frame.camera.borderColor}
-            onChange={(borderColor) => set("frame", { camera: { ...s.frame.camera, borderColor } })}
+        <MoreSettings>
+          <RangeRow
+            label="Screen corners"
+            value={s.frame.screen.cornerRadiusPx}
+            min={0}
+            max={32}
+            unit="px"
+            onChange={(cornerRadiusPx) => set("frame", { screen: { ...s.frame.screen, cornerRadiusPx } })}
           />
-        )}
-        <Toggle
-          label="Camera shadow"
-          checked={s.frame.camera.shadow}
-          onChange={(shadow) => set("frame", { camera: { ...s.frame.camera, shadow } })}
-        />
+          <RangeRow
+            label="Screen shadow"
+            value={s.frame.screen.shadowBlurPx}
+            min={0}
+            max={40}
+            unit="px"
+            onChange={(shadowBlurPx) => set("frame", { screen: { ...s.frame.screen, shadowBlurPx } })}
+          />
+          <RangeRow
+            label="Camera border"
+            value={s.frame.camera.borderWidth}
+            min={0}
+            max={8}
+            unit="px"
+            onChange={(borderWidth) => set("frame", { camera: { ...s.frame.camera, borderWidth } })}
+          />
+          {s.frame.camera.borderWidth > 0 && (
+            <ColorRow
+              label="Border colour"
+              value={s.frame.camera.borderColor}
+              onChange={(borderColor) => set("frame", { camera: { ...s.frame.camera, borderColor } })}
+            />
+          )}
+          <Toggle
+            label="Camera shadow"
+            checked={s.frame.camera.shadow}
+            onChange={(shadow) => set("frame", { camera: { ...s.frame.camera, shadow } })}
+          />
+        </MoreSettings>
       </InspectorSection>
 
       <InspectorSection id="style-portrait" title="At 9:16 (shorts)" icon={Smartphone}>
-        <p className="text-meta text-studio-500">Graphics in a short, times the style&apos;s:</p>
-        {SHORTS_LOOK_CONTROLS.map((control) => (
-          <RangeRow
-            key={control.id}
-            label={control.label}
-            value={s.portrait.graphics[control.id]}
-            min={0.5}
-            max={2}
-            step={0.05}
-            unit="×"
-            onChange={(value) => set("portrait", { graphics: { ...s.portrait.graphics, [control.id]: value } })}
-          />
-        ))}
+        <MoreSettings>
+          <p className="text-meta text-studio-500">Graphics in a short, times the style&apos;s:</p>
+          {SHORTS_LOOK_CONTROLS.map((control) => (
+            <RangeRow
+              key={control.id}
+              label={control.label}
+              value={s.portrait.graphics[control.id]}
+              min={0.5}
+              max={2}
+              step={0.05}
+              unit="×"
+              onChange={(value) => set("portrait", { graphics: { ...s.portrait.graphics, [control.id]: value } })}
+            />
+          ))}
+        </MoreSettings>
         <Field label="Words appear">
           <Segmented<"same" | CaptionStyle>
             label="Caption words at 9:16"

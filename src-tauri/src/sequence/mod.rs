@@ -66,15 +66,19 @@ pub enum Role {
     Overlay,
     /// Sound that is speech: it can be transcribed and captioned, and ducks background sound.
     Mic,
-    /// Music, game or desktop sound.
+    /// Game or desktop sound.
     Background,
+    /// A music bed: kept at the project's level under speech when that is set.
+    Music,
+    /// Sound effects placed by hand or by an agent.
+    Effects,
 }
 
 impl Role {
     pub fn kind(self) -> StreamKind {
         match self {
             Role::Screen | Role::Webcam | Role::Overlay => StreamKind::Picture,
-            Role::Mic | Role::Background => StreamKind::Sound,
+            Role::Mic | Role::Background | Role::Music | Role::Effects => StreamKind::Sound,
         }
     }
 }
@@ -126,6 +130,40 @@ pub struct Asset {
     /// The file or folder is no longer there. Worked out when the project is read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub missing: bool,
+    /// What it may be used for and where it came from (music and sound effects); none: not
+    /// known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub licence: Option<Licence>,
+}
+
+/// An imported file's licence. Music in an export must need no credit (George, 21 Oct).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Licence {
+    pub kind: LicenceKind,
+    /// Where it came from: a site, a pack, "made by me".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum LicenceKind {
+    /// CC0: no rights reserved.
+    Cc0,
+    PublicDomain,
+    /// Free to use without credit (a site's own licence, or the user's own work).
+    NoCredit,
+    /// Needs the author credited.
+    CreditRequired,
+    Unknown,
+}
+
+impl LicenceKind {
+    /// Usable in an export without crediting anyone.
+    pub fn needs_no_credit(self) -> bool {
+        matches!(self, Self::Cc0 | Self::PublicDomain | Self::NoCredit)
+    }
 }
 
 impl Asset {
@@ -313,6 +351,66 @@ pub struct Clip {
     /// How fast it plays its media: 2 plays twice as much of the asset in its duration.
     #[serde(default = "normal_speed", skip_serializing_if = "is_normal_speed")]
     pub speed: f64,
+    /// Its sound's own level and fades (SND-1); pictures ignore it.
+    #[serde(default, skip_serializing_if = "ClipMix::is_default")]
+    pub mix: ClipMix,
+}
+
+/// A clip's sound: a gain on top of its track's, and fades at its own ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClipMix {
+    /// In dB, -60 to +12; 0 leaves it as recorded.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub gain_db: f32,
+    /// How long it fades in from silence at its start, and out at its end (microseconds).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub fade_in_us: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub fade_out_us: u64,
+}
+
+pub const CLIP_GAIN_DB_RANGE: (f32, f32) = (-60.0, 12.0);
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+impl ClipMix {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Linear gain.
+    pub fn gain(&self) -> f64 {
+        10f64.powf(self.gain_db as f64 / 20.0)
+    }
+
+    /// Within range, and fades no longer than a clip of `duration_us`.
+    pub fn clamped(mut self, duration_us: u64) -> Self {
+        self.gain_db = self
+            .gain_db
+            .clamp(CLIP_GAIN_DB_RANGE.0, CLIP_GAIN_DB_RANGE.1);
+        self.fade_in_us = self.fade_in_us.min(duration_us);
+        self.fade_out_us = self.fade_out_us.min(duration_us - self.fade_in_us);
+        self
+    }
+
+    /// The fade's gain `t_us` into a clip of `duration_us`.
+    pub fn fade_gain(&self, t_us: f64, duration_us: f64) -> f64 {
+        let mut gain = 1.0;
+        if self.fade_in_us > 0 {
+            gain = (t_us / self.fade_in_us as f64).clamp(0.0, 1.0);
+        }
+        if self.fade_out_us > 0 {
+            gain = gain.min(((duration_us - t_us) / self.fade_out_us as f64).clamp(0.0, 1.0));
+        }
+        gain
+    }
 }
 
 impl Clip {
@@ -725,6 +823,7 @@ pub(crate) mod tests {
     /// A recording `rec` of `duration_us` with screen, webcam, mic and system streams.
     pub fn recording(id: &str, duration_us: u64, pauses: &[(u64, u64)]) -> Asset {
         Asset {
+            licence: None,
             id: id.into(),
             name: "Recording".into(),
             kind: AssetKind::Recording,
@@ -749,6 +848,7 @@ pub(crate) mod tests {
     /// A video file with a picture and one sound stream.
     pub fn video(id: &str, duration_us: u64) -> Asset {
         Asset {
+            licence: None,
             id: id.into(),
             name: format!("{id}.mp4"),
             kind: AssetKind::Video,
@@ -770,6 +870,7 @@ pub(crate) mod tests {
 
     pub fn image(id: &str) -> Asset {
         Asset {
+            licence: None,
             id: id.into(),
             name: format!("{id}.png"),
             kind: AssetKind::Image,
@@ -820,6 +921,7 @@ pub(crate) mod tests {
     fn validation_catches_overlaps_wrong_tracks_and_unknown_media() {
         let assets = vec![video("m1", 10_000_000)];
         let clip = |id: &str, stream: &str, start: u64, len: u64| Clip {
+            mix: Default::default(),
             id: id.into(),
             asset: "m1".into(),
             stream: stream.into(),

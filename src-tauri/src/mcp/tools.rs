@@ -208,6 +208,9 @@ pub fn all() -> &'static [ToolDef] {
             .chain(TOOLS.iter())
             .chain(super::library::TOOLS.iter())
             .chain(super::actions::ACTIONS.iter())
+            .chain(super::clips::TOOLS.iter())
+            .chain(super::review::TOOLS.iter())
+            .chain(super::search::TOOLS.iter())
             .copied()
             .collect()
     })
@@ -227,13 +230,15 @@ pub const MORE: &[&str] = &[
     "media_import",
     "short_from_take",
     "shorts",
+    "clips",
     "faces",
     "short_footage",
     "timeline_get",
     "undo_batch",
     "redo",
     "checkpoint",
-    "playhead_get",
+    "playhead",
+    "source_search",
     "layout_get",
     "telemetry_get",
     "speed",
@@ -241,7 +246,6 @@ pub const MORE: &[&str] = &[
     "captions",
     "propose_edit",
     "proposal_withdraw",
-    "short_create",
     "graphics_install",
     "graphic_write_file",
     "graphic_templatize",
@@ -348,20 +352,22 @@ pub fn call(tool: &ToolDef, ctx: &mut Ctx, mut args: Value) -> Result<Vec<Output
     })
 }
 
-static TOOLS: [ToolDef; 15] = [
+static TOOLS: [ToolDef; 14] = [
     ToolDef {
         name: "more",
         description: "Tools an edit rarely needs, left out of this list to save tokens: `tool` \
             alone gives one's description and arguments; with `args` it runs, as if called \
-            directly. Shorts: media_import (bring files in), short_from_take (a short from a \
-            new take), shorts (find, rename, remove shorts), faces (frame the camera on the \
-            face), short_footage (graphics and clips on a short). layouts (camera and screen \
+            directly. Shorts (made from a take, the Shorts tab): media_import (bring the take's \
+            files in), short_from_take (make one), short_footage (the video's footage, B-roll \
+            and graphics under it), shorts (list, rename, remove them). Clips (cut from the \
+            video, the Clips tab): clips (list, create, find, range, rename, remove). Both: \
+            faces (frame the camera on the face). layouts (camera and screen \
             sections, only when the user raises them); timeline_get (every clip); undo_batch \
-            (undo one of your batches); redo (the undo taken back); checkpoint (named moments to go back to); playhead_get (where the user's playhead is); \
+            (undo one of your batches); redo (the undo taken back); checkpoint (named moments to go back to); playhead (where the user's playhead is, or show them a moment); source_search (a phrase in every transcript, cut parts too); \
             layout_get (a layout's details); telemetry_get (mouse and keys at a time); speed \
             (play a stretch faster or slower, only when asked); transcript_fix (a misheard \
             word); captions (the caption lines and their emphasis words); propose_edit (timeline edits as a batch for the user); proposal_withdraw \
-            (take back your batch); short_create (a clip from the video's words); \
+            (take back your batch); \
             graphics_install (the graphics renderer, \
             ask first); graphic_write_file, graphic_templatize, graphic_check, library_save, \
             library_remove (writing a graphic of your own and keeping it in the library).",
@@ -397,14 +403,6 @@ static TOOLS: [ToolDef; 15] = [
         schema: schema::<RangeParams>,
         read_only: true,
         run: timeline_get,
-    },
-    ToolDef {
-        name: "playhead_get",
-        description: "Where the user's playhead is on the edited timeline, and whether it is \
-            playing. Use it when the user says 'here' or 'now'.",
-        schema: schema::<NoParams>,
-        read_only: true,
-        run: playhead_get,
     },
     ToolDef {
         name: "frame_render",
@@ -857,20 +855,6 @@ fn timeline_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     pretty(&value)
 }
 
-fn playhead_get(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let state = ctx.state;
-    params::<NoParams>(args)?;
-    with_reader(state, |_| Ok(()))?;
-    let status = state.playback.lock().status()?;
-    let at = status.position_us;
-    pretty(&json!({
-        "atUs": at,
-        "at": clock(at),
-        "playing": status.state == crate::playback::PlaybackState::Playing,
-        "inShort": status.short_id,
-    }))
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameParams {
@@ -886,7 +870,7 @@ pub struct FrameParams {
     /// One frame's width in pixels, 240 to 1920. Default 960. A sheet sizes its own tiles.
     #[serde(default)]
     pub width: Option<u32>,
-    /// A short (id or title): its 9:16 frame at `atUs` on the short's own timeline.
+    /// A short or clip (id or title): its 9:16 frame at `atUs` on the short's own timeline.
     #[serde(default)]
     pub short: Option<String>,
 }
@@ -1210,7 +1194,6 @@ mod tests {
                 "undo_batch" => json!({ "batchId": "b-1", "expectedRevision": 0 }),
                 "checkpoint" => json!({ "op": "list" }),
                 "settings" => json!({ "area": "captions" }),
-                "short_create" => json!({ "title": "t", "fromWord": "w-0", "toWord": "w-1" }),
                 "media_import" => json!({ "paths": ["a.mp4"] }),
                 "short_from_take" => json!({ "title": "t", "camera": "m1" }),
                 "short_footage" => json!({ "short": "s1" }),
@@ -1224,6 +1207,7 @@ mod tests {
                 }
                 // These work without a project open (and installing would download).
                 "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
+                "source_search" => json!({ "query": "x" }),
                 "open" | "create" | "status" | "export_status" | "preset" | "graphics"
                 | "graphics_install" | "library_remove" | "more" => continue,
                 _ => json!({}),

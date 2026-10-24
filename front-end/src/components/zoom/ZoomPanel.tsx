@@ -4,7 +4,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { api } from "../../lib/ipc";
 import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
-import { InspectorSection } from "../inspector/InspectorSection";
+import { InspectorSection, MoreSettings } from "../inspector/InspectorSection";
 import { PresetMarks } from "../presets/PresetMarks";
 import { Notice, Switch } from "../ui";
 
@@ -214,66 +214,70 @@ export const ZoomPanel: React.FC = () => {
           format={(v) => `${v.toFixed(2)}×`}
           onChange={(clickScale) => setSettings({ clickScale })}
         />
-        <Slider
-          label="Hover zoom (mouse resting)"
-          value={settings.hoverScale}
-          min={1}
-          max={4}
-          step={0.05}
-          format={(v) => (v <= 1 ? "Off" : `${v.toFixed(2)}×`)}
-          onChange={(hoverScale) => setSettings({ hoverScale })}
-        />
-        <Slider
-          label="Zooms per 5 minutes of edit"
-          value={settings.zoomsPerFiveMinutes}
-          min={1}
-          max={30}
-          step={1}
-          format={(v) => `${v}`}
-          onChange={(zoomsPerFiveMinutes) => setSettings({ zoomsPerFiveMinutes })}
-        />
-        <Slider
-          label="Join activity closer than"
-          value={settings.mergeGapMs}
-          min={0}
-          max={10000}
-          step={250}
-          format={(v) => `${(v / 1000).toFixed(1)} s`}
-          onChange={(mergeGapMs) => setSettings({ mergeGapMs })}
-        />
-        <Slider
-          label="Transition"
-          value={settings.transitionMs}
-          min={0}
-          max={3000}
-          step={50}
-          format={(v) => (v ? `${v} ms` : "cut")}
-          onChange={(transitionMs) => setSettings({ transitionMs })}
-        />
-        <Slider
-          label="Shortest zoom"
-          value={settings.minHoldMs}
-          min={500}
-          max={20000}
-          step={100}
-          format={(v) => `${(v / 1000).toFixed(1)} s`}
-          onChange={(minHoldMs) => setSettings({ minHoldMs })}
-        />
+        <MoreSettings>
+          <Slider
+            label="Hover zoom (mouse resting)"
+            value={settings.hoverScale}
+            min={1}
+            max={4}
+            step={0.05}
+            format={(v) => (v <= 1 ? "Off" : `${v.toFixed(2)}×`)}
+            onChange={(hoverScale) => setSettings({ hoverScale })}
+          />
+          <Slider
+            label="Zooms per 5 minutes of edit"
+            value={settings.zoomsPerFiveMinutes}
+            min={1}
+            max={30}
+            step={1}
+            format={(v) => `${v}`}
+            onChange={(zoomsPerFiveMinutes) => setSettings({ zoomsPerFiveMinutes })}
+          />
+          <Slider
+            label="Join activity closer than"
+            value={settings.mergeGapMs}
+            min={0}
+            max={10000}
+            step={250}
+            format={(v) => `${(v / 1000).toFixed(1)} s`}
+            onChange={(mergeGapMs) => setSettings({ mergeGapMs })}
+          />
+          <Slider
+            label="Transition"
+            value={settings.transitionMs}
+            min={0}
+            max={3000}
+            step={50}
+            format={(v) => (v ? `${v} ms` : "cut")}
+            onChange={(transitionMs) => setSettings({ transitionMs })}
+          />
+          <Slider
+            label="Shortest zoom"
+            value={settings.minHoldMs}
+            min={500}
+            max={20000}
+            step={100}
+            format={(v) => `${(v / 1000).toFixed(1)} s`}
+            onChange={(minHoldMs) => setSettings({ minHoldMs })}
+          />
+        </MoreSettings>
         <Switch
           checked={settings.follow}
           onChange={(follow) => setSettings({ follow })}
           label="Follow the mouse while zoomed"
         />
         {settings.follow && (
-          <Slider
-            label="Camera"
-            value={settings.followMs}
-            min={100}
-            max={3000}
-            step={50}
-            format={(v) => (v < 450 ? "Snappy" : v < 1100 ? "Smooth" : "Calm") + ` · ${v} ms`}
-            onChange={(followMs) => setSettings({ followMs })}
-          />
+          <MoreSettings>
+            <Slider
+              label="Camera"
+              value={settings.followMs}
+              min={100}
+              max={3000}
+              step={50}
+              format={(v) => (v < 450 ? "Snappy" : v < 1100 ? "Smooth" : "Calm") + ` · ${v} ms`}
+              onChange={(followMs) => setSettings({ followMs })}
+            />
+          </MoreSettings>
         )}
       </InspectorSection>
 

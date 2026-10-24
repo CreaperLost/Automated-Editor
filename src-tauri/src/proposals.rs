@@ -91,6 +91,31 @@ pub enum Change {
     /// One of the app's own actions the agent ran (jump cuts, fillers, zooms, ...), applied
     /// at once like a click; kept so the user sees it and can undo it.
     Action { action: String },
+    /// A rule for preset `preset`'s `rules.md`, learned from `example` (AGT-3). Only the user
+    /// accepts it (never autopilot); accepting adds it to the preset, for every project.
+    /// Rejecting a cut never changes a rule: only an accepted rule does.
+    Rule {
+        preset: String,
+        rule: String,
+        example: String,
+    },
+}
+
+const MAX_RULE_CHARS: usize = 400;
+const MAX_EXAMPLE_CHARS: usize = 400;
+
+/// The user's rules with `rule` added as a bullet, saying what taught it.
+pub fn rules_with(rules: &str, rule: &str, example: &str) -> String {
+    let mut out = rules.trim_end().to_string();
+    if !out.is_empty() {
+        out.push_str("\n");
+    }
+    out.push_str(&format!("- {rule}"));
+    if !example.is_empty() {
+        out.push_str(&format!(" (learned from: {example})"));
+    }
+    out.push('\n');
+    out
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -632,17 +657,27 @@ pub fn sequence_diff(before: &EditDocument, after: &EditDocument) -> Vec<String>
                 || was.start_us != clip.start_us
                 || was.in_us != clip.in_us
                 || was.duration_us != clip.duration_us
-                || was.fit != clip.fit;
+                || was.fit != clip.fit
+                || was.mix != clip.mix;
             moved.then_some((id, track, clip, was_track, was))
         })
         .collect();
     changed.sort_by_key(|(_, _, c, _, _)| c.start_us);
     for (id, track, clip, was_track, was) in changed {
-        let fit = if was.fit != clip.fit {
-            " (fit changed)"
+        let mut fit = if was.fit != clip.fit {
+            " (fit changed)".to_string()
         } else {
-            ""
+            String::new()
         };
+        if was.mix != clip.mix {
+            let m = clip.mix;
+            fit.push_str(&format!(
+                " (sound: {:+.0} dB, fades {:.1} s / {:.1} s)",
+                m.gain_db,
+                m.fade_in_us as f64 / 1e6,
+                m.fade_out_us as f64 / 1e6
+            ));
+        }
         lines.push(format!(
             "~ {track} {id} {} (was {was_track} {}){fit}",
             span(clip),
@@ -781,6 +816,98 @@ pub fn propose_restyle(
     })
 }
 
+/// A rule for the user to accept into preset `preset` (the project's when none).
+pub fn propose_rule(
+    reader: &ProjectReader,
+    proposals: &mut Proposals,
+    agent: &str,
+    preset: Option<&str>,
+    rule: &str,
+    example: &str,
+) -> Result<String, String> {
+    let rule: String = rule.trim().chars().take(MAX_RULE_CHARS).collect();
+    if rule.is_empty() {
+        return Err("Give the `rule`, in a sentence the user would write.".into());
+    }
+    let example: String = example.trim().chars().take(MAX_EXAMPLE_CHARS).collect();
+    if example.is_empty() {
+        return Err(
+            "Give the `example` that taught it: what the user did or said, and where.".into(),
+        );
+    }
+    let document = reader.document();
+    let preset = match preset {
+        Some(name) => crate::preset::store::load(name)?.name,
+        None => crate::preset::of(document).name,
+    };
+    if crate::preset::store::load(&preset)?.rules.contains(&rule) {
+        return Err(format!("{preset}'s rules already say that."));
+    }
+    if let Some(waiting) = proposals.batches.iter().find(|b| {
+        b.status == Status::Pending
+            && matches!(&b.change, Change::Rule { rule: r, .. } if *r == rule)
+    }) {
+        return Err(format!("{} proposes that rule already.", waiting.id));
+    }
+    let summary = vec![
+        format!("Add to {preset}'s rules: {rule}"),
+        format!("Learned from: {example}"),
+    ];
+    proposals.add(Batch {
+        id: String::new(),
+        agent: agent.to_string(),
+        reason: format!("A rule for {preset}"),
+        created_at: now(),
+        base_revision: document.revision,
+        change: Change::Rule {
+            preset,
+            rule,
+            example,
+        },
+        status: Status::Pending,
+        decided_at: None,
+        auto: false,
+        applied_revision: None,
+        summary,
+    })
+}
+
+/// The rule batch `id` waiting for the user: (preset, rule, example).
+pub fn pending_rule(
+    proposals: &Proposals,
+    id: &str,
+) -> Result<Option<(String, String, String)>, String> {
+    let batch = proposals.get(id)?;
+    let Change::Rule {
+        preset,
+        rule,
+        example,
+    } = &batch.change
+    else {
+        return Ok(None);
+    };
+    if batch.status != Status::Pending {
+        return Err(format!("{id} is already decided"));
+    }
+    Ok(Some((preset.clone(), rule.clone(), example.clone())))
+}
+
+/// Rule batch `id` was added to preset `saved_in` (a copy, when the preset was built in).
+pub fn rule_accepted(proposals: &mut Proposals, id: &str, saved_in: &str) -> Result<(), String> {
+    let batch = proposals.get_mut(id)?;
+    batch.status = Status::Accepted;
+    batch.decided_at = Some(now());
+    if let Change::Rule { preset, .. } = &batch.change {
+        if preset != saved_in {
+            batch.summary.push(format!(
+                "{preset} is built in: the rule went into {saved_in}."
+            ));
+        }
+    }
+    proposals.prune();
+    Ok(())
+}
+
 /// Whether restyle `items` can still be applied: each graphic's files as planned on.
 fn restyle_holds(root: &Path, items: &[crate::graphics::restyle::Plan]) -> bool {
     items.iter().all(|p| {
@@ -841,6 +968,12 @@ pub fn accept(
     let base_revision = batch.base_revision;
     let (summary, chosen) = match &batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied")),
+        Change::Rule { .. } if auto => {
+            return Err("a rule waits for the user: autopilot never changes their rules".into())
+        }
+        Change::Rule { .. } => {
+            return Err(format!("{id} is a rule: it is accepted in the Agent panel"))
+        }
         Change::Edits { edits } => {
             if batch.status != Status::Pending {
                 return Err(format!("{id} is already decided"));
@@ -956,7 +1089,7 @@ pub fn accept(
         batch.applied_revision = revision;
     }
     match &mut batch.change {
-        Change::Action { .. } => {}
+        Change::Action { .. } | Change::Rule { .. } => {}
         Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
             batch.status = Status::Accepted;
             batch.decided_at = Some(now());
@@ -991,19 +1124,20 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
-            match (batch.status, rejected) {
-                (Status::Pending, true) => {
-                    batch.status = Status::Rejected;
-                    batch.decided_at = Some(now());
-                }
-                (Status::Rejected, false) => {
-                    batch.status = Status::Pending;
-                    batch.decided_at = None;
-                }
-                _ => return Err(format!("{id} is already decided")),
+        Change::Edits { .. }
+        | Change::Under { .. }
+        | Change::Restyle { .. }
+        | Change::Rule { .. } => match (batch.status, rejected) {
+            (Status::Pending, true) => {
+                batch.status = Status::Rejected;
+                batch.decided_at = Some(now());
             }
-        }
+            (Status::Rejected, false) => {
+                batch.status = Status::Pending;
+                batch.decided_at = None;
+            }
+            _ => return Err(format!("{id} is already decided")),
+        },
         Change::Cuts { items, .. } => {
             let (from, to) = if rejected {
                 (ItemState::Pending, ItemState::Rejected)
@@ -1168,7 +1302,8 @@ fn set_undone(batch: &mut Batch, undone: impl Fn(u64) -> bool, by_agent: bool) {
     batch.applied_revision = None;
     batch.auto = false;
     match &mut batch.change {
-        Change::Action { .. } => batch.status = Status::Undone,
+        // A rule changes no revision, so no undo of the edit reaches it.
+        Change::Action { .. } | Change::Rule { .. } => batch.status = Status::Undone,
         Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
             batch.status = Status::Pending
         }
@@ -1243,6 +1378,9 @@ pub struct BatchView {
     /// For `under`: the take short it goes under.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub short: Option<String>,
+    /// For `rule`: the preset whose rules it joins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     pub items: Vec<ItemView>,
     /// Made for an older revision and can no longer be accepted as it is.
     pub stale: bool,
@@ -1292,6 +1430,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                 edits: None,
                 action: None,
                 short: None,
+                preset: None,
                 items: Vec::new(),
                 stale: false,
                 can_undo: batch.applied_revision == Some(document.revision),
@@ -1300,6 +1439,10 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                 Change::Action { action } => {
                     out.kind = "action";
                     out.action = Some(action.clone());
+                }
+                Change::Rule { preset, .. } => {
+                    out.kind = "rule";
+                    out.preset = Some(preset.clone());
                 }
                 Change::Edits { edits } => {
                     out.edits = Some(edits.clone());
@@ -1500,6 +1643,52 @@ mod tests {
     use crate::commands::{self, AppState};
     use crate::transcript::{ProviderKind, TranscriptWord, WordKind};
     use serde_json::json;
+
+    fn rule_batch(proposals: &mut Proposals) -> String {
+        proposals
+            .add(Batch {
+                id: String::new(),
+                agent: "test".into(),
+                reason: "A rule for Tutorial".into(),
+                created_at: now(),
+                base_revision: 1,
+                change: Change::Rule {
+                    preset: "Tutorial".into(),
+                    rule: "Keep the first take of a sentence".into(),
+                    example: "restored the cut at 1:02".into(),
+                },
+                status: Status::Pending,
+                decided_at: None,
+                auto: false,
+                applied_revision: None,
+                summary: Vec::new(),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn a_rule_joins_the_rules_as_a_bullet_with_what_taught_it() {
+        assert_eq!(
+            rules_with("# Mine\n- Short intros\n\n", "No music", "said so at 0:10"),
+            "# Mine\n- Short intros\n- No music (learned from: said so at 0:10)\n"
+        );
+        assert_eq!(rules_with("", "No music", ""), "- No music\n");
+    }
+
+    #[test]
+    fn a_rule_waits_until_the_user_decides_and_a_copy_is_named() {
+        let mut p = Proposals::default();
+        let id = rule_batch(&mut p);
+        assert!(pending_rule(&p, &id).unwrap().is_some());
+        rule_accepted(&mut p, &id, "My tutorial").unwrap();
+        assert_eq!(p.get(&id).unwrap().status, Status::Accepted);
+        assert!(p.get(&id).unwrap().summary[0].contains("My tutorial"));
+        assert!(pending_rule(&p, &id).is_err(), "decided once");
+        // Rejecting one is like any batch.
+        let other = rule_batch(&mut p);
+        reject(&mut p, &other, None, true).unwrap();
+        assert_eq!(p.get(&other).unwrap().status, Status::Rejected);
+    }
 
     /// A project with a 2 s sound on the timeline and a transcript of it; returns its stream key.
     fn project(dir: &Path) -> (AppState, String) {

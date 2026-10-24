@@ -661,6 +661,18 @@ impl SceneEvaluator {
         })
     }
 
+    /// Plays `document`'s layout sections from now on (LAY-1): only what was worked out from
+    /// them is dropped; decoders, media lookups, captions and the background stay.
+    pub fn swap_layouts(&mut self, document: &EditDocument) {
+        self.document.layouts = document.layouts.clone();
+        self.document.revision = document.revision;
+        self.layouts = std::cell::OnceCell::new();
+        self.full_camera = std::cell::OnceCell::new();
+        self.bubble_hidden = std::cell::OnceCell::new();
+        self.camera_framing.borrow_mut().clear();
+        *self.prefetched.borrow_mut() = Default::default();
+    }
+
     /// Whether recording video is decoded as NV12: a third of BGRA's bytes through the decoder
     /// pipe (its slowest part), converted by the GPU compositor. Without one, BGRA.
     fn yuv(&self) -> bool {
@@ -3679,6 +3691,7 @@ mod tests {
             media: None,
             edit: None,
             take: None,
+            caption_marks: Default::default(),
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,
@@ -4045,6 +4058,7 @@ mod tests {
             let mut track =
                 crate::sequence::Track::new(format!("t{i}"), crate::sequence::TrackKind::Video);
             track.clips.push(Clip {
+                mix: Default::default(),
                 id: format!("c{i}"),
                 asset: "logo".into(),
                 stream: "picture".into(),
@@ -4181,6 +4195,7 @@ mod tests {
         );
         let mut track = crate::sequence::Track::new("t2".into(), crate::sequence::TrackKind::Video);
         track.clips.push(Clip {
+            mix: Default::default(),
             id: "g".into(),
             asset: "graphic".into(),
             stream: "picture".into(),
@@ -4248,6 +4263,7 @@ mod tests {
         let mut track =
             crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
         track.clips.push(Clip {
+            mix: Default::default(),
             id: "g1".into(),
             asset: graphic.id.clone(),
             stream: "picture".into(),
@@ -4327,6 +4343,7 @@ mod tests {
         .unwrap();
         crate::graphics::render::sources_changed();
         let clip = |id: &str, asset: &str, start_us: u64| Clip {
+            mix: Default::default(),
             id: id.into(),
             asset: asset.into(),
             stream: "picture".into(),
@@ -4402,6 +4419,7 @@ mod tests {
         .unwrap();
         crate::graphics::render::sources_changed();
         let clip = |id: &str, asset: &str| Clip {
+            mix: Default::default(),
             id: id.into(),
             asset: asset.into(),
             stream: "picture".into(),
@@ -4479,6 +4497,7 @@ mod tests {
         let card =
             crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
         let clip = Clip {
+            mix: Default::default(),
             id: "g1".into(),
             asset: card.id.clone(),
             stream: "picture".into(),
@@ -4979,6 +4998,7 @@ mod tests {
         let mut track =
             crate::sequence::Track::new("tg".to_string(), crate::sequence::TrackKind::Video);
         track.clips.push(Clip {
+            mix: Default::default(),
             id: "g1".into(),
             asset: graphic.id.clone(),
             stream: "picture".into(),

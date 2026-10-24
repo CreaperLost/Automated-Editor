@@ -99,7 +99,7 @@ needs live in a small per-short overlay sequence anchored to words.
 Meaning-based work (which passages make the idea, which footage shows the claim) is the agent's
 job; the app gives cheap, exact tools.
 
-- `short_create` takes `title`, `idea` and `pieces: [{fromWord, toWord}]`, or `recording` for a
+- `clips` `op: create` (built 24 Oct with one stretch; pieces later) takes `title`, `idea` and `pieces: [{fromWord, toWord}]`, or `recording` for a
   take. `short_pieces` (`add | remove | move | set`) and `short_cut` (word ranges).
 - `source_search` (FTG-1) to find passages and footage, including what the edit cut.
 - `short_footage` grows into reviewable B-roll batches (`broll` items with fit, slot, sound) shown

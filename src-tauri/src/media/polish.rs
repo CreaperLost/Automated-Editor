@@ -309,7 +309,8 @@ fn prepare_analyses<'a>(
     for lane in lanes {
         let wanted = settings.normalize
             || settings.lane_denoise_db(&lane.id, lane.speech).is_some()
-            || (ducking && lane.speech);
+            || (ducking && lane.speech)
+            || (settings.music_under_speech_db.is_some() && (lane.speech || lane.music));
         if !wanted {
             continue;
         }
@@ -362,6 +363,43 @@ fn prepare_analyses<'a>(
     })
 }
 
+/// The integrated loudness of what `lanes` play (their 100 ms blocks pooled, gated as
+/// loudness is), with their track and clip gain; none when nothing of them was analyzed.
+fn lanes_loudness(
+    lanes: &[&Lane],
+    analyze: &dyn Fn(&SegmentSummary) -> Option<Arc<SegmentAnalysis>>,
+) -> Option<f64> {
+    let mut blocks = Vec::new();
+    for lane in lanes {
+        for clip in &lane.clips {
+            let gain = lane.gain * clip.mix.gain();
+            for segment in clip.segments.iter().filter(|s| s.available) {
+                let (a, b) = (
+                    clip.in_us.max(segment.start_us),
+                    (clip.in_us + clip.len).min(segment.end_us),
+                );
+                if b <= a {
+                    continue;
+                }
+                let Some(analysis) = analyze(segment) else {
+                    continue;
+                };
+                let first = ((a - segment.start_us) / LOUDNESS_BLOCK_US) as usize;
+                let last = ((b - segment.start_us) / LOUDNESS_BLOCK_US) as usize;
+                blocks.extend(
+                    analysis
+                        .loudness
+                        .iter()
+                        .take(last)
+                        .skip(first)
+                        .map(|e| e * gain * gain),
+                );
+            }
+        }
+    }
+    integrated_lufs(&blocks)
+}
+
 /// Polish derived for one edit: everything the mixer needs per sample.
 pub struct PolishPlan {
     /// Linear output gain from loudness normalization (1.0 when it is off).
@@ -375,7 +413,12 @@ pub struct PolishPlan {
     denoisers: HashMap<(String, String), Arc<Denoiser>>,
     /// Gain per 10 ms of timeline time for each ducked lane, under speech on any speech lane.
     lane_ducks: HashMap<String, Arc<Vec<f32>>>,
+    /// Gain per music lane that puts it the project's level under the speech.
+    lane_gains: HashMap<String, f64>,
 }
+
+/// How far a music lane is turned up or down to reach its level under speech, at most.
+const MUSIC_LEVEL_MAX_DB: f64 = 30.0;
 
 impl PolishPlan {
     /// `None` when every effect is off. Files that cannot be analyzed are left unpolished.
@@ -420,7 +463,21 @@ impl PolishPlan {
             level: Vec::new(),
             denoisers,
             lane_ducks,
+            lane_gains: HashMap::new(),
         };
+        if let Some(under) = settings.music_under_speech_db {
+            let speech: Vec<&Lane> = lanes.iter().filter(|l| l.speech).collect();
+            if let Some(speech_lufs) = lanes_loudness(&speech, &analyze) {
+                for lane in lanes.iter().filter(|l| l.music) {
+                    if let Some(music_lufs) = lanes_loudness(&[lane], &analyze) {
+                        let db = (speech_lufs - under as f64 - music_lufs)
+                            .clamp(-MUSIC_LEVEL_MAX_DB, MUSIC_LEVEL_MAX_DB);
+                        plan.lane_gains
+                            .insert(lane.id.clone(), 10f64.powf(db / 20.0));
+                    }
+                }
+            }
+        }
         if settings.normalize {
             if let Some(edit) = plan.edit_loudness(lanes, duration_us, &analyze) {
                 let most = match edit.peak > 0.0 {
@@ -482,7 +539,10 @@ impl PolishPlan {
                         let Some(&e) = analysis.loudness.get(index) else {
                             continue;
                         };
-                        let gain = lane.gain * self.lane_duck_gain(&lane.id, center as f64);
+                        let gain = lane.gain
+                            * self.lane_gain(&lane.id)
+                            * clip.mix.gain()
+                            * self.lane_duck_gain(&lane.id, center as f64);
                         if let Some(slot) = energy.get_mut(block as usize) {
                             *slot += e * gain * gain;
                         }
@@ -513,6 +573,11 @@ impl PolishPlan {
             energy,
             peaks,
         })
+    }
+
+    /// The gain that keeps music lane `lane` at its level under speech (1 for other lanes).
+    pub fn lane_gain(&self, lane: &str) -> f64 {
+        self.lane_gains.get(lane).copied().unwrap_or(1.0)
     }
 
     /// Whether lane `lane` is lowered under speech.
@@ -760,11 +825,13 @@ mod tests {
             segment("unused.wav", 2_000_000),
         ]);
         let mut lanes = vec![Lane {
+            music: false,
             id: "speech".into(),
             speech: true,
             gain: 1.0,
             clips: (0..20)
                 .map(|i| LaneClip {
+                    mix: Default::default(),
                     edited_start: i * 100_000,
                     in_us: i * 100_000,
                     len: 100_000,
@@ -778,10 +845,12 @@ mod tests {
         }];
         // Another lane uses the otherwise unused file, but has no enabled effect.
         lanes.push(Lane {
+            music: false,
             id: "background".into(),
             speech: false,
             gain: 1.0,
             clips: vec![LaneClip {
+                mix: Default::default(),
                 edited_start: 0,
                 in_us: 2_000_000,
                 len: 1_000_000,
@@ -827,11 +896,13 @@ mod tests {
             available: true,
         }]);
         let lane = |count| Lane {
+            music: false,
             id: "speech".into(),
             speech: true,
             gain: 1.0,
             clips: (0..count)
                 .map(|i| LaneClip {
+                    mix: Default::default(),
                     edited_start: i * (2_000_000 / count),
                     in_us: i * (2_000_000 / count),
                     len: 2_000_000 / count,
@@ -882,10 +953,12 @@ mod tests {
             available: true,
         }]);
         let lane = Lane {
+            music: false,
             id: "speech".into(),
             speech: true,
             gain: 1.0,
             clips: vec![LaneClip {
+                mix: Default::default(),
                 edited_start: 0,
                 in_us: 0,
                 len: 2_000_000,
@@ -981,6 +1054,7 @@ mod tests {
     #[test]
     fn limiter_is_transparent_below_threshold_and_bounded_above() {
         let plan = PolishPlan {
+            lane_gains: HashMap::new(),
             lane_ducks: HashMap::new(),
             gain: 2.0,
             limit: true,

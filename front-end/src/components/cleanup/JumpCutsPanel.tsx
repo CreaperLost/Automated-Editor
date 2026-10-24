@@ -12,6 +12,7 @@ import { soundSources } from "../../lib/sequence";
 import { saveCleanupSoon, useCleanupFromProject } from "../../lib/cleanupSettings";
 import { PresetMarks } from "../presets/PresetMarks";
 import { Button, IconButton, Segmented, cn } from "../ui";
+import { useUiMode } from "../../stores/uiModeStore";
 
 /** Scans every sound the timeline plays as speech at once (the backend's `ALL_SPEECH`). */
 const ALL_SPEECH = "speech";
@@ -68,7 +69,7 @@ export const JumpCutsPanel: React.FC = () => {
   const config: JumpCutSettings = transcriptAssisted ? { ...silenceConfig, ...gapConfig } : silenceConfig;
   const presets = transcriptAssisted ? GAP_PRESETS : PRESETS;
   const { blocks: activeSilenceBlocks, snapshot: silenceAnalysis, busy: isDetecting, error, diagnostics, thresholds, sourceMode, chosenTrack, secondTrack, notice } = review;
-  const [advanced, setAdvanced] = useState(false);
+  const [advanced, setAdvanced] = useState(() => useUiMode.getState().advanced);
   const [isApplying, setIsApplying] = useState(false);
   // Only the pause under the playhead re-renders the list as it plays.
   const playingId = useProjectStore((s) => {

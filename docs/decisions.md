@@ -41,7 +41,8 @@ settled table with the date and update the roadmap item it blocks.
 | **Sound needs two libraries the user can extend:** a built-in SFX library of specific, licence-clean sounds, and an open-source, copyright-free music library, both open to the user's own files and imports. Scope and order still to discuss ([Q-SOUND](#q-sound)) | 21 Oct | Q-SOUND |
 | **HyperFrames stays pinned** (0.8.162); recheck it at each dependency review | 21 Oct | Q-HYPERFRAMES |
 | **Dependencies are kept current on purpose:** toolchains (Rust, Node, TypeScript) and key libraries are pinned, reviewed on a schedule, and updated only after a compatibility check, so we get speed and quality gains without surprise migrations | 21 Oct | [dependencies.md](dependencies.md), [DEP-1](roadmap.md#dep-1) |
-| **One anchored-note type** (decided by Claude at George's request): comments, agent notes, plan beats, review marks, spoken editor directions and short ideas are all one record, `{anchor (word ids or a recording time range, mapped through clocks), kind, text, author, status, revision}`, with one timeline lane and one MCP tool. Features add a `kind`, not a new system | 21 Oct | Q-PLAN, [NOTE-1](roadmap.md#note-1) |
+| **No anchored notes** (replaces 21 Oct "one anchored-note type", Q-PLAN): no notes record, notes lane, `notes` tool or "Ask AI about this". Feedback goes in chat; the agent finds a graphic or moment from a description; context that must last lives in the agent's history and a plan file it keeps in the project ([PLAN-1](roadmap.md#plan-1)) | 24 Oct | George |
+| **Review by ear is the user's; the agent picks what to listen to** ([REV-1](roadmap.md#rev-1)): it can't hear, so no motion preview for the agent, no review records, no encoded-output pass | 24 Oct | George, token cost |
 | **Fast or thorough cleanup review** (decided by Claude at George's request): in step mode the agent asks once per video and saves the answer; auto mode uses the saved answer, fast if there is none. Thorough = read the whole kept transcript for unflagged retakes and tangents, inspect the remaining gaps and joins, and report what was only read vs actually listened to. Revisit the default after EVAL-1: if fast mode misses cuts George cares about on the long-form baseline, thorough becomes the default for long-form | 21 Oct | Q-THOROUGH, [AGT-2](roadmap.md#agt-2) |
 | **Sound order:** clip gain, fades and separate SFX/music tracks first ([SND-1](roadmap.md#snd-1)), then a small SFX starter set (~15–20 hand-picked, licence-clean sounds: whooshes, UI clicks and pops, two risers, two hits), then the music library. Both libraries take the user's own files | 21 Oct | Q-SOUND, [SND-3](roadmap.md#snd-3) |
 | **Music must never need credit.** Only tracks whose licence allows monetised use with no attribution (e.g. CC0 / public domain or an equivalent no-attribution licence) enter the built-in library. The app enforces it: every track carries its licence, and a track that requires credit, forbids monetisation or has an unknown licence is refused (user imports are flagged instead of silently accepted) | 21 Oct | Q-SOUND |
@@ -109,6 +110,10 @@ ones (the second opinion softened several).
 | Colour grading and LUTs | Not now (21 Oct) | Not needed for the channel today ([FX-5](roadmap.md#fx-5) parked) |
 | Automatic folder watch (start editing when a recording lands) | No (21 Oct) | Each video may be a different kind; the user starts a template after opening instead |
 | Importing an outside transcript | Only if it stays trivially small (21 Oct) | Not needed; our own transcription covers it ([FTG-5](roadmap.md#ftg-5)) |
+| Anchored notes (was NOTE-1): comments on a time range, a notes lane, agent notes, a selection reference ("Ask AI about this"), the user's reason on a rejected proposal | No (24 Oct) | One user, working live in chat: the chat and the agent's history hold the feedback, and agents find "the graphic titled X" reliably. Team review is where notes pay off |
+| A motion preview with sound for the agent (was REV-1 part 1) | No (24 Oct) | Claude takes no sound and MCP carries no video; as frames, 5 s at 30 fps is ~45k tokens (half the AI-1 budget) and still silent. Sight comes from review boards ([COST-1](roadmap.md#cost-1)) |
+| Review records per revision; an encoded-output pass on the export (was REV-1 parts 4–5) | No (24 Oct) | Bookkeeping for a team; export already normalises loudness, `check` warns on the target, and frozen frames are normal in screen recordings |
+| Spoken editor directions kept as notes ("cut this" said while recording) | Not now (24 Oct) | Needed a notes record; promote it as its own item only if a real edit asks for it |
 
 ## Waiting for George
 
@@ -132,7 +137,7 @@ speed; where footage runs out the camera comes back. Footage sound is the video'
 <a id="q-verify"></a>**Q-VERIFY** human in the loop, no autonomous loops ·
 <a id="q-scope"></a>**Q-SCOPE** colour not now; outside transcripts only if trivial ·
 <a id="q-hyperframes"></a>**Q-HYPERFRAMES** pinned, rechecked at dependency reviews ·
-<a id="q-plan"></a>**Q-PLAN** one anchored-note type (Claude's call) ·
+<a id="q-plan"></a>**Q-PLAN** one anchored-note type (Claude's call; superseded 24 Oct: no anchored notes) ·
 <a id="q-thorough"></a>**Q-THOROUGH** ask once per video, fast by default until EVAL-1 says otherwise (Claude's call) ·
 <a id="q-sound"></a>**Q-SOUND** knobs → SFX starter set → music; music never needs credit ·
 <a id="q-watch"></a>**Q-WATCH** no automatic folder watch; run a template on request after opening.

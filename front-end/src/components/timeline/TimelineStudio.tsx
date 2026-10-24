@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftToLine,
   ArrowRightToLine,
@@ -40,6 +40,8 @@ import { placedChapters } from "../chapters/ChaptersPanel";
 import { api } from "../../lib/ipc";
 import { pausePlayback, shuttleForward } from "../../lib/playbackControl";
 import { hotkeyHint, useHotkeyStore, type HotkeyAction } from "../../stores/hotkeyStore";
+import { loadFavourites, pressLayoutKey } from "../../stores/layoutsStore";
+import { ClipThumbs, MIN_THUMB_LANE_PX } from "./ClipThumbs";
 import {
   assetById,
   clipEnd,
@@ -108,21 +110,29 @@ const AtPlayhead: React.FC<{ spanUs: number; children: (left: string, timeUs: nu
   return <>{children(`${(Math.min(timeUs, spanUs) / spanUs) * 100}%`, timeUs)}</>;
 };
 
-/** While playing, pages the timeline so the playhead stays in view. */
+/** While playing, and when a moment is shown (`revealPlayhead`), pages the timeline so the playhead is in view. */
 const FollowPlayhead: React.FC<{ scrollRef: React.RefObject<HTMLDivElement | null>; pxPerUs: number; zoom: number }> = ({
   scrollRef,
   pxPerUs,
   zoom,
 }) => {
   const timeUs = useProjectStore((s) => (s.isPlaying ? s.currentTimeUs : -1));
+  const reveal = useProjectStore((s) => s.playheadReveal);
+  const follow = useCallback(
+    (at: number) => {
+      const element = scrollRef.current;
+      if (at < 0 || !element || pxPerUs <= 0 || zoom <= 1) return;
+      const x = at * pxPerUs;
+      if (x < element.scrollLeft || x > element.scrollLeft + element.clientWidth - 24) {
+        element.scrollLeft = Math.max(0, x - element.clientWidth * 0.1);
+      }
+    },
+    [pxPerUs, zoom, scrollRef],
+  );
+  useEffect(() => follow(timeUs), [timeUs, follow]);
   useEffect(() => {
-    const element = scrollRef.current;
-    if (timeUs < 0 || !element || pxPerUs <= 0 || zoom <= 1) return;
-    const x = timeUs * pxPerUs;
-    if (x < element.scrollLeft || x > element.scrollLeft + element.clientWidth - 24) {
-      element.scrollLeft = Math.max(0, x - element.clientWidth * 0.1);
-    }
-  }, [timeUs, pxPerUs, zoom, scrollRef]);
+    if (reveal) follow(useProjectStore.getState().currentTimeUs);
+  }, [reveal, follow]);
   return null;
 };
 
@@ -234,6 +244,9 @@ interface ClipBlockProps {
   waveToUs: number;
   /** A sound clip's muted moments (mouth noises), in its sound's own time. */
   mutes?: SourceSpan[];
+  /** A picture clip's thumbnails (UI-1), drawn over `waveFromUs`-`waveToUs`; absent when the
+   *  lane is too low for them. */
+  thumbs?: { projectHandle: string; still: boolean; aspect: number; heightPx: number; pxPerUs: number };
   actions: React.MutableRefObject<ClipActions>;
 }
 
@@ -258,6 +271,7 @@ const ClipBlock = React.memo(function ClipBlock({
   waveFromUs,
   waveToUs,
   mutes,
+  thumbs,
   actions,
 }: ClipBlockProps) {
   const pct = (us: number) => `${(us / spanUs) * 100}%`;
@@ -367,9 +381,24 @@ const ClipBlock = React.memo(function ClipBlock({
           </>
         ) : showContents ? (
           <>
+            {thumbs && (
+              <ClipThumbs
+                projectHandle={thumbs.projectHandle}
+                clip={clip}
+                stream={clip.stream}
+                still={thumbs.still}
+                aspect={thumbs.aspect}
+                heightPx={thumbs.heightPx}
+                pxPerUs={thumbs.pxPerUs}
+                fromUs={waveFromUs}
+                toUs={waveToUs}
+              />
+            )}
             <Icon className="relative w-3.5 h-3.5 shrink-0 text-white/75 pointer-events-none" aria-hidden />
             {info.unlinked && <Unlink className="relative w-3 h-3 shrink-0 text-white/60 pointer-events-none" aria-label="Unlinked" />}
-            <span className="relative text-meta font-medium text-white/90 truncate pointer-events-none">{showName ? name : ""}</span>
+            <span className={cn("relative text-meta font-medium text-white/90 truncate pointer-events-none", thumbs && showName && "px-1 rounded-sm bg-studio-950/55")}>
+              {showName ? name : ""}
+            </span>
             {speedTag && <span className="relative pointer-events-none">{speedTag}</span>}
           </>
         ) : null}
@@ -460,6 +489,8 @@ const ROLE_LABEL: Record<Role, string> = {
   overlay: "Overlay",
   mic: "Speech",
   background: "Background",
+  music: "Music",
+  effects: "Effects",
 };
 
 /** The editor's timeline: video tracks over audio tracks, each holding clips, like Premiere. */
@@ -512,6 +543,7 @@ export const TimelineStudio: React.FC = () => {
   }, [sequence]);
   const clipEdges = useMemo(() => sequence.tracks.flatMap((t) => t.clips.flatMap((c) => [c.startUs, clipEnd(c)])), [sequence]);
   const previousInfo = useRef(new Map<string, ClipInfo>());
+  const thumbSettings = useRef(new Map<string, NonNullable<ClipBlockProps["thumbs"]>>());
   const clipInfo = useMemo(() => {
     const info = new Map<string, ClipInfo>();
     // Unchanged info keeps its object, so the clip's memo holds across edits.
@@ -580,23 +612,9 @@ export const TimelineStudio: React.FC = () => {
   };
   const edit = (change: SequenceEdit) =>
     runEdit((project) => api.projectSequenceEdit(project.projectHandle, project.revision, change));
-  /** Adds a track of a kind, then runs an edit that needs its id (two undo steps). */
-  const editOnNewTrack = (audio: boolean, makeEdit: (trackId: string) => SequenceEdit) =>
-    runEdit(async (project) => {
-      const withTrack = await api.projectSequenceEdit(project.projectHandle, project.revision, {
-        kind: "addTrack",
-        trackKind: audio ? "audio" : "video",
-      });
-      const added = withTrack.sequence.tracks.filter((t) => t.kind === (audio ? "audio" : "video"));
-      const trackId = audio ? added[added.length - 1]?.id : added[added.length - 1]?.id;
-      try {
-        return await api.projectSequenceEdit(withTrack.projectHandle, withTrack.revision, makeEdit(trackId ?? ""));
-      } catch (err) {
-        // The new track stays; show it while reporting why the clip could not go on it.
-        applyOpenedProject(withTrack);
-        throw err;
-      }
-    });
+  /** Adds a track of a kind and places or moves onto it, as one undo step. */
+  const editOnNewTrack = (audio: boolean, onTrack: SequenceEdit) =>
+    edit({ kind: "onNewTrack", trackKind: audio ? "audio" : "video", edit: onTrack });
 
   // ---- The view: scale, scroll, zoom --------------------------------------------------------
   const lanesRef = useRef<HTMLDivElement | null>(null);
@@ -1043,12 +1061,20 @@ export const TimelineStudio: React.FC = () => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       const action = useHotkeyStore.getState().actionFor(event);
-      if (!action) return;
+      if (!action) {
+        const layout = useHotkeyStore.getState().layoutFor(event);
+        if (!layout) return;
+        event.preventDefault();
+        if (!event.repeat) pressLayoutKey(layout);
+        return;
+      }
       event.preventDefault();
       if (event.repeat && ONCE.includes(action)) return;
       actions.current[action]?.();
     };
     window.addEventListener("keydown", onKeyDown);
+    // Keys bound to favourite layouts need the favourites, Layouts open or not.
+    void loadFavourites();
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
@@ -1229,13 +1255,12 @@ export const TimelineStudio: React.FC = () => {
         setEditError(kind === "audio" ? "Sound goes on audio tracks." : "Pictures go on video tracks.");
         return;
       }
-      void editOnNewTrack(row.audio, (trackId) => ({
+      void editOnNewTrack(row.audio, {
         kind: "moveClips",
         clipIds: current.ids,
         deltaUs: current.deltaUs,
-        trackId,
         anchorId: current.anchor.id,
-      }));
+      });
       return;
     }
     const target = row?.kind === "track" ? sequence.tracks.find((t) => t.id === row.trackId) : undefined;
@@ -1313,7 +1338,7 @@ export const TimelineStudio: React.FC = () => {
     event.preventDefault();
     const atUs = ghost?.startUs ?? snapStart(clientXToUs(event.clientX), 0, snapPoints(), snapUs());
     if (ghost?.row.kind === "new") {
-      void editOnNewTrack(ghost.row.audio, (trackId) => ({ kind: "placeAsset", assetId, atUs, trackId }));
+      void editOnNewTrack(ghost.row.audio, { kind: "placeAsset", assetId, atUs });
       return;
     }
     const track = ghost?.row.kind === "track" ? sequence.tracks.find((t) => t.id === (ghost.row as { trackId: string }).trackId) : undefined;
@@ -1578,8 +1603,25 @@ export const TimelineStudio: React.FC = () => {
     },
     suppressClick,
   };
+  // The same thumbnail settings keep their object, so clips stay memoized.
+  const thumbHeightPx = lanes.height("lane:video") - 10;
+  const thumbsFor = (clip: Clip, info: ClipInfo | undefined): ClipBlockProps["thumbs"] => {
+    if (!openedProject || !info || info.graphic || info.missing || thumbHeightPx < MIN_THUMB_LANE_PX) return undefined;
+    const asset = assetById(openedProject, clip.asset);
+    const aspect = asset && asset.width > 0 && asset.height > 0 ? asset.width / asset.height : 16 / 9;
+    const key = `${openedProject.projectHandle}|${info.image}|${aspect}|${thumbHeightPx}|${pxPerUs}`;
+    let hit = thumbSettings.current.get(key);
+    if (!hit) {
+      if (thumbSettings.current.size > 64) thumbSettings.current.clear();
+      hit = { projectHandle: openedProject.projectHandle, still: info.image, aspect, heightPx: thumbHeightPx, pxPerUs };
+      thumbSettings.current.set(key, hit);
+    }
+    return hit;
+  };
   const clipBlock = (track: SeqTrack, trackNo: string, clip: Clip, index: number) => {
     const audio = track.kind === "audio";
+    const info = clipInfo.get(clip.id);
+    const thumbs = audio ? undefined : thumbsFor(clip, info);
     return (
       <ClipBlock
         key={clip.id}
@@ -1591,14 +1633,15 @@ export const TimelineStudio: React.FC = () => {
         showName={index === 0 || clip.durationUs * pxPerUs > 60}
         spanUs={spanUs}
         widthPx={clip.durationUs * pxPerUs}
-        info={clipInfo.get(clip.id) ?? { name: clipName(openedProject, clip), image: false, missing: true, unlinked: false }}
+        info={info ?? { name: clipName(openedProject, clip), image: false, missing: true, unlinked: false }}
         selected={selected.has(clip.id)}
         moving={!!(drag?.active && drag.mode === "move" && drag.idSet.has(clip.id))}
         shade={trimShade(clip)}
         waveform={audio ? waveforms[streamKey(clip.asset, clip.stream)] : undefined}
-        waveFromUs={audio ? Math.max(clip.startUs, drawnUs.from) : 0}
-        waveToUs={audio ? Math.min(clipEnd(clip), drawnUs.to) : 0}
+        waveFromUs={audio || thumbs ? Math.max(clip.startUs, drawnUs.from) : 0}
+        waveToUs={audio || thumbs ? Math.min(clipEnd(clip), drawnUs.to) : 0}
         mutes={audio ? noiseMutes[streamKey(clip.asset, clip.stream)] : undefined}
+        thumbs={thumbs}
         actions={clipActions}
       />
     );

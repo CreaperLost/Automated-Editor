@@ -20,6 +20,7 @@ pub mod noises;
 pub mod preset;
 pub mod proposals;
 pub mod style;
+pub mod thumbs;
 pub mod transcript;
 pub mod transcript_pauses;
 
@@ -1488,18 +1489,27 @@ pub fn layouts_find_impl(
     })
 }
 
-/// Changes the layouts of the video (`short` none) or a short, as `change` says.
+/// Changes the layouts of the video (`short` none) or a short, as `change` says. Changes of
+/// one `group` in a row (layout keys pressed while playing) are one undo step.
 pub fn project_layouts_change_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
     short: Option<String>,
     change: LayoutChange,
+    group: Option<String>,
 ) -> Result<OpenedProject, String> {
     mutate_opened(state, project_handle, |reader| {
-        reader.change_layouts(expected_revision, short.as_deref(), |timeline, track| {
-            change.apply(timeline, track)
-        })
+        if let Some(group) = group {
+            reader.group_next_step("Layout keys".into(), group);
+        }
+        let result =
+            reader.change_layouts(expected_revision, short.as_deref(), |timeline, track| {
+                change.apply(timeline, track)
+            });
+        // A change that changed nothing names no later step.
+        reader.clear_next_step();
+        result
     })
 }
 
@@ -1744,16 +1754,24 @@ pub fn project_check_fix_impl(
         if ranges.is_empty() {
             return Err("No blips to remove".into());
         }
-        return project_sequence_edit_impl(
-            state,
-            project_handle,
-            expected_revision,
-            SequenceEdit::DeleteRange {
-                ranges,
-                ripple: Some(true),
-            },
-            None,
-        );
+        let label = match ranges.len() {
+            1 => "Removed a blip".to_string(),
+            n => format!("Removed {n} blips"),
+        };
+        let _guard = state.command_lock.lock();
+        let mut opened = state.opened_project.lock();
+        let reader = opened.as_mut().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        reader.name_next_step(label);
+        let edit = SequenceEdit::DeleteRange {
+            ranges,
+            ripple: Some(true),
+        };
+        let result = edit_sequence_locked(state, reader, expected_revision, &edit, None);
+        if result.is_err() {
+            reader.clear_next_step();
+        }
+        return result;
     }
     let all = ids.iter().any(|id| id == "all");
     let mut fixes = Vec::new();
@@ -2243,6 +2261,21 @@ pub fn project_media_roles_impl(
         .lock()
         .apply_document(&reader.history().current)?;
     Ok(summary)
+}
+
+/// Imported media `asset_id`'s licence (none clears it).
+pub fn project_media_licence_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    licence: Option<crate::sequence::Licence>,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    reader.set_asset_licence(expected_revision, &asset_id, licence)
 }
 
 /// One timeline edit in the project's timeline, or in short `short_id`'s own timeline.

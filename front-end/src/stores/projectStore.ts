@@ -100,6 +100,9 @@ interface ProjectStore {
   /** The short shown as the timeline (the Shorts workspace), if any. */
   viewShort?: string;
   setViewShort: (shortId: string | undefined) => void;
+  /** Bumped to scroll the timeline to the playhead when it is out of view (a moment shown). */
+  playheadReveal: number;
+  revealPlayhead: () => void;
   /** The short playing instead of the video (set by the Shorts workspace). */
   playbackShortId?: string;
   /** How fast playback goes (1, 1.25, 1.5 or 2), as the engine reports it. */
@@ -234,6 +237,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   captionsVersion: 0,
   viewShort: undefined,
   setViewShort: (viewShort) => set({ viewShort }),
+  playheadReveal: 0,
+  revealPlayhead: () => set((state) => ({ playheadReveal: state.playheadReveal + 1 })),
   playbackShortId: undefined,
   bumpCaptions: () => set((state) => ({ captionsVersion: state.captionsVersion + 1 })),
   timelineSelection: null,

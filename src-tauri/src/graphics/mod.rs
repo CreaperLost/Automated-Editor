@@ -369,6 +369,7 @@ pub fn asset_for(id: &str, dir: &Path) -> Result<Asset, String> {
     let source = read_source(dir)?;
     let dir = dunce::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(Asset {
+        licence: None,
         id: id.to_string(),
         name: source.name,
         kind: AssetKind::Graphic,
@@ -959,6 +960,7 @@ mod tests {
 
     fn graphic_clip(start_us: u64, duration_us: u64) -> crate::sequence::Clip {
         crate::sequence::Clip {
+            mix: Default::default(),
             id: "g1".into(),
             asset: "graphic-1".into(),
             stream: "v".into(),

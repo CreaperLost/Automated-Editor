@@ -297,7 +297,8 @@ export const TranscriptPanel: React.FC = () => {
     if (!handle || !trackId) return;
     setError(null);
     try {
-      await api.transcriptCaptionEdit(handle, trackId, change);
+      const next = await api.transcriptCaptionEdit(handle, trackId, change);
+      if (next.project) useProjectStore.getState().applyOpenedProject(next.project);
       bumpCaptions();
       setNotice(label);
     } catch (err) {

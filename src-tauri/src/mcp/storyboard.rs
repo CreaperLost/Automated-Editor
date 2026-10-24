@@ -48,7 +48,7 @@ const LINE_H: i64 = 14;
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardArgs {
-    /// A short's id or title: its 9:16 frames, on its own timeline. Default: the video.
+    /// A short's or clip's id or title: its 9:16 frames, on its own timeline. Default: the video.
     #[serde(default)]
     pub short: Option<String>,
     /// Start of the stretch (edited microseconds). Default: the start.

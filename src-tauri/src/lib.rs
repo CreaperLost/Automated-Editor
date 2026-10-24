@@ -11,6 +11,7 @@ pub mod export;
 pub mod face;
 pub mod fixtures;
 pub mod graphics;
+pub mod joins;
 pub mod layouts;
 pub mod mcp;
 pub mod media;
@@ -26,6 +27,7 @@ pub mod secrets;
 pub mod sequence;
 pub mod shorts;
 pub mod sound_effects;
+pub mod source_search;
 pub mod style;
 pub mod take_short;
 pub mod telemetry;
@@ -337,6 +339,7 @@ fn project_layouts_change(
     expected_revision: u64,
     short_id: Option<String>,
     change: commands::LayoutChange,
+    group: Option<String>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_layouts_change_impl(
         &state,
@@ -344,6 +347,7 @@ fn project_layouts_change(
         expected_revision,
         short_id,
         change,
+        group,
     )
 }
 
@@ -466,6 +470,25 @@ fn project_media_roles(
     roles: Vec<commands::StreamRoleInput>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_media_roles_impl(&state, project_handle, expected_revision, asset_id, roles)
+}
+
+/// Sets (or clears) an imported file's licence.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_licence(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    licence: Option<sequence::Licence>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_media_licence_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        licence,
+    )
 }
 
 /// One timeline edit: tracks, clips, cuts, links. In a short's own timeline with `short_id`.
@@ -891,6 +914,107 @@ async fn project_noise_mutes(
     .map_err(|e| e.to_string())?
 }
 
+/// The joins to listen to (`joins.rs`), for the Joins panel: what changes them, then the list.
+#[cfg(feature = "tauri-app")]
+fn with_joins(
+    state: &AppState,
+    project_handle: &str,
+    edit: Option<
+        &dyn Fn(
+            &project::revision::EditDocument,
+            &std::path::Path,
+            &mut joins::Joins,
+        ) -> Result<(), String>,
+    >,
+) -> Result<joins::JoinsView, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    commands::require_handle(reader, project_handle)?;
+    match edit {
+        None => joins::view_for(reader),
+        Some(edit) => joins::change(reader, |document, list| edit(document, reader.root(), list)),
+    }
+}
+
+/// What was said, in every transcript (the Search panel).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn source_search(
+    state: State<'_, AppState>,
+    project_handle: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<source_search::Results, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    commands::require_handle(reader, &project_handle)?;
+    source_search::search(
+        reader.root(),
+        &reader.history().current,
+        &query,
+        None,
+        limit.unwrap_or(source_search::LIMIT_MAX),
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_list(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<joins::JoinsView, String> {
+    with_joins(&state, &project_handle, None)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_mark(
+    state: State<'_, AppState>,
+    project_handle: String,
+    id: String,
+    mark: Option<joins::Mark>,
+    note: Option<String>,
+) -> Result<joins::JoinsView, String> {
+    with_joins(
+        &state,
+        &project_handle,
+        Some(&|_, _, list| joins::mark(list, &id, mark, note.as_deref())),
+    )
+}
+
+/// The app adds the cuts most likely to sound wrong.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_find(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<joins::JoinsView, String> {
+    with_joins(
+        &state,
+        &project_handle,
+        Some(&|document, root, list| {
+            let risky = joins::risky(root, document, joins::FIND_DEFAULT);
+            joins::add(document, list, "app", &risky).map(|_| ())
+        }),
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_clear(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<joins::JoinsView, String> {
+    with_joins(
+        &state,
+        &project_handle,
+        Some(&|_, _, list| {
+            list.items.clear();
+            Ok(())
+        }),
+    )
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn apply_jump_cuts(
@@ -1130,6 +1254,19 @@ impl mcp::Host for McpHost {
         // (front-end/src/App.tsx).
         let payload = serde_json::json!({ "status": status, "short": short });
         let _ = self.0.emit("aeroedits-agent-export", payload);
+    }
+
+    fn joins_changed(&self) {
+        use tauri::Emitter;
+        let _ = self.0.emit("aeroedits-joins-updated", ());
+    }
+
+    fn show_moment(&self, at_us: u64) {
+        use tauri::Emitter;
+        // front-end/src/App.tsx: back to the video, the playhead in view.
+        let _ = self
+            .0
+            .emit("aeroedits-agent-show", serde_json::json!({ "atUs": at_us }));
     }
 
     fn transcripts(&self) -> &commands::transcript::TranscriptState {
@@ -1809,6 +1946,30 @@ async fn project_frame_thumbnail(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+async fn project_clip_thumbnails(
+    app: tauri::AppHandle,
+    project_handle: String,
+    asset_id: String,
+    stream: String,
+    times_us: Vec<u64>,
+    height: u32,
+) -> Result<Vec<Option<String>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::thumbs::project_clip_thumbnails_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            asset_id,
+            stream,
+            times_us,
+            height,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_graphic_set(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1856,14 +2017,14 @@ fn project_preset_set(
     project_handle: String,
     expected_revision: u64,
     name: String,
-    shorts: bool,
+    target: Option<commands::preset::PresetTarget>,
 ) -> Result<project::OpenedProject, String> {
     commands::preset::project_preset_set_impl(
         &state,
         project_handle,
         expected_revision,
         name,
-        shorts,
+        target.unwrap_or_default(),
     )
 }
 
@@ -2394,6 +2555,7 @@ pub fn run() {
             project_graphic_get,
             project_graphics_list,
             project_frame_thumbnail,
+            project_clip_thumbnails,
             project_graphic_set,
             project_graphic_look_set,
             presets,
@@ -2444,6 +2606,7 @@ pub fn run() {
             project_sequence_edit,
             project_media_import,
             project_media_roles,
+            project_media_licence,
             project_caption_cues,
             project_sound_effects,
             transcript_caption_edit,
@@ -2482,6 +2645,11 @@ pub fn run() {
             noise_review,
             project_noise_mutes,
             apply_jump_cuts,
+            joins_list,
+            source_search,
+            joins_mark,
+            joins_find,
+            joins_clear,
             transcript_settings_get,
             transcript_settings_set,
             transcript_set_api_key,

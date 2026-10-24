@@ -30,6 +30,7 @@ pub enum Op {
     BringInLine,
     Save,
     Reset,
+    ProposeRule,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -54,9 +55,16 @@ pub struct LibraryArgs {
     /// it the change goes into a copy, "My <name>").
     #[serde(default)]
     pub save_as: Option<String>,
-    /// Presets, use: for the project's new shorts instead.
+    /// propose_rule: the rule, in the user's words.
     #[serde(default)]
-    pub shorts: bool,
+    pub rule: Option<String>,
+    /// propose_rule: what the user did or said that taught it.
+    #[serde(default)]
+    pub example: Option<String>,
+    /// Presets, use: what the preset is for: `video` (default), or the project's new `shorts`
+    /// (from a take) or new `clips` (cut from the video).
+    #[serde(default, rename = "for")]
+    pub target: crate::commands::preset::PresetTarget,
     /// Presets, reset: only this part (captions, layout, zoomSettings, audio, layouts).
     #[serde(default)]
     pub part: Option<String>,
@@ -74,7 +82,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         applied, changing nothing: show the user before set), check (graphics not following \
         the style) and bring_in_line (one batch rewriting them, for the user to accept). \
         Presets also: save (the project's settings into its preset, or a new one: \
-        `saveAs`) and reset (the project's changes back).",
+        `saveAs`), reset (the project's changes back), propose_rule (`rule`, `example`: the \
+        user accepts it in the Agent panel).",
     schema: schema::<LibraryArgs>,
     read_only: false,
     run: library,
@@ -236,7 +245,7 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 )
             })
         }
-        Op::Save | Op::Reset => {
+        Op::Save | Op::Reset | Op::ProposeRule => {
             Err("Styles take list, show, use, set, remove, preview, check or bring_in_line".into())
         }
     }

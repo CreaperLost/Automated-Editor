@@ -1,5 +1,5 @@
 import React from "react";
-import { RangeRow } from "../inspector/InspectorSection";
+import { MoreSettings, RangeRow } from "../inspector/InspectorSection";
 import { Field, Segmented, Switch, cn } from "../ui";
 import {
   BUBBLE_SIZES,
@@ -31,20 +31,22 @@ function startOf(kind: Layout["kind"]): Layout {
 }
 
 const ScreenFitField: React.FC<{ value: ScreenFit; onChange: (screen: ScreenFit) => void }> = ({ value, onChange }) => (
-  <Field label="Screen" hint={value === "auto" ? "Fitted on a landscape frame, filled on a portrait one." : undefined}>
-    <Segmented<ScreenFit>
-      label="How the screen takes its part"
-      size="sm"
-      className="w-full"
-      value={value}
-      onChange={onChange}
-      options={[
-        { value: "auto", label: "Auto" },
-        { value: "fit", label: "Fit", title: "The whole screen, with the background around it" },
-        { value: "fill", label: "Fill", title: "Its part filled, cut to that shape and following the zooms" },
-      ]}
-    />
-  </Field>
+  <MoreSettings>
+    <Field label="Screen" hint={value === "auto" ? "Fitted on a landscape frame, filled on a portrait one." : undefined}>
+      <Segmented<ScreenFit>
+        label="How the screen takes its part"
+        size="sm"
+        className="w-full"
+        value={value}
+        onChange={onChange}
+        options={[
+          { value: "auto", label: "Auto" },
+          { value: "fit", label: "Fit", title: "The whole screen, with the background around it" },
+          { value: "fill", label: "Fill", title: "Its part filled, cut to that shape and following the zooms" },
+        ]}
+      />
+    </Field>
+  </MoreSettings>
 );
 
 /// Edits one layout: its kind, then that kind's settings. Every change is a whole new layout.
@@ -124,7 +126,9 @@ export const LayoutEditor: React.FC<{ layout: Layout; portrait: boolean; onChang
             ]}
           />
         </Field>
-        <RangeRow label="Exact size" value={layout.sizePct} min={5} max={60} step={0.5} unit="%" onChange={(sizePct) => onChange({ ...layout, sizePct })} />
+        <MoreSettings>
+          <RangeRow label="Exact size" value={layout.sizePct} min={5} max={60} step={0.5} unit="%" onChange={(sizePct) => onChange({ ...layout, sizePct })} />
+        </MoreSettings>
         <Field label="Shape">
           <Segmented
             label="Bubble shape"
@@ -140,7 +144,9 @@ export const LayoutEditor: React.FC<{ layout: Layout; portrait: boolean; onChang
           />
         </Field>
         {layout.shape === "rect" && (
-          <RangeRow label="Roundness" value={layout.roundnessPct} min={0} max={50} unit="%" onChange={(roundnessPct) => onChange({ ...layout, roundnessPct })} />
+          <MoreSettings>
+            <RangeRow label="Roundness" value={layout.roundnessPct} min={0} max={50} unit="%" onChange={(roundnessPct) => onChange({ ...layout, roundnessPct })} />
+          </MoreSettings>
         )}
         <ScreenFitField value={layout.screen} onChange={(screen) => onChange({ ...layout, screen })} />
       </>
@@ -162,14 +168,16 @@ export const LayoutEditor: React.FC<{ layout: Layout; portrait: boolean; onChang
           />
         </Field>
         <RangeRow label="Camera share" value={layout.cameraPct} min={20} max={80} unit="%" onChange={(cameraPct) => onChange({ ...layout, cameraPct })} />
-        <Field label="Style">
-          <Switch
-            checked={layout.overlap}
-            onChange={(overlap) => onChange({ ...layout, overlap })}
-            label="Camera card over the screen's edge"
-            title="Off: an even split. On: the camera as a rounded card overlapping the screen."
-          />
-        </Field>
+        <MoreSettings>
+          <Field label="Style">
+            <Switch
+              checked={layout.overlap}
+              onChange={(overlap) => onChange({ ...layout, overlap })}
+              label="Camera card over the screen's edge"
+              title="Off: an even split. On: the camera as a rounded card overlapping the screen."
+            />
+          </Field>
+        </MoreSettings>
         <ScreenFitField value={layout.screen} onChange={(screen) => onChange({ ...layout, screen })} />
       </>
     )}

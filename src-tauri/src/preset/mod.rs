@@ -17,8 +17,10 @@ use serde_json::{Map, Value};
 
 /// The preset a new project follows, and the one a missing preset falls back to.
 pub const DEFAULT: &str = "Tutorial";
-/// The preset a project's shorts follow unless it picks another.
+/// The preset a project's shorts (made from a take) follow unless it picks another.
 pub const SHORTS: &str = "Shorts";
+/// The preset a project's clips (cut from the video) follow unless it picks another.
+pub const CLIPS: &str = "Clips";
 
 /// The parts of the edit document a preset sets, by their names in it. Everything else (media,
 /// the edit, chapters, shorts, graphics...) is the project's own.
@@ -132,7 +134,7 @@ pub fn builtin() -> Vec<Preset> {
             rules: String::new(),
         },
         Preset {
-            name: "Clips".into(),
+            name: CLIPS.into(),
             description: "Vertical clips cut from the edited video: the best moments of its \
                 transcript in the split-screen look, captions on."
                 .into(),

@@ -82,7 +82,7 @@ export const ShortsListPanel: React.FC = () => {
               className={`flex-1 ${busy === "Finding shorts" ? "[&>svg]:animate-spin" : ""}`}
               disabled={!!busy || !hasSpeech}
               onClick={findShorts}
-              title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Replaces the clips (undoable)."
+              title="Ask the AI provider from Transcription and AI settings for moments that work on their own. Adds them as new clips; the clips you have and your shorts stay (undoable)."
             >
               Find with AI
             </Button>

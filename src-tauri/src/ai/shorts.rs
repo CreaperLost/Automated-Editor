@@ -60,7 +60,7 @@ pub fn parse_shorts(reply: &Value, lines: &[Line]) -> Vec<Short> {
         };
         taken.push((from, to));
         out.push(Short {
-            id: format!("short-{}", lines[from].source_us),
+            id: format!("clip-{}", lines[from].source_us / 1000),
             title,
             source_start_us: lines[from].source_us,
             source_end_us: lines[to].source_end_us,
@@ -70,6 +70,7 @@ pub fn parse_shorts(reply: &Value, lines: &[Line]) -> Vec<Short> {
             media: None,
             edit: None,
             take: None,
+            caption_marks: Default::default(),
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,

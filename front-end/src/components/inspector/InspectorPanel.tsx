@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Image as ImageIcon, Camera, Monitor } from "lucide-react";
-import { InspectorSection, NumberGrid, RangeRow } from "./InspectorSection";
+import { InspectorSection, MoreSettings, NumberGrid, RangeRow } from "./InspectorSection";
 import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "../shorts/CameraFraming";
 import { TrackClipSection } from "./TrackClipSection";
@@ -218,15 +218,17 @@ export const InspectorPanel: React.FC = () => {
                 />
               </Field>
               {canvas.cursorVisible && (
-                <RangeRow
-                  label="Cursor size"
-                  value={canvas.cursorSizePct}
-                  min={25}
-                  max={400}
-                  step={5}
-                  unit="%"
-                  onChange={(cursorSizePct) => setCanvas({ cursorSizePct })}
-                />
+                <MoreSettings>
+                    <RangeRow
+                      label="Cursor size"
+                      value={canvas.cursorSizePct}
+                      min={25}
+                      max={400}
+                      step={5}
+                      unit="%"
+                      onChange={(cursorSizePct) => setCanvas({ cursorSizePct })}
+                    />
+                </MoreSettings>
               )}
 
               <Field label="Shortcuts">
@@ -248,15 +250,17 @@ export const InspectorPanel: React.FC = () => {
               </Field>
               {canvas.windowCrop && (
                 <>
-                  <RangeRow
-                    label="Room around it"
-                    value={canvas.windowCropPaddingPct}
-                    min={0}
-                    max={15}
-                    step={0.5}
-                    unit="%"
-                    onChange={(windowCropPaddingPct) => setCanvas({ windowCropPaddingPct })}
-                  />
+                  <MoreSettings>
+                    <RangeRow
+                      label="Room around it"
+                      value={canvas.windowCropPaddingPct}
+                      min={0}
+                      max={15}
+                      step={0.5}
+                      unit="%"
+                      onChange={(windowCropPaddingPct) => setCanvas({ windowCropPaddingPct })}
+                    />
+                  </MoreSettings>
                   {canvas.windowCropOff.length > 0 && (
                     <div className="flex items-center justify-between gap-2 text-meta text-studio-400">
                       <span>
@@ -271,22 +275,24 @@ export const InspectorPanel: React.FC = () => {
                 </>
               )}
 
-              <NumberGrid
-                title="Crop"
-                min={0}
-                max={45}
-                step={0.5}
-                unit="%"
-                fields={[
-                  { key: "left", label: "Left", value: canvas.screenCrop.left },
-                  { key: "right", label: "Right", value: canvas.screenCrop.right },
-                  { key: "top", label: "Top", value: canvas.screenCrop.top },
-                  { key: "bottom", label: "Bottom", value: canvas.screenCrop.bottom },
-                ]}
-                onChange={(key, value) =>
-                  setCanvas({ screenCrop: { ...canvas.screenCrop, [key]: value } as ScreenCrop })
-                }
-              />
+              <MoreSettings>
+                <NumberGrid
+                  title="Crop"
+                  min={0}
+                  max={45}
+                  step={0.5}
+                  unit="%"
+                  fields={[
+                    { key: "left", label: "Left", value: canvas.screenCrop.left },
+                    { key: "right", label: "Right", value: canvas.screenCrop.right },
+                    { key: "top", label: "Top", value: canvas.screenCrop.top },
+                    { key: "bottom", label: "Bottom", value: canvas.screenCrop.bottom },
+                  ]}
+                  onChange={(key, value) =>
+                    setCanvas({ screenCrop: { ...canvas.screenCrop, [key]: value } as ScreenCrop })
+                  }
+                />
+              </MoreSettings>
             </InspectorSection>
 
             <InspectorSection id="wallpaper" title="Background image" icon={ImageIcon}>
@@ -318,6 +324,7 @@ export const InspectorPanel: React.FC = () => {
                 />
               </Field>
               {openedProject && !openedProject.shortView && (
+                <MoreSettings>
                 <CameraFramingControl
                   project={openedProject}
                   layout={{ cameraClips: openedProject.layout?.cameraClips ?? {} }}
@@ -331,6 +338,7 @@ export const InspectorPanel: React.FC = () => {
                     )
                   }
                 />
+                </MoreSettings>
               )}
               <>
                   <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">

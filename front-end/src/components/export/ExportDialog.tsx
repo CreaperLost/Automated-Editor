@@ -17,6 +17,7 @@ import type {
   OpenedProject,
 } from "../../lib/types";
 import { PresetMarks } from "../presets/PresetMarks";
+import { useUiMode } from "../../stores/uiModeStore";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
 const RESOLUTIONS = [
@@ -117,7 +118,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   };
   const tier = tierOf(preferences);
   // Settings the buttons don't cover (a preset's own, say) open Advanced.
-  const [advanced, setAdvanced] = useState(() => !tierOf(preferences));
+  const [advanced, setAdvanced] = useState(() => !tierOf(preferences) || useUiMode.getState().advanced);
 
   const exporting = exportJob?.state === "queued" || exportJob?.state === "running";
   const resolution = RESOLUTIONS.find((r) => r.label === preferences.resolution) ?? RESOLUTIONS[1];

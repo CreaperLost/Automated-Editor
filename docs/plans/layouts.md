@@ -1,8 +1,8 @@
 # Layouts: plan v1 (2026-10-21)
 
 Was backlog task 1. Status: **built 21 Oct 2026** (see [Built](#built-21-oct-2026-branch-claudelayouts-970278));
-open follow-ups are [LAY-1](../roadmap.md#lay-1) (look-only swap, perf measurement) to
-[LAY-4](../roadmap.md#lay-4). See [Decisions](#decisions-21-oct-2026); they override the text
+LAY-1 (look-only swap) and LAY-2 (layout keys) shipped 24 Oct; open follow-ups are
+[LAY-3](../roadmap.md#lay-3) and [LAY-4](../roadmap.md#lay-4). See [Decisions](#decisions-21-oct-2026); they override the text
 below where they differ. When the follow-ups ship, fold the model into
 [architecture.md](../architecture.md) and delete this plan.
 
@@ -400,9 +400,5 @@ George's answers to the open decisions below:
   and camera only, and the lane and Inspector worked. A pick on a 15-minute recording took
   0.2 s.
 
-Not done yet:
-- The look-only swap in playback (performance risk 1). A layout edit still rebuilds the
-  evaluator and mixer, like any edit. LAY-2's live keys need the swap.
-- Measuring with `perf.rs` on a real `.aero`.
-- Number-key bindings (LAY-2). `layoutsStore.switchAt` and MCP `layouts op: switch` are the
-  hooks.
+Not done then, since built: the look-only swap (LAY-1, measured with `perf.rs`) and layout
+keys (LAY-2, `layoutsStore.pressLayoutKey`), both 24 Oct.

@@ -6,6 +6,10 @@ import {
   WaveformOverview,
   FaceTrackStatus,
   PlaybackStatus,
+  JoinMark,
+  JoinsView,
+  Licence,
+  SearchResults,
   EditCut,
   PreviewQuality,
   PreviewStatus,
@@ -190,12 +194,15 @@ export const api = {
     expectedRevision: number,
     shortId: string | null,
     change: LayoutChange,
+    /** Changes of one group in a row are one undo step (layout keys while playing). */
+    group: string | null = null,
   ) =>
     invokeTauri<OpenedProject>("project_layouts_change", {
       projectHandle,
       expectedRevision,
       shortId,
       change,
+      group,
     }),
   /** Picks layout sections from the recording (no AI); sections made by hand stay. */
   projectLayoutsPick: (
@@ -329,6 +336,15 @@ export const api = {
     invokeTauri<OpenedProject>("project_noise_mutes", { projectHandle, expectedRevision, key, ranges, unmute, shortId }),
   applyJumpCuts: (projectHandle: string, expectedRevision: number, ranges: {startUs: number; endUs: number}[], transcriptDependencies: TranscriptDependency[], shortId: string | null = editTarget) =>
     invokeTauri<OpenedProject>("apply_jump_cuts", { projectHandle, expectedRevision, ranges, transcriptDependencies, shortId }),
+  /** A word or phrase in every transcript, cut or not (Search panel). */
+  sourceSearch: (projectHandle: string, query: string) =>
+    invokeTauri<SearchResults>("source_search", { projectHandle, query }),
+  /** The joins to listen to (Joins panel); none of these change the edit. */
+  joinsList: (projectHandle: string) => invokeTauri<JoinsView>("joins_list", { projectHandle }),
+  joinsMark: (projectHandle: string, id: string, mark: JoinMark | null, note?: string) =>
+    invokeTauri<JoinsView>("joins_mark", { projectHandle, id, mark, note }),
+  joinsFind: (projectHandle: string) => invokeTauri<JoinsView>("joins_find", { projectHandle }),
+  joinsClear: (projectHandle: string) => invokeTauri<JoinsView>("joins_clear", { projectHandle }),
   transcriptSettingsGet: () => invokeTauri<TranscriptSettingsView>("transcript_settings_get"),
   transcriptSettingsSet: (settings: TranscriptSettings) =>
     invokeTauri<TranscriptSettingsView>("transcript_settings_set", { settings }),
@@ -453,6 +469,9 @@ export const api = {
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
   pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
   pickMediaFolder: () => invokeTauri<string | null>("pick_media_folder"),
+  /** Sets (or with null clears) an imported file's licence. */
+  projectMediaLicence: (projectHandle: string, expectedRevision: number, assetId: string, licence: Licence | null) =>
+    invokeTauri<OpenedProject>("project_media_licence", { projectHandle, expectedRevision, assetId, licence }),
   /** Sets what an asset's streams stand for. */
   projectMediaRoles: (
     projectHandle: string,
@@ -498,6 +517,9 @@ export const api = {
   /** The timeline at `atUs` as it plays, as a small PNG data URL (a graphic's thumbnail). */
   projectFrameThumbnail: (projectHandle: string, atUs: number, width: number) =>
     invokeTauri<string>("project_frame_thumbnail", { projectHandle, atUs, width }),
+  /** Small JPEG data URLs of a clip's source at `timesUs` (its own clock); null where it has no picture. */
+  projectClipThumbnails: (projectHandle: string, assetId: string, stream: string, timesUs: number[], height: number) =>
+    invokeTauri<(string | null)[]>("project_clip_thumbnails", { projectHandle, assetId, stream, timesUs, height }),
   /**
    * Sets variables (`null` puts one back to its default) and, optionally, the name and the
    * style ("project" follows the project's).
@@ -520,9 +542,9 @@ export const api = {
     }),
   /** Every preset and, with a project, its preset and what it changed from it. */
   presets: (projectHandle?: string) => invokeTauri<PresetsView>("presets", { projectHandle: projectHandle ?? null }),
-  /** The project (or its new shorts, with `shorts`) follows preset `name`; one undo step. */
-  projectPresetSet: (projectHandle: string, expectedRevision: number, name: string, shorts = false) =>
-    invokeTauri<OpenedProject>("project_preset_set", { projectHandle, expectedRevision, name, shorts }),
+  /** The project follows preset `name`, or its new shorts or clips start from it (`target`); one undo step. */
+  projectPresetSet: (projectHandle: string, expectedRevision: number, name: string, target: "video" | "shorts" | "clips" = "video") =>
+    invokeTauri<OpenedProject>("project_preset_set", { projectHandle, expectedRevision, name, target }),
   /** Takes the project's changes back to its preset's values: all, a part's, or one field; one undo step. */
   projectPresetReset: (projectHandle: string, expectedRevision: number, part?: PresetPart, field?: string) =>
     invokeTauri<OpenedProject>("project_preset_reset", {

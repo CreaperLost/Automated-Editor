@@ -80,8 +80,9 @@ deterministic graphics. Resolve's native MCP is the most direct threat.
 - **Tested here:** nothing. Two sponsored creator videos (Marcin AI, Brendan Jowett) were read
   from transcripts with sampled frames. Marcin's on-screen cost note was **$6.40** of host usage
   (auto-captions said "$640").
-- **For us:** style trial ([PLAN-1](../roadmap.md#plan-1)), selection references
-  ([NOTE-1](../roadmap.md#note-1)), curated tutorial graphics ([GFX-3](../roadmap.md#gfx-3)),
+- **For us:** style trial ([PLAN-1](../roadmap.md#plan-1)), curated tutorial graphics
+  ([GFX-3](../roadmap.md#gfx-3)) (selection references: dropped 24 Oct, see
+  [decisions](../decisions.md#not-doing)),
   fast revisions and variants ([GFX-4](../roadmap.md#gfx-4)), checkpoints
   ([SAFE-2](../roadmap.md#safe-2)), guided B-roll that keeps narration intact (video-only
   streams; an empty `PlaceAsset.streams` places **all** streams including unwanted audio; avoid
@@ -160,7 +161,7 @@ Public MCP, API and open agent skills: [layout tools](https://www.tella.com/docs
   Windows only). [cth9191/after-effects-motion-prompts](https://github.com/cth9191/after-effects-motion-prompts)
   is a prompt and revision collection, not a server.
 - **Conclusion:** Higgsfield's established edge is AE handoff, not better motion from the same
-  brief. Improve our own planning, templates and moving review first; AE at most as an optional
+  brief. Improve our own planning, templates and join review first; AE at most as an optional
   backend pilot later ([decisions](../decisions.md#not-doing)).
 
 ## Tandem
@@ -171,7 +172,8 @@ transcript as the spine (words at the playhead highlighted, the agent's edits be
 **comment anchored to a time range that the agent reads and acts on**. Not a Convex product (an
 earlier review got that wrong). The demo also credits an unlicensed title card beside licensed
 clips: licensing needs to be a recorded property of an asset, not an afterthought.
-→ [NOTE-1](../roadmap.md#note-1).
+Anchored comments were considered as NOTE-1 and dropped 24 Oct for a single user working in chat
+([decisions](../decisions.md#not-doing)).
 
 ## Herk Edit Kit
 

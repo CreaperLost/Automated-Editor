@@ -11,6 +11,8 @@ export const DOCK_PANELS = {
   agent: { title: "Agent", minimumWidth: 260, minimumHeight: 160 },
   jumpCuts: { title: "Jump cuts", minimumWidth: 260, minimumHeight: 200 },
   noises: { title: "Mouth noises", minimumWidth: 260, minimumHeight: 200 },
+  joins: { title: "Joins", minimumWidth: 260, minimumHeight: 200 },
+  search: { title: "Search", minimumWidth: 220, minimumHeight: 110 },
   shorts: { title: "Shorts", minimumWidth: 220, minimumHeight: 120 },
   shortLook: { title: "Look", minimumWidth: 240, minimumHeight: 160 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
@@ -83,6 +85,12 @@ function addMedia(api: DockviewApi) {
 
 function addAgent(api: DockviewApi) {
   api.addPanel({ ...panel("agent"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+  addJoins(api);
+}
+
+/// The joins the agent hands over to listen to sit next to its proposals.
+function addJoins(api: DockviewApi) {
+  api.addPanel({ ...panel("joins"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
 /// The cleanup passes share the inspector's tab group too. In Cleanup they are its first tabs
@@ -96,6 +104,12 @@ function addCleanup(api: DockviewApi, inFront = false) {
 /// Chapters sit behind the transcript they are made from.
 function addChapters(api: DockviewApi) {
   api.addPanel({ ...panel("chapters"), position: { referencePanel: "transcript", direction: "within" }, inactive: true });
+  addSearch(api);
+}
+
+/// Searching every transcript sits behind the transcript too.
+function addSearch(api: DockviewApi) {
+  api.addPanel({ ...panel("search"), position: { referencePanel: "transcript", direction: "within" }, inactive: true });
 }
 
 function addZoom(api: DockviewApi) {
@@ -190,10 +204,20 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
       if (!ids.has("agent") && ids.has("inspector")) {
         addAgent(api);
         ids.add("agent");
+        ids.add("joins");
+      }
+      if (!ids.has("joins") && ids.has("inspector")) {
+        addJoins(api);
+        ids.add("joins");
       }
       if (!ids.has("chapters") && ids.has("transcript")) {
         addChapters(api);
         ids.add("chapters");
+        ids.add("search");
+      }
+      if (!ids.has("search") && ids.has("transcript")) {
+        addSearch(api);
+        ids.add("search");
       }
       // Layouts from before Jump cuts and Mouth noises were panels (they were a dialog).
       if (!ids.has("jumpCuts") && !ids.has("noises") && ids.has("inspector")) {

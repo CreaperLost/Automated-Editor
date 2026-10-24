@@ -18,26 +18,22 @@ follows; gaming work is not scheduled yet.
 1. **Done by 24 Oct: what exists is safe, complete and measured, and settings have one home.**
    Project binding, agent parity, history and checkpoints, the EVAL-1 baseline, presets and
    styles, one look for all graphics, caption type, graphics ready before export.
-2. **Next: a place for intent, and sight.** Notes anchored to the edit, a moving preview, rules
-   the agent proposes, and the basic craft surfaces still missing (sound clips, source search).
-3. **Later: build the director loop on those foundations.** Beat plan and style trial on top of
-   anchored notes; idea-first shorts on top of source search; cues on top of sound clips;
-   finishing and delivery.
+2. **Next: the joins by ear, and the craft surfaces still missing.** The agent hands the user
+   the risky cuts to listen to, rules the agent proposes, sound clips and source search.
+3. **Later: build the director loop on those foundations.** A plan file and style trial;
+   idea-first shorts on top of source search; cues on top of sound clips; finishing and
+   delivery.
 
 ```mermaid
 flowchart LR
     SAFE1[SAFE-1 project binding] --> AGT1[AGT-1 agent parity]
-    SAFE1 --> NOTE1[NOTE-1 anchored notes]
     SAFE2[SAFE-2 history + checkpoints] --> GFX4[GFX-4 graphic variants]
-    NOTE1 --> PLAN1[PLAN-1 beat plan + style trial]
-    ORG1[ORG-1 presets + styles] --> PLAN1
+    ORG1[ORG-1 presets + styles] --> PLAN1[PLAN-1 plan file + style trial]
     ORG1 --> STY2[STY-2 styles from references]
     ORG1 --> AUTO1[AUTO-1 run a preset after opening]
     FTG1[FTG-1 source search] --> SHT1[SHT-1 idea-first shorts]
     FTG1 --> FTG2[FTG-2 selects + B-roll]
     SND1[SND-1 sound clips] --> SND2[SND-2 cues at graphic events]
-    REV1[REV-1 moving review] --> PLAN1
-    LAY1[LAY-1 look-only swap] --> LAY2[LAY-2 number keys]
     FX1[FX-1 background matte] --> LAY4[LAY-4 cut-out layout]
 ```
 
@@ -48,15 +44,6 @@ flowchart LR
 Milestone 1 (a great long-form tutorial) is close: everything built up to 24 Oct was tried in
 the dev app and in EVAL-1 run 4 (see [Done](#done)). Rerun EVAL-1 from
 [plans/evaluation.md](plans/evaluation.md) after each cost or quality change.
-
-<a id="fix-7"></a>
-### FIX-7 · Small fixes found while trying everything, 24 Oct — S
-
-- Dropping a clip on a new track is two undo steps (add the track, move the clip); make it one.
-- The blip fix's undo step reads "Cut 0.0 s, Zooms"; name it after what it did.
-- `export` to a folder that doesn't exist says it started, then stops; refuse it up front (or
-  make the folder).
-- **Done when:** each behaves as above in the dev app. Listed in [gaps.md](gaps.md#1-small-bugs).
 
 <a id="ai-budget"></a>
 ### AI-1 · What an agent reads in an edit: about 100k tokens at most (a standing preference)
@@ -75,8 +62,13 @@ not a hard limit: no test fails on it. Our source code doesn't count.
 
 ## Next
 
-Rough order. What is left of GFX-5 waits on research, so NOTE-1 and REV-1 come first: they are
-the foundations the Later tier builds on.
+REV-1, AGT-3, AGT-4, SND-1, FTG-1 and LAY-1 were built 24 Oct (see [Done](#done)). Left in this
+tier: GFX-5's build (its research is done; a decision first) and what VER-1 couldn't cover here.
+Next up after them: the SFX starter set (SND-3, on SND-1) and SHT-1 (idea-first shorts, on
+FTG-1). LAY-2, UI-1 and UI-2 were built 24 Oct.
+NOTE-1 (anchored notes, "Ask AI about this") was dropped 24 Oct: the chat, the agent's history
+and descriptions like "the graphic titled X" already do its job
+([decisions](decisions.md#not-doing)).
 
 <a id="gfx-5"></a>
 ### GFX-5 · Styles proposed by the agent — S/M, research first
@@ -87,93 +79,22 @@ variant. Left:
   styles from a brand and a description in words, each previewed on the video's own
   graphics (`library` `kind: style` `op: preview` is the building block), and the user picks one.
   Creators who make good graphics with agents seem to give each request a board of reference
-  images, their brand and a tuned prompt (as a skill): research how they do it before building
-  this; it likely joins [STY-2](#sty-2).
-
-<a id="note-1"></a>
-### NOTE-1 · Anchored notes: comments the agent reads, and "Ask AI about this" — M
-
-- **Why:** the most transferable idea in the research (feedback anchored to a time range, not
-  chat), and the primitive several later features need (plan beats, review records, editor
-  directions, production tasks).
-- **Do:** one record type: `{id, anchor, text, author (user|agent), kind, status, revision}` where
-  the anchor is word ids or a source range (mapped through clocks like layout sections), plus
-  optional clip/graphic id and a normalised canvas rectangle. A Notes lane on the timeline and a
-  context-menu "Note…" / "Ask AI about this" (copies a reference token the agent resolves).
-  MCP: `notes` with `list` / `add` / `resolve`; `proposals_list` shows the user's reject note.
-  Notes left by the agent ("unsure about this cut") show in the Agent panel.
-- **Decided:** this is the one shared record for every "note about a moment" feature
-  ([Q-PLAN](decisions.md#q-plan)): design `kind` and `status` so plan beats (PLAN-1), review
-  marks (REV-1), spoken editor directions and short ideas (SHT-1) fit without new storage.
-- **Depends:** SAFE-1. **Done when:** "move this away from the button" resolves to the selected
-  graphic; a note survives cuts, and is flagged orphaned when its words are cut away.
-
-<a id="rev-1"></a>
-### REV-1 · Moving review — M/L
-
-- **Do:** (1) `preview_range(from, to)` renders a low-res, full-rate MP4 **with sound** of a range
-  to a temp file and returns its path (clients that can play it, can; the user can always); (2)
-  `playhead` op `show(t)` seeks the user's preview to a moment the agent wants them to look at;
-  (3) a **join audition queue** in the UI built from retake cuts, uncertain word edges, leftover
-  gaps and `check` findings: play ±2 s around each, mark keep / refine; (4) review records per
-  revision (which ranges were inspected, listened to, decided), made stale by edits that touch
-  them; (5) later, an encoded-output pass on the exported file (strips around each cut, loudness
-  and true peak) tied to the file's hash.
-- **Done when:** reports can say exactly which joins were heard, and a cut across a reviewed
-  join marks it unreviewed.
-
-<a id="agt-3"></a>
-### AGT-3 · Rules the agent proposes — S/M
-
-The user's rules live in each preset (`rules.md`, built with [ORG-1](#org-1)). What is left:
-the agent **proposing** a rule (with the example that taught it), the
-user accepting it in the Agent panel, and the agent saying which rule shaped a proposal;
-rejecting one cut never silently changes a rule. Read the three published skills (Christian's
-Editing Skill, Tao's motion skill, Jason's blueprint artifact) before designing that.
-**Decision:** [Q-RULES](decisions.md#q-rules).
-
-<a id="agt-4"></a>
-### AGT-4 · Long jobs: what is left — S
-
-Readiness, the schema cost and stopping a long call are done (see [Done](#done)). Left to
-weigh: resuming a stopped job, a "state screenshot" (canvas + timeline + inspector at one
-moment), a time budget per stage that stops and asks, a diagnose action for a broken
-timeline. **Was:** backlog #16.
-
-<a id="snd-1"></a>
-### SND-1 · Minimal sound surface — M
-
-- **Do:** clip gain and fade in/out on any audio clip (the `Clip` model has neither); SFX and
-  music as their own audio tracks with roles; a speech-relative music level (the loudness
-  target itself is done, 22 Oct); a licence/provenance field on imported audio assets; agent ops through
-  `propose_edit` + `settings`. No generation, no beat grid. Both libraries (SND-3) build on this.
-- **Decision:** [Q-SOUND](decisions.md#q-sound): this comes first, then the SFX starter set, then
-  music (SND-3). **Was:** backlog #5 (first half).
-
-<a id="ftg-1"></a>
-### FTG-1 · Search the source transcripts, including what was cut — M
-
-- **Do:** `source_search(query)` over every saved transcript (word/phrase, word-boundary, light
-  fuzzy), bounded results: asset/stream, source in/out, excerpt, word ids, and where it plays in
-  the edit (or "cut"). The same search in a UI box (it is also Gather for shorts).
-- **Done when:** finds labelled moments in a real tutorial, including one removed by a cut and one
-  in an imported take. **Was:** backlog #14 step 1. **Unblocks:** FTG-2, SHT-1, take-short footage picker.
-
-<a id="lay-1"></a>
-### LAY-1 · Layouts: look-only playback swap, then measure — M
-
-- **Do:** layout/style-only edits swap a new resolved-layout `Arc` into the running evaluator
-  instead of rebuilding evaluator and mixer; drags preview on the front end and commit on
-  release. Then `perf.rs` on a real `.aero` with ~30 sections (p50/p95 frame time).
-- **Plan:** [plans/layouts.md](plans/layouts.md). **Unblocks:** LAY-2.
+  images, their brand and a tuned prompt (as a skill); it likely joins [STY-2](#sty-2).
+- **Research done 24 Oct:** [research/ai-styles.md](research/ai-styles.md). Brand intake into
+  one file every step reads, style frames before motion, a kit plus references plus a brief.
+  Proposed: `library` `kind: style` `op: propose` (`brief`, optional `url` and `logo`) answering
+  with up to three named-different previews; only the pick is saved. **Needs George's go.**
 
 <a id="ver-1"></a>
 ### VER-1 · Pay the verification debt — M
 
-- **Do:** on a disposable project, through the real bridge: inspect → propose → accept → inspect
-  → undo → render → export → check the file, on Windows **and macOS**; a real Codex session with
-  write tools; the templatize → check → save loop over MCP; a style with a logo in a real export
-  (its font file was checked 24 Oct). Record host-verified coverage in [product.md](product.md#what-is-verified-and-what-is-not).
+- **Done on Windows, 24 Oct:** on a disposable project (the 1:40 take), through the real bridge
+  with a stdio MCP client: create → transcribe → silence → check (and its fix) → propose_edit →
+  accept in the Agent panel → undo → export (1280×720, 49.75 s, −14.2 LUFS, checked with
+  ffprobe/ebur128), plus every tool built that day.
+- **Left:** the same on **macOS**; a real Codex session with write tools (no Codex CLI on this
+  PC); the templatize → check → save loop over MCP; a style with a logo in a real export.
+  Record host-verified coverage in [product.md](product.md#what-is-verified-and-what-is-not).
 
 ---
 
@@ -184,12 +105,12 @@ Grouped by area. Order within a group is the suggested order.
 ### Direction: plan, style, method
 
 <a id="plan-1"></a>
-- **PLAN-1 · Beat plan and style trial (L).** On NOTE-1 records: per beat an anchor, purpose
-  (hook / explanation / proof / payoff / rest), treatment (layout, graphic + variables, caption
-  ownership, sound intensity), reason, user locks, status (draft → approved → built → stale).
-  A transcript-row panel; `plan` op on `notes`. Then a **style trial**: build 2–3 beats on a
-  5–10 s range, approve the look, then scale. Graphics keep their word anchor (fixes C3).
-  Plan beats are NOTE-1 records with `kind: beat` (decided, [Q-PLAN](decisions.md#q-plan)).
+- **PLAN-1 · Plan file and style trial (M).** The agent writes and keeps a plan in the project
+  (a Markdown file it reads back: per moment the purpose, treatment and reason, and what the
+  user locked), so the context survives between turns and runs without new storage or UI. Then
+  a **style trial**: build 2–3 beats on a 5–10 s range, approve the look, then scale.
+  Rewritten 24 Oct without anchored notes. (Graphics already keep their word: cuts before a
+  graphic move it along and no cut goes through one, `sequence/edit.rs`.)
 <a id="auto-3"></a>
 - **AUTO-3 · "Save this workflow" (M).** From an approved edit: instructions, defaults,
   exceptions and checks as a named, versioned workflow shown as a readable summary first. Proven
@@ -253,22 +174,14 @@ Grouped by area. Order within a group is the suggested order.
 **Decided 22 Oct:** two features in two tabs that share their parts. **Shorts** start from a take
 recorded outside the app (camera and voice); everything else goes under it. **Clips** cut the best
 moments out of the long video (what the Shorts tab does today besides takes). Shorts from a take
-come first, in this order: SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2; Clips (SHT-1) after.
+came first (SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2, all done); Clips (SHT-1) next, after FTG-1.
 
 <a id="sht-1"></a>
 - **SHT-1 · Idea-first clips (L).** A clip is an idea plus pieces gathered from anywhere in the
   video. Depends on FTG-1. Comes after the take-first Shorts work.
-<a id="sht-2"></a>
-- **SHT-2 · Caption shaping in shorts (M).** Breaks, emphasis and hidden words per short; text
-  fixes shared with the video.
 
 ### Layouts — plan: [plans/layouts.md](plans/layouts.md)
 
-<a id="lay-2"></a>
-- **LAY-2 · Switch layouts with keys (M).** The user binds layouts to keys in the shortcuts menu;
-  pressing one while playing applies it from the playhead to the next section edge; live through
-  the look-only swap, one undo step on stop; MCP `layouts op: switch`. Depends on LAY-1.
-  **Was:** backlog #10.
 <a id="lay-3"></a>
 - **LAY-3 · Auto layouts with limits (M).** Tella-style rules on top of `pick`: a few changes per
   minute at most, length windows (screen 2–8 s, camera 2–5 s, punch-in 1.5–4 s), camera on the
@@ -338,12 +251,7 @@ removed 23 Oct 2026: not needed.
 
 ### UI
 
-<a id="ui-1"></a>
-- **UI-1 · Thumbnails on clips (M).** Tiny, cached per source, only when the track is tall enough,
-  cancelled when scrolled away. **Was:** backlog #7.
-<a id="ui-2"></a>
-- **UI-2 · Basic and Advanced settings (M).** Inventory every panel's settings first, then split.
-  **Was:** backlog #8.
+Built: UI-1 and UI-2 (see [Done](#done)).
 
 ### Dependencies
 
@@ -440,6 +348,74 @@ editor already tolerates both.
 Most recent first, a line or two each. The details are in git history (commit messages and the
 plans deleted once built), the design in [architecture.md](architecture.md), the choices in
 [decisions.md](decisions.md).
+
+- **24 Oct 2026** — <a id="lay-2"></a>**LAY-2** layout keys: the shortcuts dialog has a
+  Layouts tab (built-ins and favourites, no keys by default); a key puts that layout from the
+  playhead to the next layout change. While playing it shows at once (LAY-1's swap), and every
+  press until playback stops is one undo step: history steps carry a `group`, and a step of the
+  top step's group joins it (`Join` line in the log, so it survives reopening). MCP `layouts op:
+  switch` was already there.
+- **24 Oct 2026** — <a id="ui-1"></a>**UI-1** thumbnails on video clips: small JPEGs along the
+  clip (keyframe seek, one FFmpeg process each; images and the native backend decode), kept in
+  `cache/thumbs/<asset>/` by file, time and height; times rounded to a step that suits the zoom,
+  so small zooms and moves reuse them. Only when the video lane is 42 px or taller, only for the
+  drawn part of the timeline, at most 64 a call, one call at a time; pictures scrolled away
+  before their turn are never asked for. Graphics show none.
+- **24 Oct 2026** — <a id="ui-2"></a>**UI-2** Basic and Advanced settings: File → Advanced
+  settings (off by default). In Basic, each section keeps its fine-tuning behind a "More
+  settings" link at its foot (per section, not remembered); in Advanced everything shows and the
+  Advanced parts of Export, Jump cuts and Transcript settings start open. Under More settings:
+  cursor size, room around the window, crop (Screen); per-clip camera framing (Camera); exact
+  bubble size, roundness, screen fit, overlapping card, section transition, move length
+  (Layouts); noise and duck amounts, mouth-click strength, music and loudness levels (Audio);
+  distance from edge, words at once, lines (Captions); every auto-zoom setting but the amount,
+  the follow speed (Zoom); graphics look sliders, caption weight, emphasis colour, outline, box,
+  the frame's corners, shadows and camera border, and 9:16 graphics sliders (Style). The rest
+  stays in Basic.
+- **24 Oct 2026** — <a id="rev-1"></a>**REV-1** listen to the joins: a **Joins** panel (behind
+  the Inspector) steps through cuts, plays ±2 s around each and marks keep or fix with a note;
+  `joins` (list, find, add, clear; `agent/joins.json`) lets the agent hand over cuts and read the
+  marks. Joins are held by recording times, so they move with later edits and show "changed"
+  once fixed. `find` scores retakes (words cut out), words cut into or ending at a cut, unsure
+  words, mid-sentence cuts and `check`'s blips. `playhead` `op: show` moves the user's preview
+  (`playhead_get` is now `playhead`, behind `more`). The export guide asks for it before export.
+- **24 Oct 2026** — <a id="ftg-1"></a>**FTG-1** `source_search` (behind `more`) and a **Search**
+  panel (behind the transcript): every transcript, cut parts and imported takes too; whole
+  words in order, the last a prefix, long words one letter off, Greek accents folded; each hit
+  says plays (and where), cut (and the join over it) or not placed.
+- **24 Oct 2026** — <a id="snd-1"></a>**SND-1** clips' own gain and fades (`Clip.mix`,
+  `setSound` edit, the clip inspector; split keeps fades at the outer ends); **music** and
+  **effects** roles; `musicUnderSpeechDb` keeps music lanes that far under the speech, measured
+  (Audio page); a licence on imported files (`media_import` `licences`, the clip inspector), and
+  `check` warns about music whose licence needs credit or isn't known.
+- **24 Oct 2026** — <a id="agt-3"></a>**AGT-3** `library` `kind: preset` `op: propose_rule`
+  (`rule` + the `example` that taught it) makes a **Rule** batch in the Agent panel; accepting
+  adds a bullet to the preset's `rules.md` (a built-in gets its "My" copy); autopilot never
+  accepts rules, and the rules guide says when to propose one and to name the rule that shaped a
+  proposal. Designed from the creator-workflows summary, not the three skills' originals.
+- **24 Oct 2026** — <a id="agt-4"></a>**AGT-4** the diagnose part, as `check` findings: linked
+  sound and picture out of sync, and clips running past their media. Not built, on purpose:
+  resuming a stopped job, a state screenshot (`storyboard`, `frame_render` and `timeline_view`
+  cover it) and per-stage time budgets (the agent's own pacing).
+- **24 Oct 2026** — <a id="lay-1"></a>**LAY-1** look-only swap: an edit that changes only the
+  layout sections bumps a look generation; the engine swaps them into the running scene, keeping
+  the mixer, decoders and sound playing. `perf_look_swap` on the 7:10 tutorial with 30 sections:
+  the frame after a change 7.9 ms p50 swapped vs 12.1 ms rebuilt; playing with a change every
+  second p50 11.5, p95 17.7, one 363 ms frame. Drag-preview on the front end is not done.
+- **24 Oct 2026** — **Shorts and clips told apart for agents.** `clips` (list by default,
+  create, find, range, rename, remove) replaces `short_create` and the old `shorts` find; `shorts`
+  is now only for shorts made from a take (list by default, rename, remove); each refuses the
+  other kind and names its tool. Finding clips (agent and the Clips tab's Find with AI) only
+  adds clips: it used to replace the whole list, take shorts included. New clips and new
+  shorts follow their own presets (`clipsPreset` beside `shortsPreset`; `library` `op: use`
+  `for: shorts|clips`) and copy the look of their own kind. `export` takes `short: "shorts"` or
+  `"clips"`. Methods, rules and the export guide say which is which.
+- **24 Oct 2026** — <a id="sht-2"></a>**SHT-2** a short's caption splits, joins, hidden words and
+  emphasis are its own (`Short.caption_marks`, over the video's; undo steps), text fixes stay
+  shared; the Shorts tab counts them and can drop them ("Use the video's"); MCP `captions` gains
+  `split`, `join` and `hide`. <a id="fix-7"></a>**FIX-7** dropping on a new track is one undo
+  step (`onNewTrack` edit); undo names say "Cut 0.04 s" and leave out zooms a cut only moved, and
+  the blip fix reads "Removed 3 blips"; `export` to a missing folder says it did not start.
 
 - **24 Oct 2026** — **Everything built so far, tried** in the dev app and EVAL-1 run 4
   (tutorial 18 calls, $0.271, −28 %; a short from a take 13 calls, $0.122). Fixed from it:

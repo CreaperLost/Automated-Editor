@@ -72,7 +72,7 @@ pub struct SectionInput {
 pub struct LayoutsArgs {
     #[serde(default)]
     pub op: Option<LayoutsOp>,
-    /// A short's id or title; absent is the video.
+    /// A short's or clip's id or title; absent is the video.
     #[serde(default)]
     pub short: Option<String>,
     #[serde(default)]
@@ -543,6 +543,7 @@ fn run(ctx: &Ctx, args: LayoutsArgs) -> Result<String, String> {
         before.revision,
         short.clone(),
         change,
+        None,
     )?;
     let lines = with_reader(ctx.state, |reader| {
         Ok(listing(

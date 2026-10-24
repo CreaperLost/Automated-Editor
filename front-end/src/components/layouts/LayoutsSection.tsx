@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { LayoutGrid, Sparkles, Star, Trash2, X } from "lucide-react";
-import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { InspectorSection, MoreSettings, RangeRow } from "../inspector/InspectorSection";
 import { Button, Field, Segmented, Switch, cn } from "../ui";
 import { LayoutEditor } from "./LayoutEditor";
 import { LayoutThumb } from "./LayoutThumb";
@@ -216,20 +216,22 @@ export const LayoutsSection: React.FC = () => {
 
         {selected && (
           <>
-            <Field label="Change">
-              <Segmented<LayoutTransition>
-                label="How it changes in and out"
-                size="sm"
-                className="w-full"
-                value={selected.transition}
-                onChange={(transition) => changeLayouts({ op: "update", id: selected.id, transition })}
-                options={[
-                  { value: "auto", label: "Auto", title: "A cut between full-frame shots and on cuts, a short move otherwise" },
-                  { value: "cut", label: "Cut" },
-                  { value: "move", label: "Move" },
-                ]}
-              />
-            </Field>
+            <MoreSettings>
+              <Field label="Change">
+                <Segmented<LayoutTransition>
+                  label="How it changes in and out"
+                  size="sm"
+                  className="w-full"
+                  value={selected.transition}
+                  onChange={(transition) => changeLayouts({ op: "update", id: selected.id, transition })}
+                  options={[
+                    { value: "auto", label: "Auto", title: "A cut between full-frame shots and on cuts, a short move otherwise" },
+                    { value: "cut", label: "Cut" },
+                    { value: "move", label: "Move" },
+                  ]}
+                />
+              </Field>
+            </MoreSettings>
             <div className="flex flex-wrap gap-1.5">
               <Button
                 size="sm"
@@ -292,17 +294,19 @@ export const LayoutsSection: React.FC = () => {
           ))}
       </div>
 
-      {!selected && (
-        <RangeRow
-          label="Move length"
-          value={track.transitionMs}
-          min={0}
-          max={1000}
-          step={50}
-          unit="ms"
-          onChange={(transitionMs) => later(() => changeLayouts({ op: "settings", transitionMs }))}
-        />
-      )}
+      <MoreSettings>
+        {!selected && (
+          <RangeRow
+            label="Move length"
+            value={track.transitionMs}
+            min={0}
+            max={1000}
+            step={50}
+            unit="ms"
+            onChange={(transitionMs) => later(() => changeLayouts({ op: "settings", transitionMs }))}
+          />
+        )}
+      </MoreSettings>
 
       <div className="space-y-2">
         <div className="flex gap-1.5">

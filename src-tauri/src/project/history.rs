@@ -54,6 +54,9 @@ pub struct StepMeta {
     pub joins_run: bool,
     /// The run this step undoes.
     pub undoes_run: Option<String>,
+    /// Steps in a row with the same group are one undo step (layout keys pressed while
+    /// playing, LAY-2).
+    pub group: Option<String>,
 }
 
 impl StepMeta {
@@ -128,7 +131,11 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
     let placed = !parts.is_empty();
     if before.sequence != after.sequence {
         let (was, now) = (before.duration_us(), after.duration_us());
-        let seconds = |us: u64| format!("{:.1} s", us as f64 / 1e6);
+        // A blip is a few hundredths of a second: "0.0 s" would say nothing was cut.
+        let seconds = |us: u64| match us {
+            0..=99_999 => format!("{:.2} s", us as f64 / 1e6),
+            _ => format!("{:.1} s", us as f64 / 1e6),
+        };
         if now < was {
             parts.push(format!("Cut {}", seconds(was - now)));
         } else if now > was {
@@ -141,7 +148,7 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
         (!placed && before.assets != after.assets, "Media"),
         (before.noise_mutes != after.noise_mutes, "Mouth noises"),
         (
-            before.zooms != after.zooms
+            !same_zooms(&before.zooms, &after.zooms)
                 || before.dismissed_zoom_ids != after.dismissed_zoom_ids
                 || before.zoom_settings != after.zoom_settings,
             "Zooms",
@@ -156,7 +163,9 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
         (before.cleanup != after.cleanup, "Cleanup settings"),
         (before.export != after.export, "Export settings"),
         (
-            before.preset != after.preset || before.shorts_preset != after.shorts_preset,
+            before.preset != after.preset
+                || before.shorts_preset != after.shorts_preset
+                || before.clips_preset != after.clips_preset,
             "Preset",
         ),
         (before.short_layout != after.short_layout, "Short layout"),
@@ -168,6 +177,18 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
             .map(|(_, n)| n.to_string()),
     );
     finish(parts)
+}
+
+/// The same zooms, leaving out where they fall on the edited video: a cut moves that, and
+/// a cut is not a zoom edit.
+fn same_zooms(a: &[crate::zoom::ZoomKeyframe], b: &[crate::zoom::ZoomKeyframe]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a == &crate::zoom::ZoomKeyframe {
+                edited_ranges: a.edited_ranges.clone(),
+                ..b.clone()
+            }
+        })
 }
 
 fn finish(parts: Vec<String>) -> String {
@@ -203,6 +224,9 @@ pub struct Step {
     #[serde(default)]
     pub revision: u64,
     pub at: String,
+    /// The next step with the same group joins this one ([`StepMeta::group`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 /// The newest agent run in the undo history, as the Agent panel shows it.
@@ -286,6 +310,10 @@ enum Line {
         schema_version: u32,
     },
     Commit {
+        step: Step,
+    },
+    /// `step` takes the place of the top undo step, which it joined.
+    Join {
         step: Step,
     },
     Undo,
@@ -664,6 +692,7 @@ impl History {
                             undoes_run: None,
                             revision: current.revision,
                             at: now(),
+                            group: None,
                         });
                         note = Some(
                             "The edit had changed since its undo history was saved; the change \
@@ -695,6 +724,12 @@ impl History {
         match line {
             Line::Header { .. } => {}
             Line::Commit { step } => {
+                self.current = Some(step.after.clone());
+                self.undo.push(step);
+                self.redo.clear();
+            }
+            Line::Join { step } => {
+                self.undo.pop();
                 self.current = Some(step.after.clone());
                 self.undo.push(step);
                 self.redo.clear();
@@ -769,6 +804,17 @@ impl History {
         if meta.by == Author::User {
             self.run_ended = false;
         }
+        // A step of the top one's group joins it: it undoes back to before the first.
+        let joins = meta.group.is_some()
+            && self
+                .undo
+                .last()
+                .is_some_and(|top| top.group == meta.group && top.after == before);
+        let before = if joins {
+            self.undo.pop().expect("checked above").before
+        } else {
+            before
+        };
         let step = Step {
             before,
             after: after.clone(),
@@ -781,11 +827,16 @@ impl History {
             undoes_run: meta.undoes_run,
             revision,
             at: now(),
+            group: meta.group,
         };
         self.current = Some(after);
         self.undo.push(step.clone());
         self.redo.clear();
-        self.append(root, &Line::Commit { step });
+        if joins {
+            self.append(root, &Line::Join { step });
+        } else {
+            self.append(root, &Line::Commit { step });
+        }
         self.prune(root);
     }
 

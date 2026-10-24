@@ -4,6 +4,7 @@ import { AlertCircle, Check, ChevronDown, ChevronRight, Download, KeyRound, X } 
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import { AiSettings, AiSettingsView, ModelDownloadProgress, TranscriptSettings, TranscriptSettingsView } from "../../lib/types";
 import { Segmented } from "../ui";
+import { useUiMode } from "../../stores/uiModeStore";
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -35,7 +36,7 @@ export const TranscriptSettingsModal: React.FC<{
   const [downloading, setDownloading] = useState<DownloadKind | null>(null);
   /** The key being typed, and for which service. */
   const [keyEntry, setKeyEntry] = useState<{ name: KeyName; value: string } | null>(null);
-  const [advanced, setAdvanced] = useState(false);
+  const [advanced, setAdvanced] = useState(() => useUiMode.getState().advanced);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 

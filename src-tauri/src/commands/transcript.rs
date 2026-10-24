@@ -89,9 +89,12 @@ fn current_view(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, project_handle)?;
-    let Some(transcript) = store::load_transcript(reader.root(), track_id)? else {
+    let Some(mut transcript) = store::load_transcript(reader.root(), track_id)? else {
         return Ok(None);
     };
+    if let Some(short) = short.and_then(|id| reader.document().shorts.iter().find(|s| s.id == id)) {
+        crate::shorts::overlay_caption_marks(short, &mut transcript);
+    }
     Ok(Some(edit::view(
         &transcript,
         &transcript_clock(reader, track_id, short)?,
@@ -1036,8 +1039,9 @@ pub fn project_chapters_generate_impl(
     })
 }
 
-/// Asks the AI provider for moments that work as shorts and replaces the shorts list with
-/// them (one undoable edit).
+/// Asks the AI provider for moments that work as clips and adds them to the project's clips
+/// (one undoable edit). Shorts made from a take and the clips already made stay; a moment that
+/// overlaps a clip already made is left out.
 pub fn project_shorts_generate_impl(
     state: &AppState,
     transcripts: &TranscriptState,
@@ -1062,17 +1066,14 @@ pub fn project_shorts_generate_impl(
         )
         .words
     };
-    let mut shorts = crate::ai::shorts::suggest(&mut client, &words)?;
-    // The words' times are their recording's or file's own.
-    let asset = crate::sequence::StreamRef::parse(&track_id).map(|r| r.asset);
-    for short in &mut shorts {
-        short.media = asset.clone();
-    }
+    let found = crate::ai::shorts::suggest(&mut client, &words)?;
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
     }
     super::mutate_opened(state, project_handle, |reader| {
-        let revision = reader.history().current.revision;
+        let document = reader.document();
+        let revision = document.revision;
+        let shorts = crate::shorts::with_found_clips(document, &track_id, found)?;
         reader.set_shorts(revision, shorts)
     })
 }
@@ -1101,10 +1102,14 @@ pub struct CaptionCueView {
 pub struct CaptionTrackView {
     pub track_id: Option<String>,
     pub cues: Vec<CaptionCueView>,
+    /// The short after a change to its own caption marks, which is an edit of the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<Box<crate::project::reader::OpenedProject>>,
 }
 
-/// A change made on the caption track. Every change is saved in the transcript, so the
-/// transcript panel, preview and export all show it.
+/// A change made on the caption track. Text and timing are saved in the transcript, so the
+/// video and its shorts share them; in a short, breaks, joins, hidden words and emphasis are
+/// the short's own (an undo step of the edit).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
@@ -1202,6 +1207,7 @@ fn caption_track(
     Ok(CaptionTrackView {
         track_id: Some(track_id),
         cues,
+        project: None,
     })
 }
 
@@ -1303,6 +1309,59 @@ pub fn transcript_caption_edit_impl(
         }
         _ => Vec::new(),
     };
+    if let Some(short_id) = short_id.as_deref().filter(|_| {
+        !matches!(
+            change,
+            CaptionEdit::SetText { .. } | CaptionEdit::Retime { .. }
+        )
+    }) {
+        super::mutate_opened(state, project_handle.clone(), |reader| {
+            let transcript = store::load_transcript(reader.root(), &track_id)?
+                .ok_or("Transcribe this track first")?;
+            let mut next = reader.document().clone();
+            let short = next
+                .shorts
+                .iter_mut()
+                .find(|s| s.id == short_id)
+                .ok_or("That short no longer exists")?;
+            let mut set = |id: &str, change: &dyn Fn(&mut crate::transcript::CaptionMark)| {
+                crate::shorts::set_caption_mark(short, &transcript, id, change)
+            };
+            match &change {
+                CaptionEdit::Split { word_id } => set(word_id, &|m| {
+                    m.cue_break = true;
+                    m.cue_join = false;
+                })?,
+                CaptionEdit::Merge { word_id } => set(word_id, &|m| {
+                    m.cue_join = true;
+                    m.cue_break = false;
+                })?,
+                CaptionEdit::Hide { word_ids, hidden } => {
+                    for id in word_ids {
+                        set(id, &|m| m.hidden = *hidden)?;
+                    }
+                }
+                CaptionEdit::Emphasis { word_ids, on } => {
+                    for id in &replaced {
+                        set(id, &|m| m.emphasis = false)?;
+                    }
+                    for id in word_ids {
+                        set(id, &|m| m.emphasis = *on)?;
+                    }
+                }
+                CaptionEdit::SetText { .. } | CaptionEdit::Retime { .. } => {}
+            }
+            let revision = next.revision;
+            reader.name_next_step("Short captions".into());
+            reader.commit_document(revision, next)?;
+            reader.short_view(short_id)
+        })?;
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        let mut track = caption_track(reader, Some(short_id))?;
+        track.project = Some(Box::new(reader.short_view(short_id)?));
+        return Ok(track);
+    }
     modify_transcript(state, &project_handle, &track_id, |t| match &change {
         CaptionEdit::SetText { word_ids, text } => t.replace_words(word_ids, text),
         CaptionEdit::Retime { word_ids, .. } => {

@@ -484,6 +484,10 @@ pub struct Short {
     /// plays the take's camera and voice, with footage from the video under it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub take: Option<ShortTake>,
+    /// Its own caption breaks, joins, hidden words and emphasis, where they differ from the
+    /// video's. Caption text stays shared with the video.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub caption_marks: CaptionMarks,
     /// How long the short plays now. Filled in for the UI and cleared before storing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_us: Option<u64>,
@@ -493,6 +497,122 @@ pub struct Short {
     pub edited_start_us: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_end_us: Option<u64>,
+}
+
+/// The look and base layout a new short starts with: those of the first one of its kind made
+/// so far (a short from a take, `take`, or a clip cut from the video), so they match, else its
+/// preset's. Each gets its own layout sections, graphic places and camera framing.
+pub fn new_look(document: &EditDocument, take: bool) -> (ShortLayout, crate::layouts::LayoutTrack) {
+    let first = document.shorts.iter().find(|s| s.take.is_some() == take);
+    let preset = if take {
+        &document.shorts_preset
+    } else {
+        &document.clips_preset
+    };
+    let mut layout = first
+        .map(|s| s.layout.clone())
+        .unwrap_or_else(|| crate::preset::store::resolve(preset).short_layout());
+    layout.graphic_slots.clear();
+    layout.camera_clips.clear();
+    let mut layouts = first
+        .map(|s| s.layouts.clone())
+        .unwrap_or_else(crate::layouts::LayoutTrack::for_short);
+    layouts.sections.clear();
+    (layout, layouts)
+}
+
+/// The project's shorts with the clips `found` in the transcript of `track_id` added after
+/// them, each with the clips' look and an id of its own. A found clip that overlaps one already
+/// made is left out; shorts made from a take are never touched.
+pub fn with_found_clips(
+    document: &EditDocument,
+    track_id: &str,
+    found: Vec<Short>,
+) -> Result<Vec<Short>, String> {
+    // The words' times are their recording's or file's own.
+    let media = crate::sequence::StreamRef::parse(track_id).map(|r| r.asset);
+    let (layout, layouts) = new_look(document, false);
+    let mut shorts = document.shorts.clone();
+    let mut added = 0;
+    for mut clip in found {
+        clip.media = media.clone();
+        let overlaps = shorts.iter().any(|s| {
+            s.take.is_none()
+                && s.media == clip.media
+                && s.source_start_us < clip.source_end_us
+                && clip.source_start_us < s.source_end_us
+        });
+        if overlaps {
+            continue;
+        }
+        let base = clip.id.clone();
+        clip.id = (1..)
+            .map(|n| match n {
+                1 => base.clone(),
+                n => format!("{base}-{n}"),
+            })
+            .find(|id| !shorts.iter().any(|s| &s.id == id))
+            .unwrap_or(base);
+        clip.layout = layout.clone();
+        clip.layouts = layouts.clone();
+        shorts.push(clip);
+        added += 1;
+    }
+    if added == 0 {
+        return Err("The AI found no new moment: each one overlaps a clip already made".into());
+    }
+    Ok(shorts)
+}
+
+/// Caption marks by transcript (`<asset>.<stream>`), then word id. A mark all off still
+/// counts: it turns off one the video's captions have.
+pub type CaptionMarks = std::collections::BTreeMap<
+    String,
+    std::collections::BTreeMap<String, crate::transcript::CaptionMark>,
+>;
+
+/// Sets one of `short`'s own caption marks for word `word_id` of `transcript`, starting from
+/// how the word sits in the short now. A mark the same as the video's is dropped, so the short
+/// follows the video's there again.
+pub fn set_caption_mark(
+    short: &mut Short,
+    transcript: &crate::transcript::Transcript,
+    word_id: &str,
+    change: impl FnOnce(&mut crate::transcript::CaptionMark),
+) -> Result<(), String> {
+    if !transcript.words.iter().any(|w| w.id == word_id) {
+        return Err("Unknown word".into());
+    }
+    let shared = transcript.caption_mark(word_id);
+    let marks = short
+        .caption_marks
+        .entry(transcript.track_id.clone())
+        .or_default();
+    let mut mark = marks.get(word_id).copied().unwrap_or(shared);
+    change(&mut mark);
+    if mark == shared {
+        marks.remove(word_id);
+    } else {
+        marks.insert(word_id.to_string(), mark);
+    }
+    short.caption_marks.retain(|_, marks| !marks.is_empty());
+    Ok(())
+}
+
+/// Puts `short`'s own caption marks on `transcript`, for views of the short's words.
+pub fn overlay_caption_marks(short: &Short, transcript: &mut crate::transcript::Transcript) {
+    for (word_id, mark) in short
+        .caption_marks
+        .get(&transcript.track_id)
+        .into_iter()
+        .flatten()
+    {
+        if *mark == Default::default() {
+            transcript.caption_marks.remove(word_id);
+        } else {
+            transcript.caption_marks.insert(word_id.clone(), *mark);
+        }
+    }
 }
 
 /// The take a short was made from, as stream keys (`<asset>.<stream>`).
@@ -599,6 +719,7 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
     timeline.chapters.clear();
     timeline.short_layout = None;
     timeline.layouts = short.layouts.clone();
+    timeline.captions.own_marks = short.caption_marks.clone();
     // A take's captions read the take's own words.
     if let Some(take) = &short.take {
         timeline.captions.track_id = Some(take.voice.clone());
@@ -755,7 +876,7 @@ pub fn short_document(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const S: u64 = 1_000_000;
@@ -781,7 +902,7 @@ mod tests {
         );
     }
 
-    fn short(start: u64, end: u64) -> Short {
+    pub(crate) fn short(start: u64, end: u64) -> Short {
         Short {
             id: "s1".into(),
             title: "Best bit".into(),
@@ -793,10 +914,46 @@ mod tests {
             media: None,
             edit: None,
             take: None,
+            caption_marks: Default::default(),
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,
         }
+    }
+
+    #[test]
+    fn found_clips_are_added_and_never_replace_shorts_or_clips() {
+        let mut document = doc(60 * S);
+        let mut take = short(0, 30 * S);
+        take.id = "take".into();
+        take.take = Some(ShortTake {
+            camera: None,
+            voice: "cam.mic".into(),
+        });
+        let mut made = short(10 * S, 20 * S);
+        made.id = "clip-a".into();
+        made.media = Some("rec".into());
+        made.layout.caption_max_words = 2;
+        document.shorts = vec![take, made];
+        let found = |start: u64, end: u64| {
+            let mut s = short(start, end);
+            s.id = "clip-a".into();
+            s
+        };
+        // One overlaps the clip made (left out); the other is new, with an id of its own and
+        // the clips' look. The take short stays though it covers the same time.
+        let shorts = with_found_clips(
+            &document,
+            "rec.mic",
+            vec![found(15 * S, 25 * S), found(30 * S, 45 * S)],
+        )
+        .unwrap();
+        let ids: Vec<&str> = shorts.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["take", "clip-a", "clip-a-2"]);
+        assert_eq!(shorts[2].media.as_deref(), Some("rec"));
+        assert_eq!(shorts[2].layout.caption_max_words, 2);
+        // Nothing new: refused, so the list is never emptied or replaced.
+        assert!(with_found_clips(&document, "rec.mic", vec![found(12 * S, 18 * S)]).is_err());
     }
 
     #[test]

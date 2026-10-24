@@ -8,12 +8,12 @@
 //! (webcam); then the Voice track (speech) and the Footage sound track (background, ducked
 //! under the voice).
 
-use crate::layouts::{CameraOnly, Layout, LayoutSection, LayoutTrack};
+use crate::layouts::{CameraOnly, Layout, LayoutSection};
 use crate::project::revision::EditDocument;
 use crate::sequence::{
     clock, Asset, Clip, Role, Sequence, StreamKind, StreamRef, Track, TrackKind,
 };
-use crate::shorts::{Short, ShortEdit, ShortLayout, ShortTake};
+use crate::shorts::{Short, ShortEdit, ShortTake};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -324,6 +324,7 @@ pub fn timeline(
     let mut voice_track = track(TrackKind::Audio, "Voice", Role::Mic);
     let footage_sound = track(TrackKind::Audio, "Footage sound", Role::Background);
     let clip = |id: &str, source: &StreamRef, in_us: u64| Clip {
+        mix: Default::default(),
         id: id.into(),
         asset: source.asset.clone(),
         stream: source.stream.clone(),
@@ -362,21 +363,7 @@ pub fn new_short(
     let voice = document
         .asset(&sources.voice.asset)
         .ok_or("The take's voice is not in the project")?;
-    // The look and base layout of the shorts made so far, so they match; each short has its
-    // own sections.
-    let mut layout: ShortLayout = document
-        .shorts
-        .first()
-        .map(|s| s.layout.clone())
-        .unwrap_or_else(|| crate::preset::store::resolve(&document.shorts_preset).short_layout());
-    layout.graphic_slots.clear();
-    layout.camera_clips.clear();
-    let mut layouts = document
-        .shorts
-        .first()
-        .map(|s| s.layouts.clone())
-        .unwrap_or_else(LayoutTrack::for_short);
-    layouts.sections.clear();
+    let (layout, layouts) = crate::shorts::new_look(document, true);
     let mut short = Short {
         id,
         title: title.trim().to_string(),
@@ -394,6 +381,7 @@ pub fn new_short(
             camera: sources.camera.as_ref().map(StreamRef::key),
             voice: sources.voice.key(),
         }),
+        caption_marks: Default::default(),
         length_us: None,
         edited_start_us: None,
         edited_end_us: None,
@@ -633,6 +621,7 @@ fn media_stretch(
         ));
     }
     let clip = |stream: &str| Clip {
+        mix: Default::default(),
         id: String::new(),
         asset: asset.id.clone(),
         stream: stream.to_string(),
@@ -1175,6 +1164,7 @@ mod tests {
         let mut document = document();
         let mut short = bare_short(&mut document);
         document.assets.push(crate::sequence::Asset {
+            licence: None,
             id: "g".into(),
             name: "Card".into(),
             kind: crate::sequence::AssetKind::Graphic,
@@ -1417,6 +1407,7 @@ mod tests {
     fn clearing_a_range_cuts_and_splits_clips() {
         let mut track = Track::new("t1".into(), TrackKind::Video);
         track.clips.push(Clip {
+            mix: Default::default(),
             id: "c1".into(),
             asset: "a".into(),
             stream: "screen".into(),

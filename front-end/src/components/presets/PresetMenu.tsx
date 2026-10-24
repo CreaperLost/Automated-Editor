@@ -58,7 +58,19 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
         (p): MenuEntry => ({
           label: p.name,
           icon: p.name === view.shortsPreset ? Check : undefined,
-          onSelect: () => run(`Shorts start from ${p.name}`, (h, r) => api.projectPresetSet(h, r, p.name, true)),
+          onSelect: () => run(`Shorts start from ${p.name}`, (h, r) => api.projectPresetSet(h, r, p.name, "shorts")),
+        }),
+      ),
+    },
+    {
+      kind: "submenu",
+      label: `New clips start from: ${view.clipsPreset ?? "Clips"}`,
+      icon: Smartphone,
+      entries: view.presets.map(
+        (p): MenuEntry => ({
+          label: p.name,
+          icon: p.name === view.clipsPreset ? Check : undefined,
+          onSelect: () => run(`Clips start from ${p.name}`, (h, r) => api.projectPresetSet(h, r, p.name, "clips")),
         }),
       ),
     },
