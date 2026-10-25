@@ -3,7 +3,7 @@
 Decided 21 Oct 2026: keep toolchains and key libraries current **on purpose**. Pin them so a
 build is reproducible, review them on a schedule so we pick up speed and quality gains, and
 update only after a compatibility check so an update never turns into an unplanned migration.
-Work items: [DEP-1](roadmap.md#dep-1) (pin what isn't pinned, first review) and
+Work items: [DEP-1](done.md#dep-1) (pin what isn't pinned, first review) and
 [DEP-2](roadmap.md#dep-2) (the recurring review).
 
 ## Inventory (21 Oct 2026)
@@ -55,7 +55,7 @@ build with exactly the same crates. `cargo update` happens only in a review.
 | Node.js (graphics runtime) | 22.23.4 | `graphics/runtime.rs` `NODE_VERSION` | Separate from the build's Node |
 | chrome-headless-shell | 152.0.7977.30 | `graphics/runtime.rs` `CHROME_VERSION` | Must match what HyperFrames pins; bump together |
 | GSAP | 3.15.0 (sha256-pinned npm tarball) | `graphics/runtime.rs` `GSAP_VERSION`, `graphics/gsap.rs` | The version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`); bump together. Fetched from npm onto the user's computer when a graphic first loads it (and at runtime install), never shipped in the repo or installer: its licence is GreenSock's "Standard 'no charge' licence" ("free, even for commercial use" per its README; the full terms at gsap.com/standard-license did not load on 22 Oct, so redistribution terms are unread) |
-| GSAP | not yet | — | To be vendored and pinned by [GFX-2](roadmap.md#gfx-2) |
+| GSAP | not yet | — | To be vendored and pinned by [GFX-2](done.md#gfx-2) |
 | FFmpeg (bundled) | `n8.1.3-9-g29e619e767`, BtbN release `autobuild-2026-09-30-13-08` | `src-tauri/scripts/fetch-ffmpeg.mjs` (`RELEASE`, `VERSION`, `SHA256`) | Yes, checksums in the script (21 Oct). BtbN prunes daily builds after ~2 weeks but keeps month-end ones, so pin month-end releases only |
 | CUDA / cuDNN (GPU pack) | CUDA 13.4 (cudart 13.4.92, cuBLAS 13.8), cuFFT 12.4, cuDNN 9.27 | `src-tauri/src/cuda.rs` | Must match the ONNX Runtime CUDA build |
 

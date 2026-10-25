@@ -43,8 +43,8 @@ deterministic graphics. Resolve's native MCP is the most direct threat.
   Inspector presets, project backups. Greek is in its extended transcription pack.
 - **The community MCP** (samuelgursky) is a different product: 37 compound + 390 granular tools,
   persistent source analysis, capability checks.
-- **For us:** source search first ([FTG-1](../roadmap.md#ftg-1)), recovery
-  ([SAFE-2](../roadmap.md#safe-2)), speech matching ([AUTO-2](../roadmap.md#auto-2)), script
+- **For us:** source search first ([FTG-1](../done.md#ftg-1)), recovery
+  ([SAFE-2](../done.md#safe-2)), speech matching ([AUTO-2](../done.md#auto-2)), script
   assembly ([FTG-4](../roadmap.md#ftg-4)), delivery recipes ([DLV-2](../roadmap.md#dlv-2)).
   Keep typed, reviewable tools instead of arbitrary scripts.
 - Sources: [What's New](https://www.blackmagicdesign.com/products/davinciresolve/whatsnew),
@@ -62,7 +62,7 @@ deterministic graphics. Resolve's native MCP is the most direct threat.
   283 catalogue tools over a CEP panel; a small default tool set plus `search_tools` /
   `get_tool_schema` / `invoke_tool`. Its [known issues](https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP/blob/main/KNOWN_ISSUES.md)
   include editing the wrong sequence and reporting success without a visible change, which is
-  the argument for explicit target ids ([SAFE-1](../roadmap.md#safe-1)) and checking results.
+  the argument for explicit target ids ([SAFE-1](../done.md#safe-1)) and checking results.
 - **leancoderkavy/premiere-pro-mcp** ([repo](https://github.com/leancoderkavy/premiere-pro-mcp)):
   a [context engine](https://github.com/leancoderkavy/premiere-pro-mcp/blob/main/docs/project-context-engine.md)
   with separate source and timeline revisions, media fingerprints and bounded evidence packs that
@@ -84,11 +84,11 @@ deterministic graphics. Resolve's native MCP is the most direct threat.
   ([GFX-3](../roadmap.md#gfx-3)) (selection references: dropped 24 Oct, see
   [decisions](../decisions.md#not-doing)),
   fast revisions and variants ([GFX-4](../roadmap.md#gfx-4)), checkpoints
-  ([SAFE-2](../roadmap.md#safe-2)), guided B-roll that keeps narration intact (video-only
+  ([SAFE-2](../done.md#safe-2)), guided B-roll that keeps narration intact (video-only
   streams; an empty `PlaceAsset.streams` places **all** streams including unwanted audio; avoid
   occupied magnetic tracks) ([FTG-2](../roadmap.md#ftg-2)), save-this-workflow
-  ([AUTO-3](../roadmap.md#auto-3)), spotlight/redaction/magnifier ([FX-2](../roadmap.md#fx-2)),
-  seam fades (FX-4, [done 22 Oct](../roadmap.md#done)), translated subtitles ([DLV-4](../roadmap.md#dlv-4)),
+  ([AUTO-3](../roadmap.md#auto-3)), spotlight/redaction/magnifier ([FX-2](../done.md#fx-2)),
+  seam fades (FX-4, [done 22 Oct](../done.md)), translated subtitles ([DLV-4](../roadmap.md#dlv-4)),
   delivery list ([DLV-2](../roadmap.md#dlv-2)).
 - **Pricing (homepage, monthly):** 200 credits $45, 400 $88, 800 $160; manual editing,
   transcription and export use no credits. Pages disagreed with an older $25/100 offer.
@@ -104,7 +104,7 @@ deterministic graphics. Resolve's native MCP is the most direct threat.
   export to Premiere, Resolve and Final Cut. Free (1 h, watermark), $20/$40/$100 monthly.
 - **Closest cleanup competitor.** Feature names match ours; quality doesn't follow from names.
 - **For us:** measure cleanup quality on identical inputs before adding detectors
-  ([EVAL-1](../roadmap.md#eval-1)); SRT ([DLV-1](../roadmap.md#dlv-1)); a scoped handoff
+  ([EVAL-1](../done.md#eval-1)); SRT ([DLV-1](../done.md#dlv-1)); a scoped handoff
   ([DLV-3](../roadmap.md#dlv-3)). Avatars are a separate product.
 
 ## Borumi
@@ -209,7 +209,7 @@ engine or tests in the root listing, no licence file seen.
 - **Avoid:** UI fragility (clip bodies and edges aren't named accessibility objects); removing
   every pause as a goal; downloading arbitrary B-roll with browser cookies; turning every step
   into a mandatory approval stop.
-- → [AGT-2](../roadmap.md#agt-2), [REV-1](../roadmap.md#rev-1), [FX-3](../roadmap.md#fx-3),
+- → [AGT-2](../done.md#agt-2), [REV-1](../done.md#rev-1), [FX-3](../roadmap.md#fx-3),
   [FTG-4](../roadmap.md#ftg-4).
 
 ## HyperFrames upstream
@@ -217,7 +217,7 @@ engine or tests in the root listing, no licence file seen.
 [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes) is the public repo of the
 runtime we pin (0.8.162). Its skills advertise GSAP, Lottie, Three.js, Anime.js, CSS, WAAPI and
 TypeGPU adapters, but our gate and authoring rules allow only WAAPI/CSS with no network: "the
-skills can do 3D" is not the same as "our app can" ([GFX-2](../roadmap.md#gfx-2)). Its
+skills can do 3D" is not the same as "our app can" ([GFX-2](../done.md#gfx-2)). Its
 `motion-blur-streak` recipe approximates blur with streaks; temporal sampling is a different
 technique. Some of its creative defaults (ambient motion everywhere, two focal points, layered
 backgrounds) can make busy work; let references and hierarchy override them. Stay pinned and
@@ -230,4 +230,4 @@ English/Greek sample; same goal, reference, assets and revision requests ("chang
 "move this callout", "restore the approved look", "insert two video-only B-roll ranges, then cut
 speech and undo"). Record time to an acceptable first cut, lost or clipped speech, graphics over
 UI, manual corrections, revision latency, failures and total spend; check the middle and end, not
-just the intro. Start from our own baseline ([EVAL-1](../roadmap.md#eval-1)).
+just the intro. Start from our own baseline ([EVAL-1](../done.md#eval-1)).

@@ -1,0 +1,301 @@
+# Done
+
+What shipped, most recent first, a line or two each. What is still to do is in
+[roadmap.md](roadmap.md). The details are in git history (commit messages and the plans deleted
+once built), the design in [architecture.md](architecture.md), the choices in
+[decisions.md](decisions.md).
+
+When a roadmap item ships, add it at the top here with the date and its ID as an anchor
+(`<a id="xxx-n"></a>`), and delete it from the roadmap.
+
+- **26 Oct 2026** — <a id="online-fillers"></a>**Online review fillers cut at once** (George's
+  call): in the app, Review with the OpenRouter/OpenAI review cuts the fillers it and the rules
+  found straight away (one undo step) and leaves the retakes in the list; the tutorial method
+  tells agents to cut fillers with `kinds: ["filler"]` and dry-run only the retakes. A local or
+  in-house review still lists everything first. **EL-B**, George's first real Greek recording
+  (13 s): the online review cut exactly the retake and the optional opening "Λοιπόν"; the rules
+  missed the retake ("γιααα" drawn out) until retakes matched a held letter as one, and now
+  catch it, with the other five cases unchanged. Scribe direct rejected the saved ElevenLabs
+  key, so Scribe via OpenRouter transcribed it.
+- **26 Oct 2026** — <a id="qual-3-debuginfo"></a>**QUAL-3** dev builds keep line tables only
+  (`debug = "line-tables-only"` for the app and its dependencies): a one-file change 47 s →
+  15–28 s, the PDB 285 → 79 MB; backtraces keep file and line, a debugger loses locals (set
+  `debug = true` for that). A release build links with `rust-lld` (6 min from a warm cache)
+  and its MCP server answers.
+- **26 Oct 2026** — <a id="fx-2-finished"></a>**FX-2 finished:** **blur behind a graphic**, a
+  second switch beside "Dim behind it" on a graphic clip (and `effects` `kind: blur_behind`):
+  the screen and camera under the graphic's rect blur while it plays (blocks of 12–40 px at
+  1080p, eased with the clip; a round or rounded camera only when the graphic covers it whole,
+  so its shape stays). Boxes **move and resize** while paused: drag a box, or a corner, and it
+  is saved on release as one undo step (`project_effect_move`, `effects` `op: move`).
+- **26 Oct 2026** — <a id="lng-4"></a><a id="lng-4-repeat"></a>**LNG-4** a phrase ending one sentence and opening
+  the next is meant ("what we call human in the loop. Human in the loop essentially means"):
+  neither the rules' retakes (`transcript/edit.rs`) nor the review's candidates flag it when
+  the phrase doesn't open its sentence and the sentence doesn't end on a small word ("open up
+  the." is still a retake). Rules rerun: EN-A's one wrong cut gone; EN-B, EN-C, EN-D and EL-A
+  unchanged.
+- **26 Oct 2026** — <a id="snd-3-komiku"></a>**SND-3** 14 tracks by Komiku (CC0 on all 266 of
+  their FMA track pages, no other licence found), so the library is no longer one composer's:
+  calm, focus, happy, nostalgic, upbeat and game, pinned and downloaded like the rest. Built-in
+  tracks now carry their artist.
+- **25 Oct 2026** — <a id="cost-1"></a>**COST-1** review boards: `storyboard` `board: fine` (a
+  frame a second, one JPEG a minute, 10×6 tiles of 148 px, about 1.0k image tokens by Claude's
+  pixel count) or `coarse` (every 5 s, ten minutes an image, about 120 tokens a minute); amber
+  edge on graphics, blue on zooms; 5 or 3 images a call, then "call again with fromUs". The
+  rules point at `fine` for a stretch the scene storyboard leaves in doubt. Not measured yet:
+  what an agent still catches on a board (needs an EVAL run).
+- **25 Oct 2026** — <a id="lng-5"></a>**LNG-5** custom vocabulary: the key terms (Transcription
+  settings, or `settings` `area: transcription` `keyterms`) bias Scribe as before, and now every
+  transcript respells them afterwards: spacing and case for any transcriber ("chat gpt" →
+  ChatGPT), and for Parakeet, runs of two or more words that sound like a term ("cloud code" →
+  Claude Code); one word that only sounds alike ("codecs") is left. OpenRouter answering 400 to
+  key terms transcribes without them instead of failing; terms are checked against Scribe's
+  limit (5 words, 50 characters). The field now shows for Parakeet too.
+- **25 Oct 2026** — <a id="qual-3"></a><a id="qual-3-done"></a>**QUAL-3** faster builds. Measured with `cargo build
+  --timings` on the dev profile: a one-file change took **6 min 23 s**, 338 s of it the library
+  writing a 1.5 GB static library and a DLL that nothing links (Tauri's mobile template asks for
+  `staticlib` and `cdylib`). Now `crate-type = ["rlib"]`: **1 min 1 s**. Linking with Rust's own
+  `rust-lld` (`src-tauri/.cargo/config.toml`) took the binary's link from 19.5 s to 7.6 s:
+  **41 s**. A warm `cargo check` after a change is 9 s.
+- **25 Oct 2026** — <a id="snd-3"></a><a id="snd-3-music"></a>**SND-3 (music)** 24 CC0 tracks by mood (calm,
+  focus, happy, dreamy, nostalgic, upbeat, game) by HoliznaCC0, each licence read on its own
+  FMA page; Loyalty Freak Music was turned down (archive.org says CC0, the artist's Bandcamp
+  says CC BY 4.0). The app doesn't ship them: each is pinned by size and SHA-256 and downloaded
+  the first time it is played or placed (`music/built-in` in the app folder). A **Music** page
+  in the Media panel (moods, play, + fills from the playhead to the end, add your own) and
+  `library` `kind: music`. Placing fills the stretch on a "Music" track (repeating the track,
+  faded in, out and at each repeat, brought to −16 LUFS) and switches the music under speech
+  on (18 dB) when it was off: one undo step. The user's own music is refused unless its licence
+  needs no credit and allows monetised use (new licence kind `nonCommercial`); `check` flags
+  music and effects like that anywhere in the edit.
+  Later the same day (George): **Sounds** and **Music** are dock panels of their own in Edit,
+  Cleanup, Shorts and Clips (no longer pages of the Media panel); placing goes into the timeline
+  shown, so in Shorts or Clips into that short's own timeline (the video is left as it is).
+- **25 Oct 2026** — <a id="fx-2"></a><a id="fx-2-done"></a>**FX-2** screen effects: blur (the picture reduced to a
+  coarse grid of colour, 8–32 recorded pixels a block, never faded), hide (a solid block),
+  spotlight (the screen dims around the box), magnifier (a round lens, 2× by default) and dim
+  behind a graphic (a switch on the graphic clip). An effect is a box of the recording's own
+  picture over a stretch of its own clock, so it stays on what it covers through crops, zooms,
+  layouts and cuts, in the preview and the export (one drawing path). Drawn with the tools over
+  the preview (five seconds from the playhead; while paused the boxes show with "end here" and
+  ×), or by agents with `effects` (a box as `frame_render` shows the frame). GPU and CPU agree
+  (`gpu_cpu_screen_effects_within_tolerance`); effect layers reuse the screen's texture rather
+  than upload it again. The agent rules say to cover keys, tokens, passwords, emails and
+  balances when a frame shows one, and to tell the user.
+- **25 Oct 2026** — <a id="auto-2"></a><a id="auto-2-done"></a>**AUTO-2** matching speech across takes ("Match takes"
+  in the Audio panel, on for new projects and the built-in presets). Each sound file of speech
+  is measured once with the rest of its analysis: the loudness of its mostly-spoken 100 ms
+  blocks and its spectrum in seven octave bands. Takes more than 1 dB from the edit's level
+  (weighted by how long each plays) are moved to it (9 dB at most); a take whose tone is 2 dB
+  or more off in a band gets 60 % of the difference as shelves and peaks (4 dB at most). The EQ
+  runs from a 100 ms warm-up before each read, so chunked playback and the export match.
+  Normalisation counts the matched gains.
+- **25 Oct 2026** — <a id="ui-8"></a><a id="ui-8-done"></a>**UI-8** the Shorts tab is transcript first: the Transcript
+  panel sits under the shorts list (no longer behind it), a take short's transcript carries the
+  take, its steps and **Clean the take**, Look's section is only "What plays under the take",
+  and a **Style** tab sits beside Look. Saved Shorts layouts without the new tab fall back to
+  the new arrangement.
+- **25 Oct 2026** — **SND-3 (SFX starter set)** 17 CC0 sounds built into the app (4 whooshes, 2
+  risers, 3 hits, 3 clicks, 3 pops, a ding, a toggle) from Kenney's packs and Freesound, each
+  licence checked on its page (`src-tauri/assets/sounds/LICENSES.md`); written once to the app
+  folder's `sounds/built-in`. The user's own go in `sounds/mine` with tags and a licence. A
+  **Sounds** page in the Media panel (search, tag filters, play, + at the playhead, add your
+  own); `library` `kind: sound` (`list` with `query`, `use` at `atUs`/`atWord`). Placing
+  imports the sound once (role effects, its licence) onto a free effects track or a new
+  "Sound effects" track, one undo step, never moving the video. `check` now also flags effects
+  whose licence asks for credit.
+- **25 Oct 2026** — <a id="fix-8"></a>**FIX-8** cuts in a take short stay in the short: when
+  the video plays the same take, `fillers` with `short` found and cut on the video's timeline.
+  `fillers`, `fillers_review` and the AI review now read the short's kept words and cut its
+  own timeline; `propose_cuts` takes `short` (a cuts batch remembers it, and the Agent panel
+  shows "Show the short").
+- **25 Oct 2026** — <a id="fix-9"></a>**FIX-9** online transcription is the user's recorded
+  choice: Transcription settings → AI agents → Allow stamps the date (only the app sets it;
+  `settings` refuses `agentsOnline` from an agent). The preset states it with that date, or,
+  while off, tells the agent to ask once (or use Parakeet). Not yet tried with Codex.
+- **25 Oct 2026** — <a id="fix-10"></a>**FIX-10** no Accept card for graphics: `short_footage`
+  `op: add` and `library` style `bring_in_line` apply at once as one undo step, listed in the
+  Agent panel with Undo; overlapping graphics are refused. The `under` and `restyle` batch kinds
+  are gone; proposal cards stay for cuts, timeline edits and rules.
+- **24 Oct 2026** — <a id="lay-2"></a>**LAY-2** layout keys: the shortcuts dialog has a
+  Layouts tab (built-ins and favourites, no keys by default); a key puts that layout from the
+  playhead to the next layout change. While playing it shows at once (LAY-1's swap), and every
+  press until playback stops is one undo step: history steps carry a `group`, and a step of the
+  top step's group joins it (`Join` line in the log, so it survives reopening). MCP `layouts op:
+  switch` was already there.
+- **24 Oct 2026** — <a id="ui-1"></a>**UI-1** thumbnails on video clips: small JPEGs along the
+  clip (keyframe seek, one FFmpeg process each; images and the native backend decode), kept in
+  `cache/thumbs/<asset>/` by file, time and height; times rounded to a step that suits the zoom,
+  so small zooms and moves reuse them. Only when the video lane is 42 px or taller, only for the
+  drawn part of the timeline, at most 64 a call, one call at a time; pictures scrolled away
+  before their turn are never asked for. Graphics show none.
+- **24 Oct 2026** — <a id="ui-2"></a>**UI-2** Basic and Advanced settings: File → Advanced
+  settings (off by default). In Basic, each section keeps its fine-tuning behind a "More
+  settings" link at its foot (per section, not remembered); in Advanced everything shows and the
+  Advanced parts of Export, Jump cuts and Transcript settings start open. Under More settings:
+  cursor size, room around the window, crop (Screen); per-clip camera framing (Camera); exact
+  bubble size, roundness, screen fit, overlapping card, section transition, move length
+  (Layouts); noise and duck amounts, mouth-click strength, music and loudness levels (Audio);
+  distance from edge, words at once, lines (Captions); every auto-zoom setting but the amount,
+  the follow speed (Zoom); graphics look sliders, caption weight, emphasis colour, outline, box,
+  the frame's corners, shadows and camera border, and 9:16 graphics sliders (Style). The rest
+  stays in Basic.
+- **24 Oct 2026** — <a id="rev-1"></a>**REV-1** listen to the joins: a **Joins** panel (behind
+  the Inspector) steps through cuts, plays ±2 s around each and marks keep or fix with a note;
+  `joins` (list, find, add, clear; `agent/joins.json`) lets the agent hand over cuts and read the
+  marks. Joins are held by recording times, so they move with later edits and show "changed"
+  once fixed. `find` scores retakes (words cut out), words cut into or ending at a cut, unsure
+  words, mid-sentence cuts and `check`'s blips. `playhead` `op: show` moves the user's preview
+  (`playhead_get` is now `playhead`, behind `more`). The export guide asks for it before export.
+- **24 Oct 2026** — <a id="ftg-1"></a>**FTG-1** `source_search` (behind `more`) and a **Search**
+  panel (behind the transcript): every transcript, cut parts and imported takes too; whole
+  words in order, the last a prefix, long words one letter off, Greek accents folded; each hit
+  says plays (and where), cut (and the join over it) or not placed.
+- **24 Oct 2026** — <a id="snd-1"></a>**SND-1** clips' own gain and fades (`Clip.mix`,
+  `setSound` edit, the clip inspector; split keeps fades at the outer ends); **music** and
+  **effects** roles; `musicUnderSpeechDb` keeps music lanes that far under the speech, measured
+  (Audio page); a licence on imported files (`media_import` `licences`, the clip inspector), and
+  `check` warns about music whose licence needs credit or isn't known.
+- **24 Oct 2026** — <a id="agt-3"></a>**AGT-3** `library` `kind: preset` `op: propose_rule`
+  (`rule` + the `example` that taught it) makes a **Rule** batch in the Agent panel; accepting
+  adds a bullet to the preset's `rules.md` (a built-in gets its "My" copy); autopilot never
+  accepts rules, and the rules guide says when to propose one and to name the rule that shaped a
+  proposal. Designed from the creator-workflows summary, not the three skills' originals.
+- **24 Oct 2026** — <a id="agt-4"></a>**AGT-4** the diagnose part, as `check` findings: linked
+  sound and picture out of sync, and clips running past their media. Not built, on purpose:
+  resuming a stopped job, a state screenshot (`storyboard`, `frame_render` and `timeline_view`
+  cover it) and per-stage time budgets (the agent's own pacing).
+- **24 Oct 2026** — <a id="lay-1"></a>**LAY-1** look-only swap: an edit that changes only the
+  layout sections bumps a look generation; the engine swaps them into the running scene, keeping
+  the mixer, decoders and sound playing. `perf_look_swap` on the 7:10 tutorial with 30 sections:
+  the frame after a change 7.9 ms p50 swapped vs 12.1 ms rebuilt; playing with a change every
+  second p50 11.5, p95 17.7, one 363 ms frame. The drag preview followed 26 Oct: dragging a
+  section's edge scrubs the preview to it (one seek a frame), saved on release.
+- **24 Oct 2026** — **Shorts and clips told apart for agents.** `clips` (list by default,
+  create, find, range, rename, remove) replaces `short_create` and the old `shorts` find; `shorts`
+  is now only for shorts made from a take (list by default, rename, remove); each refuses the
+  other kind and names its tool. Finding clips (agent and the Clips tab's Find with AI) only
+  adds clips: it used to replace the whole list, take shorts included. New clips and new
+  shorts follow their own presets (`clipsPreset` beside `shortsPreset`; `library` `op: use`
+  `for: shorts|clips`) and copy the look of their own kind. `export` takes `short: "shorts"` or
+  `"clips"`. Methods, rules and the export guide say which is which.
+- **24 Oct 2026** — <a id="sht-2"></a>**SHT-2** a short's caption splits, joins, hidden words and
+  emphasis are its own (`Short.caption_marks`, over the video's; undo steps), text fixes stay
+  shared; the Shorts tab counts them and can drop them ("Use the video's"); MCP `captions` gains
+  `split`, `join` and `hide`. <a id="fix-7"></a>**FIX-7** dropping on a new track is one undo
+  step (`onNewTrack` edit); undo names say "Cut 0.04 s" and leave out zooms a cut only moved, and
+  the blip fix reads "Removed 3 blips"; `export` to a missing folder says it did not start.
+- **24 Oct 2026** — **Everything built so far, tried** in the dev app and EVAL-1 run 4
+  (tutorial 18 calls, $0.271, −28 %; a short from a take 13 calls, $0.122). Fixed from it:
+  UI-5's drag row moving the tracks under the pointer; on a take short, `mouth_noises` using
+  the take's voice, `fillers` taking `short`, an answer when every noise is next to words, and
+  the shorts tools sending the agent to the Shorts preset. Docs cleaned up (built plans folded
+  in and deleted, fixed gaps removed).
+- **24 Oct 2026** — <a id="gfx-7"></a>**GFX-7** graphics ready before export: every render is
+  at the export's frame rate, export renders queue in the background (2 Chrome workers, below
+  normal priority, fast capture), so an export of unchanged graphics starts at once (tried:
+  frames after about 15 s).
+- **24 Oct 2026** — **AGT-4** stopping a long call (the client cancels, hangs up, or the user
+  presses Stop in the Agent panel); **COST-2** 8 more tools behind `more` (38 → 30, 60,100 →
+  41,240 characters; measured: Claude Code with tool search pays only the names); **AI-1** the
+  guides trimmed (tutorial −10 %, `graphics` −45 %).
+- **24 Oct 2026** — **The fixes from George's 23 Oct edit**:
+  <a id="fix-4"></a>**FIX-4** dead air before the first word, after the last and around
+  recording pauses is cut; <a id="fix-5"></a>**FIX-5** a filler review runs once and is
+  reused; <a id="agt-5"></a>**AGT-5** the preset's choices run without a question;
+  <a id="gfx-6"></a>**GFX-6** graphics proposed as a table; <a id="cost-4"></a>**COST-4**
+  `frame_render` sheets of moments or a graphic; <a id="ui-7"></a>**UI-7** a streamed export
+  log; <a id="ui-6"></a>**UI-6** Medium / High / Ultra, Advanced, **Remove all blips**;
+  <a id="ui-4"></a>**UI-4** the transcript review panel runs Review on its button;
+  <a id="ui-5"></a>**UI-5** add-track buttons, and a drop row only while dragging;
+  <a id="fix-6"></a>**FIX-6** the styles and presets folders open before anything was saved.
+- **24 Oct 2026** — **A second audit's six findings fixed** (A01-A06): export preferences saved
+  to the wrong project, two WAV saves sharing a temp file, a range selection carried between
+  shorts, waveform reads restarted on every edit, a case-variant export path that could replace
+  a source file (P1), and exports re-reading graphic sources each frame (renders now pinned).
+- **23 Oct 2026** — <a id="org-1"></a><a id="sty-1"></a><a id="ui-3"></a>**ORG-1 presets and styles**, all four phases:
+  Style (brand, graphics look, caption look, frame, 9:16 variant; Light and Dark built in),
+  Preset (settings by part, cleanup levels, export settings, the method, the user's rules, the
+  choices; Tutorial, Shorts, Clips built in), projects storing only their changes, the Preset
+  menu and the Style page, one `library` tool for agents. Replaced brand kits, saved looks, the
+  Templates menu and saved answers. Choices: [decisions](decisions.md#presets-and-styles-as-built-23-oct).
+- **23 Oct 2026** — <a id="dlv-1"></a>**DLV-1** subtitles (SRT, VTT), the transcript (text,
+  Markdown) and the sound (WAV) as files, of the video or a short, from the caption cues.
+- **23 Oct 2026** — **AGT-4 readiness**: `status` with no project says what this computer is
+  ready for (keys, models, GPU pack, renderer, FFmpeg, the skill per agent).
+- **23 Oct 2026** — <a id="safe-2"></a>**SAFE-2** history on disk (no step limit up to 2 GB),
+  an agent's run undone as one step, checkpoints of the edit, graphic files and caption marks
+  (one before every agent run). Checked with a real agent in EVAL-1 run 3.
+- **23 Oct 2026** — <a id="cap-1"></a>**CAP-1** captions as typography: the style's font (file, installed or
+  Inter Display; .woff/.woff2 too), one emphasis word per caption in the accent, pop / karaoke /
+  static, captions giving way to full-frame graphics.
+- **23 Oct 2026** — **GFX-5 leftovers and SHT-4's footage sound**: saved looks (now styles),
+  the shorts look multiples, **Bring in line** by rule; a take's footage sound on its own track,
+  always ducked under the voice.
+- **23 Oct 2026** — <a id="sht-7"></a><a id="sht-7-done"></a>**SHT-7** a split graphic knows its box and renders
+  with its portrait rules; on a take short the camera keeps its own part.
+- **23 Oct 2026** — <a id="sht-4"></a><a id="sht-3"></a>**SHT-4** graphic modes in shorts (full, split, over the face, picked
+  before the render) and footage at its own speed ([Q-SHORT-GFX](decisions.md#q-short-gfx)), the take picker, the
+  footage sound control. **SHT-3** the take is cut before footage and graphics, and the app warns
+  when graphics go on an uncut take.
+- **23 Oct 2026** — **A smaller agent context and fewer calls**: 18 rarely needed tools behind
+  `more`, a shorter automatic guide, `guard: true` instead of dry runs in automatic mode,
+  `graphic_add` with `items`, graphics on a take short movable (tutorial 34 → 20 calls).
+- **23 Oct 2026** — <a id="eval-1"></a>**EVAL-1 baseline** ([plans/evaluation.md](plans/evaluation.md)):
+  a real agent edited the 7-min tutorial for $0.41 in 34 calls and made a short from a take
+  for about $0.30.
+- **23 Oct 2026** — <a id="sht-6b"></a>**SHT-6b** the agent's picks under a take are one batch;
+  the Shorts tab's picker places video, graphics and files under a take by hand.
+  <a id="sht-6"></a>**SHT-6** graphics on a take short's own timeline, copies of the video's
+  graphics, B-roll from imported files. <a id="sht-5"></a>**SHT-5** Shorts and Clips as two
+  tabs over one model.
+- **23 Oct 2026** — <a id="gfx-2"></a>**GFX-2** GSAP in graphics (3.15.0, fetched once,
+  sha256-pinned, CDN links rewritten to the local file); the tool list's schemas trimmed 14 %.
+- **22 Oct 2026** — **GFX-5** one look for every graphic in a video (preset, five controls,
+  tokens) and the templates rewritten in George's light library style.
+- **22 Oct 2026** — **Quick wins**: <a id="fx-4"></a>**FX-4** 16 ms crossfades at cuts;
+  loudness reaches its target (-14 LUFS by default); **GFX-1** graphics at the export's frame
+  rate and 2x density above 1080p; small words said twice and broken-off words cut by the rules.
+- **22 Oct 2026** — **An audit's findings fixed**: the shorts preview freeze (a deadlock with
+  the window thread; the rule is in [architecture](architecture.md#threads-and-locks-the-window-thread-must-never-wait-on-us)),
+  stale short edits, brand-kit saves and renames, all-or-nothing `graphic_set` and
+  `transcript_fix`, and a dozen smaller ones.
+- **22 Oct 2026** — <a id="perf-1"></a>**PERF-1** the transcript panel indexed and windowed
+  (9,500 words: reload 583 → 310 ms, DOM 12,344 → 517 nodes). <a id="perf-2"></a>**PERF-2**
+  lazy loading (start-up script 966 → 236 KB).
+- **21 Oct 2026** — <a id="agt-2"></a>**AGT-2** fast or thorough review and an honest report
+  (Done / Looked at / Not heard / Approved by you / Still open).
+  <a id="agt-1"></a>**AGT-1** agent parity for cleaning up and correcting (zooms, graphic
+  moves, chapters, shorts, word fixes, roles, export cancel); calls bound to another project
+  refused under the command lock.
+- **21 Oct 2026** — <a id="fix-1"></a>**FIX-1** the render queue keeps renders of one graphic
+  at two lengths; <a id="fix-2"></a>**FIX-2** the skill's on/off defaults; <a id="fix-3"></a>**FIX-3**
+  honest read-only and destructive hints, a real `propose_edit` schema;
+  <a id="safe-1"></a>**SAFE-1** agent calls bound to their project; <a id="dep-1"></a>**DEP-1**
+  Rust 1.92.0, Node 22, FFmpeg pinned with checksums, `Cargo.lock` committed.
+- **21 Oct 2026** — Layouts: base layout + timed sections, favourites, pick rules, face framing
+  ([plan](plans/layouts.md)). Local vs cloud filler review measured
+  ([eval](plans/local-review-eval.md)). Clip speed 0.25×–8×. Docs consolidated.
+- **20 Oct 2026** — Greek (online), Parakeet Unified EN + Verbatim, the CUDA 13 GPU pack, local
+  Qwen3.5 4B review on Vulkan; sound effects off by default; fillers use rules + AI by default.
+- **18 Oct 2026** — Shorts as a workspace tab; take shorts (`short_from_take`, `short_footage`).
+- **17 Oct 2026** — Face framing (YuNet); fast switching between shorts.
+- **13–16 Oct 2026** — AI readiness phases 0–3: MCP bridge, proposals and Agent panel, app actions
+  and CLI, skill and templates, `check`, shorts scenes, graphics v1, library + gate.
+- **4–5 Oct 2026** — Premiere-style tracks (one sequence model, clocks); performance pass R01–R20.
+
+## Old task numbers → IDs
+
+For anything (memory notes, commit messages, old chats) that still says "task N".
+
+| Old | New | Old | New |
+|---|---|---|---|
+| #1 More layouts | Done; follow-ups LAY-1…LAY-4 | #10 Number keys | LAY-2 |
+| #2 More languages | Removed (was LNG-1, LNG-2) | #11 Auto layouts | LAY-3 |
+| #3 Measure local review | Done; LNG-4 | #12 Transcription models | Removed (was LNG-3) |
+| #4 B-roll | FTG-2, FTG-6 | #13 Version history | SAFE-2 |
+| #5 Music and SFX | SND-1, SND-2 | #14 Source search | FTG-1, FTG-3 |
+| #6 Templates | UI-3 | #15 NLE handoff | DLV-3 |
+| #7 Clip thumbnails | UI-1 | #16 MCP discovery | AGT-4 |
+| #8 Simpler UI | UI-2 | #17 Project binding | SAFE-1 |
+| #9 Background removal | FX-1 | Known issues F05 / F06 / render queue | PERF-1 / PERF-2 / FIX-1 |

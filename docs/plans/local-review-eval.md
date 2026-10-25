@@ -1,7 +1,7 @@
 # Local vs OpenRouter filler and retake review (was backlog task 3)
 
 Follow-ups (rules fixes, a real Greek recording, `apply: true` for cloud fillers) are
-[LNG-4](../roadmap.md#lng-4).
+[LNG-4](../done.md#lng-4).
 
 Measured 21 Oct 2026 on George's PC (RTX 3060 12 GB, Ryzen 5 3600), branch `expansion`.
 

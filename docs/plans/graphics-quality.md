@@ -2,7 +2,7 @@
 
 **Status:** notes and direction, 25 Oct 2026. Nothing built yet. Roadmap:
 [GFX-8](../roadmap.md#gfx-8), with the bugs from the same test as
-[FIX-8 to FIX-10 and UI-8](../roadmap.md#fix-8). **Comes after
+[FIX-8 to FIX-10 and UI-8](../done.md#fix-8). **Comes after
 [STY-2, styles from references](styles.md)** (George, 25 Oct): the style carries the look,
 motion, kinds of graphics and examples this plan builds on.
 

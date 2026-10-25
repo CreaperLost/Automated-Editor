@@ -10,7 +10,8 @@ other docs link to it instead of restating it.
 |---|---|---|
 | 1 | [product.md](product.md) | What AeroEdits is, who it is for, what it does today, how an agent edits with it, what is and isn't verified |
 | 2 | [gaps.md](gaps.md) | What is missing or wrong, checked against the code, with the roadmap item that fixes each |
-| 3 | [roadmap.md](roadmap.md) | **The plan:** Now / Next / Later, with what "done" means for each item. The backlog lives here |
+| 3 | [roadmap.md](roadmap.md) | **The plan:** where things stand, Next in order, what waits on George, Later by area, and what was dropped. The backlog lives here |
+| — | [done.md](done.md) | What shipped, by date, each with its roadmap ID as an anchor |
 | 4 | [decisions.md](decisions.md) | What George has decided, what we are not doing, and the open questions with recommendations |
 | 5 | [architecture.md](architecture.md) | How it is built: the sequence model and clocks, MCP, graphics, layouts, performance rules, working notes |
 | — | [dependencies.md](dependencies.md) | Every pinned toolchain, library, runtime and model, and how we review updates |
@@ -27,7 +28,7 @@ other docs link to it instead of restating it.
 
 ## Keeping the docs honest
 
-- **One home per fact.** Product facts in `product.md`, gaps in `gaps.md`, work in `roadmap.md`,
+- **One home per fact.** Product facts in `product.md`, gaps in `gaps.md`, work in `roadmap.md` (shipped work in `done.md`),
   decisions in `decisions.md`. Link, don't copy.
 - **Plans are for work in flight.** When a plan's work ships, move its lasting design into
   `architecture.md`, its decisions into `decisions.md`, and delete the plan (git keeps it).

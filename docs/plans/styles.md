@@ -53,7 +53,7 @@ already exists, which kinds of graphics fit, or shows one done well.
 7. **Shorts variant, richer** (decided): same style and references; the portrait part gets its
    own motion rules, kinds and examples on top of today's multipliers.
 8. **A small sound set** (decided): a whoosh, a click, a pop and a hit for graphic moments, each
-   with its licence stored, from the SFX starter set ([SND-3](../roadmap.md#snd-3)) or George's
+   with its licence stored, from the SFX starter set ([SND-3](../done.md#snd-3)) or George's
    own files. Graphic events cue them ([SND-2](../roadmap.md#snd-2)).
 
 **Where it lives:** everything the app uses stays in `style.json` (motion rules, kinds, look rules
@@ -65,7 +65,7 @@ compact readable brief, which is what an agent reads before any graphic.
 
 1. **Intake.** The user gives references: images, clips, a website URL, a logo, library graphics
    ("my library"), optionally a few words. Clips are read as frame boards, not whole videos
-   ([COST-1](../roadmap.md#cost-1)). If there are no references, the agent asks for one, but can
+   ([COST-1](../done.md#cost-1)). If there are no references, the agent asks for one, but can
    still work from words.
 2. **Breakdown.** The agent writes what it sees, as a short table: palette, type, motion moves,
    kinds of graphics, what it drops and why. This is shown to the user before anything is made.

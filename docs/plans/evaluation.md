@@ -1,6 +1,6 @@
 # Evaluation (EVAL-1)
 
-The baseline every cost or quality change is measured against ([EVAL-1](../roadmap.md#eval-1)).
+The baseline every cost or quality change is measured against ([EVAL-1](../done.md#eval-1)).
 Two English inputs, the milestones in order: a long-form tutorial edited with the `tutorial`
 template, then a short from a take with the `shorts` template. Greek is later (LNG-4).
 
@@ -119,7 +119,7 @@ step. Same inputs, same first messages, a fresh project.
 - **The take short keeps its placeholder title** ("Take short") until asked, although the
   template says to rename it after the transcript.
 - **Graphics in a short cover the face 22 of 31.6 s** (full frame): graphic modes in shorts
-  ([SHT-4](../roadmap.md#sht-4)). They also mixed two looks (white library graphics, navy key
+  ([SHT-4](../done.md#sht-4)). They also mixed two looks (white library graphics, navy key
   points); fixed 22 Oct: every template now has the light app look and every graphic in a
   video takes one look (GFX-5).
 - **The key-point card was plain** (a navy slide, much empty space); fixed 22 Oct: a white
