@@ -89,6 +89,8 @@ import {
   TakeShortMade,
   FootageChange,
   ShortGraphicFrom,
+  LibrarySound,
+  SoundPlaced,
 } from "./types";
 
 declare global {
@@ -648,6 +650,23 @@ export const api = {
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
     invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
+  /** The sound effects library, or the sounds matching `query`. */
+  soundLibraryList: (query?: string) => invokeTauri<LibrarySound[]>("sound_library_list", { query: query || null }),
+  /** A library sound as a data URL to play. */
+  soundLibraryPreview: (id: string) => invokeTauri<string>("sound_library_preview", { id }),
+  soundLibraryAdd: (path: string, name: string | null, tags: string[], licence: Licence) =>
+    invokeTauri<LibrarySound>("sound_library_add", { path, name, tags, licence }),
+  soundLibraryUpdate: (id: string, change: { name?: string; tags?: string[]; licence?: Licence }) =>
+    invokeTauri<LibrarySound>("sound_library_update", {
+      id,
+      name: change.name ?? null,
+      tags: change.tags ?? null,
+      licence: change.licence ?? null,
+    }),
+  soundLibraryRemove: (id: string) => invokeTauri<void>("sound_library_remove", { id }),
+  /** Places a library sound at `atUs` on an effects track: one undo step. */
+  projectSoundPlace: (projectHandle: string, expectedRevision: number, soundId: string, atUs: number) =>
+    invokeTauri<SoundPlaced>("project_sound_place", { projectHandle, expectedRevision, soundId, atUs }),
   projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
     invokeTauri<OpenedProject>("project_chapters_set", {
       projectHandle,

@@ -680,6 +680,23 @@ export interface Licence {
   source?: string;
 }
 
+/** A sound of the sound effects library: the built-in CC0 set, or one of the user's own. */
+export interface LibrarySound {
+  id: string;
+  name: string;
+  tags: string[];
+  durationUs: number;
+  path: string;
+  builtIn: boolean;
+  licence: Licence;
+}
+
+export interface SoundPlaced {
+  project: OpenedProject;
+  assetId: string;
+  clipId: string;
+}
+
 export interface Stream {
   /** A recording's own track id ("screen", "webcam", "mic", "system"); a file's "picture" or "sound0"... */
   id: string;

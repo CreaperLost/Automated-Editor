@@ -65,8 +65,8 @@ not a hard limit: no test fails on it. Our source code doesn't count.
 REV-1, AGT-3, AGT-4, SND-1, FTG-1 and LAY-1 were built 24 Oct (see [Done](#done)). Left in this
 tier, in order (George, 25 Oct): **STY-2** styles from references (it takes in GFX-5's
 AI-proposed styles), then **GFX-8** graphics an agent makes well on top of it, and what VER-1
-couldn't cover here. Next up after them: the SFX starter set (SND-3, on SND-1) and SHT-1
-(idea-first shorts, on FTG-1). LAY-2, UI-1 and UI-2 were built 24 Oct.
+couldn't cover here. Next up after them: SHT-1 (idea-first shorts, on FTG-1). The SFX starter
+set (SND-3), review boards (COST-1) and custom vocabulary (LNG-5) were built 25 Oct. LAY-2, UI-1 and UI-2 were built 24 Oct.
 NOTE-1 (anchored notes, "Ask AI about this") was dropped 24 Oct: the chat, the agent's history
 and descriptions like "the graphic titled X" already do its job
 ([decisions](decisions.md#not-doing)).
@@ -110,9 +110,12 @@ agent proposes (research: [research/ai-styles.md](research/ai-styles.md)), is no
   with a stdio MCP client: create → transcribe → silence → check (and its fix) → propose_edit →
   accept in the Agent panel → undo → export (1280×720, 49.75 s, −14.2 LUFS, checked with
   ffprobe/ebur128), plus every tool built that day.
-- **Left:** the same on **macOS**; a real Codex session with write tools (no Codex CLI on this
-  PC); the templatize → check → save loop over MCP; a style with a logo in a real export.
-  Record host-verified coverage in [product.md](product.md#what-is-verified-and-what-is-not).
+- **Done on Windows, 25 Oct:** three real Codex sessions (`codex exec`) against the dev app:
+  write tools, the templatize → check → save → remove loop, and a style's logo in a graphic in
+  a real 720p export. Found: `codex exec` refuses tools not marked read-only unless each has
+  `approval_mode = "approve"` in Codex's config (see
+  [product.md](product.md#what-is-verified-and-what-is-not)).
+- **Left:** the same on **macOS**.
 
 ---
 
@@ -155,10 +158,9 @@ Grouped by area. Order within a group is the suggested order.
   density limits, ducking); the agent picks which events deserve sound; sound style in words
   from STY-1. Depends on SND-1. **Was:** backlog #5 (second half).
 <a id="snd-3"></a>
-- **SND-3 · Sound and music libraries the user extends (M/L).** First an SFX starter set of
-  ~15–20 hand-picked, licence-clean sounds (a few whooshes, UI clicks and pops, two risers, two
-  hits), tagged and auditioned; then a copyright-free music library. Each has browse, preview,
-  search by tag and one-click placement, and takes the user's own files. **Music must never need
+- **SND-3 · Sound and music libraries the user extends (M/L).** The SFX starter set is built
+  (25 Oct, see [Done](#done)). Left: a copyright-free music library on the same pattern
+  (browse, preview, search by tag, one-click placement, the user's own files). **Music must never need
   credit (enforced):** every track stores its licence; the built-in library holds only tracks
   allowed for monetised use without attribution (CC0 / public domain or equivalent); a track that
   requires credit, forbids monetisation or has an unknown licence is refused for the library, and
@@ -247,13 +249,14 @@ LNG-1 (Greek word aligner), LNG-2 (more languages) and LNG-3 (more transcription
 removed 23 Oct 2026: not needed.
 
 <a id="lng-4"></a>
-- **LNG-4 · Filler/retake rules fixes and a real Greek eval (S/M).** Rules stop treating
-  "X. X essentially means" as a retake (list items and parallel statements: done 22 Oct); flag
-  single-word repeats and cut-off words (done 22 Oct, small words only: "very very" is meant);
-  label one more real English recording and a real Greek one; then decide whether
-  cloud review may default to `apply: true` for fillers. **Was:** task 3 leftovers.
-<a id="lng-5"></a>
-- **LNG-5 · Custom vocabulary (S/M).** Product names and jargon passed to providers that accept them.
+- **LNG-4 · Filler/retake rules fixes and a real Greek eval (S/M).** Done: list items and
+  parallel statements (22 Oct), single-word repeats and cut-off words (22 Oct), two-word
+  restarts and "they, they've" (25 Oct), a fourth labelled English recording, EN-D (25 Oct:
+  cloud cut all 6 must fillers, no wrong filler cut). Left: the rules still cut "human in the
+  loop. Human in the loop essentially means" (needs more examples); **a real Greek recording**
+  from George to label; George's call on `apply: true` for cloud fillers (only fillers; the
+  evidence now backs it). Results: [local-review-eval](plans/local-review-eval.md).
+  **Was:** task 3 leftovers.
 
 ### Automation
 
@@ -296,12 +299,6 @@ Built: UI-1 and UI-2 (see [Done](#done)).
 Raised 23 Oct as long-term direction. Every item here is measured against
 [EVAL-1](#eval-1): keep a cheaper path only when the edit stays as good.
 
-<a id="cost-1"></a>
-- **COST-1 · Review boards (M).** One image per minute of video: 60 small tiles, one a second,
-  in order (the storyboard's sheet, made denser), so an agent reviews a minute for the price of
-  one image. Then cheaper still: a coarse, compressed board first (fewer, smaller tiles, JPEG or
-  WebP) for the rough idea, and a sharper board of one stretch only where something looks off.
-  Measure tokens per reviewed minute and what the agent still catches.
 <a id="cost-2"></a>
 - **COST-2 · Tools on demand (S/M).** Measured and cut 24 Oct (see Done): 30 tools, 41,240
   characters (about 16k tokens); Claude Code with `ToolSearch` pays about 1.7k for the names.
@@ -369,6 +366,28 @@ Most recent first, a line or two each. The details are in git history (commit me
 plans deleted once built), the design in [architecture.md](architecture.md), the choices in
 [decisions.md](decisions.md).
 
+- **25 Oct 2026** — <a id="cost-1"></a>**COST-1** review boards: `storyboard` `board: fine` (a
+  frame a second, one JPEG a minute, 10×6 tiles of 148 px, about 1.0k image tokens by Claude's
+  pixel count) or `coarse` (every 5 s, ten minutes an image, about 120 tokens a minute); amber
+  edge on graphics, blue on zooms; 5 or 3 images a call, then "call again with fromUs". The
+  rules point at `fine` for a stretch the scene storyboard leaves in doubt. Not measured yet:
+  what an agent still catches on a board (needs an EVAL run).
+- **25 Oct 2026** — <a id="lng-5"></a>**LNG-5** custom vocabulary: the key terms (Transcription
+  settings, or `settings` `area: transcription` `keyterms`) bias Scribe as before, and now every
+  transcript respells them afterwards: spacing and case for any transcriber ("chat gpt" →
+  ChatGPT), and for Parakeet, runs of two or more words that sound like a term ("cloud code" →
+  Claude Code); one word that only sounds alike ("codecs") is left. OpenRouter answering 400 to
+  key terms transcribes without them instead of failing; terms are checked against Scribe's
+  limit (5 words, 50 characters). The field now shows for Parakeet too.
+- **25 Oct 2026** — **SND-3 (SFX starter set)** 17 CC0 sounds built into the app (4 whooshes, 2
+  risers, 3 hits, 3 clicks, 3 pops, a ding, a toggle) from Kenney's packs and Freesound, each
+  licence checked on its page (`src-tauri/assets/sounds/LICENSES.md`); written once to the app
+  folder's `sounds/built-in`. The user's own go in `sounds/mine` with tags and a licence. A
+  **Sounds** page in the Media panel (search, tag filters, play, + at the playhead, add your
+  own); `library` `kind: sound` (`list` with `query`, `use` at `atUs`/`atWord`). Placing
+  imports the sound once (role effects, its licence) onto a free effects track or a new
+  "Sound effects" track, one undo step, never moving the video. `check` now also flags effects
+  whose licence asks for credit. Music library still to come.
 - **25 Oct 2026** — <a id="fix-8"></a>**FIX-8** cuts in a take short stay in the short: when
   the video plays the same take, `fillers` with `short` found and cut on the video's timeline.
   `fillers`, `fillers_review` and the AI review now read the short's kept words and cut its

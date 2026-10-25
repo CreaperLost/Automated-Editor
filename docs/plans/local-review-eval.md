@@ -43,6 +43,7 @@ fewer than half of its words are labelled (must or optional).
 | EN-B | "19 Oct 2" Arkus video, Parakeet TDT v3, whole | 1044 | 8 (4 / 4) | 30 |
 | EN-C | "19 Oct Review Edit" Hermes video, Parakeet TDT v3, first 1000 | 1000 | 5 (3 / 2) | 24 |
 | EL-A | Scripted Greek tutorial, Scribe-style words | 374 | 19 (14 / 5) | 3 |
+| EN-D | "24 Oct" Kimi K3.1 video, Scribe v2 via OpenRouter, first 1200 words (added 25 Oct) | 1200 | 15 (6 / 9) | 45 |
 
 No Greek recording exists yet, so EL-A is a script (`review-eval/make-greek-case.py`). It
 plants the fillers from the Greek prompt, plus traps where the same words carry meaning:
@@ -148,6 +149,30 @@ without one.
   the lower perpetuals".
 - Rules: don't treat "X. X essentially means" or list items ("you can select A, you can
   select B") as retakes.
+
+### 25 Oct: a fourth English recording (LNG-4)
+
+EN-D was labelled blind like the others, then run with rules and cloud (OpenRouter, 56 s):
+
+| Engine | Missed (fillers / retakes) | Wrong cuts (words) |
+|---|---|---|
+| Rules, before | 3 (0 / 3) | 0 |
+| Cloud | 2 (0 / 2) | 1 (12): an AI *retake* of a clause that was meant |
+| Rules, after the stutter fix below | 1 (0 / 1) | 0 |
+
+- **Cloud fillers:** all 6 must fillers cut, no wrong filler cut. With EN-A to EN-C that is
+  17 must fillers in four real recordings without a wrong cloud filler cut (two partial ones
+  in EN-A to EN-C), so `apply: true`
+  for cloud **fillers only** (never retakes) is now backed by the evidence. Not switched:
+  George's call.
+- **Stutter fix (built):** two-word restarts with `that`, `what`, `how`, `where`, `when`,
+  `who`, `why` or `had` beside a small word ("what is, what is", "that the, that the"), and a
+  small word followed by its own contraction ("they, they've"). Alone those words stay meant
+  ("that that works"). Rerun: EN-B, EN-C and EL-A unchanged, no new wrong cuts anywhere.
+- **Still open:** the rules cut "human in the loop. Human in the loop essentially means" in
+  EN-A (a finished phrase said again to define it). It looks like a real restart ("Let's
+  begin. Let's begin with...") from the words alone; it needs more examples before a rule.
+- **Greek:** still no real recording. EL-A stays scripted until George records one.
 
 ### Gemma 4 E4B
 

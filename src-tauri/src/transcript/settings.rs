@@ -19,7 +19,8 @@ pub struct TranscriptSettings {
     pub language: SpokenLanguage,
     /// ElevenLabs model id; empty uses the default.
     pub scribe_model: String,
-    /// Words to bias recognition towards, such as game or product names.
+    /// Names written the way they should be, such as game or product names: Scribe is biased
+    /// towards them, and every transcript respells them (`vocabulary`).
     pub keyterms: Vec<String>,
     /// Which Parakeet transcribes English: Unified (the most accurate words) or Verbatim
     /// (TDT v3: keeps stutters, repeats and filler sounds).
@@ -63,8 +64,14 @@ impl TranscriptSettings {
         if self.scribe_model.len() > 64 {
             return Err("Model id is too long".into());
         }
-        if self.keyterms.len() > 100 || self.keyterms.iter().any(|k| k.chars().count() > 50) {
-            return Err("Use up to 100 key terms of 50 characters or fewer".into());
+        // Scribe's limits: 50 characters and 5 words a term.
+        if self.keyterms.len() > 100
+            || self
+                .keyterms
+                .iter()
+                .any(|k| k.chars().count() > 50 || k.split_whitespace().count() > 5)
+        {
+            return Err("Use up to 100 key terms of 5 words and 50 characters or fewer".into());
         }
         if self.parakeet_model_dir.len() > 4096 {
             return Err("Model folder path is too long".into());

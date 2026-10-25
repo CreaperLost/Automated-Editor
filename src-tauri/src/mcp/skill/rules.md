@@ -92,8 +92,9 @@ Change only when asked: `settings` `area: layout` `webcamAutoHide` and `windowCr
 
 Before export, call `storyboard` once (with `short` for a short or clip): one image of the whole edit,
 a tile per scene. Look for a wrong layout, a zoom on nothing, a graphic at the wrong moment, a
-stretch that should have been cut; name tiles by number. Use `frame_render` only for a moment
-it leaves in doubt.
+stretch that should have been cut; name tiles by number. For a stretch it leaves in doubt,
+`board: fine` with `fromUs`/`toUs` (a frame a second, one image a minute); `frame_render` only for
+a single moment.
 
 ## Beyond the passes, and corrections
 

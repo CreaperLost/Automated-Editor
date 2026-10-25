@@ -14,6 +14,7 @@ pub enum Kind {
     Style,
     Preset,
     Layout,
+    Sound,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -36,7 +37,7 @@ pub enum Op {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryArgs {
-    /// style, preset or layout.
+    /// style, preset, layout or sound.
     pub kind: Kind,
     /// list (default), show, use (in this project), set, remove; for styles also preview,
     /// check (graphics not following the style) and bring_in_line; for presets also save (the
@@ -68,6 +69,15 @@ pub struct LibraryArgs {
     /// Presets, reset: only this part (captions, layout, zoomSettings, audio, layouts).
     #[serde(default)]
     pub part: Option<String>,
+    /// Sounds, list: words its name or tags hold (`whoosh`, `riser hit`).
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Sounds, use: where it starts (edited microseconds)...
+    #[serde(default)]
+    pub at_us: Option<u64>,
+    /// ...or at a word (id from transcript_get).
+    #[serde(default)]
+    pub at_word: Option<String>,
 }
 
 pub static TOOLS: [ToolDef; 1] = [ToolDef {
@@ -83,7 +93,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         the style) and bring_in_line (one batch rewriting them, for the user to accept). \
         Presets also: save (the project's settings into its preset, or a new one: \
         `saveAs`), reset (the project's changes back), propose_rule (`rule`, `example`: the \
-        user accepts it in the Agent panel).",
+        user accepts it in the Agent panel). Sounds (CC0 whooshes, risers, hits, clicks, \
+        pops; the user's own): list (`query`), use (`name` = id, at `atUs`/`atWord`).",
     schema: schema::<LibraryArgs>,
     read_only: false,
     run: library,
@@ -95,6 +106,7 @@ fn library(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Kind::Style => style(ctx, args),
         Kind::Preset => super::presets::library(ctx, args),
         Kind::Layout => layout(args),
+        Kind::Sound => sound(ctx, args),
     }
 }
 
@@ -264,6 +276,60 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
     }
 }
 
+fn sound(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
+    use crate::commands::sounds;
+    match args.op {
+        Op::List => {
+            let found = sounds::sound_library_list_impl(args.query.clone())?;
+            let mut lines = vec![format!(
+                "{} (id, length, tags; * needs credit or unknown licence: not without the user's \
+                 word):",
+                plural(found.len(), "sound")
+            )];
+            lines.extend(found.iter().map(|s| {
+                format!(
+                    "{}{} {:.2}s {}",
+                    s.id,
+                    if s.licence.kind.needs_no_credit() {
+                        ""
+                    } else {
+                        "*"
+                    },
+                    s.duration_us as f64 / 1e6,
+                    s.tags.join(",")
+                )
+            }));
+            text(lines.join("\n"))
+        }
+        Op::Use => {
+            let id = args
+                .name
+                .ok_or("Give the sound's id as `name` (op: list)")?;
+            let at = match (args.at_us, args.at_word) {
+                (Some(at), _) => at,
+                (None, Some(word)) => super::actions::word_edited_us(ctx, None, &word)?,
+                (None, None) => return Err("Give `atUs` or `atWord`".into()),
+            };
+            let before = opened(ctx)?;
+            let placed = sounds::project_sound_place_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                id.clone(),
+                at,
+            )?;
+            let line = format!(
+                "Placed {id} at {} as clip {} (media {}).",
+                super::tools::clock(at),
+                placed.clip_id,
+                placed.asset_id
+            );
+            text(applied(ctx, "library", &before, vec![line])?)
+        }
+        _ => Err("Sounds take `op: list` or `op: use`; the user adds their own in the app".into()),
+    }
+}
+
 fn layout(args: LibraryArgs) -> Result<Vec<Output>, String> {
     use crate::layouts::favourites;
     let dir = favourites::dir();
@@ -293,5 +359,42 @@ fn layout(args: LibraryArgs) -> Result<Vec<Output>, String> {
             ))
         }
         _ => Err("Use or save a layout with the `layouts` tool".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn said(output: Vec<Output>) -> String {
+        match output.into_iter().next() {
+            Some(Output::Text(text)) => text,
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn an_agent_finds_a_sound_and_places_it() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let ctx = Ctx::new(&host, "agent", false);
+        let list = said(library(&ctx, json!({ "kind": "sound", "query": "whoosh" })).unwrap());
+        assert!(list.starts_with("4 sounds"), "{list}");
+        assert!(list.contains("\nwhoosh-whip 0.38s "), "{list}");
+        let placed = said(
+            library(
+                &ctx,
+                json!({ "kind": "sound", "op": "use", "name": "whoosh-fast", "atUs": 1_000_000 }),
+            )
+            .unwrap(),
+        );
+        assert!(
+            placed.starts_with("Placed whoosh-fast at 0:01.00"),
+            "{placed}"
+        );
+        assert!(library(&ctx, json!({ "kind": "sound", "op": "use", "name": "pop" })).is_err());
     }
 }

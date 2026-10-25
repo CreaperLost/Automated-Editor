@@ -209,10 +209,15 @@ From the build logs. Know this before trusting a feature in a real session.
   over the CLI; graphics install and render in the dev app; `check` on a real recording; layouts
   in the dev app; the filler-review evaluation; history across restarts and undoing an agent's
   run; whole agent edits of a real tutorial and a take short ([EVAL-1](plans/evaluation.md), four
-  runs); a style's font file in captions and graphics; stopping a long call.
-- **Not verified:** macOS for most of the MCP and graphics path; a real Codex session using write
-  tools; the agent's full templatize → check → save loop over MCP; a style's logo in a real
-  export.
+  runs); a style's font file in captions and graphics; stopping a long call. On 25 Oct, three
+  real Codex sessions (`codex exec`, CLI 0.163) against the dev app: write tools (silence,
+  check, a library sound, undo); the whole templatize → check → save → remove loop over MCP; a
+  style with a logo used by a graphic, rendered and exported (logo seen in the MP4's frame).
+- **Codex needs per-tool approval for write tools:** `codex exec` refuses every tool not marked
+  read-only ("requires approval, but approval policy is never") until the user adds
+  `[mcp_servers.aeroedits.tools.<name>] approval_mode = "approve"` (the Codex app asks
+  instead). Read-only tools, images included, work without it.
+- **Not verified:** macOS for most of the MCP and graphics path.
 
 ## The AI loop we are heading to
 

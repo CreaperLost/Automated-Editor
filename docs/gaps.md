@@ -119,7 +119,7 @@ The research is clear that sound is **placement and art direction, not library b
 | Greek is online-only (Parakeet is English only) | Code: `transcript/language.rs` | — |
 | The filler/retake **rules** cut a deliberate repeat ("human in the loop. Human in the loop essentially means…"), and every review engine inherits that wrong cut; restarts, single-word repeats and cut-off words open no candidate window | Log: [local-review-eval](plans/local-review-eval.md) | [LNG-4](roadmap.md#lng-4) |
 | The review evaluation has no real Greek recording (the Greek case is scripted) | Log | [LNG-4](roadmap.md#lng-4) |
-| No custom vocabulary (product names, jargon) | Code | [LNG-5](roadmap.md#lng-5) |
+| Key terms fix only what a term spells or (Parakeet) what two or more words sound like; a single sound-alike word ("codecs" for Codex) stays | Code: `transcript/vocabulary.rs` | — |
 
 ## 12. Performance
 
@@ -133,7 +133,6 @@ The research is clear that sound is **placement and art direction, not library b
 ## 13. Verification debt
 
 Built but never checked end to end; see [product.md](product.md#what-is-verified-and-what-is-not).
-macOS for the MCP and graphics paths; a real Codex session using write tools; the agent's
-templatize → check → save loop over MCP; a style's logo in a real export (its font file was
-checked in captions and graphics on 24 Oct); layout performance on a real `.aero` with
-`perf.rs`. → [VER-1](roadmap.md#ver-1).
+macOS for the MCP and graphics paths; layout performance on a real `.aero` with `perf.rs`.
+(Codex write tools, the templatize → check → save loop and a style's logo in an export were
+checked 25 Oct.) → [VER-1](roadmap.md#ver-1).

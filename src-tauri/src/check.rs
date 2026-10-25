@@ -795,22 +795,24 @@ fn proposals(out: &mut Builder, root: &Path) {
 }
 
 /// Music playing in the edit must need no credit (George, 21 Oct): music whose licence asks
-/// for credit, or isn't known, is flagged.
+/// for credit, or isn't known, is flagged; so are sound effects whose licence asks for credit
+/// (an effect with none set is usually the user's own).
 fn music_licences(out: &mut Builder, document: &EditDocument) {
     let mut seen = Vec::new();
     for track in document.sequence.audio_tracks().filter(|t| !t.muted) {
         for clip in &track.clips {
-            if crate::sequence::clip_role(&document.assets, track, clip) != Some(Role::Music)
-                || seen.contains(&clip.asset)
-            {
+            let role = crate::sequence::clip_role(&document.assets, track, clip);
+            if !matches!(role, Some(Role::Music | Role::Effects)) || seen.contains(&clip.asset) {
                 continue;
             }
             seen.push(clip.asset.clone());
             let Some(asset) = document.asset(&clip.asset) else {
                 continue;
             };
+            let music = role == Some(Role::Music);
             let why = match &asset.licence {
                 Some(l) if l.kind.needs_no_credit() => continue,
+                None if !music => continue,
                 Some(l) if l.kind == crate::sequence::LicenceKind::CreditRequired => {
                     "its licence asks for credit"
                 }
@@ -821,8 +823,9 @@ fn music_licences(out: &mut Builder, document: &EditDocument) {
                 Severity::Warning,
                 format!("\"{}\" may need credit", asset.name),
                 format!(
-                    "It plays as music, but {why}. Use music that needs no credit (CC0, public \
-                     domain), or set its licence if you know it."
+                    "It plays as {}, but {why}. Use one that needs no credit (CC0, public \
+                     domain), or set its licence if you know it.",
+                    if music { "music" } else { "a sound effect" }
                 ),
             )
             .at(clip.start_us, clip.end_us());

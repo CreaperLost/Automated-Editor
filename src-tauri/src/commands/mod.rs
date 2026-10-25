@@ -19,6 +19,7 @@ pub mod history;
 pub mod noises;
 pub mod preset;
 pub mod proposals;
+pub mod sounds;
 pub mod style;
 pub mod thumbs;
 pub mod transcript;

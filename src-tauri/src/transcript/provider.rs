@@ -52,6 +52,10 @@ pub trait ChunkTranscriber {
     fn model(&self) -> String;
     fn plan(&self) -> ChunkPlan;
     fn transcribe_chunk(&mut self, chunk: &AudioChunk) -> Result<ChunkResult, String>;
+    /// What the user should know about the run once it is over.
+    fn notes(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub struct TranscriptionOutput {
@@ -79,7 +83,7 @@ pub fn transcribe_segments(
         fraction: 0.0,
         message: format!("Preparing audio for {label}"),
     });
-    let diagnostics = for_each_chunk(
+    let mut diagnostics = for_each_chunk(
         root,
         segments,
         transcriber.plan(),
@@ -133,6 +137,7 @@ pub fn transcribe_segments(
         .into_iter()
         .max_by_key(|(_, count)| *count)
         .map(|(code, _)| code);
+    diagnostics.extend(transcriber.notes());
     let transcript = Transcript::new(
         track_id.into(),
         transcriber.kind(),

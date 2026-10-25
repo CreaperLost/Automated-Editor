@@ -43,6 +43,10 @@ const MAX_RETAKE_SPAN_US: u64 = 12_000_000;
 const MAX_FINISHED_EXTRA_WORDS: usize = 2;
 /// Padding at the very start or end of the transcript, where there is no neighbour word.
 const EDGE_PAD_US: u64 = 50_000;
+/// Words that can be meant said twice alone ("that that", "had had") but, with a small word,
+/// say a pair again only as a restart ("that the, that the", "what is, what is").
+const PAIR_WORDS: &[&str] = &["that", "had", "what", "how", "where", "when", "who", "why"];
+
 /// Small words that said twice in a row are a stutter ("we we", "and and", "it's a it's a").
 /// Words said twice for weight ("very very", "pretty pretty", "really really") are meant, so
 /// only these count; "that that" and "had had" are left out, as both can be meant. Written as
@@ -519,11 +523,19 @@ pub fn suggestions(
     while k + 1 < live.len() {
         let same = |a: usize, b: usize| normalized.get(b).is_some_and(|n| *n == normalized[a]);
         let small = |k: usize| STUTTER_WORDS.contains(&normalized[k].as_str());
+        let in_pair = |k: usize| small(k) || PAIR_WORDS.contains(&normalized[k].as_str());
+        // A small word, then itself with a contraction: "they, they've", "we we're".
+        let contracted = |k: usize| {
+            normalized
+                .get(k + 1)
+                .and_then(|next| next.strip_prefix(normalized[k].as_str()))
+                .is_some_and(|rest| rest.starts_with('\'') && rest.len() > 1)
+        };
         // Two words count only if both are small: "one by one by one" is meant.
-        let span = if small(k) && !stops[k] && same(k, k + 1) {
+        let span = if small(k) && !stops[k] && (same(k, k + 1) || contracted(k)) {
             Some((k, k))
-        } else if small(k)
-            && small(k + 1)
+        } else if in_pair(k)
+            && in_pair(k + 1)
             && !stops[k]
             && !stops[k + 1]
             && same(k, k + 2)
@@ -1028,6 +1040,22 @@ mod tests {
             retakes(&["a problem with with previous models"]),
             vec!["with"]
         );
+        // From the 24 Oct recording (EN-D).
+        assert_eq!(
+            retakes(&["what is, what is going to happen?"]),
+            vec!["what is,"]
+        );
+        assert_eq!(
+            retakes(&["we can see that the, that the robot's hand"]),
+            vec!["that the,"]
+        );
+        assert_eq!(
+            retakes(&["I gotta say, they, they've got some demos"]),
+            vec!["they,"]
+        );
+        // Alone, these may be meant; two different pair words are not a stutter.
+        assert!(retakes(&["I know that that works"]).is_empty());
+        assert!(retakes(&["what that is"]).is_empty());
     }
 
     #[test]

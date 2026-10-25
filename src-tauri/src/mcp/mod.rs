@@ -551,19 +551,21 @@ impl rmcp::ServerHandler for Handler {
             millis: started.elapsed().as_millis() as u64,
             error: outcome.as_ref().err().cloned(),
         });
+        let image = |bytes: Vec<u8>, mime: &str| {
+            use base64::Engine;
+            ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(bytes),
+                mime,
+            )
+        };
         let result = match outcome {
             Ok(outputs) => CallToolResult::success(
                 outputs
                     .into_iter()
                     .map(|output| match output {
                         tools::Output::Text(text) => ContentBlock::text(text),
-                        tools::Output::Png(bytes) => {
-                            use base64::Engine;
-                            ContentBlock::image(
-                                base64::engine::general_purpose::STANDARD.encode(bytes),
-                                "image/png",
-                            )
-                        }
+                        tools::Output::Png(bytes) => image(bytes, "image/png"),
+                        tools::Output::Jpeg(bytes) => image(bytes, "image/jpeg"),
                     })
                     .collect(),
             ),
@@ -1423,7 +1425,7 @@ mod tests {
         let mut run = |args: serde_json::Value| {
             tools::call(more, &mut ctx, args).map(|out| match &out[0] {
                 tools::Output::Text(text) => text.clone(),
-                tools::Output::Png(_) => String::new(),
+                tools::Output::Png(_) | tools::Output::Jpeg(_) => String::new(),
             })
         };
         // Without `args`: what the tool does and takes.
@@ -1461,8 +1463,9 @@ mod tests {
             }
         }
         // 25 Oct (FIX-8): `short` on `propose_cuts` and `fillers_review`, 44,168; the budget
-        // moved to 44,500.
+        // moved to 44,500. Later (COST-1, SND-3): `storyboard` `board` and `library`
+        // `kind: sound` with `query`, `atUs`, `atWord`, 44,998; the budget moved to 45,500.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 44_500, "the tool list grew to {size} characters");
+        assert!(size < 45_500, "the tool list grew to {size} characters");
     }
 }

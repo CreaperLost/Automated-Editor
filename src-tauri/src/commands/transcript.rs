@@ -280,6 +280,16 @@ pub fn transcript_run_impl(
     };
     // Every later pass (fillers, retakes, AI review) reads the language from here.
     output.transcript.language = language;
+    let respelled = crate::transcript::vocabulary::apply(
+        &mut output.transcript.words,
+        &config.keyterms,
+        config.provider == ProviderKind::Parakeet,
+    );
+    if !respelled.is_empty() {
+        output
+            .diagnostics
+            .push(format!("Key terms respelled: {}.", respelled.join(", ")));
+    }
     {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();

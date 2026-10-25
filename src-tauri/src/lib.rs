@@ -27,6 +27,7 @@ pub mod secrets;
 pub mod sequence;
 pub mod shorts;
 pub mod sound_effects;
+pub mod sound_library;
 pub mod source_search;
 pub mod style;
 pub mod take_short;
@@ -488,6 +489,70 @@ fn project_media_licence(
         expected_revision,
         asset_id,
         licence,
+    )
+}
+
+/// The sound effects library, or the sounds matching `query` (SND-3).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_list(query: Option<String>) -> Result<Vec<sound_library::Sound>, String> {
+    commands::sounds::sound_library_list_impl(query)
+}
+
+/// A library sound as a data URL, to hear it.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_preview(id: String) -> Result<String, String> {
+    commands::sounds::sound_library_preview_impl(id)
+}
+
+/// Copies a sound file of the user's into the library.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_add(
+    path: String,
+    name: Option<String>,
+    tags: Vec<String>,
+    licence: sequence::Licence,
+) -> Result<sound_library::Sound, String> {
+    commands::sounds::sound_library_add_impl(path, name, tags, licence)
+}
+
+/// Changes a sound of the user's own.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_update(
+    id: String,
+    name: Option<String>,
+    tags: Option<Vec<String>>,
+    licence: Option<sequence::Licence>,
+) -> Result<sound_library::Sound, String> {
+    commands::sounds::sound_library_update_impl(id, name, tags, licence)
+}
+
+/// Takes a sound of the user's out of the library.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_remove(id: String) -> Result<(), String> {
+    commands::sounds::sound_library_remove_impl(id)
+}
+
+/// Places a library sound at a moment, on an effects track: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_sound_place(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    sound_id: String,
+    at_us: u64,
+) -> Result<commands::sounds::SoundPlaced, String> {
+    commands::sounds::project_sound_place_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        sound_id,
+        at_us,
     )
 }
 
@@ -2609,6 +2674,12 @@ pub fn run() {
             project_media_import,
             project_media_roles,
             project_media_licence,
+            sound_library_list,
+            sound_library_preview,
+            sound_library_add,
+            sound_library_update,
+            sound_library_remove,
+            project_sound_place,
             project_caption_cues,
             project_sound_effects,
             transcript_caption_edit,

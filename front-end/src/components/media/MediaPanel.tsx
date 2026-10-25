@@ -17,6 +17,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import type { Asset } from "../../lib/types";
 import { GraphicsPanel } from "../graphics/GraphicsPanel";
+import { SoundsPage } from "./SoundsPage";
 
 /** dataTransfer type for dragging a media bin item onto the timeline. */
 export const MEDIA_DRAG_TYPE = "application/x-aeroedits-media";
@@ -37,12 +38,13 @@ function formatLength(asset: Asset): string {
 
 const KIND_ICON = { recording: Clapperboard, video: Film, image: ImageIcon, audio: Music, graphic: Sparkles } as const;
 
-/// The Media panel: imported media, and a Graphics page for motion graphics.
+/// The Media panel: imported media, a Graphics page for motion graphics, and the sound effects
+/// library.
 export const MediaPanel: React.FC = () => {
-  const [page, setPage] = useState<"media" | "graphics">("media");
+  const [page, setPage] = useState<"media" | "graphics" | "sounds">("media");
   return (
     <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label select-none">
-      <Tabs<"media" | "graphics">
+      <Tabs<"media" | "graphics" | "sounds">
         label="Media pages"
         size="sm"
         className="shrink-0 h-8 px-1 border-b border-studio-800"
@@ -51,9 +53,10 @@ export const MediaPanel: React.FC = () => {
         items={[
           { value: "media", label: "Media", icon: Film },
           { value: "graphics", label: "Graphics", icon: Sparkles },
+          { value: "sounds", label: "Sounds", icon: Music },
         ]}
       />
-      {page === "media" ? <MediaList /> : <GraphicsPanel />}
+      {page === "media" ? <MediaList /> : page === "graphics" ? <GraphicsPanel /> : <SoundsPage />}
     </div>
   );
 };

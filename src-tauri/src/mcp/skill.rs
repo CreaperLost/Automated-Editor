@@ -535,7 +535,7 @@ mod tests {
         let call = |name: &str, args: Value| {
             (crate::mcp::tools::find(name).unwrap().run)(&ctx, args).map(|out| match &out[0] {
                 Output::Text(text) => text.clone(),
-                Output::Png(_) => String::new(),
+                Output::Png(_) | Output::Jpeg(_) => String::new(),
             })
         };
         let list = call("preset", serde_json::json!({})).unwrap();

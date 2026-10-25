@@ -26,6 +26,8 @@ pub const OTHER_PROJECT_MESSAGE: &str = "This call was for another project: the 
 pub enum Output {
     Text(String),
     Png(Vec<u8>),
+    /// A review board: many small frames, where JPEG is a fraction of PNG's bytes.
+    Jpeg(Vec<u8>),
 }
 
 /// Where a long tool call reports how far it got: a fraction (0 to 1) and a short message.
@@ -451,7 +453,8 @@ static TOOLS: [ToolDef; 14] = [
             a zoom, a graphic, a chapter or a long silence starts, short stretches merged. \
             Each tile is a finished frame with its time, what it shows, zoom, graphic, chapter \
             and words; the JSON lists the same per tile number. Use it to check an edit after \
-            your passes and before export, instead of many frame_render calls.",
+            your passes and before export, instead of many frame_render calls. `board`: \
+            `coarse` first, `fine` on a stretch in doubt.",
         schema: schema::<super::storyboard::StoryboardArgs>,
         read_only: true,
         run: super::storyboard::storyboard,

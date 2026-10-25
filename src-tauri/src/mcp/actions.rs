@@ -4610,7 +4610,7 @@ pub struct GraphicSetArgs {
 }
 
 /// Where word `word` of the transcript of `stream` starts on the edited timeline.
-fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> Result<u64, String> {
+pub(super) fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> Result<u64, String> {
     let key = pick_sound(ctx, stream, Want::Transcribed)?;
     with_reader(ctx.state, |reader| {
         let transcript =
@@ -5630,7 +5630,7 @@ mod tests {
                 .into_iter()
                 .filter_map(|o| match o {
                     Output::Text(text) => Some(text),
-                    Output::Png(_) => None,
+                    Output::Png(_) | Output::Jpeg(_) => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -5828,7 +5828,7 @@ mod tests {
                     .into_iter()
                     .filter_map(|o| match o {
                         Output::Text(text) => Some(text),
-                        Output::Png(_) => None,
+                        Output::Png(_) | Output::Jpeg(_) => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n")

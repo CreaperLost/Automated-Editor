@@ -339,22 +339,24 @@ export const TranscriptSettingsModal: React.FC<{
                   ? "Keeps every um, stutter and repeat, so they can be cut."
                   : "Gets names and numbers right more often; may drop stutters.",
               )}
-            {!local &&
-              choice(
-                "Key terms",
-                <input
-                  aria-label="Key terms"
-                  value={keyterms}
-                  placeholder="Names it should spell right, comma separated"
-                  onChange={(e) => setKeyterms(e.target.value)}
-                  onBlur={() => {
-                    const terms = keyterms.split(",").map((t) => t.trim()).filter(Boolean);
-                    if (terms.join(",") !== settings.keyterms.join(",")) void change({ keyterms: terms });
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                  className={input}
-                />,
-              )}
+            {choice(
+              "Key terms",
+              <input
+                aria-label="Key terms"
+                value={keyterms}
+                placeholder="Claude Code, Codex, ..."
+                onChange={(e) => setKeyterms(e.target.value)}
+                onBlur={() => {
+                  const terms = keyterms.split(",").map((t) => t.trim()).filter(Boolean);
+                  if (terms.join(",") !== settings.keyterms.join(",")) void change({ keyterms: terms });
+                }}
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                className={input}
+              />,
+              local
+                ? "Names spelled your way, comma separated. Fixes spacing, case and sound-alikes like “cloud code”."
+                : "Names spelled your way, comma separated. Scribe listens for them (ElevenLabs adds a small fee per hour).",
+            )}
             {choice(
               "Review by",
               <Segmented
