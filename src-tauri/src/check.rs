@@ -813,18 +813,19 @@ fn music_licences(out: &mut Builder, document: &EditDocument) {
             let why = match &asset.licence {
                 Some(l) if l.kind.needs_no_credit() => continue,
                 None if !music => continue,
-                Some(l) if l.kind == crate::sequence::LicenceKind::CreditRequired => {
-                    "its licence asks for credit"
-                }
-                _ => "its licence isn't known",
+                Some(l) => match crate::music_library::refused(l) {
+                    Some(why) => why,
+                    None => continue,
+                },
+                None => "its licence isn't known",
             };
             out.push(
                 Kind::MusicLicence,
                 Severity::Warning,
                 format!("\"{}\" may need credit", asset.name),
                 format!(
-                    "It plays as {}, but {why}. Use one that needs no credit (CC0, public \
-                     domain), or set its licence if you know it.",
+                    "It plays as {}, but {why}. Use one free for monetised videos with no \
+                     credit (CC0, public domain), or set its licence if you know it.",
                     if music { "music" } else { "a sound effect" }
                 ),
             )

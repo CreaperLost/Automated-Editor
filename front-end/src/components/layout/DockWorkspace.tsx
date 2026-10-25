@@ -53,6 +53,9 @@ const JumpCutsPanel = React.lazy(() => import("../cleanup/JumpCutsPanel").then((
 const NoisesPanel = React.lazy(() => import("../cleanup/NoisesPanel").then((m) => ({ default: m.NoisesPanel })));
 const ShortsListPanel = React.lazy(() => import("../shorts/ShortsListPanel").then((m) => ({ default: m.ShortsListPanel })));
 const ShortLookPanel = React.lazy(() => import("../shorts/ShortLookPanel").then((m) => ({ default: m.ShortLookPanel })));
+const SoundsPage = React.lazy(() => import("../media/SoundsPage").then((m) => ({ default: m.SoundsPage })));
+const MusicPage = React.lazy(() => import("../media/MusicPage").then((m) => ({ default: m.MusicPage })));
+const StylePanel = React.lazy(() => import("../style/StylePanel").then((m) => ({ default: m.StylePanel })));
 const JoinsPanel = React.lazy(() => import("../review/JoinsPanel").then((m) => ({ default: m.JoinsPanel })));
 const SearchPanel = React.lazy(() => import("../review/SearchPanel").then((m) => ({ default: m.SearchPanel })));
 
@@ -61,6 +64,8 @@ const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProp
   transcript: () => fill(<TranscriptPanel />),
   inspector: () => fill(<InspectorPanel />),
   media: () => fill(<MediaPanel />),
+  sounds: () => fill(<Library><SoundsPage /></Library>),
+  music: () => fill(<Library><MusicPage /></Library>),
   zoom: () => fill(<ZoomPanel />),
   chapters: () => fill(<ChaptersPanel />),
   agent: () => fill(<AgentPanel />),
@@ -71,7 +76,13 @@ const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProp
   timeline: () => fill(<Timeline />),
   shorts: () => fill(<ShortsListPanel />),
   shortLook: () => fill(<ShortLookPanel />),
+  shortStyle: () => fill(<div className="h-full overflow-y-auto"><StylePanel /></div>),
 };
+
+/// A library page as a panel of its own.
+function Library({ children }: { children: React.ReactNode }) {
+  return <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label select-none">{children}</div>;
+}
 
 /// The timeline, saying so when it is a short's own.
 function Timeline() {

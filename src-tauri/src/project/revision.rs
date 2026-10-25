@@ -67,6 +67,10 @@ pub struct EditDocument {
     /// Vertical clips picked from this video, anchored in an asset's time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shorts: Vec<crate::shorts::Short>,
+    /// Screen effects: blur, hide, spotlight, magnifier, dim behind a graphic (FX-2),
+    /// anchored in a screen recording's own picture and time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<crate::effects::ScreenEffect>,
     /// Set only on the document a short renders from: draw a split-screen vertical frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_layout: Option<crate::shorts::ShortLayout>,
@@ -126,6 +130,7 @@ impl Default for EditDocument {
             captions: CaptionSettings::default(),
             chapters: Vec::new(),
             shorts: Vec::new(),
+            effects: Vec::new(),
             short_layout: None,
             zoom_settings: Default::default(),
             style: default_style(),

@@ -1,0 +1,4 @@
+# Link with the LLVM linker Rust ships (rust-lld) instead of MSVC's link.exe: the app's
+# binary links in about 8 s instead of about 20 (QUAL-3, measured 25 Oct 2026).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

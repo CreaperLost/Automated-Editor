@@ -66,7 +66,9 @@ REV-1, AGT-3, AGT-4, SND-1, FTG-1 and LAY-1 were built 24 Oct (see [Done](#done)
 tier, in order (George, 25 Oct): **STY-2** styles from references (it takes in GFX-5's
 AI-proposed styles), then **GFX-8** graphics an agent makes well on top of it, and what VER-1
 couldn't cover here. Next up after them: SHT-1 (idea-first shorts, on FTG-1). The SFX starter
-set (SND-3), review boards (COST-1) and custom vocabulary (LNG-5) were built 25 Oct. LAY-2, UI-1 and UI-2 were built 24 Oct.
+set (SND-3), review boards (COST-1) and custom vocabulary (LNG-5) were built 25 Oct, and later
+that day the music library (SND-3), screen effects (FX-2), matching takes (AUTO-2), the Shorts
+tab's transcript-first layout (UI-8) and faster builds (QUAL-3). LAY-2, UI-1 and UI-2 were built 24 Oct.
 NOTE-1 (anchored notes, "Ask AI about this") was dropped 24 Oct: the chat, the agent's history
 and descriptions like "the graphic titled X" already do its job
 ([decisions](decisions.md#not-doing)).
@@ -115,7 +117,8 @@ agent proposes (research: [research/ai-styles.md](research/ai-styles.md)), is no
   a real 720p export. Found: `codex exec` refuses tools not marked read-only unless each has
   `approval_mode = "approve"` in Codex's config (see
   [product.md](product.md#what-is-verified-and-what-is-not)).
-- **Left:** the same on **macOS**.
+- **Later:** the same on **macOS**, when the macOS version is worked on again (George, 26 Oct:
+  not now).
 
 ---
 
@@ -158,14 +161,11 @@ Grouped by area. Order within a group is the suggested order.
   density limits, ducking); the agent picks which events deserve sound; sound style in words
   from STY-1. Depends on SND-1. **Was:** backlog #5 (second half).
 <a id="snd-3"></a>
-- **SND-3 · Sound and music libraries the user extends (M/L).** The SFX starter set is built
-  (25 Oct, see [Done](#done)). Left: a copyright-free music library on the same pattern
-  (browse, preview, search by tag, one-click placement, the user's own files). **Music must never need
-  credit (enforced):** every track stores its licence; the built-in library holds only tracks
-  allowed for monetised use without attribution (CC0 / public domain or equivalent); a track that
-  requires credit, forbids monetisation or has an unknown licence is refused for the library, and
-  a user import like that is flagged in the project and by `check` before export. Comes after
-  the project rules and style kit (decided order). Depends on SND-1.
+- **SND-3 · Sound and music libraries the user extends (M/L).** Built 25 Oct, both halves, and
+  a second composer (Komiku, 14 tracks) added 26 Oct (see [Done](#done);
+  [LICENSES](../src-tauri/assets/music/LICENSES.md) lists what was turned down and why). Left:
+  George's feedback when he listens (no rush, 26 Oct); the Komiku moods are guessed from
+  titles and genres.
   Decision: [Q-SOUND](decisions.md#q-sound).
 
 ### Footage
@@ -217,9 +217,9 @@ came first (SHT-5, SHT-6, SHT-4, SHT-7, SHT-3, SHT-2, all done); Clips (SHT-1) n
   per recording and cached like face tracks, composited in wgpu. Also enables text drawn behind
   the presenter. **Was:** backlog #9.
 <a id="fx-2"></a>
-- **FX-2 · Tutorial effects (M).** Spotlight, redaction/blur of a region, magnifier, dim/blur
-  under a graphic: time-bounded rectangles anchored to the screen layer, correct through crop,
-  zoom, layout changes and cuts, in preview and export.
+- **FX-2 · Tutorial effects (M).** Built 25 Oct, finished 26 Oct (blur behind a graphic, moving
+  and resizing a box; see [Done](#done)). Finding secrets on screen automatically was dropped
+  26 Oct ([decisions](decisions.md#not-doing)).
 <a id="fx-3"></a>
 - **FX-3 · Camera push-ins (M).** Start/end scale, pivot, easing, hold, return; matched framing
   across jump cuts; separate from screen zooms.
@@ -252,10 +252,11 @@ removed 23 Oct 2026: not needed.
 - **LNG-4 · Filler/retake rules fixes and a real Greek eval (S/M).** Done: list items and
   parallel statements (22 Oct), single-word repeats and cut-off words (22 Oct), two-word
   restarts and "they, they've" (25 Oct), a fourth labelled English recording, EN-D (25 Oct:
-  cloud cut all 6 must fillers, no wrong filler cut). Left: the rules still cut "human in the
-  loop. Human in the loop essentially means" (needs more examples); **a real Greek recording**
-  from George to label; George's call on `apply: true` for cloud fillers (only fillers; the
-  evidence now backs it). Results: [local-review-eval](plans/local-review-eval.md).
+  cloud cut all 6 must fillers, no wrong filler cut), the deliberate "human in the loop"
+  repeat and drawn-out words in retakes (26 Oct), and a real Greek recording, EL-B (26 Oct).
+  The online review's fillers are now cut at once (George, 26 Oct). Left, only when a longer
+  Greek recording comes: EL-B is 13 seconds, so Greek still rests mostly on the scripted EL-A.
+  Results: [local-review-eval](plans/local-review-eval.md).
   **Was:** task 3 leftovers.
 
 ### Automation
@@ -267,17 +268,16 @@ removed 23 Oct 2026: not needed.
   free local steps unless the user confirms. After [ORG-1](#org-1) phase 3. Decision:
   [Q-WATCH](decisions.md#q-watch).
 <a id="auto-2"></a>
-- **AUTO-2 · Speech matching across takes (M).** Measured speech-level matching (then gentle EQ)
-  so a re-recorded sentence doesn't jump.
+- **AUTO-2 · Speech matching across takes (M).** Built 25 Oct (see [Done](#done)). Left:
+  hearing it on George's real pickups; the EQ's strength (60 % of the difference, 4 dB at most)
+  is a first guess.
 
 ### UI
 
 Built: UI-1 and UI-2 (see [Done](#done)).
 
 <a id="ui-8"></a>
-- **UI-8 · Shorts tab: transcript first (S).** Add a Style tab; move "Clean the take" and its
-  steps out of Look into the Transcript panel, which is the main thing; keep "what plays under
-  it" short. From the 25 Oct test ([plans/graphics-quality.md](plans/graphics-quality.md#bugs)).
+- **UI-8 · Shorts tab: transcript first (S).** Built 25 Oct (see [Done](#done)).
 
 ### Dependencies
 
@@ -302,7 +302,9 @@ Raised 23 Oct as long-term direction. Every item here is measured against
 <a id="cost-2"></a>
 - **COST-2 · Tools on demand (S/M).** Measured and cut 24 Oct (see Done): 30 tools, 41,240
   characters (about 16k tokens); Claude Code with `ToolSearch` pays about 1.7k for the names.
-  Left: measure Codex and the Claude app; then, if a client sends the whole list, change the
+  Codex measured 26 Oct: it loads MCP tools on demand (about 0.9k tokens a turn for the
+  server; a search answers names only; a tool's schema loads when it is used), so it needs no
+  change. Left: measure the Claude app (George); only if it sends the whole list, change the
   list to the open project's preset (`notifications/tools/list_changed`: the shorts' tools only
   in a shorts edit) rather than more behind `more`.
 <a id="cost-3"></a>
@@ -336,12 +338,11 @@ Raised 23 Oct as long-term direction. Every item here is measured against
   project formats, removed alignment, superseded passes), merge near-duplicates, and keep the
   ones that pin decisions. Note how long the suite takes before and after.
 <a id="qual-3"></a>
-- **QUAL-3 · Build times and caching (S/M), later, not urgent.** Asked for 23 Oct: builds feel
-  slow (a `cargo check` of the app takes about 3 minutes after a small change). Measure a clean
-  build, a one-line change and `cargo tauri dev` rebuilds (`cargo build --timings`); look at
-  what is missing: a compiler cache (sccache), a faster linker, splitting the big crate so a
-  change rebuilds less, dev profile settings (`opt-level` and debug info per package), and
-  caching in the release/installer build.
+- **QUAL-3 · Build times and caching (S/M).** Done 25–26 Oct (see [Done](#done)): a one-file
+  change builds in 15–28 s instead of 6 min 23 s. Left, only if builds feel slow again:
+  splitting the crate (a refactor); sccache helps only clean builds and the extra target
+  folders (`target-check`, `C:\aeb`). Not run: a whole installer build with `rust-lld` (a plain
+  release build links and runs).
 
 ### Ideas not yet scheduled
 
@@ -366,6 +367,36 @@ Most recent first, a line or two each. The details are in git history (commit me
 plans deleted once built), the design in [architecture.md](architecture.md), the choices in
 [decisions.md](decisions.md).
 
+- **26 Oct 2026** — <a id="online-fillers"></a>**Online review fillers cut at once** (George's
+  call): in the app, Review with the OpenRouter/OpenAI review cuts the fillers it and the rules
+  found straight away (one undo step) and leaves the retakes in the list; the tutorial method
+  tells agents to cut fillers with `kinds: ["filler"]` and dry-run only the retakes. A local or
+  in-house review still lists everything first. **EL-B**, George's first real Greek recording
+  (13 s): the online review cut exactly the retake and the optional opening "Λοιπόν"; the rules
+  missed the retake ("γιααα" drawn out) until retakes matched a held letter as one, and now
+  catch it, with the other five cases unchanged. Scribe direct rejected the saved ElevenLabs
+  key, so Scribe via OpenRouter transcribed it.
+- **26 Oct 2026** — <a id="qual-3-debuginfo"></a>**QUAL-3** dev builds keep line tables only
+  (`debug = "line-tables-only"` for the app and its dependencies): a one-file change 47 s →
+  15–28 s, the PDB 285 → 79 MB; backtraces keep file and line, a debugger loses locals (set
+  `debug = true` for that). A release build links with `rust-lld` (6 min from a warm cache)
+  and its MCP server answers.
+- **26 Oct 2026** — <a id="fx-2-finished"></a>**FX-2 finished:** **blur behind a graphic**, a
+  second switch beside "Dim behind it" on a graphic clip (and `effects` `kind: blur_behind`):
+  the screen and camera under the graphic's rect blur while it plays (blocks of 12–40 px at
+  1080p, eased with the clip; a round or rounded camera only when the graphic covers it whole,
+  so its shape stays). Boxes **move and resize** while paused: drag a box, or a corner, and it
+  is saved on release as one undo step (`project_effect_move`, `effects` `op: move`).
+- **26 Oct 2026** — <a id="lng-4-repeat"></a>**LNG-4** a phrase ending one sentence and opening
+  the next is meant ("what we call human in the loop. Human in the loop essentially means"):
+  neither the rules' retakes (`transcript/edit.rs`) nor the review's candidates flag it when
+  the phrase doesn't open its sentence and the sentence doesn't end on a small word ("open up
+  the." is still a retake). Rules rerun: EN-A's one wrong cut gone; EN-B, EN-C, EN-D and EL-A
+  unchanged.
+- **26 Oct 2026** — <a id="snd-3-komiku"></a>**SND-3** 14 tracks by Komiku (CC0 on all 266 of
+  their FMA track pages, no other licence found), so the library is no longer one composer's:
+  calm, focus, happy, nostalgic, upbeat and game, pinned and downloaded like the rest. Built-in
+  tracks now carry their artist.
 - **25 Oct 2026** — <a id="cost-1"></a>**COST-1** review boards: `storyboard` `board: fine` (a
   frame a second, one JPEG a minute, 10×6 tiles of 148 px, about 1.0k image tokens by Claude's
   pixel count) or `coarse` (every 5 s, ten minutes an image, about 120 tokens a minute); amber
@@ -379,6 +410,50 @@ plans deleted once built), the design in [architecture.md](architecture.md), the
   Claude Code); one word that only sounds alike ("codecs") is left. OpenRouter answering 400 to
   key terms transcribes without them instead of failing; terms are checked against Scribe's
   limit (5 words, 50 characters). The field now shows for Parakeet too.
+- **25 Oct 2026** — <a id="qual-3-done"></a>**QUAL-3** faster builds. Measured with `cargo build
+  --timings` on the dev profile: a one-file change took **6 min 23 s**, 338 s of it the library
+  writing a 1.5 GB static library and a DLL that nothing links (Tauri's mobile template asks for
+  `staticlib` and `cdylib`). Now `crate-type = ["rlib"]`: **1 min 1 s**. Linking with Rust's own
+  `rust-lld` (`src-tauri/.cargo/config.toml`) took the binary's link from 19.5 s to 7.6 s:
+  **41 s**. A warm `cargo check` after a change is 9 s.
+- **25 Oct 2026** — <a id="snd-3-music"></a>**SND-3 (music)** 24 CC0 tracks by mood (calm,
+  focus, happy, dreamy, nostalgic, upbeat, game) by HoliznaCC0, each licence read on its own
+  FMA page; Loyalty Freak Music was turned down (archive.org says CC0, the artist's Bandcamp
+  says CC BY 4.0). The app doesn't ship them: each is pinned by size and SHA-256 and downloaded
+  the first time it is played or placed (`music/built-in` in the app folder). A **Music** page
+  in the Media panel (moods, play, + fills from the playhead to the end, add your own) and
+  `library` `kind: music`. Placing fills the stretch on a "Music" track (repeating the track,
+  faded in, out and at each repeat, brought to −16 LUFS) and switches the music under speech
+  on (18 dB) when it was off: one undo step. The user's own music is refused unless its licence
+  needs no credit and allows monetised use (new licence kind `nonCommercial`); `check` flags
+  music and effects like that anywhere in the edit.
+  Later the same day (George): **Sounds** and **Music** are dock panels of their own in Edit,
+  Cleanup, Shorts and Clips (no longer pages of the Media panel); placing goes into the timeline
+  shown, so in Shorts or Clips into that short's own timeline (the video is left as it is).
+- **25 Oct 2026** — <a id="fx-2-done"></a>**FX-2** screen effects: blur (the picture reduced to a
+  coarse grid of colour, 8–32 recorded pixels a block, never faded), hide (a solid block),
+  spotlight (the screen dims around the box), magnifier (a round lens, 2× by default) and dim
+  behind a graphic (a switch on the graphic clip). An effect is a box of the recording's own
+  picture over a stretch of its own clock, so it stays on what it covers through crops, zooms,
+  layouts and cuts, in the preview and the export (one drawing path). Drawn with the tools over
+  the preview (five seconds from the playhead; while paused the boxes show with "end here" and
+  ×), or by agents with `effects` (a box as `frame_render` shows the frame). GPU and CPU agree
+  (`gpu_cpu_screen_effects_within_tolerance`); effect layers reuse the screen's texture rather
+  than upload it again. The agent rules say to cover keys, tokens, passwords, emails and
+  balances when a frame shows one, and to tell the user.
+- **25 Oct 2026** — <a id="auto-2-done"></a>**AUTO-2** matching speech across takes ("Match takes"
+  in the Audio panel, on for new projects and the built-in presets). Each sound file of speech
+  is measured once with the rest of its analysis: the loudness of its mostly-spoken 100 ms
+  blocks and its spectrum in seven octave bands. Takes more than 1 dB from the edit's level
+  (weighted by how long each plays) are moved to it (9 dB at most); a take whose tone is 2 dB
+  or more off in a band gets 60 % of the difference as shelves and peaks (4 dB at most). The EQ
+  runs from a 100 ms warm-up before each read, so chunked playback and the export match.
+  Normalisation counts the matched gains.
+- **25 Oct 2026** — <a id="ui-8-done"></a>**UI-8** the Shorts tab is transcript first: the Transcript
+  panel sits under the shorts list (no longer behind it), a take short's transcript carries the
+  take, its steps and **Clean the take**, Look's section is only "What plays under the take",
+  and a **Style** tab sits beside Look. Saved Shorts layouts without the new tab fall back to
+  the new arrangement.
 - **25 Oct 2026** — **SND-3 (SFX starter set)** 17 CC0 sounds built into the app (4 whooshes, 2
   risers, 3 hits, 3 clicks, 3 pops, a ding, a toggle) from Kenney's packs and Freesound, each
   licence checked on its page (`src-tauri/assets/sounds/LICENSES.md`); written once to the app
@@ -453,7 +528,8 @@ plans deleted once built), the design in [architecture.md](architecture.md), the
   layout sections bumps a look generation; the engine swaps them into the running scene, keeping
   the mixer, decoders and sound playing. `perf_look_swap` on the 7:10 tutorial with 30 sections:
   the frame after a change 7.9 ms p50 swapped vs 12.1 ms rebuilt; playing with a change every
-  second p50 11.5, p95 17.7, one 363 ms frame. Drag-preview on the front end is not done.
+  second p50 11.5, p95 17.7, one 363 ms frame. The drag preview followed 26 Oct: dragging a
+  section's edge scrubs the preview to it (one seek a frame), saved on release.
 - **24 Oct 2026** — **Shorts and clips told apart for agents.** `clips` (list by default,
   create, find, range, rename, remove) replaces `short_create` and the old `shorts` find; `shorts`
   is now only for shorts made from a take (list by default, rename, remove); each refuses the

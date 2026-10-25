@@ -569,21 +569,41 @@ impl AudioMixer {
                         .polish
                         .as_ref()
                         .and_then(|plan| plan.denoiser(&span.lane, &segment.relative_path));
+                    // A take matched to the others (AUTO-2) is filtered from a little earlier,
+                    // so its filter has settled by `read_start`.
+                    let take = self
+                        .polish
+                        .as_ref()
+                        .and_then(|plan| plan.take(&span.lane, &segment.relative_path));
+                    let first = take.map_or(read_start, |t| t.input_range(read_start, read_end).0);
                     let (samples, got) = match denoiser {
                         Some(denoiser) => {
-                            let (from, to) = denoiser.input_range(read_start, read_end);
+                            let (from, to) = denoiser.input_range(first, read_end);
                             let input =
                                 self.with_reader(&path, |reader| read_padded(reader, from, to))?;
-                            let samples = denoiser.process(&input, channels, read_start, read_end);
-                            (samples, (read_end - read_start) as usize)
+                            let samples = denoiser.process(&input, channels, first, read_end);
+                            (samples, (read_end - first) as usize)
                         }
                         None => self.with_reader(&path, |reader| {
-                            reader.seek_to_frame(read_start)?;
-                            let want = (read_end - read_start) as usize;
+                            reader.seek_to_frame(first)?;
+                            let want = (read_end - first) as usize;
                             let mut samples = vec![0f32; want * channels];
                             let got = reader.read_frames(&mut samples, want)?;
                             Ok((samples, got))
                         })?,
+                    };
+                    let (samples, got) = match take {
+                        Some(take) => {
+                            let got = got.min(samples.len() / channels.max(1));
+                            let out = take.process(
+                                &samples[..got * channels],
+                                channels,
+                                first,
+                                read_start,
+                            );
+                            (out, got.saturating_sub((read_start - first) as usize))
+                        }
+                        None => (samples, got),
                     };
                     if got == 0 {
                         continue;

@@ -91,6 +91,12 @@ import {
   ShortGraphicFrom,
   LibrarySound,
   SoundPlaced,
+  LibraryTrack,
+  MusicPlaced,
+  EffectArea,
+  EffectAt,
+  EffectKind,
+  ScreenEffect,
 } from "./types";
 
 declare global {
@@ -664,9 +670,59 @@ export const api = {
       licence: change.licence ?? null,
     }),
   soundLibraryRemove: (id: string) => invokeTauri<void>("sound_library_remove", { id }),
-  /** Places a library sound at `atUs` on an effects track: one undo step. */
+  /** Places a library sound at `atUs` on an effects track of the timeline shown (a short's own when one is): one undo step. */
   projectSoundPlace: (projectHandle: string, expectedRevision: number, soundId: string, atUs: number) =>
-    invokeTauri<SoundPlaced>("project_sound_place", { projectHandle, expectedRevision, soundId, atUs }),
+    invokeTauri<SoundPlaced>("project_sound_place", { projectHandle, expectedRevision, soundId, atUs, shortId: editTarget }),
+  /** The screen effects showing at `editedUs`, with where each is on the canvas. */
+  projectEffectsAt: (projectHandle: string, editedUs: number) =>
+    invokeTauri<EffectAt[]>("project_effects_at", { projectHandle, editedUs }),
+  /** Adds an effect over `canvas` (0 to 1 of the canvas) for `durationUs` from `atUs`: one undo step. */
+  projectEffectAdd: (
+    projectHandle: string,
+    expectedRevision: number,
+    kind: EffectKind,
+    atUs: number,
+    durationUs: number,
+    canvas: EffectArea,
+  ) =>
+    invokeTauri<{ project: OpenedProject; effect: ScreenEffect }>("project_effect_add", {
+      projectHandle,
+      expectedRevision,
+      kind,
+      atUs,
+      durationUs,
+      canvas,
+      amount: null,
+    }),
+  /** Ends effect `effectId` at edited time `atUs`: one undo step. */
+  projectEffectEnd: (projectHandle: string, expectedRevision: number, effectId: string, atUs: number) =>
+    invokeTauri<OpenedProject>("project_effect_end", { projectHandle, expectedRevision, effectId, atUs }),
+  /** Moves or resizes effect `effectId` to `canvas` (0 to 1 of the canvas, as drawn at `atUs`): one undo step. */
+  projectEffectMove: (projectHandle: string, expectedRevision: number, effectId: string, atUs: number, canvas: EffectArea) =>
+    invokeTauri<OpenedProject>("project_effect_move", { projectHandle, expectedRevision, effectId, atUs, canvas }),
+  /** Replaces the video's effects: one undo step. */
+  projectEffectsSet: (projectHandle: string, expectedRevision: number, effects: ScreenEffect[]) =>
+    invokeTauri<OpenedProject>("project_effects_set", { projectHandle, expectedRevision, effects }),
+  /** The music library, or the tracks matching `query`. */
+  musicLibraryList: (query?: string) => invokeTauri<LibraryTrack[]>("music_library_list", { query: query || null }),
+  /** A library track's file on disk, downloading a built-in one the first time. */
+  musicLibraryFetch: (id: string) => invokeTauri<LibraryTrack>("music_library_fetch", { id }),
+  /** A library track as a data URL to play (downloading a built-in one the first time). */
+  musicLibraryPreview: (id: string) => invokeTauri<string>("music_library_preview", { id }),
+  /** Refused unless the licence needs no credit and allows monetised use. */
+  musicLibraryAdd: (path: string, name: string | null, tags: string[], licence: Licence) =>
+    invokeTauri<LibraryTrack>("music_library_add", { path, name, tags, licence }),
+  musicLibraryRemove: (id: string) => invokeTauri<void>("music_library_remove", { id }),
+  /** Fills `[atUs, untilUs)` (to the end when not given) of the timeline shown with a library track on a music track: one undo step. */
+  projectMusicPlace: (projectHandle: string, expectedRevision: number, trackId: string, atUs: number, untilUs?: number) =>
+    invokeTauri<MusicPlaced>("project_music_place", {
+      projectHandle,
+      expectedRevision,
+      trackId,
+      atUs,
+      untilUs: untilUs ?? null,
+      shortId: editTarget,
+    }),
   projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
     invokeTauri<OpenedProject>("project_chapters_set", {
       projectHandle,

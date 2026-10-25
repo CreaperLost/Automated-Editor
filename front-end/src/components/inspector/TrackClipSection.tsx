@@ -47,6 +47,7 @@ const LICENCES: { value: LicenceKind | ""; label: string }[] = [
   { value: "publicDomain", label: "Public domain" },
   { value: "noCredit", label: "Free to use, no credit needed" },
   { value: "creditRequired", label: "Needs credit" },
+  { value: "nonCommercial", label: "Not for monetised videos" },
   { value: "unknown", label: "Unclear" },
 ];
 

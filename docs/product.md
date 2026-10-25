@@ -76,7 +76,9 @@ lack it, so we say "we have", not "only we have".
 | Camera | Face centring on every camera slot (YuNet, found once per recording), hand framing per clip | Local model |
 | Telemetry polish | Window crop to the front window, bubble hides under activity, shortcut badges, click/whoosh lane (off by default) | `windows.jsonl`, `keys.jsonl`, `events.jsonl` |
 | Captions | The style's title font (a .ttf, .otf, .woff or .woff2 file, or an installed family; else Inter Display, bundled) at its caption weight; one emphasis word per caption in the accent, picked by the agent; pop-in, karaoke or static; give way to full-frame graphics; English and Greek, 16:9 and 9:16 | Transcript |
-| Audio | Track gain, denoise, speech ducking, loudness normalisation to -14 LUFS by default with a peak leveller, crossfades at cuts | DSP |
+| Audio | Track gain, denoise, speech ducking, loudness normalisation to -14 LUFS by default with a peak leveller, crossfades at cuts; takes of speech matched in level and (gently) tone | DSP |
+| Sounds and music | 17 CC0 sound effects and 24 CC0 music tracks by mood (downloaded on first use, hash-checked), plus the user's own; music that needs credit or forbids monetised use is refused, and `check` flags any in the edit | Media panel's Sounds and Music pages |
+| Screen effects | Blur or hide a part of the screen (keys, emails, balances), spotlight, magnifier, dim or blur behind a graphic; anchored in the recording's picture and time, so they stay put through zooms, crops, layouts and cuts; boxes move and resize on the paused preview | Drawn on the preview, or the agent |
 | Graphics | HyperFrames compositions (GSAP allowed): tutorial templates + blank in a light app style, one look per video from its style, an app-level library behind a no-model quality gate, short modes (full, split beside the face, over the face); rendered at the export's frame rate in the background, so an export of unchanged graphics starts at once | Pinned runtime (200 MB download on first use) |
 | Shorts | Two tabs. **Shorts** start from a take (a new camera take, cleaned like any recording, with footage and graphics from the video or the library under it, each piece at its own speed). **Clips** cut word ranges from the video that follow its edits or get their own timeline | The agent, or the app's cloud AI for clips |
 | Chapters | YouTube chapters from the transcript, checked before export | The agent when connected, else the app's cloud AI |
@@ -168,21 +170,21 @@ one-click connect for the Claude app and Codex, skill install and the autopilot 
 styles of the user's own; `graphic_templatize` → `graphic_check` → `library_save`. Not reusable
 yet: sound choices, a plan of the edit.
 
-## The agent surface: 55 tools
+## The agent surface: 56 tools
 
-30 are in the list every agent is sent; 25 that an edit rarely needs are behind `more`, which
+31 are in the list every agent is sent; 25 that an edit rarely needs are behind `more`, which
 gives one's arguments or runs it (COST-2, so the list stays about 15k tokens). Every tool is
 also a CLI command, `aeroedits do <tool> --key value`. Tools return **text and PNG only**.
 
 | Group | In the list | Behind `more` | Applies how |
 |---|---|---|---|
-| Guide | `preset`, `library` (styles, presets, layouts), `more` | — | Choosing a style or preset is one undo step |
+| Guide | `preset`, `library` (styles, presets, layouts, sounds, music), `more` | — | Choosing a style or preset, or placing a sound or music, is one undo step |
 | Read | `project_info`, `transcript_get` | `timeline_get`, `playhead`, `source_search`, `telemetry_get`, `layout_get`, `captions` | — |
 | Look | `frame_render`, `timeline_view`, `storyboard` | — | — |
 | Propose | `propose_cuts`, `proposals_list` | `propose_edit`, `proposal_withdraw`, `undo_batch` | Waits for the user in the Agent panel (unless autopilot) |
 | Project | `status`, `scan`, `open`, `create`, `undo` (`run: true`: the agent's whole run), `settings` | `redo`, `checkpoint`, `media_import` | Directly, one undo step each; the app saves a checkpoint before each agent run |
 | Speech | `transcribe`, `mouth_noises`, `silence`, `fillers`, `fillers_review` | `speed`, `transcript_fix` | Directly; `apply: false` is a dry run, `guard: true` the automatic check; word fixes are not undo steps |
-| Picture | `zooms` (automatic and single zooms) | `layouts`, `faces` | Directly; dry run available |
+| Picture | `zooms` (automatic and single zooms), `effects` (blur, hide, spotlight, magnifier, dim) | `layouts`, `faces` | Directly; dry run available (zooms) |
 | Shorts (from a take) | — | `short_from_take`, `short_footage`, `shorts` (list, rename, remove) | Directly; footage and graphics under a take as a batch |
 | Clips (cut from the video) | — | `clips` (list, create, find, range, rename, remove) | Directly; `find` only adds clips |
 | Graphics | `graphics`, `graphic_add`, `graphic_set` (incl. move, remove, style), `graphic_render` | `graphics_install`, `graphic_write_file`, `graphic_check`, `graphic_templatize`, `library_save`, `library_remove` | Directly (source edits and the library have no undo; checkpoints keep the files) |
@@ -217,6 +219,9 @@ From the build logs. Know this before trusting a feature in a real session.
   read-only ("requires approval, but approval policy is never") until the user adds
   `[mcp_servers.aeroedits.tools.<name>] approval_mode = "approve"` (the Codex app asks
   instead). Read-only tools, images included, work without it.
+- **Codex loads our tools on demand** (measured 26 Oct, CLI 0.163): connecting aeroedits adds
+  about 0.9k input tokens a turn, against about 11.5k for the full list of 31; a tool search
+  answers names, and a tool's schema loads when it is called.
 - **Not verified:** macOS for most of the MCP and graphics path.
 
 ## The AI loop we are heading to

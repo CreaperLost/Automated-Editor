@@ -209,6 +209,7 @@ pub fn all() -> &'static [ToolDef] {
             .iter()
             .chain(TOOLS.iter())
             .chain(super::library::TOOLS.iter())
+            .chain(super::effects::TOOLS.iter())
             .chain(super::actions::ACTIONS.iter())
             .chain(super::clips::TOOLS.iter())
             .chain(super::review::TOOLS.iter())

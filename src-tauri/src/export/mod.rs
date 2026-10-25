@@ -898,6 +898,30 @@ impl SceneEvaluator {
         (crate::layouts::arrange::Rect::of(placed), uv)
     }
 
+    /// An evaluator that composes scenes but never draws them (no GPU): for asking where
+    /// things are on the canvas.
+    pub fn without_gpu(root: PathBuf, document: EditDocument, width: u32, height: u32) -> Self {
+        let mut document = document;
+        crate::style::dress(&mut document);
+        Self::with_parts(
+            root,
+            document,
+            None,
+            width,
+            height,
+            std::cell::OnceCell::new(),
+        )
+    }
+
+    /// The screen clip's media and its time at `edited_us`, when a screen plays there.
+    pub fn screen_clip_at(&self, edited_us: u64) -> Option<(String, u64)> {
+        let (_, clip) = self.shown(edited_us).screen?;
+        Some((
+            clip.asset.clone(),
+            clip.local_us(edited_us).unwrap_or(clip.in_us),
+        ))
+    }
+
     pub fn scene_at(&self, edited_us: u64) -> Result<Scene, String> {
         use crate::layouts::arrange::{arrange, blend, Canvas, Sources};
         let shown = self.shown(edited_us);
@@ -1013,6 +1037,20 @@ impl SceneEvaluator {
             let slot = crate::layouts::arrange::ScreenSlot { rect, ..slot };
             scene.push_screen(picture, &slot, uv, style, unit);
             self.push_cursor(&mut scene, &clip.asset, local)?;
+            // Effects on what the recording shows (FX-2): anchored in its picture and clock,
+            // so they follow the crop, zoom and layout just drawn.
+            for (effect, weight) in
+                crate::effects::on_screen_at(&self.document.effects, &clip.asset, local)
+            {
+                let a = effect.area;
+                scene.push_screen_effect(
+                    effect.kind,
+                    [a.x, a.y, a.w, a.h],
+                    effect.amount(),
+                    weight,
+                    unit,
+                )?;
+            }
         }
         if let (Some(picture), Some(slot)) = (webcam, parts.camera) {
             let (focus, offset) = shown
@@ -1141,6 +1179,23 @@ impl SceneEvaluator {
                 Err(_) => continue,
             };
             frame.pts_us = edited_us;
+            if let Some((amount, weight)) = crate::effects::behind(
+                &self.document.effects,
+                crate::effects::EffectKind::BlurBehind,
+                &clip.id,
+                edited_us.saturating_sub(clip.start_us),
+                clip.duration_us,
+            ) {
+                scene.push_blur_behind(rect, amount, weight)?;
+            }
+            if let Some(amount) = crate::effects::dim_behind(
+                &self.document.effects,
+                &clip.id,
+                edited_us.saturating_sub(clip.start_us),
+                clip.duration_us,
+            ) {
+                scene.push_dim(rect, amount)?;
+            }
             scene.push_graphic(frame, rect, key);
         }
         Ok(())

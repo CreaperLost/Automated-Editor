@@ -26,7 +26,7 @@ settled table with the date and update the roadmap item it blocks.
 | Shorts use only what the main edit keeps; caption text fixes are shared with the video; one default length target, 30–60 s | 17 Oct | [plans/shorts.md](plans/shorts.md) |
 | Take shorts: footage only from what the video keeps, ducked under the voice, split look by default, the take goes through the normal cleanup | 18 Oct | plans/shorts.md |
 | Sound effects (clicks, whooshes) off by default | 20 Oct | backlog |
-| Fillers/retakes default to rules + AI review; OpenRouter/OpenAI when a key is set, local Qwen 4B only without one; `apply: true` is not the default for either | 21 Oct | [local-review-eval](plans/local-review-eval.md) |
+| Fillers/retakes default to rules + AI review; OpenRouter/OpenAI when a key is set, local Qwen 4B only without one. The online review's fillers are cut at once (26 Oct, George); its retakes, and everything the local review finds, are listed first | 21 Oct, 26 Oct | [local-review-eval](plans/local-review-eval.md) |
 | Greek is transcribed online only until a local model is good enough | 20 Oct | backlog |
 | **Presets and styles:** saved things become four: Style (how it looks: brand, graphics, caption look, frame look), Preset (what the app and agent do for a kind of video, incl. caption position and words per caption, the agent's method and rules), Layout, Project (only its own changes). "Template" stops being a user-facing word for settings. Replaces brand kits, saved looks, the Templates menu, saved answers; folds in STY-1, UI-3, AGT-3. How it was built: [below](#presets-and-styles-as-built-23-oct) | 23 Oct | [ORG-1](roadmap.md#org-1) |
 | Undo history lives in the project (`history/`), up to 2 GB, no step limit; a checkpoint before every agent run (newest five kept); graphic source edits are kept only in checkpoints until GFX-4 | 23 Oct | [SAFE-2](roadmap.md#safe-2) |
@@ -113,6 +113,7 @@ ones (the second opinion softened several).
 | Anchored notes (was NOTE-1): comments on a time range, a notes lane, agent notes, a selection reference ("Ask AI about this"), the user's reason on a rejected proposal | No (24 Oct) | One user, working live in chat: the chat and the agent's history hold the feedback, and agents find "the graphic titled X" reliably. Team review is where notes pay off |
 | A motion preview with sound for the agent (was REV-1 part 1) | No (24 Oct) | Claude takes no sound and MCP carries no video; as frames, 5 s at 30 fps is ~45k tokens (half the AI-1 budget) and still silent. Sight comes from review boards ([COST-1](roadmap.md#cost-1)) |
 | Review records per revision; an encoded-output pass on the export (was REV-1 parts 4–5) | No (24 Oct) | Bookkeeping for a team; export already normalises loudness, `check` warns on the target, and frozen frames are normal in screen recordings |
+| Finding secrets on screen automatically (OCR or a model marks keys, emails, passwords to hide) | No (25 Oct) | George dropped it: the agent covers what it sees in frames with `effects`, and the user draws the rest |
 | Spoken editor directions kept as notes ("cut this" said while recording) | Not now (24 Oct) | Needed a notes record; promote it as its own item only if a real edit asks for it |
 
 ## Waiting for George

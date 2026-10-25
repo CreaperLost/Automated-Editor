@@ -88,6 +88,12 @@ user asks. If anything is cut after them, set them again before export.
 Change only when asked: `settings` `area: layout` `webcamAutoHide` and `windowCrop` (on;
 `windowCropOff` lists stretches shown whole), `area: audio` `soundEffects` (off).
 
+## Secrets on screen, music
+
+When a frame shows an API key, token, password, email address or account balance, cover it
+with `effects` (`blur`, or `hide` for anything that must never be readable) over the stretch it
+shows, and tell the user. Music only when the user or the preset asks: `library` `kind: music`.
+
 ## Looking at the edit
 
 Before export, call `storyboard` once (with `short` for a short or clip): one image of the whole edit,

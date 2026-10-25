@@ -14,8 +14,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub mod effects;
 pub mod graphics;
 pub mod history;
+pub mod music;
 pub mod noises;
 pub mod preset;
 pub mod proposals;

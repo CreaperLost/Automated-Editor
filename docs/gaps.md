@@ -117,8 +117,8 @@ The research is clear that sound is **placement and art direction, not library b
 | Gap | Evidence | Fix |
 |---|---|---|
 | Greek is online-only (Parakeet is English only) | Code: `transcript/language.rs` | — |
-| The filler/retake **rules** cut a deliberate repeat ("human in the loop. Human in the loop essentially means…"), and every review engine inherits that wrong cut; restarts, single-word repeats and cut-off words open no candidate window | Log: [local-review-eval](plans/local-review-eval.md) | [LNG-4](roadmap.md#lng-4) |
-| The review evaluation has no real Greek recording (the Greek case is scripted) | Log | [LNG-4](roadmap.md#lng-4) |
+| Restarts, single-word repeats and cut-off words open no candidate window for the review (the deliberate "human in the loop" repeat the rules cut was fixed 26 Oct) | Log: [local-review-eval](plans/local-review-eval.md) | [LNG-4](roadmap.md#lng-4) |
+| The review evaluation has one short real Greek recording (EL-B, 13 s); the main Greek case is still scripted | Log | [LNG-4](roadmap.md#lng-4) |
 | Key terms fix only what a term spells or (Parakeet) what two or more words sound like; a single sound-alike word ("codecs" for Codex) stays | Code: `transcript/vocabulary.rs` | — |
 
 ## 12. Performance

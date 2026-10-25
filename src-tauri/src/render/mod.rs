@@ -15,9 +15,9 @@ use present::{Placement, WindowPresenter, WindowTarget};
 
 pub const COPIES_COMPOSITE: u32 = 2;
 /// Background, screen, webcam border, webcam, pointer and captions, plus an overlay for every
-/// other video track a sequence may have (16 in all), with room to spare. A valid sequence
-/// never runs out of layers.
-pub const MAX_LAYERS: usize = 24;
+/// other video track a sequence may have (16 in all), and screen effects (FX-2), with room to
+/// spare. A valid sequence never runs out of layers.
+pub const MAX_LAYERS: usize = 48;
 const SHADER: &str = include_str!("composite.wgsl");
 const TO_YUV: &str = include_str!("to_yuv.wgsl");
 const WEBCAM_SHADOW_BLUR_PX: f32 = 16.0;
@@ -46,6 +46,10 @@ struct LayerParams {
     format: u32,
     opacity: f32,
     _pad: u32,
+    /// A dim's hole (layer pixels: x, y, w, h).
+    hole: [f32; 4],
+    /// Blur: block size (uv, x and y); dim: feather (px), unused, amount, hole radius (px).
+    effect: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -60,6 +64,27 @@ pub enum LayerRole {
     Overlay,
     /// Straight-alpha text over everything else.
     Caption,
+    /// A screen effect (FX-2) over the screen: a blur, a block, a dim or a magnifier.
+    Effect,
+}
+
+/// What a layer draws instead of its plain picture (FX-2).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum LayerEffect {
+    #[default]
+    None,
+    /// The picture reduced to the mean colour of blocks `block` (uv) across, blended smoothly
+    /// between them: what it shows can't be read. The grid sits on the picture, so it holds
+    /// still through a zoom.
+    Blur { block: [f32; 2] },
+    /// Black at `amount` everywhere in the layer but a rounded `hole` (layer pixels: x, y, w,
+    /// h; none when empty), its edge `feather` pixels soft. Its picture is not drawn.
+    Dim {
+        hole: [f32; 4],
+        radius: f32,
+        feather: f32,
+        amount: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -93,6 +118,10 @@ pub struct Layer {
     pub cache_key: Option<u64>,
     /// How opaque the layer and its shadow are drawn, 0 to 1.
     pub opacity: f32,
+    pub effect: LayerEffect,
+    /// Draws the texture of the earlier layer at this index (the same frame) rather than
+    /// uploading it again: a screen effect over the screen.
+    pub shares: Option<usize>,
 }
 
 impl Layer {
@@ -115,6 +144,8 @@ impl Layer {
             shadow_offset: [0.0, 0.0],
             cache_key: None,
             opacity: 1.0,
+            effect: LayerEffect::None,
+            shares: None,
         }
     }
 
@@ -648,6 +679,240 @@ impl Scene {
         self.layers.push(layer);
     }
 
+    /// Where `area` (x, y, w, h: 0..1 of the screen's picture) is drawn on the canvas, cut to
+    /// the screen's rect and rounded out to whole pixels: the screen layer's index, the canvas
+    /// rect, and the part of the picture (uv) that rect shows. `None` when none of it shows.
+    pub fn screen_area(&self, area: [f32; 4]) -> Option<(usize, [u32; 4], [f32; 4])> {
+        let index = self
+            .layers
+            .iter()
+            .position(|l| l.role == LayerRole::Screen)?;
+        let s = &self.layers[index];
+        let (sx, sy, sw, sh) = (s.x as f64, s.y as f64, s.width as f64, s.height as f64);
+        let (ux, uy) = (s.uv_x as f64, s.uv_y as f64);
+        let (uw, uh) = ((s.uv_w as f64).max(1e-6), (s.uv_h as f64).max(1e-6));
+        let to_x = |u: f64| sx + (u - ux) / uw * sw;
+        let to_y = |v: f64| sy + (v - uy) / uh * sh;
+        let x0 = to_x(area[0] as f64).max(sx).floor();
+        let y0 = to_y(area[1] as f64).max(sy).floor();
+        let x1 = to_x((area[0] + area[2]) as f64)
+            .min(sx + sw)
+            .min(self.width as f64)
+            .ceil();
+        let y1 = to_y((area[1] + area[3]) as f64)
+            .min(sy + sh)
+            .min(self.height as f64)
+            .ceil();
+        if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+            return None;
+        }
+        let from_x = |x: f64| ux + (x - sx) / sw * uw;
+        let from_y = |y: f64| uy + (y - sy) / sh * uh;
+        Some((
+            index,
+            [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32],
+            [
+                from_x(x0) as f32,
+                from_y(y0) as f32,
+                (from_x(x1) - from_x(x0)) as f32,
+                (from_y(y1) - from_y(y0)) as f32,
+            ],
+        ))
+    }
+
+    /// Draws a screen effect over `area` of the screen's picture (see [`Scene::screen_area`]),
+    /// `weight` of the way in (spotlights and magnifiers ease; a blur or block is always
+    /// whole). Over the screen and its pointer, under the camera and everything after it, so
+    /// call it right after the pointer.
+    pub fn push_screen_effect(
+        &mut self,
+        kind: crate::effects::EffectKind,
+        area: [f32; 4],
+        amount: f32,
+        weight: f32,
+        unit: f32,
+    ) -> Result<(), String> {
+        use crate::effects::EffectKind;
+        let Some((index, [x, y, w, h], uv)) = self.screen_area(area) else {
+            return Ok(());
+        };
+        if self.layers.len() + 2 > MAX_LAYERS {
+            return Err("Too many screen effects at once to draw".into());
+        }
+        let screen = self.layers[index].clone();
+        let (fw, fh) = (screen.frame.width as f32, screen.frame.height as f32);
+        match kind {
+            EffectKind::Blur => {
+                // Blocks of 8 to 32 recorded pixels at 1080p: wider than a line of text.
+                let block_px = (8.0 + 24.0 * amount.clamp(0.0, 1.0)) * (fh / 1080.0).max(0.5);
+                let mut layer =
+                    Layer::placed(screen.frame, x, y, w, h).with_role(LayerRole::Effect);
+                (layer.uv_x, layer.uv_y, layer.uv_w, layer.uv_h) = (uv[0], uv[1], uv[2], uv[3]);
+                layer.effect = LayerEffect::Blur {
+                    block: [block_px / fw, block_px / fh],
+                };
+                layer.shares = Some(index);
+                self.layers.push(layer);
+            }
+            EffectKind::Hide => {
+                let block = VideoFrame::solid(8, 8, 0x2B, 0x26, 0x26, 0)?;
+                self.layers
+                    .push(Layer::placed(block, x, y, w, h).with_role(LayerRole::Effect));
+            }
+            EffectKind::Spotlight => {
+                let pad = 6.0 * unit;
+                let black = VideoFrame::solid(8, 8, 0, 0, 0, 0)?;
+                let mut layer =
+                    Layer::placed(black, screen.x, screen.y, screen.width, screen.height)
+                        .with_role(LayerRole::Effect)
+                        .with_clip(screen.clip, screen.radius_px);
+                layer.effect = LayerEffect::Dim {
+                    hole: [
+                        (x - screen.x) as f32 - pad,
+                        (y - screen.y) as f32 - pad,
+                        w as f32 + 2.0 * pad,
+                        h as f32 + 2.0 * pad,
+                    ],
+                    radius: 10.0 * unit,
+                    feather: 8.0 * unit,
+                    amount: amount * weight,
+                };
+                layer.opacity = screen.opacity;
+                self.layers.push(layer);
+            }
+            EffectKind::Magnify => {
+                // A round lens over the part, showing it `amount` times larger.
+                let per_source = screen.width as f32 / (screen.uv_w.max(1e-6) * fw);
+                let side_source = (area[2] * fw).max(area[3] * fh);
+                let full = (side_source * per_source * amount)
+                    .min(0.6 * screen.width.min(screen.height) as f32);
+                let d = (full * (0.85 + 0.15 * weight)).round().max(8.0);
+                let (cx, cy) = (x as f32 + w as f32 / 2.0, y as f32 + h as f32 / 2.0);
+                let fit = |c: f32, lo: u32, len: u32| {
+                    (c - d / 2.0)
+                        .min((lo + len) as f32 - d)
+                        .max(lo as f32)
+                        .max(0.0)
+                };
+                let (lx, ly) = (
+                    fit(cx, screen.x, screen.width),
+                    fit(cy, screen.y, screen.height),
+                );
+                let shown = d / (per_source * amount);
+                let (ucx, ucy) = (area[0] + area[2] / 2.0, area[1] + area[3] / 2.0);
+                let ring = (3.0 * unit).round().max(1.0);
+                let white = VideoFrame::solid(8, 8, 255, 255, 255, 0)?;
+                let mut border = Layer::placed(
+                    white,
+                    (lx - ring).max(0.0) as u32,
+                    (ly - ring).max(0.0) as u32,
+                    (d + 2.0 * ring) as u32,
+                    (d + 2.0 * ring) as u32,
+                )
+                .with_role(LayerRole::Effect)
+                .with_clip(ClipMode::Circle, 0.0)
+                .with_shadow(WEBCAM_SHADOW_BLUR_PX * unit, WEBCAM_SHADOW_OPACITY);
+                border.opacity = weight;
+                let mut lens =
+                    Layer::placed(screen.frame, lx as u32, ly as u32, d as u32, d as u32)
+                        .with_role(LayerRole::Effect)
+                        .with_clip(ClipMode::Circle, 0.0);
+                lens.uv_w = shown / fw;
+                lens.uv_h = shown / fh;
+                lens.uv_x = ucx - lens.uv_w / 2.0;
+                lens.uv_y = ucy - lens.uv_h / 2.0;
+                lens.shares = Some(index);
+                lens.opacity = weight;
+                self.layers.push(border);
+                self.layers.push(lens);
+            }
+            EffectKind::Dim | EffectKind::BlurBehind => {}
+        }
+        Ok(())
+    }
+
+    /// Dims the canvas inside `rect` to `amount` black (behind a graphic about to be pushed).
+    pub fn push_dim(&mut self, rect: (u32, u32, u32, u32), amount: f32) -> Result<(), String> {
+        let (x, y, w, h) = rect;
+        if self.layers.len() >= MAX_LAYERS || w == 0 || h == 0 || amount <= 0.0 {
+            return Ok(());
+        }
+        let mut layer = Layer::placed(VideoFrame::solid(8, 8, 0, 0, 0, 0)?, x, y, w, h)
+            .with_role(LayerRole::Effect);
+        layer.opacity = amount.min(1.0);
+        self.layers.push(layer);
+        Ok(())
+    }
+
+    /// Blurs the screen and camera pictures inside `rect` (behind a graphic about to be
+    /// pushed), `amount` coarse (0..1) and `weight` of the way in. A round or rounded camera
+    /// is blurred only when the rect covers it whole, so its shape stays.
+    pub fn push_blur_behind(
+        &mut self,
+        rect: (u32, u32, u32, u32),
+        amount: f32,
+        weight: f32,
+    ) -> Result<(), String> {
+        let (rx, ry, rw, rh) = rect;
+        if rw == 0 || rh == 0 || weight <= 0.0 {
+            return Ok(());
+        }
+        // A soft frost: 12 to 40 canvas pixels at 1080p.
+        let block_px = (12.0 + 28.0 * amount.clamp(0.0, 1.0)) * (self.height as f32 / 1080.0);
+        let pictures: Vec<usize> = (0..self.layers.len())
+            .filter(|&i| {
+                let l = &self.layers[i];
+                matches!(l.role, LayerRole::Screen | LayerRole::Webcam)
+                    && l.effect == LayerEffect::None
+                    && l.width > 0
+                    && l.height > 0
+            })
+            .collect();
+        for index in pictures {
+            if self.layers.len() >= MAX_LAYERS {
+                return Err("Too many layers to blur behind a graphic".into());
+            }
+            let source = &self.layers[index];
+            let x0 = rx.max(source.x);
+            let y0 = ry.max(source.y);
+            let x1 = (rx + rw).min(source.x + source.width);
+            let y1 = (ry + rh).min(source.y + source.height);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let whole = (x0, y0, x1, y1)
+                == (
+                    source.x,
+                    source.y,
+                    source.x + source.width,
+                    source.y + source.height,
+                );
+            if !whole && source.clip != ClipMode::None {
+                continue;
+            }
+            let (sw, sh) = (source.width as f32, source.height as f32);
+            let mut layer = Layer::placed(source.frame.clone(), x0, y0, x1 - x0, y1 - y0)
+                .with_role(LayerRole::Effect);
+            layer.uv_x = source.uv_x + source.uv_w * (x0 - source.x) as f32 / sw;
+            layer.uv_y = source.uv_y + source.uv_h * (y0 - source.y) as f32 / sh;
+            layer.uv_w = source.uv_w * (x1 - x0) as f32 / sw;
+            layer.uv_h = source.uv_h * (y1 - y0) as f32 / sh;
+            if whole {
+                layer = layer.with_clip(source.clip, source.radius_px);
+            }
+            layer.effect = LayerEffect::Blur {
+                block: [
+                    block_px * source.uv_w.abs() / sw,
+                    block_px * source.uv_h.abs() / sh,
+                ],
+            };
+            layer.opacity = weight.min(1.0) * source.opacity;
+            layer.shares = Some(index);
+            self.layers.push(layer);
+        }
+        Ok(())
+    }
+
     pub fn apply_screen_uv(&mut self, uv_x: f32, uv_y: f32, uv_w: f32, uv_h: f32) {
         if let Some(layer) = self
             .layers
@@ -716,6 +981,7 @@ struct YuvTarget {
 }
 
 /// A layer texture kept for the layer in the same position on the next frame.
+#[derive(Clone)]
 struct LayerSlot {
     width: u32,
     height: u32,
@@ -727,6 +993,8 @@ struct LayerSlot {
     chroma: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// The `cache_key` of the pixels last uploaded, if they were static.
     key: Option<u64>,
+    /// Another layer's texture (see [`Layer::shares`]): never uploaded into.
+    shared: bool,
 }
 
 /// What a render produces: the frame read back, or whether it reached the window.
@@ -1030,6 +1298,14 @@ impl Compositor {
             if layer.has_shadow() {
                 blit_shadow(&mut frame, layer)?;
             }
+            if layer.effect != LayerEffect::None {
+                let bgra = Layer {
+                    frame: layer.frame.to_bgra(),
+                    ..layer.clone()
+                };
+                blit_effect(&mut frame, &bgra)?;
+                continue;
+            }
             if layer.frame.format == PixelFormat::Bgra8888 {
                 blit_bilinear(&mut frame, layer)?;
             } else {
@@ -1216,8 +1492,22 @@ impl Compositor {
                     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                     (texture, view)
                 };
-            if slots.get(index).is_none_or(|slot| {
-                (slot.width, slot.height, slot.format) != (size.0, size.1, format)
+            let shares = layer
+                .shares
+                .filter(|&source| source < index && source < slots.len());
+            if let Some(source) = shares {
+                let slot = LayerSlot {
+                    key: None,
+                    shared: true,
+                    ..slots[source].clone()
+                };
+                if index < slots.len() {
+                    slots[index] = slot;
+                } else {
+                    slots.push(slot);
+                }
+            } else if slots.get(index).is_none_or(|slot| {
+                slot.shared || (slot.width, slot.height, slot.format) != (size.0, size.1, format)
             }) {
                 let (texture, view) = if nv12 {
                     new_texture(
@@ -1250,6 +1540,7 @@ impl Compositor {
                     view,
                     chroma,
                     key: None,
+                    shared: false,
                 };
                 if index < slots.len() {
                     slots[index] = slot;
@@ -1258,7 +1549,8 @@ impl Compositor {
                 }
             }
             let slot = &mut slots[index];
-            let unchanged = layer.cache_key.is_some() && slot.key == layer.cache_key;
+            let unchanged =
+                shares.is_some() || (layer.cache_key.is_some() && slot.key == layer.cache_key);
             slot.key = layer.cache_key;
             if !unchanged {
                 let stride = layer.frame.stride;
@@ -1912,6 +2204,20 @@ fn shadow_pad(layer: &Layer) -> f32 {
 }
 
 fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
+    // The content pass of an effect layer draws the effect instead.
+    let (pass_kind, hole, effect) = match (pass_kind, layer.effect) {
+        (0, LayerEffect::Blur { block }) => (2, [0.0; 4], [block[0], block[1], 0.0, 0.0]),
+        (
+            0,
+            LayerEffect::Dim {
+                hole,
+                radius,
+                feather,
+                amount,
+            },
+        ) => (3, hole, [feather, 0.0, amount, radius]),
+        (kind, _) => (kind, [0.0; 4], [0.0; 4]),
+    };
     LayerParams {
         size_px: [layer.width as f32, layer.height as f32],
         radius_px: layer.radius_px,
@@ -1926,6 +2232,8 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
         },
         opacity: layer.opacity.clamp(0.0, 1.0),
         _pad: 0,
+        hole,
+        effect,
     }
 }
 
@@ -2105,6 +2413,92 @@ fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
                 continue;
             }
             dest.data[di..di + 4].copy_from_slice(&src);
+        }
+    }
+    Ok(())
+}
+
+/// The CPU twin of the shader's blur and dim passes (see `composite.wgsl`).
+fn blit_effect(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
+    if layer.width == 0 || layer.height == 0 {
+        return Err("Layer size is empty".into());
+    }
+    let opacity = layer.opacity.clamp(0.0, 1.0);
+    let (w, h) = (layer.width as f32, layer.height as f32);
+    let block_mean = |cu: f32, cv: f32, block: [f32; 2]| {
+        let mut sum = [0f32; 3];
+        for i in 0..4 {
+            for j in 0..4 {
+                let du = ((i as f32 + 0.5) / 4.0 - 0.5) * block[0];
+                let dv = ((j as f32 + 0.5) / 4.0 - 0.5) * block[1];
+                let s = sample_bilinear(&layer.frame, cu + du, cv + dv);
+                for (total, value) in sum.iter_mut().zip(s) {
+                    *total += value as f32;
+                }
+            }
+        }
+        sum.map(|s| s / 16.0)
+    };
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    for dy in 0..layer.height {
+        let y = layer.y + dy;
+        if y >= dest.height {
+            continue;
+        }
+        let local_y = (dy as f32 + 0.5) / h;
+        let v = layer.uv_y + layer.uv_h * local_y;
+        for dx in 0..layer.width {
+            let x = layer.x + dx;
+            if x >= dest.width {
+                continue;
+            }
+            let local_x = (dx as f32 + 0.5) / w;
+            if layer_sdf(layer, local_x, local_y, false) > 0.0 {
+                continue;
+            }
+            let u = layer.uv_x + layer.uv_w * local_x;
+            let (color, alpha) = match layer.effect {
+                LayerEffect::Blur { block } => {
+                    let (gx, gy) = (u / block[0] - 0.5, v / block[1] - 0.5);
+                    let (ix, iy) = (gx.floor(), gy.floor());
+                    let (fx, fy) = (smooth(gx - ix), smooth(gy - iy));
+                    let at = |a: f32, b: f32| {
+                        block_mean((ix + a) * block[0], (iy + b) * block[1], block)
+                    };
+                    let (c00, c10) = (at(0.5, 0.5), at(1.5, 0.5));
+                    let (c01, c11) = (at(0.5, 1.5), at(1.5, 1.5));
+                    let mut color = [0f32; 3];
+                    for (c, out) in color.iter_mut().enumerate() {
+                        let top = c00[c] + (c10[c] - c00[c]) * fx;
+                        let bottom = c01[c] + (c11[c] - c01[c]) * fx;
+                        *out = top + (bottom - top) * fy;
+                    }
+                    (color, opacity)
+                }
+                LayerEffect::Dim {
+                    hole,
+                    radius,
+                    feather,
+                    amount,
+                } => {
+                    let mut alpha = amount;
+                    if hole[2] > 0.0 && hole[3] > 0.0 {
+                        let (px, py) = ((local_x - 0.5) * w, (local_y - 0.5) * h);
+                        let (hw, hh) = (hole[2] / 2.0, hole[3] / 2.0);
+                        let (cx, cy) = (hole[0] + hw - w / 2.0, hole[1] + hh - h / 2.0);
+                        let d = sdf_rounded_rect(px - cx, py - cy, hw, hh, radius);
+                        alpha *= (d / feather.max(1.0) + 0.5).clamp(0.0, 1.0);
+                    }
+                    ([0.0; 3], alpha * opacity)
+                }
+                LayerEffect::None => continue,
+            };
+            let di = (y * dest.stride + x * 4) as usize;
+            for (dst, s) in dest.data[di..di + 3].iter_mut().zip(color) {
+                *dst = (s * alpha + *dst as f32 * (1.0 - alpha))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+            }
         }
     }
     Ok(())
@@ -3265,6 +3659,143 @@ mod tests {
                 mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE
                     && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
                 "GPU vs CPU mean {mean} max {max}"
+            );
+        }
+    }
+
+    /// A screen with fine stripes (text-like detail), placed half-size and zoomed 2x.
+    fn effects_scene() -> Scene {
+        let mut stripes = VideoFrame::solid(64, 32, 255, 255, 255, 0).unwrap();
+        let mut data = stripes.data.clone().into_vec();
+        for y in 0..32u32 {
+            for x in 0..64u32 {
+                if (x / 2 + y / 3) % 2 == 0 {
+                    let i = (y * stripes.stride + x * 4) as usize;
+                    data[i..i + 3].copy_from_slice(&[20, 30, 40]);
+                }
+            }
+        }
+        stripes.data = crate::media::PixelBuffer::from(data);
+        let mut scene = Scene {
+            width: 64,
+            height: 48,
+            background: [0.2, 0.2, 0.2, 1.0],
+            layers: Vec::new(),
+        };
+        let mut screen = Layer::placed(stripes, 0, 8, 64, 32);
+        (screen.uv_x, screen.uv_y, screen.uv_w, screen.uv_h) = (0.25, 0.25, 0.5, 0.5);
+        scene.layers.push(screen);
+        scene
+    }
+
+    #[test]
+    fn a_blur_behind_covers_the_screen_under_the_graphic_and_keeps_a_round_camera_whole() {
+        let mut scene = effects_scene();
+        let camera = VideoFrame::solid(8, 8, 200, 100, 50, 0).unwrap();
+        scene.layers.push(
+            Layer::placed(camera, 48, 0, 16, 16)
+                .with_role(LayerRole::Webcam)
+                .with_clip(ClipMode::Circle, 0.0),
+        );
+        // The left half of the canvas: half the screen and none of the camera.
+        scene.push_blur_behind((0, 0, 32, 48), 0.5, 1.0).unwrap();
+        assert_eq!(scene.layers.len(), 3);
+        let blur = scene.layers.last().unwrap();
+        assert_eq!((blur.x, blur.y, blur.width, blur.height), (0, 8, 32, 32));
+        assert_eq!(blur.shares, Some(0));
+        assert!((blur.uv_x - 0.25).abs() < 1e-6 && (blur.uv_w - 0.25).abs() < 1e-6);
+        assert!(matches!(blur.effect, LayerEffect::Blur { .. }));
+        // Part of the camera is under it: a round camera isn't cut square.
+        let mut part = effects_scene();
+        part.layers.push(scene.layers[1].clone());
+        part.push_blur_behind((40, 0, 24, 8), 0.5, 1.0).unwrap();
+        assert_eq!(part.layers.len(), 2);
+        // All of it is: blurred whole, still round.
+        part.push_blur_behind((0, 0, 64, 48), 0.5, 0.5).unwrap();
+        let round = part.layers.last().unwrap();
+        assert_eq!(
+            (round.clip, round.shares, round.opacity),
+            (ClipMode::Circle, Some(1), 0.5)
+        );
+        // Nothing when it hasn't eased in.
+        let count = part.layers.len();
+        part.push_blur_behind((0, 0, 64, 48), 0.5, 0.0).unwrap();
+        assert_eq!(part.layers.len(), count);
+    }
+
+    #[test]
+    fn a_blur_covers_its_box_on_the_screen_and_flattens_detail() {
+        use crate::effects::EffectKind;
+        let mut scene = effects_scene();
+        // The middle of the picture: [0.4, 0.6] across is canvas x 19.2..44.8.
+        scene
+            .push_screen_effect(EffectKind::Blur, [0.4, 0.4, 0.2, 0.2], 1.0, 1.0, 1.0)
+            .unwrap();
+        let blur = scene.layers.last().unwrap();
+        assert_eq!((blur.x, blur.width), (19, 26));
+        assert_eq!(blur.shares, Some(0));
+        let before = Compositor::composite_cpu(&effects_scene()).unwrap();
+        let after = Compositor::composite_cpu(&scene).unwrap();
+        let spread = |f: &VideoFrame| {
+            let row = 24 * f.stride as usize;
+            let values: Vec<u8> = (22..42).map(|x| f.data[row + x * 4]).collect();
+            values.iter().max().unwrap() - values.iter().min().unwrap()
+        };
+        assert!(spread(&before) > 150, "the stripes show before");
+        assert!(
+            spread(&after) < 60,
+            "the blur flattens them: {}",
+            spread(&after)
+        );
+        // Outside the box the screen is as it was.
+        let i = (24 * after.stride + 4 * 4) as usize;
+        assert_eq!(after.data[i..i + 3], before.data[i..i + 3]);
+    }
+
+    #[test]
+    fn a_spotlight_dims_around_its_box_and_a_box_off_screen_draws_nothing() {
+        use crate::effects::EffectKind;
+        let mut scene = effects_scene();
+        scene
+            .push_screen_effect(EffectKind::Spotlight, [0.4, 0.4, 0.2, 0.2], 0.6, 1.0, 0.5)
+            .unwrap();
+        let lit = Compositor::composite_cpu(&scene).unwrap();
+        let plain = Compositor::composite_cpu(&effects_scene()).unwrap();
+        let at = |f: &VideoFrame, x: u32, y: u32| f.data[(y * f.stride + x * 4) as usize + 1];
+        assert_eq!(at(&lit, 32, 24), at(&plain, 32, 24), "the hole is bright");
+        assert!(at(&lit, 2, 10) < at(&plain, 2, 10), "the rest dims");
+        let mut off = effects_scene();
+        // Zoomed in on the middle half, the picture's corner isn't on the canvas.
+        off.push_screen_effect(EffectKind::Blur, [0.0, 0.0, 0.1, 0.1], 1.0, 1.0, 1.0)
+            .unwrap();
+        assert_eq!(off.layers.len(), 1);
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
+    )]
+    fn gpu_cpu_screen_effects_within_tolerance() {
+        use crate::effects::EffectKind;
+        let compositor = Compositor::new().expect("GPU compositor required for contract tests");
+        for kind in [
+            EffectKind::Blur,
+            EffectKind::Hide,
+            EffectKind::Spotlight,
+            EffectKind::Magnify,
+        ] {
+            let mut scene = effects_scene();
+            scene
+                .push_screen_effect(kind, [0.4, 0.4, 0.2, 0.2], 0.6, 1.0, 0.5)
+                .unwrap();
+            scene.push_dim((0, 0, 64, 8), 0.5).unwrap();
+            let cpu = Compositor::composite_cpu(&scene).unwrap();
+            let gpu = compositor.composite(&scene).unwrap();
+            let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
+            assert!(
+                mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE + 1.0,
+                "{kind:?}: GPU vs CPU mean {mean} max {max}"
             );
         }
     }

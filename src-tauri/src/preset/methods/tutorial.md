@@ -80,10 +80,14 @@ The passes:
    - **Always `review: auto` (leave `review` out)**, fast or thorough alike: `fillers` runs the
      rules with the app's OpenRouter review when a key is set, else with its built-in local
      model when it is downloaded. Don't review the words yourself unless the user asks you to
-     or `fillers` says no review could run: the app's review costs you nothing. Dry-run it
-     (`apply: false`): give how many came from the review, the seconds it would cut and a few
+     or `fillers` says no review could run: the app's review costs you nothing.
+   - **The OpenRouter review ran** (`fillers` names it): its fillers are cut without asking.
+     Run `fillers` with `kinds: ["filler"]` (and `guard: true`), then dry-run the retakes
+     (`kinds: ["retake"]`, `apply: false`): how many, the seconds they would cut and a few
      examples. Read the transcript around a flagged retake only when it looks like content
-     (a full sentence or an item of a list), and then offer "fillers only".
+     (a full sentence or an item of a list). Choices for the retakes: yes / skip.
+   - **The local review ran:** dry-run both (`apply: false`) the same way, and then offer
+     "fillers only".
    - **No review could run** (`fillers` says so): you are the AI review.
      By default `fillers_review` shows only windows of about 15 words either side of what the
      app's local pass flagged (a "like" or "so" that may be filler, a phrase said again); um
@@ -92,7 +96,8 @@ The passes:
      save them in one `fillers_review` call with `cuts` and the pages' `stamp`. With a
      thorough review (or when the windows miss things the user points out), read every word
      with `review: "thorough"` instead. Then dry-run `fillers` the same way.
-   Choices: yes / fillers only (`kinds: ["filler"]`) / skip. Then `fillers`. When the user
+   Choices (local or in-house review): yes / fillers only (`kinds: ["filler"]`) / skip. Then
+   `fillers`. When the user
    wants nothing sent to OpenRouter, use `review: local`.
 5. **Layouts: only when the user talks about layouts or the camera.** Otherwise skip this pass
    and don't mention it. When they do (`layouts` is behind `more`): the base layout, keep the camera bubble (default) / side

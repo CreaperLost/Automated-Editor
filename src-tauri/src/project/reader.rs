@@ -131,6 +131,9 @@ pub struct OpenedProject {
     pub chapters: Vec<crate::chapters::Chapter>,
     #[serde(default)]
     pub shorts: Vec<crate::shorts::Short>,
+    /// Screen effects (FX-2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<crate::effects::ScreenEffect>,
     /// Set when this is short `id`'s own timeline (the sequence is the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
@@ -606,6 +609,7 @@ impl ProjectReader {
                 captions: Default::default(),
                 chapters: Vec::new(),
                 shorts: Vec::new(),
+                effects: Vec::new(),
                 short_view: None,
                 cleanup: Default::default(),
                 export: Default::default(),
@@ -1226,6 +1230,7 @@ impl ProjectReader {
         let mut shorts = document.shorts.clone();
         crate::shorts::attach_edited(&mut shorts, document);
         self.summary.shorts = shorts;
+        self.summary.effects = document.effects.clone();
     }
 }
 

@@ -1,5 +1,6 @@
 import React from "react";
 import { NativePreviewHost } from "../canvas/NativePreviewHost";
+import { EffectsOverlay } from "../canvas/EffectsOverlay";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { api } from "../../lib/ipc";
@@ -77,7 +78,9 @@ export const StagePanel: React.FC = () => {
               : "No clips yet. Make one in the Clips panel: New clip, or Find with AI once the video is transcribed."}
           </p>
         ) : (
-          <NativePreviewHost key={project.projectHandle} fitAspectRatio={showsShort ? 9 / 16 : aspectValue(aspectRatio)} />
+          <NativePreviewHost key={project.projectHandle} fitAspectRatio={showsShort ? 9 / 16 : aspectValue(aspectRatio)}>
+            {!showsShort && <EffectsOverlay aspect={aspectValue(aspectRatio)} />}
+          </NativePreviewHost>
         )}
       </div>
 

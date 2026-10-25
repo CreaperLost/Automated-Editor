@@ -1,30 +1,18 @@
 import React from "react";
-import { Film, Shapes, Sparkles, Trash2 } from "lucide-react";
+import { Film, Shapes, Trash2 } from "lucide-react";
 import { seekPlayback } from "../../lib/playbackControl";
 import { assetById } from "../../lib/sequence";
 import { saveTrackMix } from "../../lib/trackMix";
 import { DEFAULT_AUDIO_SETTINGS, type OpenedProject, type Short } from "../../lib/types";
 import {
-  cleanTake,
   removeFootage,
   removeShortClips,
   setShortsError,
   useShortsStore,
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
-import { Button } from "../ui";
 import { UnderTake } from "./UnderTake";
 import { formatTime } from "./underTakeParts";
-
-/** "Recording · Microphone" for a stream key, else the key. */
-function streamName(project: OpenedProject, key: string | undefined): string {
-  if (!key) return "none";
-  const [assetId, streamId] = key.split(".");
-  const asset = assetById(project, assetId);
-  const stream = asset?.streams.find((s) => s.id === streamId);
-  if (!asset) return key;
-  return asset.kind === "recording" && stream ? `${asset.name} · ${stream.name}` : asset.name;
-}
 
 /// How loud the footage and B-roll sound plays under the take, and how far it is lowered while
 /// the voice talks: both play on the short's one Footage sound track, so one setting does both.
@@ -75,8 +63,9 @@ const FootageSound: React.FC<{ project: OpenedProject }> = ({ project }) => {
   );
 };
 
-/// A take short's take and what plays under it while the take talks: footage from the video,
-/// graphics and outside files. The agent places them (the "shorts" template), or the user here.
+/// What plays under a take short while the take talks: footage from the video, graphics and
+/// outside files. The agent places them (the "shorts" template), or the user here. The take
+/// itself (cleaning it) is worked on in the Transcript panel.
 export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewing: boolean }> = ({
   project,
   short,
@@ -95,29 +84,7 @@ export const TakeFootage: React.FC<{ project: OpenedProject; short: Short; viewi
         .sort((a, b) => a.clip.startUs - b.clip.startUs)
     : [];
   return (
-    <InspectorSection id="short-take" title="Take and what plays under it" icon={Film}>
-      <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-meta">
-        <dt className="text-studio-500">Camera</dt>
-        <dd className="truncate text-studio-200">{streamName(project, take.camera)}</dd>
-        <dt className="text-studio-500">Voice</dt>
-        <dd className="truncate text-studio-200">{streamName(project, take.voice)}</dd>
-      </dl>
-      <ol className="list-decimal pl-4 space-y-0.5 text-meta text-studio-400">
-        <li>Transcribe the take (Transcript, beside Shorts).</li>
-        <li>Clean it: pauses and mouth noises, or by hand in Jump cuts and Mouth noises.</li>
-        <li>Put footage, graphics or files under it: below, or ask the agent.</li>
-      </ol>
-      <Button
-        size="sm"
-        variant="secondary"
-        icon={Sparkles}
-        className="w-full"
-        disabled={!!busy || !viewing}
-        onClick={() => void cleanTake(short.id, take.voice)}
-        title="Cut the pauses between the take's words and mute its mouth noises (balanced settings; undoable). Needs the take's transcript."
-      >
-        {busy === "Cleaning the take" ? "Cleaning…" : "Clean the take"}
-      </Button>
+    <InspectorSection id="short-take" title="What plays under the take" icon={Film}>
       {viewing && <UnderTake project={project} short={short} />}
       {viewing && <FootageSound project={project} />}
       {placed.length === 0 ? (

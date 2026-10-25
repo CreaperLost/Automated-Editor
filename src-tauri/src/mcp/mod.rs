@@ -11,6 +11,7 @@ pub mod bridge;
 pub mod cli;
 pub mod clients;
 mod clips;
+mod effects;
 pub(crate) mod frames;
 pub mod ipc;
 mod layouts;
@@ -1465,7 +1466,9 @@ mod tests {
         // 25 Oct (FIX-8): `short` on `propose_cuts` and `fillers_review`, 44,168; the budget
         // moved to 44,500. Later (COST-1, SND-3): `storyboard` `board` and `library`
         // `kind: sound` with `query`, `atUs`, `atWord`, 44,998; the budget moved to 45,500.
+        // 25 Oct, later: `effects` (FX-2: blurring keys and emails is too important to sit
+        // behind `more`) and `library` `kind: music`, 46,549; the budget moved to 47,000.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 45_500, "the tool list grew to {size} characters");
+        assert!(size < 47_000, "the tool list grew to {size} characters");
     }
 }

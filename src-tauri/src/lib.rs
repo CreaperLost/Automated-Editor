@@ -7,6 +7,7 @@ pub mod commands;
 pub mod cuda;
 pub mod cursor;
 pub mod dsp;
+pub mod effects;
 pub mod export;
 pub mod face;
 pub mod fixtures;
@@ -16,6 +17,7 @@ pub mod layouts;
 pub mod mcp;
 pub mod media;
 pub mod media_bin;
+pub mod music_library;
 mod parity;
 mod perf;
 pub mod playback;
@@ -546,6 +548,7 @@ fn project_sound_place(
     expected_revision: u64,
     sound_id: String,
     at_us: u64,
+    short_id: Option<String>,
 ) -> Result<commands::sounds::SoundPlaced, String> {
     commands::sounds::project_sound_place_impl(
         &state,
@@ -553,7 +556,196 @@ fn project_sound_place(
         expected_revision,
         sound_id,
         at_us,
+        short_id,
     )
+}
+
+/// The screen effects showing at a moment, with where each is on the canvas (FX-2).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_effects_at(
+    app: tauri::AppHandle,
+    project_handle: String,
+    edited_us: u64,
+) -> Result<Vec<commands::effects::EffectAt>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::effects::project_effects_at_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            edited_us,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Adds a screen effect over a box drawn on the preview: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn project_effect_add(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    kind: effects::EffectKind,
+    at_us: u64,
+    duration_us: u64,
+    canvas: effects::Area,
+    amount: Option<f32>,
+) -> Result<commands::effects::EffectAdded, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::effects::project_effect_add_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            kind,
+            at_us,
+            duration_us,
+            canvas,
+            amount,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Ends a screen effect at a moment: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_effect_end(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    effect_id: String,
+    at_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::effects::project_effect_end_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        effect_id,
+        at_us,
+    )
+}
+
+/// Moves or resizes a screen effect to a box drawn on the preview: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_effect_move(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    effect_id: String,
+    at_us: u64,
+    canvas: effects::Area,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::effects::project_effect_move_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            effect_id,
+            at_us,
+            canvas,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Sets the video's screen effects: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_effects_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    effects: Vec<effects::ScreenEffect>,
+) -> Result<project::OpenedProject, String> {
+    commands::effects::project_effects_set_impl(&state, project_handle, expected_revision, effects)
+}
+
+/// The music library, or the tracks matching `query` (SND-3).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_list(query: Option<String>) -> Result<Vec<music_library::Track>, String> {
+    commands::music::music_library_list_impl(query)
+}
+
+/// A library track on disk, downloading a built-in one the first time.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn music_library_fetch(id: String) -> Result<music_library::Track, String> {
+    tauri::async_runtime::spawn_blocking(move || commands::music::music_library_fetch_impl(id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A library track as a data URL, to hear it (downloading a built-in one the first time).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn music_library_preview(id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || commands::music::music_library_preview_impl(id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Copies a music file of the user's into the library; refused unless it needs no credit.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_add(
+    path: String,
+    name: Option<String>,
+    tags: Vec<String>,
+    licence: sequence::Licence,
+) -> Result<music_library::Track, String> {
+    commands::music::music_library_add_impl(path, name, tags, licence)
+}
+
+/// Changes a track of the user's own.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_update(
+    id: String,
+    name: Option<String>,
+    tags: Option<Vec<String>>,
+    licence: Option<sequence::Licence>,
+) -> Result<music_library::Track, String> {
+    commands::music::music_library_update_impl(id, name, tags, licence)
+}
+
+/// Takes a track of the user's out of the library.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_remove(id: String) -> Result<(), String> {
+    commands::music::music_library_remove_impl(id)
+}
+
+/// Plays a library track under a stretch of the video, on a music track: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_music_place(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    track_id: String,
+    at_us: u64,
+    until_us: Option<u64>,
+    short_id: Option<String>,
+) -> Result<commands::music::MusicPlaced, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::music::project_music_place_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            track_id,
+            at_us,
+            until_us,
+            short_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// One timeline edit: tracks, clips, cuts, links. In a short's own timeline with `short_id`.
@@ -2680,6 +2872,18 @@ pub fn run() {
             sound_library_update,
             sound_library_remove,
             project_sound_place,
+            music_library_list,
+            music_library_fetch,
+            music_library_preview,
+            music_library_add,
+            music_library_update,
+            music_library_remove,
+            project_music_place,
+            project_effects_at,
+            project_effect_add,
+            project_effect_end,
+            project_effect_move,
+            project_effects_set,
             project_caption_cues,
             project_sound_effects,
             transcript_caption_edit,

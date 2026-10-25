@@ -13,6 +13,7 @@ const LICENCE_LABEL: Record<LicenceKind, string> = {
   publicDomain: "Public domain",
   noCredit: "No credit needed",
   creditRequired: "Needs credit",
+  nonCommercial: "Non-commercial",
   unknown: "Unknown",
 };
 

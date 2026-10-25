@@ -17,6 +17,10 @@ struct LayerParams {
     // How opaque the layer and its shadow are drawn, 0 to 1.
     opacity: f32,
     _pad: u32,
+    // A dim's hole in layer pixels: x, y, w, h.
+    hole: vec4<f32>,
+    // Blur: block size (uv). Dim: feather (px), unused, amount, hole radius (px).
+    effect: vec4<f32>,
 }
 
 @group(0) @binding(0) var layer_tex: texture_2d<f32>;
@@ -34,6 +38,39 @@ fn layer_color(uv: vec2<f32>) -> vec4<f32> {
         return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
     }
     return textureSample(layer_tex, layer_samp, uv);
+}
+
+// `layer_color` at mip level 0, safe in loops and branches.
+fn layer_color_level(uv: vec2<f32>) -> vec4<f32> {
+    if params.format == 1u {
+        return layer_color(uv);
+    }
+    return textureSampleLevel(layer_tex, layer_samp, uv, 0.0);
+}
+
+// The mean colour of the block of the blur's grid centred on `center` (4 x 4 taps).
+fn block_mean(center: vec2<f32>) -> vec4<f32> {
+    var sum = vec4<f32>(0.0);
+    for (var i = 0; i < 4; i++) {
+        for (var j = 0; j < 4; j++) {
+            let offset = (vec2<f32>(f32(i), f32(j)) + 0.5) / 4.0 - 0.5;
+            sum += layer_color_level(center + offset * params.effect.xy);
+        }
+    }
+    return sum / 16.0;
+}
+
+// The picture as a smooth blend of its blocks' means: nothing finer than a block survives.
+fn blurred(uv: vec2<f32>) -> vec4<f32> {
+    let block = params.effect.xy;
+    let g = uv / block - vec2<f32>(0.5);
+    let i = floor(g);
+    let f = smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), g - i);
+    let c00 = block_mean((i + vec2<f32>(0.5, 0.5)) * block);
+    let c10 = block_mean((i + vec2<f32>(1.5, 0.5)) * block);
+    let c01 = block_mean((i + vec2<f32>(0.5, 1.5)) * block);
+    let c11 = block_mean((i + vec2<f32>(1.5, 1.5)) * block);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
 @vertex
@@ -101,6 +138,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sdf = shape_sdf(p);
     if sdf > 0.0 {
         return vec4<f32>(0.0);
+    }
+    if params.pass_kind == 3u {
+        // Dim: black, but not in the hole.
+        var alpha = params.effect.z;
+        if params.hole.z > 0.0 && params.hole.w > 0.0 {
+            let half = params.hole.zw * 0.5;
+            let center = params.hole.xy + half - params.size_px * 0.5;
+            let d = sdf_rounded_rect(p - center, half, params.effect.w);
+            alpha *= clamp(d / max(params.effect.x, 1.0) + 0.5, 0.0, 1.0);
+        }
+        return vec4<f32>(0.0, 0.0, 0.0, alpha * params.opacity);
+    }
+    if params.pass_kind == 2u {
+        let color = blurred(in.uv);
+        return vec4<f32>(color.rgb, params.opacity);
     }
     let color = layer_color(in.uv);
     return vec4<f32>(color.rgb, color.a * params.opacity);

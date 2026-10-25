@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { FolderOpen, Library, RotateCw, Sparkles } from "lucide-react";
 import { InspectorSection } from "./InspectorSection";
-import { IconButton } from "../ui";
+import { IconButton, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { assetById, findClip } from "../../lib/sequence";
@@ -68,6 +68,23 @@ export const GraphicSection: React.FC = () => {
   if (!openedProject || !found || !assetId) return null;
   const { clip, track } = found;
 
+  // Dimming or blurring the video behind this clip while it plays (FX-2).
+  const behind = (kind: "dim" | "blurBehind") =>
+    (openedProject.effects ?? []).find((e) => e.kind === kind && e.graphic === clip.id);
+  const setBehind = async (kind: "dim" | "blurBehind", on: boolean) => {
+    const project = useProjectStore.getState().openedProject;
+    if (!project) return;
+    const others = (project.effects ?? []).filter((e) => !(e.kind === kind && e.graphic === clip.id));
+    const next = on
+      ? [...others, { id: "", kind, startUs: 0, endUs: 0, area: { x: 0, y: 0, w: 1, h: 1 }, graphic: clip.id }]
+      : others;
+    try {
+      applyOpenedProject(await api.projectEffectsSet(project.projectHandle, project.revision, next));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const save = async (variables: Record<string, unknown>, name?: string, style?: string) => {
     const project = useProjectStore.getState().openedProject;
     if (!project) return;
@@ -129,6 +146,18 @@ export const GraphicSection: React.FC = () => {
               className={fieldClass}
             />
             <RenderBadge graphic={graphic} ready={ready} />
+          </div>
+          <div className="flex items-center justify-between gap-2 text-label text-studio-300">
+            <span title="Everything behind the graphic darkens while it plays, so it stands out">Dim behind it</span>
+            <Switch checked={!!behind("dim")} onChange={(on) => void setBehind("dim", on)} title="Dim the video behind this graphic" />
+          </div>
+          <div className="flex items-center justify-between gap-2 text-label text-studio-300">
+            <span title="The screen and camera behind the graphic blur while it plays">Blur behind it</span>
+            <Switch
+              checked={!!behind("blurBehind")}
+              onChange={(on) => void setBehind("blurBehind", on)}
+              title="Blur the video behind this graphic"
+            />
           </div>
           <label className="flex items-center justify-between gap-2 text-label text-studio-300">
             <span className="shrink-0">Style</span>

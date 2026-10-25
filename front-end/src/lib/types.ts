@@ -390,6 +390,8 @@ export interface AudioSettings {
   duckDb: number;
   /** Music tracks sit this many dB under the speech, measured (6 to 40); absent plays them as placed. */
   musicUnderSpeechDb?: number;
+  /** Speech from several takes brought to one level, with a gentle EQ for a take that sounds different. */
+  matchTakes?: boolean;
   /** Volume, noise reduction and ducking per audio track id; absent plays as recorded. */
   tracks?: Record<string, TrackMix>;
   /** The sound effects lane; absent is the default (on, quiet). */
@@ -674,7 +676,7 @@ export type StreamKind = "picture" | "sound";
 export type Role = "screen" | "webcam" | "overlay" | "mic" | "background" | "music" | "effects";
 
 /** An imported file's licence; music must need no credit. */
-export type LicenceKind = "cc0" | "publicDomain" | "noCredit" | "creditRequired" | "unknown";
+export type LicenceKind = "cc0" | "publicDomain" | "noCredit" | "creditRequired" | "nonCommercial" | "unknown";
 export interface Licence {
   kind: LicenceKind;
   source?: string;
@@ -695,6 +697,61 @@ export interface SoundPlaced {
   project: OpenedProject;
   assetId: string;
   clipId: string;
+}
+
+/** A screen effect's kind (FX-2). */
+export type EffectKind = "blur" | "hide" | "spotlight" | "magnify" | "dim" | "blurBehind";
+
+/** A rectangle, each value 0 to 1 of a picture's width or height. */
+export interface EffectArea {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A screen effect: a part of a recording's picture over a stretch of its own clock (a dim follows a graphic clip). */
+export interface ScreenEffect {
+  id: string;
+  kind: EffectKind;
+  asset?: string;
+  startUs: number;
+  endUs: number;
+  area: EffectArea;
+  amount?: number;
+  graphic?: string;
+}
+
+/** An effect showing at a moment: where it is on the canvas (0 to 1) and its stretch on the timeline. */
+export interface EffectAt {
+  effect: ScreenEffect;
+  canvas: EffectArea;
+  span?: [number, number];
+}
+
+/** A track of the music library: built-in CC0 music (downloaded on first use) or the user's own. */
+export interface LibraryTrack {
+  id: string;
+  name: string;
+  tags: string[];
+  durationUs: number;
+  /** Where it starts playing (past a silent intro). */
+  startUs: number;
+  path: string;
+  builtIn: boolean;
+  downloaded: boolean;
+  licence: Licence;
+  lufs?: number;
+}
+
+export interface MusicPlaced {
+  project: OpenedProject;
+  assetId: string;
+  clipIds: string[];
+  startUs: number;
+  endUs: number;
+  /** Set when placing switched the music under speech on, at this level. */
+  underSpeechDb?: number;
 }
 
 export interface Stream {
@@ -1201,6 +1258,8 @@ export interface OpenedProject {
   captions?: CaptionSettings;
   chapters?: Chapter[];
   shorts?: Short[];
+  /** Screen effects (blur, hide, spotlight, magnifier, dim or blur behind a graphic). */
+  effects?: ScreenEffect[];
   /** Auto-zoom settings; absent: the defaults. */
   zoomSettings?: ZoomSettings;
   /** Set when this is a short's own timeline: the sequence is the short's. */

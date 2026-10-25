@@ -8,6 +8,7 @@
 use super::audio::Lane;
 use crate::dsp::denoise::{fft_size_for, Denoiser, NoiseProfile, ProfileBuilder};
 use crate::dsp::loudness::{integrated_lufs, KWeighting};
+use crate::dsp::takes::{BandMeter, SpeechProfile, TakeFilter, TakeMatch};
 use crate::project::{
     pcm::{PcmReader, READ_FRAME_CHUNK},
     reader::{safe_path, SegmentSummary},
@@ -72,6 +73,9 @@ pub struct SegmentAnalysis {
     pub peaks: Vec<f32>,
     /// Absent when the file has too little quiet audio to measure.
     pub noise: Option<NoiseProfile>,
+    /// How its speech sounds (level and tone), for matching takes; absent with too little
+    /// speech.
+    pub speech: Option<SpeechProfile>,
 }
 
 type CacheKey = (PathBuf, u64, Option<SystemTime>);
@@ -240,13 +244,71 @@ fn analyze(path: &Path) -> Result<SegmentAnalysis, String> {
         )?,
         None => None,
     };
+    let speech = speech_profile(&mut reader, &voice, &loudness, voice_frames)?;
     Ok(SegmentAnalysis {
         sample_rate: rate,
         voice,
         loudness,
         peaks,
         noise,
+        speech,
     })
+}
+
+/// A take's speech: the loudness of its 100 ms blocks that are mostly speech, and the shape
+/// of its spectrum over windows that lie entirely in speech.
+fn speech_profile(
+    reader: &mut PcmReader,
+    voice: &[bool],
+    loudness: &[f64],
+    voice_frames: usize,
+) -> Result<Option<SpeechProfile>, String> {
+    let per_block = (LOUDNESS_BLOCK_US / VOICE_BLOCK_US) as usize;
+    let spoken: Vec<f64> = loudness
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            let flags = voice.iter().skip(i * per_block).take(per_block);
+            flags.filter(|v| **v).count() * 2 > per_block
+        })
+        .map(|(_, e)| *e)
+        .collect();
+    // Under three seconds of speech says too little about a take.
+    if spoken.len() < 30 {
+        return Ok(None);
+    }
+    let Some(lufs) = integrated_lufs(&spoken) else {
+        return Ok(None);
+    };
+    let info = reader.info().clone();
+    let channels = info.channels as usize;
+    let mut meter = BandMeter::new(info.sample_rate);
+    let n = meter.size();
+    let blocks_per_window = n.div_ceil(voice_frames);
+    let mut starts = Vec::new();
+    let mut run = 0;
+    for (i, &v) in voice.iter().enumerate() {
+        run = if v { run + 1 } else { 0 };
+        if run == blocks_per_window {
+            starts.push((i + 1 - blocks_per_window) as u64 * voice_frames as u64);
+            run = 0;
+        }
+    }
+    let step = starts.len().div_ceil(BandMeter::max_windows()).max(1);
+    let mut buf = vec![0f32; n * channels];
+    let mut mono = vec![0f32; n];
+    for &start in starts.iter().step_by(step) {
+        reader.seek_to_frame(start)?;
+        if reader.read_frames(&mut buf, n)? < n {
+            continue;
+        }
+        for (m, frame) in mono.iter_mut().zip(buf.chunks_exact(channels)) {
+            let stereo = fold_stereo(frame);
+            *m = (stereo[0] + stereo[1]) * 0.5;
+        }
+        meter.add(&mono);
+    }
+    Ok(meter.finish().map(|bands| SpeechProfile { lufs, bands }))
 }
 
 /// Averages the spectrum of FFT windows that lie entirely in near-floor 10 ms blocks.
@@ -310,7 +372,8 @@ fn prepare_analyses<'a>(
         let wanted = settings.normalize
             || settings.lane_denoise_db(&lane.id, lane.speech).is_some()
             || (ducking && lane.speech)
-            || (settings.music_under_speech_db.is_some() && (lane.speech || lane.music));
+            || (settings.music_under_speech_db.is_some() && (lane.speech || lane.music))
+            || (settings.match_takes && lane.speech);
         if !wanted {
             continue;
         }
@@ -361,6 +424,68 @@ fn prepare_analyses<'a>(
             .flat_map(|job| job.join().unwrap())
             .collect()
     })
+}
+
+/// The speech takes the edit plays (every file on a speech lane with enough speech), matched
+/// to each other: how long each plays sets its weight in the level and tone they meet at.
+fn matched_takes(
+    lanes: &[Lane],
+    analyze: &dyn Fn(&SegmentSummary) -> Option<Arc<SegmentAnalysis>>,
+) -> HashMap<(String, String), (Arc<TakeFilter>, f64)> {
+    // Each file once, with how long the edit plays it and the lanes it plays on.
+    let mut files: Vec<(String, Arc<SegmentAnalysis>, f64, Vec<String>)> = Vec::new();
+    for lane in lanes.iter().filter(|l| l.speech) {
+        for clip in &lane.clips {
+            for segment in clip.segments.iter().filter(|s| s.available) {
+                let (a, b) = (
+                    clip.in_us.max(segment.start_us),
+                    (clip.in_us + clip.len).min(segment.end_us),
+                );
+                if b <= a {
+                    continue;
+                }
+                let used = (b - a) as f64 / 1e6;
+                match files
+                    .iter_mut()
+                    .find(|(path, ..)| *path == segment.relative_path)
+                {
+                    Some((_, _, total, on)) => {
+                        *total += used;
+                        if !on.contains(&lane.id) {
+                            on.push(lane.id.clone());
+                        }
+                    }
+                    None => {
+                        if let Some(analysis) = analyze(segment).filter(|a| a.speech.is_some()) {
+                            files.push((
+                                segment.relative_path.clone(),
+                                analysis,
+                                used,
+                                vec![lane.id.clone()],
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let profiles: Vec<(SpeechProfile, f64)> = files
+        .iter()
+        .map(|(_, analysis, used, _)| (analysis.speech.clone().expect("kept with speech"), *used))
+        .collect();
+    let matches: Vec<TakeMatch> = crate::dsp::takes::match_takes(&profiles);
+    let mut out = HashMap::new();
+    for ((path, analysis, _, on), take) in files.iter().zip(matches) {
+        if take.is_noop() {
+            continue;
+        }
+        let filter = Arc::new(TakeFilter::new(&take, analysis.sample_rate));
+        let gain = 10f64.powf(take.gain_db as f64 / 20.0);
+        for lane in on {
+            out.insert((lane.clone(), path.clone()), (Arc::clone(&filter), gain));
+        }
+    }
+    out
 }
 
 /// The integrated loudness of what `lanes` play (their 100 ms blocks pooled, gated as
@@ -415,6 +540,8 @@ pub struct PolishPlan {
     lane_ducks: HashMap<String, Arc<Vec<f32>>>,
     /// Gain per music lane that puts it the project's level under the speech.
     lane_gains: HashMap<String, f64>,
+    /// Takes of speech matched to the rest (AUTO-2), by lane and file, with their gain.
+    takes: HashMap<(String, String), (Arc<TakeFilter>, f64)>,
 }
 
 /// How far a music lane is turned up or down to reach its level under speech, at most.
@@ -457,6 +584,11 @@ impl PolishPlan {
             }
         }
         let lane_ducks = lane_ducks(settings, lanes, duration_us, &analyze);
+        let takes = if settings.match_takes {
+            matched_takes(lanes, &analyze)
+        } else {
+            HashMap::new()
+        };
         let mut plan = Self {
             gain: 1.0,
             limit: settings.normalize,
@@ -464,6 +596,7 @@ impl PolishPlan {
             denoisers,
             lane_ducks,
             lane_gains: HashMap::new(),
+            takes,
         };
         if let Some(under) = settings.music_under_speech_db {
             let speech: Vec<&Lane> = lanes.iter().filter(|l| l.speech).collect();
@@ -541,6 +674,7 @@ impl PolishPlan {
                         };
                         let gain = lane.gain
                             * self.lane_gain(&lane.id)
+                            * self.take_gain(&lane.id, &segment.relative_path)
                             * clip.mix.gain()
                             * self.lane_duck_gain(&lane.id, center as f64);
                         if let Some(slot) = energy.get_mut(block as usize) {
@@ -573,6 +707,20 @@ impl PolishPlan {
             energy,
             peaks,
         })
+    }
+
+    /// How the take in file `relative_path` is matched on lane `lane`, if it is.
+    pub fn take(&self, lane: &str, relative_path: &str) -> Option<&TakeFilter> {
+        self.takes
+            .get(&(lane.to_string(), relative_path.to_string()))
+            .map(|(filter, _)| filter.as_ref())
+    }
+
+    /// A matched take's gain (1 when it isn't matched).
+    fn take_gain(&self, lane: &str, relative_path: &str) -> f64 {
+        self.takes
+            .get(&(lane.to_string(), relative_path.to_string()))
+            .map_or(1.0, |(_, gain)| *gain)
     }
 
     /// The gain that keeps music lane `lane` at its level under speech (1 for other lanes).
@@ -924,6 +1072,116 @@ mod tests {
         assert!((whole.gain - cuts.gain).abs() < 1e-12);
     }
 
+    /// Speech-like bursts (on 400 ms, off 300 ms) over faint hiss: tones at `amps` of 200 Hz,
+    /// 700 Hz, 2.5 kHz and 5 kHz.
+    fn bursts(seconds: u32, amps: [f32; 4]) -> Vec<i16> {
+        let rate = 48_000u32;
+        let mut state = 7u64;
+        (0..rate * seconds)
+            .map(|i| {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let hiss = ((state >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 200.0;
+                let t = i as f32 / rate as f32;
+                let on = (i % (rate * 7 / 10)) < rate * 4 / 10;
+                let tone: f32 = [200.0f32, 700.0, 2500.0, 5000.0]
+                    .iter()
+                    .zip(amps)
+                    .map(|(hz, a)| a * (std::f32::consts::TAU * hz * t).sin())
+                    .sum();
+                (hiss + if on { tone } else { 0.0 }) as i16
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_quieter_duller_take_is_matched_to_the_rest() {
+        use super::super::audio::LaneClip;
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, samples: &[i16]| {
+            let wav = generate_pcm16_wav(48_000, 1, samples);
+            std::fs::write(dir.path().join(name), &wav).unwrap();
+            Arc::new(vec![SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: name.into(),
+                start_us: 0,
+                end_us: samples.len() as u64 * 1_000_000 / 48_000,
+                size_bytes: wav.len() as u64,
+                media_timescale: 48_000,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: None,
+                available: true,
+            }])
+        };
+        let first = file("first.wav", &bursts(12, [3000.0; 4]));
+        let pickup = file("pickup.wav", &bursts(6, [1400.0, 1400.0, 300.0, 300.0]));
+        let clip = |segments: &Arc<Vec<SegmentSummary>>, at: u64, len: u64| LaneClip {
+            mix: Default::default(),
+            edited_start: at,
+            in_us: 0,
+            len,
+            edited_len: len,
+            speed: 1.0,
+            source_end: len,
+            segments: segments.clone(),
+            mutes: Default::default(),
+        };
+        let lane = Lane {
+            music: false,
+            id: "speech".into(),
+            speech: true,
+            gain: 1.0,
+            clips: vec![
+                clip(&first, 0, 12_000_000),
+                clip(&pickup, 12_000_000, 6_000_000),
+            ],
+        };
+        let analysis = analyze_cached(&dir.path().join("pickup.wav")).unwrap();
+        let profile = analysis.speech.clone().expect("the bursts count as speech");
+        assert!(profile.bands[5] < profile.bands[1], "{:?}", profile.bands);
+        let settings = crate::project::AudioSettings {
+            match_takes: true,
+            ..Default::default()
+        };
+        let plan = PolishPlan::build(dir.path(), &settings, &[lane], 18_000_000).unwrap();
+        let gain = plan.take_gain("speech", "pickup.wav");
+        assert!(gain > 1.5, "the pickup is brought up: {gain}");
+        assert!(
+            plan.take_gain("speech", "first.wav") < 1.0,
+            "and the first a little down"
+        );
+        let off = plan.take("speech", "pickup.wav").unwrap();
+        // Brighter: a 5 kHz tone through its EQ comes out louder than a 200 Hz one.
+        let level = |hz: f32| {
+            let tone: Vec<f32> = (0..48_000)
+                .map(|i| (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin() * 0.1)
+                .collect();
+            let out = off.process(&tone, 1, 0, 24_000);
+            out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32
+        };
+        assert!(level(5000.0) > level(200.0) * 1.5);
+        let without = PolishPlan::build(
+            dir.path(),
+            &crate::project::AudioSettings {
+                normalize: true,
+                ..Default::default()
+            },
+            &[Lane {
+                music: false,
+                id: "speech".into(),
+                speech: true,
+                gain: 1.0,
+                clips: vec![clip(&first, 0, 12_000_000)],
+            }],
+            12_000_000,
+        )
+        .unwrap();
+        assert!(
+            without.take("speech", "first.wav").is_none(),
+            "one take: nothing to match"
+        );
+    }
+
     #[test]
     fn the_leveller_keeps_peaks_under_the_limiter_and_normalization_stops_past_it() {
         use super::super::audio::LaneClip;
@@ -1060,6 +1318,7 @@ mod tests {
             limit: true,
             level: Vec::new(),
             denoisers: HashMap::new(),
+            takes: HashMap::new(),
         };
         let finish = |s: f64| plan.finish(s, 0.0);
         assert!((finish(0.2) - 0.4).abs() < 1e-12);

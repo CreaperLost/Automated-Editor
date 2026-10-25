@@ -43,6 +43,7 @@ fewer than half of its words are labelled (must or optional).
 | EN-B | "19 Oct 2" Arkus video, Parakeet TDT v3, whole | 1044 | 8 (4 / 4) | 30 |
 | EN-C | "19 Oct Review Edit" Hermes video, Parakeet TDT v3, first 1000 | 1000 | 5 (3 / 2) | 24 |
 | EL-A | Scripted Greek tutorial, Scribe-style words | 374 | 19 (14 / 5) | 3 |
+| EL-B | "26 Oct" George's first real Greek recording, Scribe via OpenRouter, whole (added 26 Oct) | 19 | 1 (0 / 1) | 1 |
 | EN-D | "24 Oct" Kimi K3.1 video, Scribe v2 via OpenRouter, first 1200 words (added 25 Oct) | 1200 | 15 (6 / 9) | 45 |
 
 No Greek recording exists yet, so EL-A is a script (`review-eval/make-greek-case.py`). It
@@ -169,10 +170,17 @@ EN-D was labelled blind like the others, then run with rules and cloud (OpenRout
   `who`, `why` or `had` beside a small word ("what is, what is", "that the, that the"), and a
   small word followed by its own contraction ("they, they've"). Alone those words stay meant
   ("that that works"). Rerun: EN-B, EN-C and EL-A unchanged, no new wrong cuts anywhere.
-- **Still open:** the rules cut "human in the loop. Human in the loop essentially means" in
-  EN-A (a finished phrase said again to define it). It looks like a real restart ("Let's
-  begin. Let's begin with...") from the words alone; it needs more examples before a rule.
-- **Greek:** still no real recording. EL-A stays scripted until George records one.
+- **Defining repeat fixed (26 Oct):** "human in the loop. Human in the loop essentially means"
+  in EN-A is no longer cut. Told apart from a real restart ("Let's begin. Let's begin with...")
+  by where the phrase sits: it ends a sentence it didn't open, and that sentence doesn't end on
+  a small word ("open up the." stays a retake). Rules rerun: EN-A 0 wrong cuts (was 1, 4
+  words); EN-B, EN-C, EN-D and EL-A unchanged.
+- **Greek, EL-B (26 Oct):** George's first real Greek recording, 13 seconds. Cloud: the one
+  retake ("γιααα το ελληνικό βίντεο," said again) and the optional opening "Λοιπόν", nothing
+  wrong. Rules: missed the retake until retakes match a drawn-out word ("γιααα" = "για"); now
+  0 missed, and EN-A to EN-D and EL-A unchanged. Too short to retire EL-A.
+- **Decided 26 Oct (George):** the online review's fillers are cut at once; retakes are still
+  listed first.
 
 ### Gemma 4 E4B
 

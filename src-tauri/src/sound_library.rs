@@ -288,7 +288,7 @@ pub fn find(root: &Path, id: &str) -> Result<Sound, String> {
         .ok_or_else(|| format!("No sound {id} in the library"))
 }
 
-fn tidy_tags(tags: Vec<String>) -> Vec<String> {
+pub(crate) fn tidy_tags(tags: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for tag in tags {
         let tag = tag.trim().to_lowercase();
@@ -298,6 +298,19 @@ fn tidy_tags(tags: Vec<String>) -> Vec<String> {
     }
     out.truncate(12);
     out
+}
+
+/// A file name as an id: lower case letters and digits, at most six words joined by dashes.
+pub(crate) fn slug(stem: &str) -> String {
+    stem.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// Copies a sound file of the user's into the library with its tags and licence.
@@ -325,16 +338,7 @@ pub fn add(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "sound".into());
-    let slug: String = stem
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|p| !p.is_empty())
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("-");
+    let slug = slug(&stem);
     let base = format!("my-{}", if slug.is_empty() { "sound" } else { &slug });
     let taken = |id: &str| BUILTIN.iter().any(|b| b.id == id) || mine.iter().any(|m| m.id == id);
     let id = (1..)
@@ -439,15 +443,79 @@ pub fn asset_for(
     Ok((asset, true))
 }
 
+/// The document's sequence with an unlocked audio track for `role` free over `[from, to)`: one
+/// with that role, named `name`, or holding only media of that role; else a new one named
+/// `name`. Answers the sequence (with the new track, if one was added) and the track's id.
+pub(crate) fn free_track<'t>(
+    document: &EditDocument,
+    role: Role,
+    name: &str,
+    from: u64,
+    to: u64,
+    taken: impl IntoIterator<Item = &'t str> + Clone,
+) -> Result<(crate::sequence::Sequence, String), String> {
+    use crate::sequence::edit::{apply_reserving, SequenceEdit};
+    use crate::sequence::TrackKind;
+    let only = |id: &str| {
+        document
+            .asset(id)
+            .is_some_and(|a| a.streams.iter().all(|s| s.role == role))
+    };
+    let free = document
+        .sequence
+        .audio_tracks()
+        .find(|t| {
+            !t.locked
+                && (t.role == Some(role)
+                    || t.name == name
+                    || (!t.clips.is_empty() && t.clips.iter().all(|c| only(&c.asset))))
+                && t.is_free(from, to)
+        })
+        .map(|t| t.id.clone());
+    let sequence = document.sequence.clone();
+    if let Some(id) = free {
+        return Ok((sequence, id));
+    }
+    let (added, _) = apply_reserving(
+        &sequence,
+        &document.assets,
+        &SequenceEdit::AddTrack {
+            track_kind: TrackKind::Audio,
+        },
+        taken.clone(),
+    )?;
+    let id = added
+        .audio_tracks()
+        .find(|t| sequence.track(&t.id).is_none())
+        .map(|t| t.id.clone())
+        .ok_or("Could not add a track")?;
+    let (named, _) = apply_reserving(
+        &added,
+        &document.assets,
+        &SequenceEdit::SetTrack {
+            track_id: id.clone(),
+            name: name.into(),
+            hidden: false,
+            muted: false,
+            locked: false,
+            role: Some(role),
+        },
+        taken,
+    )?;
+    Ok((named, id))
+}
+
 /// `document` with `asset` (added when new) placed whole at `at_us` on an effects track free
-/// there, or a new one named [`TRACK_NAME`]. Answers the document and the clip's id.
+/// there, or a new one named [`TRACK_NAME`] (an id not in `taken`). Answers the document and
+/// the clip's id.
 pub fn place(
     document: &EditDocument,
     asset: Asset,
     at_us: u64,
+    taken: &[String],
 ) -> Result<(EditDocument, String), String> {
     use crate::sequence::edit::{apply_reserving, SequenceEdit};
-    use crate::sequence::{SourceRange, TrackKind};
+    use crate::sequence::SourceRange;
     let mut next = document.clone();
     let asset_id = asset.id.clone();
     let length = asset.duration_us.max(1);
@@ -455,56 +523,14 @@ pub fn place(
         next.assets.push(asset);
     }
     let at = at_us.min(next.duration_us());
-    let taken: Vec<String> = next.track_ids_in_use().map(String::from).collect();
-    let effects = |id: &str| {
-        next.asset(id)
-            .is_some_and(|a| a.streams.iter().all(|s| s.role == Role::Effects))
-    };
-    let free = next
-        .sequence
-        .audio_tracks()
-        .find(|t| {
-            !t.locked
-                && (t.role == Some(Role::Effects)
-                    || t.name == TRACK_NAME
-                    || (!t.clips.is_empty() && t.clips.iter().all(|c| effects(&c.asset))))
-                && t.is_free(at, at + length)
-        })
-        .map(|t| t.id.clone());
-    let mut sequence = next.sequence.clone();
-    let track_id = match free {
-        Some(id) => id,
-        None => {
-            let (added, _) = apply_reserving(
-                &sequence,
-                &next.assets,
-                &SequenceEdit::AddTrack {
-                    track_kind: TrackKind::Audio,
-                },
-                taken.iter().map(String::as_str),
-            )?;
-            let id = added
-                .audio_tracks()
-                .find(|t| sequence.track(&t.id).is_none())
-                .map(|t| t.id.clone())
-                .ok_or("Could not add a track for the sound")?;
-            let (named, _) = apply_reserving(
-                &added,
-                &next.assets,
-                &SequenceEdit::SetTrack {
-                    track_id: id.clone(),
-                    name: TRACK_NAME.into(),
-                    hidden: false,
-                    muted: false,
-                    locked: false,
-                    role: Some(Role::Effects),
-                },
-                taken.iter().map(String::as_str),
-            )?;
-            sequence = named;
-            id
-        }
-    };
+    let (sequence, track_id) = free_track(
+        &next,
+        Role::Effects,
+        TRACK_NAME,
+        at,
+        at + length,
+        taken.iter().map(String::as_str),
+    )?;
     let before: Vec<String> = sequence.clips().map(|(_, c)| c.id.clone()).collect();
     let (placed, _) = apply_reserving(
         &sequence,

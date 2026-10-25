@@ -8,7 +8,9 @@ edition = "2021"
 
 [lib]
 name = "aeroedits_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Only the app's own binary links the library. Tauri's template also asks for a staticlib and
+# a cdylib (for mobile), which cost a 1.5 GB .lib and a DLL link on every build (QUAL-3).
+crate-type = ["rlib"]
 
 [[bin]]
 name = "aeroedits"
@@ -95,6 +97,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # `cargo tauri dev` play back at a fraction of real time. Optimize dev builds too.
 [profile.dev]
 opt-level = 1
+# Line numbers for backtraces, not full debug info: a one-file change builds in 15-28 s instead
+# of 47 (QUAL-3, 26 Oct 2026). Set `debug = true` here for a session in a debugger.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = "line-tables-only"

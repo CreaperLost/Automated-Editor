@@ -56,6 +56,10 @@ pub struct AudioSettings {
     /// them as placed. On top of their track volume and clip gain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub music_under_speech_db: Option<f32>,
+    /// Speech recorded in several takes is brought to one level, and a take that sounds
+    /// different gets a gentle EQ towards the rest (AUTO-2).
+    #[serde(default)]
+    pub match_takes: bool,
     /// Mute and volume per audio track id. Tracks without an entry play at full volume.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tracks: BTreeMap<String, TrackMix>,
@@ -99,6 +103,7 @@ impl Default for AudioSettings {
             duck_system_audio: false,
             duck_db: DEFAULT_DUCK_DB,
             music_under_speech_db: None,
+            match_takes: false,
             tracks: BTreeMap::new(),
             sound_effects: Default::default(),
         }
@@ -106,11 +111,12 @@ impl Default for AudioSettings {
 }
 
 impl AudioSettings {
-    /// A new project's: loudness normalized to [`DEFAULT_TARGET_LUFS`], the rest off. (The
-    /// plain default leaves the sound as recorded.)
+    /// A new project's: loudness normalized to [`DEFAULT_TARGET_LUFS`] and takes matched, the
+    /// rest off. (The plain default leaves the sound as recorded.)
     pub fn for_new_project() -> Self {
         Self {
             normalize: true,
+            match_takes: true,
             ..Self::default()
         }
     }
@@ -124,6 +130,7 @@ impl AudioSettings {
             || self.noise_reduction
             || self.duck_system_audio
             || self.music_under_speech_db.is_some()
+            || self.match_takes
             || self
                 .tracks
                 .values()

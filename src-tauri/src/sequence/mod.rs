@@ -156,6 +156,8 @@ pub enum LicenceKind {
     NoCredit,
     /// Needs the author credited.
     CreditRequired,
+    /// Not for monetised videos (CC BY-NC and the like), credit or not.
+    NonCommercial,
     Unknown,
 }
 

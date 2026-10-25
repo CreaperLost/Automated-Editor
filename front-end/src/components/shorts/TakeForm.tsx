@@ -34,7 +34,11 @@ export const TakeForm: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const busy = useShortsStore((s) => s.busy);
   const [importing, setImporting] = useState(false);
   const cameras = useMemo(() => (project ? streams(project, "picture") : []), [project]);
-  const sounds = useMemo(() => (project ? streams(project, "sound") : []), [project]);
+  // Music and sound effects (from the libraries) are never a take's voice.
+  const sounds = useMemo(
+    () => (project ? streams(project, "sound").filter((s) => s.role !== "music" && s.role !== "effects") : []),
+    [project],
+  );
   // Unset: worked out (see below).
   const [camera, setCamera] = useState<string>();
   const [voice, setVoice] = useState<string>();

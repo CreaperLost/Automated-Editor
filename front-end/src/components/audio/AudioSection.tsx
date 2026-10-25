@@ -473,6 +473,21 @@ export const AudioSection: React.FC = () => {
           onValue={(musicUnderSpeechDb) => update({ musicUnderSpeechDb })}
         />
       )}
+      {lanes.some((lane) => lane.role === "mic") && (
+        <div className="flex items-center justify-between gap-3">
+          <span
+            className="text-label text-studio-200"
+            title="Speech from several takes plays at one level, and a take that sounds different gets a gentle EQ towards the rest, so a re-recorded sentence doesn't jump."
+          >
+            Match takes
+          </span>
+          <Switch
+            checked={!!draft.matchTakes}
+            onChange={(matchTakes) => update({ matchTakes })}
+            title="Level and tone of speech matched across takes"
+          />
+        </div>
+      )}
       <EffectRow
         label="Normalize loudness"
         hint="Scales the whole edit to a standard loudness without pushing peaks into the limiter. -16 LUFS suits speech."

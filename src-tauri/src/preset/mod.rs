@@ -108,7 +108,9 @@ pub fn builtin() -> Vec<Preset> {
                 .into(),
             style: crate::style::DEFAULT.into(),
             // A new project's sound is loudness-normalized (`AudioSettings::for_new_project`).
-            values: object(serde_json::json!({ "audio": { "normalize": true } })),
+            values: object(
+                serde_json::json!({ "audio": { "normalize": true, "matchTakes": true } }),
+            ),
             short: Map::new(),
             choices: tutorial_choices(),
             method: include_str!("methods/tutorial.md").replace("\r\n", "\n"),
@@ -123,7 +125,7 @@ pub fn builtin() -> Vec<Preset> {
             values: object(serde_json::json!({
                 "layout": { "aspectRatio": "9:16" },
                 "captions": { "enabled": true, "maxWords": 3 },
-                "audio": { "normalize": true }
+                "audio": { "normalize": true, "matchTakes": true }
             })),
             short: object(serde_json::json!({ "captions": true, "captionMaxWords": 3 })),
             choices: object(serde_json::json!({
@@ -142,7 +144,7 @@ pub fn builtin() -> Vec<Preset> {
             values: object(serde_json::json!({
                 "layout": { "aspectRatio": "9:16" },
                 "captions": { "enabled": true, "maxWords": 3 },
-                "audio": { "normalize": true }
+                "audio": { "normalize": true, "matchTakes": true }
             })),
             short: object(serde_json::json!({ "captions": true })),
             choices: object(serde_json::json!({

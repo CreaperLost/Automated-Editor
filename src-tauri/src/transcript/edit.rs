@@ -41,6 +41,38 @@ const MAX_RETAKE_SPAN_US: u64 = 12_000_000;
 /// A finished first attempt (it ends a sentence) counts only if it is little more than the
 /// repeated words: at most this many words beyond them.
 const MAX_FINISHED_EXTRA_WORDS: usize = 2;
+/// Words a sentence broken off often ends on ("open the."), as `normalize` gives them: a
+/// sentence ending on one is not taken as finished on purpose.
+const CUT_OFF_ENDINGS: &[&str] = &[
+    "the", "a", "an", "to", "of", "and", "or", "but", "so", "in", "on", "at", "for", "with",
+    "from", "by", "into", "is", "are", "was", "were", "be", "this", "that", "these", "those", "my",
+    "your", "our", "their", "its", "his", "her", "we", "you", "they", "i", "it",
+];
+
+/// A sentence ending on `normalized` can be a finished one (not a word it breaks off on).
+pub fn can_end_sentence(normalized: &str) -> bool {
+    !CUT_OFF_ENDINGS.contains(&normalized)
+}
+
+/// Two normalized words are the same said again, one drawn out or not: a letter held three
+/// times or more counts once ("γιααα" is "για", "sooo" is "so").
+pub fn same_word(a: &str, b: &str) -> bool {
+    fn held(word: &str) -> String {
+        let chars: Vec<char> = word.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let run = chars[i..].iter().take_while(|&&c| c == chars[i]).count();
+            for _ in 0..if run >= 3 { 1 } else { run } {
+                out.push(chars[i]);
+            }
+            i += run;
+        }
+        out
+    }
+    a == b || held(a) == held(b)
+}
+
 /// Padding at the very start or end of the transcript, where there is no neighbour word.
 const EDGE_PAD_US: u64 = 50_000;
 /// Words that can be meant said twice alone ("that that", "had had") but, with a small word,
@@ -471,7 +503,7 @@ pub fn suggestions(
                     a + k < b
                         && b + k < live.len()
                         && !normalized[a + k].is_empty()
-                        && normalized[a + k] == normalized[b + k]
+                        && same_word(&normalized[a + k], &normalized[b + k])
                 })
                 .count();
             // The first attempt must be repeated from its first word, by at least three words
@@ -499,7 +531,15 @@ pub fn suggestions(
             // a token, it will not have an airdrop."). A false start is either repeated whole
             // or corrected into something longer.
             let parallel = extra > 0 && breaks_after(b + matched + extra - 1);
-            if abandoned && !parallel {
+            // Nor is a finished sentence that ends on the phrase, then a new one opening with
+            // it: "this is what we call human in the loop. Human in the loop means...". The
+            // phrase doesn't open its own sentence, which ends on a word it can end on.
+            let defining = stops[b - 1]
+                && extra == 0
+                && a > 0
+                && !stops[a - 1]
+                && can_end_sentence(&normalized[b - 1]);
+            if abandoned && !parallel && !defining {
                 found = Some(a);
                 break;
             }
@@ -999,6 +1039,37 @@ mod tests {
             "you will be able to redeem and sell all of that",
         ]);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_phrase_ending_one_sentence_and_opening_the_next_is_meant() {
+        // From the "Agent test" edit (EN-A): a pause before the term, then it is defined.
+        let found = retakes(&[
+            "and this is what we call",
+            "human in the loop.",
+            "Human in the loop essentially means that",
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+        // Broken off on a small word, it is still a retake.
+        assert_eq!(
+            retakes(&["now we", "open up the.", "Open up the settings panel"]),
+            vec!["open up the."]
+        );
+        // From George's Greek test (EL-B): a drawn-out first word, then the phrase again.
+        assert_eq!(
+            retakes(&[
+                "Λοιπόν, αυτό εδώ είναι ένα τεστ",
+                "γιααα",
+                "το ελληνικό βίντεο,",
+                "για το ελληνικό βίντεο το οποίο θα κάνουμε σήμερα.",
+            ]),
+            vec!["γιααα το ελληνικό βίντεο,"]
+        );
+        // And a sentence begun again whole after the last one ended.
+        assert_eq!(
+            retakes(&["That works.", "Let's begin.", "Let's begin with the export"]),
+            vec!["Let's begin."]
+        );
     }
 
     #[test]
