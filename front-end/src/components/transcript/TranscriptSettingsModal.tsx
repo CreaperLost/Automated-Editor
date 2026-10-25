@@ -403,6 +403,24 @@ export const TranscriptSettingsModal: React.FC<{
               {keyRow("elevenlabs", "ElevenLabs key", view.elevenlabsKeySource)}
               {keyRow("openRouter", "OpenRouter key", aiView.openrouterKeySource)}
               {keyRow("openAi", "OpenAI key", aiView.openaiKeySource)}
+              {row(
+                "AI agents",
+                settings.agentsOnline ? (
+                  <span title="Agents read this choice and its date before they transcribe">
+                    {ok(`may transcribe online, since ${new Date(settings.agentsOnline).toLocaleDateString()}`)}
+                  </span>
+                ) : (
+                  missing("ask before sending audio online")
+                ),
+                <button
+                  type="button"
+                  onClick={() => void change({ agentsOnline: settings.agentsOnline ? null : "on" })}
+                  className={`${smallButton} bg-studio-700 hover:bg-studio-600 text-white`}
+                  title="Lets connected AI agents send the speech to ElevenLabs (or OpenRouter) to transcribe it, without asking you each time"
+                >
+                  {settings.agentsOnline ? "Turn off" : "Allow"}
+                </button>,
+              )}
             </div>
 
             <button

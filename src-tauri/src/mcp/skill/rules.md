@@ -21,9 +21,10 @@ preset has no choice for, or what the user brings up. When the user changes a ch
 answers as the preset's choices (`library`, `kind: preset`, `op: set`), so next time asks
 nothing.
 
-Settled, never asked: going online. Transcription and the filler and retake review run online
-as the method says, with the keys the app has. If the user's client asks them to allow a tool
-call, that is the client's question, not yours: don't ask it again in words.
+<!-- online -->
+The filler and retake review runs as the method says, with the keys the user set in the app. If
+the user's client asks them to allow a tool call, that is the client's question, not yours:
+don't ask it again in words.
 
 Never raise layouts or the webcam (picked sections, the camera alone when the mouse rests, a
 base layout) unless the user talks about them: leave them as the project has them.

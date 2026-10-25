@@ -248,6 +248,46 @@ pub fn project_short_graphic_add_impl(
     })
 }
 
+/// Puts footage, files and graphics under take short `short_id`, all of them as one undo step
+/// (or none: graphics that would play over each other are refused). Returns a line per item.
+pub fn project_short_under_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    short_id: &str,
+    items: &[crate::under_take::Under],
+) -> Result<(OpenedProject, Vec<String>), String> {
+    if items.is_empty() {
+        return Err("Name something to put under the take".into());
+    }
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let root = reader.root().to_path_buf();
+    let done = crate::under_take::put(&root, &root, reader.document(), short_id, items)?;
+    if !done.overlaps.is_empty() {
+        done.discard();
+        return Err(format!(
+            "Graphics would overlap: {}. End one earlier or start the next later (`toS` / \
+             `toWord`), or remove the one already there.",
+            done.overlaps.join("; ")
+        ));
+    }
+    let project = match reader.commit_document(expected_revision, done.document.clone()) {
+        Ok(project) => project,
+        Err(error) => {
+            done.discard();
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok((project, done.lines))
+}
+
 /// Makes a graphic in the project's folder with `make` and places it, one undo step; the
 /// folder goes again if placing fails.
 fn add_graphic(

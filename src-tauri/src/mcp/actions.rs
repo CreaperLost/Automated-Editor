@@ -242,8 +242,8 @@ pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "short_footage",
         description: "What plays under a short made from a take, while the take talks. \
-            `op: add` proposes `items` as one batch the user accepts in the Agent panel (put \
-            all your picks in one call, with a `reason`): each under the take's words \
+            `op: add` puts `items` there as one undo step (put all your picks in one call, \
+            with a `reason`): each under the take's words \
             `fromWord`..`toWord` (ids from `transcript_get` with the take's voice as `stream`) \
             or seconds `atS`..`toS` on the short, showing the video as edited (only what it \
             keeps, its cuts included) from its word `sourceWord` (an id from the video's \
@@ -2221,6 +2221,9 @@ pub struct ReviewArgs {
     /// The `stamp` the pages gave; required with `cuts`.
     #[serde(default)]
     pub stamp: Option<String>,
+    /// A take short, as in `fillers`: on every page and with `cuts`.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -2251,7 +2254,20 @@ pub struct ReviewCut {
 fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ReviewArgs = params(args)?;
     let handle = opened(ctx)?.handle;
-    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
+    let stream = match args.stream {
+        Some(stream) => Some(stream),
+        None => take_voice(ctx, args.short.as_deref())?,
+    };
+    let key = pick_sound(ctx, stream, Want::Transcribed)?;
+    let short = args
+        .short
+        .as_deref()
+        .map(|s| take_short_id(ctx, s))
+        .transpose()?;
+    let in_short = short
+        .as_deref()
+        .map(|id| format!("`short: \"{id}\"`, "))
+        .unwrap_or_default();
     let Some(cuts) = args.cuts else {
         let read = args.review.unwrap_or_default();
         let page = args.page.unwrap_or(0);
@@ -2262,18 +2278,27 @@ fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                     ReviewRead::Candidates => "",
                     ReviewRead::Thorough => "`review: \"thorough\"`, ",
                 };
-                format!("Next: `fillers_review` with {review}`page: {}`.", at + 1)
+                format!(
+                    "Next: `fillers_review` with {in_short}{review}`page: {}`.",
+                    at + 1
+                )
             } else {
                 format!(
-                    "That was the last page. Now call `fillers_review` once with all your cuts \
-                     (`[{{\"type\": \"filler\"|\"retake\", \"from\": i, \"to\": j, \"why\": \
-                     \"...\"}}]`) and `stamp: \"{stamp}\"`; then `fillers` (`apply: false` \
-                     first) lists and cuts them."
+                    "That was the last page. Now call `fillers_review` once with {in_short}all \
+                     your cuts (`[{{\"type\": \"filler\"|\"retake\", \"from\": i, \"to\": j, \
+                     \"why\": \"...\"}}]`) and `stamp: \"{stamp}\"`; then `fillers` \
+                     ({in_short}`apply: false` first) lists and cuts them."
                 )
             }
         };
         if read == ReviewRead::Thorough {
-            let page = tc::transcript_review_page_impl(ctx.state, handle, key.clone(), page)?;
+            let page = tc::transcript_review_page_impl(
+                ctx.state,
+                handle,
+                key.clone(),
+                short.as_deref(),
+                page,
+            )?;
             return text(format!(
                 "In-house review of {key}: page {} of {} ({} kept words, stamp {}). Pages \
                  overlap a little; indexes count over all of them.\n\n{}\n{}\n\n{}",
@@ -2286,7 +2311,13 @@ fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 next(page.page, page.pages, &page.stamp),
             ));
         }
-        let page = tc::transcript_review_candidates_impl(ctx.state, handle, key.clone(), page)?;
+        let page = tc::transcript_review_candidates_impl(
+            ctx.state,
+            handle,
+            key.clone(),
+            short.as_deref(),
+            page,
+        )?;
         let settled = format!(
             "The rules already cut {} (um, uh, ...) and {}: leave those.",
             plural(page.rule_fillers, "filler sound"),
@@ -2335,8 +2366,15 @@ fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .ok_or("Give the `stamp` the pages showed with your cuts")?;
     let given = cuts.len();
     let cuts = serde_json::to_value(cuts).map_err(|e| e.to_string())?;
-    let (kept, suggestions) =
-        tc::transcript_review_save_impl(ctx.state, handle, key.clone(), &stamp, cuts, &ctx.agent)?;
+    let (kept, suggestions) = tc::transcript_review_save_impl(
+        ctx.state,
+        handle,
+        key.clone(),
+        short.as_deref(),
+        &stamp,
+        cuts,
+        &ctx.agent,
+    )?;
     let listed = suggestions
         .iter()
         .filter(|s| s.source == SuggestionSource::Ai && !s.dismissed)
@@ -2352,9 +2390,9 @@ fn fillers_review(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 .into(),
         );
     }
-    lines.push(
-        "Next: `fillers` with `apply: false` lists everything to cut; then `fillers`.".into(),
-    );
+    lines.push(format!(
+        "Next: `fillers` with {in_short}`apply: false` lists everything to cut; then `fillers`."
+    ));
     text(lines.join("\n"))
 }
 
@@ -2378,6 +2416,13 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         None => take_voice(ctx, args.short.as_deref())?,
     };
     let key = pick_sound(ctx, stream, Want::Transcribed)?;
+    // Found, timed and cut on the short's own timeline: a take the video also plays would
+    // otherwise be cut from the video.
+    let short = args
+        .short
+        .as_deref()
+        .map(|s| take_short_id(ctx, s))
+        .transpose()?;
     let kinds = args.kinds.unwrap_or_else(|| {
         vec![
             TranscriptSuggestionKind::Filler,
@@ -2430,6 +2475,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
                 before.handle.clone(),
                 key.clone(),
                 Some(engine),
+                short.clone(),
                 &mut |p| ctx.progress(p.fraction, &p.message),
             )
         }) {
@@ -2443,13 +2489,18 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
                     ctx.state,
                     before.handle.clone(),
                     key.clone(),
-                    None,
+                    short.clone(),
                 )?
             }
             Err(error) => return Err(error),
         }
     } else {
-        tc::transcript_suggestions_impl(ctx.state, before.handle.clone(), key.clone(), None)?
+        tc::transcript_suggestions_impl(
+            ctx.state,
+            before.handle.clone(),
+            key.clone(),
+            short.clone(),
+        )?
     };
     // Rejected ones stay rejected, and agents' own proposals are decided in the Agent panel.
     let chosen: Vec<_> = found
@@ -2521,7 +2572,8 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
     if !examples.is_empty() {
         lines.push(format!("For example: {}.", examples.join("; ")));
     }
-    let hold = match args.guard && !chosen.is_empty() {
+    // A short's take is cut much tighter than a video: the guard is for the video.
+    let hold = match args.guard && short.is_none() && !chosen.is_empty() {
         true => {
             let cut: u64 = chosen
                 .iter()
@@ -2545,9 +2597,12 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
             key,
             ids,
             None,
-            None,
+            short.clone(),
         )?;
-        lines.push("Cut them all.".into());
+        lines.push(match &short {
+            Some(id) => format!("Cut them all from short {id}."),
+            None => "Cut them all.".into(),
+        });
     }
     applied(ctx, "fillers", &before, lines)
 }
@@ -2985,6 +3040,14 @@ fn settings(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let before = opened(ctx);
     match args.area {
         Area::Transcription => {
+            // The user's own consent: an agent can neither give it nor take it back.
+            if patch.get("agentsOnline").is_some() {
+                return Err(
+                    "Only the user lets agents transcribe online, in AeroEdits' \
+                     Transcription settings (AI agents: Allow); ask them."
+                        .into(),
+                );
+            }
             let next = patched(&name, &tc::transcript_settings_get_impl().settings, &patch)?;
             tc::transcript_settings_set_impl(next)?;
         }
@@ -3696,7 +3759,7 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             from_us: args.from_s.map(to_us).transpose()?,
             to_us: args.to_s.map(to_us).transpose()?,
         },
-        FootageOp::Add => return propose_under(ctx, &short, &args),
+        FootageOp::Add => return put_under(ctx, &before, &short, &args),
     };
     let project = commands::project_short_footage_impl(
         ctx.state,
@@ -3715,9 +3778,11 @@ fn short_footage(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(applied(ctx, "short_footage", &before, lines)?)
 }
 
-/// `short_footage` `op: add`: the items as one batch for the user (autopilot accepts it).
-fn propose_under(
+/// `short_footage` `op: add`: the items at once, one undo step the Agent panel lists with Undo
+/// (no Accept card: like every other pass, it is taken back, not approved first).
+fn put_under(
     ctx: &Ctx,
+    before: &Open,
     short: &crate::shorts::Short,
     args: &ShortFootageArgs,
 ) -> Result<Vec<Output>, String> {
@@ -3819,10 +3884,32 @@ fn propose_under(
         .clone()
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| format!("What plays under \"{}\"", short.title));
-    let (agent, id) = (ctx.agent.clone(), short.id.clone());
-    super::propose::propose(ctx, |reader, proposals| {
-        crate::proposals::propose_under(reader, proposals, &agent, &id, items, &reason)
-    })
+    let graphics = items
+        .iter()
+        .filter(|i| matches!(i, Under::Graphic { .. }))
+        .count();
+    let (_, done) = commands::graphics::project_short_under_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        &short.id,
+        &items,
+    )?;
+    let added: Vec<String> = [
+        (graphics, "graphic"),
+        (items.len() - graphics, "footage item"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| plural(n, what))
+    .collect();
+    let mut lines = vec![format!(
+        "{reason}: added {} to {}.",
+        added.join(" and "),
+        short.id
+    )];
+    lines.extend(done);
+    text(applied(ctx, "short_footage", before, lines)?)
 }
 
 /// The id of the take short `wanted` names (its id or title), for cleaning its take.
@@ -6162,6 +6249,69 @@ mod tests {
     }
 
     #[test]
+    fn cuts_in_a_take_short_stay_in_the_short_when_the_video_plays_the_take_too() {
+        // FIX-8: the same recording on the video and as a take; cutting the short's words
+        // must leave the video alone.
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, key) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let voice = key.split('.').next().unwrap().to_string();
+        call(
+            &ctx,
+            "short_from_take",
+            json!({ "title": "Take", "media": [voice] }),
+        )
+        .unwrap();
+        let lengths = |ctx: &Ctx| {
+            with_reader(ctx.state, |reader| {
+                let document = reader.document();
+                let short = document.shorts.iter().find(|s| s.title == "Take").unwrap();
+                let own = crate::shorts::short_timeline(document, short)?.duration_us();
+                Ok((document.duration_us(), own))
+            })
+            .unwrap()
+        };
+        let (video, short) = lengths(&ctx);
+        let done = call(&ctx, "fillers", json!({ "short": "Take" })).unwrap();
+        assert!(done.contains("Cut them all from short"), "{done}");
+        let (video_after, short_after) = lengths(&ctx);
+        assert_eq!(video_after, video, "the video keeps its words");
+        assert!(short_after < short, "the short lost the filler");
+        // A proposed cut with `short` is checked and applied on the short's timeline too.
+        let revision = with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
+        let proposed = call(
+            &ctx,
+            "propose_cuts",
+            json!({ "expectedRevision": revision, "reason": "A retake", "short": "Take",
+                    "cuts": [{ "fromWord": "w-6", "toWord": "w-6" }] }),
+        )
+        .unwrap();
+        let batch = proposed
+            .split_whitespace()
+            .find(|w| w.starts_with("b-"))
+            .unwrap()
+            .trim_end_matches('.')
+            .to_string();
+        let handle = with_reader(ctx.state, |r| Ok(r.summary.project_handle.clone())).unwrap();
+        commands::proposals::proposal_accept_impl(ctx.state, handle, revision, batch, None, false)
+            .unwrap();
+        let (video_cut, short_cut) = lengths(&ctx);
+        assert_eq!(video_cut, video, "the video still keeps its words");
+        assert!(short_cut < short_after, "the short lost \"now.\"");
+        // A clip is the video itself: its cuts are made there.
+        assert!(call(
+            &ctx,
+            "propose_cuts",
+            json!({ "expectedRevision": revision + 1, "reason": "r", "short": "nope",
+                    "cuts": [{ "fromWord": "w-6" }] }),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn an_agent_puts_graphics_under_a_take() {
         if !crate::media::ffmpeg::available() {
             return;
@@ -6219,19 +6369,21 @@ mod tests {
         assert!(call(&ctx, "clips", json!({}))
             .unwrap()
             .starts_with("No clips yet"));
-        // Everything under the take goes as one batch: a template, and a copy of the video's
-        // own graphic with new text. Nothing changes until the user accepts it.
+        // Everything under the take goes in at once, one undo step (no Accept card): a
+        // template, and a copy of the video's own graphic with new text.
         let revision = |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.document().revision)).unwrap();
-        let handle = with_reader(ctx.state, |r| Ok(r.summary.project_handle.clone())).unwrap();
-        let batch_of = |said: &str| {
-            said.split_whitespace()
-                .find(|w| w.starts_with("b-"))
-                .unwrap()
-                .trim_end_matches('.')
-                .to_string()
+        let graphics_made = |ctx: &Ctx| {
+            with_reader(ctx.state, |r| {
+                Ok(r.document()
+                    .assets
+                    .iter()
+                    .filter(|a| a.is_graphic())
+                    .count())
+            })
+            .unwrap()
         };
         let before = revision(&ctx);
-        let proposed = call(
+        let added = call(
             &ctx,
             "short_footage",
             json!({ "short": "Take", "op": "add", "reason": "Graphics for the take",
@@ -6243,35 +6395,20 @@ mod tests {
         )
         .unwrap();
         assert!(
-            proposed.contains("Proposed b-")
-                && proposed.contains("(template title)")
-                && proposed.contains("a copy of the video's")
-                && proposed.contains("over the face, which fills the frame"),
-            "{proposed}"
+            added.contains("added 2 graphics")
+                && added.contains("(template title)")
+                && added.contains("a copy of the video's")
+                && added.contains("over the face, which fills the frame"),
+            "{added}"
         );
-        assert_eq!(revision(&ctx), before, "proposing changes nothing");
-        let graphics_made = |ctx: &Ctx| {
-            with_reader(ctx.state, |r| {
-                Ok(r.document()
-                    .assets
-                    .iter()
-                    .filter(|a| a.is_graphic())
-                    .count())
-            })
-            .unwrap()
-        };
-        assert_eq!(graphics_made(&ctx), 1, "the check leaves no graphic behind");
-        let first = batch_of(&proposed);
-        commands::proposals::proposal_accept_impl(
-            ctx.state,
-            handle.clone(),
-            before,
-            first.clone(),
-            None,
-            false,
-        )
-        .unwrap();
-        assert_eq!(revision(&ctx), before + 1, "accepted as one undo step");
+        assert_eq!(revision(&ctx), before + 1, "one undo step");
+        assert_eq!(graphics_made(&ctx), 3);
+        // The Agent panel lists it as done, with Undo.
+        let listed = call(&ctx, "proposals_list", json!({})).unwrap();
+        assert!(
+            listed.contains("\"kind\": \"action\"") && listed.contains("\"canUndo\": true"),
+            "{listed}"
+        );
         // The title's mode came with it, set before it ever rendered.
         let modes = with_reader(ctx.state, |r| {
             Ok(r.document().shorts[0]
@@ -6313,38 +6450,17 @@ mod tests {
         assert_eq!(in_short, 2);
         // The copy took the new text; the video's graphic is its own.
         assert_eq!(copy_title, Some(json!("In the short")));
-        // A batch made before the short changed can't be accepted as it is.
-        let second = batch_of(
-            &call(
-                &ctx,
-                "short_footage",
-                json!({ "short": "Take", "op": "add",
-                        "items": [{ "atS": 1.5, "toS": 2.0, "template": "key-point" }] }),
-            )
-            .unwrap(),
-        );
-        commands::proposals::proposal_undo_impl(ctx.state, handle.clone(), before + 1, first)
-            .unwrap();
-        let stale = commands::proposals::proposal_accept_impl(
-            ctx.state,
-            handle.clone(),
-            revision(&ctx),
-            second,
-            None,
-            false,
-        )
-        .unwrap_err();
-        assert!(stale.contains("propose it again"), "{stale}");
-        // Under autopilot it lands at once.
-        let auto = Ctx::new(&host, "claude-code", true);
-        let landed = call(
-            &auto,
+        // Graphics that would play over each other are refused, and nothing is left behind.
+        let overlap = call(
+            &ctx,
             "short_footage",
             json!({ "short": "Take", "op": "add",
-                    "items": [{ "atS": 1.0, "template": "key-point" }] }),
+                    "items": [{ "atS": 1.0, "toS": 2.5, "template": "key-point" }] }),
         )
-        .unwrap();
-        assert!(landed.contains("autopilot accepted it"), "{landed}");
+        .unwrap_err();
+        assert!(overlap.contains("would overlap"), "{overlap}");
+        assert_eq!(revision(&ctx), before + 1);
+        assert_eq!(graphics_made(&ctx), 3);
         // The footage and B-roll sound share one track: its volume and ducking are set once.
         let listed = call(&ctx, "short_footage", json!({ "short": "Take" })).unwrap();
         assert!(
@@ -6718,28 +6834,17 @@ mod tests {
         assert!(listed.contains("\"look\":{\"radius\":\"0\"}"), "{listed}");
         let check = call(&ctx, "library", json!({ "kind": "style", "op": "check" })).unwrap();
         assert!(check.contains("Step card"), "{check}");
-        let proposed = call(
+        // Applied at once, one undo step like every pass.
+        let done = call(
             &ctx,
             "library",
             json!({ "kind": "style", "op": "bring_in_line" }),
         )
         .unwrap();
         assert!(
-            proposed.contains("Proposed b-") && proposed.contains("its own look (radius)"),
-            "{proposed}"
+            done.contains("Brought 1 graphic in line") && done.contains("its own look (radius)"),
+            "{done}"
         );
-        let batch = proposed
-            .split_whitespace()
-            .find(|w| w.starts_with("b-"))
-            .unwrap()
-            .trim_end_matches('.')
-            .to_string();
-        let (handle, revision) = with_reader(ctx.state, |r| {
-            Ok((r.summary.project_handle.clone(), r.document().revision))
-        })
-        .unwrap();
-        commands::proposals::proposal_accept_impl(ctx.state, handle, revision, batch, None, false)
-            .unwrap();
         let in_line = with_reader(ctx.state, |reader| {
             let document = reader.document();
             let graphic = document.assets.iter().find(|a| a.is_graphic()).unwrap();
@@ -7040,6 +7145,23 @@ mod tests {
             json!({ "area": "export", "set": { "fps": 7 } })
         )
         .is_err());
+    }
+
+    #[test]
+    fn an_agent_cannot_allow_itself_online() {
+        // FIX-9: only the user's Settings record that agents may transcribe online. Refused
+        // before anything is read or saved, so no project is needed.
+        let host = super::super::tests_support::BareHost::default();
+        let ctx = Ctx::new(&host, "agent", false);
+        for value in [json!("on"), Value::Null] {
+            let refused = call(
+                &ctx,
+                "settings",
+                json!({ "area": "transcription", "set": { "agentsOnline": value } }),
+            )
+            .unwrap_err();
+            assert!(refused.contains("Only the user"), "{refused}");
+        }
     }
 
     #[test]

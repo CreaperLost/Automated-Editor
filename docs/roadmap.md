@@ -63,27 +63,45 @@ not a hard limit: no test fails on it. Our source code doesn't count.
 ## Next
 
 REV-1, AGT-3, AGT-4, SND-1, FTG-1 and LAY-1 were built 24 Oct (see [Done](#done)). Left in this
-tier: GFX-5's build (its research is done; a decision first) and what VER-1 couldn't cover here.
-Next up after them: the SFX starter set (SND-3, on SND-1) and SHT-1 (idea-first shorts, on
-FTG-1). LAY-2, UI-1 and UI-2 were built 24 Oct.
+tier, in order (George, 25 Oct): **STY-2** styles from references (it takes in GFX-5's
+AI-proposed styles), then **GFX-8** graphics an agent makes well on top of it, and what VER-1
+couldn't cover here. Next up after them: the SFX starter set (SND-3, on SND-1) and SHT-1
+(idea-first shorts, on FTG-1). LAY-2, UI-1 and UI-2 were built 24 Oct.
 NOTE-1 (anchored notes, "Ask AI about this") was dropped 24 Oct: the chat, the agent's history
 and descriptions like "the graphic titled X" already do its job
 ([decisions](decisions.md#not-doing)).
 
-<a id="gfx-5"></a>
-### GFX-5 · Styles proposed by the agent — S/M, research first
+<a id="sty-2"></a>
+### STY-2 · Styles from references — L, plan: [plans/styles.md](plans/styles.md)
 
-The look, the shorts look and bring-in-line shipped and are the Style's graphics look and 9:16
-variant. Left:
-- **AI-built styles: later, research first (George, 23 Oct).** The agent proposes two or three
-  styles from a brand and a description in words, each previewed on the video's own
-  graphics (`library` `kind: style` `op: preview` is the building block), and the user picks one.
-  Creators who make good graphics with agents seem to give each request a board of reference
-  images, their brand and a tuned prompt (as a skill); it likely joins [STY-2](#sty-2).
-- **Research done 24 Oct:** [research/ai-styles.md](research/ai-styles.md). Brand intake into
-  one file every step reads, style frames before motion, a kit plus references plus a brief.
-  Proposed: `library` `kind: style` `op: propose` (`brief`, optional `url` and `logo`) answering
-  with up to three named-different previews; only the pick is saved. **Needs George's go.**
+First, ahead of GFX-8 (George, 25 Oct): bad graphics aren't a shorts-only problem, and a style
+today holds only look settings, so agents fall back on stock templates. Merges GFX-5's
+AI-proposed styles, the old STY-2 and GFX-8's worked examples. A style gains motion rules, the
+kinds of graphics it uses (with their 9:16 placement), 2–3 examples linked from the library,
+its references and the agent's breakdown of them, look rules, a richer shorts variant and a
+small sound set; fonts must resolve or ship with it. `library` `kind: style` `op: propose` makes
+one from references: breakdown first, stills to narrow, one clip in place for the pick. First
+test: a "my library" long-form style from George's own graphics.
+
+<a id="gfx-8"></a>
+### GFX-8 · Graphics an agent makes well — L, plan: [plans/graphics-quality.md](plans/graphics-quality.md)
+
+After STY-2. The 25 Oct test (one short take, three agents) gave generic text cards every time:
+stock templates, approval on a written plan, no sample, uninstalled fonts, cards over the face,
+captions cut by splits. On top of the style: picking per moment what to show (text cards and
+demonstrations are equals), one sample clip before the set, the plan always shown as a table,
+checks the agent runs (face, captions, fonts), honest style knobs. George's decisions are in
+the plan.
+
+The bugs from the same test, FIX-8 to FIX-10, were fixed 25 Oct (see [Done](#done)); FIX-9
+still needs a real Codex run.
+
+<a id="gfx-5"></a>
+### GFX-5 · Styles proposed by the agent — merged into STY-2
+
+The look, the shorts look and bring-in-line shipped (see [Done](#done)). The leftover, styles the
+agent proposes (research: [research/ai-styles.md](research/ai-styles.md)), is now part of
+[STY-2](#sty-2) (George, 25 Oct).
 
 <a id="ver-1"></a>
 ### VER-1 · Pay the verification debt — M
@@ -253,6 +271,11 @@ removed 23 Oct 2026: not needed.
 
 Built: UI-1 and UI-2 (see [Done](#done)).
 
+<a id="ui-8"></a>
+- **UI-8 · Shorts tab: transcript first (S).** Add a Style tab; move "Clean the take" and its
+  steps out of Look into the Transcript panel, which is the main thing; keep "what plays under
+  it" short. From the 25 Oct test ([plans/graphics-quality.md](plans/graphics-quality.md#bugs)).
+
 ### Dependencies
 
 <a id="dep-2"></a>
@@ -290,11 +313,8 @@ Raised 23 Oct as long-term direction. Every item here is measured against
   windows, chapter titles, checking a graphic) to a smaller model or a lower reasoning effort,
   through a subagent or the app's own OpenRouter pass with a cheap model; the main agent keeps
   the decisions. Each swap kept only if EVAL-1 says the result is as good.
-<a id="sty-2"></a>
-- **STY-2 · Styles from references (M).** The agent studies a reference (a video as review
-  boards, images, a channel's thumbnails) and writes a **Style** (kept with its references) and
-  two or three graphic templates in it; the user picks what to keep, and it goes into the
-  library. Cheap because it reads boards (COST-1), not whole videos. After ORG-1 phase 1.
+- **STY-2 · Styles from references:** moved to [Next](#sty-2) on 25 Oct, plan
+  [plans/styles.md](plans/styles.md).
 <a id="loop-1"></a>
 - **LOOP-1 · The user and the agent improve the app together (L).** Aim: a loop where each edit
   makes the next one better: the app, the bundled material (presets, styles, graphic
@@ -349,6 +369,19 @@ Most recent first, a line or two each. The details are in git history (commit me
 plans deleted once built), the design in [architecture.md](architecture.md), the choices in
 [decisions.md](decisions.md).
 
+- **25 Oct 2026** — <a id="fix-8"></a>**FIX-8** cuts in a take short stay in the short: when
+  the video plays the same take, `fillers` with `short` found and cut on the video's timeline.
+  `fillers`, `fillers_review` and the AI review now read the short's kept words and cut its
+  own timeline; `propose_cuts` takes `short` (a cuts batch remembers it, and the Agent panel
+  shows "Show the short").
+- **25 Oct 2026** — <a id="fix-9"></a>**FIX-9** online transcription is the user's recorded
+  choice: Transcription settings → AI agents → Allow stamps the date (only the app sets it;
+  `settings` refuses `agentsOnline` from an agent). The preset states it with that date, or,
+  while off, tells the agent to ask once (or use Parakeet). Not yet tried with Codex.
+- **25 Oct 2026** — <a id="fix-10"></a>**FIX-10** no Accept card for graphics: `short_footage`
+  `op: add` and `library` style `bring_in_line` apply at once as one undo step, listed in the
+  Agent panel with Undo; overlapping graphics are refused. The `under` and `restyle` batch kinds
+  are gone; proposal cards stay for cuts, timeline edits and rules.
 - **24 Oct 2026** — <a id="lay-2"></a>**LAY-2** layout keys: the shortcuts dialog has a
   Layouts tab (built-ins and favourites, no keys by default); a key puts that layout from the
   playhead to the next layout change. While playing it shows at once (LAY-1's swap), and every

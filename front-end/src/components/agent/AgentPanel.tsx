@@ -43,13 +43,13 @@ const ACTION_LABEL: Record<string, string> = {
   settings: "Settings",
   chapters: "Chapters",
   shorts: "Shorts",
+  short_footage: "Under a take",
+  bring_in_line: "Bring in line",
 };
 
 function kindLabel(batch: ProposalBatch) {
   if (batch.kind === "cuts") return "Cuts";
   if (batch.kind === "edits") return "Edits";
-  if (batch.kind === "under") return "Under a take";
-  if (batch.kind === "restyle") return "Bring in line";
   if (batch.kind === "rule") return "Rule";
   return ACTION_LABEL[batch.action ?? ""] ?? batch.action ?? "Action";
 }
@@ -173,11 +173,7 @@ const BatchCard: React.FC<{
         )}
         {batch.stale && waiting && (
           <p className="text-meta text-danger-fg">
-            {batch.kind === "under"
-              ? "The short or the video changed since, so this can no longer be applied as proposed."
-              : batch.kind === "restyle"
-                ? "A graphic was changed since, so this can no longer be applied as proposed."
-                : `The edit changed after revision ${batch.baseRevision}, so this can no longer be applied as proposed.`}{" "}
+            {`The edit changed after revision ${batch.baseRevision}, so this can no longer be applied as proposed.`}{" "}
             Ask the agent to propose it again.
           </p>
         )}

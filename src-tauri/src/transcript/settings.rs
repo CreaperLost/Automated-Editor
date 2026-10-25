@@ -26,6 +26,9 @@ pub struct TranscriptSettings {
     pub parakeet_model: parakeet::ParakeetModel,
     /// Folder holding the Parakeet ONNX files; empty uses the app data folder.
     pub parakeet_model_dir: String,
+    /// When the user let AI agents send the speech online to transcribe it (RFC 3339), as the
+    /// app stamped it; `None` while agents ask first. Only the user's Settings change it.
+    pub agents_online: Option<String>,
 }
 
 impl Default for TranscriptSettings {
@@ -37,6 +40,7 @@ impl Default for TranscriptSettings {
             keyterms: Vec::new(),
             parakeet_model: parakeet::ParakeetModel::Unified,
             parakeet_model_dir: String::new(),
+            agents_online: None,
         }
     }
 }

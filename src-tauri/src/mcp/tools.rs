@@ -458,12 +458,11 @@ static TOOLS: [ToolDef; 14] = [
     },
     ToolDef {
         name: "propose_cuts",
-        description: "Proposes cutting time out of the video (every track, closing the gap, as \
-            word cuts do). Give runs of words by id (`fromWord`..`toWord` from transcript_get) \
-            or edited-time ranges, each with a short reason. Nothing changes until the user \
-            accepts the batch in the Agent panel (or autopilot is on); word cuts stay valid \
-            through later edits. Needs `expectedRevision` from project_info or transcript_get. \
-            Returns the batch id and what it would do.",
+        description: "Proposes cutting time out of the video or a take `short` (every track, \
+            closing the gap, as word cuts do). Give runs of words by id (`fromWord`..`toWord` \
+            from transcript_get) or edited-time ranges, each with a short reason. Nothing \
+            changes until the user accepts the batch in the Agent panel (or autopilot is on); \
+            word cuts stay valid through later edits. Returns the batch id and what it would do.",
         schema: schema::<super::propose::CutsParams>,
         read_only: false,
         run: super::propose::propose_cuts,

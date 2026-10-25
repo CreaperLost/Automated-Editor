@@ -125,18 +125,17 @@ before the call. These are the short's own (undo steps); the take's text stays s
 Emphasis is drawn in the style's accent.
 How the words come on (pop by default at 9:16) is the project's style (`library` `kind: style`).
 
-## 7. Propose (automatic)
+## 7. Put it under the take (automatic)
 
-One `short_footage` call with `op: add`, a `reason`, and every item at once; the user accepts
-the batch in the Agent panel (under autopilot it lands at once). Footage: `fromWord`/`toWord`
+One `short_footage` call with `op: add`, a `reason`, and every item at once: it goes in as one
+undo step, listed in the Agent panel with Undo (no Accept card). Footage: `fromWord`/`toWord`
 from the take, and `sourceWord` (a word id from the video's transcript where the footage
 starts; it must be one the video keeps) or `videoS`; its game or desktop sound plays ducked
 under the voice, `sound: false` where it distracts; `speed` as planned. Graphics: `fromWord`
 (and `toWord`, else its own length) with `template`, `library` or `graphic`, `mode`, plus
 `name` and `variables`. Report
-the summary it answers and wait for the user's decision (`proposals_list`). Graphics play one at
-a time: the app refuses a batch whose graphics would overlap, and says where. Once accepted:
-`storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
+the summary it answers in a line. Graphics play one at a time: the app refuses a call whose
+graphics would overlap, and says where (nothing is added). Then: `storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
 later with `graphic_set` `short` and `slot` renders that graphic again):
 `graphic_set` with `short` moves (`moveToWord`, a word of the take) or lengthens (`lengthUs`) a
 graphic on the short's timeline, `op: remove` with `fromS`/`toS` takes footage off. Footage and

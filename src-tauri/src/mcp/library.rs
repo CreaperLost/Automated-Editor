@@ -234,16 +234,29 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 })).collect::<Vec<_>>(),
             }))
         }
+        // One undo step at once, like every pass: no Accept card for graphics.
         Op::BringInLine => {
-            let agent = ctx.agent.clone();
-            super::propose::propose(ctx, |reader, proposals| {
-                crate::proposals::propose_restyle(
-                    reader,
-                    proposals,
-                    &agent,
-                    "Bring every graphic in line with the style",
-                )
-            })
+            let before = opened(ctx)?;
+            let plans =
+                commands::graphics::graphics_in_line_plan_impl(ctx.state, before.handle.clone())?;
+            if plans.is_empty() {
+                return Err(
+                    "Every graphic follows the video's look already: nothing to bring in line"
+                        .into(),
+                );
+            }
+            let mut lines = vec![format!(
+                "Brought {} in line with the style; each renders again.",
+                plural(plans.len(), "graphic")
+            )];
+            lines.extend(plans.iter().map(|p| p.line()));
+            commands::graphics::project_graphics_in_line_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                plans,
+            )?;
+            text(applied(ctx, "bring_in_line", &before, lines)?)
         }
         Op::Save | Op::Reset | Op::ProposeRule => {
             Err("Styles take list, show, use, set, remove, preview, check or bring_in_line".into())

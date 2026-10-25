@@ -22,6 +22,9 @@ pub struct CutsParams {
     /// transcribed one, as in transcript_get.
     #[serde(default)]
     pub stream: Option<String>,
+    /// A take short (id or title): cut its own timeline.
+    #[serde(default)]
+    pub short: Option<String>,
     /// The cuts: each either `fromWord` (and `toWord`, inclusive) or `startUs` and `endUs`.
     pub cuts: Vec<CutInput>,
 }
@@ -117,20 +120,40 @@ pub(crate) fn propose(
 pub fn propose_cuts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: CutsParams = params(args)?;
     let agent = ctx.agent.clone();
+    let short = match args.short.as_deref() {
+        Some(wanted) => Some(super::clips::named(ctx, wanted)?),
+        None => None,
+    };
+    if let Some(short) = short.as_ref().filter(|s| s.take.is_none()) {
+        return Err(format!(
+            "\"{}\" is a clip cut from the video: propose the cut on the video (no `short`), \
+             then `clips` with `op: range` brings it into the clip",
+            short.title
+        ));
+    }
+    let stream = match (args.stream, &short) {
+        (None, Some(short)) => short.take.as_ref().map(|t| t.voice.clone()),
+        (stream, _) => stream,
+    };
     propose(ctx, |reader, proposals| {
-        let stream = transcribed_stream(reader, args.stream).or_else(|e| {
+        let stream = transcribed_stream(reader, stream).or_else(|e| {
             match args.cuts.iter().all(|c| c.from_word.is_none()) {
                 // Ranges alone need no transcript.
                 true => Ok(String::new()),
                 false => Err(e),
             }
         })?;
+        // A take only the short plays is cut there even unnamed.
+        let short = short.map(|s| s.id).or_else(|| {
+            crate::shorts::take_short_of(reader.document(), &stream).map(|s| s.id.clone())
+        });
         proposals::propose_cuts(
             reader,
             proposals,
             &agent,
             args.expected_revision,
             &stream,
+            short.as_deref(),
             args.cuts,
             &args.reason,
         )

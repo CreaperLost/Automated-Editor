@@ -1521,6 +1521,9 @@ export interface TranscriptSettings {
   scribeModel: string;
   keyterms: string[];
   parakeetModelDir: string;
+  /** When the user let AI agents transcribe online (RFC 3339; the app stamps it); null while
+   *  agents ask first. Send any string to turn it on. */
+  agentsOnline: string | null;
 }
 
 export interface TranscriptSettingsView {
@@ -1641,12 +1644,11 @@ export interface ProposalBatch {
   reason: string;
   createdAt: string;
   baseRevision: number;
-  /** `action`: one of the app's own actions the agent ran, applied at once; `under`: footage,
-   *  graphics and files under a take short. */
-  kind: "cuts" | "edits" | "under" | "restyle" | "action" | "rule";
+  /** `action`: one of the app's own actions the agent ran, applied at once. */
+  kind: "cuts" | "edits" | "action" | "rule";
   /** For an action: which (`silence`, `fillers`, ...). */
   action?: string;
-  /** For `under`: the take short it goes under. */
+  /** For cuts on a take short's own timeline: that short. */
   short?: string;
   /** For `rule`: the preset whose rules it joins (for every project). */
   preset?: string;

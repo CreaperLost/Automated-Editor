@@ -179,8 +179,17 @@ mod tests {
                 from_word: Some("w-1".into()),
                 ..Default::default()
             };
-            let id = proposals::propose_cuts(reader, &mut p, "test", revision, &key, vec![cut], "")
-                .unwrap();
+            let id = proposals::propose_cuts(
+                reader,
+                &mut p,
+                "test",
+                revision,
+                &key,
+                None,
+                vec![cut],
+                "",
+            )
+            .unwrap();
             proposals::save(reader.root(), &p).unwrap();
             let root = reader.root().to_path_buf();
             (

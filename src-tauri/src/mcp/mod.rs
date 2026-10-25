@@ -1460,7 +1460,9 @@ mod tests {
                 );
             }
         }
+        // 25 Oct (FIX-8): `short` on `propose_cuts` and `fillers_review`, 44,168; the budget
+        // moved to 44,500.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 44_000, "the tool list grew to {size} characters");
+        assert!(size < 44_500, "the tool list grew to {size} characters");
     }
 }

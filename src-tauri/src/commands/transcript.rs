@@ -168,9 +168,21 @@ pub fn transcript_settings_get_impl() -> TranscriptSettingsView {
 }
 
 pub fn transcript_settings_set_impl(
-    new_settings: TranscriptSettings,
+    mut new_settings: TranscriptSettings,
 ) -> Result<TranscriptSettingsView, String> {
     let dir = config_dir();
+    // The app stamps when the user allowed agents online: any value turns it on, and the
+    // date it was first turned on stays.
+    new_settings.agents_online = match (
+        new_settings.agents_online,
+        settings::load_settings(&dir).agents_online,
+    ) {
+        (None, _) => None,
+        (Some(_), Some(since)) => Some(since),
+        (Some(_), None) => {
+            Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        }
+    };
     settings::save_settings(&dir, &new_settings)?;
     Ok(settings::settings_view(&dir))
 }
@@ -388,10 +400,12 @@ pub fn transcript_suggestions_impl(
         &transcript,
         &transcript_clock(reader, &track_id, short.as_deref())?,
     );
+    let short = target_short(reader.document(), &track_id, short.as_deref());
     Ok(crate::proposals::with_agent_suggestions(
         reader,
         &transcript,
         &track_id,
+        short.map(|s| s.id.as_str()),
         found,
     ))
 }
@@ -621,13 +635,14 @@ pub fn ai_set_api_key_impl(
 /// Reviews the kept words for fillers and retakes with `engine` (the settings' choice when
 /// `None`) and stores the spans it finds with the transcript. The cloud review reads every
 /// word; the local model reads only the windows the local pass flagged. Returns the merged
-/// suggestion list.
+/// suggestion list. With `short`, the words that short keeps (a take's own timeline).
 pub fn transcript_ai_suggest_impl(
     state: &AppState,
     transcripts: &TranscriptState,
     project_handle: String,
     track_id: String,
     engine: Option<crate::ai::FillerEngine>,
+    short: Option<String>,
     progress: &mut dyn FnMut(TranscriptionProgress),
 ) -> Result<Vec<TranscriptCutSuggestion>, String> {
     use crate::ai::client::JsonModel;
@@ -667,7 +682,7 @@ pub fn transcript_ai_suggest_impl(
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        let mapper = transcript_clock(reader, &track_id, None)?;
+        let mapper = transcript_clock(reader, &track_id, short.as_deref())?;
         let kept: Vec<&crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
@@ -733,7 +748,7 @@ pub fn transcript_ai_suggest_impl(
         t.ai_model = Some(model);
         Ok(())
     })?;
-    transcript_suggestions_impl(state, project_handle, track_id, None)
+    transcript_suggestions_impl(state, project_handle, track_id, short)
 }
 
 /// The model name an in-house review is stored under (the connected agent's own name follows).
@@ -760,6 +775,7 @@ fn kept_words(
     state: &AppState,
     project_handle: &str,
     track_id: &str,
+    short: Option<&str>,
 ) -> Result<
     (
         crate::transcript::TranscriptDependency,
@@ -773,7 +789,7 @@ fn kept_words(
     super::require_handle(reader, project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = transcript_clock(reader, track_id, None)?;
+    let mapper = transcript_clock(reader, track_id, short)?;
     let words = transcript
         .words
         .iter()
@@ -799,14 +815,16 @@ fn review_stamp<'a>(
     format!("{:016x}", hasher.finish())
 }
 
-/// Page `page` of the kept words of `track_id`, numbered as the AI review numbers them.
+/// Page `page` of the kept words of `track_id` (those `short` keeps, with one), numbered as
+/// the AI review numbers them.
 pub fn transcript_review_page_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<&str>,
     page: usize,
 ) -> Result<ReviewPage, String> {
-    let (_, words, language) = kept_words(state, &project_handle, &track_id)?;
+    let (_, words, language) = kept_words(state, &project_handle, &track_id, short)?;
     let ranges = crate::ai::fillers::chunks(words.len());
     if ranges.is_empty() {
         return Err("There are no kept words to check".into());
@@ -891,6 +909,7 @@ pub fn transcript_review_candidates_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<&str>,
     page: usize,
 ) -> Result<CandidatePage, String> {
     use crate::ai::candidates::{self, Flag};
@@ -899,7 +918,7 @@ pub fn transcript_review_candidates_impl(
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = transcript_clock(reader, &track_id, None)?;
+    let mapper = transcript_clock(reader, &track_id, short)?;
     let words: Vec<&crate::transcript::TranscriptWord> = transcript
         .words
         .iter()
@@ -949,11 +968,12 @@ pub fn transcript_review_save_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<&str>,
     stamp: &str,
     cuts: serde_json::Value,
     reviewer: &str,
 ) -> Result<(usize, Vec<TranscriptCutSuggestion>), String> {
-    let (dependency, words, _) = kept_words(state, &project_handle, &track_id)?;
+    let (dependency, words, _) = kept_words(state, &project_handle, &track_id, short)?;
     if review_stamp(&words) != stamp {
         return Err(
             "The kept words changed since those pages were read (a cut, an undo, a word fixed): \
@@ -993,7 +1013,7 @@ pub fn transcript_review_save_impl(
     })?;
     Ok((
         kept,
-        transcript_suggestions_impl(state, project_handle, track_id, None)?,
+        transcript_suggestions_impl(state, project_handle, track_id, short.map(str::to_string))?,
     ))
 }
 

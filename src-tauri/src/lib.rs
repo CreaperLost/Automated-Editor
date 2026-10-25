@@ -1545,6 +1545,7 @@ async fn transcript_ai_suggest(
     project_handle: String,
     track_id: String,
     engine: Option<ai::FillerEngine>,
+    short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     use tauri::Emitter;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1555,6 +1556,7 @@ async fn transcript_ai_suggest(
             project_handle,
             track_id,
             engine,
+            short_id,
             &mut |progress| {
                 let _ = emitter.emit("transcript-progress", progress);
             },
