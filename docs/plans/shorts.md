@@ -2,15 +2,15 @@
 
 Merged on 21 Oct 2026 from the shorts redesign plan (17 Oct) and the Shorts workspace +
 voiceover shorts plan (18 Oct), which described the same `Short` model twice. Roadmap items:
-[SHT-1](../roadmap.md#sht-1) to [SHT-4](../roadmap.md#sht-4); the shared dependency is source
-search, [FTG-1](../roadmap.md#ftg-1).
+[SHT-1](../roadmap.md#sht-1) to [SHT-4](../done.md#sht-4); the shared dependency is source
+search, [FTG-1](../done.md#ftg-1).
 
 ## The goal
 
 **22 Oct: two features.** **Shorts** start from a take recorded outside the app and put anything
 under it: the user's camera, the long video's graphics the agent picks (re-made for 9:16), new
 graphics (news, a new feature, filler), the long video's footage, outside video as B-roll. This
-comes first ([SHT-5](../roadmap.md#sht-5), [SHT-6](../roadmap.md#sht-6)). **Clips** cut the best
+comes first ([SHT-5](../done.md#sht-5), [SHT-6](../done.md#sht-6)). **Clips** cut the best
 moments out of the long video (the idea-first model below, [SHT-1](../roadmap.md#sht-1)). Both use
 the one `Short` model and the same panels.
 
@@ -86,7 +86,7 @@ needs live in a small per-short overlay sequence anchored to words.
 ## The flow (Shorts workspace)
 
 1. **Idea:** title and a one-line premise.
-2. **Gather:** search the whole video's transcript ([FTG-1](../roadmap.md#ftg-1)), add passages as
+2. **Gather:** search the whole video's transcript ([FTG-1](../done.md#ftg-1)), add passages as
    pieces in any order; cut passages are greyed out and can't be added. For a take: pick or
    import the take; it is transcribed, framed and cleaned.
 3. **Tighten:** the short's own transcript: strike words, drop sentences, a running length against
@@ -99,7 +99,7 @@ needs live in a small per-short overlay sequence anchored to words.
 Meaning-based work (which passages make the idea, which footage shows the claim) is the agent's
 job; the app gives cheap, exact tools.
 
-- `short_create` takes `title`, `idea` and `pieces: [{fromWord, toWord}]`, or `recording` for a
+- `clips` `op: create` (built 24 Oct with one stretch; pieces later) takes `title`, `idea` and `pieces: [{fromWord, toWord}]`, or `recording` for a
   take. `short_pieces` (`add | remove | move | set`) and `short_cut` (word ranges).
 - `source_search` (FTG-1) to find passages and footage, including what the edit cut.
 - `short_footage` grows into reviewable B-roll batches (`broll` items with fit, slot, sound) shown

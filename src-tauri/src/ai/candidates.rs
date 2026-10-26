@@ -3,7 +3,9 @@
 //! the words around each flag instead of the whole transcript. Indexes are the review's own:
 //! positions in the kept words, as the full pages number them, so cuts are saved the same way.
 use super::fillers::chunk_prompt;
-use crate::transcript::edit::{ends_clause, is_filler_sound, is_punctuation, normalize};
+use crate::transcript::edit::{
+    can_end_sentence, ends_clause, is_filler_sound, is_punctuation, normalize, same_word,
+};
 use crate::transcript::TranscriptWord;
 use std::ops::Range;
 
@@ -266,15 +268,28 @@ fn retakes(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
     // How many words from `a` are said again from `b`, the first attempt not overlapping.
     let matched = |a: usize, b: usize| {
         (0..)
-            .take_while(|&k| a + k < b && b + k < s.len() && s[a + k].norm == s[b + k].norm)
+            .take_while(|&k| {
+                a + k < b && b + k < s.len() && same_word(&s[a + k].norm, &s[b + k].norm)
+            })
             .count()
     };
     let one_word = |a: usize, m: usize| s[a..a + m].iter().all(|w| w.norm == s[a].norm);
+    // A finished sentence ending on the phrase, then a new one opening with it: said again on
+    // purpose ("what we call human in the loop. Human in the loop means..."). The phrase
+    // doesn't open its sentence, and the sentence ends on a word it can end on.
+    let defining = |a: usize, m: usize, b: usize| {
+        b == a + m
+            && s[b].after_stop
+            && a > 0
+            && !s[a].after_stop
+            && can_end_sentence(&s[a + m - 1].norm)
+    };
     let mut out = Vec::new();
     let mut covered = 0;
     let mut b = 1;
     while b < s.len() {
         let mut found = None;
+        let mut meant = None;
         // A phrase of three or more words said again within a few seconds.
         let lowest = b
             .saturating_sub(MAX_RESTART_WORDS + MAX_REPEAT_GAP_WORDS)
@@ -286,12 +301,16 @@ fn retakes(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
                 && start(b).saturating_sub(end(a + m - 1)) <= MAX_REPEAT_GAP_US
                 && !one_word(a, m)
             {
-                found = Some((a, m));
+                if defining(a, m, b) {
+                    meant = Some(m);
+                } else {
+                    found = Some((a, m));
+                }
                 break;
             }
         }
         // A phrase stopped and begun again with its first words.
-        if found.is_none() && s[b].after_halt {
+        if found.is_none() && meant.is_none() && s[b].after_halt {
             for a in b.saturating_sub(MAX_RESTART_WORDS).max(covered)..b {
                 if !(a == 0 || s[a].after_break)
                     || start(b).saturating_sub(start(a)) > MAX_RESTART_US
@@ -304,10 +323,20 @@ fn retakes(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
                     && !one_word(a, m)
                     && (!finished || b - a <= m + MAX_FINISHED_EXTRA_WORDS)
                 {
-                    found = Some((a, m));
+                    if defining(a, m, b) {
+                        meant = Some(m);
+                    } else {
+                        found = Some((a, m));
+                    }
                     break;
                 }
             }
+        }
+        // Said again on purpose: no part of it is a retake either.
+        if let Some(m) = meant {
+            covered = b;
+            b += m;
+            continue;
         }
         match found {
             Some((a, m)) => {
@@ -604,6 +633,16 @@ mod tests {
              dialog shows its progress"
         )
         .is_empty());
+        // A finished sentence ending on a phrase, then one opening with it, is meant.
+        assert!(flags(
+            "this is what we call |human in the loop. Human in the loop means you check it"
+        )
+        .is_empty());
+        // Broken off on a small word and begun again is still a retake.
+        assert_eq!(
+            flags("now we open up the. |Open up the settings panel"),
+            vec![(Flag::Retake, 2, 4)]
+        );
         // A phrase said again much later is a new sentence.
         assert!(flags(
             "add a clip |here we trim it down and move on to the next part of \

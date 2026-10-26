@@ -131,6 +131,9 @@ pub struct OpenedProject {
     pub chapters: Vec<crate::chapters::Chapter>,
     #[serde(default)]
     pub shorts: Vec<crate::shorts::Short>,
+    /// Screen effects (FX-2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<crate::effects::ScreenEffect>,
     /// Set when this is short `id`'s own timeline (the sequence is the short's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_view: Option<String>,
@@ -606,6 +609,7 @@ impl ProjectReader {
                 captions: Default::default(),
                 chapters: Vec::new(),
                 shorts: Vec::new(),
+                effects: Vec::new(),
                 short_view: None,
                 cleanup: Default::default(),
                 export: Default::default(),
@@ -677,6 +681,25 @@ impl ProjectReader {
 
     pub fn history(&self) -> &EditHistory {
         &self.history
+    }
+
+    /// Names the next undo step, instead of naming it from what changed.
+    pub fn name_next_step(&mut self, label: String) {
+        let mut meta = super::history::StepMeta::for_this_thread();
+        meta.label = Some(label);
+        self.history.set_next_step(meta);
+    }
+
+    /// Makes the next step join the top one while both are of `group`, as one undo step.
+    pub fn group_next_step(&mut self, label: String, group: String) {
+        let mut meta = super::history::StepMeta::for_this_thread();
+        meta.label = Some(label);
+        meta.group = Some(group);
+        self.history.set_next_step(meta);
+    }
+
+    pub fn clear_next_step(&mut self) {
+        self.history.clear_next_step();
     }
 
     pub fn document(&self) -> &EditDocument {
@@ -1098,6 +1121,17 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    pub fn set_asset_licence(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        licence: Option<crate::sequence::Licence>,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .set_asset_licence(expected_revision, asset_id, licence, &self.root)?;
+        Ok(self.done())
+    }
+
     /// The project as short `short_id` sees it: the sequence is the short's own (or its
     /// stretch of the video), in the short's time; everything else is the project's.
     pub fn short_view(&self, short_id: &str) -> Result<OpenedProject, String> {
@@ -1196,6 +1230,7 @@ impl ProjectReader {
         let mut shorts = document.shorts.clone();
         crate::shorts::attach_edited(&mut shorts, document);
         self.summary.shorts = shorts;
+        self.summary.effects = document.effects.clone();
     }
 }
 
@@ -1414,6 +1449,7 @@ mod tests {
         let original = media.join("Original.wav");
         fs::write(&original, b"original").unwrap();
         let source = Asset {
+            licence: None,
             id: "a".into(),
             name: "Original.wav".into(),
             kind: crate::sequence::AssetKind::Audio,

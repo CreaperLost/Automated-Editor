@@ -18,6 +18,7 @@ import { useShortsWorkspace } from "../shorts/useShortsWorkspace";
 import { useProjectStore } from "../../stores/projectStore";
 import {
   isShortsWorkspace,
+  requestPanel,
   restoreLayout,
   saveLayout,
   setActiveDockApi,
@@ -26,6 +27,7 @@ import {
   type DockPanelId,
 } from "./dockLayout";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
+import { isTauriEnvironment } from "../../lib/ipc";
 import type { DockviewApi } from "dockview-react";
 
 const THEME: DockviewTheme = {
@@ -51,21 +53,36 @@ const JumpCutsPanel = React.lazy(() => import("../cleanup/JumpCutsPanel").then((
 const NoisesPanel = React.lazy(() => import("../cleanup/NoisesPanel").then((m) => ({ default: m.NoisesPanel })));
 const ShortsListPanel = React.lazy(() => import("../shorts/ShortsListPanel").then((m) => ({ default: m.ShortsListPanel })));
 const ShortLookPanel = React.lazy(() => import("../shorts/ShortLookPanel").then((m) => ({ default: m.ShortLookPanel })));
+const SoundsPage = React.lazy(() => import("../media/SoundsPage").then((m) => ({ default: m.SoundsPage })));
+const MusicPage = React.lazy(() => import("../media/MusicPage").then((m) => ({ default: m.MusicPage })));
+const StylePanel = React.lazy(() => import("../style/StylePanel").then((m) => ({ default: m.StylePanel })));
+const JoinsPanel = React.lazy(() => import("../review/JoinsPanel").then((m) => ({ default: m.JoinsPanel })));
+const SearchPanel = React.lazy(() => import("../review/SearchPanel").then((m) => ({ default: m.SearchPanel })));
 
 const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
   preview: () => fill(<StagePanel />),
   transcript: () => fill(<TranscriptPanel />),
   inspector: () => fill(<InspectorPanel />),
   media: () => fill(<MediaPanel />),
+  sounds: () => fill(<Library><SoundsPage /></Library>),
+  music: () => fill(<Library><MusicPage /></Library>),
   zoom: () => fill(<ZoomPanel />),
   chapters: () => fill(<ChaptersPanel />),
   agent: () => fill(<AgentPanel />),
   jumpCuts: () => fill(<JumpCutsPanel />),
   noises: () => fill(<NoisesPanel />),
+  joins: () => fill(<JoinsPanel />),
+  search: () => fill(<SearchPanel />),
   timeline: () => fill(<Timeline />),
   shorts: () => fill(<ShortsListPanel />),
   shortLook: () => fill(<ShortLookPanel />),
+  shortStyle: () => fill(<div className="h-full overflow-y-auto"><StylePanel /></div>),
 };
+
+/// A library page as a panel of its own.
+function Library({ children }: { children: React.ReactNode }) {
+  return <div className="h-full flex flex-col min-h-0 bg-studio-900 text-label select-none">{children}</div>;
+}
 
 /// The timeline, saying so when it is a short's own.
 function Timeline() {
@@ -104,6 +121,32 @@ export const DockWorkspace: React.FC = () => {
   const saveTimer = useRef(0);
 
   useEffect(() => () => setActiveDockApi(null), []);
+
+  // An agent shows the user a moment (back to the video, the playhead in view), or hands them
+  // joins to listen to (the Joins panel comes forward).
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    const unlisteners: (() => void)[] = [];
+    let disposed = false;
+    void import("@tauri-apps/api/event").then(({ listen }) =>
+      Promise.all([
+        listen<{ atUs: number }>("aeroedits-agent-show", (event) => {
+          if (isShortsWorkspace(useWorkspaceStore.getState().workspace)) useWorkspaceStore.getState().setWorkspace("edit");
+          const store = useProjectStore.getState();
+          store.setCurrentTimeUs(event.payload.atUs);
+          store.revealPlayhead();
+        }),
+        listen("aeroedits-joins-updated", () => requestPanel("joins")),
+      ]).then((fns) => {
+        if (disposed) fns.forEach((fn) => fn());
+        else unlisteners.push(...fns);
+      }),
+    );
+    return () => {
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, []);
 
   // Switching workspace: keep this one's arrangement, then show the other's.
   useEffect(() => {

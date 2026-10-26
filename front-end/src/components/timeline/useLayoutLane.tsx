@@ -10,6 +10,8 @@ import { HeaderRow, MIN_LANE_PX, type TimelineView } from "./timelineShared";
 const MIN_SHOWN_US = 1_000_000;
 /** How close, in pixels, a press must be to a section's edge to drag the edge. */
 const EDGE_PX = 6;
+/** While dragging an end, the preview shows this far inside it: its last frame. */
+const LAST_FRAME_US = 40_000;
 
 /** The colour of a section, by what it shows. */
 function tone(section: LayoutSection): string {
@@ -36,7 +38,8 @@ function span(section: LayoutSection): { startUs: number; endUs: number } | null
 
 /**
  * The Layouts track: the sections that change the base layout, where they play. Click one to
- * edit it in the inspector; drag an edge to move it (saved on release); double-click to go to it.
+ * edit it in the inspector; drag an edge to move it (the preview follows the edge, saved on
+ * release); double-click to go to it.
  */
 export function useLayoutLane({ view }: { view: TimelineView }) {
   const openedProject = useProjectStore((s) => s.openedProject);
@@ -44,6 +47,9 @@ export function useLayoutLane({ view }: { view: TimelineView }) {
   const [drag, setDrag] = useState<{ id: string; edge: "start" | "end"; startUs: number; endUs: number } | null>(null);
   const dragRef = useRef(drag);
   dragRef.current = drag;
+  // The preview follows the dragged edge, one seek a frame at most.
+  const seekFrame = useRef<number | null>(null);
+  const seekTarget = useRef(0);
   const track = openedProject?.layouts;
   if (!openedProject || !track) return { header: null, lane: null };
 
@@ -62,7 +68,7 @@ export function useLayoutLane({ view }: { view: TimelineView }) {
       icon={LayoutGrid}
       name="Layouts"
       meta={`${layoutKindName(track.base)} base · ${sections.length} section${sections.length === 1 ? "" : "s"}`}
-      title="Where the layout changes. Elsewhere the base layout shows. Click a section to edit it in the inspector, drag an edge to move it."
+      title="Where the layout changes. Elsewhere the base layout shows. Click a section to edit it in the inspector, drag an edge to move it (the preview shows the edge)."
     />
   );
 
@@ -82,15 +88,27 @@ export function useLayoutLane({ view }: { view: TimelineView }) {
     const current = dragRef.current;
     if (!current) return;
     const at = Math.max(0, Math.min(view.durationUs, view.clientXToUs(event.clientX)));
-    setDrag(
+    const next =
       current.edge === "start"
         ? { ...current, startUs: Math.min(at, current.endUs - MIN_SHOWN_US) }
-        : { ...current, endUs: Math.max(at, current.startUs + MIN_SHOWN_US) },
-    );
+        : { ...current, endUs: Math.max(at, current.startUs + MIN_SHOWN_US) };
+    setDrag(next);
+    seekTarget.current =
+      next.edge === "start" ? next.startUs : Math.max(next.startUs, next.endUs - LAST_FRAME_US);
+    if (seekFrame.current === null) {
+      seekFrame.current = requestAnimationFrame(() => {
+        seekFrame.current = null;
+        view.seekToUs(Math.round(seekTarget.current));
+      });
+    }
   };
   const endDrag = () => {
     const done = dragRef.current;
     setDrag(null);
+    if (seekFrame.current !== null) {
+      cancelAnimationFrame(seekFrame.current);
+      seekFrame.current = null;
+    }
     if (!done) return;
     changeLayouts({ op: "retime", id: done.id, startUs: Math.round(done.startUs), endUs: Math.round(done.endUs) }, "Moving a section");
   };

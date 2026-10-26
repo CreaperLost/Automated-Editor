@@ -67,6 +67,10 @@ pub struct EditDocument {
     /// Vertical clips picked from this video, anchored in an asset's time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shorts: Vec<crate::shorts::Short>,
+    /// Screen effects: blur, hide, spotlight, magnifier, dim behind a graphic (FX-2),
+    /// anchored in a screen recording's own picture and time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<crate::effects::ScreenEffect>,
     /// Set only on the document a short renders from: draw a split-screen vertical frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_layout: Option<crate::shorts::ShortLayout>,
@@ -80,9 +84,12 @@ pub struct EditDocument {
     /// stored, only the changes are written).
     #[serde(default = "default_preset")]
     pub preset: String,
-    /// The preset its new shorts start from.
+    /// The preset its new shorts (made from a take) start from.
     #[serde(default = "default_shorts_preset")]
     pub shorts_preset: String,
+    /// The preset its new clips (cut from the video) start from.
+    #[serde(default = "default_clips_preset")]
+    pub clips_preset: String,
     /// What the cleanup passes start from (silence and gap levels, mouth-noise sensitivity).
     #[serde(default)]
     pub cleanup: crate::preset::settings::CleanupSettings,
@@ -103,6 +110,10 @@ fn default_shorts_preset() -> String {
     crate::preset::SHORTS.into()
 }
 
+fn default_clips_preset() -> String {
+    crate::preset::CLIPS.into()
+}
+
 impl Default for EditDocument {
     fn default() -> Self {
         Self {
@@ -119,11 +130,13 @@ impl Default for EditDocument {
             captions: CaptionSettings::default(),
             chapters: Vec::new(),
             shorts: Vec::new(),
+            effects: Vec::new(),
             short_layout: None,
             zoom_settings: Default::default(),
             style: default_style(),
             preset: default_preset(),
             shorts_preset: default_shorts_preset(),
+            clips_preset: default_clips_preset(),
             cleanup: Default::default(),
             export: Default::default(),
         }
@@ -323,7 +336,7 @@ impl EditDocument {
         }
         self.cleanup.validate()?;
         self.export.validate()?;
-        for preset in [&self.preset, &self.shorts_preset] {
+        for preset in [&self.preset, &self.shorts_preset, &self.clips_preset] {
             if !crate::preset::is_builtin(preset) {
                 crate::preset::store::check_name(preset)?;
             }
@@ -1244,6 +1257,34 @@ impl EditHistory {
         self.commit_next(expected_revision, persist_root, next)
     }
 
+    /// Sets (or clears) imported media `asset_id`'s licence: one undo step.
+    pub fn set_asset_licence(
+        &mut self,
+        expected_revision: u64,
+        asset_id: &str,
+        licence: Option<crate::sequence::Licence>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        self.check(expected_revision)?;
+        let mut next = self.current.clone();
+        let asset = next
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .ok_or("No such imported media")?;
+        asset.licence = licence.map(|mut l| {
+            l.source = l
+                .source
+                .map(|s| s.trim().chars().take(200).collect::<String>())
+                .filter(|s| !s.is_empty());
+            l
+        });
+        if next == self.current {
+            return Err("Nothing changed".into());
+        }
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
     /// One timeline change made in short `short_id`'s own timeline. The short's first edit
     /// copies its stretch of the video into it; from then on it is edited on its own.
     pub fn edit_short_sequence(
@@ -2087,6 +2128,42 @@ mod tests {
     }
 
     #[test]
+    fn steps_of_one_group_undo_as_one_and_survive_reopening() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history.ripple_cuts(0, &[(S, 2 * S)], dir.path()).unwrap();
+        let grouped = || StepMeta {
+            label: Some("Layout keys".into()),
+            group: Some("keys-1".into()),
+            ..StepMeta::default()
+        };
+        for revision in 1..4 {
+            history.set_next_step(grouped());
+            history
+                .ripple_cuts(revision, &[(0, 10_000)], dir.path())
+                .unwrap();
+        }
+        // Another group starts its own step.
+        history.set_next_step(StepMeta {
+            group: Some("keys-2".into()),
+            ..grouped()
+        });
+        history.ripple_cuts(4, &[(0, 10_000)], dir.path()).unwrap();
+        assert_eq!(history.steps().undo_len(), 3);
+        drop(history);
+
+        let (mut history, note) = reopen(dir.path());
+        assert_eq!(note, None);
+        assert_eq!(history.steps().undo_len(), 3);
+        history.undo(5, dir.path()).unwrap();
+        history.undo(6, dir.path()).unwrap();
+        assert_eq!(history.current.duration_us(), 9 * S);
+        assert_eq!(history.undo_label(), Some("Cut 1.0 s"));
+        // The states in between are let go.
+        assert_eq!(states(dir.path()), 4);
+    }
+
+    #[test]
     fn more_steps_than_the_old_stack_come_back_after_reopening() {
         let dir = tempdir().unwrap();
         let mut history = EditHistory::new(doc(10 * S));
@@ -2205,6 +2282,20 @@ mod tests {
         assert_eq!(step.tool.as_deref(), Some("silence"));
         assert_eq!(step.label, "Cut 3.0 s");
         assert_eq!(history.steps().redo_step().unwrap().by, Author::User);
+    }
+
+    #[test]
+    fn a_tiny_cut_under_a_zoom_is_named_as_a_cut() {
+        let dir = tempdir().unwrap();
+        let mut history = EditHistory::new(doc(10 * S));
+        history
+            .add_manual_zoom(0, 5 * S, 8 * S, 0.5, 0.5, 2.0, dir.path())
+            .unwrap();
+        // A 40 ms blip before the zoom: the zoom moves on the edited video but is not edited.
+        history
+            .ripple_cuts(1, &[(S, S + 40_000)], dir.path())
+            .unwrap();
+        assert_eq!(history.steps().undo_step().unwrap().label, "Cut 0.04 s");
     }
 
     #[test]

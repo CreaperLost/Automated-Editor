@@ -13,6 +13,7 @@ use crate::sequence::edit::SequenceEdit;
 use crate::transcript::edit::{word_cuts, ProposalRef, SuggestionSource};
 use crate::transcript::{store, Transcript, TranscriptCutSuggestion, TranscriptSuggestionKind};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -73,24 +74,40 @@ pub enum Change {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         words: Option<String>,
         items: Vec<CutItem>,
+        /// A take short whose own timeline is cut (its times, its words); else the video's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        short: Option<String>,
     },
     /// Timeline edits applied in order, all or nothing.
     Edits { edits: Vec<SequenceEdit> },
-    /// Footage, graphics and files put under take short `short`, all or nothing. It holds
-    /// while the short and the video's timeline are as they were (`stamp`).
-    Under {
-        short: String,
-        stamp: String,
-        items: Vec<crate::under_take::Under>,
-    },
-    /// Graphics brought in line with the video's look (`graphics::restyle`), all or nothing.
-    /// It holds while each graphic's files are as they were planned on.
-    Restyle {
-        items: Vec<crate::graphics::restyle::Plan>,
-    },
     /// One of the app's own actions the agent ran (jump cuts, fillers, zooms, ...), applied
     /// at once like a click; kept so the user sees it and can undo it.
     Action { action: String },
+    /// A rule for preset `preset`'s `rules.md`, learned from `example` (AGT-3). Only the user
+    /// accepts it (never autopilot); accepting adds it to the preset, for every project.
+    /// Rejecting a cut never changes a rule: only an accepted rule does.
+    Rule {
+        preset: String,
+        rule: String,
+        example: String,
+    },
+}
+
+const MAX_RULE_CHARS: usize = 400;
+const MAX_EXAMPLE_CHARS: usize = 400;
+
+/// The user's rules with `rule` added as a bullet, saying what taught it.
+pub fn rules_with(rules: &str, rule: &str, example: &str) -> String {
+    let mut out = rules.trim_end().to_string();
+    if !out.is_empty() {
+        out.push_str("\n");
+    }
+    out.push_str(&format!("- {rule}"));
+    if !example.is_empty() {
+        out.push_str(&format!(" (learned from: {example})"));
+    }
+    out.push('\n');
+    out
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -400,6 +417,23 @@ fn item_cuts(
     }
 }
 
+/// The timeline a batch's cuts are on: take short `short`'s own, else the video's. It keeps
+/// the edit's revision.
+fn cuts_timeline<'a>(
+    document: &'a EditDocument,
+    short: Option<&str>,
+) -> Result<Cow<'a, EditDocument>, String> {
+    let Some(id) = short else {
+        return Ok(Cow::Borrowed(document));
+    };
+    let short = document
+        .shorts
+        .iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| format!("The short {id} was removed"))?;
+    Ok(Cow::Owned(crate::shorts::short_timeline(document, short)?))
+}
+
 fn load_stream_transcript(root: &Path, stream: &str) -> Result<Transcript, String> {
     store::load_transcript(root, stream)?.ok_or_else(|| format!("{stream} has no transcript"))
 }
@@ -437,18 +471,22 @@ fn cuts_summary(document: &EditDocument, items: &[CutItem], removed: &[(u64, u64
     lines
 }
 
-/// Checks the cuts against the edit and stores them as a pending batch.
+/// Checks the cuts against the edit (take short `short`'s own timeline, with one) and stores
+/// them as a pending batch.
+#[allow(clippy::too_many_arguments)]
 pub fn propose_cuts(
     reader: &ProjectReader,
     proposals: &mut Proposals,
     agent: &str,
     expected_revision: u64,
     stream: &str,
+    short: Option<&str>,
     inputs: Vec<CutInput>,
     reason: &str,
 ) -> Result<String, String> {
-    let document = reader.document();
-    check_revision(document, expected_revision)?;
+    check_revision(reader.document(), expected_revision)?;
+    let timeline = cuts_timeline(reader.document(), short)?;
+    let document: &EditDocument = &timeline;
     if inputs.is_empty() {
         return Err("Propose at least one cut".into());
     }
@@ -537,6 +575,7 @@ pub fn propose_cuts(
             stream: stream.to_string(),
             words,
             items,
+            short: short.map(str::to_string),
         },
         status: Status::Pending,
         decided_at: None,
@@ -632,17 +671,27 @@ pub fn sequence_diff(before: &EditDocument, after: &EditDocument) -> Vec<String>
                 || was.start_us != clip.start_us
                 || was.in_us != clip.in_us
                 || was.duration_us != clip.duration_us
-                || was.fit != clip.fit;
+                || was.fit != clip.fit
+                || was.mix != clip.mix;
             moved.then_some((id, track, clip, was_track, was))
         })
         .collect();
     changed.sort_by_key(|(_, _, c, _, _)| c.start_us);
     for (id, track, clip, was_track, was) in changed {
-        let fit = if was.fit != clip.fit {
-            " (fit changed)"
+        let mut fit = if was.fit != clip.fit {
+            " (fit changed)".to_string()
         } else {
-            ""
+            String::new()
         };
+        if was.mix != clip.mix {
+            let m = clip.mix;
+            fit.push_str(&format!(
+                " (sound: {:+.0} dB, fades {:.1} s / {:.1} s)",
+                m.gain_db,
+                m.fade_in_us as f64 / 1e6,
+                m.fade_out_us as f64 / 1e6
+            ));
+        }
         lines.push(format!(
             "~ {track} {id} {} (was {was_track} {}){fit}",
             span(clip),
@@ -718,30 +767,53 @@ pub fn propose_edits(
     })
 }
 
-/// Proposes putting `items` under take short `short`, checked on a copy of the edit.
-pub fn propose_under(
+/// A rule for the user to accept into preset `preset` (the project's when none).
+pub fn propose_rule(
     reader: &ProjectReader,
     proposals: &mut Proposals,
     agent: &str,
-    short: &str,
-    items: Vec<crate::under_take::Under>,
-    reason: &str,
+    preset: Option<&str>,
+    rule: &str,
+    example: &str,
 ) -> Result<String, String> {
-    if items.len() > MAX_EDITS {
-        return Err(format!("At most {MAX_EDITS} items in one batch"));
+    let rule: String = rule.trim().chars().take(MAX_RULE_CHARS).collect();
+    if rule.is_empty() {
+        return Err("Give the `rule`, in a sentence the user would write.".into());
+    }
+    let example: String = example.trim().chars().take(MAX_EXAMPLE_CHARS).collect();
+    if example.is_empty() {
+        return Err(
+            "Give the `example` that taught it: what the user did or said, and where.".into(),
+        );
     }
     let document = reader.document();
-    let summary = crate::under_take::check(reader.root(), document, short, &items)?;
+    let preset = match preset {
+        Some(name) => crate::preset::store::load(name)?.name,
+        None => crate::preset::of(document).name,
+    };
+    if crate::preset::store::load(&preset)?.rules.contains(&rule) {
+        return Err(format!("{preset}'s rules already say that."));
+    }
+    if let Some(waiting) = proposals.batches.iter().find(|b| {
+        b.status == Status::Pending
+            && matches!(&b.change, Change::Rule { rule: r, .. } if *r == rule)
+    }) {
+        return Err(format!("{} proposes that rule already.", waiting.id));
+    }
+    let summary = vec![
+        format!("Add to {preset}'s rules: {rule}"),
+        format!("Learned from: {example}"),
+    ];
     proposals.add(Batch {
         id: String::new(),
         agent: agent.to_string(),
-        reason: check_reason(reason)?,
+        reason: format!("A rule for {preset}"),
         created_at: now(),
         base_revision: document.revision,
-        change: Change::Under {
-            short: short.to_string(),
-            stamp: crate::under_take::stamp(document, short),
-            items,
+        change: Change::Rule {
+            preset,
+            rule,
+            example,
         },
         status: Status::Pending,
         decided_at: None,
@@ -751,42 +823,40 @@ pub fn propose_under(
     })
 }
 
-/// Proposes bringing the video's graphics in line with its look (every graphic that is not).
-pub fn propose_restyle(
-    reader: &ProjectReader,
-    proposals: &mut Proposals,
-    agent: &str,
-    reason: &str,
-) -> Result<String, String> {
-    let document = reader.document();
-    let items = crate::graphics::restyle::plan(reader.root(), document);
-    if items.is_empty() {
-        return Err(
-            "Every graphic follows the video's look already: nothing to bring in line".into(),
-        );
+/// The rule batch `id` waiting for the user: (preset, rule, example).
+pub fn pending_rule(
+    proposals: &Proposals,
+    id: &str,
+) -> Result<Option<(String, String, String)>, String> {
+    let batch = proposals.get(id)?;
+    let Change::Rule {
+        preset,
+        rule,
+        example,
+    } = &batch.change
+    else {
+        return Ok(None);
+    };
+    if batch.status != Status::Pending {
+        return Err(format!("{id} is already decided"));
     }
-    let summary = items.iter().map(|p| p.line()).collect();
-    proposals.add(Batch {
-        id: String::new(),
-        agent: agent.to_string(),
-        reason: check_reason(reason)?,
-        created_at: now(),
-        base_revision: document.revision,
-        change: Change::Restyle { items },
-        status: Status::Pending,
-        decided_at: None,
-        auto: false,
-        applied_revision: None,
-        summary,
-    })
+    Ok(Some((preset.clone(), rule.clone(), example.clone())))
 }
 
-/// Whether restyle `items` can still be applied: each graphic's files as planned on.
-fn restyle_holds(root: &Path, items: &[crate::graphics::restyle::Plan]) -> bool {
-    items.iter().all(|p| {
-        crate::graphics::gate::source_hash(&crate::graphics::folder(root, &p.graphic))
-            .is_ok_and(|hash| hash == p.stamp)
-    })
+/// Rule batch `id` was added to preset `saved_in` (a copy, when the preset was built in).
+pub fn rule_accepted(proposals: &mut Proposals, id: &str, saved_in: &str) -> Result<(), String> {
+    let batch = proposals.get_mut(id)?;
+    batch.status = Status::Accepted;
+    batch.decided_at = Some(now());
+    if let Change::Rule { preset, .. } = &batch.change {
+        if preset != saved_in {
+            batch.summary.push(format!(
+                "{preset} is built in: the rule went into {saved_in}."
+            ));
+        }
+    }
+    proposals.prune();
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -841,6 +911,12 @@ pub fn accept(
     let base_revision = batch.base_revision;
     let (summary, chosen) = match &batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied")),
+        Change::Rule { .. } if auto => {
+            return Err("a rule waits for the user: autopilot never changes their rules".into())
+        }
+        Change::Rule { .. } => {
+            return Err(format!("{id} is a rule: it is accepted in the Agent panel"))
+        }
         Change::Edits { edits } => {
             if batch.status != Status::Pending {
                 return Err(format!("{id} is already decided"));
@@ -857,52 +933,13 @@ pub fn accept(
                 Vec::new(),
             )
         }
-        Change::Under {
-            short,
-            stamp,
-            items,
-        } => {
-            if batch.status != Status::Pending {
-                return Err(format!("{id} is already decided"));
-            }
-            if crate::under_take::stamp(document, short) != *stamp {
-                return Err(format!(
-                    "{id} was made before {short} or the video changed. Ask the agent to                      propose it again."
-                ));
-            }
-            let root = reader.root().to_path_buf();
-            let done = crate::under_take::put(&root, &root, document, short, items)?;
-            match reader.commit_document(expected_revision, done.document.clone()) {
-                Ok(project) => (Some(project), Vec::new()),
-                Err(error) => {
-                    done.discard();
-                    return Err(error);
-                }
-            }
-        }
-        Change::Restyle { items } => {
-            if batch.status != Status::Pending {
-                return Err(format!("{id} is already decided"));
-            }
-            let root = reader.root().to_path_buf();
-            let done = crate::graphics::restyle::apply(&root, document, items)?;
-            match reader.commit_document(expected_revision, done.document.clone()) {
-                Ok(project) => {
-                    // Every changed graphic is new: render them now.
-                    crate::graphics::render::request_all(&root, &reader.history().current);
-                    (Some(project), Vec::new())
-                }
-                Err(error) => {
-                    done.discard();
-                    return Err(error);
-                }
-            }
-        }
         Change::Cuts {
             stream,
             words,
             items,
+            short,
         } => {
+            let timeline = cuts_timeline(document, short.as_deref())?;
             let chosen: Vec<&CutItem> = items
                 .iter()
                 .filter(|i| i.state == ItemState::Pending)
@@ -932,15 +969,28 @@ pub fn accept(
             let mut ranges = Vec::new();
             for item in &chosen {
                 if let Some(cuts) =
-                    item_cuts(document, transcript.as_ref(), stream, base_revision, item)?
+                    item_cuts(&timeline, transcript.as_ref(), stream, base_revision, item)?
                 {
                     ranges.extend(cuts);
                 }
             }
+            drop(timeline);
             let ranges = merge(ranges);
             let chosen: Vec<String> = chosen.iter().map(|i| i.id.clone()).collect();
             if ranges.is_empty() {
                 (None, chosen)
+            } else if let Some(short) = short {
+                // Every track of the short loses the same time, as its word cuts do.
+                let edit = SequenceEdit::DeleteRange {
+                    ranges: ranges
+                        .iter()
+                        .map(|&(start_us, end_us)| crate::zoom::EditedRange { start_us, end_us })
+                        .collect(),
+                    ripple: Some(true),
+                };
+                let (project, _) =
+                    reader.edit_sequence(expected_revision, &edit, Some(short.as_str()))?;
+                (Some(project), chosen)
             } else {
                 (
                     Some(reader.ripple_cuts(expected_revision, &ranges)?),
@@ -956,8 +1006,8 @@ pub fn accept(
         batch.applied_revision = revision;
     }
     match &mut batch.change {
-        Change::Action { .. } => {}
-        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
+        Change::Action { .. } | Change::Rule { .. } => {}
+        Change::Edits { .. } => {
             batch.status = Status::Accepted;
             batch.decided_at = Some(now());
         }
@@ -991,19 +1041,17 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
-            match (batch.status, rejected) {
-                (Status::Pending, true) => {
-                    batch.status = Status::Rejected;
-                    batch.decided_at = Some(now());
-                }
-                (Status::Rejected, false) => {
-                    batch.status = Status::Pending;
-                    batch.decided_at = None;
-                }
-                _ => return Err(format!("{id} is already decided")),
+        Change::Edits { .. } | Change::Rule { .. } => match (batch.status, rejected) {
+            (Status::Pending, true) => {
+                batch.status = Status::Rejected;
+                batch.decided_at = Some(now());
             }
-        }
+            (Status::Rejected, false) => {
+                batch.status = Status::Pending;
+                batch.decided_at = None;
+            }
+            _ => return Err(format!("{id} is already decided")),
+        },
         Change::Cuts { items, .. } => {
             let (from, to) = if rejected {
                 (ItemState::Pending, ItemState::Rejected)
@@ -1168,10 +1216,9 @@ fn set_undone(batch: &mut Batch, undone: impl Fn(u64) -> bool, by_agent: bool) {
     batch.applied_revision = None;
     batch.auto = false;
     match &mut batch.change {
-        Change::Action { .. } => batch.status = Status::Undone,
-        Change::Edits { .. } | Change::Under { .. } | Change::Restyle { .. } => {
-            batch.status = Status::Pending
-        }
+        // A rule changes no revision, so no undo of the edit reaches it.
+        Change::Action { .. } | Change::Rule { .. } => batch.status = Status::Undone,
+        Change::Edits { .. } => batch.status = Status::Pending,
         Change::Cuts { items, .. } => {
             for item in items.iter_mut() {
                 if item.state == ItemState::Accepted && item.revision.is_some_and(&undone) {
@@ -1224,8 +1271,7 @@ pub struct BatchView {
     pub reason: String,
     pub created_at: String,
     pub base_revision: u64,
-    /// `cuts`, `edits`, `under` (things put under a take short), `restyle` (graphics brought
-    /// in line with the look), or `action` (one of the app's actions the agent ran).
+    /// `cuts`, `edits`, `rule`, or `action` (one of the app's actions the agent ran).
     pub kind: &'static str,
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1240,9 +1286,12 @@ pub struct BatchView {
     /// For an action the agent ran: which (`silence`, `fillers`, ...).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
-    /// For `under`: the take short it goes under.
+    /// For `cuts` on a take short's own timeline: that short.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub short: Option<String>,
+    /// For `rule`: the preset whose rules it joins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     pub items: Vec<ItemView>,
     /// Made for an older revision and can no longer be accepted as it is.
     pub stale: bool,
@@ -1292,6 +1341,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                 edits: None,
                 action: None,
                 short: None,
+                preset: None,
                 items: Vec::new(),
                 stale: false,
                 can_undo: batch.applied_revision == Some(document.revision),
@@ -1301,29 +1351,27 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                     out.kind = "action";
                     out.action = Some(action.clone());
                 }
+                Change::Rule { preset, .. } => {
+                    out.kind = "rule";
+                    out.preset = Some(preset.clone());
+                }
                 Change::Edits { edits } => {
                     out.edits = Some(edits.clone());
                     out.stale =
                         batch.status == Status::Pending && batch.base_revision != document.revision;
                 }
-                Change::Under { short, stamp, .. } => {
-                    out.kind = "under";
-                    out.short = Some(short.clone());
-                    out.stale = batch.status == Status::Pending
-                        && crate::under_take::stamp(document, short) != *stamp;
-                }
-                Change::Restyle { items } => {
-                    out.kind = "restyle";
-                    out.stale =
-                        batch.status == Status::Pending && !restyle_holds(reader.root(), items);
-                }
                 Change::Cuts {
                     stream,
                     words,
                     items,
+                    short,
                 } => {
                     out.kind = "cuts";
                     out.stream = Some(stream.clone());
+                    out.short = short.clone();
+                    // A removed short leaves its cuts nothing to cut.
+                    let timeline = cuts_timeline(document, short.as_deref());
+                    let on = timeline.as_deref().unwrap_or(document);
                     let (transcript, stamp) =
                         transcripts.entry(stream.clone()).or_insert_with(|| {
                             let transcript =
@@ -1335,16 +1383,15 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                     let transcript = transcript.as_ref().filter(|_| stamp == words);
                     out.items = items
                         .iter()
-                        .map(|item| {
-                            item_view(document, transcript, stream, batch.base_revision, item)
-                        })
+                        .map(|item| item_view(on, transcript, stream, batch.base_revision, item))
                         .collect();
                     let waiting: Vec<_> = out
                         .items
                         .iter()
                         .filter(|i| i.state == ItemState::Pending)
                         .collect();
-                    out.stale = !waiting.is_empty() && waiting.iter().all(|i| i.stale);
+                    out.stale = !waiting.is_empty()
+                        && (timeline.is_err() || waiting.iter().all(|i| i.stale));
                 }
             }
             out
@@ -1408,15 +1455,19 @@ fn item_view(
     view
 }
 
-/// The agents' waiting (and rejected) word cuts on `stream`, as transcript suggestions, so they
-/// sit in the transcript's review list beside the rules' and the AI pass's.
+/// The agents' waiting (and rejected) word cuts on `stream` in `short`'s timeline (the
+/// video's when `None`), as transcript suggestions, so they sit in the transcript's review
+/// list beside the rules' and the AI pass's.
 pub fn transcript_suggestions(
     reader: &ProjectReader,
     proposals: &Proposals,
     transcript: &Transcript,
     stream: &str,
+    short: Option<&str>,
 ) -> Vec<TranscriptCutSuggestion> {
-    let document = reader.document();
+    let Ok(document) = cuts_timeline(reader.document(), short) else {
+        return Vec::new();
+    };
     let stamp = words_stamp(transcript);
     let mut out = Vec::new();
     for batch in &proposals.batches {
@@ -1424,12 +1475,16 @@ pub fn transcript_suggestions(
             stream: s,
             words,
             items,
+            short: on,
         } = &batch.change
         else {
             continue;
         };
         // A batch about an older transcript's words would mark other words now.
-        if s != stream || batch.status == Status::Withdrawn || *words != stamp {
+        if s != stream || on.as_deref() != short || batch.status == Status::Withdrawn {
+            continue;
+        }
+        if *words != stamp {
             continue;
         }
         for item in items {
@@ -1437,7 +1492,7 @@ pub fn transcript_suggestions(
                 continue;
             }
             let view = item_view(
-                document,
+                &document,
                 Some(transcript),
                 stream,
                 batch.base_revision,
@@ -1473,18 +1528,20 @@ pub fn transcript_suggestions(
     out
 }
 
-/// `suggestions` with the agents' cuts on `stream` joined in: an agent's cut of exactly the
-/// same words replaces the rules' one, since it carries a reason and a decision of its own.
+/// `suggestions` with the agents' cuts on `stream` (in `short`'s timeline) joined in: an
+/// agent's cut of exactly the same words replaces the rules' one, since it carries a reason
+/// and a decision of its own.
 pub fn with_agent_suggestions(
     reader: &ProjectReader,
     transcript: &Transcript,
     stream: &str,
+    short: Option<&str>,
     mut suggestions: Vec<TranscriptCutSuggestion>,
 ) -> Vec<TranscriptCutSuggestion> {
     let Ok(proposals) = load(reader.root()) else {
         return suggestions;
     };
-    let agent = transcript_suggestions(reader, &proposals, transcript, stream);
+    let agent = transcript_suggestions(reader, &proposals, transcript, stream, short);
     if agent.is_empty() {
         return suggestions;
     }
@@ -1500,6 +1557,52 @@ mod tests {
     use crate::commands::{self, AppState};
     use crate::transcript::{ProviderKind, TranscriptWord, WordKind};
     use serde_json::json;
+
+    fn rule_batch(proposals: &mut Proposals) -> String {
+        proposals
+            .add(Batch {
+                id: String::new(),
+                agent: "test".into(),
+                reason: "A rule for Tutorial".into(),
+                created_at: now(),
+                base_revision: 1,
+                change: Change::Rule {
+                    preset: "Tutorial".into(),
+                    rule: "Keep the first take of a sentence".into(),
+                    example: "restored the cut at 1:02".into(),
+                },
+                status: Status::Pending,
+                decided_at: None,
+                auto: false,
+                applied_revision: None,
+                summary: Vec::new(),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn a_rule_joins_the_rules_as_a_bullet_with_what_taught_it() {
+        assert_eq!(
+            rules_with("# Mine\n- Short intros\n\n", "No music", "said so at 0:10"),
+            "# Mine\n- Short intros\n- No music (learned from: said so at 0:10)\n"
+        );
+        assert_eq!(rules_with("", "No music", ""), "- No music\n");
+    }
+
+    #[test]
+    fn a_rule_waits_until_the_user_decides_and_a_copy_is_named() {
+        let mut p = Proposals::default();
+        let id = rule_batch(&mut p);
+        assert!(pending_rule(&p, &id).unwrap().is_some());
+        rule_accepted(&mut p, &id, "My tutorial").unwrap();
+        assert_eq!(p.get(&id).unwrap().status, Status::Accepted);
+        assert!(p.get(&id).unwrap().summary[0].contains("My tutorial"));
+        assert!(pending_rule(&p, &id).is_err(), "decided once");
+        // Rejecting one is like any batch.
+        let other = rule_batch(&mut p);
+        reject(&mut p, &other, None, true).unwrap();
+        assert_eq!(p.get(&other).unwrap().status, Status::Rejected);
+    }
 
     /// A project with a 2 s sound on the timeline and a transcript of it; returns its stream key.
     fn project(dir: &Path) -> (AppState, String) {
@@ -1599,6 +1702,7 @@ mod tests {
                 "claude-code",
                 revision,
                 &key,
+                None,
                 vec![
                     words("w-1", "w-1", "filler"),
                     words("w-3", "w-4", "tangent"),
@@ -1629,6 +1733,7 @@ mod tests {
                 "a",
                 revision + 7,
                 &key,
+                None,
                 vec![words("w-0", "w-0", "")],
                 "",
             )
@@ -1683,6 +1788,7 @@ mod tests {
                 "a",
                 revision,
                 &key,
+                None,
                 vec![words("w-1", "w-1", "")],
                 "",
             )
@@ -1699,7 +1805,7 @@ mod tests {
             let shown = view(reader, proposals);
             assert!(shown.batches[0].stale);
             assert!(shown.batches[0].items[0].stale);
-            assert!(transcript_suggestions(reader, proposals, &transcript, &key).is_empty());
+            assert!(transcript_suggestions(reader, proposals, &transcript, &key, None).is_empty());
             let error = accept(reader, proposals, &id, revision, None, false, false).unwrap_err();
             assert!(error.contains("older transcript"), "{error}");
             assert_eq!(revision_and_length(reader), (revision, length));
@@ -1721,6 +1827,7 @@ mod tests {
                 "a",
                 revision,
                 &key,
+                None,
                 vec![words("w-3", "w-3", "")],
                 "",
             )
@@ -1731,6 +1838,7 @@ mod tests {
                 "a",
                 revision,
                 &key,
+                None,
                 vec![CutInput {
                     start_us: Some(1_900_000),
                     end_us: Some(2_000_000),
@@ -1749,6 +1857,7 @@ mod tests {
                 "a",
                 revision,
                 &key,
+                None,
                 vec![words("w-0", "w-2", "")],
                 "",
             )
@@ -1792,6 +1901,7 @@ mod tests {
                 "a",
                 revision,
                 &key,
+                None,
                 vec![
                     words("w-1", "w-1", ""),
                     words("w-3", "w-3", ""),
@@ -1804,7 +1914,7 @@ mod tests {
             let transcript = store::load_transcript(reader.root(), &key)
                 .unwrap()
                 .unwrap();
-            let listed = transcript_suggestions(reader, proposals, &transcript, &key);
+            let listed = transcript_suggestions(reader, proposals, &transcript, &key, None);
             assert_eq!(listed.len(), 3);
             assert_eq!(listed[0].source, SuggestionSource::Agent);
             assert_eq!(listed[0].id, format!("agent-{id}-c-1"));
@@ -1935,6 +2045,7 @@ mod tests {
                 "claude-code",
                 revision,
                 &key,
+                None,
                 vec![words("w-1", "w-1", "")],
                 "",
             )

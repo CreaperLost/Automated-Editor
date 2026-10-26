@@ -10,12 +10,16 @@ mod actions;
 pub mod bridge;
 pub mod cli;
 pub mod clients;
+mod clips;
+mod effects;
 pub(crate) mod frames;
 pub mod ipc;
 mod layouts;
 mod library;
 mod presets;
 mod propose;
+mod review;
+mod search;
 pub mod skill;
 pub mod storyboard;
 #[cfg(test)]
@@ -53,6 +57,11 @@ pub trait Host: Send + Sync + 'static {
     /// The agent started an export (of a short when `short`): the editor shows its progress as
     /// if started there.
     fn export_started(&self, _status: &crate::export::ExportStatus, _short: bool) {}
+    /// The agent changed the joins to listen to: the Joins panel reloads and comes forward.
+    fn joins_changed(&self) {}
+    /// The agent moved the user's preview to `_at_us` to show them a moment: the editor
+    /// leaves Shorts for the video and brings the playhead into view.
+    fn show_moment(&self, _at_us: u64) {}
     /// Accept proposals as they arrive.
     fn autopilot(&self) -> bool {
         false
@@ -543,19 +552,21 @@ impl rmcp::ServerHandler for Handler {
             millis: started.elapsed().as_millis() as u64,
             error: outcome.as_ref().err().cloned(),
         });
+        let image = |bytes: Vec<u8>, mime: &str| {
+            use base64::Engine;
+            ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(bytes),
+                mime,
+            )
+        };
         let result = match outcome {
             Ok(outputs) => CallToolResult::success(
                 outputs
                     .into_iter()
                     .map(|output| match output {
                         tools::Output::Text(text) => ContentBlock::text(text),
-                        tools::Output::Png(bytes) => {
-                            use base64::Engine;
-                            ContentBlock::image(
-                                base64::engine::general_purpose::STANDARD.encode(bytes),
-                                "image/png",
-                            )
-                        }
+                        tools::Output::Png(bytes) => image(bytes, "image/png"),
+                        tools::Output::Jpeg(bytes) => image(bytes, "image/jpeg"),
                     })
                     .collect(),
             ),
@@ -1415,7 +1426,7 @@ mod tests {
         let mut run = |args: serde_json::Value| {
             tools::call(more, &mut ctx, args).map(|out| match &out[0] {
                 tools::Output::Text(text) => text.clone(),
-                tools::Output::Png(_) => String::new(),
+                tools::Output::Png(_) | tools::Output::Jpeg(_) => String::new(),
             })
         };
         // Without `args`: what the tool does and takes.
@@ -1438,6 +1449,10 @@ mod tests {
         // tools' `openWorldHint`, so the budget moved from 60,000 to 61,000. COST-2 (24 Oct):
         // the layouts and the shorts' tools behind `more` too, 41,240. Measured in Claude
         // Code, the whole list was 23,868 tokens; with its ToolSearch only the names are sent.
+        // 24 Oct, later: `more` names shorts and clips apart (the right tool and arguments
+        // matter more than size now, George said), 42,036; the budget moved to 44,000.
+        // REV-1 put `joins` in the list (the export steps use it); `source_search` and
+        // `playhead` sit behind `more`.
         let list = tool_list();
         if std::env::var("TOOL_SIZES").is_ok() {
             for tool in &list {
@@ -1448,7 +1463,12 @@ mod tests {
                 );
             }
         }
+        // 25 Oct (FIX-8): `short` on `propose_cuts` and `fillers_review`, 44,168; the budget
+        // moved to 44,500. Later (COST-1, SND-3): `storyboard` `board` and `library`
+        // `kind: sound` with `query`, `atUs`, `atWord`, 44,998; the budget moved to 45,500.
+        // 25 Oct, later: `effects` (FX-2: blurring keys and emails is too important to sit
+        // behind `more`) and `library` `kind: music`, 46,549; the budget moved to 47,000.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 42_000, "the tool list grew to {size} characters");
+        assert!(size < 47_000, "the tool list grew to {size} characters");
     }
 }

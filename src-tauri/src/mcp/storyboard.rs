@@ -48,7 +48,7 @@ const LINE_H: i64 = 14;
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StoryboardArgs {
-    /// A short's id or title: its 9:16 frames, on its own timeline. Default: the video.
+    /// A short's or clip's id or title: its 9:16 frames, on its own timeline. Default: the video.
     #[serde(default)]
     pub short: Option<String>,
     /// Start of the stretch (edited microseconds). Default: the start.
@@ -60,6 +60,75 @@ pub struct StoryboardArgs {
     /// Tiles at most, 1 to 48. Default 24.
     #[serde(default)]
     pub max_tiles: Option<usize>,
+    /// Frames at even steps, not scenes: `fine` every second (an image a minute), `coarse`
+    /// every 5 s (an image per 10 minutes).
+    #[serde(default)]
+    pub board: Option<Density>,
+}
+
+/// How dense a review board is.
+#[derive(Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Density {
+    Fine,
+    Coarse,
+}
+
+impl Density {
+    fn every_us(self) -> u64 {
+        match self {
+            Density::Fine => 1_000_000,
+            Density::Coarse => 5_000_000,
+        }
+    }
+
+    fn per_image(self) -> usize {
+        match self {
+            Density::Fine => 60,
+            Density::Coarse => 120,
+        }
+    }
+
+    /// Images one call returns at most: 5 minutes fine, 30 coarse.
+    fn most_images(self) -> usize {
+        match self {
+            Density::Fine => 5,
+            Density::Coarse => 3,
+        }
+    }
+
+    /// Tile width and columns for a canvas shape: a row is 10 s fine and a minute coarse on
+    /// the video, and each image stays under about 1,500 pixels wide, where clients start to
+    /// scale images down.
+    fn grid(self, canvas: (u32, u32)) -> (u32, u32) {
+        let portrait = canvas.1 > canvas.0;
+        let square = canvas.1 == canvas.0;
+        match (self, portrait, square) {
+            (Density::Fine, true, _) => (72, 15),
+            (Density::Fine, _, true) => (112, 12),
+            (Density::Fine, _, _) => (148, 10),
+            (Density::Coarse, true, _) => (60, 20),
+            (Density::Coarse, _, true) => (88, 15),
+            (Density::Coarse, _, _) => (112, 12),
+        }
+    }
+
+    fn quality(self) -> u8 {
+        match self {
+            Density::Fine => 80,
+            Density::Coarse => 65,
+        }
+    }
+}
+
+/// One review board image and the stretch it covers.
+pub struct ReviewBoard {
+    pub jpeg: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub from_us: u64,
+    pub to_us: u64,
+    pub tiles: usize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -523,6 +592,198 @@ pub fn sheet(
     })
 }
 
+/// The tile starts of a review board over `from..to`, one every `every`, and where each
+/// image's tiles begin: `per_image` a board, `most` boards at most.
+fn board_plan(from: u64, to: u64, every: u64, per_image: usize, most: usize) -> Vec<Vec<u64>> {
+    let starts: Vec<u64> = (0..)
+        .map(|i| from + i * every)
+        .take_while(|&t| t < to)
+        .take(per_image * most)
+        .collect();
+    starts.chunks(per_image).map(<[u64]>::to_vec).collect()
+}
+
+/// Review boards (COST-1): a small finished frame every second or five, in order and
+/// uncaptioned but for the time, so an agent sees a minute (or ten) for the price of one
+/// image. A graphic's tile has an amber edge, a zoom's a blue one.
+pub(crate) fn boards(
+    ctx: &Ctx,
+    short: Option<&str>,
+    density: Density,
+    range: (Option<u64>, Option<u64>),
+) -> Result<(Vec<ReviewBoard>, u64, Facts, u64), String> {
+    let state = ctx.state;
+    let (root, stream) = with_reader(state, |reader| {
+        Ok((
+            reader.root().to_path_buf(),
+            super::tools::transcribed_stream(reader, None).ok(),
+        ))
+    })?;
+    let canvas = {
+        let (document, _, _) = super::frames::document(state, short)?;
+        document.layout.preview_dimensions()?
+    };
+    let (tile_w, cols) = density.grid(canvas);
+    super::frames::with_document_evaluator(state, short, tile_w, |evaluator, document| {
+        let duration = document.duration_us();
+        let from = range.0.unwrap_or(0).min(duration.saturating_sub(1));
+        let to = range.1.unwrap_or(duration).min(duration);
+        if to <= from {
+            return Err("toUs must come after fromUs, inside the timeline".into());
+        }
+        let facts = Facts::gather(document, &root, stream.as_deref());
+        let every = density.every_us();
+        let plan = board_plan(from, to, every, density.per_image(), density.most_images());
+        let total: usize = plan.iter().map(Vec::len).sum();
+        let mut done = 0;
+        let mut out = Vec::with_capacity(plan.len());
+        for starts in &plan {
+            let mut frames = Vec::with_capacity(starts.len());
+            for &start in starts {
+                ctx.stop_point()?;
+                ctx.progress(
+                    done as f64 / total as f64,
+                    &format!("Frame {} of {total}", done + 1),
+                );
+                done += 1;
+                let at = (start + every / 2)
+                    .min(to.saturating_sub(1))
+                    .min(duration - 1);
+                frames.push((start, at, evaluator.preview_at(at)?));
+            }
+            let tile_h = frames.first().map_or(2, |f| f.2.height);
+            let used_cols = (frames.len() as u32).clamp(1, cols);
+            let rows = (frames.len() as u32).div_ceil(used_cols).max(1);
+            let gap = 2;
+            let width = gap + used_cols * (tile_w + gap);
+            let height = gap + rows * (tile_h + gap);
+            let mut image = RgbaImage::from_pixel(width, height, BACKGROUND);
+            for (i, (start, at, frame)) in frames.iter().enumerate() {
+                let (col, row) = (i as u32 % used_cols, i as u32 / used_cols);
+                let x = (gap + col * (tile_w + gap)) as i64;
+                let y = (gap + row * (tile_h + gap)) as i64;
+                blit_bgra(&mut image, frame, x, y);
+                let inside = |a: u64, b: u64| a <= *at && *at < b;
+                let edge = if facts.graphics.iter().any(|g| inside(g.0, g.1)) {
+                    Some(CHAPTER)
+                } else if facts.zooms.iter().any(|z| inside(z.0, z.1)) {
+                    Some(ACCENT)
+                } else {
+                    None
+                };
+                if let Some(colour) = edge {
+                    let bottom = y + tile_h as i64;
+                    fill(&mut image, x, bottom - 3, x + tile_w as i64, bottom, colour);
+                }
+                let label = clock(*start);
+                let label = label.split('.').next().unwrap_or(&label);
+                let label_w = text_width(label, BOARD_TEXT_PX) as i64 + 4;
+                fill(
+                    &mut image,
+                    x,
+                    y,
+                    x + label_w,
+                    y + BOARD_TEXT_PX as i64 + 3,
+                    Rgba([0, 0, 0, 200]),
+                );
+                draw_text(&mut image, x + 2, y + 1, label, BOARD_TEXT_PX, TITLE);
+            }
+            let rgb = image::DynamicImage::ImageRgba8(image).to_rgb8();
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, density.quality())
+                .encode_image(&rgb)
+                .map_err(|e| format!("Could not encode the board: {e}"))?;
+            let last = *starts.last().unwrap_or(&from);
+            out.push(ReviewBoard {
+                jpeg,
+                width,
+                height,
+                from_us: starts[0],
+                to_us: (last + every).min(to),
+                tiles: starts.len(),
+            });
+        }
+        ctx.progress(1.0, "Board ready");
+        Ok((out, document.revision, facts, to))
+    })
+}
+
+const BOARD_TEXT_PX: f32 = 10.0;
+
+/// The `storyboard` answer for a review board: the images, then what they cover and the
+/// graphics, zooms and chapters in them, a line each.
+fn board_answer(ctx: &Ctx, args: &StoryboardArgs, density: Density) -> Result<Vec<Output>, String> {
+    let (boards, revision, facts, end) = boards(
+        ctx,
+        args.short.as_deref(),
+        density,
+        (args.from_us, args.to_us),
+    )?;
+    let every_s = density.every_us() / 1_000_000;
+    let what = match &args.short {
+        Some(short) => format!("short {short}"),
+        None => "the video".into(),
+    };
+    let mut lines = vec![format!(
+        "Review board of {what}, revision {revision}: a frame every {every_s} s (each from the \
+         middle of its stretch), left to right, labelled with its start. An amber bottom edge \
+         is a graphic, a blue one a zoom."
+    )];
+    let mut out = Vec::with_capacity(boards.len() + 1);
+    for (i, board) in boards.iter().enumerate() {
+        lines.push(format!(
+            "Image {}: {}-{} ({}..{}), {} frames, {}x{}.",
+            i + 1,
+            clock(board.from_us),
+            clock(board.to_us),
+            board.from_us,
+            board.to_us,
+            board.tiles,
+            board.width,
+            board.height
+        ));
+    }
+    let (from, to) = (
+        boards.first().map_or(0, |b| b.from_us),
+        boards.last().map_or(0, |b| b.to_us),
+    );
+    let overlaps = |a: u64, b: u64| a < to && b > from;
+    let graphics: Vec<String> = facts
+        .graphics
+        .iter()
+        .filter(|g| overlaps(g.0, g.1))
+        .map(|g| format!("{}-{} {}", clock(g.0), clock(g.1), g.2))
+        .collect();
+    if !graphics.is_empty() {
+        lines.push(format!("Graphics: {}.", graphics.join("; ")));
+    }
+    let zooms = facts.zooms.iter().filter(|z| overlaps(z.0, z.1)).count();
+    if zooms > 0 {
+        lines.push(format!(
+            "{} in range.",
+            super::actions::plural(zooms, "zoom")
+        ));
+    }
+    let chapters: Vec<String> = facts
+        .chapters
+        .iter()
+        .filter(|c| c.0 >= from && c.0 < to)
+        .map(|c| format!("{} \"{}\"", clock(c.0), c.1))
+        .collect();
+    if !chapters.is_empty() {
+        lines.push(format!("Chapters: {}.", chapters.join("; ")));
+    }
+    if to < end {
+        lines.push(format!(
+            "More after {}: call again with fromUs {to}.",
+            clock(to)
+        ));
+    }
+    out.extend(boards.into_iter().map(|b| Output::Jpeg(b.jpeg)));
+    out.push(Output::Text(lines.join("\n")));
+    Ok(out)
+}
+
 /// `count` moments spread over `from..to`, from its first frame to about its last.
 pub fn spread(from: u64, to: u64, count: usize) -> Vec<u64> {
     // A frame at 25 fps before the end, so the last tile still shows it.
@@ -582,6 +843,9 @@ fn draw_strip(image: &mut RgbaImage, tile: &Tile, x: i64, y: i64, width: u32) {
 
 pub fn storyboard(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: StoryboardArgs = params(args)?;
+    if let Some(density) = args.board {
+        return board_answer(ctx, &args, density);
+    }
     let board = build(ctx.state, &args, &|fraction, message| {
         ctx.progress(fraction, message)
     })?;
@@ -749,6 +1013,39 @@ mod tests {
         );
         // Shorter than a frame: every tile shows its start.
         assert_eq!(spread(10 * S, 10 * S + 20_000, 2), vec![10 * S, 10 * S]);
+    }
+
+    #[test]
+    fn a_board_holds_a_frame_a_second_a_minute_an_image() {
+        let plan = board_plan(0, 150 * S, S, 60, 5);
+        assert_eq!(plan.iter().map(Vec::len).collect::<Vec<_>>(), [60, 60, 30]);
+        assert_eq!(plan[1][0], 60 * S);
+        // Capped at the most images a call returns.
+        let plan = board_plan(10 * S, 3_600 * S, 5 * S, 120, 3);
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[2].last(), Some(&(10 * S + 359 * 5 * S)));
+        assert!(board_plan(5, 5, S, 60, 5).is_empty());
+    }
+
+    #[test]
+    fn a_lesson_makes_review_boards() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let ctx = Ctx::new(&host, "agent", false);
+        let output = storyboard(&ctx, json!({ "board": "fine" })).unwrap();
+        let Output::Jpeg(jpeg) = &output[0] else {
+            panic!("expected a JPEG")
+        };
+        let image = image::load_from_memory(jpeg).unwrap();
+        assert!(image.width() <= 1568, "{}", image.width());
+        let Output::Text(text) = output.last().unwrap() else {
+            panic!("expected text")
+        };
+        assert!(text.contains("a frame every 1 s"), "{text}");
+        assert!(text.contains("Image 1: 0:00.00-"), "{text}");
     }
 
     #[test]

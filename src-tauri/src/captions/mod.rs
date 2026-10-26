@@ -136,6 +136,10 @@ pub struct CaptionSettings {
     pub background_color: String,
     #[serde(skip, default = "default_background_opacity")]
     pub background_opacity: f32,
+    /// A short's own caption marks, by transcript and word, over the transcript's: put on as
+    /// its document is built (`shorts::short_timeline`), never stored here.
+    #[serde(skip)]
+    pub own_marks: crate::shorts::CaptionMarks,
 }
 
 /// One line: easier to read, and what a caption turned on starts with.
@@ -163,11 +167,22 @@ impl Default for CaptionSettings {
             uppercase: false,
             max_words: default_max_words(),
             max_lines: default_max_lines(),
+            own_marks: Default::default(),
         }
     }
 }
 
 impl CaptionSettings {
+    /// How word `word_id` of `transcript` sits in these captions: a short's own mark, else
+    /// the one the video's captions have.
+    pub fn mark(&self, transcript: &Transcript, word_id: &str) -> crate::transcript::CaptionMark {
+        self.own_marks
+            .get(&transcript.track_id)
+            .and_then(|marks| marks.get(word_id))
+            .copied()
+            .unwrap_or_else(|| transcript.caption_mark(word_id))
+    }
+
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -313,7 +328,7 @@ pub fn build_cues(
     // (word, source start, source end), in playback order once clips are reordered.
     let mut words = Vec::new();
     for word in &transcript.words {
-        let mark = transcript.caption_mark(&word.id);
+        let mark = settings.mark(transcript, &word.id);
         if word.kind != WordKind::Word || word.text.trim().is_empty() || mark.hidden {
             continue;
         }
@@ -358,7 +373,7 @@ pub fn build_cues(
             // Playing earlier recording time next means a clip was reordered here: never
             // join across it. (A cut jumps forward and keeps the cue together.)
             let jumped = source_start < last_source_end;
-            let mark = transcript.caption_mark(&word.id);
+            let mark = settings.mark(transcript, &word.id);
             // A user's break or join (from the caption track) wins over the automatic rules.
             let breaks = mark.cue_break
                 || jumped
@@ -1103,6 +1118,36 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_shorts_own_marks_win_over_the_videos_and_leave_them_alone() {
+        let mut t = transcript(&[("one", 0, 200), ("two", 250, 450), ("three", 500, 700)]);
+        t.set_caption_mark("w-1", |m| m.hidden = true).unwrap();
+        let map = mapper(&[(0, 3000)]);
+        let mut short = crate::shorts::tests::short(0, 3_000_000);
+        // Show "two" in the short and break before "three"; the video's mark stays.
+        crate::shorts::set_caption_mark(&mut short, &t, "w-1", |m| m.hidden = false).unwrap();
+        crate::shorts::set_caption_mark(&mut short, &t, "w-2", |m| m.cue_break = true).unwrap();
+        let settings = CaptionSettings {
+            own_marks: short.caption_marks.clone(),
+            ..Default::default()
+        };
+        let texts = |settings: &CaptionSettings| -> Vec<usize> {
+            build_cues(&t, &map, settings)
+                .iter()
+                .map(|c| c.words.len())
+                .collect()
+        };
+        assert_eq!(texts(&settings), [2, 1]);
+        assert_eq!(texts(&CaptionSettings::default()), [2]);
+        assert!(t.caption_mark("w-1").hidden);
+        // Hiding it again in the short matches the video: the short's mark goes.
+        crate::shorts::set_caption_mark(&mut short, &t, "w-1", |m| m.hidden = true).unwrap();
+        assert_eq!(short.caption_marks[&t.track_id].len(), 1);
+        crate::shorts::set_caption_mark(&mut short, &t, "w-2", |m| m.cue_break = false).unwrap();
+        assert!(short.caption_marks.is_empty());
+        assert!(crate::shorts::set_caption_mark(&mut short, &t, "w-9", |_| {}).is_err());
     }
 
     #[test]

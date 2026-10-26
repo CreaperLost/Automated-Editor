@@ -73,6 +73,31 @@ pub fn proposal_accept_impl(
     item_ids: Option<Vec<String>>,
     reject_rest: bool,
 ) -> Result<ProposalOutcome, String> {
+    // A rule goes into its preset (app-wide, like the Library's own changes), then is marked.
+    let rule = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        proposals::pending_rule(&proposals::load(reader.root())?, &batch_id)?
+    };
+    if let Some((preset, rule, example)) = rule {
+        let current = crate::preset::store::load(&preset)?;
+        let rules = proposals::rules_with(&current.rules, &rule, &example);
+        let (saved, _) = super::preset::preset_patch_impl(
+            state,
+            &preset,
+            &serde_json::json!({ "rules": rules }),
+            None,
+        )?;
+        let ((), proposals) = with_proposals(state, Some(&project_handle), |_, p| {
+            proposals::rule_accepted(p, &batch_id, &saved.name)
+        })?;
+        let project = {
+            let opened = state.opened_project.lock();
+            opened.as_ref().map(|r| r.summary.clone())
+        };
+        return Ok(ProposalOutcome { project, proposals });
+    }
     let (project, proposals) = with_proposals(state, Some(&project_handle), |reader, p| {
         proposals::accept(
             reader,
@@ -154,8 +179,17 @@ mod tests {
                 from_word: Some("w-1".into()),
                 ..Default::default()
             };
-            let id = proposals::propose_cuts(reader, &mut p, "test", revision, &key, vec![cut], "")
-                .unwrap();
+            let id = proposals::propose_cuts(
+                reader,
+                &mut p,
+                "test",
+                revision,
+                &key,
+                None,
+                vec![cut],
+                "",
+            )
+            .unwrap();
             proposals::save(reader.root(), &p).unwrap();
             let root = reader.root().to_path_buf();
             (

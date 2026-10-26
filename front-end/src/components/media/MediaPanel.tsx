@@ -37,7 +37,8 @@ function formatLength(asset: Asset): string {
 
 const KIND_ICON = { recording: Clapperboard, video: Film, image: ImageIcon, audio: Music, graphic: Sparkles } as const;
 
-/// The Media panel: imported media, and a Graphics page for motion graphics.
+/// The Media panel: imported media and a Graphics page for motion graphics. The sound effects
+/// and music libraries are panels of their own (Sounds, Music).
 export const MediaPanel: React.FC = () => {
   const [page, setPage] = useState<"media" | "graphics">("media");
   return (

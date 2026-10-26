@@ -6,13 +6,18 @@ export const DOCK_PANELS = {
   transcript: { title: "Transcript", minimumWidth: 260, minimumHeight: 110 },
   inspector: { title: "Inspector", minimumWidth: 240, minimumHeight: 200 },
   media: { title: "Media", minimumWidth: 220, minimumHeight: 110 },
+  sounds: { title: "Sounds", minimumWidth: 220, minimumHeight: 160 },
+  music: { title: "Music", minimumWidth: 220, minimumHeight: 160 },
   zoom: { title: "Zoom", minimumWidth: 220, minimumHeight: 160 },
   chapters: { title: "Chapters", minimumWidth: 220, minimumHeight: 110 },
   agent: { title: "Agent", minimumWidth: 260, minimumHeight: 160 },
   jumpCuts: { title: "Jump cuts", minimumWidth: 260, minimumHeight: 200 },
   noises: { title: "Mouth noises", minimumWidth: 260, minimumHeight: 200 },
+  joins: { title: "Joins", minimumWidth: 260, minimumHeight: 200 },
+  search: { title: "Search", minimumWidth: 220, minimumHeight: 110 },
   shorts: { title: "Shorts", minimumWidth: 220, minimumHeight: 120 },
   shortLook: { title: "Look", minimumWidth: 240, minimumHeight: 160 },
+  shortStyle: { title: "Style", minimumWidth: 240, minimumHeight: 160 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -45,7 +50,7 @@ export function isShortsWorkspace(workspace: Workspace): workspace is "shorts" |
 }
 
 /** The panels only Shorts has, and the editor's panels Shorts has too. */
-const SHORTS_ONLY: readonly DockPanelId[] = ["shorts", "shortLook"];
+const SHORTS_ONLY: readonly DockPanelId[] = ["shorts", "shortLook", "shortStyle"];
 const SHORTS_PANELS: readonly DockPanelId[] = [
   ...SHORTS_ONLY,
   "preview",
@@ -54,6 +59,8 @@ const SHORTS_PANELS: readonly DockPanelId[] = [
   "jumpCuts",
   "noises",
   "media",
+  "sounds",
+  "music",
   "agent",
 ];
 
@@ -73,16 +80,30 @@ function panel(id: DockPanelId) {
   return { id, component: id, title, minimumWidth, minimumHeight };
 }
 
-/// The media bin, the zoom panel and the agent's proposals share the inspector's tab group,
-/// behind it.
+/// The media bin, the sound and music libraries, the zoom panel and the agent's proposals share
+/// the inspector's tab group, behind it.
 function addMedia(api: DockviewApi) {
   api.addPanel({ ...panel("media"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+  addLibraries(api, "inspector");
   addZoom(api);
   addAgent(api);
 }
 
+/// The sound effects and music libraries, behind `beside`.
+function addLibraries(api: DockviewApi, beside: DockPanelId) {
+  for (const id of ["sounds", "music"] as const) {
+    api.addPanel({ ...panel(id), position: { referencePanel: beside, direction: "within" }, inactive: true });
+  }
+}
+
 function addAgent(api: DockviewApi) {
   api.addPanel({ ...panel("agent"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+  addJoins(api);
+}
+
+/// The joins the agent hands over to listen to sit next to its proposals.
+function addJoins(api: DockviewApi) {
+  api.addPanel({ ...panel("joins"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
 /// The cleanup passes share the inspector's tab group too. In Cleanup they are its first tabs
@@ -96,26 +117,33 @@ function addCleanup(api: DockviewApi, inFront = false) {
 /// Chapters sit behind the transcript they are made from.
 function addChapters(api: DockviewApi) {
   api.addPanel({ ...panel("chapters"), position: { referencePanel: "transcript", direction: "within" }, inactive: true });
+  addSearch(api);
+}
+
+/// Searching every transcript sits behind the transcript too.
+function addSearch(api: DockviewApi) {
+  api.addPanel({ ...panel("search"), position: { referencePanel: "transcript", direction: "within" }, inactive: true });
 }
 
 function addZoom(api: DockviewApi) {
   api.addPanel({ ...panel("zoom"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
 }
 
-/// Shorts: the list on the left with the short's transcript behind it, the preview, the look
-/// on the right (the short's cleanup passes, media and the agent behind it), the short's
-/// timeline below. Only settings of shorts: the video's own (the Inspector) stay in Edit.
+/// Shorts: the transcript first, on the left under a short list of the shorts, the preview,
+/// the look on the right (the style, the short's cleanup passes, media and the agent behind
+/// it), the short's timeline below. Only settings of shorts: the video's own (the Inspector)
+/// stay in Edit, but for the style, which shorts wear too.
 function applyShortsLayout(api: DockviewApi) {
   api.clear();
   api.addPanel(panel("preview"));
-  api.addPanel({ ...panel("shorts"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 260 });
-  api.addPanel({ ...panel("transcript"), position: { referencePanel: "shorts", direction: "within" }, inactive: true });
+  api.addPanel({ ...panel("shorts"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 340 });
+  api.addPanel({ ...panel("transcript"), position: { referencePanel: "shorts", direction: "below" }, initialHeight: 420 });
   api.addPanel({ ...panel("shortLook"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
-  for (const id of ["jumpCuts", "noises", "media", "agent"] as const) {
+  for (const id of ["shortStyle", "jumpCuts", "noises", "media", "sounds", "music", "agent"] as const) {
     api.addPanel({ ...panel(id), position: { referencePanel: "shortLook", direction: "within" }, inactive: true });
   }
   api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
-  api.getPanel("shorts")?.api.setActive();
+  api.getPanel("transcript")?.api.setActive();
   api.getPanel("shortLook")?.api.setActive();
   api.getPanel("preview")?.api.setActive();
 }
@@ -183,6 +211,12 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
         ids.add("media");
         ids.add("zoom");
       }
+      // Layouts from before the sound and music libraries were panels.
+      if (!ids.has("sounds") && !ids.has("music") && ids.has("inspector")) {
+        addLibraries(api, "inspector");
+        ids.add("sounds");
+        ids.add("music");
+      }
       if (!ids.has("zoom") && ids.has("inspector")) {
         addZoom(api);
         ids.add("zoom");
@@ -190,10 +224,20 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
       if (!ids.has("agent") && ids.has("inspector")) {
         addAgent(api);
         ids.add("agent");
+        ids.add("joins");
+      }
+      if (!ids.has("joins") && ids.has("inspector")) {
+        addJoins(api);
+        ids.add("joins");
       }
       if (!ids.has("chapters") && ids.has("transcript")) {
         addChapters(api);
         ids.add("chapters");
+        ids.add("search");
+      }
+      if (!ids.has("search") && ids.has("transcript")) {
+        addSearch(api);
+        ids.add("search");
       }
       // Layouts from before Jump cuts and Mouth noises were panels (they were a dialog).
       if (!ids.has("jumpCuts") && !ids.has("noises") && ids.has("inspector")) {

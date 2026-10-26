@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Mic, MousePointerClick, Music, Sparkles, Volume2, VolumeX, Wand2, Wind } from "lucide-react";
-import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { InspectorSection, MoreSettings, RangeRow } from "../inspector/InspectorSection";
 import { PresetMarks } from "../presets/PresetMarks";
 import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
@@ -81,19 +81,21 @@ const EffectRow: React.FC<EffectRowProps> = ({
       <Switch checked={enabled} onChange={onToggle} title={hint} />
     </div>
     {enabled && (
-      <div className="flex items-center gap-3">
-        <input
-          type="range"
-          aria-label={label}
-          min={min}
-          max={max}
-          step={1}
-          value={value}
-          onChange={(e) => onValue(Number(e.target.value))}
-          className="flex-1 h-1.5 cursor-pointer"
-        />
-        <span className="w-[4.5rem] text-right font-mono text-meta tabular-nums text-studio-200">{valueLabel}</span>
-      </div>
+      <MoreSettings>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            aria-label={label}
+            min={min}
+            max={max}
+            step={1}
+            value={value}
+            onChange={(e) => onValue(Number(e.target.value))}
+            className="flex-1 h-1.5 cursor-pointer"
+          />
+          <span className="w-[4.5rem] text-right font-mono text-meta tabular-nums text-studio-200">{valueLabel}</span>
+        </div>
+      </MoreSettings>
     )}
     <p className="text-meta text-studio-500">{hint}</p>
   </div>
@@ -202,14 +204,18 @@ const LaneRow: React.FC<{
       </button>
     </div>
     {denoiseDb !== undefined && (
-      <div className="pl-7">
-        <RangeRow label="Noise reduction" value={denoiseDb} min={3} max={30} unit=" dB" onChange={onDenoise} />
-      </div>
+      <MoreSettings>
+        <div className="pl-7">
+          <RangeRow label="Noise reduction" value={denoiseDb} min={3} max={30} unit=" dB" onChange={onDenoise} />
+        </div>
+      </MoreSettings>
     )}
     {duckDb !== undefined && (
-      <div className="pl-7">
-        <RangeRow label="Lower under speech" value={duckDb} min={3} max={30} unit=" dB" onChange={onDuck} />
-      </div>
+      <MoreSettings>
+        <div className="pl-7">
+          <RangeRow label="Lower under speech" value={duckDb} min={3} max={30} unit=" dB" onChange={onDuck} />
+        </div>
+      </MoreSettings>
     )}
   </div>
 );
@@ -315,8 +321,10 @@ const MouthClickCleanup: React.FC = () => {
       <Switch checked={enabled} onChange={(value) => void save(value)} title="Reduce mouth clicks on speech tracks" />
     </div>
     <p className="text-meta text-studio-500">Repairs short clicks on tracks marked Speech, keeping timing intact. Turn off to compare with the original. Strong settings can soften consonants.</p>
-    <RangeRow label="Cleanup strength" value={strength} min={1} max={100} unit="%" onChange={setStrength} />
-    {enabled && strength !== savedStrength && <Button variant="secondary" size="sm" onClick={() => void save(true)}>Apply strength</Button>}
+    <MoreSettings>
+      <RangeRow label="Cleanup strength" value={strength} min={1} max={100} unit="%" onChange={setStrength} />
+      {enabled && strength !== savedStrength && <Button variant="secondary" size="sm" onClick={() => void save(true)}>Apply strength</Button>}
+    </MoreSettings>
     {busy && <p role="status" className="text-meta text-studio-400">Preparing speech audio… Long recordings can take a few minutes.</p>}
     {error && <Notice tone="danger" onDismiss={() => setError(undefined)}>{error}</Notice>}
   </fieldset>;
@@ -452,6 +460,34 @@ export const AudioSection: React.FC = () => {
         </div>
       )}
       {lanes.some((lane) => lane.role === "mic") && <MouthClickCleanup />}
+      {lanes.some((lane) => lane.track.role === "music" || (openedProject && lane.track.clips.some((c) => clipRole(openedProject, lane.track, c) === "music"))) && (
+        <EffectRow
+          label="Music under speech"
+          hint="Measures the music and the speech and keeps music tracks this far under the voice, on top of their volume. About 18 dB suits a voice-over."
+          enabled={draft.musicUnderSpeechDb !== undefined}
+          onToggle={(on) => update({ musicUnderSpeechDb: on ? 18 : undefined })}
+          valueLabel={`${draft.musicUnderSpeechDb ?? 18} dB`}
+          min={6}
+          max={40}
+          value={draft.musicUnderSpeechDb ?? 18}
+          onValue={(musicUnderSpeechDb) => update({ musicUnderSpeechDb })}
+        />
+      )}
+      {lanes.some((lane) => lane.role === "mic") && (
+        <div className="flex items-center justify-between gap-3">
+          <span
+            className="text-label text-studio-200"
+            title="Speech from several takes plays at one level, and a take that sounds different gets a gentle EQ towards the rest, so a re-recorded sentence doesn't jump."
+          >
+            Match takes
+          </span>
+          <Switch
+            checked={!!draft.matchTakes}
+            onChange={(matchTakes) => update({ matchTakes })}
+            title="Level and tone of speech matched across takes"
+          />
+        </div>
+      )}
       <EffectRow
         label="Normalize loudness"
         hint="Scales the whole edit to a standard loudness without pushing peaks into the limiter. -16 LUFS suits speech."

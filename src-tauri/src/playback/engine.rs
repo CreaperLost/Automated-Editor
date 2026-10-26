@@ -29,6 +29,8 @@ const WINDOW_SOURCE_FPS: u32 = 60;
 /// The scene and mixer for what plays. Kept across seeks; rebuilt when an edit changes it.
 struct Runtime {
     content: u64,
+    /// The layout sections it plays (`PlaybackOwner::look_generation`).
+    look: u64,
     /// Built for the webview preview, which copies frames through JPEG.
     webview: bool,
     quality: PreviewQuality,
@@ -322,6 +324,8 @@ fn tick(
         != Some((content, webview, quality))
     {
         let rebuild_started = std::time::Instant::now();
+        // Read first: a look change while this builds is swapped in on the next tick.
+        let look = state.playback.lock().look_generation().0;
         let (root, document) = {
             let opened = state.opened_project.lock();
             let Some(reader) = opened.as_ref() else {
@@ -357,6 +361,7 @@ fn tick(
             .with_decode_limit(quality.decode_limit((width, height), webview));
         *runtime = Some(Runtime {
             content,
+            look,
             webview,
             quality,
             evaluator,
@@ -369,6 +374,21 @@ fn tick(
         crate::media::switch_stage("engine rebuilt", false);
     }
     let runtime = runtime.as_mut().unwrap();
+    // Only the layout sections changed (LAY-1): swap them in; sound and decoders carry on.
+    let swapped = {
+        let owner = state.playback.lock();
+        let (look, playing_now) = owner.look_generation();
+        (look != runtime.look).then(|| (look, playing_now.cloned()))
+    };
+    if let Some((look, document)) = swapped {
+        let started = std::time::Instant::now();
+        if let Some(document) = document {
+            runtime.evaluator.swap_layouts(&document);
+        }
+        runtime.look = look;
+        *last_frame = None;
+        crate::media::profile("look swapped", started);
+    }
     if status.state == PlaybackState::Playing && !runtime.mixer.has_audio() {
         state.playback.lock().run_without_audio(generation);
     }

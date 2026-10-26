@@ -7,14 +7,17 @@ pub mod commands;
 pub mod cuda;
 pub mod cursor;
 pub mod dsp;
+pub mod effects;
 pub mod export;
 pub mod face;
 pub mod fixtures;
 pub mod graphics;
+pub mod joins;
 pub mod layouts;
 pub mod mcp;
 pub mod media;
 pub mod media_bin;
+pub mod music_library;
 mod parity;
 mod perf;
 pub mod playback;
@@ -26,6 +29,8 @@ pub mod secrets;
 pub mod sequence;
 pub mod shorts;
 pub mod sound_effects;
+pub mod sound_library;
+pub mod source_search;
 pub mod style;
 pub mod take_short;
 pub mod telemetry;
@@ -337,6 +342,7 @@ fn project_layouts_change(
     expected_revision: u64,
     short_id: Option<String>,
     change: commands::LayoutChange,
+    group: Option<String>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_layouts_change_impl(
         &state,
@@ -344,6 +350,7 @@ fn project_layouts_change(
         expected_revision,
         short_id,
         change,
+        group,
     )
 }
 
@@ -466,6 +473,279 @@ fn project_media_roles(
     roles: Vec<commands::StreamRoleInput>,
 ) -> Result<project::OpenedProject, String> {
     commands::project_media_roles_impl(&state, project_handle, expected_revision, asset_id, roles)
+}
+
+/// Sets (or clears) an imported file's licence.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_licence(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    licence: Option<sequence::Licence>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_media_licence_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        licence,
+    )
+}
+
+/// The sound effects library, or the sounds matching `query` (SND-3).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_list(query: Option<String>) -> Result<Vec<sound_library::Sound>, String> {
+    commands::sounds::sound_library_list_impl(query)
+}
+
+/// A library sound as a data URL, to hear it.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_preview(id: String) -> Result<String, String> {
+    commands::sounds::sound_library_preview_impl(id)
+}
+
+/// Copies a sound file of the user's into the library.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_add(
+    path: String,
+    name: Option<String>,
+    tags: Vec<String>,
+    licence: sequence::Licence,
+) -> Result<sound_library::Sound, String> {
+    commands::sounds::sound_library_add_impl(path, name, tags, licence)
+}
+
+/// Changes a sound of the user's own.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_update(
+    id: String,
+    name: Option<String>,
+    tags: Option<Vec<String>>,
+    licence: Option<sequence::Licence>,
+) -> Result<sound_library::Sound, String> {
+    commands::sounds::sound_library_update_impl(id, name, tags, licence)
+}
+
+/// Takes a sound of the user's out of the library.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn sound_library_remove(id: String) -> Result<(), String> {
+    commands::sounds::sound_library_remove_impl(id)
+}
+
+/// Places a library sound at a moment, on an effects track: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_sound_place(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    sound_id: String,
+    at_us: u64,
+    short_id: Option<String>,
+) -> Result<commands::sounds::SoundPlaced, String> {
+    commands::sounds::project_sound_place_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        sound_id,
+        at_us,
+        short_id,
+    )
+}
+
+/// The screen effects showing at a moment, with where each is on the canvas (FX-2).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_effects_at(
+    app: tauri::AppHandle,
+    project_handle: String,
+    edited_us: u64,
+) -> Result<Vec<commands::effects::EffectAt>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::effects::project_effects_at_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            edited_us,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Adds a screen effect over a box drawn on the preview: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn project_effect_add(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    kind: effects::EffectKind,
+    at_us: u64,
+    duration_us: u64,
+    canvas: effects::Area,
+    amount: Option<f32>,
+) -> Result<commands::effects::EffectAdded, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::effects::project_effect_add_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            kind,
+            at_us,
+            duration_us,
+            canvas,
+            amount,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Ends a screen effect at a moment: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_effect_end(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    effect_id: String,
+    at_us: u64,
+) -> Result<project::OpenedProject, String> {
+    commands::effects::project_effect_end_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        effect_id,
+        at_us,
+    )
+}
+
+/// Moves or resizes a screen effect to a box drawn on the preview: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_effect_move(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    effect_id: String,
+    at_us: u64,
+    canvas: effects::Area,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::effects::project_effect_move_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            effect_id,
+            at_us,
+            canvas,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Sets the video's screen effects: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_effects_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    effects: Vec<effects::ScreenEffect>,
+) -> Result<project::OpenedProject, String> {
+    commands::effects::project_effects_set_impl(&state, project_handle, expected_revision, effects)
+}
+
+/// The music library, or the tracks matching `query` (SND-3).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_list(query: Option<String>) -> Result<Vec<music_library::Track>, String> {
+    commands::music::music_library_list_impl(query)
+}
+
+/// A library track on disk, downloading a built-in one the first time.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn music_library_fetch(id: String) -> Result<music_library::Track, String> {
+    tauri::async_runtime::spawn_blocking(move || commands::music::music_library_fetch_impl(id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A library track as a data URL, to hear it (downloading a built-in one the first time).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn music_library_preview(id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || commands::music::music_library_preview_impl(id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Copies a music file of the user's into the library; refused unless it needs no credit.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_add(
+    path: String,
+    name: Option<String>,
+    tags: Vec<String>,
+    licence: sequence::Licence,
+) -> Result<music_library::Track, String> {
+    commands::music::music_library_add_impl(path, name, tags, licence)
+}
+
+/// Changes a track of the user's own.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_update(
+    id: String,
+    name: Option<String>,
+    tags: Option<Vec<String>>,
+    licence: Option<sequence::Licence>,
+) -> Result<music_library::Track, String> {
+    commands::music::music_library_update_impl(id, name, tags, licence)
+}
+
+/// Takes a track of the user's out of the library.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn music_library_remove(id: String) -> Result<(), String> {
+    commands::music::music_library_remove_impl(id)
+}
+
+/// Plays a library track under a stretch of the video, on a music track: one undo step.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_music_place(
+    app: tauri::AppHandle,
+    project_handle: String,
+    expected_revision: u64,
+    track_id: String,
+    at_us: u64,
+    until_us: Option<u64>,
+    short_id: Option<String>,
+) -> Result<commands::music::MusicPlaced, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::music::project_music_place_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            expected_revision,
+            track_id,
+            at_us,
+            until_us,
+            short_id,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// One timeline edit: tracks, clips, cuts, links. In a short's own timeline with `short_id`.
@@ -891,6 +1171,107 @@ async fn project_noise_mutes(
     .map_err(|e| e.to_string())?
 }
 
+/// The joins to listen to (`joins.rs`), for the Joins panel: what changes them, then the list.
+#[cfg(feature = "tauri-app")]
+fn with_joins(
+    state: &AppState,
+    project_handle: &str,
+    edit: Option<
+        &dyn Fn(
+            &project::revision::EditDocument,
+            &std::path::Path,
+            &mut joins::Joins,
+        ) -> Result<(), String>,
+    >,
+) -> Result<joins::JoinsView, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    commands::require_handle(reader, project_handle)?;
+    match edit {
+        None => joins::view_for(reader),
+        Some(edit) => joins::change(reader, |document, list| edit(document, reader.root(), list)),
+    }
+}
+
+/// What was said, in every transcript (the Search panel).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn source_search(
+    state: State<'_, AppState>,
+    project_handle: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<source_search::Results, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    commands::require_handle(reader, &project_handle)?;
+    source_search::search(
+        reader.root(),
+        &reader.history().current,
+        &query,
+        None,
+        limit.unwrap_or(source_search::LIMIT_MAX),
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_list(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<joins::JoinsView, String> {
+    with_joins(&state, &project_handle, None)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_mark(
+    state: State<'_, AppState>,
+    project_handle: String,
+    id: String,
+    mark: Option<joins::Mark>,
+    note: Option<String>,
+) -> Result<joins::JoinsView, String> {
+    with_joins(
+        &state,
+        &project_handle,
+        Some(&|_, _, list| joins::mark(list, &id, mark, note.as_deref())),
+    )
+}
+
+/// The app adds the cuts most likely to sound wrong.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_find(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<joins::JoinsView, String> {
+    with_joins(
+        &state,
+        &project_handle,
+        Some(&|document, root, list| {
+            let risky = joins::risky(root, document, joins::FIND_DEFAULT);
+            joins::add(document, list, "app", &risky).map(|_| ())
+        }),
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn joins_clear(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<joins::JoinsView, String> {
+    with_joins(
+        &state,
+        &project_handle,
+        Some(&|_, _, list| {
+            list.items.clear();
+            Ok(())
+        }),
+    )
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn apply_jump_cuts(
@@ -1130,6 +1511,19 @@ impl mcp::Host for McpHost {
         // (front-end/src/App.tsx).
         let payload = serde_json::json!({ "status": status, "short": short });
         let _ = self.0.emit("aeroedits-agent-export", payload);
+    }
+
+    fn joins_changed(&self) {
+        use tauri::Emitter;
+        let _ = self.0.emit("aeroedits-joins-updated", ());
+    }
+
+    fn show_moment(&self, at_us: u64) {
+        use tauri::Emitter;
+        // front-end/src/App.tsx: back to the video, the playhead in view.
+        let _ = self
+            .0
+            .emit("aeroedits-agent-show", serde_json::json!({ "atUs": at_us }));
     }
 
     fn transcripts(&self) -> &commands::transcript::TranscriptState {
@@ -1408,6 +1802,7 @@ async fn transcript_ai_suggest(
     project_handle: String,
     track_id: String,
     engine: Option<ai::FillerEngine>,
+    short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     use tauri::Emitter;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1418,6 +1813,7 @@ async fn transcript_ai_suggest(
             project_handle,
             track_id,
             engine,
+            short_id,
             &mut |progress| {
                 let _ = emitter.emit("transcript-progress", progress);
             },
@@ -1809,6 +2205,30 @@ async fn project_frame_thumbnail(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+async fn project_clip_thumbnails(
+    app: tauri::AppHandle,
+    project_handle: String,
+    asset_id: String,
+    stream: String,
+    times_us: Vec<u64>,
+    height: u32,
+) -> Result<Vec<Option<String>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::thumbs::project_clip_thumbnails_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            asset_id,
+            stream,
+            times_us,
+            height,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_graphic_set(
     state: State<'_, AppState>,
     project_handle: String,
@@ -1856,14 +2276,14 @@ fn project_preset_set(
     project_handle: String,
     expected_revision: u64,
     name: String,
-    shorts: bool,
+    target: Option<commands::preset::PresetTarget>,
 ) -> Result<project::OpenedProject, String> {
     commands::preset::project_preset_set_impl(
         &state,
         project_handle,
         expected_revision,
         name,
-        shorts,
+        target.unwrap_or_default(),
     )
 }
 
@@ -2394,6 +2814,7 @@ pub fn run() {
             project_graphic_get,
             project_graphics_list,
             project_frame_thumbnail,
+            project_clip_thumbnails,
             project_graphic_set,
             project_graphic_look_set,
             presets,
@@ -2444,6 +2865,25 @@ pub fn run() {
             project_sequence_edit,
             project_media_import,
             project_media_roles,
+            project_media_licence,
+            sound_library_list,
+            sound_library_preview,
+            sound_library_add,
+            sound_library_update,
+            sound_library_remove,
+            project_sound_place,
+            music_library_list,
+            music_library_fetch,
+            music_library_preview,
+            music_library_add,
+            music_library_update,
+            music_library_remove,
+            project_music_place,
+            project_effects_at,
+            project_effect_add,
+            project_effect_end,
+            project_effect_move,
+            project_effects_set,
             project_caption_cues,
             project_sound_effects,
             transcript_caption_edit,
@@ -2482,6 +2922,11 @@ pub fn run() {
             noise_review,
             project_noise_mutes,
             apply_jump_cuts,
+            joins_list,
+            source_search,
+            joins_mark,
+            joins_find,
+            joins_clear,
             transcript_settings_get,
             transcript_settings_set,
             transcript_set_api_key,

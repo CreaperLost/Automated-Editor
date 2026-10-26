@@ -10,15 +10,18 @@ about, so the action comes from the video while the take does the talking. Then 
 Step by step by default; automatic when the user says so ("auto", "no questions"): then use
 the defaults below, report in one message and go on. Export still waits for the user's go.
 
-The shorts' own tools (`media_import`, `short_from_take`, `shorts`, `faces`, `short_footage`)
-are behind `more`: `more` with `tool` alone gives one's arguments, with `args` it runs it.
+The shorts' own tools (`media_import`, `short_from_take`, `short_footage`, `shorts`, `faces`,
+`captions`) are behind `more`: `more` with `tool` alone gives one's arguments, with `args` it
+runs it. This is the Shorts tab: clips cut from the video (`clips`, the Clips tab) are another
+kind; never touch them here.
 
 ## 1. Project (automatic)
 
 - `status`. The long video needs a transcript (that is how you find its footage): if it has
   none, `transcribe` it (online, the language detected; as in the Tutorial preset). The
   long video should be edited first: footage only comes from what its edit keeps.
-- `status` says how many shorts are already made.
+- `status` says how many shorts are already made (`shorts`, `op: list` the default, lists
+  them).
 
 ## 2. The take (ask only if unclear)
 
@@ -108,27 +111,31 @@ them short, or split. Each shows what its words say (the claim, the number, the 
 just the topic. Add them to the plan as a table (start, end, template, mode, what it shows,
 the words it sits on); ask for an OK (automatic: go).
 
-## 6b. Caption emphasis (automatic)
+## 6b. Captions (automatic)
 
 Once the take is cut, `more` with `tool: captions` and `args: {"short": <id>}` lists the
 short's caption lines, numbered. Pick per line the one word that makes a viewer keep watching (a
 number, a name, the twist, the verdict, the thing being warned about), never a small word
-("the", "is", "and"); a flat line gets none. Set them in one call: `args: {"short": <id>,
-"emphasis": [{"line": 0, "word": "never"}, ...]}`. They are drawn in the style's accent.
+("the", "is", "and"); a flat line gets none. Shape the lines in the same call: `split` a line
+that reads as two thoughts (`{"line": 3, "word": "but"}`, the word the new line starts at),
+`join` a line too short to read alone (its number: it goes on the line before), `hide` a stray
+word or a false start. One call: `args: {"short": <id>, "emphasis": [{"line": 0, "word":
+"never"}, ...], "split": [...], "join": [...], "hide": [...]}`; line numbers are as listed
+before the call. These are the short's own (undo steps); the take's text stays shared.
+Emphasis is drawn in the style's accent.
 How the words come on (pop by default at 9:16) is the project's style (`library` `kind: style`).
 
-## 7. Propose (automatic)
+## 7. Put it under the take (automatic)
 
-One `short_footage` call with `op: add`, a `reason`, and every item at once; the user accepts
-the batch in the Agent panel (under autopilot it lands at once). Footage: `fromWord`/`toWord`
+One `short_footage` call with `op: add`, a `reason`, and every item at once: it goes in as one
+undo step, listed in the Agent panel with Undo (no Accept card). Footage: `fromWord`/`toWord`
 from the take, and `sourceWord` (a word id from the video's transcript where the footage
 starts; it must be one the video keeps) or `videoS`; its game or desktop sound plays ducked
 under the voice, `sound: false` where it distracts; `speed` as planned. Graphics: `fromWord`
 (and `toWord`, else its own length) with `template`, `library` or `graphic`, `mode`, plus
 `name` and `variables`. Report
-the summary it answers and wait for the user's decision (`proposals_list`). Graphics play one at
-a time: the app refuses a batch whose graphics would overlap, and says where. Once accepted:
-`storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
+the summary it answers in a line. Graphics play one at a time: the app refuses a call whose
+graphics would overlap, and says where (nothing is added). Then: `storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
 later with `graphic_set` `short` and `slot` renders that graphic again):
 `graphic_set` with `short` moves (`moveToWord`, a word of the take) or lengthens (`lengthUs`) a
 graphic on the short's timeline, `op: remove` with `fromS`/`toS` takes footage off. Footage and
@@ -137,5 +144,6 @@ B-roll sound share one track: if the user finds it too loud or too quiet, `op: s
 
 ## 8. Export (ask)
 
-Ask "Export the short now?". On the go: `export` with `short` (its id). It is written next to
+Ask "Export the short now?". On the go: `export` with `short` (its id; `"shorts"` for every
+short made from a take, never `"all"`, which exports the clips too). It is written next to
 the project as "<project> - <title>.mp4", 1080x1920. Answer with the path.

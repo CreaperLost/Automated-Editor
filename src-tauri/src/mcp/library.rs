@@ -14,6 +14,8 @@ pub enum Kind {
     Style,
     Preset,
     Layout,
+    Sound,
+    Music,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -30,12 +32,13 @@ pub enum Op {
     BringInLine,
     Save,
     Reset,
+    ProposeRule,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryArgs {
-    /// style, preset or layout.
+    /// style, preset, layout, sound or music.
     pub kind: Kind,
     /// list (default), show, use (in this project), set, remove; for styles also preview,
     /// check (graphics not following the style) and bring_in_line; for presets also save (the
@@ -54,12 +57,30 @@ pub struct LibraryArgs {
     /// it the change goes into a copy, "My <name>").
     #[serde(default)]
     pub save_as: Option<String>,
-    /// Presets, use: for the project's new shorts instead.
+    /// propose_rule: the rule, in the user's words.
     #[serde(default)]
-    pub shorts: bool,
+    pub rule: Option<String>,
+    /// propose_rule: what the user did or said that taught it.
+    #[serde(default)]
+    pub example: Option<String>,
+    /// Presets, use: what the preset is for: `video` (default), or the project's new `shorts`
+    /// (from a take) or new `clips` (cut from the video).
+    #[serde(default, rename = "for")]
+    pub target: crate::commands::preset::PresetTarget,
     /// Presets, reset: only this part (captions, layout, zoomSettings, audio, layouts).
     #[serde(default)]
     pub part: Option<String>,
+    /// Sounds and music, list: words its name or tags hold (`whoosh`, `riser hit`, `calm`).
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Sounds and music, use: where it starts (edited microseconds)...
+    #[serde(default)]
+    pub at_us: Option<u64>,
+    /// ...or at a word (id from transcript_get).
+    #[serde(default)]
+    pub at_word: Option<String>,
+    #[serde(default)]
+    pub until_us: Option<u64>,
 }
 
 pub static TOOLS: [ToolDef; 1] = [ToolDef {
@@ -74,7 +95,10 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         applied, changing nothing: show the user before set), check (graphics not following \
         the style) and bring_in_line (one batch rewriting them, for the user to accept). \
         Presets also: save (the project's settings into its preset, or a new one: \
-        `saveAs`) and reset (the project's changes back).",
+        `saveAs`), reset (the project's changes back), propose_rule (`rule`, `example`: the \
+        user accepts it in the Agent panel). Sounds (CC0 whooshes, risers, hits, clicks, \
+        pops; the user's own): list (`query`), use (`name` = id, at `atUs`/`atWord`). Music \
+        (CC0 beds by mood): the same, until `untilUs` or the end, kept under the speech.",
     schema: schema::<LibraryArgs>,
     read_only: false,
     run: library,
@@ -86,6 +110,8 @@ fn library(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Kind::Style => style(ctx, args),
         Kind::Preset => super::presets::library(ctx, args),
         Kind::Layout => layout(args),
+        Kind::Sound => sound(ctx, args),
+        Kind::Music => music(ctx, args),
     }
 }
 
@@ -225,20 +251,149 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 })).collect::<Vec<_>>(),
             }))
         }
+        // One undo step at once, like every pass: no Accept card for graphics.
         Op::BringInLine => {
-            let agent = ctx.agent.clone();
-            super::propose::propose(ctx, |reader, proposals| {
-                crate::proposals::propose_restyle(
-                    reader,
-                    proposals,
-                    &agent,
-                    "Bring every graphic in line with the style",
-                )
-            })
+            let before = opened(ctx)?;
+            let plans =
+                commands::graphics::graphics_in_line_plan_impl(ctx.state, before.handle.clone())?;
+            if plans.is_empty() {
+                return Err(
+                    "Every graphic follows the video's look already: nothing to bring in line"
+                        .into(),
+                );
+            }
+            let mut lines = vec![format!(
+                "Brought {} in line with the style; each renders again.",
+                plural(plans.len(), "graphic")
+            )];
+            lines.extend(plans.iter().map(|p| p.line()));
+            commands::graphics::project_graphics_in_line_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                plans,
+            )?;
+            text(applied(ctx, "bring_in_line", &before, lines)?)
         }
-        Op::Save | Op::Reset => {
+        Op::Save | Op::Reset | Op::ProposeRule => {
             Err("Styles take list, show, use, set, remove, preview, check or bring_in_line".into())
         }
+    }
+}
+
+fn sound(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
+    use crate::commands::sounds;
+    match args.op {
+        Op::List => {
+            let found = sounds::sound_library_list_impl(args.query.clone())?;
+            let mut lines = vec![format!(
+                "{} (id, length, tags; * needs credit or unknown licence: not without the user's \
+                 word):",
+                plural(found.len(), "sound")
+            )];
+            lines.extend(found.iter().map(|s| {
+                format!(
+                    "{}{} {:.2}s {}",
+                    s.id,
+                    if s.licence.kind.needs_no_credit() {
+                        ""
+                    } else {
+                        "*"
+                    },
+                    s.duration_us as f64 / 1e6,
+                    s.tags.join(",")
+                )
+            }));
+            text(lines.join("\n"))
+        }
+        Op::Use => {
+            let id = args
+                .name
+                .ok_or("Give the sound's id as `name` (op: list)")?;
+            let at = match (args.at_us, args.at_word) {
+                (Some(at), _) => at,
+                (None, Some(word)) => super::actions::word_edited_us(ctx, None, &word)?,
+                (None, None) => return Err("Give `atUs` or `atWord`".into()),
+            };
+            let before = opened(ctx)?;
+            let placed = sounds::project_sound_place_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                id.clone(),
+                at,
+                None,
+            )?;
+            let line = format!(
+                "Placed {id} at {} as clip {} (media {}).",
+                super::tools::clock(at),
+                placed.clip_id,
+                placed.asset_id
+            );
+            text(applied(ctx, "library", &before, vec![line])?)
+        }
+        _ => Err("Sounds take `op: list` or `op: use`; the user adds their own in the app".into()),
+    }
+}
+
+fn music(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
+    use crate::commands::music;
+    match args.op {
+        Op::List => {
+            let found = music::music_library_list_impl(args.query.clone())?;
+            let mut lines = vec![format!(
+                "{} (id, length, moods; ~ downloads on first use):",
+                plural(found.len(), "track")
+            )];
+            lines.extend(found.iter().map(|t| {
+                let s = t.duration_us / 1_000_000;
+                format!(
+                    "{}{} {}:{:02} {}",
+                    t.id,
+                    if t.downloaded { "" } else { "~" },
+                    s / 60,
+                    s % 60,
+                    t.tags.join(",")
+                )
+            }));
+            text(lines.join(
+                "
+",
+            ))
+        }
+        Op::Use => {
+            let id = args
+                .name
+                .ok_or("Give the track's id as `name` (op: list)")?;
+            let at = match (args.at_us, args.at_word) {
+                (Some(at), _) => at,
+                (None, Some(word)) => super::actions::word_edited_us(ctx, None, &word)?,
+                (None, None) => 0,
+            };
+            let before = opened(ctx)?;
+            let placed = music::project_music_place_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                id.clone(),
+                at,
+                args.until_us,
+                None,
+            )?;
+            let bed = &placed.bed;
+            let mut line = format!(
+                "{id} plays {}-{} on the Music track ({}, media {}).",
+                super::tools::clock(bed.start_us),
+                super::tools::clock(bed.end_us),
+                plural(bed.clip_ids.len(), "clip"),
+                placed.asset_id
+            );
+            if let Some(db) = bed.under_speech_db {
+                line.push_str(&format!(" Music now sits {db} dB under the speech."));
+            }
+            text(applied(ctx, "library", &before, vec![line])?)
+        }
+        _ => Err("Music takes `op: list` or `op: use`; the user adds their own in the app".into()),
     }
 }
 
@@ -271,5 +426,42 @@ fn layout(args: LibraryArgs) -> Result<Vec<Output>, String> {
             ))
         }
         _ => Err("Use or save a layout with the `layouts` tool".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn said(output: Vec<Output>) -> String {
+        match output.into_iter().next() {
+            Some(Output::Text(text)) => text,
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn an_agent_finds_a_sound_and_places_it() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let ctx = Ctx::new(&host, "agent", false);
+        let list = said(library(&ctx, json!({ "kind": "sound", "query": "whoosh" })).unwrap());
+        assert!(list.starts_with("4 sounds"), "{list}");
+        assert!(list.contains("\nwhoosh-whip 0.38s "), "{list}");
+        let placed = said(
+            library(
+                &ctx,
+                json!({ "kind": "sound", "op": "use", "name": "whoosh-fast", "atUs": 1_000_000 }),
+            )
+            .unwrap(),
+        );
+        assert!(
+            placed.starts_with("Placed whoosh-fast at 0:01.00"),
+            "{placed}"
+        );
+        assert!(library(&ctx, json!({ "kind": "sound", "op": "use", "name": "pop" })).is_err());
     }
 }

@@ -137,6 +137,8 @@ interface NativePreviewHostProps {
   className?: string;
   fitAspectRatio?: number;
   showStatus?: boolean;
+  /** Drawn over the preview, inside its box (tools that point at the picture). */
+  children?: React.ReactNode;
 }
 
 export function NativePreviewHost({
@@ -145,6 +147,7 @@ export function NativePreviewHost({
   className = "w-full max-w-4xl aspect-video",
   fitAspectRatio,
   showStatus = true,
+  children,
 }: NativePreviewHostProps) {
   const previewAvailable = useProjectStore(s => s.previewAvailable);
   const playbackError = useProjectStore(s => s.playbackError);
@@ -309,7 +312,7 @@ export function NativePreviewHost({
         <div
           ref={hostRef}
           data-native-preview-host
-          className={`pointer-events-none rounded-xl border border-studio-800 bg-black/50 ${fitAspectRatio ? "w-full h-full min-h-0" : `shrink-0 ${className}`}`}
+          className={`relative pointer-events-none rounded-xl border border-studio-800 bg-black/50 ${fitAspectRatio ? "w-full h-full min-h-0" : `shrink-0 ${className}`}`}
           data-content-aspect-ratio={fitAspectRatio}
         >
           {webview && (
@@ -318,6 +321,7 @@ export function NativePreviewHost({
               className="w-full h-full object-contain rounded-xl"
             />
           )}
+          {children}
         </div>
       </div>
       {showStatus && <p className="text-xs text-studio-400 max-w-md text-center shrink-0">

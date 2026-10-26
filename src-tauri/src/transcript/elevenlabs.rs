@@ -45,6 +45,8 @@ pub struct ScribeTranscriber {
     model: String,
     language: Option<String>,
     keyterms: Vec<String>,
+    /// The service refused the key terms, so they were dropped for the rest of the run.
+    dropped_keyterms: bool,
 }
 
 impl ScribeTranscriber {
@@ -109,6 +111,7 @@ impl ScribeTranscriber {
                 .filter(|k| !k.is_empty() && k.chars().count() <= 50)
                 .take(MAX_KEYTERMS)
                 .collect(),
+            dropped_keyterms: false,
         })
     }
 
@@ -225,6 +228,17 @@ impl ChunkTranscriber for ScribeTranscriber {
         self.model.clone()
     }
 
+    fn notes(&self) -> Vec<String> {
+        if self.dropped_keyterms {
+            vec![format!(
+                "{} refused the key terms, so it transcribed without them.",
+                self.route.service()
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn plan(&self) -> ChunkPlan {
         // Ten-minute uploads (about 19 MB of 16-bit WAV) keep each ElevenLabs request well
         // inside its limits and let progress move during long recordings. OpenRouter takes at
@@ -269,6 +283,16 @@ impl ChunkTranscriber for ScribeTranscriber {
                 };
             }
             last_error = describe_error(self.route, status, &body);
+            // OpenRouter answers 400 when the routed model can't take key terms: transcribe
+            // without them rather than not at all.
+            if status == 400
+                && !self.keyterms.is_empty()
+                && body.to_ascii_lowercase().contains("keyterm")
+            {
+                self.keyterms.clear();
+                self.dropped_keyterms = true;
+                return self.transcribe_chunk(chunk);
+            }
             if !(status == 429 || status >= 500) {
                 break;
             }

@@ -24,11 +24,12 @@ used below; see [Corrections](#corrections-that-change-conclusions).
 3. **The method lives in a file the user owns and the agent improves.** Christian: "save the
    correction in the skill file". Jason and Zane: the prompt is a versioned, compiled artefact.
    Our `SKILL.md` is compiled into the app and reinstalled; the user can't own it. This is the
-   sharpest structural difference between our loop and the strong examples → [AGT-3](../roadmap.md#agt-3).
+   sharpest structural difference between our loop and the strong examples → [AGT-3](../done.md#agt-3).
 4. **Feedback is anchored to the timeline, not phrased in chat.** Mike Cann (Tandem) leaves a
    comment on a time range that Claude reads; Tao labels clipped words and a repeated zoom at
    49–59 s, rejects "boring" as feedback, and fixed a HUD with a Paint sketch after words failed
-   → [NOTE-1](../roadmap.md#note-1).
+   → considered as NOTE-1, dropped 24 Oct: one user feeding back live in chat doesn't need it
+   ([decisions](../decisions.md#not-doing)).
 5. **A reference is mandatory, and it should be small and real.** Screen-record only the section
    you want to mimic (Science Based AI); record your own product rather than invent it (Matt
    Loui); give the agent concrete asset files, not an inspiration board it can't resolve (Ben
@@ -42,17 +43,18 @@ used below; see [Corrections](#corrections-that-change-conclusions).
    ElevenLabs SFX at the exact frame an element pops, because the animation is code, and states
    the style in words: "keep it pretty minimal and subtle … no heavy risers or drops". Joseph's
    starter kit: five whooshes; two or three each of mechanical, sci-fi and UI; two risers; two
-   hits → [SND-1](../roadmap.md#snd-1), [SND-2](../roadmap.md#snd-2).
+   hits → [SND-1](../done.md#snd-1), [SND-2](../roadmap.md#snd-2).
 8. **The output must stay editable in the host app, and the agent stops at a reviewable state.**
    Every AI-editing creator ends in an editable timeline or project; the failure they advertise
    against is "AI made it and I can't touch it". The human keeps style, grade, final trim and
    what to keep. Our proposal/approval model is this, built in.
 9. **Everyone duplicates the project before an agent touches it** (every Resolve creator) →
-   [SAFE-1](../roadmap.md#safe-1), [SAFE-2](../roadmap.md#safe-2).
+   [SAFE-1](../done.md#safe-1), [SAFE-2](../done.md#safe-2).
 10. **Review by watching, with a human in the loop.** "Codex checks against the storyboard,
     renders, checks the render" (Chase AI), but the same creator warns against autonomous loops
     and their time cost; Jason's agent loops "until the cut is clean". Stills can't judge motion
-    → [REV-1](../roadmap.md#rev-1), [Q-VERIFY](../decisions.md#q-verify).
+    and the agent can't hear, so the user listens to the joins the agent picks
+    → [REV-1](../done.md#rev-1), [Q-VERIFY](../decisions.md#q-verify).
 
 What the research did **not** establish: that one model has better taste (no experiment held
 subject, assets, skill and budget constant), that deterministic rendering gives better *visual*
@@ -73,17 +75,17 @@ quality (it gives control), or that viral-reel polish is the right yardstick for
 
 | # | Trick | Source | Where it lands |
 |---|---|---|---|
-| 1 | Anchor feedback to a time range, not a chat message | Tandem; Tao | [NOTE-1](../roadmap.md#note-1) |
+| 1 | Anchor feedback to a time range, not a chat message | Tandem; Tao | Not doing (24 Oct): chat is enough for one user |
 | 2 | Feed the agent a small, exact reference (a frame, a 5 s clip), never a whole file | Science Based AI | Skill guidance; `frame_render` |
-| 3 | Ask questions before the long job | Matt Loui; Ben Stevenson | [AGT-3](../roadmap.md#agt-3) / templates |
-| 4 | Art-direct sound in words; place it at the visual peak | Ben Stevenson; Zane | [SND-2](../roadmap.md#snd-2), [STY-1](../roadmap.md#sty-1) |
-| 5 | Keep the prompt/method as a versioned file the agent edits | Christian, Jason, Zane | [AGT-3](../roadmap.md#agt-3) |
+| 3 | Ask questions before the long job | Matt Loui; Ben Stevenson | [AGT-3](../done.md#agt-3) / templates |
+| 4 | Art-direct sound in words; place it at the visual peak | Ben Stevenson; Zane | [SND-2](../roadmap.md#snd-2), [STY-1](../done.md#sty-1) |
+| 5 | Keep the prompt/method as a versioned file the agent edits | Christian, Jason, Zane | [AGT-3](../done.md#agt-3) |
 | 6 | Filter style references by what the model can actually execute ("Opus isn't good at mimicking Kurzgesagt") | Science Based AI | Gate the style trial with `graphic_check` |
 | 7 | Approve a 5–10 s sample before scaling a look | ChatCut / Marcin | [PLAN-1](../roadmap.md#plan-1) |
 | 8 | Keep the result composable: green-screen one element, or two transparent PNG layers you can recolour | Science Based AI; Higgsfield | Expose layers, not the flat frame ([DLV-3](../roadmap.md#dlv-3)) |
 | 9 | Let the model animate; render hard images once as an asset sheet | Tao ("great at animating, not at rendering realistic images") | Supplied assets in graphics |
-| 10 | Separate the brief into **requirements** (format, deliverables), **preferences** (taste) and **analysis** (transcript, telemetry) | Short-form review part 2 | [STY-1](../roadmap.md#sty-1) |
-| 11 | Keep spoken editor directions ("cut this", "add a graphic here") as notes that survive cleanup | Dan Kieft | [NOTE-1](../roadmap.md#note-1) (`kind: direction`) |
+| 10 | Separate the brief into **requirements** (format, deliverables), **preferences** (taste) and **analysis** (transcript, telemetry) | Short-form review part 2 | [STY-1](../done.md#sty-1) |
+| 11 | Keep spoken editor directions ("cut this", "add a graphic here") as notes that survive cleanup | Dan Kieft | Not now (24 Oct, [decisions](../decisions.md#not-doing)) |
 | 12 | Revise on a copy; say what to change *and what to keep* ("reduce the bounce, keep the glow") | Roboverse | [GFX-4](../roadmap.md#gfx-4) |
 
 ## Tutorial graphics: three workflows and a production contract
@@ -133,13 +135,13 @@ talking-head edit, an Astra/Borumi comparison, a Claude + HyperFrames short):
 - Joseph's caption spec (a medium sans plus a script font for key words, white plus one accent,
   word-by-word pop-in) is **one creator's taste**; the transferable rule is *"highlight the one
   word that makes you keep watching"*: emphasis chosen by meaning, the agent's job →
-  [CAP-1](../roadmap.md#cap-1).
+  [CAP-1](../done.md#cap-1).
 - A visual needs an explanatory job; presenter-only moments are a deliberate choice.
 - Brief compliance ≠ taste ≠ execution quality: an agent can follow a restrained brief and still
   disappoint a creator who wanted energy. Judge them separately.
 - Some looks need compositor work over real footage (dim/blur behind an overlay, a presenter
   cut-out, gaze-aware cutaways); a graphic can't blur what is composited under it later
-  → [FX-2](../roadmap.md#fx-2), [FX-1](../roadmap.md#fx-1).
+  → [FX-2](../done.md#fx-2), [FX-1](../roadmap.md#fx-1).
 
 ## Production workflows (Dan Kieft, Roboverse)
 
@@ -167,7 +169,7 @@ talking-head edit, an Astra/Borumi comparison, a Claude + HyperFrames short):
 | Reformat with linked labels and cursor targets: 50 min vs 2–3 h by hand | Higgsfield commercial | Dependency-preserving reformat, not a canvas resize |
 | $6.40 host usage so far for an intro | Marcin (ChatCut) | Excludes ChatCut charges |
 
-Measure our own instead: cost per accepted video, by stage ([EVAL-1](../roadmap.md#eval-1)).
+Measure our own instead: cost per accepted video, by stage ([EVAL-1](../done.md#eval-1)).
 
 ## Artefact index
 

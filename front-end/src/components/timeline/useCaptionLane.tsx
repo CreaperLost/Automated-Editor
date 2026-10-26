@@ -62,7 +62,9 @@ export function useCaptionLane({
   const edit = async (change: CaptionEdit) => {
     if (!openedProject || !track.trackId) return false;
     try {
-      setTrack(await api.transcriptCaptionEdit(openedProject.projectHandle, track.trackId, change));
+      const next = await api.transcriptCaptionEdit(openedProject.projectHandle, track.trackId, change);
+      if (next.project) useProjectStore.getState().applyOpenedProject(next.project);
+      setTrack(next);
       onError(undefined);
       bumpCaptions();
       return true;

@@ -1,0 +1,424 @@
+{
+ "transcript": "C:/Users/George/Documents/AeroEdits/Untitled 24 Oct 2026 - Edited/transcripts/rec-d036cf08d423.mic.json",
+ "language": "en",
+ "words": 1200,
+ "gold": [
+  {
+   "from": 57,
+   "to": 63,
+   "type": "retake",
+   "note": "The weights will be available on November. said twice",
+   "alt": [
+    [
+     64,
+     70
+    ]
+   ]
+  },
+  {
+   "from": 451,
+   "to": 451,
+   "type": "filler",
+   "note": "Um"
+  },
+  {
+   "from": 745,
+   "to": 745,
+   "type": "filler",
+   "note": "uh"
+  },
+  {
+   "from": 750,
+   "to": 750,
+   "type": "filler",
+   "note": "uh"
+  },
+  {
+   "from": 753,
+   "to": 753,
+   "type": "retake",
+   "note": "I, I"
+  },
+  {
+   "from": 900,
+   "to": 900,
+   "type": "filler",
+   "note": "Uh"
+  },
+  {
+   "from": 975,
+   "to": 975,
+   "type": "filler",
+   "note": "uh"
+  },
+  {
+   "from": 976,
+   "to": 978,
+   "type": "retake",
+   "note": "really b- I, (cut off)",
+   "alt": [
+    [
+     973,
+     978
+    ]
+   ]
+  },
+  {
+   "from": 1028,
+   "to": 1029,
+   "type": "retake",
+   "note": "what is, what is"
+  },
+  {
+   "from": 1059,
+   "to": 1059,
+   "type": "retake",
+   "note": "they, they've"
+  },
+  {
+   "from": 1082,
+   "to": 1082,
+   "type": "retake",
+   "note": "the, the usage"
+  },
+  {
+   "from": 1102,
+   "to": 1103,
+   "type": "retake",
+   "note": "that the, that the"
+  },
+  {
+   "from": 1129,
+   "to": 1130,
+   "type": "retake",
+   "note": "this is, this is lovely"
+  },
+  {
+   "from": 1163,
+   "to": 1163,
+   "type": "retake",
+   "note": "I, I don't"
+  },
+  {
+   "from": 1179,
+   "to": 1179,
+   "type": "filler",
+   "note": "Uh"
+  },
+  {
+   "from": 48,
+   "to": 48,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 124,
+   "to": 124,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 135,
+   "to": 135,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 316,
+   "to": 316,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 366,
+   "to": 366,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 376,
+   "to": 376,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 387,
+   "to": 387,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 412,
+   "to": 412,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 473,
+   "to": 473,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 569,
+   "to": 569,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 594,
+   "to": 594,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 606,
+   "to": 606,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 657,
+   "to": 657,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 694,
+   "to": 694,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 709,
+   "to": 709,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 715,
+   "to": 715,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 762,
+   "to": 762,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 775,
+   "to": 775,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 789,
+   "to": 789,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 872,
+   "to": 872,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 890,
+   "to": 890,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1000,
+   "to": 1000,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1040,
+   "to": 1040,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1097,
+   "to": 1097,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1134,
+   "to": 1134,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 1177,
+   "to": 1177,
+   "type": "filler",
+   "note": "sentence-opening So/And",
+   "optional": true
+  },
+  {
+   "from": 245,
+   "to": 246,
+   "type": "retake",
+   "note": "really, really",
+   "optional": true
+  },
+  {
+   "from": 312,
+   "to": 313,
+   "type": "retake",
+   "note": "very, very",
+   "optional": true
+  },
+  {
+   "from": 419,
+   "to": 422,
+   "type": "retake",
+   "note": "really, really very, very",
+   "optional": true
+  },
+  {
+   "from": 434,
+   "to": 435,
+   "type": "retake",
+   "note": "super, super",
+   "optional": true
+  },
+  {
+   "from": 660,
+   "to": 661,
+   "type": "retake",
+   "note": "pretty, pretty",
+   "optional": true
+  },
+  {
+   "from": 967,
+   "to": 968,
+   "type": "retake",
+   "note": "pretty, pretty",
+   "optional": true
+  },
+  {
+   "from": 1077,
+   "to": 1078,
+   "type": "retake",
+   "note": "very, very",
+   "optional": true
+  },
+  {
+   "from": 666,
+   "to": 666,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 669,
+   "to": 669,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 714,
+   "to": 714,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 871,
+   "to": 871,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 1098,
+   "to": 1098,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 1160,
+   "to": 1160,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 1178,
+   "to": 1178,
+   "type": "filler",
+   "note": "Okay",
+   "optional": true
+  },
+  {
+   "from": 735,
+   "to": 735,
+   "type": "filler",
+   "note": "like",
+   "optional": true
+  },
+  {
+   "from": 834,
+   "to": 834,
+   "type": "filler",
+   "note": "like",
+   "optional": true
+  },
+  {
+   "from": 1069,
+   "to": 1069,
+   "type": "filler",
+   "note": "like",
+   "optional": true
+  },
+  {
+   "from": 961,
+   "to": 962,
+   "type": "filler",
+   "note": "you know",
+   "optional": true
+  },
+  {
+   "from": 1160,
+   "to": 1162,
+   "type": "filler",
+   "note": "Okay, fuck it. (aside)",
+   "optional": true
+  }
+ ]
+}

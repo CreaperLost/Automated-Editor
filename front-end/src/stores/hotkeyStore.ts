@@ -103,6 +103,45 @@ function saveBindings(bindings: Bindings) {
   }
 }
 
+/**
+ * Keys that switch layouts (LAY-2), by layout: `builtin:<name>` or `fav:<favourite id>`. None
+ * by default: people bind the layouts they use (George, 21 Oct).
+ */
+export type LayoutKeys = Record<string, string[]>;
+const LAYOUT_KEYS_STORAGE_KEY = "aeroedits.layoutKeys.v1";
+
+function loadLayoutKeys(): LayoutKeys {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LAYOUT_KEYS_STORAGE_KEY) ?? "{}") as unknown;
+    if (!saved || typeof saved !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(saved as Record<string, unknown>).filter(
+        (entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].every((b) => typeof b === "string"),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveLayoutKeys(keys: LayoutKeys) {
+  try {
+    window.localStorage.setItem(LAYOUT_KEYS_STORAGE_KEY, JSON.stringify(keys));
+  } catch {
+    // Not remembered on this machine; the change still applies for this session.
+  }
+}
+
+/** `keys` without `taken`, and without layouts left with no key. */
+function withoutKeys(keys: LayoutKeys, taken: string[], except?: string): LayoutKeys {
+  const next: LayoutKeys = {};
+  for (const [id, list] of Object.entries(keys)) {
+    const kept = id === except ? list : list.filter((b) => !taken.includes(b));
+    if (kept.length > 0) next[id] = kept;
+  }
+  return next;
+}
+
 /** The binding a key press makes, or null for a lone modifier. */
 export function bindingFromEvent(
   event: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,
@@ -158,47 +197,76 @@ export function formatBinding(binding: string): string {
 
 interface HotkeyStore {
   bindings: Bindings;
-  /** Sets one action's bindings; any of them taken by another action is removed from it. */
+  layoutKeys: LayoutKeys;
+  /** Sets one action's bindings; any of them taken by another action or layout is removed from it. */
   setBindings: (action: HotkeyAction, bindings: string[]) => void;
+  /** Sets the keys of one layout, taking them from any action or other layout. */
+  setLayoutKeys: (layout: string, bindings: string[]) => void;
+  /** One action back to its defaults, or every shortcut (layouts then have no keys). */
   reset: (action?: HotkeyAction) => void;
   /** The action a key press triggers, if any. */
   actionFor: (event: KeyboardEvent) => HotkeyAction | null;
+  /** The layout a key press switches to, if any. */
+  layoutFor: (event: KeyboardEvent) => string | null;
+}
+
+/** `bindings` without `taken`, except on `except`. */
+function withoutBindings(bindings: Bindings, taken: string[], except?: HotkeyAction): Bindings {
+  const next = { ...bindings };
+  for (const other of Object.keys(next) as HotkeyAction[]) {
+    if (other !== except) next[other] = next[other].filter((b) => !taken.includes(b));
+  }
+  return next;
 }
 
 export const useHotkeyStore = create<HotkeyStore>((set, get) => ({
   bindings: loadBindings(),
+  layoutKeys: loadLayoutKeys(),
   setBindings: (action, list) =>
     set((state) => {
       const unique = [...new Set(list)];
-      const next = { ...state.bindings };
-      for (const other of Object.keys(next) as HotkeyAction[]) {
-        if (other !== action) next[other] = next[other].filter((b) => !unique.includes(b));
-      }
-      next[action] = unique;
+      const next = { ...withoutBindings(state.bindings, unique, action), [action]: unique };
+      const layoutKeys = withoutKeys(state.layoutKeys, unique);
       saveBindings(next);
-      return { bindings: next };
+      saveLayoutKeys(layoutKeys);
+      return { bindings: next, layoutKeys };
+    }),
+  setLayoutKeys: (layout, list) =>
+    set((state) => {
+      const unique = [...new Set(list)];
+      const bindings = withoutBindings(state.bindings, unique);
+      const layoutKeys = withoutKeys({ ...state.layoutKeys, [layout]: unique }, unique, layout);
+      if (unique.length === 0) delete layoutKeys[layout];
+      saveBindings(bindings);
+      saveLayoutKeys(layoutKeys);
+      return { bindings, layoutKeys };
     }),
   reset: (action) =>
     set((state) => {
       const defaults = defaultBindings();
       let next: Bindings;
+      let layoutKeys: LayoutKeys = {};
       if (action) {
-        next = { ...state.bindings };
-        for (const other of Object.keys(next) as HotkeyAction[]) {
-          if (other !== action) next[other] = next[other].filter((b) => !defaults[action].includes(b));
-        }
-        next[action] = defaults[action];
+        next = { ...withoutBindings(state.bindings, defaults[action], action), [action]: defaults[action] };
+        layoutKeys = withoutKeys(state.layoutKeys, defaults[action]);
       } else {
         next = defaults;
       }
       saveBindings(next);
-      return { bindings: next };
+      saveLayoutKeys(layoutKeys);
+      return { bindings: next, layoutKeys };
     }),
   actionFor: (event) => {
     const binding = bindingFromEvent(event);
     if (!binding) return null;
     const { bindings } = get();
     return (Object.keys(bindings) as HotkeyAction[]).find((action) => bindings[action].includes(binding)) ?? null;
+  },
+  layoutFor: (event) => {
+    const binding = bindingFromEvent(event);
+    if (!binding) return null;
+    const { layoutKeys } = get();
+    return Object.keys(layoutKeys).find((layout) => layoutKeys[layout].includes(binding)) ?? null;
   },
 }));
 

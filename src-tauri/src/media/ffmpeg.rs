@@ -1346,6 +1346,28 @@ pub fn prefetch(path: &Path, time_us: u64, limit: DecodeLimit) -> bool {
     true
 }
 
+/// A small JPEG of the picture near `time_us`, `height` pixels tall: the keyframe at or
+/// before it, so it costs one short process and no decoding up to the moment (UI-1, clip
+/// thumbnails). Its own process, never one of the preview's decoders.
+pub fn thumbnail_jpeg(path: &Path, time_us: u64, height: u32) -> Result<Vec<u8>, String> {
+    let (mut cmd, mut log) = command(ffmpeg_path()?)?;
+    cmd.args(["-noaccurate_seek", "-ss"])
+        .arg(format!("{:.3}", time_us as f64 / 1e6))
+        .arg("-i")
+        .arg(file_arg(path))
+        .args(["-map", "0:v:0", "-frames:v", "1", "-an", "-vf"])
+        .arg(format!("scale=-2:{}", height.clamp(16, 360) & !1))
+        .args(["-q:v", "6", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
+        .stdout(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg did not start: {e}"))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(failure("No thumbnail", &mut log));
+    }
+    Ok(output.stdout)
+}
+
 /// Decodes the frame shown at `time_us` (relative to the start of the file) as BGRA.
 pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
     decode_bgra_limited(path, time_us, DecodeLimit::NONE)

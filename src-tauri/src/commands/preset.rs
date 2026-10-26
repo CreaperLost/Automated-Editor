@@ -12,9 +12,11 @@ use serde_json::{Map, Value};
 #[serde(rename_all = "camelCase")]
 pub struct PresetsView {
     pub presets: Vec<PresetView>,
-    /// The open project's preset and its shorts' preset, if a project is open.
+    /// The open project's preset and the presets its new shorts and clips start from, if a
+    /// project is open.
     pub project_preset: Option<String>,
     pub shorts_preset: Option<String>,
+    pub clips_preset: Option<String>,
     /// What the open project changed from its preset, by part, as a merge patch (what is always
     /// the project's own left out).
     pub changes: Map<String, Value>,
@@ -29,30 +31,33 @@ pub fn presets_impl(
     state: &AppState,
     project_handle: Option<String>,
 ) -> Result<PresetsView, String> {
-    let (project_preset, shorts_preset, changes, changed, inherited) = match project_handle {
-        Some(handle) => {
-            let opened = state.opened_project.lock();
-            let reader = opened.as_ref().ok_or("No opened project")?;
-            require_handle(reader, &handle)?;
-            let document = reader.document();
-            let mut changes = preset::changes(document);
-            preset::strip_own(&mut changes);
-            (
-                Some(preset::of(document).name),
-                Some(preset::store::resolve(&document.shorts_preset).name),
-                changes,
-                preset::changed_count(document),
-                preset::of(document).inherited(),
-            )
-        }
-        None => (None, None, Map::new(), 0, Map::new()),
-    };
+    let (project_preset, shorts_preset, clips_preset, changes, changed, inherited) =
+        match project_handle {
+            Some(handle) => {
+                let opened = state.opened_project.lock();
+                let reader = opened.as_ref().ok_or("No opened project")?;
+                require_handle(reader, &handle)?;
+                let document = reader.document();
+                let mut changes = preset::changes(document);
+                preset::strip_own(&mut changes);
+                (
+                    Some(preset::of(document).name),
+                    Some(preset::store::resolve(&document.shorts_preset).name),
+                    Some(preset::store::resolve(&document.clips_preset).name),
+                    changes,
+                    preset::changed_count(document),
+                    preset::of(document).inherited(),
+                )
+            }
+            None => (None, None, None, Map::new(), 0, Map::new()),
+        };
     // Made before a preset of the user's own is saved, so "Open the presets folder" has one.
     let _ = std::fs::create_dir_all(store::dir());
     Ok(PresetsView {
         presets: store::list().iter().map(preset::view).collect(),
         project_preset,
         shorts_preset,
+        clips_preset,
         changes,
         changed,
         inherited,
@@ -86,22 +91,41 @@ fn commit(
     Ok(project)
 }
 
-/// The project follows preset `name` (or its shorts do, with `shorts`), one undo step: what it
-/// changed stays changed. Following another preset also dresses it in that preset's style when
-/// it still wears its old preset's.
+/// What a preset is picked for: the video itself, or the new shorts or clips made from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PresetTarget {
+    #[default]
+    Video,
+    /// New shorts made from a take.
+    Shorts,
+    /// New clips cut from the video.
+    Clips,
+}
+
+/// The project follows preset `name` (or its new shorts or clips start from it), one undo
+/// step: what it changed stays changed. Following another preset also dresses it in that
+/// preset's style when it still wears its old preset's.
 pub fn project_preset_set_impl(
     state: &AppState,
     project_handle: String,
     expected_revision: u64,
     name: String,
-    shorts: bool,
+    target: PresetTarget,
 ) -> Result<OpenedProject, String> {
     let preset = store::load(&name)?;
     commit(state, &project_handle, expected_revision, |document| {
-        if shorts {
-            let mut next = document.clone();
-            next.shorts_preset = preset.name.clone();
-            return Ok(next);
+        match target {
+            PresetTarget::Video => {}
+            PresetTarget::Shorts | PresetTarget::Clips => {
+                let mut next = document.clone();
+                if target == PresetTarget::Shorts {
+                    next.shorts_preset = preset.name.clone();
+                } else {
+                    next.clips_preset = preset.name.clone();
+                }
+                return Ok(next);
+            }
         }
         let old = preset::of(document);
         let mut next = preset::switch(document, &preset.name)?;
@@ -369,7 +393,7 @@ pub fn preset_patch_impl(
             })
         };
         if let Some((handle, revision, true)) = open {
-            project_preset_set_impl(state, handle, revision, target.clone(), false)?;
+            project_preset_set_impl(state, handle, revision, target.clone(), PresetTarget::Video)?;
         }
     }
     Ok((preset::view(&saved), copy))

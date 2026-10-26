@@ -122,11 +122,38 @@ fn compose(name: &str, auto: bool, export: bool) -> Result<String, String> {
     // A checkout with CRLF line ends embeds them.
     let whole = format!(
         "{}\n\n---\n\n{own_rules}{}\n\n---\n\n{export}{chosen}",
-        RULES.trim(),
+        RULES.trim().replace(ONLINE_MARK, &online_rule()),
         preset.method.trim(),
     )
     .replace("\r\n", "\n");
     Ok(for_mode(&whole, auto, thorough, !choices.is_empty()))
+}
+
+/// Where the rules say whether agents may transcribe online.
+const ONLINE_MARK: &str = "<!-- online -->";
+
+/// Whether the user let agents send the speech online, as the app recorded it (only the
+/// user's Settings set it, with the date), so the agent and its client's reviewer read the
+/// user's own choice, never one the agent claims for them.
+fn online_rule() -> String {
+    let settings =
+        crate::transcript::settings::load_settings(&crate::transcript::settings::config_dir());
+    match settings.agents_online.as_deref() {
+        Some(since) => format!(
+            "Transcribing online is the user's own choice, recorded by the app: on {} they \
+             turned on \"AI agents may transcribe online\" in AeroEdits' Transcription settings. \
+             So `transcribe` (`provider: auto`) sends the speech to ElevenLabs, or OpenRouter \
+             when ElevenLabs has no key, without asking again.",
+            since.get(..10).unwrap_or(since)
+        ),
+        None => "Transcribing online: the user has not turned on \"AI agents may transcribe \
+             online\" in AeroEdits' Transcription settings. Before the first `transcribe` that \
+             sends the speech online (`provider: auto`, `elevenlabs` or `openrouter`), ask them \
+             once whether it may go to ElevenLabs (or OpenRouter), even in an automatic run; \
+             with a no, `provider: parakeet` transcribes English on this computer. Allowing it \
+             in those settings saves the question next time."
+            .to_string(),
+    }
 }
 
 /// `text` without the blocks this run doesn't need: `<!-- steps -->` (a run step by step only),
@@ -508,7 +535,7 @@ mod tests {
         let call = |name: &str, args: Value| {
             (crate::mcp::tools::find(name).unwrap().run)(&ctx, args).map(|out| match &out[0] {
                 Output::Text(text) => text.clone(),
-                Output::Png(_) => String::new(),
+                Output::Png(_) | Output::Jpeg(_) => String::new(),
             })
         };
         let list = call("preset", serde_json::json!({})).unwrap();

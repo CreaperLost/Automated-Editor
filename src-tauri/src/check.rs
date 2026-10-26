@@ -60,6 +60,9 @@ pub enum Kind {
     TooFewChapters,
     Loudness,
     ProposalsPending,
+    MusicLicence,
+    OutOfSync,
+    PastMediaEnd,
 }
 
 impl Kind {
@@ -193,6 +196,9 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
         loudness(&mut out, document);
     }
     proposals(&mut out, root);
+    music_licences(&mut out, document);
+    linked_sync(&mut out, document);
+    past_media_end(&mut out, document);
 
     let mut findings = cap(out.findings);
     findings.sort_by(|a, b| {
@@ -373,17 +379,17 @@ fn sound(out: &mut Builder, document: &EditDocument) -> bool {
 /// A stretch of the edit that plays its sound's moments back to back, with whether a cut
 /// (a jump in the recording, or a gap) comes right before and after it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Piece {
-    edited_start: u64,
-    edited_end: u64,
-    source_start: u64,
-    source_end: u64,
-    cut_before: bool,
-    cut_after: bool,
+pub(crate) struct Piece {
+    pub edited_start: u64,
+    pub edited_end: u64,
+    pub source_start: u64,
+    pub source_end: u64,
+    pub cut_before: bool,
+    pub cut_after: bool,
 }
 
 /// The pieces of `clock`, in timeline order.
-fn pieces(clock: &TimelineMapper) -> Vec<Piece> {
+pub(crate) fn pieces(clock: &TimelineMapper) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let mut edited = 0u64;
     let mut broke = false;
@@ -422,7 +428,7 @@ fn pieces(clock: &TimelineMapper) -> Vec<Piece> {
 
 /// The clock the cuts are counted on, with its sound's key: the first speech on the timeline,
 /// else the first recording's picture.
-fn edit_clock(document: &EditDocument) -> Option<(Option<String>, TimelineMapper)> {
+pub(crate) fn edit_clock(document: &EditDocument) -> Option<(Option<String>, TimelineMapper)> {
     let mic = document.sequence.audio_tracks().find_map(|track| {
         track.clips.iter().find(|clip| {
             crate::sequence::clip_role(&document.assets, track, clip) == Some(Role::Mic)
@@ -788,6 +794,132 @@ fn proposals(out: &mut Builder, root: &Path) {
     }
 }
 
+/// Music playing in the edit must need no credit (George, 21 Oct): music whose licence asks
+/// for credit, or isn't known, is flagged; so are sound effects whose licence asks for credit
+/// (an effect with none set is usually the user's own).
+fn music_licences(out: &mut Builder, document: &EditDocument) {
+    let mut seen = Vec::new();
+    for track in document.sequence.audio_tracks().filter(|t| !t.muted) {
+        for clip in &track.clips {
+            let role = crate::sequence::clip_role(&document.assets, track, clip);
+            if !matches!(role, Some(Role::Music | Role::Effects)) || seen.contains(&clip.asset) {
+                continue;
+            }
+            seen.push(clip.asset.clone());
+            let Some(asset) = document.asset(&clip.asset) else {
+                continue;
+            };
+            let music = role == Some(Role::Music);
+            let why = match &asset.licence {
+                Some(l) if l.kind.needs_no_credit() => continue,
+                None if !music => continue,
+                Some(l) => match crate::music_library::refused(l) {
+                    Some(why) => why,
+                    None => continue,
+                },
+                None => "its licence isn't known",
+            };
+            out.push(
+                Kind::MusicLicence,
+                Severity::Warning,
+                format!("\"{}\" may need credit", asset.name),
+                format!(
+                    "It plays as {}, but {why}. Use one free for monetised videos with no \
+                     credit (CC0, public domain), or set its licence if you know it.",
+                    if music { "music" } else { "a sound effect" }
+                ),
+            )
+            .at(clip.start_us, clip.end_us());
+        }
+    }
+}
+
+/// More than this between linked sound and picture of one media is heard as lip-sync drift.
+const SYNC_SLACK_US: u64 = 20_000;
+
+/// Where a clip's media would start on the timeline, were it played from its beginning.
+fn media_origin(clip: &crate::sequence::Clip) -> i128 {
+    clip.start_us as i128 - crate::sequence::timeline_len(clip.in_us, clip.speed) as i128
+}
+
+/// Linked clips of one media (a recording's screen and microphone, a video and its sound)
+/// that no longer line up: something moved one without the other.
+fn linked_sync(out: &mut Builder, document: &EditDocument) {
+    let mut groups: std::collections::BTreeMap<(&str, &str), Vec<&crate::sequence::Clip>> =
+        Default::default();
+    for (_, clip) in document.sequence.clips() {
+        if let Some(link) = clip.link.as_deref() {
+            groups
+                .entry((link, clip.asset.as_str()))
+                .or_default()
+                .push(clip);
+        }
+    }
+    for clips in groups.values().filter(|c| c.len() > 1) {
+        let first = clips[0];
+        let Some(worst) = clips[1..]
+            .iter()
+            .filter(|c| c.speed == first.speed)
+            .max_by_key(|c| (media_origin(c) - media_origin(first)).unsigned_abs())
+        else {
+            continue;
+        };
+        let off = (media_origin(worst) - media_origin(first)).unsigned_abs() as u64;
+        if off <= SYNC_SLACK_US {
+            continue;
+        }
+        let name = document
+            .asset(&first.asset)
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        out.push(
+            Kind::OutOfSync,
+            Severity::Warning,
+            "Sound and picture out of sync".into(),
+            format!(
+                "Linked clips of \"{name}\" are {} ms apart at {}: one moved without the other. \
+                 Move it back, or undo the edit that moved it.",
+                off / 1000,
+                clock(first.start_us.min(worst.start_us))
+            ),
+        )
+        .at(
+            first.start_us.min(worst.start_us),
+            first.end_us().max(worst.end_us()),
+        );
+    }
+}
+
+/// Clips that play past the end of their media: a frozen frame or silence.
+fn past_media_end(out: &mut Builder, document: &EditDocument) {
+    for (_, clip) in document.sequence.clips() {
+        let Some(asset) = document.asset(&clip.asset) else {
+            continue;
+        };
+        if asset.is_still() || asset.duration_us == 0 {
+            continue;
+        }
+        let over = clip.out_us().saturating_sub(asset.duration_us);
+        if over < BLACK_MIN_US {
+            continue;
+        }
+        let over_edited = crate::sequence::timeline_len(over, clip.speed);
+        out.push(
+            Kind::PastMediaEnd,
+            Severity::Warning,
+            "A clip runs past its media".into(),
+            format!(
+                "\"{}\" ends {} before this clip does, at {}: the rest is a frozen frame or \
+                 silence. Trim the clip.",
+                asset.name,
+                seconds(over),
+                clock(clip.end_us().saturating_sub(over_edited))
+            ),
+        )
+        .at(clip.end_us().saturating_sub(over_edited), clip.end_us());
+    }
+}
+
 /// The report as text, for agents and the CLI: one line per finding with its id.
 pub fn report_text(report: &CheckReport) -> String {
     if report.findings.is_empty() {
@@ -911,6 +1043,30 @@ mod tests {
         let fix = report.findings[0].fix.clone();
         assert_eq!(fix, Some(Fix::Normalize { target_lufs: -14.0 }));
         assert_eq!(report.findings[0].id, "loudness-all");
+    }
+
+    #[test]
+    fn linked_clips_moved_apart_and_clips_past_their_media_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = document(60);
+        let audio = doc
+            .sequence
+            .tracks
+            .iter()
+            .position(|t| t.kind == crate::sequence::TrackKind::Audio)
+            .unwrap();
+        assert!(doc.sequence.tracks[audio].clips[0].link.is_some());
+        doc.sequence.tracks[audio].clips[0].start_us += 500 * MS;
+        let report = run(dir.path(), &doc, &[]);
+        assert!(
+            kinds(&report).contains(&Kind::OutOfSync),
+            "{:?}",
+            kinds(&report)
+        );
+        assert!(!kinds(&report).contains(&Kind::PastMediaEnd));
+        // Made a second longer than the recording has.
+        doc.sequence.tracks[audio].clips[0].duration_us += S;
+        assert!(kinds(&run(dir.path(), &doc, &[])).contains(&Kind::PastMediaEnd));
     }
 
     #[test]

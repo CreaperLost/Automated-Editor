@@ -329,6 +329,104 @@ fn perf_preview() {
     }
 }
 
+/// `document` with `count` layout sections spread over it, alternating side by side and the
+/// bubble (`flip` starts with the other one): what a picked tutorial has.
+fn with_sections(
+    document: &crate::project::revision::EditDocument,
+    count: u64,
+    flip: bool,
+) -> crate::project::revision::EditDocument {
+    use crate::layouts::{Bubble, Layout, LayoutSection, SideBySide};
+    let mut out = document.clone();
+    let span = document.duration_us() / count;
+    out.layouts.sections = (0..count)
+        .map(|i| {
+            let side = (i % 2 == 0) != flip;
+            let layout = if side {
+                Layout::SideBySide(SideBySide::default())
+            } else {
+                Layout::Bubble(Bubble::default())
+            };
+            LayoutSection::new(
+                format!("perf-{i}"),
+                None,
+                i * span,
+                i * span + span * 3 / 5,
+                Some(layout),
+            )
+        })
+        .collect();
+    out
+}
+
+/// LAY-1: a layout-only change, rebuilt as before against swapped into the running scene,
+/// each with the frame drawn after it; then playing with a layout change every second.
+#[test]
+#[ignore]
+fn perf_look_swap() {
+    let Some(dir) = probe_dir() else { return };
+    let work = tempfile::tempdir().unwrap();
+    let (state, _, root) = opened(work.path(), &dir);
+    if let Some(settle) = std::env::var_os("AERO_PERF_SETTLE") {
+        let seconds: u64 = settle.to_string_lossy().parse().unwrap_or(15);
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+    }
+    let base = document(&state);
+    let looks = [
+        with_sections(&base, 30, false),
+        with_sections(&base, 30, true),
+    ];
+    let at = base.duration_us() / 3;
+    let (mut evaluator, _) = rebuild(&root, &looks[0], None);
+    evaluator.preview_at(at).unwrap();
+
+    let mut rebuilt = Vec::new();
+    let mut reuse = evaluator.into_reuse();
+    for i in 0..10 {
+        let started = Instant::now();
+        let (mut evaluator, _) = rebuild(&root, &looks[(i + 1) % 2], reuse.take());
+        evaluator.preview_at(at).unwrap();
+        rebuilt.push(started.elapsed().as_secs_f64() * 1000.0);
+        reuse = evaluator.into_reuse();
+    }
+    println!("PERF {}", Stats(rebuilt).line("layout change, rebuilt"));
+
+    let (mut evaluator, _) = rebuild(&root, &looks[0], reuse);
+    evaluator.preview_at(at).unwrap();
+    let mut swapped = Vec::new();
+    for i in 0..10 {
+        let started = Instant::now();
+        evaluator.swap_layouts(&looks[(i + 1) % 2]);
+        evaluator.preview_at(at).unwrap();
+        swapped.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("PERF {}", Stats(swapped).line("layout change, swapped"));
+
+    // Ten seconds played in real time, the layouts changing every second.
+    let quality = PreviewQuality::default_for(true);
+    let mut times = Vec::new();
+    let started = Instant::now();
+    let mut t = 0;
+    while t < 10_000_000 {
+        if let Some(wait) = std::time::Duration::from_micros(t).checked_sub(started.elapsed()) {
+            std::thread::sleep(wait);
+        }
+        if t % 1_000_000 < 1_000_000 / 30 {
+            evaluator.swap_layouts(&looks[(t / 1_000_000) as usize % 2]);
+        }
+        let frame = Instant::now();
+        let shown = quality.frame_time(at + t);
+        evaluator.preview_at(shown).unwrap();
+        times.push(frame.elapsed().as_secs_f64() * 1000.0);
+        evaluator.prefetch(shown, 1_200_000);
+        t += 1_000_000 / 30;
+    }
+    println!(
+        "PERF {}",
+        Stats(times).line("play with a layout change every second")
+    );
+}
+
 /// Only the steps back of [`perf_preview`], straight and with jump cuts: quick to repeat.
 #[test]
 #[ignore]

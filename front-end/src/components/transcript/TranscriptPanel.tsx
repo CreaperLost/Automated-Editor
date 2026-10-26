@@ -14,6 +14,7 @@ import { soundSources } from "../../lib/sequence";
 import { buildTimeIndex, findAt } from "../../lib/transcriptIndex";
 import { Badge, Button, IconButton, Notice, cn } from "../ui";
 import { useLineWindow } from "./useLineWindow";
+import { TakeCleanBar } from "../shorts/TakeCleanBar";
 
 // Loaded when first opened.
 const TranscriptSettingsModal = React.lazy(() =>
@@ -297,7 +298,8 @@ export const TranscriptPanel: React.FC = () => {
     if (!handle || !trackId) return;
     setError(null);
     try {
-      await api.transcriptCaptionEdit(handle, trackId, change);
+      const next = await api.transcriptCaptionEdit(handle, trackId, change);
+      if (next.project) useProjectStore.getState().applyOpenedProject(next.project);
       bumpCaptions();
       setNotice(label);
     } catch (err) {
@@ -478,6 +480,9 @@ export const TranscriptPanel: React.FC = () => {
 
   const runAiReview = async () => {
     if (!handle || !trackId) return;
+    // The online review's fillers are cut at once (George, 26 Oct: its filler cuts were clean
+    // on every labelled recording); retakes, and the local model's finds, wait in the list.
+    let online = false;
     // Without the local model or a key the review cannot start: say so and open the settings.
     try {
       const ai = await api.aiSettingsGet();
@@ -494,6 +499,7 @@ export const TranscriptPanel: React.FC = () => {
         }
       } else {
         const source = ai.settings.provider === "openAi" ? ai.openaiKeySource : ai.openrouterKeySource;
+        online = !!source;
         // Without a key the app runs the local model instead, when it is downloaded.
         if (!source && !(ai.localAvailable && ai.localPresent)) {
           setError(null);
@@ -525,6 +531,18 @@ export const TranscriptPanel: React.FC = () => {
       setSuggestions(next);
       const added = next.filter((s) => s.source === "ai" && !before.has(s.id)).length;
       setReviewOpen(true);
+      const fillers = online
+        ? next.filter((s) => s.kind === "filler" && !s.dismissed && s.source !== "agent")
+        : [];
+      if (fillers.length > 0) {
+        const retakes = next.filter((s) => s.kind === "retake" && !s.dismissed && s.source !== "agent").length;
+        await cutWords(
+          fillers.flatMap((s) => s.wordIds),
+          `Cut ${fillers.length} filler${fillers.length === 1 ? "" : "s"} the online review found` +
+            (retakes > 0 ? `; ${retakes} retake${retakes === 1 ? "" : "s"} left to check` : ""),
+        );
+        return;
+      }
       setNotice(
         added > 0
           ? `AI review found ${added} more suggestion${added === 1 ? "" : "s"}.`
@@ -712,6 +730,7 @@ export const TranscriptPanel: React.FC = () => {
           <IconButton size="sm" icon={Settings2} label="Transcription settings" onClick={() => setSettingsOpen(true)} />
         </div>
       </div>
+      <TakeCleanBar />
 
       {selectedIds.length > 0 && (
         <div className="shrink-0 flex items-center gap-1.5 h-10 px-3 border-b border-studio-800 bg-accent/5" role="toolbar" aria-label="Selected words">

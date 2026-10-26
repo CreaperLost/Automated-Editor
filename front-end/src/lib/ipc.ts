@@ -6,6 +6,10 @@ import {
   WaveformOverview,
   FaceTrackStatus,
   PlaybackStatus,
+  JoinMark,
+  JoinsView,
+  Licence,
+  SearchResults,
   EditCut,
   PreviewQuality,
   PreviewStatus,
@@ -85,6 +89,14 @@ import {
   TakeShortMade,
   FootageChange,
   ShortGraphicFrom,
+  LibrarySound,
+  SoundPlaced,
+  LibraryTrack,
+  MusicPlaced,
+  EffectArea,
+  EffectAt,
+  EffectKind,
+  ScreenEffect,
 } from "./types";
 
 declare global {
@@ -190,12 +202,15 @@ export const api = {
     expectedRevision: number,
     shortId: string | null,
     change: LayoutChange,
+    /** Changes of one group in a row are one undo step (layout keys while playing). */
+    group: string | null = null,
   ) =>
     invokeTauri<OpenedProject>("project_layouts_change", {
       projectHandle,
       expectedRevision,
       shortId,
       change,
+      group,
     }),
   /** Picks layout sections from the recording (no AI); sections made by hand stay. */
   projectLayoutsPick: (
@@ -329,6 +344,15 @@ export const api = {
     invokeTauri<OpenedProject>("project_noise_mutes", { projectHandle, expectedRevision, key, ranges, unmute, shortId }),
   applyJumpCuts: (projectHandle: string, expectedRevision: number, ranges: {startUs: number; endUs: number}[], transcriptDependencies: TranscriptDependency[], shortId: string | null = editTarget) =>
     invokeTauri<OpenedProject>("apply_jump_cuts", { projectHandle, expectedRevision, ranges, transcriptDependencies, shortId }),
+  /** A word or phrase in every transcript, cut or not (Search panel). */
+  sourceSearch: (projectHandle: string, query: string) =>
+    invokeTauri<SearchResults>("source_search", { projectHandle, query }),
+  /** The joins to listen to (Joins panel); none of these change the edit. */
+  joinsList: (projectHandle: string) => invokeTauri<JoinsView>("joins_list", { projectHandle }),
+  joinsMark: (projectHandle: string, id: string, mark: JoinMark | null, note?: string) =>
+    invokeTauri<JoinsView>("joins_mark", { projectHandle, id, mark, note }),
+  joinsFind: (projectHandle: string) => invokeTauri<JoinsView>("joins_find", { projectHandle }),
+  joinsClear: (projectHandle: string) => invokeTauri<JoinsView>("joins_clear", { projectHandle }),
   transcriptSettingsGet: () => invokeTauri<TranscriptSettingsView>("transcript_settings_get"),
   transcriptSettingsSet: (settings: TranscriptSettings) =>
     invokeTauri<TranscriptSettingsView>("transcript_settings_set", { settings }),
@@ -453,6 +477,9 @@ export const api = {
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
   pickMediaFiles: () => invokeTauri<string[]>("pick_media_files"),
   pickMediaFolder: () => invokeTauri<string | null>("pick_media_folder"),
+  /** Sets (or with null clears) an imported file's licence. */
+  projectMediaLicence: (projectHandle: string, expectedRevision: number, assetId: string, licence: Licence | null) =>
+    invokeTauri<OpenedProject>("project_media_licence", { projectHandle, expectedRevision, assetId, licence }),
   /** Sets what an asset's streams stand for. */
   projectMediaRoles: (
     projectHandle: string,
@@ -498,6 +525,9 @@ export const api = {
   /** The timeline at `atUs` as it plays, as a small PNG data URL (a graphic's thumbnail). */
   projectFrameThumbnail: (projectHandle: string, atUs: number, width: number) =>
     invokeTauri<string>("project_frame_thumbnail", { projectHandle, atUs, width }),
+  /** Small JPEG data URLs of a clip's source at `timesUs` (its own clock); null where it has no picture. */
+  projectClipThumbnails: (projectHandle: string, assetId: string, stream: string, timesUs: number[], height: number) =>
+    invokeTauri<(string | null)[]>("project_clip_thumbnails", { projectHandle, assetId, stream, timesUs, height }),
   /**
    * Sets variables (`null` puts one back to its default) and, optionally, the name and the
    * style ("project" follows the project's).
@@ -520,9 +550,9 @@ export const api = {
     }),
   /** Every preset and, with a project, its preset and what it changed from it. */
   presets: (projectHandle?: string) => invokeTauri<PresetsView>("presets", { projectHandle: projectHandle ?? null }),
-  /** The project (or its new shorts, with `shorts`) follows preset `name`; one undo step. */
-  projectPresetSet: (projectHandle: string, expectedRevision: number, name: string, shorts = false) =>
-    invokeTauri<OpenedProject>("project_preset_set", { projectHandle, expectedRevision, name, shorts }),
+  /** The project follows preset `name`, or its new shorts or clips start from it (`target`); one undo step. */
+  projectPresetSet: (projectHandle: string, expectedRevision: number, name: string, target: "video" | "shorts" | "clips" = "video") =>
+    invokeTauri<OpenedProject>("project_preset_set", { projectHandle, expectedRevision, name, target }),
   /** Takes the project's changes back to its preset's values: all, a part's, or one field; one undo step. */
   projectPresetReset: (projectHandle: string, expectedRevision: number, part?: PresetPart, field?: string) =>
     invokeTauri<OpenedProject>("project_preset_reset", {
@@ -626,6 +656,73 @@ export const api = {
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
     invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
+  /** The sound effects library, or the sounds matching `query`. */
+  soundLibraryList: (query?: string) => invokeTauri<LibrarySound[]>("sound_library_list", { query: query || null }),
+  /** A library sound as a data URL to play. */
+  soundLibraryPreview: (id: string) => invokeTauri<string>("sound_library_preview", { id }),
+  soundLibraryAdd: (path: string, name: string | null, tags: string[], licence: Licence) =>
+    invokeTauri<LibrarySound>("sound_library_add", { path, name, tags, licence }),
+  soundLibraryUpdate: (id: string, change: { name?: string; tags?: string[]; licence?: Licence }) =>
+    invokeTauri<LibrarySound>("sound_library_update", {
+      id,
+      name: change.name ?? null,
+      tags: change.tags ?? null,
+      licence: change.licence ?? null,
+    }),
+  soundLibraryRemove: (id: string) => invokeTauri<void>("sound_library_remove", { id }),
+  /** Places a library sound at `atUs` on an effects track of the timeline shown (a short's own when one is): one undo step. */
+  projectSoundPlace: (projectHandle: string, expectedRevision: number, soundId: string, atUs: number) =>
+    invokeTauri<SoundPlaced>("project_sound_place", { projectHandle, expectedRevision, soundId, atUs, shortId: editTarget }),
+  /** The screen effects showing at `editedUs`, with where each is on the canvas. */
+  projectEffectsAt: (projectHandle: string, editedUs: number) =>
+    invokeTauri<EffectAt[]>("project_effects_at", { projectHandle, editedUs }),
+  /** Adds an effect over `canvas` (0 to 1 of the canvas) for `durationUs` from `atUs`: one undo step. */
+  projectEffectAdd: (
+    projectHandle: string,
+    expectedRevision: number,
+    kind: EffectKind,
+    atUs: number,
+    durationUs: number,
+    canvas: EffectArea,
+  ) =>
+    invokeTauri<{ project: OpenedProject; effect: ScreenEffect }>("project_effect_add", {
+      projectHandle,
+      expectedRevision,
+      kind,
+      atUs,
+      durationUs,
+      canvas,
+      amount: null,
+    }),
+  /** Ends effect `effectId` at edited time `atUs`: one undo step. */
+  projectEffectEnd: (projectHandle: string, expectedRevision: number, effectId: string, atUs: number) =>
+    invokeTauri<OpenedProject>("project_effect_end", { projectHandle, expectedRevision, effectId, atUs }),
+  /** Moves or resizes effect `effectId` to `canvas` (0 to 1 of the canvas, as drawn at `atUs`): one undo step. */
+  projectEffectMove: (projectHandle: string, expectedRevision: number, effectId: string, atUs: number, canvas: EffectArea) =>
+    invokeTauri<OpenedProject>("project_effect_move", { projectHandle, expectedRevision, effectId, atUs, canvas }),
+  /** Replaces the video's effects: one undo step. */
+  projectEffectsSet: (projectHandle: string, expectedRevision: number, effects: ScreenEffect[]) =>
+    invokeTauri<OpenedProject>("project_effects_set", { projectHandle, expectedRevision, effects }),
+  /** The music library, or the tracks matching `query`. */
+  musicLibraryList: (query?: string) => invokeTauri<LibraryTrack[]>("music_library_list", { query: query || null }),
+  /** A library track's file on disk, downloading a built-in one the first time. */
+  musicLibraryFetch: (id: string) => invokeTauri<LibraryTrack>("music_library_fetch", { id }),
+  /** A library track as a data URL to play (downloading a built-in one the first time). */
+  musicLibraryPreview: (id: string) => invokeTauri<string>("music_library_preview", { id }),
+  /** Refused unless the licence needs no credit and allows monetised use. */
+  musicLibraryAdd: (path: string, name: string | null, tags: string[], licence: Licence) =>
+    invokeTauri<LibraryTrack>("music_library_add", { path, name, tags, licence }),
+  musicLibraryRemove: (id: string) => invokeTauri<void>("music_library_remove", { id }),
+  /** Fills `[atUs, untilUs)` (to the end when not given) of the timeline shown with a library track on a music track: one undo step. */
+  projectMusicPlace: (projectHandle: string, expectedRevision: number, trackId: string, atUs: number, untilUs?: number) =>
+    invokeTauri<MusicPlaced>("project_music_place", {
+      projectHandle,
+      expectedRevision,
+      trackId,
+      atUs,
+      untilUs: untilUs ?? null,
+      shortId: editTarget,
+    }),
   projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
     invokeTauri<OpenedProject>("project_chapters_set", {
       projectHandle,

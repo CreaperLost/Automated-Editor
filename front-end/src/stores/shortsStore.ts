@@ -167,6 +167,9 @@ function patchShort(id: string, patch: Partial<Short>) {
   void saveShorts((list) => (list.some((s) => s.id === id) ? list.map((s) => (s.id === id ? { ...s, ...patch } : s)) : null));
 }
 
+/** Drops a short's own caption breaks, hidden words and emphasis: it shows the video's again. */
+export const dropShortCaptionMarks = (id: string) => patchShort(id, { captionMarks: {} });
+
 function selected(): Short | undefined {
   const { selectedId, kind } = useShortsStore.getState();
   return pickShort(useProjectStore.getState().openedProject?.shorts, selectedId, kind);
@@ -268,13 +271,13 @@ export function newShort() {
   ]);
 }
 
-/** Asks the AI provider for moments that work on their own; replaces the list. */
+/** Asks the AI provider for moments that work on their own and adds them as clips (shorts from a take and the clips made stay). */
 export function findShorts() {
   const project = useProjectStore.getState().openedProject;
   // Speech on the timeline first, the recording's or an imported file's.
   const speech = soundSources(project).find((sound) => sound.placed) ?? soundSources(project)[0];
   if (!speech) return;
-  void runShorts("Finding shorts", (p) => api.projectShortsGenerate(p.projectHandle, speech.key));
+  void runShorts("Finding clips", (p) => api.projectShortsGenerate(p.projectHandle, speech.key));
 }
 
 /**

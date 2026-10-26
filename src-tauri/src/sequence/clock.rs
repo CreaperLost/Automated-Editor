@@ -162,6 +162,7 @@ mod tests {
 
     fn clip(id: &str, stream: &str, start: u64, in_us: u64, len: u64) -> Clip {
         Clip {
+            mix: Default::default(),
             id: id.into(),
             asset: "rec".into(),
             stream: stream.into(),

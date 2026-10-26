@@ -4,6 +4,7 @@ use super::actions::{applied, opened};
 use super::library::{LibraryArgs, Op};
 use super::tools::{pretty, text, with_reader, Ctx, Output};
 use crate::commands;
+use crate::commands::preset::PresetTarget;
 use serde_json::json;
 
 pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
@@ -28,6 +29,7 @@ pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                     "description": p.preset.description,
                     "thisProject": view.project_preset.as_deref() == Some(p.name.as_str()),
                     "thisProjectsShorts": view.shorts_preset.as_deref() == Some(p.name.as_str()),
+                    "thisProjectsClips": view.clips_preset.as_deref() == Some(p.name.as_str()),
                 })).collect::<Vec<_>>(),
                 "changedHere": view.changes,
                 "folder": view.folder,
@@ -56,18 +58,24 @@ pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 before.handle.clone(),
                 before.revision,
                 name.clone(),
-                args.shorts,
+                args.target,
             )?;
             text(applied(
                 ctx,
                 "library",
                 &before,
-                vec![if args.shorts {
-                    format!("New shorts of this project start from preset {name}.")
-                } else {
-                    format!(
+                vec![match args.target {
+                    PresetTarget::Shorts => {
+                        format!(
+                            "New shorts (from a take) of this project start from preset {name}."
+                        )
+                    }
+                    PresetTarget::Clips => {
+                        format!("New clips of this project start from preset {name}.")
+                    }
+                    PresetTarget::Video => format!(
                         "The project follows preset {name}; what it changed here stays changed."
-                    )
+                    ),
                 }],
             )?)
         }
@@ -136,6 +144,35 @@ pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 "Removed preset {name}. Projects that followed it follow Tutorial."
             ))
         }
-        _ => Err("Presets take list, show, use, set, save, reset or remove".into()),
+        Op::ProposeRule => {
+            let rule = args.rule.clone().unwrap_or_default();
+            let example = args.example.clone().unwrap_or_default();
+            let agent = ctx.agent.clone();
+            let ((id, preset), _) = crate::commands::proposals::with_proposals(
+                ctx.state,
+                ctx.project.as_deref(),
+                |reader, proposals| {
+                    let id = crate::proposals::propose_rule(
+                        reader,
+                        proposals,
+                        &agent,
+                        args.name.as_deref(),
+                        &rule,
+                        &example,
+                    )?;
+                    let preset = match &proposals.get(&id)?.change {
+                        crate::proposals::Change::Rule { preset, .. } => preset.clone(),
+                        _ => String::new(),
+                    };
+                    Ok((id, preset))
+                },
+            )?;
+            ctx.changed_proposals();
+            text(format!(
+                "Proposed rule {id} for {preset}. It waits for the user in the Agent panel (never \
+                 autopilot); once accepted it is in {preset}'s rules for every project."
+            ))
+        }
+        _ => Err("Presets take list, show, use, set, save, reset, remove or propose_rule".into()),
     }
 }

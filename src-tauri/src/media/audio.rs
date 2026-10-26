@@ -87,6 +87,11 @@ struct Span {
     segments: Arc<Vec<SegmentSummary>>,
     /// Moments of its sound that are muted, in the sound's own time.
     mutes: Mutes,
+    /// The clip's own gain and fades, over where the clip itself plays (not the crossfade
+    /// either side of it).
+    mix: crate::sequence::ClipMix,
+    clip_start: u64,
+    clip_len: u64,
     /// How fast it plays its sound; other than 1, stretched in time keeping its pitch.
     speed: f64,
     /// Clips that carry straight on from each other share the grains of one stretch (so a
@@ -137,6 +142,9 @@ impl Span {
             gain: 1.0,
             segments: self.segments.clone(),
             mutes: self.mutes.clone(),
+            mix: Default::default(),
+            clip_start: 0,
+            clip_len: SOURCE_END_US,
             speed: 1.0,
             stretch: 0,
             stretch_edited: 0,
@@ -176,6 +184,8 @@ pub struct Lane {
     pub id: String,
     /// Its clips are speech (they duck background lanes and get noise reduction by default).
     pub speech: bool,
+    /// Its clips are a music bed (kept at the project's level under speech, when set).
+    pub music: bool,
     pub gain: f64,
     pub clips: Vec<LaneClip>,
 }
@@ -194,6 +204,8 @@ pub struct LaneClip {
     pub segments: Arc<Vec<SegmentSummary>>,
     /// Moments of its sound that are muted, in the sound's own time (merged, in order).
     pub mutes: Arc<Vec<(u64, u64)>>,
+    /// Its own gain and fades.
+    pub mix: crate::sequence::ClipMix,
 }
 
 impl LaneClip {
@@ -219,12 +231,15 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
             continue;
         }
         let mut speech = false;
+        let mut music = false;
         let mut clips = Vec::new();
         for clip in &track.clips {
             let Some(asset) = document.asset(&clip.asset) else {
                 continue;
             };
-            speech |= crate::sequence::clip_role(&document.assets, track, clip) == Some(Role::Mic);
+            let role = crate::sequence::clip_role(&document.assets, track, clip);
+            speech |= role == Some(Role::Mic);
+            music |= role == Some(Role::Music);
             let segments = sounds
                 .entry((clip.asset.clone(), clip.stream.clone()))
                 .or_insert_with(|| {
@@ -254,11 +269,13 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
                 source_end: asset.duration_us,
                 segments,
                 mutes,
+                mix: clip.mix,
             });
         }
         out.push(Lane {
             id: track.id.clone(),
             speech,
+            music: music && !speech,
             gain,
             clips,
         });
@@ -288,6 +305,7 @@ impl AudioMixer {
             lanes.push(Lane {
                 id: LANE_ID.into(),
                 speech: false,
+                music: false,
                 gain: 1.0,
                 clips: Vec::new(),
             });
@@ -352,9 +370,12 @@ impl AudioMixer {
                     fade_in: edge(fade_in, cross_in),
                     fade_out: edge(fade_out, cross_out),
                     lane: lane.id.clone(),
-                    gain: lane.gain,
+                    gain: lane.gain * polish.as_ref().map_or(1.0, |p| p.lane_gain(&lane.id)),
                     segments: clip.segments.clone(),
                     mutes: clip.mutes.clone(),
+                    mix: clip.mix,
+                    clip_start: clip.edited_start,
+                    clip_len: clip.edited_len,
                     speed: clip.speed,
                     stretch,
                     stretch_edited,
@@ -448,10 +469,18 @@ impl AudioMixer {
         };
         let a = start.max(ceil_frame(span.edited_start));
         let b = end.min(ceil_frame(span.edited_end));
+        let own = !span.mix.is_default();
+        let clip_gain = span.mix.gain();
         for frame in a..b {
             let t = frame as f64 * 1e6 / SAMPLE_RATE as f64;
             let mut gain = edge_gain(span.fade_in, t - span.edited_start as f64)
                 .min(edge_gain(span.fade_out, span.edited_end as f64 - t));
+            if own {
+                gain *= clip_gain
+                    * span
+                        .mix
+                        .fade_gain(t - span.clip_start as f64, span.clip_len as f64);
+            }
             // A stretched span's mutes are in the sound it stretches (see `sound`).
             if span.speed == 1.0 && !span.mutes.is_empty() {
                 let source = span.source_start as f64 + (t - span.edited_start as f64);
@@ -540,21 +569,41 @@ impl AudioMixer {
                         .polish
                         .as_ref()
                         .and_then(|plan| plan.denoiser(&span.lane, &segment.relative_path));
+                    // A take matched to the others (AUTO-2) is filtered from a little earlier,
+                    // so its filter has settled by `read_start`.
+                    let take = self
+                        .polish
+                        .as_ref()
+                        .and_then(|plan| plan.take(&span.lane, &segment.relative_path));
+                    let first = take.map_or(read_start, |t| t.input_range(read_start, read_end).0);
                     let (samples, got) = match denoiser {
                         Some(denoiser) => {
-                            let (from, to) = denoiser.input_range(read_start, read_end);
+                            let (from, to) = denoiser.input_range(first, read_end);
                             let input =
                                 self.with_reader(&path, |reader| read_padded(reader, from, to))?;
-                            let samples = denoiser.process(&input, channels, read_start, read_end);
-                            (samples, (read_end - read_start) as usize)
+                            let samples = denoiser.process(&input, channels, first, read_end);
+                            (samples, (read_end - first) as usize)
                         }
                         None => self.with_reader(&path, |reader| {
-                            reader.seek_to_frame(read_start)?;
-                            let want = (read_end - read_start) as usize;
+                            reader.seek_to_frame(first)?;
+                            let want = (read_end - first) as usize;
                             let mut samples = vec![0f32; want * channels];
                             let got = reader.read_frames(&mut samples, want)?;
                             Ok((samples, got))
                         })?,
+                    };
+                    let (samples, got) = match take {
+                        Some(take) => {
+                            let got = got.min(samples.len() / channels.max(1));
+                            let out = take.process(
+                                &samples[..got * channels],
+                                channels,
+                                first,
+                                read_start,
+                            );
+                            (out, got.saturating_sub((read_start - first) as usize))
+                        }
+                        None => (samples, got),
                     };
                     if got == 0 {
                         continue;
@@ -949,6 +998,7 @@ mod tests {
             let duration =
                 (values.len() as u128 / channels as u128 * 1_000_000 / rate as u128) as u64;
             doc.assets.push(Asset {
+                licence: None,
                 id: id.into(),
                 name: format!("{id}.wav"),
                 kind: AssetKind::Audio,
@@ -1124,6 +1174,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, &(start_us, in_us, duration_us, speed))| Clip {
+                mix: Default::default(),
                 id: format!("c{}", i + 100),
                 asset: asset.clone(),
                 stream: "sound0".into(),
@@ -1261,6 +1312,34 @@ mod tests {
         // The hold keeps it ducked briefly after speech, then it recovers.
         assert!(rms(seconds(&diff, 2.0, 2.2)) > 0.05);
         assert!(rms(seconds(&diff, 2.8, 3.0)) < 1e-3);
+    }
+
+    /// A clip's own gain lowers it on top of its track's, and its fade starts from silence.
+    #[test]
+    fn a_clips_gain_and_fade_change_only_that_clip() {
+        let (dir, mut doc) = polish_fixture(true);
+        let plain = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let system = lane(&doc, 1);
+        let track = doc
+            .sequence
+            .tracks
+            .iter_mut()
+            .find(|t| t.id == system)
+            .unwrap();
+        track.clips[0].mix = crate::sequence::ClipMix {
+            gain_db: -6.0,
+            fade_in_us: 1_000_000,
+            fade_out_us: 0,
+        };
+        let changed = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let diff: Vec<f64> = plain.iter().zip(&changed).map(|(a, b)| a - b).collect();
+        let system_rms = 8000.0 / 32767.0 / 2f64.sqrt();
+        // Past the fade, 6 dB down.
+        let removed = rms(seconds(&diff, 2.2, 2.8)) / system_rms;
+        let expected = 1.0 - 10f64.powf(-6.0 / 20.0);
+        assert!((removed - expected).abs() < 0.03, "removed {removed}");
+        // At the start of the fade, nearly all of it is gone.
+        assert!(rms(seconds(&diff, 0.0, 0.05)) / system_rms > 0.95);
     }
 
     /// Ducking set on one lane lowers it; marking the speech track as background takes the

@@ -124,6 +124,7 @@ pub fn import(root: &Path, source: &Path) -> Result<Asset, String> {
         _ => {}
     }
     Ok(Asset {
+        licence: None,
         id,
         name,
         kind,

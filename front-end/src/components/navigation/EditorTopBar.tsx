@@ -14,6 +14,7 @@ import {
   Loader2,
   Redo2,
   RotateCcw,
+  SlidersHorizontal,
   Undo2,
   X,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useSaveStatusStore } from "../../stores/saveStatusStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { useHotkeyStore, formatBinding } from "../../stores/hotkeyStore";
+import { useUiMode } from "../../stores/uiModeStore";
 import { api } from "../../lib/ipc";
 import { ExportStatus } from "../../lib/types";
 import { FILE_MANAGER, redoProject, undoProject } from "../../lib/projectActions";
@@ -82,6 +84,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   const setWorkspace = useWorkspaceStore((s) => s.setWorkspace);
   const bindings = useHotkeyStore((s) => s.bindings);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
+  const advancedSettings = useUiMode((s) => s.advanced);
+  const setAdvancedSettings = useUiMode((s) => s.setAdvanced);
   // The Agent panel opens it too.
   const agentsOpen = useAgentStore((s) => s.dialogOpen);
   const setAgentsOpen = useAgentStore((s) => s.setDialogOpen);
@@ -131,6 +135,12 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     ),
     { label: "Reset this workspace", icon: RotateCcw, onSelect: resetWorkspaceLayout, disabled: !project },
     { kind: "separator" },
+    {
+      label: "Advanced settings",
+      icon: SlidersHorizontal,
+      checked: advancedSettings,
+      onSelect: () => setAdvancedSettings(!advancedSettings),
+    },
     { label: "Keyboard shortcuts…", icon: Keyboard, onSelect: () => setHotkeysOpen(true) },
     { label: "AI agents…", icon: Bot, onSelect: () => setAgentsOpen(true) },
   ];

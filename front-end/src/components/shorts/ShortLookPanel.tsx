@@ -12,6 +12,7 @@ import {
   removeShort,
   runShorts,
   useSelectedShort,
+  dropShortCaptionMarks,
   useShortsStore,
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
@@ -52,6 +53,7 @@ export const ShortLookPanel: React.FC = () => {
   const busy = useShortsStore((s) => s.busy);
   const shortsCount = project?.shorts?.length ?? 0;
   if (!project) return null;
+  const ownMarks = Object.values(selected?.captionMarks ?? {}).reduce((n, marks) => n + Object.keys(marks).length, 0);
 
   const layout = fullLayout(draft ?? selected?.layout);
   // The store shows the picked short's own timeline once its view has arrived.
@@ -263,7 +265,26 @@ export const ShortLookPanel: React.FC = () => {
                 </label>
               </div>
             )}
-            <p className="text-meta text-studio-500">Colours come from the editor's Captions settings, the font and accent from the brand kit; edit caption text and emphasis on the short's timeline.</p>
+            {ownMarks > 0 && selected && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-meta text-studio-300">
+                  {ownMarks === 1 ? "1 word is" : `${ownMarks} words are`} shown differently from the video
+                </span>
+                <button
+                  type="button"
+                  disabled={!!busy}
+                  onClick={() => dropShortCaptionMarks(selected.id)}
+                  title="Drop this short's own caption breaks, hidden words and emphasis"
+                  className="h-7 px-2 rounded-control bg-studio-800 border border-studio-700 text-label hover:bg-studio-700 disabled:opacity-40"
+                >
+                  Use the video's
+                </button>
+              </div>
+            )}
+            <p className="text-meta text-studio-500">
+              Colours come from the editor's Captions settings, the font and accent from the brand kit. On the short's caption track, splits, joins, hidden words and
+              emphasis are this short's own; text fixes reach the video too.
+            </p>
           </InspectorSection>
 
           <div className="flex flex-col gap-2 p-4">

@@ -89,9 +89,12 @@ fn current_view(
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     super::require_handle(reader, project_handle)?;
-    let Some(transcript) = store::load_transcript(reader.root(), track_id)? else {
+    let Some(mut transcript) = store::load_transcript(reader.root(), track_id)? else {
         return Ok(None);
     };
+    if let Some(short) = short.and_then(|id| reader.document().shorts.iter().find(|s| s.id == id)) {
+        crate::shorts::overlay_caption_marks(short, &mut transcript);
+    }
     Ok(Some(edit::view(
         &transcript,
         &transcript_clock(reader, track_id, short)?,
@@ -165,9 +168,21 @@ pub fn transcript_settings_get_impl() -> TranscriptSettingsView {
 }
 
 pub fn transcript_settings_set_impl(
-    new_settings: TranscriptSettings,
+    mut new_settings: TranscriptSettings,
 ) -> Result<TranscriptSettingsView, String> {
     let dir = config_dir();
+    // The app stamps when the user allowed agents online: any value turns it on, and the
+    // date it was first turned on stays.
+    new_settings.agents_online = match (
+        new_settings.agents_online,
+        settings::load_settings(&dir).agents_online,
+    ) {
+        (None, _) => None,
+        (Some(_), Some(since)) => Some(since),
+        (Some(_), None) => {
+            Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        }
+    };
     settings::save_settings(&dir, &new_settings)?;
     Ok(settings::settings_view(&dir))
 }
@@ -265,6 +280,16 @@ pub fn transcript_run_impl(
     };
     // Every later pass (fillers, retakes, AI review) reads the language from here.
     output.transcript.language = language;
+    let respelled = crate::transcript::vocabulary::apply(
+        &mut output.transcript.words,
+        &config.keyterms,
+        config.provider == ProviderKind::Parakeet,
+    );
+    if !respelled.is_empty() {
+        output
+            .diagnostics
+            .push(format!("Key terms respelled: {}.", respelled.join(", ")));
+    }
     {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();
@@ -385,10 +410,12 @@ pub fn transcript_suggestions_impl(
         &transcript,
         &transcript_clock(reader, &track_id, short.as_deref())?,
     );
+    let short = target_short(reader.document(), &track_id, short.as_deref());
     Ok(crate::proposals::with_agent_suggestions(
         reader,
         &transcript,
         &track_id,
+        short.map(|s| s.id.as_str()),
         found,
     ))
 }
@@ -618,13 +645,14 @@ pub fn ai_set_api_key_impl(
 /// Reviews the kept words for fillers and retakes with `engine` (the settings' choice when
 /// `None`) and stores the spans it finds with the transcript. The cloud review reads every
 /// word; the local model reads only the windows the local pass flagged. Returns the merged
-/// suggestion list.
+/// suggestion list. With `short`, the words that short keeps (a take's own timeline).
 pub fn transcript_ai_suggest_impl(
     state: &AppState,
     transcripts: &TranscriptState,
     project_handle: String,
     track_id: String,
     engine: Option<crate::ai::FillerEngine>,
+    short: Option<String>,
     progress: &mut dyn FnMut(TranscriptionProgress),
 ) -> Result<Vec<TranscriptCutSuggestion>, String> {
     use crate::ai::client::JsonModel;
@@ -664,7 +692,7 @@ pub fn transcript_ai_suggest_impl(
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
-        let mapper = transcript_clock(reader, &track_id, None)?;
+        let mapper = transcript_clock(reader, &track_id, short.as_deref())?;
         let kept: Vec<&crate::transcript::TranscriptWord> = transcript
             .words
             .iter()
@@ -730,7 +758,7 @@ pub fn transcript_ai_suggest_impl(
         t.ai_model = Some(model);
         Ok(())
     })?;
-    transcript_suggestions_impl(state, project_handle, track_id, None)
+    transcript_suggestions_impl(state, project_handle, track_id, short)
 }
 
 /// The model name an in-house review is stored under (the connected agent's own name follows).
@@ -757,6 +785,7 @@ fn kept_words(
     state: &AppState,
     project_handle: &str,
     track_id: &str,
+    short: Option<&str>,
 ) -> Result<
     (
         crate::transcript::TranscriptDependency,
@@ -770,7 +799,7 @@ fn kept_words(
     super::require_handle(reader, project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = transcript_clock(reader, track_id, None)?;
+    let mapper = transcript_clock(reader, track_id, short)?;
     let words = transcript
         .words
         .iter()
@@ -796,14 +825,16 @@ fn review_stamp<'a>(
     format!("{:016x}", hasher.finish())
 }
 
-/// Page `page` of the kept words of `track_id`, numbered as the AI review numbers them.
+/// Page `page` of the kept words of `track_id` (those `short` keeps, with one), numbered as
+/// the AI review numbers them.
 pub fn transcript_review_page_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<&str>,
     page: usize,
 ) -> Result<ReviewPage, String> {
-    let (_, words, language) = kept_words(state, &project_handle, &track_id)?;
+    let (_, words, language) = kept_words(state, &project_handle, &track_id, short)?;
     let ranges = crate::ai::fillers::chunks(words.len());
     if ranges.is_empty() {
         return Err("There are no kept words to check".into());
@@ -888,6 +919,7 @@ pub fn transcript_review_candidates_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<&str>,
     page: usize,
 ) -> Result<CandidatePage, String> {
     use crate::ai::candidates::{self, Flag};
@@ -896,7 +928,7 @@ pub fn transcript_review_candidates_impl(
     super::require_handle(reader, &project_handle)?;
     let transcript =
         store::load_transcript(reader.root(), &track_id)?.ok_or("Transcribe this track first")?;
-    let mapper = transcript_clock(reader, &track_id, None)?;
+    let mapper = transcript_clock(reader, &track_id, short)?;
     let words: Vec<&crate::transcript::TranscriptWord> = transcript
         .words
         .iter()
@@ -946,11 +978,12 @@ pub fn transcript_review_save_impl(
     state: &AppState,
     project_handle: String,
     track_id: String,
+    short: Option<&str>,
     stamp: &str,
     cuts: serde_json::Value,
     reviewer: &str,
 ) -> Result<(usize, Vec<TranscriptCutSuggestion>), String> {
-    let (dependency, words, _) = kept_words(state, &project_handle, &track_id)?;
+    let (dependency, words, _) = kept_words(state, &project_handle, &track_id, short)?;
     if review_stamp(&words) != stamp {
         return Err(
             "The kept words changed since those pages were read (a cut, an undo, a word fixed): \
@@ -990,7 +1023,7 @@ pub fn transcript_review_save_impl(
     })?;
     Ok((
         kept,
-        transcript_suggestions_impl(state, project_handle, track_id, None)?,
+        transcript_suggestions_impl(state, project_handle, track_id, short.map(str::to_string))?,
     ))
 }
 
@@ -1036,8 +1069,9 @@ pub fn project_chapters_generate_impl(
     })
 }
 
-/// Asks the AI provider for moments that work as shorts and replaces the shorts list with
-/// them (one undoable edit).
+/// Asks the AI provider for moments that work as clips and adds them to the project's clips
+/// (one undoable edit). Shorts made from a take and the clips already made stay; a moment that
+/// overlaps a clip already made is left out.
 pub fn project_shorts_generate_impl(
     state: &AppState,
     transcripts: &TranscriptState,
@@ -1062,17 +1096,14 @@ pub fn project_shorts_generate_impl(
         )
         .words
     };
-    let mut shorts = crate::ai::shorts::suggest(&mut client, &words)?;
-    // The words' times are their recording's or file's own.
-    let asset = crate::sequence::StreamRef::parse(&track_id).map(|r| r.asset);
-    for short in &mut shorts {
-        short.media = asset.clone();
-    }
+    let found = crate::ai::shorts::suggest(&mut client, &words)?;
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
     }
     super::mutate_opened(state, project_handle, |reader| {
-        let revision = reader.history().current.revision;
+        let document = reader.document();
+        let revision = document.revision;
+        let shorts = crate::shorts::with_found_clips(document, &track_id, found)?;
         reader.set_shorts(revision, shorts)
     })
 }
@@ -1101,10 +1132,14 @@ pub struct CaptionCueView {
 pub struct CaptionTrackView {
     pub track_id: Option<String>,
     pub cues: Vec<CaptionCueView>,
+    /// The short after a change to its own caption marks, which is an edit of the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<Box<crate::project::reader::OpenedProject>>,
 }
 
-/// A change made on the caption track. Every change is saved in the transcript, so the
-/// transcript panel, preview and export all show it.
+/// A change made on the caption track. Text and timing are saved in the transcript, so the
+/// video and its shorts share them; in a short, breaks, joins, hidden words and emphasis are
+/// the short's own (an undo step of the edit).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
@@ -1202,6 +1237,7 @@ fn caption_track(
     Ok(CaptionTrackView {
         track_id: Some(track_id),
         cues,
+        project: None,
     })
 }
 
@@ -1303,6 +1339,59 @@ pub fn transcript_caption_edit_impl(
         }
         _ => Vec::new(),
     };
+    if let Some(short_id) = short_id.as_deref().filter(|_| {
+        !matches!(
+            change,
+            CaptionEdit::SetText { .. } | CaptionEdit::Retime { .. }
+        )
+    }) {
+        super::mutate_opened(state, project_handle.clone(), |reader| {
+            let transcript = store::load_transcript(reader.root(), &track_id)?
+                .ok_or("Transcribe this track first")?;
+            let mut next = reader.document().clone();
+            let short = next
+                .shorts
+                .iter_mut()
+                .find(|s| s.id == short_id)
+                .ok_or("That short no longer exists")?;
+            let mut set = |id: &str, change: &dyn Fn(&mut crate::transcript::CaptionMark)| {
+                crate::shorts::set_caption_mark(short, &transcript, id, change)
+            };
+            match &change {
+                CaptionEdit::Split { word_id } => set(word_id, &|m| {
+                    m.cue_break = true;
+                    m.cue_join = false;
+                })?,
+                CaptionEdit::Merge { word_id } => set(word_id, &|m| {
+                    m.cue_join = true;
+                    m.cue_break = false;
+                })?,
+                CaptionEdit::Hide { word_ids, hidden } => {
+                    for id in word_ids {
+                        set(id, &|m| m.hidden = *hidden)?;
+                    }
+                }
+                CaptionEdit::Emphasis { word_ids, on } => {
+                    for id in &replaced {
+                        set(id, &|m| m.emphasis = false)?;
+                    }
+                    for id in word_ids {
+                        set(id, &|m| m.emphasis = *on)?;
+                    }
+                }
+                CaptionEdit::SetText { .. } | CaptionEdit::Retime { .. } => {}
+            }
+            let revision = next.revision;
+            reader.name_next_step("Short captions".into());
+            reader.commit_document(revision, next)?;
+            reader.short_view(short_id)
+        })?;
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        let mut track = caption_track(reader, Some(short_id))?;
+        track.project = Some(Box::new(reader.short_view(short_id)?));
+        return Ok(track);
+    }
     modify_transcript(state, &project_handle, &track_id, |t| match &change {
         CaptionEdit::SetText { word_ids, text } => t.replace_words(word_ids, text),
         CaptionEdit::Retime { word_ids, .. } => {

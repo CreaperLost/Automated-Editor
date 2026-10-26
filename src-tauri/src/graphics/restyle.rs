@@ -835,6 +835,7 @@ mod tests {
         document.assets.push(asset);
         let mut track = crate::sequence::Track::new("t9".into(), crate::sequence::TrackKind::Video);
         track.clips.push(crate::sequence::Clip {
+            mix: Default::default(),
             id: "g1".into(),
             asset: id.clone(),
             stream: "picture".into(),

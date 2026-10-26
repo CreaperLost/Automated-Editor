@@ -1,5 +1,6 @@
-import React, { useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, LucideIcon } from "lucide-react";
+import { useUiMode } from "../../stores/uiModeStore";
 
 const SECTION_STATE_KEY = "aeroedits.inspector.sections";
 
@@ -20,6 +21,15 @@ export const InspectorSection: React.FC<{
   children: React.ReactNode;
 }> = ({ id, title, icon: Icon, extra, children }) => {
   const [open, setOpen] = useState(() => readOpenSections()[id] ?? true);
+  const advanced = useUiMode((s) => s.advanced);
+  // Basic mode: the fine-tuning rows inside, and whether they are shown here.
+  const [more, setMore] = useState(false);
+  const [rows, setRows] = useState(0);
+  const register = useCallback(() => {
+    setRows((n) => n + 1);
+    return () => setRows((n) => n - 1);
+  }, []);
+  const context = React.useMemo(() => ({ shown: advanced || more, register }), [advanced, more, register]);
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -49,10 +59,49 @@ export const InspectorSection: React.FC<{
         </button>
         {extra}
       </div>
-      {open && <div className="space-y-3 px-4 pb-4 pt-1">{children}</div>}
+      {open && (
+        <div className="space-y-3 px-4 pb-4 pt-1">
+          <MoreContext.Provider value={context}>{children}</MoreContext.Provider>
+          {!advanced && rows > 0 && <MoreToggle open={more} onToggle={() => setMore(!more)} />}
+        </div>
+      )}
     </section>
   );
 };
+
+/** What a section tells the fine-tuning rows inside it (UI-2). */
+const MoreContext = React.createContext<{ shown: boolean; register: () => () => void } | null>(null);
+
+/// Settings for fine-tuning (UI-2), where they belong in a section. Advanced mode shows them;
+/// Basic mode hides them until the section's "More settings" opens (outside a section, a
+/// link of their own does).
+export const MoreSettings: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const section = React.useContext(MoreContext);
+  const advanced = useUiMode((s) => s.advanced);
+  const [open, setOpen] = useState(false);
+  const register = section?.register;
+  useEffect(() => register?.(), [register]);
+  if (advanced) return <>{children}</>;
+  if (section) return section.shown ? <>{children}</> : null;
+  return (
+    <>
+      <MoreToggle open={open} onToggle={() => setOpen(!open)} />
+      {open && children}
+    </>
+  );
+};
+
+const MoreToggle: React.FC<{ open: boolean; onToggle: () => void }> = ({ open, onToggle }) => (
+  <button
+    type="button"
+    aria-expanded={open}
+    onClick={onToggle}
+    className="flex items-center gap-1 text-meta text-studio-500 hover:text-studio-200"
+  >
+    <ChevronDown className={`w-3 h-3 transition-transform ${open ? "" : "-rotate-90"}`} />
+    {open ? "Fewer settings" : "More settings"}
+  </button>
+);
 
 const clampStep = (value: number, min: number, max: number, step: number) => {
   const snapped = Math.round((value - min) / step) * step + min;

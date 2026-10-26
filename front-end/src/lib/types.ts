@@ -388,6 +388,10 @@ export interface AudioSettings {
   duckSystemAudio: boolean;
   /** How far system audio is lowered under speech, 3 to 30 dB. */
   duckDb: number;
+  /** Music tracks sit this many dB under the speech, measured (6 to 40); absent plays them as placed. */
+  musicUnderSpeechDb?: number;
+  /** Speech from several takes brought to one level, with a gentle EQ for a take that sounds different. */
+  matchTakes?: boolean;
   /** Volume, noise reduction and ducking per audio track id; absent plays as recorded. */
   tracks?: Record<string, TrackMix>;
   /** The sound effects lane; absent is the default (on, quiet). */
@@ -669,7 +673,86 @@ export type StreamKind = "picture" | "sound";
  * (the camera bubble) or "overlay" (over the whole canvas). Sound: "mic" (speech: transcribed,
  * captioned, ducks background sound) or "background" (music, game, desktop).
  */
-export type Role = "screen" | "webcam" | "overlay" | "mic" | "background";
+export type Role = "screen" | "webcam" | "overlay" | "mic" | "background" | "music" | "effects";
+
+/** An imported file's licence; music must need no credit. */
+export type LicenceKind = "cc0" | "publicDomain" | "noCredit" | "creditRequired" | "nonCommercial" | "unknown";
+export interface Licence {
+  kind: LicenceKind;
+  source?: string;
+}
+
+/** A sound of the sound effects library: the built-in CC0 set, or one of the user's own. */
+export interface LibrarySound {
+  id: string;
+  name: string;
+  tags: string[];
+  durationUs: number;
+  path: string;
+  builtIn: boolean;
+  licence: Licence;
+}
+
+export interface SoundPlaced {
+  project: OpenedProject;
+  assetId: string;
+  clipId: string;
+}
+
+/** A screen effect's kind (FX-2). */
+export type EffectKind = "blur" | "hide" | "spotlight" | "magnify" | "dim" | "blurBehind";
+
+/** A rectangle, each value 0 to 1 of a picture's width or height. */
+export interface EffectArea {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A screen effect: a part of a recording's picture over a stretch of its own clock (a dim follows a graphic clip). */
+export interface ScreenEffect {
+  id: string;
+  kind: EffectKind;
+  asset?: string;
+  startUs: number;
+  endUs: number;
+  area: EffectArea;
+  amount?: number;
+  graphic?: string;
+}
+
+/** An effect showing at a moment: where it is on the canvas (0 to 1) and its stretch on the timeline. */
+export interface EffectAt {
+  effect: ScreenEffect;
+  canvas: EffectArea;
+  span?: [number, number];
+}
+
+/** A track of the music library: built-in CC0 music (downloaded on first use) or the user's own. */
+export interface LibraryTrack {
+  id: string;
+  name: string;
+  tags: string[];
+  durationUs: number;
+  /** Where it starts playing (past a silent intro). */
+  startUs: number;
+  path: string;
+  builtIn: boolean;
+  downloaded: boolean;
+  licence: Licence;
+  lufs?: number;
+}
+
+export interface MusicPlaced {
+  project: OpenedProject;
+  assetId: string;
+  clipIds: string[];
+  startUs: number;
+  endUs: number;
+  /** Set when placing switched the music under speech on, at this level. */
+  underSpeechDb?: number;
+}
 
 export interface Stream {
   /** A recording's own track id ("screen", "webcam", "mic", "system"); a file's "picture" or "sound0"... */
@@ -697,6 +780,8 @@ export interface Asset {
   pauses?: { startUs: number; endUs: number }[];
   /** The file or folder is no longer there. */
   missing?: boolean;
+  /** Its licence (music and sound effects); absent: not known. */
+  licence?: Licence;
 }
 
 /** The graphics renderer (HyperFrames with its own Node and Chrome), downloaded on first use. */
@@ -910,7 +995,9 @@ export type PresetPart = "layout" | "captions" | "zoomSettings" | "audio" | "lay
 export interface PresetsView {
   presets: PresetView[];
   projectPreset: string | null;
+  /** What new shorts (from a take) and new clips (cut from the video) start from. */
   shortsPreset: string | null;
+  clipsPreset: string | null;
   /** What the open project changed from its preset, by part (its own files and clips left out). */
   changes: Partial<Record<PresetPart, Record<string, unknown>>>;
   changed: number;
@@ -1055,6 +1142,15 @@ export interface Clip {
   fit?: Fit;
   /** How fast it plays its media (absent: 1). At 2 it plays twice as much in `durationUs`. */
   speed?: number;
+  /** Its sound's own gain and fades; absent plays as its track does. */
+  mix?: ClipMix;
+}
+
+export interface ClipMix {
+  /** -60 to +12 dB. */
+  gainDb?: number;
+  fadeInUs?: number;
+  fadeOutUs?: number;
 }
 
 export interface SeqTrack {
@@ -1104,10 +1200,14 @@ export type SequenceEdit =
   | { kind: "unlink"; clipIds: string[] }
   | { kind: "setMagnetic"; magnetic: boolean }
   | { kind: "setClip"; clipId: string; fit: Fit }
+  /** Sets clips' own gain and fades; fields left out stay as they are. */
+  | { kind: "setSound"; clipIds: string[]; gainDb?: number; fadeInUs?: number; fadeOutUs?: number }
   /** Plays clips (and their partners), or what plays in `range`, at `speed`, keeping their media: they get shorter or longer. */
   | { kind: "setSpeed"; clipIds: string[]; speed: number; range?: { startUs: number; endUs: number } | null; ripple?: boolean | null }
   /** Puts cut time back between the listed clips and the next ones of their source (all, when none). */
-  | { kind: "restoreCuts"; clipIds: string[] };
+  | { kind: "restoreCuts"; clipIds: string[] }
+  /** Adds a track of the kind, then places or moves onto it: one undo step. */
+  | { kind: "onNewTrack"; trackKind: TrackKind; edit: SequenceEdit };
 
 /** The project as the UI sees it (src-tauri/src/project/reader.rs `OpenedProject`). */
 /** What the cleanup passes start from (src-tauri preset/settings.rs). */
@@ -1158,6 +1258,8 @@ export interface OpenedProject {
   captions?: CaptionSettings;
   chapters?: Chapter[];
   shorts?: Short[];
+  /** Screen effects (blur, hide, spotlight, magnifier, dim or blur behind a graphic). */
+  effects?: ScreenEffect[];
   /** Auto-zoom settings; absent: the defaults. */
   zoomSettings?: ZoomSettings;
   /** Set when this is a short's own timeline: the sequence is the short's. */
@@ -1181,9 +1283,11 @@ export interface CaptionTrackView {
   /** The transcript captions read from; absent until something is transcribed. */
   trackId?: string | null;
   cues: CaptionCueView[];
+  /** The short after a change to its own caption marks (an edit of the project). */
+  project?: OpenedProject | null;
 }
 
-/** A change made on the caption track, saved in the transcript. */
+/** A change made on the caption track: text and timing in the transcript, a short's breaks, hidden words and emphasis on the short. */
 export type CaptionEdit =
   | { kind: "setText"; wordIds: string[]; text: string }
   | { kind: "retime"; wordIds: string[]; startUs: number; endUs: number }
@@ -1223,6 +1327,55 @@ export interface PlaybackStatus {
   previewAvailable: boolean;
   error: string | null;
   diagnostics: string[];
+}
+
+/** A phrase found in a transcript (`source_search.rs`). */
+export interface SearchHit {
+  stream: string;
+  media: string;
+  sourceStartUs: number;
+  sourceEndUs: number;
+  firstWord: string;
+  lastWord: string;
+  /** The words around it, the hit in `[ ]`. */
+  excerpt: string;
+  /** Where it plays; for a cut line, where the edit joins over it; absent when not on the timeline. */
+  editedUs?: number;
+  status: "plays" | "cut" | "notPlaced";
+  /** The take short whose voice it is. */
+  short?: string;
+  exact: boolean;
+}
+
+export interface SearchResults {
+  hits: SearchHit[];
+  total: number;
+  streams: number;
+}
+
+/** The user's verdict on a join they listened to (`joins.rs`). */
+export type JoinMark = "keep" | "fix";
+
+export interface JoinView {
+  id: string;
+  /** Where it plays; absent once an edit took the join away or changed it. */
+  atUs?: number;
+  /** Recording time cut out at the join (0 for a moment that is not a cut). */
+  removedUs: number;
+  reason: string;
+  /** The agent that added it, or "app". */
+  by: string;
+  mark?: JoinMark;
+  note?: string;
+}
+
+export interface JoinsView {
+  /** Timeline order; changed ones last. */
+  items: JoinView[];
+  unheard: number;
+  keep: number;
+  fix: number;
+  changed: number;
 }
 
 export interface EditCut {
@@ -1444,6 +1597,9 @@ export interface TranscriptSettings {
   scribeModel: string;
   keyterms: string[];
   parakeetModelDir: string;
+  /** When the user let AI agents transcribe online (RFC 3339; the app stamps it); null while
+   *  agents ask first. Send any string to turn it on. */
+  agentsOnline: string | null;
 }
 
 export interface TranscriptSettingsView {
@@ -1564,13 +1720,14 @@ export interface ProposalBatch {
   reason: string;
   createdAt: string;
   baseRevision: number;
-  /** `action`: one of the app's own actions the agent ran, applied at once; `under`: footage,
-   *  graphics and files under a take short. */
-  kind: "cuts" | "edits" | "under" | "restyle" | "action";
+  /** `action`: one of the app's own actions the agent ran, applied at once. */
+  kind: "cuts" | "edits" | "action" | "rule";
   /** For an action: which (`silence`, `fillers`, ...). */
   action?: string;
-  /** For `under`: the take short it goes under. */
+  /** For cuts on a take short's own timeline: that short. */
   short?: string;
+  /** For `rule`: the preset whose rules it joins (for every project). */
+  preset?: string;
   status: ProposalStatus;
   decidedAt?: string;
   /** Accepted by autopilot. */
@@ -1742,11 +1899,21 @@ export interface Short {
   edit?: unknown;
   /** A short made from a take recorded for it: its camera and voice (stream keys). */
   take?: ShortTake;
+  /** Its own caption breaks, joins, hidden words and emphasis, by transcript then word id, where they differ from the video's. */
+  captionMarks?: Record<string, Record<string, CaptionMark>>;
   /** How long it plays now. */
   lengthUs?: number;
   /** Absent when an end was cut from the video. Filled in by the backend. */
   editedStartUs?: number;
   editedEndUs?: number;
+}
+
+/** How a word sits in the captions (src-tauri/src/transcript/mod.rs `CaptionMark`); all off is left out. */
+export interface CaptionMark {
+  cueBreak?: boolean;
+  cueJoin?: boolean;
+  hidden?: boolean;
+  emphasis?: boolean;
 }
 
 export interface ShortTake {

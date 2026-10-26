@@ -33,7 +33,16 @@ mounted at `recordings/<asset id>/`.
 - **Tracks and clips.** Video tracks V1… and audio tracks A1…, all the same kind of thing. A clip
   is `{source: StreamRef, start_us, in_us, duration_us, link}`. Video clips never carry sound;
   sound is a linked clip on an audio track. Track roles: Screen, Camera, Overlay (video); Speech,
-  Background (audio). Mix (volume, denoise, ducking) is per audio track; clips have no gain or fades.
+  Background, Music, Effects (audio). Mix (volume, denoise, ducking) is per audio track; clips
+  have their own gain and fades (SND-1). The mixer (`media/audio.rs`) reads each sound file
+  through its polish (`media/polish.rs`): denoise, then take matching (AUTO-2, `dsp/takes.rs`:
+  a gain and gentle biquads per file of speech, run from a 100 ms warm-up so any chunking gives
+  the same samples), ducking, the music's level under speech, normalisation.
+- **Libraries** (`sound_library.rs`, `music_library.rs`): built-in sounds are compiled in and
+  written once to the app folder; built-in music is too big for that, so each track is pinned
+  by size and SHA-256 and downloaded from the Free Music Archive on first use. Placing either
+  imports it into the project with its licence; music that needs credit is refused for the
+  library and flagged by `check`.
 - **Magnetic** ripples every unlocked track; off, cuts leave gaps and moves overwrite. Empty time
   is black.
 - **Edits** are a typed `SequenceEdit` enum (17 kinds: add/move/remove track, place asset, move,
@@ -107,6 +116,14 @@ mounted at `recordings/<asset id>/`.
   ([contract](contracts/keyboard-telemetry.md)), `windows.jsonl`
   ([contract](contracts/window-telemetry.md)). Drives zooms, layout picks, window crop, bubble hide,
   shortcut badges and the click/whoosh lane (`sound_effects.rs`).
+- **Screen effects** (`effects.rs`, FX-2): a box of a screen recording's own picture (0..1) over
+  a stretch of its own clock, so crops, zooms, layouts and cuts never move it. `scene_at` draws
+  the ones showing right after the pointer (`Scene::push_screen_effect` maps the box through the
+  screen layer's rect and uv); a dim or a blur behind goes in just before its graphic
+  (`Scene::push_blur_behind` blurs the screen and camera layers under the graphic's rect). Blur and the spotlight are
+  shader passes (`pass_kind` 2 and 3 in `composite.wgsl`, twinned on the CPU in `blit_effect`);
+  blur and magnifier layers draw the screen's texture again (`Layer::shares`) instead of
+  uploading the frame twice. A blur or hide never fades.
 - **Faces:** YuNet tracks per camera asset in source time; `focus_uv` frames each camera slot on
   the face, lining up every 30 s rather than following; per-clip hand framing overrides.
 

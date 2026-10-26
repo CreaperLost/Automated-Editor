@@ -39,8 +39,8 @@
 </g>
 <g class="new" transform="translate(0,180)">
   <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">3. Plan</text><text class="ts" x="34" y="42">new stage</text>
-  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">Graphics listed in chat, shorts as a list;</text><text class="tx" x="218" y="41">nothing stored, graphics forget their word</text>
-  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Beat plan in the project, anchored to words:</text><text class="tx" x="588" y="41">purpose, treatment, reason; source search</text>
+  <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">Graphics listed in chat, shorts as a list;</text><text class="tx" x="218" y="41">nothing stored between turns</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">A plan file the agent keeps in the project;</text><text class="tx" x="588" y="41">purpose, treatment, reason; source search</text>
 </g>
 <g class="new" transform="translate(0,244)">
   <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">4. Style trial</text><text class="ts" x="34" y="42">new stage</text>
@@ -55,7 +55,7 @@
 <g class="grow" transform="translate(0,372)">
   <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">6. Verify</text><text class="ts" x="34" y="42">exists, grows</text>
   <rect class="card" x="206" y="0" width="360" height="56" rx="8"/><text class="tx" x="218" y="23">check, one storyboard, frame stills;</text><text class="tx" x="218" y="41">nothing moves or sounds</text>
-  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">Motion preview with sound, review records,</text><text class="tx" x="588" y="41">join audition queue, final-file pass</text>
+  <rect class="t" x="576" y="0" width="364" height="56" rx="8"/><text class="tx" x="588" y="23">The agent picks the risky joins; you listen</text><text class="tx" x="588" y="41">in a queue and mark keep or fix</text>
 </g>
 <g class="same" transform="translate(0,436)">
   <rect class="s" x="20" y="0" width="176" height="56" rx="8"/><text class="th" x="34" y="24">7. Export</text><text class="ts" x="34" y="42">unchanged</text>

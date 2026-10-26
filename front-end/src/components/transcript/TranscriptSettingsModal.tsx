@@ -4,6 +4,7 @@ import { AlertCircle, Check, ChevronDown, ChevronRight, Download, KeyRound, X } 
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import { AiSettings, AiSettingsView, ModelDownloadProgress, TranscriptSettings, TranscriptSettingsView } from "../../lib/types";
 import { Segmented } from "../ui";
+import { useUiMode } from "../../stores/uiModeStore";
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
@@ -35,7 +36,7 @@ export const TranscriptSettingsModal: React.FC<{
   const [downloading, setDownloading] = useState<DownloadKind | null>(null);
   /** The key being typed, and for which service. */
   const [keyEntry, setKeyEntry] = useState<{ name: KeyName; value: string } | null>(null);
-  const [advanced, setAdvanced] = useState(false);
+  const [advanced, setAdvanced] = useState(() => useUiMode.getState().advanced);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -338,22 +339,24 @@ export const TranscriptSettingsModal: React.FC<{
                   ? "Keeps every um, stutter and repeat, so they can be cut."
                   : "Gets names and numbers right more often; may drop stutters.",
               )}
-            {!local &&
-              choice(
-                "Key terms",
-                <input
-                  aria-label="Key terms"
-                  value={keyterms}
-                  placeholder="Names it should spell right, comma separated"
-                  onChange={(e) => setKeyterms(e.target.value)}
-                  onBlur={() => {
-                    const terms = keyterms.split(",").map((t) => t.trim()).filter(Boolean);
-                    if (terms.join(",") !== settings.keyterms.join(",")) void change({ keyterms: terms });
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-                  className={input}
-                />,
-              )}
+            {choice(
+              "Key terms",
+              <input
+                aria-label="Key terms"
+                value={keyterms}
+                placeholder="Claude Code, Codex, ..."
+                onChange={(e) => setKeyterms(e.target.value)}
+                onBlur={() => {
+                  const terms = keyterms.split(",").map((t) => t.trim()).filter(Boolean);
+                  if (terms.join(",") !== settings.keyterms.join(",")) void change({ keyterms: terms });
+                }}
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                className={input}
+              />,
+              local
+                ? "Names spelled your way, comma separated. Fixes spacing, case and sound-alikes like “cloud code”."
+                : "Names spelled your way, comma separated. Scribe listens for them (ElevenLabs adds a small fee per hour).",
+            )}
             {choice(
               "Review by",
               <Segmented
@@ -402,6 +405,24 @@ export const TranscriptSettingsModal: React.FC<{
               {keyRow("elevenlabs", "ElevenLabs key", view.elevenlabsKeySource)}
               {keyRow("openRouter", "OpenRouter key", aiView.openrouterKeySource)}
               {keyRow("openAi", "OpenAI key", aiView.openaiKeySource)}
+              {row(
+                "AI agents",
+                settings.agentsOnline ? (
+                  <span title="Agents read this choice and its date before they transcribe">
+                    {ok(`may transcribe online, since ${new Date(settings.agentsOnline).toLocaleDateString()}`)}
+                  </span>
+                ) : (
+                  missing("ask before sending audio online")
+                ),
+                <button
+                  type="button"
+                  onClick={() => void change({ agentsOnline: settings.agentsOnline ? null : "on" })}
+                  className={`${smallButton} bg-studio-700 hover:bg-studio-600 text-white`}
+                  title="Lets connected AI agents send the speech to ElevenLabs (or OpenRouter) to transcribe it, without asking you each time"
+                >
+                  {settings.agentsOnline ? "Turn off" : "Allow"}
+                </button>,
+              )}
             </div>
 
             <button

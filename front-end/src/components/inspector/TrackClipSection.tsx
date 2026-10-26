@@ -17,7 +17,7 @@ import {
   trackNumber,
 } from "../../lib/sequence";
 import { layoutFromSettings } from "../../lib/types";
-import type { Fit, OpenedProject, Role, SequenceEdit } from "../../lib/types";
+import type { Fit, LicenceKind, OpenedProject, Role, SequenceEdit } from "../../lib/types";
 import { cropOffFor, setCropFor } from "../../lib/windowCrop";
 import { Switch } from "../ui";
 
@@ -36,8 +36,50 @@ const PICTURE_ROLES: { value: Role; label: string }[] = [
 ];
 const SOUND_ROLES: { value: Role; label: string }[] = [
   { value: "mic", label: "Speech: transcribed and captioned" },
-  { value: "background", label: "Background: music, game, desktop" },
+  { value: "background", label: "Background: game, desktop" },
+  { value: "music", label: "Music: kept under the speech" },
+  { value: "effects", label: "Sound effects" },
 ];
+
+const LICENCES: { value: LicenceKind | ""; label: string }[] = [
+  { value: "", label: "Not known" },
+  { value: "cc0", label: "CC0: no rights reserved" },
+  { value: "publicDomain", label: "Public domain" },
+  { value: "noCredit", label: "Free to use, no credit needed" },
+  { value: "creditRequired", label: "Needs credit" },
+  { value: "nonCommercial", label: "Not for monetised videos" },
+  { value: "unknown", label: "Unclear" },
+];
+
+/** A number field committed on blur or Enter. */
+const NumberField: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  disabled?: boolean;
+  onCommit: (value: number) => void;
+}> = ({ label, value, min, max, step, disabled, onCommit }) => (
+  <label className="flex items-center justify-between text-label text-studio-300">
+    <span>{label}</span>
+    <input
+      key={value}
+      aria-label={label}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      defaultValue={value}
+      disabled={disabled}
+      onBlur={(event) => onCommit(Number(event.target.value))}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onCommit(Number((event.target as HTMLInputElement).value));
+      }}
+      className="w-24 bg-studio-950 px-2 py-1 rounded border border-studio-700 text-right"
+    />
+  </label>
+);
 
 /// The clip selected on the timeline: what its stream is, how it fills the frame, where it
 /// starts, and removing it. Every change is one undoable edit.
@@ -140,6 +182,71 @@ export const TrackClipSection: React.FC = () => {
             <span className="block text-meta text-studio-500">
               Its track plays it as {track.role} (set on the track's header).
             </span>
+          )}
+        </label>
+      )}
+      {track.kind === "audio" && (
+        <div className="space-y-1">
+          <NumberField
+            label="Clip gain (dB)"
+            value={clip.mix?.gainDb ?? 0}
+            min={-60}
+            max={12}
+            step={1}
+            disabled={busy || track.locked}
+            onCommit={(gainDb) =>
+              Number.isFinite(gainDb) && gainDb !== (clip.mix?.gainDb ?? 0) && void edit({ kind: "setSound", clipIds: selectedIds.length ? selectedIds : [clip.id], gainDb })
+            }
+          />
+          <NumberField
+            label="Fade in (s)"
+            value={(clip.mix?.fadeInUs ?? 0) / 1e6}
+            min={0}
+            max={clip.durationUs / 1e6}
+            step={0.1}
+            disabled={busy || track.locked}
+            onCommit={(s) => Number.isFinite(s) && s >= 0 && void edit({ kind: "setSound", clipIds: [clip.id], fadeInUs: Math.round(s * 1e6) })}
+          />
+          <NumberField
+            label="Fade out (s)"
+            value={(clip.mix?.fadeOutUs ?? 0) / 1e6}
+            min={0}
+            max={clip.durationUs / 1e6}
+            step={0.1}
+            disabled={busy || track.locked}
+            onCommit={(s) => Number.isFinite(s) && s >= 0 && void edit({ kind: "setSound", clipIds: [clip.id], fadeOutUs: Math.round(s * 1e6) })}
+          />
+          <p className="text-meta text-studio-500">On top of the track's volume (Audio page); fades start from silence at the clip's ends.</p>
+        </div>
+      )}
+      {asset && stream?.kind === "sound" && (role === "music" || role === "effects" || asset.licence) && (
+        <label className="block text-label text-studio-300 space-y-1">
+          <span>Licence</span>
+          <select
+            aria-label="The file's licence"
+            value={asset.licence?.kind ?? ""}
+            disabled={busy}
+            onChange={(event) => {
+              const kind = event.target.value as LicenceKind | "";
+              void run(() =>
+                api.projectMediaLicence(
+                  openedProject.projectHandle,
+                  openedProject.revision,
+                  asset.id,
+                  kind ? { kind, source: asset.licence?.source } : null,
+                ),
+              );
+            }}
+            className="w-full min-w-0 truncate bg-studio-800 text-studio-100 text-label rounded px-2 py-1 border border-studio-700 focus:outline-none focus:border-accent-hover"
+          >
+            {LICENCES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {role === "music" && !["cc0", "publicDomain", "noCredit"].includes(asset.licence?.kind ?? "") && (
+            <span className="block text-meta text-suggest-fg">Music in the video must need no credit: the check before export flags this.</span>
           )}
         </label>
       )}

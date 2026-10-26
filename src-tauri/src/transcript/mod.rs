@@ -13,6 +13,7 @@ pub mod pauses;
 pub mod provider;
 pub mod settings;
 pub mod store;
+pub mod vocabulary;
 
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};

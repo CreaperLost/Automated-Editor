@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Captions } from "lucide-react";
-import { InspectorSection, RangeRow } from "../inspector/InspectorSection";
+import { InspectorSection, MoreSettings, RangeRow } from "../inspector/InspectorSection";
 import { PresetMarks } from "../presets/PresetMarks";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { soundSources } from "../../lib/sequence";
@@ -151,14 +151,16 @@ export const CaptionsSection: React.FC = () => {
           ))}
         </div>
         {draft.position !== "middle" && (
-          <RangeRow
-            label="Distance from edge"
-            value={draft.offsetPct}
-            min={0}
-            max={45}
-            unit="%"
-            onChange={(offsetPct) => update({ offsetPct })}
-          />
+          <MoreSettings>
+            <RangeRow
+              label="Distance from edge"
+              value={draft.offsetPct}
+              min={0}
+              max={45}
+              unit="%"
+              onChange={(offsetPct) => update({ offsetPct })}
+            />
+          </MoreSettings>
         )}
         <RangeRow
           label="Text size"
@@ -169,22 +171,24 @@ export const CaptionsSection: React.FC = () => {
           unit="%"
           onChange={(fontSizePct) => update({ fontSizePct })}
         />
-        <RangeRow
-          label="Words at once"
-          value={draft.maxWords}
-          min={1}
-          max={12}
-          unit=""
-          onChange={(maxWords) => update({ maxWords })}
-        />
-        <RangeRow
-          label="Lines at most"
-          value={draft.maxLines ?? 1}
-          min={1}
-          max={3}
-          unit=""
-          onChange={(maxLines) => update({ maxLines })}
-        />
+        <MoreSettings>
+          <RangeRow
+            label="Words at once"
+            value={draft.maxWords}
+            min={1}
+            max={12}
+            unit=""
+            onChange={(maxWords) => update({ maxWords })}
+          />
+          <RangeRow
+            label="Lines at most"
+            value={draft.maxLines ?? 1}
+            min={1}
+            max={3}
+            unit=""
+            onChange={(maxLines) => update({ maxLines })}
+          />
+        </MoreSettings>
         <p className="text-meta text-studio-500 leading-relaxed">
           How they look (pop, karaoke or still, colours, outline, box, font) is the project&apos;s style: the Style
           page.

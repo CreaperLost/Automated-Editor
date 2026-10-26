@@ -141,6 +141,17 @@ pub enum SequenceEdit {
         clip_id: String,
         fit: Fit,
     },
+    /// Sets the sound of clips: their gain in dB (-60 to +12) and fades at their ends, each
+    /// left as it is when not given. Linked partners are not changed with them.
+    SetSound {
+        clip_ids: Vec<String>,
+        #[serde(default)]
+        gain_db: Option<f32>,
+        #[serde(default)]
+        fade_in_us: Option<u64>,
+        #[serde(default)]
+        fade_out_us: Option<u64>,
+    },
     /// Plays clips (with their linked partners) at `speed`: each keeps the media it plays and
     /// gets shorter or longer. With `range` instead of clips, every unlocked track is split at
     /// its ends and what plays inside it changes. `ripple` overrides magnetic for this edit.
@@ -159,6 +170,13 @@ pub enum SequenceEdit {
     RestoreCuts {
         #[serde(default)]
         clip_ids: Vec<String>,
+    },
+    /// Adds a track of `track_kind`, then runs `edit` (placing an asset or moving clips) onto
+    /// it: one undo step. The timeline's drop row for a new track; agents name a track.
+    #[schemars(skip)]
+    OnNewTrack {
+        track_kind: TrackKind,
+        edit: Box<SequenceEdit>,
     },
 }
 
@@ -187,6 +205,45 @@ pub fn apply_reserving<'t>(
     edit: &SequenceEdit,
     taken: impl IntoIterator<Item = &'t str>,
 ) -> Result<(Sequence, EditOutcome), String> {
+    if let SequenceEdit::OnNewTrack { track_kind, edit } = edit {
+        let taken: Vec<&str> = taken.into_iter().collect();
+        let add = SequenceEdit::AddTrack {
+            track_kind: *track_kind,
+        };
+        let (with_track, _) = apply_reserving(sequence, assets, &add, taken.iter().copied())?;
+        let new_id = with_track
+            .tracks
+            .iter()
+            .find(|t| !sequence.tracks.iter().any(|old| old.id == t.id))
+            .map(|t| t.id.clone())
+            .ok_or("The new track was not added")?;
+        let id = Some(new_id.clone());
+        let edit = match edit.as_ref() {
+            SequenceEdit::PlaceAsset { .. } | SequenceEdit::MoveClips { .. } => {
+                let mut edit = edit.as_ref().clone();
+                match &mut edit {
+                    SequenceEdit::PlaceAsset { track_id, .. }
+                    | SequenceEdit::MoveClips { track_id, .. } => *track_id = id,
+                    _ => {}
+                }
+                edit
+            }
+            _ => return Err("Only placing or moving clips can go on a new track".into()),
+        };
+        let (next, outcome) = apply_reserving(&with_track, assets, &edit, taken)?;
+        // Something that went to other tracks (a picture on a new audio track) leaves none.
+        if !next
+            .tracks
+            .iter()
+            .any(|t| t.id == new_id && !t.clips.is_empty())
+        {
+            return Err(match track_kind {
+                TrackKind::Audio => "Only sound goes on an audio track".into(),
+                TrackKind::Video => "Only pictures go on a video track".into(),
+            });
+        }
+        return Ok((next, outcome));
+    }
     check_times(edit)?;
     let protected = around_graphics(sequence, assets, edit)?;
     let edit = protected.as_ref().unwrap_or(edit);
@@ -532,7 +589,10 @@ impl<'a> Editor<'a> {
             }),
             None => None,
         };
+        // Fades stay at the outer ends.
+        right.mix.fade_in_us = 0;
         self.seq.tracks[t].clips[index].duration_us = at - clip.start_us;
+        self.seq.tracks[t].clips[index].mix.fade_out_us = 0;
         self.seq.tracks[t].clips.insert(index + 1, right);
         true
     }
@@ -596,6 +656,8 @@ impl<'a> Editor<'a> {
         let magnetic = self.seq.magnetic;
         match edit {
             SequenceEdit::AddTrack { track_kind } => self.add_track(*track_kind).map(|_| ()),
+            // Split up by `apply_reserving` before it gets here.
+            SequenceEdit::OnNewTrack { .. } => Err("A new track's edit runs on its own".into()),
             SequenceEdit::RemoveTrack { track_id } => {
                 let t = self.track_index(track_id)?;
                 if self.seq.tracks[t].locked {
@@ -773,6 +835,34 @@ impl<'a> Editor<'a> {
                     return Err("That track is locked".into());
                 }
                 self.seq.tracks[t].clips[c].fit = *fit;
+                Ok(())
+            }
+            SequenceEdit::SetSound {
+                clip_ids,
+                gain_db,
+                fade_in_us,
+                fade_out_us,
+            } => {
+                if clip_ids.is_empty() {
+                    return Err("Name the clips".into());
+                }
+                for id in clip_ids {
+                    let (t, c) = self.find(id)?;
+                    if self.seq.tracks[t].locked {
+                        return Err("That track is locked".into());
+                    }
+                    let clip = &mut self.seq.tracks[t].clips[c];
+                    let mut mix = clip.mix;
+                    if let Some(gain) = gain_db {
+                        if !gain.is_finite() {
+                            return Err("gainDb must be a number".into());
+                        }
+                        mix.gain_db = *gain;
+                    }
+                    mix.fade_in_us = fade_in_us.unwrap_or(mix.fade_in_us);
+                    mix.fade_out_us = fade_out_us.unwrap_or(mix.fade_out_us);
+                    clip.mix = mix.clamped(clip.duration_us);
+                }
                 Ok(())
             }
             SequenceEdit::SetSpeed {
@@ -1092,6 +1182,7 @@ impl<'a> Editor<'a> {
             for (stream, track) in &placed {
                 let t = self.track_index(track)?;
                 let clip = Clip {
+                    mix: Default::default(),
                     id: self.clip_id(),
                     asset: asset_id.into(),
                     stream: stream.clone(),
@@ -1672,6 +1763,28 @@ mod tests {
         );
         let id = clip_on(&seq, "V3", 5 * S);
         (assets, seq, id)
+    }
+
+    #[test]
+    fn placing_on_a_new_track_is_one_edit() {
+        let (mut assets, seq) = rec_project();
+        assets.push(image("i"));
+        let place = |track_kind| SequenceEdit::OnNewTrack {
+            track_kind,
+            edit: Box::new(SequenceEdit::PlaceAsset {
+                asset_id: "i".into(),
+                at_us: 2 * S,
+                track_id: None,
+                streams: Vec::new(),
+                range: None,
+            }),
+        };
+        let (next, _) = apply(&seq, &assets, &place(TrackKind::Video)).unwrap();
+        let top = next.video_tracks().last().unwrap();
+        assert!(!seq.tracks.iter().any(|t| t.id == top.id));
+        assert_eq!(top.clips.len(), 1);
+        // A picture on a new audio track fails, and leaves no track behind.
+        assert!(apply(&seq, &assets, &place(TrackKind::Audio)).is_err());
     }
 
     #[test]

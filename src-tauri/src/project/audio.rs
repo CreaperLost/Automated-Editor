@@ -12,6 +12,8 @@ pub const TARGET_LUFS_RANGE: (f32, f32) = (-30.0, -8.0);
 pub const NOISE_REDUCTION_DB_RANGE: (f32, f32) = (3.0, 30.0);
 pub const DUCK_DB_RANGE: (f32, f32) = (3.0, 30.0);
 pub const TRACK_VOLUME_DB_RANGE: (f32, f32) = (-30.0, 12.0);
+/// How far under speech a music bed may sit; about 18 dB is usual for a voice-over.
+pub const MUSIC_UNDER_SPEECH_DB_RANGE: (f32, f32) = (6.0, 40.0);
 
 fn default_target_lufs() -> f32 {
     DEFAULT_TARGET_LUFS
@@ -50,6 +52,14 @@ pub struct AudioSettings {
     /// How far system audio is lowered under speech, in dB.
     #[serde(default = "default_duck_db")]
     pub duck_db: f32,
+    /// Music tracks (role `music`) sit this many dB under the speech, measured; none plays
+    /// them as placed. On top of their track volume and clip gain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub music_under_speech_db: Option<f32>,
+    /// Speech recorded in several takes is brought to one level, and a take that sounds
+    /// different gets a gentle EQ towards the rest (AUTO-2).
+    #[serde(default)]
+    pub match_takes: bool,
     /// Mute and volume per audio track id. Tracks without an entry play at full volume.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tracks: BTreeMap<String, TrackMix>,
@@ -92,6 +102,8 @@ impl Default for AudioSettings {
             noise_reduction_db: DEFAULT_NOISE_REDUCTION_DB,
             duck_system_audio: false,
             duck_db: DEFAULT_DUCK_DB,
+            music_under_speech_db: None,
+            match_takes: false,
             tracks: BTreeMap::new(),
             sound_effects: Default::default(),
         }
@@ -99,11 +111,12 @@ impl Default for AudioSettings {
 }
 
 impl AudioSettings {
-    /// A new project's: loudness normalized to [`DEFAULT_TARGET_LUFS`], the rest off. (The
-    /// plain default leaves the sound as recorded.)
+    /// A new project's: loudness normalized to [`DEFAULT_TARGET_LUFS`] and takes matched, the
+    /// rest off. (The plain default leaves the sound as recorded.)
     pub fn for_new_project() -> Self {
         Self {
             normalize: true,
+            match_takes: true,
             ..Self::default()
         }
     }
@@ -116,6 +129,8 @@ impl AudioSettings {
         self.normalize
             || self.noise_reduction
             || self.duck_system_audio
+            || self.music_under_speech_db.is_some()
+            || self.match_takes
             || self
                 .tracks
                 .values()
@@ -161,6 +176,9 @@ impl AudioSettings {
             NOISE_REDUCTION_DB_RANGE,
         )?;
         check("Ducking amount", self.duck_db, DUCK_DB_RANGE)?;
+        if let Some(db) = self.music_under_speech_db {
+            check("Music under speech", db, MUSIC_UNDER_SPEECH_DB_RANGE)?;
+        }
         for mix in self.tracks.values() {
             check("Track volume", mix.volume_db, TRACK_VOLUME_DB_RANGE)?;
             if let Some(db) = mix.denoise_db {

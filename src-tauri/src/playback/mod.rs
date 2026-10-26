@@ -13,6 +13,18 @@ use std::time::Instant;
 
 pub use preview::{PreviewHitMode, PreviewOwner, PreviewQuality, PreviewStatus, PreviewViewport};
 
+/// Whether `next` differs from `last` only in its layout sections (and its revision): a change
+/// the running scene can take without rebuilding.
+fn only_layouts_changed(last: &EditDocument, next: &EditDocument) -> bool {
+    if last.layouts == next.layouts {
+        return false;
+    }
+    let mut same = next.clone();
+    same.layouts = last.layouts.clone();
+    same.revision = last.revision;
+    same == *last
+}
+
 fn next_generation() -> u64 {
     static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -104,6 +116,11 @@ pub struct PlaybackOwner {
     /// Bumped when what plays changes (an edit, another short), not on a seek: the engine
     /// keeps its scene and mixer across seeks.
     content: u64,
+    /// Bumped when only the layout sections changed (LAY-1): the engine swaps them into its
+    /// running scene, keeping the mixer, decoders and sound playing.
+    look: u64,
+    /// What played last, to tell a look-only change from any other.
+    last_played: Option<EditDocument>,
     position_us: u64,
     duration_us: u64,
     /// Some audio track has clips to play, so the audio device is the clock.
@@ -181,6 +198,8 @@ impl PlaybackOwner {
             state: PlaybackState::Closed,
             generation: 0,
             content: 0,
+            look: 0,
+            last_played: None,
             position_us: 0,
             duration_us: 0,
             has_sound: false,
@@ -209,6 +228,8 @@ impl PlaybackOwner {
             },
             generation: next_generation(),
             content: next_generation(),
+            look: next_generation(),
+            last_played: Some(document.clone()),
             position_us: 0,
             duration_us,
             has_sound: has_sound(document),
@@ -226,8 +247,6 @@ impl PlaybackOwner {
         // An edit while playing keeps playing (with the new edit): changing a short's look as
         // it plays, or a caption, no longer stops it.
         let was_playing = self.state == PlaybackState::Playing;
-        self.bump_generation();
-        self.content = next_generation();
         // A short that is gone or no longer valid hands playback back to the video.
         let playable = match self.playable_document(document) {
             Ok(playable) => playable,
@@ -236,6 +255,20 @@ impl PlaybackOwner {
                 document.clone()
             }
         };
+        // Only the layout sections changed: the engine swaps them in; playing carries on.
+        if self
+            .last_played
+            .as_ref()
+            .is_some_and(|last| only_layouts_changed(last, &playable))
+        {
+            self.look = next_generation();
+            self.last_played = Some(playable);
+            wake_engine();
+            return Ok(());
+        }
+        self.bump_generation();
+        self.content = next_generation();
+        self.last_played = Some(playable.clone());
         let document = &playable;
         self.has_sound = has_sound(document);
         self.duration_us = document.duration_us();
@@ -292,6 +325,11 @@ impl PlaybackOwner {
     /// Changes when what plays changes; seeks leave it alone.
     pub fn content_generation(&self) -> u64 {
         self.content
+    }
+
+    /// Changes when only the layout sections changed, with what plays now.
+    pub fn look_generation(&self) -> (u64, Option<&EditDocument>) {
+        (self.look, self.last_played.as_ref())
     }
 
     /// Nothing on the audio tracks can be heard (its recording is missing, say), so no audio
@@ -496,6 +534,27 @@ mod tests {
     fn document() -> EditDocument {
         EditDocument::from_recording(crate::sequence::tests::recording("rec", 10_000_000, &[]))
             .unwrap()
+    }
+
+    #[test]
+    fn a_layout_only_change_swaps_the_look_and_keeps_playing() {
+        let doc = document();
+        let mut owner = PlaybackOwner::open("p".into(), &doc).unwrap();
+        owner.play().unwrap();
+        let (content, look) = (owner.content_generation(), owner.look_generation().0);
+        let mut next = doc.clone();
+        next.revision += 1;
+        next.layouts.transition_ms += 100;
+        owner.apply_document(&next).unwrap();
+        assert_eq!(owner.content_generation(), content, "no rebuild");
+        assert_ne!(owner.look_generation().0, look);
+        assert_eq!(owner.status().unwrap().state, PlaybackState::Playing);
+        // Anything else changing rebuilds as before.
+        let mut cut = next.clone();
+        cut.revision += 1;
+        cut.audio.normalize = !cut.audio.normalize;
+        owner.apply_document(&cut).unwrap();
+        assert_ne!(owner.content_generation(), content);
     }
 
     #[test]

@@ -1,0 +1,8 @@
+{
+ "transcript": "el-b.mic.json",
+ "language": "el",
+ "gold": [
+  {"from": 0, "to": 0, "type": "filler", "note": "opening Λοιπόν,", "optional": true},
+  {"from": 6, "to": 9, "type": "retake", "note": "γιααα το ελληνικό βίντεο, said again"}
+ ]
+}
