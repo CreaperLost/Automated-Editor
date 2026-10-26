@@ -1,0 +1,581 @@
+# kitcut-hq/kitcut
+
+- **Source:** https://github.com/kitcut-hq/kitcut
+- **Kind:** github
+- **Captured:** 2026-10-25T15:57:00
+- **Evidence grade:** vendor or creator claim. Not tested in this repo. Quotes from a caption are what a creator *said*, not a measurement.
+
+## Repository
+
+- **Repo:** kitcut-hq/kitcut
+- **Description:** Ask Claude Code to edit your video. Multicam sync, captions, vertical shorts, dubbing, PII blurring, upload. Local, no timeline.
+- **Homepage:** https://kitcut.ai
+- **Stars:** 41
+- **Forks:** 5
+- **Open issues:** 3
+- **Language:** Python
+- **Default branch:** main
+- **Last push:** 2026-10-25T07:34:21Z
+- **Archived:** False
+
+## README
+
+```
+# KitCut
+
+**Raw footage in. Finished video out. On your own machine.**
+
+- You say what you want in plain words. Claude does the editing.
+- Nothing is uploaded until you say "publish."
+- Every decision is remembered, so any video can be changed later in one sentence.
+
+## Start
+
+1. Install [Claude Code](https://claude.com/claude-code).
+2. Open this folder in it. Say **"Set this up."** Claude installs what's missing and renders a test video to prove it works.
+3. Record something. Say **"Import today's recordings."**
+
+No dragging files. KitCut finds the session's recordings on your PC and on a connected phone, drops duplicate copies, orders them by when they were actually shot, and knows which ones have sound. Then say what you want made.
+
+## Capabilities
+
+Every choice is priced before anything renders, and every render is checked
+afterwards against what was asked for. That applies to all of it.
+
+### Captions
+- **Word-synced captions** burned in, the spoken word highlighted.
+- **Any channel's style**, measured off their own frames rather than guessed.
+- **Never lands on a face** or across the video's own lower third.
+
+### Shorts
+- **Finds the moments** in a long video, shortlisted with reasons before a cut.
+- **Opens on the hook** — a clip whose point arrives late is refused, not rendered.
+- **Vertical 9:16 with face tracking**, or a fixed region for a screen recording.
+- **Animated social-handle badge.**
+
+### Dubbing
+- **Another language, same rhythm**: speech starts and stops with the mouth.
+- **Every line measured**, and re-tuned where it does not fit its slot.
+- **Free or premium voice**, captions timed from the dub itself.
+- **Or replace the narration** with a written script, timed to the picture.
+
+### Tightening one recording
+- **For footage that arrives already finished** — screen, webcam and narration
+  burned together, nothing to sync.
+- **Shortens pauses rather than deleting them**, so nothing sounds spliced,
+  and swallows the "um"s that lean on them.
+- **Removes a passage you name by quoting it.**
+
+### Screen recording + camera
+- **Syncs two recordings that never were**, proven with paired frames.
+- **Cuts only where the speaker is silent and the screen is still.**
+- **Camera picture-in-picture**, full-frame where the screen has nothing to show.
+- **Intro and outro shot separately**, with cutaway footage over them.
+
+### Multi-camera events
+- **Lines up any number of cameras** from their sound alone, to the frame.
+- **Cuts between angles following the voice**; tells cameras apart by
+  background or by who is in shot.
+- **Scores itself** against professionally edited videos, frame by frame — and
+  will tell you whether it can reproduce a given channel's style.
+
+### Silent screen recordings
+- **One film from a session of silent captures**, voice-over added later.
+- **Drops dead air**, fast-forwards where only an AI panel is streaming, and
+  hits a target length.
+- **Finds and blurs** card numbers, CVVs, IBANs, phones, emails and addresses,
+  following each one as it scrolls.
+- **Two stops before publishing**: a before/after sheet, then a draft of the
+  riskiest minute.
+- **The last check reads the finished render**, not the plan.
+
+### Graphics
+- **Lower-third name labels**, image overlays and end cards, with entrance
+  animation and the footage beneath blurred, dimmed or black-and-white.
+- **Card designer**: template x brand x words.
+- **Burned inside the render**, never a second encode.
+
+### Animated explainers
+- **A film with no footage**: hand-drawn or clean editorial animation written as
+  code, an AI voice-over, an original score and synthesised sound effects.
+- **Cues follow the voice**: visuals hang off spoken words, so a re-recorded
+  line takes its animation with it.
+- **Two deliverables**: a 60 fps MP4 with captions, and a one-file HTML player.
+- **Every stage timed**, so the next film can be priced before it starts.
+
+### Publishing
+- **YouTube upload**, confirmed on the right channel, unlisted by default.
+- **Chapters from the transcript**, plus an audit of which videos lack them.
+
+### Handover to another editor
+- **Give the edit away, not just the file**: the cut exports as an
+  OpenTimelineIO timeline, an EDL or FCP7 XML that **DaVinci Resolve opens in
+  its free edition** — two video tracks, the audio, the media paths, plus an
+  SRT of the words.
+- **The reasoning travels with it**: every removal, name label and end card
+  arrives as a marker carrying the note that explains it.
+- **It says what it cannot carry** before you promise anyone an editable file —
+  the composite, the crop and the caption look are pixels, and pixels stay in
+  the render.
+
+### Memory
+- **Every render has a record**: what is on it, which setting controls it,
+  where it went, and a journal of why.
+- **Change one thing later in one sentence** — only that re-renders.
+- **Stale renders flagged** when a decision changed after them.
+
+## Requirements
+
+| | |
+|---|---|
+| OS | Windows |
+| GPU | Optional. KitCut finds the fastest encoder your machine has — NVIDIA, AMD or Intel — and falls back to software, which is slower but works everywhere. |
+| Accounts | None. YouTube publishing and the premium dub voice are the only exceptions. |
+
+## Not yet
+
+Colour grading. Mac.
+
+## Technical reference
+
+Every command, setting and trap: [`docs/reference.md`](docs/reference.md).
+
+## Update history
+
+What changed and which capability it touched. Fixes that only a maintainer
+would care about are left to `git log`.
+
+```
+2026-09-25
+  sketch     New pipeline: animated explainers written as code. Voice takes
+             picked by Whisper, a score on sampled instruments, synthesised
+             sound, a 60 fps render through headless Edge. Two looks, crayon
+             and clean; both shipped a film on day one.
+
+2026-09-03
+  shorts     Picking the moments became its own stage: candidates shortlisted
+             with reasoning, quotes resolved and hook timing priced BEFORE
+             anything is cut. Two rejected picks would have died on paper.
+  shorts     A caption card sitting on the speaker's face is refused. The
+             guard reads the render and runs after every vertical cut.
+  captions   Whisper's split punctuation glued at the shared word loader --
+             "60 ,000" reads "60,000" in captions, dub units and phrase
+             anchors alike. It had been shipping on every captioned video.
+  captions   grouping.wrap: a channel's own wrapping policy ends cards that
+             strand a single word on a line of their own.
+  shorts     Caption position measured off the channel's published shorts
+             instead of eyeballed -- a still frame cannot tell a caption box
+             from a black turtleneck.
+  shorts     check-shorts.py, the self-test this path never had. No GPU.
+
+2026-09-02
+  platform   Setup is something Claude performs, not something the user is
+             told to run.
+
+2026-09-01
+  captions   CPU encoder fallback -- captions and shorts render on a machine
+             with no NVENC.
+  shorts     Hook gate: a clip whose hook arrives late is refused rather than
+             rendered. It had shipped twice.
+  screen     film-redact -- when the secrets ARE the film, redact the finished
+             cut instead of mapping back through it.
+  publish    One OAuth grant per channel, so authorising a second never burns
+             the first.
+  platform   make-tester-repo -- the copy of this repo a stranger can be given.
+
+2026-08-31
+  screen     New pipeline: a film out of screen recordings carrying no sound
+             at all -- sensitive fields tracked and blurred, voice-over added
+             later, twelve stages behind one command, two review stops.
+  multicam   Count the PEOPLE at the shoot, not the clusters: held-out score
+             49.5% -> 63.9%, and it needed no tuning.
+
+2026-08-30
+  platform   Tooling and the user's work split behind one resolver, with the
+             platform boundary enforced by the checker rather than by habit.
+
+2026-08-27
+  multicam   New pipeline: cut between cameras that shot one event, tested by
+             rebuilding somebody else's finished film and scoring the re-cut
+             frame by frame. Six films, stage 1 exact on all six.
+  multicam   Stage 2 chooses the cut from the soundtrack alone -- 73-87% of
+             the timeline on the same camera as the human editor.
+  multicam   Angles identified by WHO is in frame, for the studio case where
+             every camera shares one backdrop.
+
+2026-08-26
+  screencast New pipeline: one film out of a screen recording plus the camera
+             take beside it -- offset measured and proved, dead air dropped,
+             camera composited as a PiP.
+  projects   Every video gets a folder that remembers what was done to it:
+             project.json for current state, journal.md for history.
+  graphics   Name labels, image overlays and designed cards, each burned
+             inside the pass that was already happening.
+  publish    Chapter markers written and audited from what a video says.
+  platform   check-script.py, the status line, and a render progress reader.
+
+2026-08-25
+  captions   The beginning: word-synced burned-in captions, with sync proven
+             on sampled frames before an encode is spent.
+  shorts     Shorts cut by quoting what is said rather than by timecode;
+             vertical 9:16 with a face-tracked crop; animated handle badge.
+  dub        New pipeline: translate a clip and keep its cadence -- segment at
+             real pauses, fit each line to its slot, retune what will not fit.
+  platform   A user-level PYTHONPATH was loading another Python's packages;
+             every script now re-execs into .venv with a clean environment.
+```
+```
+
+## File tree (557 files, filtered)
+
+- `.agents/skills/hf-cli/.hf-skill-manifest.json`
+- `.agents/skills/hf-cli/SKILL.md`
+- `.claude/skills/check-script/SKILL.md`
+- `.claude/skills/hf-cli`
+- `.claude/skills/setup/SKILL.md`
+- `.claude/skills/studio-vm/SKILL.md`
+- `.claude/skills/video-captions/SKILL.md`
+- `.claude/skills/video-card-design/SKILL.md`
+- `.claude/skills/video-channel-audit/SKILL.md`
+- `.claude/skills/video-dub/SKILL.md`
+- `.claude/skills/video-image-overlay/SKILL.md`
+- `.claude/skills/video-multicam-switch/SKILL.md`
+- `.claude/skills/video-multicam/SKILL.md`
+- `.claude/skills/video-name-label/SKILL.md`
+- `.claude/skills/video-project/SKILL.md`
+- `.claude/skills/video-resolve/SKILL.md`
+- `.claude/skills/video-screen-cut/SKILL.md`
+- `.claude/skills/video-shorts/SKILL.md`
+- `.claude/skills/video-sketch/SKILL.md`
+- `.claude/skills/video-tighten/SKILL.md`
+- `.claude/skills/video-zoom/SKILL.md`
+- `CLAUDE.md`
+- `README.md`
+- `config/caption-style.json`
+- `config/cards/brands/mint.json`
+- `config/cards/brands/mono.json`
+- `config/cards/brands/yt2.json`
+- `config/cards/checklist/chips.json`
+- `config/cards/checklist/plain.json`
+- `config/cards/checklist/window-slate.json`
+- `config/cards/checklist/window-vertical.json`
+- `config/cards/checklist/window.json`
+- `config/cards/templates/centred-lockup.html`
+- `config/cards/templates/corner-tag.html`
+- `config/cards/templates/quote.html`
+- `config/cards/templates/stacked-blocks.html`
+- `config/cards/templates/stat.html`
+- `config/docs/issuers/brightwater.json`
+- `config/docs/issuers/cardinal-state.json`
+- `config/docs/issuers/keystone-survey.json`
+- `config/docs/issuers/northgate.json`
+- `config/docs/issuers/ohio-sos.json`
+- `config/docs/templates/letterhead-report.html`
+- `config/elevenlabs-voices.json`
+- `config/examples/checklist.example.json`
+- `config/examples/edl-film.example.json`
+- `config/examples/edl-short.example.json`
+- `config/examples/thumbnail.example.json`
+- `config/handles/default.json`
+- `config/handles/vertical.json`
+- `config/heads/looks.json`
+- `config/labels/lower-third.json`
+- `config/maps/example-route-map.json`
+- `config/maps/paper-relief.json`
+- `config/overlays/callout.json`
+- `config/overlays/debug-notes.json`
+- `config/overlays/elapsed-counter-vertical.json`
+- `config/overlays/elapsed-counter.json`
+- `config/overlays/end-card.json`
+- `config/presets/band-dark.json`
+- `config/presets/band-light.json`
+- `config/presets/bloomberg-tech-vertical.json`
+- `config/presets/bloomberg-tech.json`
+- `config/presets/dark-card-uk.json`
+- `config/presets/dark-card.json`
+- `config/presets/eu-navy.json`
+- `config/presets/lennys-podcast-vertical.json`
+- `config/presets/red-card-vertical.json`
+- `config/presets/red-card.json`
+- `config/presets/vertical-band-dark.json`
+- `config/resolve/export.json`
+- `config/sketch/collage-example/film.js`
+- `config/sketch/collage-example/paint.json`
+- `config/sketch/collage-example/score.json`
+- `config/sketch/collage-example/score.py`
+- `config/sketch/collage-example/sfx.json`
+- `config/sketch/collage-example/sfx.py`
+- `config/sketch/collage-example/sketch.json`
+- `config/sketch/example/film.js`
+- `config/sketch/example/score.json`
+- `config/sketch/example/sfx.json`
+- `config/sketch/example/sketch.json`
+- `config/sketch/grounds/film.js`
+- `config/sketch/grounds/sketch.json`
+- `config/sketch/heads-example/film.js`
+- `config/sketch/heads-example/score.json`
+- `config/sketch/heads-example/sfx.json`
+- `config/sketch/heads-example/sfx.py`
+- `config/sketch/heads-example/sketch.json`
+- `config/sketch/heads-example/wilbur.landmarks.json`
+- `config/sketch/kit-example/film.js`
+- `config/sketch/kit-example/sketch.json`
+- `config/sketch/voice-samples.json`
+- `config/templates/call-for-speakers.json`
+- `config/templates/call-for-speakers/README.md`
+- `config/templates/call-for-speakers/content.sample.json`
+- `config/templates/call-for-speakers/film.js`
+- `config/templates/conference-numbers.json`
+- `config/templates/conference-numbers/README.md`
+- `config/templates/conference-numbers/content.sample.json`
+- `config/templates/conference-numbers/film.js`
+- `config/templates/conference-programme.json`
+- `config/templates/conference-programme/README.md`
+- `config/templates/conference-programme/content.sample.json`
+- `config/templates/conference-programme/film.js`
+- `config/templates/conference-speakers.json`
+- `config/templates/conference-speakers/README.md`
+- `config/templates/conference-speakers/content.sample.json`
+- `config/templates/conference-speakers/film.js`
+- `config/tester/settings.json`
+- `config/thumbnails/thumbnails.json`
+- `docs/adr/0001-placeholder.md`
+- `docs/agents/domain.md`
+- `docs/agents/issue-tracker.md`
+- `docs/agents/triage-labels.md`
+- `docs/cartoon-from-a-still.md`
+- `docs/cartoon-from-a-still/film.js`
+- `docs/davinci-resolve.md`
+- `docs/ffmpeg-recipes.md`
+- `docs/karaoke-captions.md`
+- `docs/known-issues.md`
+- `docs/market-shorts-2026.md`
+- `docs/product-strategy.md`
+- `docs/reference.md`
+- `docs/retro-books-giveaway.md`
+- `docs/studio-scenes-plan.md`
+- `docs/studio-speed.md`
+- `docs/studio-voice-lines.md`
+- `docs/tester-quickstart.md`
+- `docs/todo.md`
+- `fonts/SOURCES.md`
+- `projects/Rj814rcfsmk/journal.md`
+- `projects/SKv9fUHeckE/journal.md`
+- `projects/a16z-agents/journal.md`
+- `projects/a16z-altman/journal.md`
+- `projects/a16z-bornstein/journal.md`
+- `projects/a16z-sinofsky/journal.md`
+- `projects/bbg-nvidia-hf/journal.md`
+- `projects/books-giveaway/journal.md`
+- `projects/books-giveaway/review-notes.md`
+- `projects/claude-demo/assets/end-card.html`
+- `projects/claude-demo/journal.md`
+- `projects/dHYrpun-XTs/journal.md`
+- `projects/dana-workshop-5veo/journal.md`
+- `projects/egr4Y4oZgLM/journal.md`
+- `projects/flatten-pdf/cards/01-free-tool.html`
+- `projects/flatten-pdf/cards/02-whole-packet.html`
+- `projects/flatten-pdf/journal.md`
+- `projects/neaCnEawvbk/journal.md`
+- `projects/puL2GfNbdaM/journal.md`
+- `projects/twocam-test/journal.md`
+- `projects/uLCrita7WSM/journal.md`
+- `projects/up-interview-1/journal.md`
+- `projects/up-interview-2/journal.md`
+- `projects/yt2-fpv33-seg/cards/outro.html`
+- `projects/yt2-fpv33-seg/journal.md`
+- `projects/yt2-fpv33-val/journal.md`
+- `projects/yt2-fpv33/journal.md`
+- `scripts/__init__.py`
+- `scripts/_encode.py`
+- `scripts/_env.py`
+- `scripts/_gpulock.py`
+- `scripts/_heads.py`
+- `scripts/_overlay.py`
+- `scripts/_progress.py`
+- `scripts/_project.py`
+- `scripts/_runlog.py`
+- `scripts/_sketch.py`
+- `scripts/_sketchaudio.py`
+- `scripts/_stt.py`
+- `scripts/_thumb.py`
+- `scripts/_toon.py`
+- `scripts/_types.py`
+- `scripts/_web.py`
+- `scripts/_ytchapters.py`
+- `scripts/angle-cut.py`
+- `scripts/audit-caption-glue.py`
+- `scripts/auto-reframe.py`
+- `scripts/auto-switch.py`
+- `scripts/build-captions-ass.py`
+- `scripts/chapter-thumbs.py`
+- `scripts/check-caption-space.py`
+- `scripts/check-dub.py`
+- `scripts/check-encode.py`
+- `scripts/check-env.py`
+- `scripts/check-gpulock.py`
+- `scripts/check-kit.py`
+- `scripts/check-multicam.py`
+- `scripts/check-openings.py`
+- `scripts/check-resolve.py`
+- `scripts/check-screen.py`
+- `scripts/check-script.py`
+- `scripts/check-shorts.py`
+- `scripts/check-sketch.py`
+- `scripts/check-thumbnail.py`
+- `scripts/check-zoom.py`
+- `scripts/checklist-card.py`
+- `scripts/compare-videos.py`
+- `scripts/conform-tapes.py`
+- `scripts/cut-clips.py`
+- `scripts/debug-notes.py`
+- `scripts/detect-overlays.py`
+- `scripts/dub-clips.py`
+- `scripts/dub-translate.py`
+- `scripts/dub-tts.py`
+- `scripts/edl-cut.py`
+- `scripts/film-redact.py`
+- `scripts/generate-voiceover.py`
+- `scripts/gpu-lock.py`
+- `scripts/handle-overlay.py`
+- `scripts/head-rig.py`
+- `scripts/html-to-image.py`
+- `scripts/image-overlay.py`
+- `scripts/import-footage.py`
+- `scripts/kitcut-clean.py`
+- `scripts/make-card.py`
+- `scripts/make-doc.py`
+- `scripts/make-proxies.py`
+- `scripts/make-tester-history.py`
+- `scripts/make-tester-repo.py`
+- `scripts/make-thumbnail.py`
+- `scripts/measure-caption-band.py`
+- `scripts/mouth-bench.py`
+- `scripts/name-label.py`
+- `scripts/paint-compare.py`
+- `scripts/portrait-cutout.py`
+- `scripts/project-scan.py`
+- `scripts/redaction-review.py`
+- `scripts/render-gate.py`
+- `scripts/render-status.py`
+- `scripts/resolve-export.py`
+- `scripts/review-ingest.py`
+- `scripts/route-map.py`
+- `scripts/run-captions.py`
+- `scripts/run-log.py`
+- `scripts/scan-pii.py`
+- `scripts/screen-activity.py`
+- `scripts/screen-cut.py`
+- `scripts/screencast-cut.py`
+- `scripts/screencast-pipeline.py`
+- `scripts/shortlist-moments.py`
+- `scripts/shot-detect.py`
+- `scripts/sketch-audio.py`
+- `scripts/sketch-paint.py`
+- `scripts/sketch-render.py`
+- `scripts/sketch-vo.py`
+- `scripts/speaker-loops.py`
+- `scripts/split-cameras.py`
+- `scripts/statusline.py`
+- `scripts/stt-compare.py`
+- `scripts/sync-audio.py`
+- `scripts/sync-tracks.py`
+- `scripts/thumb-options.py`
+- `scripts/tighten-cut.py`
+- `scripts/track-blur.py`
+- `scripts/transcribe-audio.py`
+- `scripts/transcribe-words.py`
+- `scripts/transcript-outline.py`
+- `scripts/verify-captions.py`
+- `scripts/verify-chapters.py`
+- `scripts/vo-scorer-bench.py`
+- `scripts/voice-samples.py`
+- `scripts/web-grab.py`
+- `scripts/yt-audit-chapters.py`
+- `scripts/yt-connect.py`
+- `scripts/yt-delete.py`
+- `scripts/yt-fetch-transcripts.py`
+- `scripts/yt-set-banner.py`
+- `scripts/yt-set-chapters.py`
+- `scripts/yt-set-disclosure.py`
+- `scripts/yt-set-privacy.py`
+- `scripts/yt-update.py`
+- `scripts/yt-upload.py`
+- `scripts/zoom-import.py`
+- `sketch/collage.js`
+- `sketch/engine.js`
+- `sketch/heads.js`
+- `sketch/kit.js`
+- `sketch/player.html`
+- `sketch/preview.html`
+- `sketch/props.js`
+- `sketch/space.js`
+- `sketch/thumb.js`
+- `studio/README.md`
+- `studio/agent.py`
+- `studio/bakeoff.py`
+- `studio/claude_log.py`
+- `studio/clients.py`
+- `studio/deploy/README.md`
+- `studio/draft_times.py`
+- `studio/examples/blueprint/film.js`
+- `studio/examples/night/film.js`
+- `studio/film.py`
+- `studio/guard.py`
+- `studio/harvest.py`
+- `studio/harvest/inventory.md`
+- `studio/harvest/process.md`
+- `studio/import_film.py`
+- `studio/index.html`
+- `studio/library.py`
+- `studio/locks.py`
+- `studio/looks/collage.md`
+- `studio/looks/drawn.md`
+- `studio/looks/painted.md`
+- `studio/media.py`
+- `studio/motion.py`
+- `studio/outro.js`
+- `studio/peers.py`
+- `studio/people-row.js`
+- `studio/people.md`
+- `studio/procs.py`
+- `studio/prompt.md`
+- `studio/prompts/director.md`
+- `studio/prompts/editor.md`
+- `studio/prompts/scene.md`
+- `studio/prompts/scenes.md`
+- `studio/release.py`
+- `studio/resume.py`
+- `studio/scenes.py`
+- `studio/sched.py`
+- `studio/server.py`
+- `studio/share.py`
+- `studio/store.py`
+- `studio/templates.py`
+- `studio/test_bluegreen.py`
+- `studio/test_direction.py`
+- `studio/test_guard.py`
+- `studio/test_isolation.py`
+- `studio/test_library.py`
+- `studio/test_media.py`
+- `studio/test_memory.py`
+- `studio/test_multi.py`
+- `studio/test_people.py`
+- `studio/test_scenes.py`
+- `studio/test_sched.py`
+- `studio/test_server.py`
+- `studio/test_share.py`
+- `studio/test_shared.py`
+- `studio/test_templates.py`
+- `studio/test_thumbs.py`
+- `studio/test_uploads.py`
+- `studio/test_web.py`
+- `studio/test_youtube.py`
+- `studio/test_ytdraft.py`
+- `studio/thumbs.py`
+- `studio/tools.py`
+- `studio/uploads.py`
+- `studio/validate.py`
+- `studio/voicelines.py`
+- `studio/youtube.py`
+- `studio/ytdraft.py`

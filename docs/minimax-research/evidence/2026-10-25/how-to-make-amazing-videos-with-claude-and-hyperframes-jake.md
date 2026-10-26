@@ -1,0 +1,1204 @@
+# How to Make Amazing Videos with Claude and HyperFrames | Jake Moran
+
+- **Source:** https://youtu.be/MC1g2fHYC88
+- **Kind:** youtube
+- **Captured:** 2026-10-25T16:29:23
+- **Evidence grade:** vendor or creator claim. Not tested in this repo. Quotes from a caption are what a creator *said*, not a measurement.
+
+## Metadata
+
+- **Title:** How to Make Amazing Videos with Claude and HyperFrames | Jake Moran
+- **Channel:** Peter Yang
+- **Published:** 25 10 2026
+- **Runtime:** 41:41
+- **Views:** 252
+- **Likes:** 14
+
+## Description (verbatim)
+
+```
+Jake is my go-to expert for creating and editing videos with AI. In our episode, he demoed how he prompts Claude and HyperFrames to make incredible videos for product launches, long-form tutorials, and shorts. We also covered the key terms that you need to learn to guide AI to make the right edits. 
+
+Jake and I talked about:
+
+(00:00) Video editing 101 to get Claude to make what you want
+(06:14) Parakeet: A free local model for accurate cuts
+(08:40) Hook viewers with zooms, B-roll, and whip pans
+(13:37) Demo: A launch video built from three screenshots
+(18:41) Launch videos in 4 parts: Hook, context, payoff, brand
+(20:39) Claude added Jake’s AI avatar without being asked
+(23:28) Jake’s AI edit of my raw YouTube video
+(29:25) How to copy any video’s style using AI
+(36:17) Draw feedback on the frame instead of typing
+
+Thanks to our sponsors:
+
+Wispr Flow: 4x faster than typing with your voice https://ref.wisprflow.ai/peteryang
+
+📌 Get the takeaways: https://creatoreconomy.so/p/how-to-make-amazing-videos-with-claude-and-hyperframes-jake-moran
+
+Where to find Jake:
+
+X: https://x.com/jake11moran
+HyperFrames: https://hyperframes.dev
+Parakeet: https://build.nvidia.com/nvidia/parakeet-tdt-0_6b-v2/modelcard
+
+Subscribe to this channel - more interviews coming soon!
+```
+
+## Links from the description
+
+- https://ref.wisprflow.ai/peteryang
+- https://creatoreconomy.so/p/how-to-make-amazing-videos-with-claude-and-hyperframes-jake-moran
+- https://x.com/jake11moran
+- https://hyperframes.dev
+- https://build.nvidia.com/nvidia/parakeet-tdt-0_6b-v2/modelcard
+
+## Captions
+
+1144 snippets. ASR output; brand names are mangled.
+
+- [00:00] It came with three screenshots. It came
+- [00:02] up with so much of this on its own. None
+- [00:04] of these people are real except for you
+- [00:06] in the middle there. Or even you is not
+- [00:07] real.
+- [00:08] >> That's my avatar as well.
+- [00:09] >> Yeah, and I didn't even ask for myself
+- [00:11] to be in there. That was actually
+- [00:12] Claude's discretion.
+- [00:13] >> You just upload a reference, so I
+- [00:15] uploaded this 5 seconds, and then I
+- [00:18] described in the prompt just what I
+- [00:20] wanted to change. You can just draw on
+- [00:22] what you want to change, leave the note,
+- [00:24] and then they'll queue.
+- [00:25] >> I think that's the dream of a content
+- [00:27] creator. You can just yap to the camera,
+- [00:28] and then Claude will add all the screen
+- [00:30] shares and everything for you.
+- [00:34] All right. Hey everyone. Today I'm
+- [00:35] really excited to welcome back Jake from
+- [00:37] Hyperframes. Jake has only been editing
+- [00:39] videos for 6 months, but to me he's the
+- [00:41] go-to expert on how to use AI to edit
+- [00:44] videos. Today we're going to walk
+- [00:45] through video editing 101, and also how
+- [00:48] to edit product launch videos, talking
+- [00:50] head YouTube videos, and also short-form
+- [00:52] videos. So, welcome, Jake.
+- [00:54] >> Hey, Peter. Thanks so much for having
+- [00:56] me.
+- [00:56] >> Why don't we start with this? I'm like a
+- [00:58] total noob when it comes to video
+- [00:59] editing. Can you walk us through some
+- [01:01] video editing concepts and terms, and
+- [01:03] what they might look like so that we can
+- [01:05] all get educated?
+- [01:06] >> Video creation, it's a super wide net.
+- [01:09] So,
+- [01:10] there's tons of different types. There's
+- [01:12] launch videos, which is what I've worked
+- [01:14] on primarily for the last few months.
+- [01:16] I'm actually just now really getting
+- [01:18] into the weeds of editing something like
+- [01:21] this, which is a podcast where we've
+- [01:23] recorded this, and then we need to do
+- [01:25] some kind of cleanup later. And I want
+- [01:27] to try and visualize a couple of these
+- [01:29] things here today. When we finish
+- [01:32] recording this video, we're going to
+- [01:34] have something called the raw video or
+- [01:36] the raw takes, which is going to be
+- [01:38] maybe slightly longer than what the
+- [01:41] finished video will look like. And so,
+- [01:43] in the case of using AI, it makes it a
+- [01:45] lot easier to get to this kind of
+- [01:49] shortened version that's a little bit
+- [01:51] more polished. There's a couple terms
+- [01:54] that are worth knowing, and I'm sure
+- [01:56] Peter's going to be able to to share
+- [01:58] this out in some form later so that we
+- [02:00] have a visual reference as well. For me,
+- [02:03] I use HyperFrames as my editor. There's
+- [02:06] plenty of other editors out there.
+- [02:08] HyperFrames is HTML-based, so it's a
+- [02:11] pretty native way for agents to edit.
+- [02:14] So, I find a lot of these techniques to
+- [02:16] work pretty much one shot if you ask for
+- [02:19] that. So, there's In terms of like
+- [02:21] cleaning up recordings before you put
+- [02:23] anything crazy on the screen, there's
+- [02:25] something called the rough cut, which
+- [02:28] you can ask your agent for.
+- [02:30] This is basically where we take out a
+- [02:32] lot of the mistakes that might have
+- [02:35] happened during recording and get back
+- [02:37] to that consistent storyline that you
+- [02:39] wanted when you started recording. The
+- [02:42] way that I would do a rough cut is I
+- [02:45] would say, "Let's remove things like
+- [02:48] filler words," which are all the things
+- [02:50] that I'll probably say right now on this
+- [02:53] podcast. I would normally I want to
+- [02:55] remove to get to the meat of of what I'm
+- [02:58] trying to talk about. The same thing,
+- [03:00] I'm probably going to stop and think
+- [03:02] about something before I say it, which
+- [03:05] would be considered a pause. It's
+- [03:06] probably pretty self-explanatory, but
+- [03:09] it's important to use
+- [03:11] language that both you and the LLM will
+- [03:15] recognize because that'll help you get
+- [03:17] to results faster, not waste tokens. We
+- [03:19] all know that AI is expensive. Editing
+- [03:21] definitely isn't outside of that. So,
+- [03:24] there's different things that you can
+- [03:26] ask to be removed because models can do
+- [03:28] transcription, which is basically taking
+- [03:30] the audio and understanding what was
+- [03:33] spoken from that. So, it can find filler
+- [03:37] words, it can find the pauses because
+- [03:39] it'll take timestamps, it can find
+- [03:41] moments where I say something twice, it
+- [03:44] can also find things where I might start
+- [03:46] saying something and then I'll realize
+- [03:48] that I might have blundered, and I say
+- [03:51] it again. All of these can be found. The
+- [03:54] key is that if you really want to maybe
+- [03:56] guarantee that you're going to get
+- [03:58] closer to that cut down that you want
+- [04:01] that first go is if you use these types
+- [04:04] of terms, which is
+- [04:06] Hey, I think I had a lot of filler
+- [04:07] words. Here's an example. I might have
+- [04:09] said, I want to remove ums. I think
+- [04:11] there was a moment where I was
+- [04:13] pausing a lot. I would like to cut all
+- [04:16] the pauses to around let's say a quarter
+- [04:19] of a second or less. And it goes down
+- [04:21] the list in the same way, right? I I
+- [04:23] might have been repeating words. I want
+- [04:25] to get rid of those. I know that I did a
+- [04:27] retake around here. Basically, I think
+- [04:29] this is true with all things AI, but
+- [04:31] it's also especially true with video
+- [04:33] editing. Getting as much context into
+- [04:36] your prompt, into wherever you're uh
+- [04:40] asking things to be edited is the key to
+- [04:43] increasing quality and getting closer to
+- [04:46] what you're wanting. So, the biggest
+- [04:47] thing you can do is try and explain as
+- [04:51] much as possible.
+- [04:51] >> And and this uh just to finish it, the
+- [04:53] jump cut and the punching. So, jump cut
+- [04:55] is like all of a sudden you like jump
+- [04:56] cut to saying something else and a
+- [04:58] punching tries to hide some of that
+- [04:59] stuff, right?
+- [05:00] >> Yeah. So, same kind of thing. If if I
+- [05:04] said the way the LLM will probably do it
+- [05:07] is if I say if two times, it'll cut out
+- [05:10] one of those ifs and then move to
+- [05:12] whatever the next item is.
+- [05:14] And so, that will just
+- [05:17] to the viewer, they might notice it just
+- [05:19] because it will appear as a slight oh,
+- [05:22] my head might have moved from here to
+- [05:24] here because in between that, the time
+- [05:26] has been taken out. And then the same
+- [05:28] thing here, if you want to move
+- [05:30] something that you said later to earlier
+- [05:32] in the video, that would be the same
+- [05:34] idea where you're punching in this clip
+- [05:36] that would add additional context for
+- [05:38] the viewer at the right time in the
+- [05:40] video. So, these are all ways to use
+- [05:42] your footage that might have happened
+- [05:44] later without having to fully re-record
+- [05:46] something.
+- [05:47] >> Got it. And basically, you have
+- [05:48] individual prompts here, but usually
+- [05:50] what I do is I just combine all the
+- [05:51] stuff you do one prompt, right? Just
+- [05:53] like remove all the filler words, repeat
+- [05:55] phrases.
+- [05:56] If there's jump cuts, use punch-ins.
+- [05:57] Yeah.
+- [05:58] >> Yep.
+- [05:59] >> Yeah, and this has only happened really
+- [06:00] in the past, basically with Opus 55 and
+- [06:03] maybe with Astra and Gemini 4. So,
+- [06:05] really only the past few months, right?
+- [06:06] It was able to kind of get to this
+- [06:08] level. And before this, for the main
+- [06:10] video, I had to look at the timeline and
+- [06:12] look at the transcript and cross stuff
+- [06:13] out and like it just took forever, man.
+- [06:15] So, so I think this is a massive
+- [06:16] time-saver.
+- [06:17] >> Yeah.
+- [06:17] >> And and you also had a tip that you told
+- [06:19] me because some of the transcription
+- [06:21] models aren't as good. Like, can you
+- [06:22] share a tip? I think you use Parakeet or
+- [06:24] something?
+- [06:25] >> Yeah, so I use Parakeet, which is a a
+- [06:28] locally hosted model. It's I think it's
+- [06:30] about a gigabyte in size, so it's big as
+- [06:32] local models are, but it's worth it. So,
+- [06:35] basically, all of these tools, no matter
+- [06:38] what you use, either if they're operated
+- [06:39] from MCP, which would be the kind of
+- [06:43] older generation tools, that's how AI
+- [06:45] interacts with them or us, they normally
+- [06:48] have some kind of transcription
+- [06:51] software. For HyperFrames, we have a
+- [06:54] smaller size local transcription model.
+- [06:57] And the thing is, sometimes it misses on
+- [07:01] the exact timestamp. It's a bit hard for
+- [07:03] LLMs to figure out exactly when
+- [07:05] something said down to the millisecond,
+- [07:08] but it's key for, let's say, Instagram
+- [07:11] or TikTok-based editing where you it
+- [07:14] really really matters that you're super
+- [07:17] concise and that the pacing is really
+- [07:19] high. And so, you might ask to be like,
+- [07:21] "Okay, cut down the the pauses in
+- [07:23] between sentences to a quarter of a
+- [07:25] second." With a bad transcription model,
+- [07:28] the LLM will think, "Okay, cool." And
+- [07:30] then it might be operating on some bad
+- [07:33] timestamps, and then you'll have like
+- [07:35] half your word cut off or things like
+- [07:37] that that are awkward. So, Parakeet for
+- [07:39] me works 98%
+- [07:42] of the time to getting the right amount
+- [07:45] of time in between words or whatever the
+- [07:46] case you need. It just allows the LLM to
+- [07:49] get really good timestamps, which is
+- [07:52] everything for these types of, let's
+- [07:54] say, recording cleanup.
+- [07:56] >> Awesome, yeah. We can link the Parakeet
+- [07:57] model. It's It's free in the video
+- [07:59] description.
+- [08:00] >> This episode is brought to you by
+- [08:01] WhisperFlow. WhisperFlow saves me at
+- [08:03] least 3 hours a week and is one of my
+- [08:05] favorite AI apps by far. It's just so
+- [08:07] much faster to dictate to AI using your
+- [08:10] voice than to type. You just talk
+- [08:11] naturally and it outputs clean,
+- [08:13] ready-to-send text. WhisperFlow even
+- [08:16] removes filler words and formats your
+- [08:17] sentences for you. I use WhisperFlow for
+- [08:20] everything including drafting newsletter
+- [08:21] posts, writing product specs, replying
+- [08:23] on Slack, and more. It works on Mac,
+- [08:26] Windows, iPhone, and Android across all
+- [08:28] of your favorite apps. Try it free at
+- [08:30] whisperflow.com and use my code Peter
+- [08:33] WhisperFlow to get 6 months free. That's
+- [08:36] Peter WhisperFlow. Now, back to our
+- [08:38] episode.
+- [08:39] >> So, that's the main video like getting
+- [08:40] rid of the repeat phrases and all that
+- [08:41] kind of crap. What about the intro? The
+- [08:42] intro's trying to hook the viewer,
+- [08:43] right? I think you have some more stuff
+- [08:45] down here.
+- [08:45] >> Yeah, so intro, hook are normally the
+- [08:49] main terms you're going to hear. I think
+- [08:51] the biggest thing is if you're trying to
+- [08:52] get into this game of creating video,
+- [08:54] you're going to hear all of these
+- [08:56] buzzwords and they a lot of them mean
+- [08:57] the same thing. Intro and hook are
+- [08:59] generally the same thing. And normally
+- [09:01] what you want to do in these, if you're
+- [09:03] editing existing footage, I'll go into
+- [09:05] it with motion graphics as well, but you
+- [09:07] want probably your most engaging piece
+- [09:10] to come from that. And so, when you're
+- [09:11] editing existing footage, normally that
+- [09:14] takes the shape of a couple effects. And
+- [09:17] so, those can either be motion graphics
+- [09:18] or those can be things that are done to
+- [09:20] the footage itself to make it a little
+- [09:22] bit more engaging. One that's probably
+- [09:24] super familiar to people at least from
+- [09:27] visually understanding is zoom ins. I
+- [09:30] can't understate how powerful a zoom in
+- [09:33] is at the beginning of the video. It
+- [09:34] just leads your eye somewhere and kind
+- [09:37] of wraps you into the world and there's
+- [09:39] tons of different ways to do that. You
+- [09:41] can ask an LLM right now to just add a
+- [09:43] zoom in in the beginning and it'll
+- [09:45] probably look pretty good. There's
+- [09:46] different types of zoom in, so there's
+- [09:48] push ins where you start further away
+- [09:51] and then the camera kind of appears to
+- [09:53] come in closer like this and then
+- [09:55] there's pull back. There's cut in where
+- [09:58] we don't actually see the zooming
+- [09:59] happening, it just jumps from one
+- [10:02] position in frame to another. And all of
+- [10:04] these are controlled by a certain speed.
+- [10:06] Most creators you'll see are using a
+- [10:09] curve that looks something like the one
+- [10:11] on the right here where we start slow,
+- [10:14] kind of ramp up and then smooth out
+- [10:16] towards the end. Then the next types of
+- [10:18] things you can add to a intro or hook is
+- [10:23] b-roll. So, this right now that we're
+- [10:26] hovering on is all a-roll, but this
+- [10:28] would be an example of b-roll which is
+- [10:30] something that you might be talking
+- [10:31] about later in the video. It might be
+- [10:33] something that's just for the purpose of
+- [10:35] being visually engaging. It might be
+- [10:37] maybe a table of contents for a more
+- [10:40] tutorial style thing. If you're somebody
+- [10:43] like Peter that has a big audience, you
+- [10:44] might put your overlay explaining, "Hey,
+- [10:47] here's the reason you listen to me
+- [10:49] because I've got a big audience. I've
+- [10:51] got a long history, right?" Like there's
+- [10:53] certain pedigree that's normally used
+- [10:55] for these speaker cards, things like
+- [10:57] that. So, these are a couple examples of
+- [10:59] other types of techniques that people
+- [11:01] use. So, transition in this case is
+- [11:03] pretty broad, but the the one that's
+- [11:05] shown here is just a cut where there's
+- [11:07] no effect being done to the footage in
+- [11:10] scene A from the footage to scene B. We
+- [11:13] just straight drop in. The second one on
+- [11:15] the right is called a whip pan where it
+- [11:18] appears that the scene A would go out to
+- [11:21] the left and then scene B enters to the
+- [11:24] left. You can do this in any direction.
+- [11:26] It's just another example of more
+- [11:28] visually engaging ways to to hook in
+- [11:31] viewers.
+- [11:33] >> Nice.
+- [11:34] >> These are examples as well.
+- [11:35] >> other kinds of transitions. And and and
+- [11:37] and maybe they can just like maybe we
+- [11:38] can just like cuz I don't actually know
+- [11:39] when to whip pan versus cut. So maybe
+- [11:42] may- maybe we can just like mention all
+- [11:43] the transition names or like a bunch of
+- [11:45] them and be like, "Hey Claude, use your
+- [11:46] best judgment." too.
+- [11:47] >> Exactly.
+- [11:48] >> Yeah. Yeah.
+- [11:49] >> Honestly, yeah, I I I it is rare that
+- [11:52] I'm deciding what exactly needs to
+- [11:55] happen and when. It's more, "Hey, I like
+- [11:58] these effects, right?" When I see
+- [12:00] another creator use, let's say uh
+- [12:02] the the whip pan, I like it. I think
+- [12:04] visually it's just a really engaging
+- [12:06] type of effect. Leave it up to to
+- [12:08] Claude. It's going to make the choice
+- [12:10] for you and it'll probably be pretty
+- [12:12] solid.
+- [12:12] >> Got it. Awesome, dude. And and then and
+- [12:14] then you can also ask it to add music.
+- [12:16] Do you have to use Suno or you can just
+- [12:17] randomly add music music by by itself?
+- [12:19] >> Yeah, so
+- [12:20] so this one's super new to me and I'm
+- [12:23] still experimenting with it, but Opus
+- [12:25] can can make its own music, too. So it
+- [12:28] can use MIDI and create its own tracks.
+- [12:31] You can point it at different types of
+- [12:33] libraries to create its own music. If
+- [12:35] you just ask, "Hey, don't use a
+- [12:37] generative model, make your own music."
+- [12:39] There's you you can if you have if you
+- [12:42] have local files on your desktop, which
+- [12:44] I do, I just drop it in chat and I'm
+- [12:45] like, "Hey, please add this music." One
+- [12:48] thing that kind of goes back to the idea
+- [12:50] with transcription as well, models still
+- [12:53] struggle with audio. They can't hear
+- [12:56] anything. And so often if you just say,
+- [12:59] "Put the music in," it might come back
+- [13:01] super loud against what you're talking
+- [13:03] about and against your voiceover. So I
+- [13:05] normally just say, "Keep it low, you
+- [13:07] know, keep it at 10% of the volume of my
+- [13:11] A-roll." There's all sorts of ways to
+- [13:12] describe this, but just being a little
+- [13:14] bit clearer normally helps. Again, turns
+- [13:17] with editing take a little while. It's
+- [13:19] not the fastest thing ever. So if you
+- [13:21] kind of have an idea that something
+- [13:22] might happen or you kind of have an idea
+- [13:24] of what you want, it's better to just
+- [13:26] list it all out before sending the agent
+- [13:29] off on some kind of task.
+- [13:31] >> Awesome. Yeah, this is a problem. And of
+- [13:33] course asking it to cut the transitions
+- [13:34] to the beat of the music it will take it
+- [13:36] to another level, right? That's kind of
+- [13:37] >> Exactly.
+- [13:38] >> Yeah. Dude, so so do you want to show us
+- [13:40] a finished video that you made? Should
+- [13:42] we start the product launch one or
+- [13:43] should we start with something else?
+- [13:45] >> So, this is something we launched last
+- [13:48] week, which is a feature inside of our
+- [13:50] desktop app, HyperFrames desktop app
+- [13:52] that allows people to remove background
+- [13:54] on video and images. What I'm really
+- [13:56] going to actually be going over is more
+- [13:57] of Okay, how did I actually make this
+- [13:59] video, right? There's the meta idea of
+- [14:02] we have this feature, how do we describe
+- [14:04] it to people? And so I came up with
+- [14:05] this.
+- [14:48] >> All right, that's pretty great. So,
+- [14:49] that was pretty good.
+- [14:51] So, yeah. Walk us through how you made
+- [14:52] this.
+- [14:52] >> Yeah. So, let me open up In In our case,
+- [14:56] I made it in our desktop app. You can
+- [14:58] also use our tool natively within our
+- [15:02] code app or chat GPT, anything. I'm just
+- [15:05] going to show our app because that's
+- [15:06] where I made it. But the creation flow
+- [15:09] is is largely the same thing. This just
+- [15:11] made it easier for me to edit later.
+- [15:13] Basically, I came I came with three
+- [15:16] screenshots. That's what I came with
+- [15:18] when I wanted to to start this video.
+- [15:20] So, one screenshot I had was of our
+- [15:24] actual studio because I knew I wanted to
+- [15:26] share it later. I came with the images I
+- [15:29] wanted to use in hook, and then I sat
+- [15:32] down and I wrote this prompt. And kind
+- [15:34] of core to the the what I was going over
+- [15:37] earlier, it's the same idea with motion
+- [15:39] graphics videos as well. As much context
+- [15:42] as you can feed is is ideal. So, but
+- [15:47] this isn't it isn't that much, and the
+- [15:48] key is that I'm not actually using
+- [15:51] really much editing jargon at all, which
+- [15:53] goes back to that idea that like Opus
+- [15:56] and these newer models, they're going to
+- [15:57] make a lot of these choices themselves,
+- [15:59] and you'll be amazed once you get
+- [16:01] started by what they choose to do by
+- [16:04] themselves. What I'm really going over
+- [16:07] in this is the storyline that I wanted.
+- [16:11] And I I will say, and this has come up
+- [16:13] before, the biggest bummer I think for
+- [16:15] people still today with editing with AI
+- [16:18] is that you actually you
+- [16:20] you probably do still need your idea,
+- [16:21] right? You probably still need to know a
+- [16:24] rough storyline that you want to convey.
+- [16:27] And so, in the case of this video, when
+- [16:29] we were creating the the background
+- [16:32] removal feature, one of the engineers on
+- [16:34] my team had actually shared this hook
+- [16:37] sequence basically with me in in Slack
+- [16:40] and was like, "Look, we have background
+- [16:41] removal and it works." And and showed
+- [16:44] this image with the background removed,
+- [16:46] and I was like, "Okay, that was super
+- [16:48] cool. I want to use it in the video."
+- [16:50] So, I came to create my launch video
+- [16:53] with the same asset that he had shared,
+- [16:55] dropped it in, and then loosely in the
+- [16:58] chat described what I want, which is
+- [17:00] literally not that much information,
+- [17:02] right? It came up with so much of this
+- [17:05] on its own, and then the rest of it I
+- [17:07] just wanted to explain kind of the now
+- [17:10] it's just a prompt away, like the idea
+- [17:12] of just normal how people do the more
+- [17:15] marketing-y type things in these videos
+- [17:18] where it's just like, "Oh, it's a prompt
+- [17:19] away." Right? Things like that. But, it
+- [17:21] wasn't like, "Okay, now we're going to
+- [17:22] cut into this, and it's going to be 35
+- [17:24] seconds, and all of the very specific
+- [17:26] things that could have happened." I
+- [17:28] actually don't really feel like you need
+- [17:30] to prompt like that anymore. It's more
+- [17:31] about get out what you're thinking, and
+- [17:34] you'll get something back. And the the
+- [17:36] last thing is I normally ask for a
+- [17:38] storyboard in this case in this tool, we
+- [17:40] actually have this as a thing you can
+- [17:42] select. So, I had that selected. And so,
+- [17:45] the L amp goes off,
+- [17:47] and it makes something like this if you
+- [17:49] ask for it. Otherwise, it'll probably go
+- [17:52] build the full video, which takes a long
+- [17:55] time. I prefer, just because motion
+- [17:57] graphics, I have a certain standard I
+- [17:59] want to get to, I prefer to look at
+- [18:01] still frames of what's going to happen
+- [18:04] over the video instead of kind of
+- [18:07] working on the the fully built thing.
+- [18:09] But, basically, going back to that full
+- [18:11] video that we saw, you can see all of
+- [18:14] the pieces that actually ended up making
+- [18:16] it to to the finished film. But, this
+- [18:19] allowed me to to edit things first. So,
+- [18:21] you can see I didn't end up having this
+- [18:24] exact look. So, I asked for more things
+- [18:26] later when I got the first build back. I
+- [18:30] normally just use this as a a rule of
+- [18:33] thumb where I don't need it to be
+- [18:35] perfect, but if I can kind of see what I
+- [18:37] want, then I'm good to let it build.
+- [18:40] But, it allows you to catch some of the
+- [18:42] things that might be issues a lot
+- [18:43] faster.
+- [18:44] >> And And generally speaking for product
+- [18:46] launch videos, I think you made the most
+- [18:48] of these, right? So,
+- [18:49] just as a high-level, do you have any
+- [18:51] quick guidelines for making these? Like,
+- [18:53] you know, they're usually like 30, 45
+- [18:54] seconds long. They just tell a story,
+- [18:56] maybe like bring the problem or just
+- [18:57] show the solution. Like, how how do you
+- [18:59] >> Yeah, in our case, the mainly what we're
+- [19:02] doing with product launch videos is it's
+- [19:04] it's some feature which is a subset of
+- [19:07] our lar- larger product. I'm not often
+- [19:09] doing like a
+- [19:11] like, "Here's this new company. I have
+- [19:13] to explain the the founder story and all
+- [19:15] the things that you might see for when
+- [19:17] people announce a round or something
+- [19:18] like that. Often, what people really
+- [19:20] need is hey, I just made this tool. In
+- [19:23] our case, our engineers go crazy all the
+- [19:26] time. So, I'm getting pinged at 5:00
+- [19:28] p.m. being like, "Hey, we just finished
+- [19:30] this. Do you think we could talk about
+- [19:31] it tomorrow?" Right? So, it's it's some
+- [19:33] smaller scope item that is useful to
+- [19:36] something or some subset of users. And
+- [19:39] then within these videos, you want to be
+- [19:41] concise. They don't need to know a ton
+- [19:43] of things. So, you try and get somewhere
+- [19:46] I or generally I try and get somewhere
+- [19:48] in like 30 to a minute and change.
+- [19:52] >> Yeah.
+- [19:52] >> 30 seconds to a minute and change. And I
+- [19:54] start with some kind of engaging hook.
+- [19:56] In the case who is In this case, it was
+- [19:57] that kind of basketball thing. But in
+- [19:59] general, this is the hook is probably
+- [20:02] your most creative thing. And I'll get
+- [20:04] into different ways to add context in
+- [20:07] just a second. But the hook is your most
+- [20:09] engaging thing. Then you kind of want to
+- [20:10] lead to how to use it in the product
+- [20:12] generally. And then what the payoff is
+- [20:15] going to be for the end user. And then
+- [20:18] maybe you need some kind of follow-up
+- [20:20] information about if it costs money or
+- [20:22] something like that. Or just like, "Hey,
+- [20:24] we're Hyperframes again, by the way."
+- [20:26] Right? Just reminding people of the
+- [20:28] brand. So, I normally think of that it
+- [20:30] in four sections. Hook, kind of like the
+- [20:33] context building, the maybe the call to
+- [20:35] action or the output, and then coming
+- [20:38] back around to like, "Hey, here's our
+- [20:40] brand."
+- [20:41] >> Got it. And couple quick questions. So,
+- [20:43] I think the avatars are actually not
+- [20:45] generated by Claude. You're using
+- [20:47] HeyGen, right? To make that
+- [20:48] >> Yeah.
+- [20:48] >> people.
+- [20:49] >> Yeah. So, I don't like being on camera.
+- [20:53] I also don't have access to a ton of
+- [20:55] creators. So, I being a HeyGen employee,
+- [20:59] being someone that's been around HeyGen
+- [21:00] way before I started doing this
+- [21:01] Hyperframes stuff, I've gotten super
+- [21:03] comfortable with just using avatars to
+- [21:06] generate assets that I need in videos.
+- [21:09] In this case, like we'll see later in
+- [21:11] this video, right? We have this crazy
+- [21:13] grid wall of video examples. I could
+- [21:15] have pulled these from online. I'm lazy,
+- [21:18] and I just asked Claude to use HeyGen to
+- [21:22] generate different characters and then
+- [21:24] have them speak a couple clips. In this
+- [21:26] way, I could get the idea that I wanted
+- [21:29] to get across more easily and without me
+- [21:32] doing any kind of research work on
+- [21:34] Instagram and TikTok and pulling videos
+- [21:37] and all the things.
+- [21:37] >> So, none of these people are real except
+- [21:39] for you in the middle there.
+- [21:41] Is that right?
+- [21:41] >> Exactly.
+- [21:42] >> even you is not real, right? Is it like
+- [21:43] an avatar or something?
+- [21:44] >> yeah. That's my avatar as well. Yeah,
+- [21:46] and I didn't even ask for for myself to
+- [21:48] be in there. That was actually Claude's
+- [21:50] discretion. If you have footage, you can
+- [21:52] use it. You would just drop it in. In
+- [21:54] this case, I really didn't want to
+- [21:55] source it. I have access to these
+- [21:57] models. Why not use them? It sped up my
+- [21:59] workflow and made my night easier.
+- [22:01] >> And you you didn't actually go to
+- [22:02] heygen.com or or whatever, right? You
+- [22:04] just used the MCP and just talked to
+- [22:06] Claude, did you not?
+- [22:07] >> Yeah, so in in our desktop app, we
+- [22:09] actually have a direct connection to
+- [22:12] generative models. In the case you were
+- [22:14] using it in the Claude desktop app or
+- [22:16] let's say Codex or anything like that,
+- [22:18] you would have to connect via CLI or
+- [22:20] MCP. And that's true for any of these
+- [22:22] other generative features. You can use
+- [22:23] Image Gen, audio generation like Suno.
+- [22:26] All of these require some kind of
+- [22:28] outside connector to to generate.
+- [22:30] >> Okay. And the other question I had was
+- [22:32] how do you make your sure that the the
+- [22:34] brand is consistent across these
+- [22:36] different videos? Do you have a scale
+- [22:37] with color and font and stuff like that
+- [22:39] or
+- [22:40] >> Yeah, so we have a feature now that
+- [22:44] allows you to create a brand kit just
+- [22:46] from your website. In this case, I
+- [22:48] already had brand kits, let's say the
+- [22:50] HeyGen one, where I can
+- [22:54] edit all of these items myself, but the
+- [22:57] agent just pulls them down from your
+- [22:59] website or you can upload them if let's
+- [23:01] say you have a PDF with all of the
+- [23:03] information or a folder.
+- [23:05] >> Got it.
+- [23:06] >> But this helps so much. You do need to
+- [23:09] add it in. If you just say my brand,
+- [23:12] probably nine times out of 10, you're
+- [23:14] going to get some crazy colors and then
+- [23:16] imagined surface. So it does matter to
+- [23:20] to add the context. For us, we we built
+- [23:22] this natively. You just have to be more
+- [23:24] specific if you use it outside of
+- [23:27] our app.
+- [23:28] >> Okay, yeah, this is awesome. Okay,
+- [23:30] awesome. Yeah, so so that's product
+- [23:31] launch video.
+- [23:33] And why don't you show us the other ones
+- [23:35] now? I think you actually edited one of
+- [23:36] my videos, right? One of my talking head
+- [23:38] stuff.
+- [23:39] >> Yeah, I did. Basically, I I might have
+- [23:42] gotten access to a raw unedited version
+- [23:46] of of one of your episodes. And that
+- [23:48] basically I did. And this was 20 20
+- [23:51] minutes and 30 seconds long. And then
+- [23:54] when I finished editing it, it was 18
+- [23:56] minutes and 11 seconds. And that comes
+- [23:58] back to the thing that we were talking
+- [23:59] about earlier where
+- [24:01] there were items that were maybe retakes
+- [24:04] or pauses or things that in the long run
+- [24:08] weren't necessarily needed. So the
+- [24:10] finished output ends up being shorter
+- [24:13] than the raw footage that comes in. And
+- [24:15] that came from that initial cut down of
+- [24:18] the video. That generally, I mean, who
+- [24:21] knows how much will be cut out. Maybe I
+- [24:23] I've recorded for 8 minutes before and
+- [24:26] because I was sloppy and didn't have a
+- [24:28] script and whatever, the the finished
+- [24:30] output of what I actually needed was
+- [24:31] only a minute, right? That you never
+- [24:33] really know. It just depends on how,
+- [24:36] let's say, clean you were through the
+- [24:38] creation process there. But there are
+- [24:40] two things I really wanted to do in this
+- [24:43] example, and we're not going to play the
+- [24:44] full 18-minute thing, but I wanted to
+- [24:47] work on a fun intro reel that I could
+- [24:50] show off for this episode. And then just
+- [24:53] going back to this stuff, I wanted to
+- [24:56] cut out all the things that I might have
+- [24:59] thought have been pauses, repeated
+- [25:01] words, retakes, etc. So, I ended up
+- [25:04] creating this intro reel.
+- [25:38] >> Nice. I like listing the use cases cuz
+- [25:40] then people actually want to watch to
+- [25:41] see all 10. So, that that makes sense.
+- [25:43] >> Exactly. So, that was and and I didn't I
+- [25:46] didn't choose what should be the
+- [25:49] the where that cut in should be or
+- [25:51] anything like that, but it goes back to
+- [25:53] that idea of if we're going to do a
+- [25:54] tutorial, most likely you're going to
+- [25:56] have some kind of table of contents and
+- [25:58] you're going to introduce that to try
+- [26:00] and lead people into this video. And so,
+- [26:03] for these effects, I had two examples
+- [26:06] that Peter actually shared with me that
+- [26:08] he liked and all I did was shared
+- [26:11] screenshots to the agent of what I was
+- [26:15] going after and then I said, I think I
+- [26:18] want to do in the case of that that
+- [26:20] first thing where we showed the apps, I
+- [26:22] just described that, right? So, I had a
+- [26:23] screenshot of somebody else doing a
+- [26:26] similar type of hook and then in this
+- [26:28] case, it was just about translating that
+- [26:31] idea to the contents of this video and
+- [26:34] then also switching it to the Behind the
+- [26:36] Craft colors that that you use for most
+- [26:39] of your for your videos.
+- [26:40] >> Nice. I think one thing with this intro
+- [26:42] stuff is you want to add some animations
+- [26:44] and motion graphics, but you don't want
+- [26:46] to overwhelm with the actual person
+- [26:48] speaking. So, you you have to like do it
+- [26:49] in the high taste way, right? You don't
+- [26:51] want to just like add crazy animations
+- [26:52] all over the place.
+- [26:53] >> Yeah. I mean,
+- [26:54] >> So, some some people do. I think I
+- [26:56] definitely agree with you. Let the
+- [26:58] A-roll do the work, right? At the end of
+- [27:00] the day, you want to learn from the
+- [27:01] speaker. We don't need to like I don't
+- [27:03] think we need to go crazy. Some people
+- [27:05] prefer that look, but I would say a
+- [27:07] little goes a long way and the models
+- [27:09] seem to be pretty good about this. They
+- [27:11] seem to be maybe more conservative than
+- [27:15] I normally am. So,
+- [27:16] >> Yeah. Okay, so basically to make this
+- [27:17] intro reel, you basically just like
+- [27:19] submitted like let's say a prompt of
+- [27:20] like hey, you know, add a table of
+- [27:21] contents, add add a flow diagram, and so
+- [27:23] on, right? Exactly. Okay, awesome. You
+- [27:25] know, what? I I think just real quick on
+- [27:27] this talking head stuff. Showing Paweł
+- [27:29] Lipski here. I actually just talked to
+- [27:30] him and it's actually kind of incredible
+- [27:32] how far this thing has advanced. He made
+- [27:33] a video, I think about Muse Wonder that
+- [27:36] pretty much other than him talking to
+- [27:38] the camera, all the other screen sharing
+- [27:40] and effects were made by Claude.
+- [27:42] >> [laughter]
+- [27:42] >> So, so basically he he just kind of
+- [27:44] shared a link to the Muse Wonder blog
+- [27:46] post and maybe some other assets and and
+- [27:48] then Claude made all the text effects
+- [27:50] and I highlighted the like part where
+- [27:52] he's speaking.
+- [27:53] And I haven't tried this myself, but
+- [27:54] it's pretty incredible cuz I think
+- [27:56] that's the dream of a content creator.
+- [27:58] You can just yap to the camera
+- [28:00] and then Claude will add all the screen
+- [28:02] shares and everything for you.
+- [28:03] >> Yeah.
+- [28:04] No, yeah, exactly. And I think there is
+- [28:06] a fundamental difference between let's
+- [28:09] say a YouTube video versus these more
+- [28:11] short form that end up on TikTok and
+- [28:13] Instagram. Normally, you you lean a
+- [28:15] little bit more towards the a lot of
+- [28:18] effects or more busy on social media
+- [28:20] just because we know it's harder to stop
+- [28:22] people from just scrolling on to the
+- [28:24] next video, whereas YouTube, the
+- [28:26] commitment normally comes more from the
+- [28:28] thumbnail and the other things that
+- [28:31] get people to click in. So, for those
+- [28:34] types of videos, again, Claude also now
+- [28:37] and and and Astra and Gemini and all of
+- [28:40] these kind of leading frontier models,
+- [28:42] they all also seem to have this sense.
+- [28:45] It's so crazy. You can probably just
+- [28:47] give the link to the blog post. You can
+- [28:50] give maybe a couple other assets if you
+- [28:52] have them on your computer and a rough
+- [28:53] description. Just Even if you just
+- [28:55] describing the energy is so valuable to
+- [28:58] the to the agent. If you're just like I
+- [29:00] want this to be high-paced. I want this
+- [29:02] to be kind of crazy, right? Or I want
+- [29:04] this to be refined, professional, sleek.
+- [29:07] These types of more general, I like to
+- [29:09] say energy type terms work really well
+- [29:12] for for helping these models get there.
+- [29:14] We added one feature that I'll show just
+- [29:18] for another way of doing it. Basically,
+- [29:20] it all comes back to how can I add more
+- [29:22] context to the agent. Giving a link to a
+- [29:25] blog post really helps. The other thing
+- [29:27] is if you have styles that you really
+- [29:30] want to emulate, you can either watch
+- [29:32] them really slowly and try and describe
+- [29:34] them. Which, let's say I really liked
+- [29:37] this creator's effect for
+- [29:40] a hook or an intro for for social media.
+- [29:43] How I was creating videos in the last
+- [29:47] four four months, five months before for
+- [29:50] the last couple weeks when we unlocked
+- [29:53] this new tool internally and we shared
+- [29:54] it yesterday. If I liked this effect, I
+- [29:57] would just describe it, right? Which
+- [29:59] >> Yeah.
+- [29:59] >> I'm saying that just if you really want
+- [30:01] to copy someone's effect and then turn
+- [30:04] it into your own, it's not the simplest
+- [30:06] thing. As you can imagine, there's a lot
+- [30:08] of little nuances in what just happened
+- [30:11] in this hook. Including how the words
+- [30:13] enter, how there's background removal so
+- [30:16] that some of the items can be slightly
+- [30:17] behind the character. There's a lot that
+- [30:20] needs to be described. And that's what I
+- [30:22] would kind of struggle with in previous
+- [30:25] months.
+- [30:26] >> Yeah.
+- [30:26] >> Now, if you scroll X or if you scroll
+- [30:29] Instagram or whatever, if your algorithm
+- [30:31] is remotely involved in this game,
+- [30:32] you'll see people are learning how to
+- [30:35] recreate certain effects in different
+- [30:37] ways. Yesterday, we added this as
+- [30:41] a native capability to if you just
+- [30:44] upload a reference so I uploaded this 5
+- [30:46] seconds and then I described in the
+- [30:50] prompt just what I wanted to change
+- [30:52] right cuz you can see where we're
+- [30:54] drawing inspiration from but at the end
+- [30:57] of the day this feels like a very
+- [30:58] different scene because there's
+- [31:00] different font different colors but it's
+- [31:03] still
+- [31:04] structurally the same idea and a lot of
+- [31:06] people when you look on social media or
+- [31:10] or video sharing platforms there is kind
+- [31:12] of a convergence I would say happening
+- [31:14] on certain effects and a lot of people
+- [31:16] want to use those effects so this gives
+- [31:18] you the ability to create those or you
+- [31:20] can just
+- [31:22] try and describe them right there were
+- [31:24] only probably 10 total things that
+- [31:26] happen in this hook it's more about
+- [31:28] getting those right it's easier if you
+- [31:30] can start with references may that be
+- [31:32] screenshots may that be previous videos
+- [31:35] may that be somebody else's hyperframes
+- [31:38] project where you have the code to use
+- [31:40] all of these are valid paths to to
+- [31:43] getting to what you want
+- [31:45] >> so basically
+- [31:46] the way this is first you uploaded the
+- [31:47] clip and then you asked AI to reverse
+- [31:51] engineer it and then you added your own
+- [31:53] tweaks to it right
+- [31:54] >> exactly just for what I wanted in my
+- [31:56] video and you can do this with all
+- [31:59] different types of things this is like a
+- [32:01] split screen effect to motion graphics
+- [32:02] on top were generated by hyperframes we
+- [32:06] added captions the other thing too is
+- [32:08] existing creators right if you're
+- [32:10] someone that's been editing for a long
+- [32:12] time maybe and you're looking to get
+- [32:14] into AI editing this would be really
+- [32:16] useful because you just want a
+- [32:17] one-to-one of what you've probably
+- [32:19] already gotten down to right you have
+- [32:22] your style you have your colors you have
+- [32:24] your
+- [32:25] formats all of these things are are
+- [32:28] dialed down through years of creation
+- [32:30] you now have a library that can be
+- [32:32] referenceable if you reverse engineer it
+- [32:35] into code and and so that's another path
+- [32:38] for the more already at creating type of
+- [32:40] people as well.
+- [32:41] >> And I I like you're showing the split
+- [32:43] screen view cuz now you can actually use
+- [32:45] AI to generate the b-roll footage on the
+- [32:47] split screen like probably that plane is
+- [32:48] probably just AI generated.
+- [32:50] >> Exactly. [laughter]
+- [32:51] >> Yeah, cuz before you had to go find all
+- [32:53] the b-rolls and customize it and it'll
+- [32:54] take forever. But now you can just like
+- [32:56] AI generate the stuff.
+- [32:57] >> And in like the agent can also probably
+- [33:00] find real footage too, download it and
+- [33:03] then use it as well. So all of that a
+- [33:05] lot of it it's just becoming more and
+- [33:07] more hands-off and more and more
+- [33:08] focusing on what you're trying to convey
+- [33:10] exactly in that moment. And and that's
+- [33:12] what's making it more fun for me as well
+- [33:14] trying to ramp up how much we can share
+- [33:16] about tools like this online. It's
+- [33:19] getting easier for even myself to talk
+- [33:21] about creating with these tools cuz
+- [33:23] they're getting so much better.
+- [33:25] >> I think honestly like the A-roll, the
+- [33:26] person talking is can probably just be
+- [33:28] AI generated too, I mean.
+- [33:30] >> [laughter]
+- [33:30] >> Yeah. I mean it It's up to you. Yeah, if
+- [33:33] you don't want to record, you don't have
+- [33:34] to. If you do want to record, do it.
+- [33:37] It's all kind of the same process at the
+- [33:39] end of the day. It's just more up to
+- [33:40] your discretion. Which is great.
+- [33:43] >> Awesome, dude. Well, anything else real
+- [33:44] quick you want to show on the short side
+- [33:46] or is pretty much
+- [33:47] >> I do want to show one thing just for
+- [33:49] product launch videos because I think
+- [33:51] maybe see people if people see
+- [33:53] hyperframes they might might want a
+- [33:55] little bit of additional info here. So
+- [33:58] we have these things in our desktop app
+- [34:01] that we call moments. That's an internal
+- [34:04] term so I don't I don't believe everyone
+- [34:07] will know that right away, but it's
+- [34:08] going back to that idea of there's
+- [34:10] probably four main sections in what you
+- [34:14] create in a launch video. So like the
+- [34:16] hook, proof, the turn. These are all
+- [34:19] just ways of expressing sections. What
+- [34:22] we have here is examples of how people
+- [34:24] have done this before. And all of these
+- [34:27] are available to anyone if they use our
+- [34:31] desktop app. And all you have to do is
+- [34:34] add them and then add a little bit of
+- [34:36] additional information, and I'll have I
+- [34:39] have this article here where I visually
+- [34:41] just quickly show the three styles of
+- [34:43] you three ways that we use inspirations
+- [34:47] internally.
+- [34:49] And so, there are three ways that I
+- [34:50] would ask the agent to to use a section
+- [34:54] for something that I'm creating, which
+- [34:55] is either make it ours. If I'm using a
+- [34:59] bunch of them, I would say something
+- [35:00] like this, each one doing its own thing,
+- [35:04] serving the purpose of the news story,
+- [35:07] or I want to take from some of the
+- [35:09] energy. And you can see these are the
+- [35:12] actual prompts that went in, which is
+- [35:14] basically this is the same idea of just
+- [35:16] the context that we have launch, and
+- [35:18] then it's
+- [35:19] it's that same get inspired by
+- [35:22] >> Got it.
+- [35:22] >> these. So, it's it's really lightweight.
+- [35:24] You add the moments that you like, and
+- [35:26] then it'll recreate within your brand
+- [35:29] context because my brand kit was
+- [35:30] selected.
+- [35:31] >> Yeah, this makes it easier instead of
+- [35:33] cuz I I I remember you had like a Claude
+- [35:35] video of the Claude avatar typing stuff,
+- [35:38] and before I had to go find it in the
+- [35:41] GitHub, right? Some some somewhere.
+- [35:43] Or before my agent would have to find
+- [35:45] it. But now I can so we find it.
+- [35:47] >> It just at the end of the day for for
+- [35:49] us, the desktop app allows us to
+- [35:51] visualize a lot of the things that we've
+- [35:53] been that have been hidden in some repo
+- [35:55] or whatever it is, like some X article
+- [35:58] or something like that. It just allows
+- [36:00] because video creation is so visual.
+- [36:03] >> Yeah.
+- [36:03] >> I mean, it is. It's so much easier as
+- [36:06] the end user to have everything
+- [36:08] available to you to see and then
+- [36:11] reference when when you you're ready to
+- [36:13] start creating. So, I just wanted to
+- [36:14] show that. I'll also link this article,
+- [36:17] I'm sure, with
+- [36:18] >> Can you also show one more thing? Okay,
+- [36:20] let let let's be real here. Many times
+- [36:22] the thing can one shot it, but a lot of
+- [36:23] other times you have to to a feedback,
+- [36:25] and I honestly haven't tried out for
+- [36:27] this for I'll probably try it right
+- [36:28] after this, but but why I just use
+- [36:30] Claude I have to give a feedback I will
+- [36:32] I will be like, "Hey,
+- [36:33] 5 minutes in, go do this. 10 minutes in,
+- [36:35] go do that." And it's kind of annoying
+- [36:36] to type that stuff out in text.
+- [36:38] There probably is a way to annotate this
+- [36:40] stuff, right? In the frame.
+- [36:41] >> Yeah, so that was the other big addition
+- [36:45] for us. I I also
+- [36:48] have been up until 2 weeks ago when we
+- [36:52] had this desktop app internally
+- [36:55] edited of the same format, which was I
+- [36:58] watched this whole thing and then I'm
+- [37:00] trying to frantically leave notes as I
+- [37:03] go. Like I'm watching it and typing in
+- [37:04] Claude chat at the same time. And that's
+- [37:07] difficult, right? I'm trying to like
+- [37:09] maybe call back and be like, "Well, at
+- [37:11] this moment I said this to give some
+- [37:13] kind of additional reference." Or I do
+- [37:14] the timestamp if I catch it. But at the
+- [37:16] end of the day it
+- [37:18] it just was frustrating because yes,
+- [37:20] there are going to be edits. Maybe Opus
+- [37:23] doesn't get it right. Or after watching
+- [37:25] it you have a better idea. Half of the
+- [37:27] time I'm creating I'm like, "Oh wait, no
+- [37:29] this would be sick. I should come up
+- [37:31] with some other thing." And that's just
+- [37:33] part of the creation process. For us we
+- [37:35] added this ability to Let's say I wanted
+- [37:39] to change something right here. You can
+- [37:41] just draw on what you want to change,
+- [37:43] leave the note, and then they'll queue.
+- [37:45] Let's change
+- [37:47] Um ooh, let's change the text.
+- [37:53] Oh my god, hello.
+- [37:56] Right, it'll queue here and then when
+- [37:58] I'm ready and I'm watched through the
+- [38:00] whole video
+- [38:01] um
+- [38:04] Let's see. Instagram.
+- [38:08] I can just send these off, which just
+- [38:10] feels like to me just as it's so much
+- [38:13] easier to to edit using that type of uh
+- [38:17] experience than trying to rattle things
+- [38:20] off. I still sometimes do it if I have
+- [38:22] like a 10-second video, but yeah, they
+- [38:24] it just makes it a lot more comfortable
+- [38:27] as the viewer to to make edits.
+- [38:29] >> Yeah. And I guess a few more tips from
+- [38:31] my side. So, one tip is I've built a
+- [38:34] skill called video blur
+- [38:36] that blurs out all the sensitive
+- [38:37] information cuz I'm usually like trying
+- [38:38] to screen share like clock code or
+- [38:40] something and there's some PI stuff in
+- [38:42] there. And and then so first I get it to
+- [38:44] do a video blur pass and it just goes
+- [38:46] frame by frame and blurs out like emails
+- [38:48] and names and stuff. That's super
+- [38:49] helpful. And I I think also with longer
+- [38:51] videos, anything longer than let's say
+- [38:53] 15, 20, 30 minutes,
+- [38:55] I like to split it into different
+- [38:56] segments. So, it's also really good at
+- [38:58] stitching videos together
+- [38:59] cuz otherwise if you want to make a
+- [39:00] change at like 13 minutes in to an
+- [39:03] hour-long video, it has to reprocess the
+- [39:04] whole thing which is going to like just
+- [39:06] burn a bunch of tokens. So, I actually
+- [39:07] kind of split it into different segments
+- [39:08] and edit one by one and then stitch it
+- [39:10] together or get AI to do it. Yeah.
+- [39:12] >> Yes. Yeah, 100%. Yeah, it we're in a
+- [39:15] funny time where there's all sorts of
+- [39:18] things like this where you have an idea
+- [39:21] of how it would be faster to be done
+- [39:23] with AI. Once you nail that, just create
+- [39:27] a skill or similar and all that is is
+- [39:30] asking at the end of the session, "Hey,
+- [39:32] let's remember exactly what the steps
+- [39:34] here are so that I can reference it
+- [39:36] later for when I'm creating more
+- [39:37] videos." Especially if you're somebody
+- [39:39] that has a consistent format that you
+- [39:41] use. You definitely want to save things
+- [39:43] as a reference so you don't have to do
+- [39:45] the same work twice.
+- [39:47] >> Yeah. All right, man. Well, this is
+- [39:48] crazy times that we live in. I guess
+- [39:50] this really democratizes this video
+- [39:52] editing.
+- [39:53] I think if you're a professional video
+- [39:54] editor, you can probably still do a
+- [39:55] better job, but
+- [39:57] but at least the rest of us can can now
+- [39:58] do at least enough job. And I think this
+- [40:00] is very powerful because I think video
+- [40:01] is actually the most effective way to
+- [40:03] communicate something, right? Instead of
+- [40:05] using slides or text for a lot of
+- [40:06] things. So, yeah, I I highly encourage
+- [40:08] everyone watching this to get Opus to
+- [40:10] make launch videos for everything or
+- [40:13] help it edit your videos. I feel like
+- [40:14] the ultimate format is a rap battle for
+- [40:16] everything. Like, like a rap battle
+- [40:18] video.
+- [40:18] >> [laughter]
+- [40:20] >> You know, then then people would just
+- [40:21] love watching it. So,
+- [40:23] >> Didn't you Didn't you make a rap battle
+- [40:24] video recently?
+- [40:26] >> Yeah, I made a rap battle Lauren from
+- [40:28] Rock Paper Scissors team versus Tibo
+- [40:30] from ChatGPT. And I don't think they're
+- [40:31] actually feuding anymore, but yeah, it
+- [40:33] was pretty amazing.
+- [40:34] >> Yeah. It it there's so many more things
+- [40:37] also with AI music and all the things
+- [40:39] like that that you can just create kind
+- [40:41] of whatever you're thinking about and be
+- [40:43] surprised by what these frontier models
+- [40:46] are able to do from
+- [40:47] probably not that much information,
+- [40:49] right? I can't imagine that
+- [40:51] uh that was super scripted. So,
+- [40:53] yeah, it is extremely fun.
+- [40:55] >> Yeah.
+- [40:56] All right, dude. Well, so where can
+- [40:57] people find you and Hyperframes Studio?
+- [41:00] >> Yeah, so Hyperframes Studio is available
+- [41:03] to download on hyperframes.dev.
+- [41:05] Right now, it's only for Mac
+- [41:07] and Linux. We are trying so hard to get
+- [41:10] Windows out. We're hearing everyone talk
+- [41:12] about it. Hopefully, sometime within the
+- [41:14] next few days. We're waiting on their
+- [41:16] side. It's not The The app is built. So,
+- [41:19] we're just waiting to be approved there.
+- [41:20] Otherwise, you can find our repo, which
+- [41:23] is also called Hyperframes, and you can
+- [41:25] use it with any agent. For me, I'm on X.
+- [41:28] You can find me at Jake 11 Moran, m o r
+- [41:31] a n.
+- [41:32] >> Awesome. Awesome. Yeah, thanks for
+- [41:33] bringing this tool and showing us uh
+- [41:36] your pro pro tips. I'm really inspired.
+- [41:37] I'm going to definitely do a lot of
+- [41:38] stuff myself.
+- [41:39] >> Thank you so much.
