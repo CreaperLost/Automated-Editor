@@ -78,6 +78,55 @@ static TEMPLATES: &[Template] = &[
         "Thanks, a call to action, the channel and what's next. Holds to the end."
     ),
     template!(
+        "timeline-cut",
+        "Timeline, gaps closed",
+        6000,
+        "Shows a cut: a timeline's silent gaps close up on `cue` and its length goes from \
+         `before` to `after`. For cutting silence, pauses or retakes."
+    ),
+    template!(
+        "prompt-reply",
+        "Prompt and reply",
+        8000,
+        "Shows a prompt typed into a chat, sent on `cue`, and the reply streaming in. For what \
+         the speaker asks an agent or app, in their words."
+    ),
+    template!(
+        "count-up",
+        "Number count-up",
+        5000,
+        "A spoken number as the hero: its digits roll up from `cue` and land on it, with a \
+         label, a prefix or suffix (a currency, a unit) and a line under it."
+    ),
+    template!(
+        "before-after",
+        "Before and after",
+        6000,
+        "Shows a change: one card holds the before; on `cue` a line sweeps across and leaves the \
+         after in the same frame. For a result, a fix, two states compared."
+    ),
+    template!(
+        "app-click",
+        "App click",
+        6000,
+        "Shows an action in an app sketch: the cursor moves to a named button, clicks it on \
+         `cue`, and the result appears. For \"click Join\", \"press Run\"."
+    ),
+    template!(
+        "steps-link",
+        "Steps, linked",
+        6000,
+        "Shows a flow: up to five steps appear from `cue`, each joined to the last by a line \
+         as it is reached. For \"first this, then that\": how a process goes."
+    ),
+    template!(
+        "items-stack",
+        "Items, stacked",
+        6000,
+        "Shows what adds up: up to five items land one on another from `cue` and build a \
+         stack, with a line under it. For \"on top of that, you also get\"."
+    ),
+    template!(
         "blank",
         "Blank",
         4000,

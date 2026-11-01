@@ -76,6 +76,10 @@ import {
   PresetInput,
   PresetPart,
   PresetsView,
+  PresetRunPlan,
+  DeliveryView,
+  StyleRequest,
+  GraphicVersioned,
   PresetView,
   Style,
   StyleInput,
@@ -319,10 +323,18 @@ export const api = {
     invokeTauri<PreviewStatus>("preview_detach", { windowLabel, generation }),
   mediaInteropStatus: () => invokeTauri<MediaInteropStatus>("media_interop_status"),
   mediaRunParity: () => invokeTauri<MediaParityReport>("media_run_parity"),
-  exportStart: (projectHandle: string, settings: ExportSettings) =>
-    invokeTauri<ExportStatus>("export_start", { projectHandle, settings }),
+  /** Exports the video; with `queue` it waits behind the export running (else a busy export refuses it). */
+  exportStart: (projectHandle: string, settings: ExportSettings, queue = false) =>
+    invokeTauri<ExportStatus>("export_start", { projectHandle, settings, queue }),
+  /** Export `jobId`, or without one the export running (else the last one asked for). */
   exportStatus: (jobId?: string) =>
     invokeTauri<ExportStatus>("export_status", { jobId: jobId ?? null }),
+  /** The project's exports: waiting, running, then what went out, newest first (DLV-2). */
+  exportDeliveries: (projectHandle: string) => invokeTauri<DeliveryView[]>("export_deliveries", { projectHandle }),
+  /** Makes an export in the list again from the edit as it is now, beside the old file (queued if one runs). */
+  exportAgain: (projectHandle: string, jobId: string) => invokeTauri<void>("export_again", { projectHandle, jobId }),
+  /** Takes an export out of the list; its file stays. */
+  exportForget: (projectHandle: string, jobId: string) => invokeTauri<void>("export_forget", { projectHandle, jobId }),
   exportCancel: (jobId: string) => invokeTauri<ExportStatus>("export_cancel", { jobId }),
   detectSilence: (projectHandle: string, trackId: string, config: SilenceConfig, trackIds?: string[], transcriptAssisted = false) =>
     invokeTauri<SilenceDetectionResult>("detect_silence", { projectHandle, trackId, config, trackIds, transcriptAssisted, shortId: editTarget }),
@@ -522,6 +534,18 @@ export const api = {
     invokeTauri<GraphicView>("project_graphic_get", { projectHandle, assetId }),
   projectGraphicsList: (projectHandle: string) =>
     invokeTauri<GraphicListed[]>("project_graphics_list", { projectHandle }),
+  /** A version of a graphic beside it (GFX-4); with `useIt` it plays in its place at once. One undo step. */
+  projectGraphicVersionNew: (projectHandle: string, expectedRevision: number, assetId: string, useIt: boolean, note?: string) =>
+    invokeTauri<GraphicVersioned>("project_graphic_version_new", {
+      projectHandle,
+      expectedRevision,
+      assetId,
+      note: note ?? null,
+      useIt,
+    }),
+  /** Version `assetId` plays where its family plays now. One undo step. */
+  projectGraphicVersionUse: (projectHandle: string, expectedRevision: number, assetId: string) =>
+    invokeTauri<OpenedProject>("project_graphic_version_use", { projectHandle, expectedRevision, assetId }),
   /** The timeline at `atUs` as it plays, as a small PNG data URL (a graphic's thumbnail). */
   projectFrameThumbnail: (projectHandle: string, atUs: number, width: number) =>
     invokeTauri<string>("project_frame_thumbnail", { projectHandle, atUs, width }),
@@ -566,6 +590,11 @@ export const api = {
     invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null }),
   presetSave: (input: PresetInput) => invokeTauri<PresetView>("preset_save", { input }),
   presetRemove: (name: string) => invokeTauri<void>("preset_remove", { name }),
+  /** What running the open project's preset would do: its first steps (online ones only when `online`). */
+  presetRunPlan: (online: boolean) => invokeTauri<PresetRunPlan>("preset_run_plan", { online }),
+  /** Runs them, each one undo step, up to where the agent takes over; each step comes as `aeroedits-preset-run`. */
+  presetRun: (online: boolean) => invokeTauri<void>("preset_run", { online }),
+  presetRunStop: () => invokeTauri<void>("preset_run_stop"),
   /** Renames one of the user's presets; projects following it keep following it. */
   presetRename: (name: string, to: string) => invokeTauri<PresetView>("preset_rename", { name, to }),
   /** What the project's cleanup passes start from; one undo step. */
@@ -581,6 +610,11 @@ export const api = {
   styleRemove: (name: string) => invokeTauri<void>("style_remove", { name }),
   /** Picks a logo or font file for a style; null when cancelled. */
   pickBrandFile: (kind: "logo" | "font") => invokeTauri<string | null>("pick_brand_file", { kind }),
+  /** Keeps a style asked for from references for the agent (STY-3); answers it as a prompt to paste. */
+  styleRequestSet: (references: string[], brief: string, name?: string) =>
+    invokeTauri<string>("style_request_set", { references, brief, name: name ?? null }),
+  styleRequestGet: () => invokeTauri<StyleRequest | null>("style_request_get"),
+  styleRequestClear: () => invokeTauri<void>("style_request_clear"),
   /** Dresses the project in style `name`, one undo step. */
   projectStyleSet: (projectHandle: string, expectedRevision: number, name: string) =>
     invokeTauri<OpenedProject>("project_style_set", { projectHandle, expectedRevision, name }),
@@ -738,6 +772,12 @@ export const api = {
   projectCheckFix: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_check_fix", { projectHandle, expectedRevision, ids }),
   projectCurrent: () => invokeTauri<OpenedProject | null>("project_current"),
+  /** Adds words of a transcript to a clip after what it plays, or makes a new clip of them (`clip` null). */
+  projectClipAddWords: (projectHandle: string, expectedRevision: number, clip: string | null, trackId: string, wordIds: string[]) =>
+    invokeTauri<OpenedProject>("project_clip_add_words", { projectHandle, expectedRevision, clip, trackId, wordIds }),
+  /** Plays a gathered clip's pieces in `order` (indices; one left out is removed). */
+  projectClipArrange: (projectHandle: string, expectedRevision: number, clip: string, order: number[]) =>
+    invokeTauri<OpenedProject>("project_clip_arrange", { projectHandle, expectedRevision, clip, order }),
   projectShortsSet: (projectHandle: string, expectedRevision: number, shorts: Short[]) =>
     invokeTauri<OpenedProject>("project_shorts_set", {
       projectHandle,
@@ -747,8 +787,8 @@ export const api = {
   /** Asks the AI provider for moments that work as shorts; replaces the shorts list. */
   projectShortsGenerate: (projectHandle: string, trackId: string) =>
     invokeTauri<OpenedProject>("project_shorts_generate", { projectHandle, trackId }),
-  projectShortExport: (projectHandle: string, shortId: string, settings: ExportSettings) =>
-    invokeTauri<ExportStatus>("project_short_export", { projectHandle, shortId, settings }),
+  projectShortExport: (projectHandle: string, shortId: string, settings: ExportSettings, queue = false) =>
+    invokeTauri<ExportStatus>("project_short_export", { projectHandle, shortId, settings, queue }),
   /** Saves subtitles, the transcript or the sound of the video (or a short); answers with the
    *  path. Next to the project unless `destination`. */
   exportFile: (projectHandle: string, kind: ExportFileKind, shortId: string | null, destination: string | null) =>

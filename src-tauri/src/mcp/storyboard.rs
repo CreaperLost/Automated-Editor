@@ -466,6 +466,12 @@ pub fn build(
         ))
     })?;
     let max_tiles = args.max_tiles.unwrap_or(DEFAULT_TILES).clamp(1, MAX_TILES);
+    super::frames::wait_for_graphics(
+        state,
+        args.short.as_deref(),
+        args.from_us.unwrap_or(0),
+        args.to_us.unwrap_or(u64::MAX),
+    )?;
     let canvas = {
         let (document, _, _) = super::frames::document(state, args.short.as_deref())?;
         document.layout.preview_dimensions()?
@@ -548,6 +554,11 @@ pub fn sheet(
     if moments.is_empty() || moments.len() > MAX_SHEET_FRAMES {
         return Err(format!("Give 1 to {MAX_SHEET_FRAMES} moments"));
     }
+    let (first, last) = (
+        moments.iter().copied().min().unwrap_or(0),
+        moments.iter().copied().max().unwrap_or(0),
+    );
+    super::frames::wait_for_graphics(state, short, first, last)?;
     let canvas = {
         let (document, _, _) = super::frames::document(state, short)?;
         document.layout.preview_dimensions()?

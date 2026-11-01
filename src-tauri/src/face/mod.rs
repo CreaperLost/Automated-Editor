@@ -311,6 +311,44 @@ pub fn ensure(root: &Path, document: &EditDocument, retry: bool) {
     }
 }
 
+/// The longest an export waits for the face tracks it frames cameras on.
+const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Waits until every camera of `document` has its face track, finding the missing ones, so
+/// an export frames each camera on the face as the preview does once the track is there (it
+/// is found in the background after a project opens). `progress` gets the share found while
+/// it waits. Gives up when `cancel` is set or after ten minutes, and returns at once when face
+/// framing is off or the build has no face detection. True when it had to wait.
+pub fn wait_for_tracks(
+    root: &Path,
+    document: &EditDocument,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> bool {
+    if !document.layout.face_framing || !yunet::compiled_in() {
+        return false;
+    }
+    ensure(root, document, false);
+    let started = std::time::Instant::now();
+    let mut waited = false;
+    loop {
+        let detecting: Vec<f32> = status(root, document)
+            .into_iter()
+            .filter(|s| s.state == "detecting")
+            .map(|s| s.progress)
+            .collect();
+        if detecting.is_empty()
+            || cancel.load(std::sync::atomic::Ordering::SeqCst)
+            || started.elapsed() > MAX_WAIT
+        {
+            return waited;
+        }
+        waited = true;
+        progress(detecting.iter().sum::<f32>() / detecting.len() as f32);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
 fn detect_and_save(
     root: &Path,
     asset: &Asset,

@@ -16,6 +16,7 @@ pub mod render;
 pub mod restyle;
 pub mod runtime;
 pub mod templates;
+pub mod versions;
 
 use crate::sequence::{Asset, AssetKind, Role, Stream, StreamKind, IMAGE_MAX_US};
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,12 @@ pub struct GraphicSource {
     /// Look tokens of its own over the video's (`radius`, `ease`...): shown as overrides.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub look: std::collections::BTreeMap<String, String>,
+    /// The graphic this is a version of: its family's first ([`versions`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_of: Option<String>,
+    /// What this version changes, in a few words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// One variable a composition declares in `data-composition-variables`.
@@ -265,6 +272,11 @@ pub struct GraphicView {
     /// Look tokens of its own over the video's.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub look: std::collections::BTreeMap<String, String>,
+    /// The graphic this is a version of, and what the version changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
@@ -283,6 +295,8 @@ pub fn view(root: &Path, asset: &Asset) -> Result<GraphicView, String> {
             .style
             .map(|s| crate::style::store::current_name(&crate::style::store::dir(), &s)),
         look: source.look,
+        version_of: source.version_of,
+        note: source.note,
     })
 }
 
@@ -333,6 +347,8 @@ pub fn create(
                 variables,
                 style: None,
                 look: Default::default(),
+                version_of: None,
+                note: None,
             },
         )
     })();

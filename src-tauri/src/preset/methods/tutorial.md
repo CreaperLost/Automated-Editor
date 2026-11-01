@@ -179,17 +179,25 @@ no choice, ask whether the user wants graphics (automatic: no). If yes:
    (`status`; `library` `kind: style`) gives every graphic its colours, fonts and look, so
    leave `background`, `text` and `accent` unset. If the user has styles of their own and the
    project wears a built-in one, ask which (`library` `op: use`).
-2. Read `transcript_get` and propose them as a table, one row each:
+2. Read `transcript_get` and propose them as a table, one row each (the graphics rules say how
+   to pick between showing and a card; `graphic_add` with `plan: true` checks the items and
+   gives the times and words):
 
-   | Start | End | Template | What it shows | Said there |
+   | Start | End | Kind, from | What the viewer sees | Said there |
    |---|---|---|---|---|
-   | 2:14 | 2:19 | key-point | "Reset the chat. Keep the plan." | "...you can clear the chat and it still has the plan..." |
+   | 2:14 | 2:22 | state change, own | A chat full of messages clears; three saved files stay and slide into a fresh chat on "still has the plan" | "...you can clear the chat and it still has the plan..." |
+   | 3:05 | 3:09 | statement card, key-point | "Reset the chat. Keep the plan." | "...so reset the chat, keep the plan..." |
 
-   The user's library comes first (an item whose `useWhen` fits beats a bundled template).
-   Otherwise a `title` where a new section starts, `step` cards for numbered steps, `shortcut`
-   when a key combination is named, `key-point` for a rule worth remembering, `recap` near the
-   end, `end-card` last. Few and short (about one a minute at most, 3–5 s each), never over a
-   part where the screen must be seen. Ask: add them all / pick / skip.
+   An item of the user's library whose `useWhen` fits beats a bundled template. Bundled cards: a
+   `title` where a new section starts, `step` cards for numbered steps, `shortcut` when a key
+   combination is named, `key-point` for a rule worth remembering, `recap` near the end,
+   `end-card` last. Bundled demonstrations: `timeline-cut` when a cut is described,
+   `prompt-reply` when the speaker asks an agent or app something, `count-up` for a number
+   worth seeing, `before-after` for a result or two states, `app-click` for a click the
+   screen doesn't show clearly, `steps-link` for a process told step by step, `items-stack` for
+   things that add up. Few (about one a minute at most), cards 3–5 s, a demonstration as long as
+   its action needs; never over a part where the screen must be seen. Ask: add them all / pick
+   / skip.
 3. One `graphic_add` with `items`, each with `atWord` (the word it starts at) and its
    `variables` (`library` with the item's name for a library one), then `graphic_render`, and
    look at one or two with `frame_render` `graphic` (a sheet across each). Report one line.

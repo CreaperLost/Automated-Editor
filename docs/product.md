@@ -66,24 +66,24 @@ lack it, so we say "we have", not "only we have".
 |---|---|---|
 | Timeline | Tracks of clips (V1…, A1…), linked picture and sound, magnetic ripple, non-destructive | Clocks map recording time ↔ edited time |
 | History | Undo and redo that survive closing the app (up to 2 GB a project, no step limit), an agent's whole run undone as one step, named checkpoints (one saved before every agent run) | `history/` in the project |
-| Presets and styles | A **Preset** per kind of video (Tutorial, Shorts, Clips or your own: cleanup levels, captions, zooms, layouts, export settings, the agent's method, your rules); a **Style** for the look (colours, fonts, logo, graphics look, caption look, frame; Light, Dark or your own). A project stores only what it changed, shown as "changed here" chips | Preset menu, Inspector's Style page |
+| Presets and styles | A **Preset** per kind of video (Tutorial, Shorts, Clips or your own: cleanup levels, captions, zooms, layouts, export settings, the agent's method, your rules); a **Style** for the look (colours, fonts, logo, graphics look, caption look, frame; Light, Dark or your own). A project stores only what it changed, shown as "changed here" chips. **Run** (Preset menu) has the app run a preset's first steps itself (scan, transcription, the cleanup passes its choices turn on), free local steps unless the user allows online ones, up to where the agent takes over | Preset menu, Inspector's Style page |
 | Import | `.aero` recordings, video, audio, images, folders; any recording or import is just an asset | — |
 | Transcription | Online by default: Scribe detects the language (ElevenLabs, then OpenRouter); Parakeet Unified EN or Verbatim (TDT v3) locally for English | The user's key, or the local model |
 | Cleanup | Mouth noises (mute), mouth-click repair (`adeclick`), silence (audio), gaps without words (transcript), fillers and retakes (rules + AI review), manual word cuts | Rules; AI review by OpenRouter/OpenAI, local Qwen 4B without a key |
 | Speed | 0.25×–8× on clips or ranges, pitch kept | Manual, or the agent on request |
 | Zooms | Suggested from clicks, dwell, click clusters and typing (caret follow) | Telemetry |
 | Layouts | Bubble (3×3 grid, S/M/L, shapes), side by side (fit/fill, any share), camera only (punch-in), screen only; a base layout plus sections anchored in recording time; favourites; **Pick from the recording** (rest, busy, hook rules) | Telemetry, face tracks |
-| Camera | Face centring on every camera slot (YuNet, found once per recording), hand framing per clip | Local model |
+| Camera | Face centring on every camera slot (YuNet, found once per recording; an export waits for it), hand framing per clip; in shorts, push-ins at jump cuts when turned on | Local model |
 | Telemetry polish | Window crop to the front window, bubble hides under activity, shortcut badges, click/whoosh lane (off by default) | `windows.jsonl`, `keys.jsonl`, `events.jsonl` |
 | Captions | The style's title font (a .ttf, .otf, .woff or .woff2 file, or an installed family; else Inter Display, bundled) at its caption weight; one emphasis word per caption in the accent, picked by the agent; pop-in, karaoke or static; give way to full-frame graphics; English and Greek, 16:9 and 9:16 | Transcript |
 | Audio | Track gain, denoise, speech ducking, loudness normalisation to -14 LUFS by default with a peak leveller, crossfades at cuts; takes of speech matched in level and (gently) tone | DSP |
 | Sounds and music | 17 CC0 sound effects and 24 CC0 music tracks by mood (downloaded on first use, hash-checked), plus the user's own; music that needs credit or forbids monetised use is refused, and `check` flags any in the edit | Media panel's Sounds and Music pages |
 | Screen effects | Blur or hide a part of the screen (keys, emails, balances), spotlight, magnifier, dim or blur behind a graphic; anchored in the recording's picture and time, so they stay put through zooms, crops, layouts and cuts; boxes move and resize on the paused preview | Drawn on the preview, or the agent |
-| Graphics | HyperFrames compositions (GSAP allowed): tutorial templates + blank in a light app style, one look per video from its style, an app-level library behind a no-model quality gate, short modes (full, split beside the face, over the face); rendered at the export's frame rate in the background, so an export of unchanged graphics starts at once | Pinned runtime (200 MB download on first use) |
+| Graphics | HyperFrames compositions (GSAP allowed): tutorial templates + blank in a light app style, one look per video from its style, an app-level library behind a no-model quality gate, short modes (full, split beside the face, over the face); versions (a redo is made beside the graphic; which one plays is one undo step); rendered at the export's frame rate in the background, so an export of unchanged graphics starts at once | Pinned runtime (200 MB download on first use) |
 | Shorts | Two tabs. **Shorts** start from a take (a new camera take, cleaned like any recording, with footage and graphics from the video or the library under it, each piece at its own speed). **Clips** cut word ranges from the video that follow its edits or get their own timeline | The agent, or the app's cloud AI for clips |
 | Chapters | YouTube chapters from the transcript, checked before export | The agent when connected, else the app's cloud AI |
 | Review | `check` (≈12 defect classes, one-click fixes each its own undo step, **Remove all blips**) and `storyboard` (one contact sheet of the edit) | No model |
-| Export | H.264/AAC, 720p–4K, Medium / High / Ultra, GPU encoders (NVENC, AMF, QSV, else x264), a streamed log; shorts at 1080×1920; subtitles (SRT, VTT), the transcript (text, Markdown) and the sound (WAV) as files | FFmpeg (Windows/Linux), AVFoundation (macOS) |
+| Export | H.264/AAC, 720p–4K, Medium / High / Ultra, GPU encoders (NVENC, AMF, QSV, else x264), a streamed log; shorts at 1080×1920; subtitles (SRT, VTT), the transcript (text, Markdown) and the sound (WAV) as files. One at a time, with a queue on request, and a list of what went out (older than the edit, export again) | FFmpeg (Windows/Linux), AVFoundation (macOS) |
 
 ## Three kinds of "AI" in the app
 
@@ -215,6 +215,10 @@ From the build logs. Know this before trusting a feature in a real session.
   real Codex sessions (`codex exec`, CLI 0.163) against the dev app: write tools (silence,
   check, a library sound, undo); the whole templatize → check → save → remove loop over MCP; a
   style with a logo used by a graphic, rendered and exported (logo seen in the MP4's frame).
+  On 1 Nov in the dev app: Preset → Run on a copy of a real take (mouth noises muted, the pause
+  pass held back for the user), graphic versions from the Inspector and the CLI (used, made,
+  undone, shown in place by `frame_render`), and an export started before the face was found
+  (it waited, the camera came out centred). Not verified: a preset run with online steps.
 - **Codex needs per-tool approval for write tools:** `codex exec` refuses every tool not marked
   read-only ("requires approval, but approval policy is never") until the user adds
   `[mcp_servers.aeroedits.tools.<name>] approval_mode = "approve"` (the Codex app asks

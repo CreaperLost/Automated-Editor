@@ -2,8 +2,9 @@
 
 0. Chapters come right before export: run `status`; if chapters were never made (and the user
    wants them) or it says they are out of date, set them now and show them to the user. Then
-   run `check`. Tell the user about any error or warning and fix it with their go (`check` with
-   `fix`, whose answer already says what is left); an error stops the export.
+   run `check` (for a short or clip, `check` with `short`: its own timeline). Tell the user
+   about any error or warning and fix it with their go (`check` with `fix`, whose answer
+   already says what is left); an error stops the export.
    You can't hear the cuts: `joins` `find`, plus `add` for any cut you doubt, then ask the user
    to listen in the Joins panel. Read the marks back (`joins`) and fix those marked FIX first.
    Skip it only when the user says so.

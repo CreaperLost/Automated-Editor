@@ -14,12 +14,9 @@ own build or measurement logs. **Research:** from competitor or creator material
 1. **The agent is blind to time.** Every review tool is a still; tools return text and PNG
    only, and the agent can't hear. The user's ears check the joins; the app doesn't yet hand
    them the risky ones.
-2. **No plan before the build.** The agent keeps no plan between turns.
-3. **The craft surfaces are thin:** no sound placement, no clip gain or fades, few tutorial
+2. **The craft surfaces are thin:** no sound placement, no clip gain or fades, few tutorial
    graphic templates, no search over the source footage.
-4. **Shorts are one continuous stretch** (clips) or one take: no idea-first short built from
-   pieces across the video.
-5. **Some things are absent from the app itself,** not just from the agent: NLE handoff,
+3. **Some things are absent from the app itself,** not just from the agent: NLE handoff,
    tutorial effects (spotlight, redaction), background removal.
 
 ---
@@ -32,7 +29,7 @@ None open (24 Oct).
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| Graphic source edits (`graphic_set` variables, `graphic_write_file`) are not undo steps; checkpoints keep the files, and the app saves one before every agent run | Code: `commands/graphics.rs`, `project/checkpoint.rs` | [GFX-4](roadmap.md#gfx-4) |
+| Graphic source edits made in place (`graphic_set` variables, `graphic_write_file`) are not undo steps; checkpoints keep the files (one before every agent run), and a redo goes into a version whose switch is an undo step ([GFX-4](done.md#gfx-4)) | Code: `commands/graphics.rs`, `project/checkpoint.rs` | — |
 | Direct actions check the `project` id just before running rather than under the command lock | Code: `mcp/tools.rs` | [AGT-1](done.md#agt-1) follow-up |
 
 ## 3. Agent surface
@@ -59,14 +56,13 @@ Anchored notes and a selection reference were dropped 24 Oct: feedback goes in c
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| **No plan before the build.** `storyboard` reviews the edit that exists, not the one to come; the agent keeps no plan between turns | Code: `mcp/storyboard.rs` | [PLAN-1](roadmap.md#plan-1) |
 | A style has no references (images, a video) and no sound policy; agent-proposed styles are not built | Code: `style/` | [GFX-5](roadmap.md#gfx-5) (proposed styles), [STY-2](roadmap.md#sty-2) |
 
 ## 6. Captions
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| Greek glyph coverage in graphics never tested (captions: tested 23 Oct, every bundled weight) | Log | [GFX-3](roadmap.md#gfx-3) |
+| Greek glyph coverage in graphics never tested (captions: tested 23 Oct, every bundled weight) | Log | — |
 
 ## 7. Sound and music
 
@@ -85,8 +81,7 @@ The research is clear that sound is **placement and art direction, not library b
 
 | Gap | Evidence | Fix |
 |---|---|---|
-| Few templates for the most common tutorial jobs: highlight real UI, a word-timed emphasis, a sequence of steps, before/after | Code: `src-tauri/graphics/templates/` | [GFX-3](roadmap.md#gfx-3) |
-| No variants: a revision overwrites; no Compare / Use; a re-render takes 20-40 s with no draft preview | Code; log | [GFX-4](roadmap.md#gfx-4) |
+| A re-render takes 20-40 s with no draft preview (versions, [GFX-4](done.md#gfx-4), keep the old one playing meanwhile) | Log | — |
 | A graphic can't dim or blur the footage under it (a transparent HTML clip can't sample what is composited later); that is compositor work | Research | [FX-2](done.md#fx-2) |
 | GSAP is allowed in graphics (23 Oct); 3D and shaders are not | Code: the gate | Only when a style needs them ([decisions](decisions.md)) |
 
@@ -96,8 +91,7 @@ The research is clear that sound is **placement and art direction, not library b
 |---|---|---|
 | **No search over the source.** Every read is on the *edited* timeline; the agent can't ask "where do I open the export dialog?", including material already cut | Code: `mcp/tools.rs` | [FTG-1](done.md#ftg-1) |
 | No saved selects, no guided B-roll from own footage, no stock providers | Code | [FTG-2](roadmap.md#ftg-2), [FTG-6](roadmap.md#ftg-6) |
-| A clip is one continuous stretch (`Short.source_start_us..source_end_us` or a copied `ShortEdit`): it can't combine a setup at minute 3 with the payoff at minute 17 | Code: `shorts.rs` | [SHT-1](roadmap.md#sht-1) |
-| No ordered take assembly, no script-guided assembly; no one-step "run this preset now" after opening a project | Code | [FTG-4](roadmap.md#ftg-4), [AUTO-1](roadmap.md#auto-1) |
+| No ordered take assembly, no script-guided assembly | Code | [FTG-4](roadmap.md#ftg-4) |
 
 ## 10. Finishing and delivery: absent from the app, not just the agent
 
@@ -109,7 +103,6 @@ The research is clear that sound is **placement and art direction, not library b
 | No tutorial effects: spotlight, redaction/blur of a region (an email, a key), magnifier | Code | [FX-2](done.md#fx-2) |
 | No webcam background removal or blur (also blocks the cut-out layout) | Code | [FX-1](roadmap.md#fx-1) |
 | No real reformat of a finished 16:9 edit into 9:16 that keeps UI targets and cursor relationships | Code | [DLV-5](roadmap.md#dlv-5) |
-| One export job at a time, no delivery list (video + shorts + sidecars, which revision was exported, retry) | Code: `ExportOwner` | [DLV-2](roadmap.md#dlv-2) |
 | No translated subtitles (Greek ↔ English) | Code | [DLV-4](roadmap.md#dlv-4) |
 
 ## 11. Languages and transcription

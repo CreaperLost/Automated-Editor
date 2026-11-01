@@ -436,22 +436,38 @@ export async function exportShorts(ids: string[]) {
   const current = useProjectStore.getState().openedProject;
   if (!current || ids.length === 0) return;
   set({ exports: Object.fromEntries(ids.map((id) => [id, { state: "waiting", progress: 0 } as ExportRow])) });
+  // All go into the export queue at once (behind an export already running), one at a time.
+  const started: { id: string; status?: ExportStatus; error?: unknown }[] = [];
   for (const id of ids) {
+    try {
+      const status = await api.projectShortExport(
+        current.projectHandle,
+        id,
+        {
+          videoCodec: "h264",
+          audioCodec: "aac",
+          // A standard size: the backend turns it into 1080x1920 for the 9:16 canvas.
+          width: 1920,
+          height: 1080,
+          fps: 30,
+          quality: "high",
+          bitrateKbps: null,
+        },
+        true,
+      );
+      started.push({ id, status });
+    } catch (error) {
+      started.push({ id, error });
+    }
+  }
+  for (const { id, status: first, error } of started) {
     const update = (row: ExportRow) => set((s) => ({ exports: { ...s.exports, [id]: row } }));
     try {
-      let status: ExportStatus = await api.projectShortExport(current.projectHandle, id, {
-        videoCodec: "h264",
-        audioCodec: "aac",
-        // A standard size: the backend turns it into 1080x1920 for the 9:16 canvas.
-        width: 1920,
-        height: 1080,
-        fps: 30,
-        quality: "high",
-        bitrateKbps: null,
-      });
+      if (!first) throw error;
+      let status: ExportStatus = first;
       while (status.state === "queued" || status.state === "running") {
         update({
-          state: "running",
+          state: status.state === "running" ? "running" : "waiting",
           progress: status.progressDenominator > 0 ? status.progressNumerator / status.progressDenominator : 0,
         });
         await new Promise((resolve) => window.setTimeout(resolve, 500));

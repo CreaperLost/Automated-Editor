@@ -498,13 +498,7 @@ impl LayoutTrack {
     }
 
     fn unique_id(&self, base: &str) -> String {
-        let mut id = base.to_string();
-        let mut n = 2;
-        while self.sections.iter().any(|s| s.id == id) {
-            id = format!("{base}-{n}");
-            n += 1;
-        }
-        id
+        crate::ids::free_id(base, |id| self.sections.iter().any(|s| s.id == id))
     }
 
     /// A new id for a section made by hand.

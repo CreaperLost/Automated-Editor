@@ -221,6 +221,43 @@ export."). Same inputs, a fresh project, commit 046b260 + bee77ae.
 - **Left as it is:** the take's 58 s of pauses in 100 s were real (119 words; takes are not
   guarded); the graphics batch waited for an accept, as under step-by-step it should.
 
+## Run 5 (1 Nov): after GFX-8, PLAN-1, versions, AUTO-1 and DLV-2
+
+Run 4's three messages (recovered from its session), a fresh project, the dev app with face
+detection, uncommitted work of 31 Oct–1 Nov. The resumed session reports a running total, so
+per turn is the difference.
+
+| | Run 4 | Run 5 |
+|---|---|---|
+| T1 tutorial edit | 13 calls, $0.191 | 18 calls, $0.237 (4 of them, $0.136, before it stopped to ask about online transcription) |
+| T2 graphics | 5 calls, $0.080 | 13 calls, 8:52 (mostly rendering), $0.161 |
+| S1 short from the take | 13 calls, $0.122 | 26 calls, 3:04, $0.293 |
+| **All three** | **31 calls, $0.393** | **57 calls, $0.691** |
+
+- **Context (AI-1):** T1 ends at 39.8k, T2 at 56.9k, S1 at 88.4k: still within 100k, but
+  close. Biggest answers: `graphics` 4.3k in T2 and 5.9k again in S1 (its guide grew with
+  GFX-8), `preset` 4.7k and 4.4k.
+- **Same cleanup:** 7:10 → 5:48.65 (run 4: 5:46), 114 mouth noises, 70.3 s of pauses, 26
+  fillers and 3 retakes, 12 zooms, 5 chapters, one blip fixed by `check`.
+- **Graphics are much better** (what GFX-8 was for): run 4 made six key-point text cards; run 5
+  made six graphics of which four show what is said (the steps to join as linked steps, the
+  $10 reward counting up, the products stacking, revenue before and after), checked their
+  reading time and lengthened three. All six read cleanly in their frames.
+- **The short does more:** renamed from its words, face framed, tight cleanup (100 s → 31.5 s),
+  captions with an emphasis word on 16 of 24 lines, three graphics (the library's Hermes hub
+  split below the face, two over-face cards), no footage because the video is about something
+  else (right). Run 4's S1 stopped at a batch waiting for an accept.
+- **Asked once, rightly:** online transcription (the dev profile's "AI agents may transcribe
+  online" is off). Nothing else was asked; nothing about layouts or the webcam.
+- **Found:**
+  - `check` reads only the long video, not a short (the agent said so).
+  - S1 reads the graphics guide again (5.9k) after T2 read it (4.3k).
+  - The agent reported a graphic fix done while its render was still running (a frame drawn
+    then shows the old one).
+  - `count-up` sets its "$" small and apart from the number.
+  - ElevenLabs rejects George's key; transcription fell back to OpenRouter both times.
+  The first four were fixed the same day ([QUAL-5](../done.md#qual-5)).
+
 ## Rerun
 
 Same inputs, same messages (T1, T2, S1, then the user's answer to what the agent asks), a

@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Layers, Trash2 } from "lucide-react";
-import { InspectorSection } from "./InspectorSection";
+import { InspectorSection, NumberGrid, RangeRow } from "./InspectorSection";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { api } from "../../lib/ipc";
@@ -17,7 +17,7 @@ import {
   trackNumber,
 } from "../../lib/sequence";
 import { layoutFromSettings } from "../../lib/types";
-import type { Fit, LicenceKind, OpenedProject, Role, SequenceEdit } from "../../lib/types";
+import type { Fit, LicenceKind, OpenedProject, Role, ScreenLook, SeqTrack, SequenceEdit } from "../../lib/types";
 import { cropOffFor, setCropFor } from "../../lib/windowCrop";
 import { Switch } from "../ui";
 
@@ -80,6 +80,77 @@ const NumberField: React.FC<{
     />
   </label>
 );
+
+const FULL_FRAME: ScreenLook = { cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0, scalePct: 100 };
+
+/**
+ * A video track's own screen framing (size and crop), for footage the recording's framing
+ * doesn't suit. Off, a recording takes the Video page's and a file shows whole. Saved a moment
+ * after a slider stops, as one undo step.
+ */
+const TrackLookControl: React.FC<{
+  track: SeqTrack;
+  recording: boolean;
+  /** The framing it shows while it has none of its own. */
+  current: ScreenLook;
+  disabled: boolean;
+  onSave: (look: ScreenLook | null) => void;
+}> = ({ track, recording, current, disabled, onSave }) => {
+  const [draft, setDraft] = useState<ScreenLook>();
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  useEffect(() => setDraft(undefined), [track.id, JSON.stringify(track.look ?? null)]);
+  const look = draft ?? track.look;
+  const change = (patch: Partial<ScreenLook>) => {
+    const next = { ...(look ?? current), ...patch };
+    setDraft(next);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => onSave(next), 350);
+  };
+  return (
+    <div className="space-y-2">
+      <Switch
+        checked={!!look}
+        disabled={disabled}
+        onChange={(on) => onSave(on ? current : null)}
+        label="Own framing for this track"
+        title="Size and crop this track's screen clips their own way, instead of the Video page's Screen settings. The frame's corners and shadow stay the style's."
+      />
+      {look ? (
+        <>
+          <RangeRow
+            label="Size"
+            value={look.scalePct}
+            min={40}
+            max={100}
+            unit="%"
+            onChange={(scalePct) => change({ scalePct })}
+          />
+          <NumberGrid
+            title="Crop"
+            min={0}
+            max={45}
+            step={0.5}
+            unit="%"
+            fields={[
+              { key: "cropLeft", label: "Left", value: look.cropLeft },
+              { key: "cropRight", label: "Right", value: look.cropRight },
+              { key: "cropTop", label: "Top", value: look.cropTop },
+              { key: "cropBottom", label: "Bottom", value: look.cropBottom },
+            ]}
+            onChange={(key, value) => change({ [key]: value })}
+          />
+        </>
+      ) : (
+        <p className="text-meta text-studio-500">
+          {recording
+            ? "Sized and cropped like the screen on the Video page."
+            : "Shown whole: a file never takes the recording's crop or size."}
+        </p>
+      )}
+    </div>
+  );
+};
 
 /// The clip selected on the timeline: what its stream is, how it fills the frame, where it
 /// starts, and removing it. Every change is one undoable edit.
@@ -257,6 +328,25 @@ export const TrackClipSection: React.FC = () => {
           onChange={setClipCrop}
           label="Crop to the active window"
           title="Off shows the whole screen for this clip, whatever window is in front. The switch for the whole video is on the Video page."
+        />
+      )}
+      {track.kind === "video" && role === "screen" && (
+        <TrackLookControl
+          track={track}
+          recording={asset?.kind === "recording"}
+          current={
+            asset?.kind === "recording"
+              ? {
+                  cropLeft: canvas.screenCrop.left,
+                  cropTop: canvas.screenCrop.top,
+                  cropRight: canvas.screenCrop.right,
+                  cropBottom: canvas.screenCrop.bottom,
+                  scalePct: canvas.screenScalePct,
+                }
+              : FULL_FRAME
+          }
+          disabled={busy || !!track.locked}
+          onSave={(look) => void edit({ kind: "setTrackLook", trackId: track.id, look })}
         />
       )}
       {track.kind === "video" && role === "overlay" && (

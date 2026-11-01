@@ -533,7 +533,8 @@ export const TimelineStudio: React.FC = () => {
   const videoTracks = sequence.tracks.filter((t) => t.kind === "video");
   const audioTracks = sequence.tracks.filter((t) => t.kind === "audio");
   const frameUs = Math.round(1e6 / (openedProject?.fps || 30));
-  const edges = useMemo(() => sequenceEdges(sequence), [openedProject?.revision, openedProject?.shortView]);
+  // By the sequence itself: two projects (or shorts) can share a revision.
+  const edges = useMemo(() => sequenceEdges(sequence), [sequence]);
   // Clips by id with their tracks, and every clip edge: built once per sequence, so drags and
   // selections do not search the timeline for each clip.
   const clipIndex = useMemo(() => {

@@ -801,16 +801,7 @@ pub fn add(
     let slug = crate::sound_library::slug(&stem);
     let base = format!("my-{}", if slug.is_empty() { "track" } else { &slug });
     let taken = |id: &str| builtin(id).is_some() || mine.iter().any(|m| m.id == id);
-    let id = (1..)
-        .map(|n| {
-            if n == 1 {
-                base.clone()
-            } else {
-                format!("{base}-{n}")
-            }
-        })
-        .find(|id| !taken(id))
-        .unwrap_or(base);
+    let id = crate::ids::free_id(&base, taken);
     let ext = file
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())

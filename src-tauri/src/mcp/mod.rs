@@ -12,10 +12,13 @@ pub mod cli;
 pub mod clients;
 mod clips;
 mod effects;
+pub mod first_steps;
 pub(crate) mod frames;
+mod graphic_checks;
 pub mod ipc;
 mod layouts;
 mod library;
+mod plan;
 mod presets;
 mod propose;
 mod review;
@@ -1468,7 +1471,9 @@ mod tests {
         // `kind: sound` with `query`, `atUs`, `atWord`, 44,998; the budget moved to 45,500.
         // 25 Oct, later: `effects` (FX-2: blurring keys and emails is too important to sit
         // behind `more`) and `library` `kind: music`, 46,549; the budget moved to 47,000.
+        // 31 Oct (STY-2, GFX-8): `library` `op: propose` with `references` and `brief`, and
+        // `frame_render` `sample` (the sample clip in place), 47,127; the budget moved to 47,500.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 47_000, "the tool list grew to {size} characters");
+        assert!(size < 47_500, "the tool list grew to {size} characters");
     }
 }

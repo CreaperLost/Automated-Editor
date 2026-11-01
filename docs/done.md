@@ -8,6 +8,179 @@ once built), the design in [architecture.md](architecture.md), the choices in
 When a roadmap item ships, add it at the top here with the date and its ID as an anchor
 (`<a id="xxx-n"></a>`), and delete it from the roadmap.
 
+- **1 Nov 2026** — <a id="qual-5"></a>**QUAL-5 what EVAL-1 run 5 found**: `check` with
+  `short` checks a short or clip as its export plays it (its own timeline, captions and
+  graphics; its fixes stay with the short's own tools), and the export steps say so;
+  `graphics` with `rules: false` leaves out the rules an agent read earlier in the
+  conversation (about 2.5k tokens; the shorts method says when); the frame tools
+  (`frame_render`, its sheets, `storyboard`) render and wait for a graphic that plays there
+  and is out of date, so a fix shows as made, never the old render; `count-up`'s sign
+  ("$", "€", "%": two characters at most) is the number's size and colour, right against it.
+  Tried in the dev app: "$25" drawn straight after changing "$10", and "€5M".
+- **1 Nov 2026** — <a id="eval-1-run-5"></a>**EVAL-1 run 5**
+  ([plan](plans/evaluation.md#run-5-1-nov-after-gfx-8-plan-1-versions-auto-1-and-dlv-2)): run 4's
+  three messages on the 31 Oct–1 Nov work. Same cleanup; graphics that show what is said (four
+  demonstrations of six, against six text cards); a short with captions, emphasis and three
+  graphics. 57 calls and $0.69 against 31 and $0.39, the edit's context ending at 88k. Its
+  findings are fixed ([QUAL-5](#qual-5)).
+- **1 Nov 2026** — <a id="fx-3"></a>**FX-3 camera push-ins**, off by default (George): a short's
+  Look panel has "Push in at jump cuts", and a preset's `short` defaults take `pushIns` for new
+  shorts. At a jump cut in the camera the framing goes 1.15x closer, and back out at the next,
+  centred on the face; a framing holds at least 2.5 s (a cleaned take is cut every few tenths
+  of a second, and changing at each would strobe); footage or a gap in between starts it over.
+  Preview and export alike. Tried on the 25 Oct take short: in at 6 s, out at 12 s, in at 17 s.
+- **1 Nov 2026** — <a id="dlv-2"></a>**DLV-2 delivery list**: one export at a time stays the
+  default (George). While one runs, the Export dialog offers "Add to queue", and exporting
+  ticked shorts queues them all; the queue runs in order on one worker. The dialog's Exports
+  list (kept in the project, `exports.json`) shows what waits, runs and went out (videos,
+  shorts, subtitles, transcripts, sound), the file and when, "Older than the edit" when an
+  export now would differ (judged by what the export contains, so an undo and redo, or an edit
+  to another short, doesn't mark it), and per line: take out of the queue, stop, show in the
+  folder, export again from the edit as it is now (beside the old file), take off the list.
+  Queued exports never take a name another one will write. Agents keep one at a time. Tried in
+  the dev app: a second export refused without the queue, queued with it, both written as (4)
+  and (5); after an edit, "export again" made (6).
+- **1 Nov 2026** — <a id="sty-3"></a>**STY-3 a style from references in the Style panel**:
+  "New style from references…" (the Style page's header): pick pictures or clips, say what
+  you like, optionally a name. The app keeps the request (`style-request.json` in its
+  settings) and copies it as a prompt; an agent's `status` names it, even with no project
+  open, until it runs `library` `op: propose`, which takes it up. Nothing is sent anywhere by
+  the app. Tried in the dev app.
+- **1 Nov 2026** — <a id="gfx-8"></a>**GFX-8 graphics an agent makes well**, closed by
+  George: the two 31 Oct rerun shorts (Claude Code, Codex) are OK. The over-face panel stays
+  where it is. His note: full-camera moments in those review renders weren't centred on the
+  face. They came from a dev build without face detection (the installed app has it), but it
+  showed a real gap: an export started before a camera's face track was found (it is found
+  in the background after opening) used the centre crop. An export now waits for the face
+  first ("Finding the face in the camera"); tried by exporting right after opening.
+- **1 Nov 2026** — <a id="gfx-4"></a>**GFX-4 graphic versions**: a redo of a graphic goes into a
+  version beside it (its own folder and renders, marked as a version of the first), so the one
+  the user saw is kept. Inspector: the Version row (1, 2 · what changed, + New) plays another
+  version in the same places, on the video and every short's own timeline; + New copies the
+  graphic into a version that plays at once, so changes go into the copy. Each is one undo step.
+  Agents: `graphic_set` `newVersion` (a copy that doesn't play yet), `frame_render` `graphic`
+  on it shows it in place (with `sample: true`, a clip), `graphic_set` `use: true` plays it;
+  `graphics` lists `versionOf` and the note. A word or a colour still changes in place. Tried in
+  the dev app.
+- **1 Nov 2026** — <a id="auto-1"></a>**AUTO-1 run a preset after opening**: Preset → Run
+  "Tutorial…" lists the steps the app runs itself (scan, transcription unless done, then the
+  passes the preset's choices turn on: mouth noises, pauses, gaps, fillers only, zooms with
+  mouse data), each one undo step through the same tools an agent calls, `guard: true` on the
+  cuts. Only free steps on this computer run unless the user ticks online steps for that run.
+  It stops at a pass that waits for the user ("would cut more than a quarter"), an error, or
+  where the agent takes over (retakes, graphics, chapters, export), and says so; `status` tells
+  an agent later which passes the app already ran. Tried in the dev app on a copy of the 25 Oct
+  take (mouth noises muted, the pause pass held).
+- **1 Nov 2026** — <a id="gfx-3"></a>**GFX-3 templates for tutorial jobs**, closed by George:
+  what GFX-8 built covers it (`step`, `steps-link`, `items-stack`, `before-after`,
+  `app-click`, `timeline-cut`, `prompt-reply`, `count-up`, the diagram parts, 14 templates in
+  all, each through the gate). Not built and not wanted now: a word-timed emphasis template, a
+  lower-half overlay prototype, purpose tags and search in the library.
+- **31 Oct 2026** — <a id="plan-1"></a>**PLAN-1 style trial**: `frame_render` with `moments`
+  and `sample: true` gives a playable clip from the first moment to the last (3–20 s, with
+  sound) beside the sheet; the rules' step-by-step part says to dress 5–10 s first when the
+  look is new and scale after the user likes the clip. With the plan file below, PLAN-1 is done.
+- **31 Oct 2026** — <a id="gfx-8-table"></a>**GFX-8 the plan table from the tool**
+  ([plan](plans/graphics-quality.md#as-built-31-oct)): `graphic_add` with `plan: true` checks
+  the items and answers with the table (start, end, the words said there, template or library
+  item, overlaps, what it shows), adding nothing; the graphics guide and the Tutorial method
+  use it.
+- **31 Oct 2026** — <a id="plan-1-file"></a>**PLAN-1 plan file**: `plan` (behind `more`)
+  keeps the agent's plan as `plan.md` in the project: `write`, `edit` (each old text found
+  once) and `read`, which ends with where each word id in it plays now (or that it was cut), so
+  a later cut moves a row without the file changing. `status` names a plan; the rules say to
+  read it first, save the table once the user agrees, and follow what it locks. Tried in the
+  dev app.
+- **31 Oct 2026** — <a id="sht-1"></a><a id="sht-1-find"></a>**SHT-1 idea-first clips, last
+  parts** ([plan](plans/shorts.md#as-built-31-oct)): the cloud `find` (Clips tab "Find with AI",
+  `clips` `op: find`) now picks ideas, each one stretch or up to four pieces in play order, and
+  a gathered pick gets its own timeline like one an agent gathers. "Take the video's cuts again"
+  rejoins a gathered clip's pieces as the video has them now (it played everything from the
+  first piece to the last before); agents: `clips` `op: resync`. A piece the video trimmed
+  plays what is kept, one cut whole is left out.
+- **31 Oct 2026** — <a id="sht-1-arrange"></a>**SHT-1 arranging pieces**
+  ([plan](plans/shorts.md#as-built-31-oct)): a gathered clip's pieces in the Clips tab, each
+  with its place in the video and earlier, later, remove; agents: `clips` `op: arrange` with
+  `order`, and `list` shows each piece. A piece takes its own cuts and graphics with it.
+- **31 Oct 2026** — <a id="sht-1-gather"></a>**SHT-1 Gather**
+  ([plan](plans/shorts.md#as-built-31-oct)): select words in the video's transcript, then "Add
+  to clip…": a new clip of them, or they play after what a clip plays (its own cuts kept).
+  Agents: `clips` `op: add`. Words a clip already has are refused. Tested in the dev app.
+- **31 Oct 2026** — <a id="gfx-8-rerun"></a>**GFX-8 rerun**
+  ([plan](plans/graphics-quality.md#the-rerun-31-oct)): the 25 Oct take again with Claude
+  Code (Opus 5.5, 55 calls, $1.43) and Codex (gpt-6-astra, 84 calls). Both made colourful,
+  moving graphics that show what is said (linked steps, a typed prompt, gaps closing, the apps
+  side by side) instead of white text cards. Fixed from the runs: captions moved out of a part
+  a graphic fills, the shared text fit no longer shrinks a font's overhanging letters to a dot,
+  `prompt-reply` keeps both messages in a short's part.
+- **31 Oct 2026** — <a id="sht-1-pieces"></a>**SHT-1 first part, clips gathered from anywhere**
+  ([plan](plans/shorts.md#as-built-31-oct)): `clips` `op: create` takes an `idea` and `pieces`
+  (word ranges from anywhere, in play order); the clip gets its own timeline joining them as
+  the video has them now (`shorts::join_slices`), overlapping pieces are refused, layouts are
+  picked inside each piece only. The Clips method starts from ideas; the Clips tab shows the
+  pieces and the idea. Tested in the dev app: a later stretch then an earlier one, 24.9 s.
+- **31 Oct 2026** — <a id="gfx-8-diagrams"></a>**GFX-8 diagram parts**
+  ([plan](plans/graphics-quality.md#as-built-31-oct)): bundled `steps-link` (up to five steps
+  appear from `cue`, each joined by a drawn line, the current one ringed; across in 16:9, down
+  in portrait) and `items-stack` (up to five items land one on another, a line under them).
+  Both pass the real gate first time and render clean in 16:9 and a 9:16 clip. The frame
+  checks now wait for a graphic still rendering instead of measuring its placeholder.
+- **31 Oct 2026** — <a id="gfx-8-safe-area"></a>**GFX-8 9:16 safe area**
+  ([plan](plans/graphics-quality.md#as-built-31-oct)): in a short, `frame_render` with
+  `graphic` names words or detail under the bars and buttons Shorts and TikTok draw once posted
+  (top 8%, bottom 20%, right 12% below the middle, 5% side edges), found from the graphic's own
+  pixels row by row. All eleven templates clean in a 9:16 clip; planted words flagged.
+- **31 Oct 2026** — <a id="gfx-8-toolkit"></a>**GFX-8 toolkit, first three demonstrations**
+  ([plan](plans/graphics-quality.md#as-built-31-oct)): bundled templates `timeline-cut` (gaps
+  close on `cue`, length before → after), `prompt-reply` (types, sends on `cue`, reply
+  streams) and `count-up` (digits roll up from `cue`). Seek-safe GSAP, the look's tokens and the
+  style's colours; the real gate passes all nine templates; rendered in the dev app in English
+  and Greek. Later the same day: `before-after` (a line sweeps the before into the after) and
+  `app-click` (a cursor clicks a named button, the result appears), and a `check` hint when a
+  graphic's words take longer to read than it is on screen.
+- **31 Oct 2026** — <a id="gfx-8-frame-checks"></a>**GFX-8 frame checks**
+  ([plan](plans/graphics-quality.md#as-built-31-oct)): `frame_render` with `graphic` now ends
+  with checks measured from the scene's pixels at the sheet's moments: a face partly covered
+  (through the face track and the camera's crop), captions hidden under a graphic, captions
+  across a short's split line, and a hint when a graphic holds still. Full cards are exempt.
+  Live: TX Flow clean, a bad panel over the bubble flagged on all three. Sounds on graphics
+  became opt-in the same day.
+- **31 Oct 2026** — <a id="gfx-8-first"></a>**GFX-8, first part**
+  ([plan](plans/graphics-quality.md#as-built-31-oct)): guidance (show or card per moment, the
+  text-removed test, a plan table with what the viewer sees, honest look knobs), the **sample
+  clip in place** (`frame_render` `graphic` + `sample: true`: frames for the agent, a 720p clip
+  with sound for the user) and a `graphic_font` check. Toolkit, the frame-based checks, UI-8
+  and the rerun remain.
+- **31 Oct 2026** — <a id="sty-2-sound"></a>**STY-2 step 5, a style's sound set**
+  ([plan](plans/styles.md#as-built-step-5-31-oct-sound-set)): the brief shows each cue's sound
+  (name, length) and how to place it; My library gets four quiet CC0 cues (soft whoosh, soft
+  click, pluck pop, soft hit) and a one-line policy. Step 4 (shorts variant) skipped until
+  George brings references.
+- **31 Oct 2026** — <a id="sty-2-propose"></a>**STY-2 step 3, `op: propose`**
+  ([plan](plans/styles.md#as-built-step-3-31-oct-op-propose)): up to 8 references (images,
+  clips read as one board at two frames a second, library graphics as their contact sheet and
+  source) shown to the agent with the steps (breakdown first, up to three previewed proposals,
+  save only the pick). Saves nothing itself. Not yet run by an agent; the pick as a clip in
+  place waits on GFX-8 §2.
+- **30 Oct 2026** — <a id="sty-2-my-library"></a>**STY-2 step 2, the "My library" style**
+  ([plan](plans/styles.md#as-built-step-2-30-oct-my-library)), in George's styles folder: the
+  look tuned to his four white library graphics, seven motion rules, five kinds, the four
+  graphics as examples, six look rules and a breakdown; `check` clean. Tested 31 Oct: a fresh
+  Opus agent made a new graphic in it ("TX Flow prize pool"); George: "It's cool", not kept.
+- **30 Oct 2026** — <a id="sty-2-parts"></a>**STY-2 step 1, a style's new parts**
+  ([plan](plans/styles.md#as-built-step-1-30-oct)): motion rules, kinds of graphics with their
+  short slot, library examples, look rules, references (images and clips in the style's folder),
+  a breakdown and a sound policy with cues, plus a 9:16 motion/kinds/examples part.
+  `library` `kind: style` `op: show` is now a text brief agents read before graphics; `op: set`
+  refuses a font the style doesn't carry; `op: check` reports the style's own problems without a
+  project. Steps 2–6 (the "my library" style, `op: propose`, shorts variant, sound set, GFX-8)
+  remain.
+- **30 Oct 2026** — <a id="skill-text"></a>**Skill text from the research** (requirements.md
+  §5 row 1): the graphics guide (`mcp/skill/graphics.md`) asks for real material only, builds a
+  composition in three passes (stills with ids, timing, motion), holds text for its reading time,
+  compares what was promised with the frames before reporting, and keeps a fix to its one graphic
+  with an edge check; the rules (`rules.md`) read every correction as where / what is wrong /
+  what it becomes / what stays, and change only what was named. Not yet run in EVAL-1.
 - **26 Oct 2026** — <a id="online-fillers"></a>**Online review fillers cut at once** (George's
   call): in the app, Review with the OpenRouter/OpenAI review cuts the fillers it and the rules
   found straight away (one undo step) and leaves the retakes in the list; the tutorial method

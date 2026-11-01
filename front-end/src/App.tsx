@@ -142,7 +142,12 @@ export const App: React.FC = () => {
     const timer = window.setInterval(() => {
       void api
         .exportStatus(exportJob.jobId)
-        .then((next) => {
+        .then(async (next) => {
+          // When it ends and a queued export starts, follow that one.
+          if (next.state !== "queued" && next.state !== "running") {
+            const running = await api.exportStatus().catch(() => undefined);
+            if (running && running.jobId !== next.jobId && running.state === "running") next = running;
+          }
           if (active) setExportJob(next);
         })
         .catch((err) => {
@@ -218,15 +223,17 @@ export const App: React.FC = () => {
     }
   };
 
-  const startExport = async (settings: ExportSettings) => {
+  const startExport = async (settings: ExportSettings, queue = false) => {
     if (!project) return;
     setError(undefined);
     try {
-      const next = await api.exportStart(project.projectHandle, {
-        ...settings,
-        destination: exportDestination.trim() || undefined,
-      });
-      setExportJob(next);
+      const next = await api.exportStart(
+        project.projectHandle,
+        { ...settings, destination: exportDestination.trim() || undefined },
+        queue,
+      );
+      // A queued export shows in the list; the progress here stays on the one running.
+      if (!queue || next.state === "failed") setExportJob(next);
     } catch (err) {
       setError(String(err));
     }

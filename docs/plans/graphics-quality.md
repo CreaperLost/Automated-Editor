@@ -1,7 +1,8 @@
 # Graphics an agent makes well (GFX-8)
 
-**Status:** notes and direction, 25 Oct 2026. Nothing built yet. Roadmap:
-[GFX-8](../roadmap.md#gfx-8), with the bugs from the same test as
+**Status:** built 31 Oct 2026 (see "As built"); closed 1 Nov by George, who kept the rerun's
+graphics and left the over-face panel where it is. Roadmap:
+[GFX-8](../done.md#gfx-8), with the bugs from the same test as
 [FIX-8 to FIX-10 and UI-8](../done.md#fix-8). **Comes after
 [STY-2, styles from references](styles.md)** (George, 25 Oct): the style carries the look,
 motion, kinds of graphics and examples this plan builds on.
@@ -119,7 +120,7 @@ The template set needs pieces that demonstrate, especially for tutorial and AI-t
 - Transformations: gaps collapsing, before/after wipe, a messy → clean snap, a counter.
 - Diagram motion: steps linking, an arrow path drawing, items stacking.
 - Built as parts the agent composes (GSAP is decided, 21 Oct), not as finished cards. This
-  replaces most of [GFX-3](../roadmap.md#gfx-3)'s list; keep its word-timed emphasis.
+  replaces most of [GFX-3](../done.md#gfx-3)'s list; keep its word-timed emphasis.
 - The six text-card templates stay, as equals to the new parts (decided 25 Oct): the agent picks
   per moment, by what the idea needs.
 - The HyperFrames skills we have (`motion-graphics`, `hyperframes-animation`,
@@ -253,6 +254,157 @@ first") stay in preset rules.
 6. UI-8.
 7. Rerun the same take with all three agents and compare against this file. Done when George
    would keep the graphics without asking for a redo.
+
+## As built, 31 Oct
+
+After STY-2 steps 1–3 and 5. Order taken: guidance, the sample clip, checks; then the toolkit,
+UI-8 and the rerun.
+- **Guidance** (direction 1, 3, 6): the graphics guide picks per moment between showing and a
+  calm card, as equals, asks the text-removed test (a number or quote may honestly fail it),
+  leaves the speaker on screen where nothing adds, treats templates as starting points, and
+  asks for a plan table with kind and "what the viewer sees" (start state, change and cue
+  word, end state). The tutorial and shorts methods' tables follow it, with a demonstration
+  row in the tutorial example. Honest knobs: the look's numbers only scale motion a graphic
+  already has; "more motion" changes the graphics.
+- **The table from the tool** (direction 3, last on 31 Oct): `graphic_add` with `plan: true`
+  checks the items as an add would (templates, library names, words) and answers with the
+  table, adding nothing: number, start, end, the words said there, template or library item
+  (overlaps flagged), what its variables show. The agent adds "what the viewer sees", shows
+  it, then makes the same call without `plan`, and keeps it with the `plan` tool
+  ([PLAN-1](../done.md#plan-1-file)), which places each row's word ids again on every read.
+- **Sample clip** (direction 2): `frame_render` with `graphic` and `sample: true` returns the
+  sheet for the agent and writes a playable 720p clip in place with sound, 1.5 s either side,
+  to `%TEMP%\AeroEdits samples\` (export can't write inside the project); the agent gives the
+  user the path. Built by trimming a copy of the edit (or the short) to the range and running
+  the normal export. The guide: sample the most typical or hardest graphic first; stop for the
+  user only when the look is new or they asked to review (decision 1). First real use, 31 Oct:
+  TX Flow prize pool with My library's four cues, 21.4 s, took 1 min 53 s to make.
+- **Checks** (direction 5), `check` kind `graphic_font`: a graphic's style font that isn't
+  there (per style, once), and a family a composition asks for first in a `font-family` list
+  that isn't installed (generic and system names and `var()` skipped; a family the style
+  carries as a file passes).
+- **Frame checks** (direction 5, built 31 Oct, `mcp/graphic_checks.rs`): `frame_render` with
+  `graphic` ends its answer with checks measured from the scene the export draws at the sheet's
+  moments (each layer's pixels, alpha ≥ 200 counts as opaque), so every agent that looks at a
+  graphic gets them without a new tool:
+  - **Face:** the camera clip's face track (nearest look) through the camera layer's crop and
+    mirroring; flagged when an overlay graphic hides ≥ 35% of the face. A card opaque over
+    ≥ 85% of the frame is exempt (it replaces the picture on purpose). No face track: "not
+    checked", never a pass.
+  - **Captions hidden:** a graphic drawn after the captions (full-frame graphics are) opaque
+    over ≥ 30% of the caption line; cards exempt as above.
+  - **Captions across the split:** in 9:16, a caption line straddling where a stacked camera
+    and screen meet.
+  - **Holds still:** a hint, not a fault: the graphic's picture unchanged across sheet moments
+    for ≥ 4 s and ≥ 60% of its length ("fine for reading a card; a demonstration should
+    change").
+  - Checked live: TX Flow prize pool (a full card) clean; a deliberately bad opaque, still
+    panel over the camera bubble and caption line flagged on all three.
+- **Toolkit, first three parts** (direction 4, 31 Oct): bundled templates `timeline-cut` (a
+  timeline's silent gaps close on `cue`, its length hands over from `before` to `after`),
+  `prompt-reply` (a prompt types, is sent on `cue`, the reply streams in) and `count-up` (a
+  number's digits roll up like a counter from `cue` and land on it, with prefix/suffix). GSAP,
+  every change a tween or a set (no callbacks), so any seek draws the same frame; timing scales
+  down in a short placement. Assembled once from part files and the `blank` base, so their look
+  block and over-face and portrait rules match it; the templates themselves are the source from
+  here on. The real gate
+  (`graphics_gate_real`) passes all nine bundled templates; rendered in the dev app with
+  English copy and a Greek `prompt-reply`, frame checks clean. The guide and the tutorial
+  method name them; the HyperFrames registry was not mined (review note: a few strong worked
+  examples first).
+- **Two more parts, later on 31 Oct:** `before-after` (one card holds the before; a line
+  sweeps across on `cue` and leaves the after in the same frame, clip-path following it) and
+  `app-click` (an app sketch: the cursor travels to a named button centred on a fixed point,
+  clicks on `cue` with a ring, and the result rises in as a toast; the sketch says it is not
+  the real screen). Nothing is measured at script time: the line and the cursor ride in
+  full-size wrappers moved by `xPercent`/`yPercent`, since HyperFrames refuses tweens of
+  `left`/`top` (layout properties snap to whole pixels and stutter frame by frame). Still to
+  add: steps linking, items stacking.
+- **Reading time** (`check` kind `graphic_reading_time`, Info): a graphic whose words (its
+  string variables as set, else defaults, plus fixed text in its composition) take longer to
+  read at three words a second than it stays on screen. A hint, as a diagram read at a glance
+  can hold more.
+  - **Lessons the renders taught** (the gate and the app caught each; a browser didn't):
+    HyperFrames gives the root its height after the script runs, so text measured then sits in
+    a zero-height column, and a squeezable box (`overflow: hidden` flex item) measures 0 and
+    shrinks its text to nothing: measured boxes are `flex: none` (now in the guide). Fitting by
+    width loops forever on boxes whose width follows their text. GSAP `onUpdate`/`call` aren't
+    relied on: text changes are sets of `display` or tweens. Short placements (the gate's 3 s)
+    must still show every variable. A counter's hidden digits are marked
+    `data-layout-allow-occlusion`.
+- **The 9:16 safe area** (in `frame_render` `graphic`, shorts only): where Shorts and TikTok
+  draw their own once posted, a bar at the top (8%), the title and caption at the bottom (20%),
+  buttons down the right (12%, from 45% to 80% of the height) and the side edges (5%). It
+  doesn't need the composition's text boxes after all: along each pixel row of a band it counts
+  sharp changes in the graphic's own layer (brightness, or see-through to opaque). A shape's
+  border makes two, words make many, so three rows with six or more (four in a narrow band)
+  count as words or detail there. A plain card filling the frame finds nothing. Live in a
+  9:16 clip: all eleven templates clean with their defaults and with real copy; a card with
+  words planted low and down the right flagged all three bands and left its centred card
+  alone. A first band of 14% on the right flagged `prompt-reply`'s send button and
+  `timeline-cut`'s waveform at 86 to 92% of the width; the buttons sit further right, so it is
+  12%. The guide's shorts section names the bands.
+- **Diagram parts, later on 31 Oct:** `steps-link` (up to five steps from `cue`, evenly to
+  about three quarters of the length; each new step rises in and is ringed, the line to it
+  drawn by `scaleX`, or `scaleY` in portrait where the flow runs down) and `items-stack` (up to
+  five items, the first at the bottom and widest, each above narrower and stronger in the
+  accent, the top one filled; each drops in by `yPercent` and the stack gives a little; a line
+  under it after the last). Widths come from the viewport, never measured at script time.
+  Both passed the real gate on the first run and render clean in 16:9 and in a 9:16 clip with
+  real copy. Portrait layouts sit 5 vh higher (`padding-bottom: 10vh`) to stay clear of the
+  bottom band.
+- **Checks wait for a render:** a graphic still rendering is drawn as a "(rendering)"
+  placeholder; the frame checks measured it and called it still. They now say they wait.
+- **Over the face (`overFace`) found wanting:** the checks on a 9:16 clip flag the over-face
+  panel every time: its words sit in the bottom 20%, it hides the captions, and a taller one
+  (recap) covers the mouth. Moving the panel up trades the platform band for more of the face.
+  Not changed: a design call for George.
+- **Not built yet:** the frame checks live in `frame_render`, not the export dialog's
+  `check`. The clip is not shown inside the app's Agent panel.
+
+## The rerun, 31 Oct
+
+The 25 Oct take (`Untitled 25 Oct 2026.aero`, 51 s), a fresh host project from the 22 Oct
+tutorial recording, the same request for both agents: "Make a short from a take I recorded:
+<path>. Clean it up and add motion graphics that make it engaging, with fancy colours and lots
+of motion. Stop before export." Headless against the dev app, every AeroEdits tool allowed,
+nothing else. Both stopped first to ask about online transcription (the setting is off in the
+dev profile), and were told yes. Astra could not be run apart from Codex: Codex's default model
+here is `gpt-6-astra`, so the Codex run stands for both.
+
+| | Claude Code, Opus 5.5 | Codex (gpt-6-astra) |
+|---|---|---|
+| Turns, calls | 2 turns, 55 calls, 10 min | 2 turns, 84 calls |
+| Cost | $1.43 (the session's total) | 6.3 M input tokens (6.2 M cached), 19 k out |
+| Cleanup | 51 s → 22 s: mouth noises, 82 gaps, a filler and a false start | 51 s → 23 s, the same passes |
+| Graphics | 5 in the user's Neon Pop style: an over-face hook, `steps-link` (3 steps, split), `prompt-reply` (split), a closing card over the face, `timeline-cut` "51 s take, cut to 22 s" (split) | 6 compositions of its own from `blank`: a hook card, the two apps as cards with their models, "Give AI your MP4" with the request, "Cut silence. Add motion." with blocks, "Edited by AI" |
+| Report | A table of what shows when and how, checked frames, open problems named (captions under splits, a tiny before/after it swapped out, the caption emphasis colour, one fact to confirm) | Five lines: lengths, passes, "six colourful motion graphics", not exported; no plan table |
+
+Against 25 Oct: no generic white cards; both showed what is said (steps that link, the prompt
+being typed, the take's own gaps closing, the apps side by side), in colour, with motion; no
+serif fallback; the cut landed on the short; Codex got past transcription. The frame checks
+fired in the Claude run as meant (captions hidden under splits, words in the bottom band) and
+it acted on them.
+
+Fixed from what the runs showed:
+- **Captions under a split graphic:** seam captions sat half under a graphic filling the
+  screen's part (drawn after them). A graphic filling one part now moves them to the bottom of
+  the other (`shorts::caption_spot_beside`), in the preview and the export.
+- **Tiny numbers with the style's font:** strict fitting shrank text whose letters reach past a
+  tight line (Bahnschrift, at any size) 45 times over, to a dot ("0:51" in `before-after`).
+  The shared `fit` now shrinks only for whole lines and lets the box hold the letters; all
+  seven demonstrations. HyperFrames still saw a 3 px overhang on `before-after`'s numbers at a
+  1.15 line, so they have a 1.25 line and one line in 16:9 (two in portrait); `steps-link`
+  and `items-stack` shrink their items together until the flow fits its share of the frame
+  (the gate's long text in a short's part pushed the label off the top). All thirteen
+  templates pass the real gate again.
+- **`prompt-reply` in a short's part:** the reply pushed the prompt out of the window's top.
+  Both now shrink together when they don't both fit; the window is `flex: none` so it has its
+  height when measured.
+
+Left open: Codex's report skips the plan table the guide asks for; the caption emphasis colour
+follows the project's style, not the graphics' (Claude asked rather than change the project's
+style); the over-face panel (above). 1 Nov: the panel stays where it is (George).
 
 ## Review notes and suggested refinements, 25 Oct
 

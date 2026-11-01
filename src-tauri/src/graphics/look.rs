@@ -47,7 +47,8 @@ pub struct Look {
     /// How fast things move: 2 plays every entrance in half the time.
     #[serde(default = "one")]
     pub speed: f32,
-    /// How far things travel as they come in (0 only fades them).
+    /// How far things travel as they come in (0 only fades them). It scales the motion a
+    /// graphic already has and adds none.
     #[serde(default = "one")]
     pub energy: f32,
     /// Padding, gaps and margins, as a multiple of the preset's.

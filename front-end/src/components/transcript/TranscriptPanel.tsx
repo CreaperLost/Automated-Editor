@@ -451,6 +451,22 @@ export const TranscriptPanel: React.FC = () => {
     }
   };
 
+  // Gather (SHT-1): the selected words go after what a clip plays, or start a new one.
+  const clips = useMemo(() => (openedProject?.shorts ?? []).filter((s) => !s.take), [openedProject?.shorts]);
+  const addToClip = async (clip: string | null) => {
+    if (!openedProject || !trackId || selectedIds.length === 0) return;
+    setError(null);
+    try {
+      const next = await api.projectClipAddWords(openedProject.projectHandle, openedProject.revision, clip, trackId, selectedIds);
+      applyOpenedProject(next);
+      setSelection(null);
+      const title = clip && clips.find((c) => c.id === clip)?.title;
+      setNotice(`${title ? `Added to "${title}"` : "New clip made"}, in the Clips tab. Undo takes it back.`);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const runTranscription = async () => {
     if (!handle || !trackId) return;
     setRunning(true);
@@ -770,6 +786,27 @@ export const TranscriptPanel: React.FC = () => {
             >
               {firstChosen.captionBreak ? "Merge caption" : "New caption here"}
             </Button>
+          )}
+          {!inShort && (
+            <select
+              aria-label="Add the selected words to a clip"
+              title="Gather: these words play after what the clip plays, or start a new clip"
+              value=""
+              onChange={(e) => {
+                const value = e.target.value;
+                e.currentTarget.blur();
+                if (value) void addToClip(value === "new" ? null : value);
+              }}
+              className="ui-field !h-7 !w-auto max-w-44 text-meta"
+            >
+              <option value="">Add to clip…</option>
+              <option value="new">New clip</option>
+              {clips.map((clip) => (
+                <option key={clip.id} value={clip.id}>
+                  {clip.title}
+                </option>
+              ))}
+            </select>
           )}
           <span className="flex-1" />
           <Button

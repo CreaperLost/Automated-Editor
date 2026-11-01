@@ -11,6 +11,11 @@ const MAX_STYLES: usize = 100;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const LOGO_EXTENSIONS: &[&str] = &["png", "svg", "jpg", "jpeg", "webp"];
 const FONT_EXTENSIONS: &[&str] = &["woff2", "woff", "ttf", "otf"];
+const REFERENCE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "svg", "mp4", "mov", "webm", "mkv",
+];
+/// A reference clip may be larger than a font or logo.
+const MAX_CLIP_BYTES: u64 = 300 * 1024 * 1024;
 const RENAMES_FILE: &str = "renamed.json";
 const MAX_RENAME_HOPS: usize = 16;
 
@@ -219,11 +224,7 @@ pub fn save_in(styles: &Path, input: &StyleInput) -> Result<Style, String> {
     let mut style = input.style.clone().normalized();
     style.name = name.clone();
     // Checked without its files, which are taken in below.
-    let mut bare = style.clone();
-    bare.brand.fonts.title.file = None;
-    bare.brand.fonts.body.file = None;
-    bare.brand.logo = None;
-    bare.validate()?;
+    style.validate_parts()?;
     std::fs::create_dir_all(styles).map_err(|e| format!("{}: {e}", styles.display()))?;
     let stage = styles.join(format!(".saving-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
@@ -236,6 +237,16 @@ pub fn save_in(styles: &Path, input: &StyleInput) -> Result<Style, String> {
             "logo",
             LOGO_EXTENSIONS,
         )?;
+        for (i, reference) in style.references.iter_mut().enumerate() {
+            reference.file = take_file(
+                Some(&reference.file),
+                src,
+                &stage,
+                &format!("reference-{}", i + 1),
+                REFERENCE_EXTENSIONS,
+            )?
+            .ok_or("Give each reference its `file`")?;
+        }
         style.brand.fonts.title.file = take_file(
             input.style.brand.fonts.title.file.as_deref(),
             src,
@@ -372,8 +383,8 @@ pub fn current_name(styles: &Path, name: &str) -> String {
     }
 }
 
-/// The style's file for `given`: its own file kept (copied from `from`), a full path copied
-/// in as `<stem>.<ext>`, or none.
+/// The style's file for `given`: its own file kept (linked or copied from `from`), a full path
+/// copied in as `<stem>.<ext>`, or none.
 fn take_file(
     given: Option<&str>,
     from: Option<&Path>,
@@ -384,7 +395,8 @@ fn take_file(
     let Some(given) = given.map(str::trim).filter(|g| !g.is_empty()) else {
         return Ok(None);
     };
-    let path = if plain_file(given) && !Path::new(given).is_absolute() {
+    let own = plain_file(given) && !Path::new(given).is_absolute();
+    let path = if own {
         from.map(|k| k.join(given))
             .filter(|p| p.is_file())
             .ok_or_else(|| format!("The style has no file \"{given}\""))?
@@ -399,11 +411,17 @@ fn take_file(
     let size = std::fs::metadata(&path)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .len();
-    if size > MAX_FILE_BYTES {
+    let clip = matches!(ext.as_str(), "mp4" | "mov" | "webm" | "mkv");
+    if size > if clip { MAX_CLIP_BYTES } else { MAX_FILE_BYTES } {
         return Err(format!("That {stem} file is too big"));
     }
     let name = format!("{stem}.{ext}");
-    std::fs::copy(&path, stage.join(&name)).map_err(|e| format!("{}: {e}", path.display()))?;
+    // The style's own files are linked into the new folder where the disk allows, so saving a
+    // style with clips doesn't copy them each time.
+    let target = stage.join(&name);
+    if !(own && std::fs::hard_link(&path, &target).is_ok()) {
+        std::fs::copy(&path, &target).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     Ok(Some(name))
 }
 
@@ -453,6 +471,38 @@ mod tests {
         remove_in(styles, "Acme").unwrap();
         assert!(load_in(styles, "Acme Dark").is_err());
         assert!(remove_in(styles, "Light").is_err());
+    }
+
+    #[test]
+    fn references_are_taken_in_and_kept_through_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let styles = dir.path().join("styles");
+        let clip = dir.path().join("Launch film.mp4");
+        std::fs::write(&clip, "clip").unwrap();
+        let mut first = input("Refs");
+        first.style.references = vec![super::super::Reference {
+            file: clip.display().to_string(),
+            note: "the card reveal at 0:04".into(),
+        }];
+        let saved = save_in(&styles, &first).unwrap();
+        assert_eq!(saved.references[0].file, "reference-1.mp4");
+        let mut renamed = input("Refs 2");
+        renamed.previous = Some("Refs".into());
+        renamed.style = saved.clone();
+        let kept = save_in(&styles, &renamed).unwrap();
+        assert_eq!(kept.references, saved.references);
+        assert_eq!(
+            std::fs::read_to_string(styles.join("Refs 2").join("reference-1.mp4")).unwrap(),
+            "clip"
+        );
+        // Only images and clips.
+        let mut text = input("Notes");
+        text.style.references = vec![super::super::Reference {
+            file: dir.path().join("notes.txt").display().to_string(),
+            note: String::new(),
+        }];
+        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+        assert!(save_in(&styles, &text).unwrap_err().contains("reference-1"));
     }
 
     #[test]

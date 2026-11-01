@@ -64,6 +64,12 @@ pub enum SequenceEdit {
         #[serde(default)]
         role: Option<Role>,
     },
+    /// Gives a video track its own screen framing, or (`None`) puts it back on the project's.
+    SetTrackLook {
+        track_id: String,
+        #[serde(default)]
+        look: Option<super::ScreenLook>,
+    },
     /// One place up or down among the tracks of its kind.
     MoveTrack {
         track_id: String,
@@ -681,6 +687,18 @@ impl<'a> Editor<'a> {
                 track.muted = *muted;
                 track.locked = *locked;
                 track.role = *role;
+                Ok(())
+            }
+            SequenceEdit::SetTrackLook { track_id, look } => {
+                let t = self.track_index(track_id)?;
+                if let Some(look) = look {
+                    look.validate()?;
+                }
+                let track = &mut self.seq.tracks[t];
+                if track.kind != TrackKind::Video {
+                    return Err("Only a video track has a screen look".into());
+                }
+                track.look = *look;
                 Ok(())
             }
             SequenceEdit::MoveTrack { track_id, up } => self.move_track(track_id, *up),

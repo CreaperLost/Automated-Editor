@@ -1,7 +1,7 @@
 # Reference video scripts
 
 Tooling behind [../transcript.md](../transcript.md), the full captions for the eleven reference
-videos analysed in [../reference-video-review-2026-10-21.md](../../creator-workflows.md), and
+videos analysed in [../reference-video-review-2026-10-21.md](../../synthesis.md), and
 behind [../video-dossier-2026-10-21.md](../video-dossier-2026-10-21.md), the metadata, **verbatim
 descriptions and extracted links** for all nineteen videos in scope.
 

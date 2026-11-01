@@ -16,6 +16,8 @@ other docs link to it instead of restating it.
 | 5 | [architecture.md](architecture.md) | How it is built: the sequence model and clocks, MCP, graphics, layouts, performance rules, working notes |
 | — | [dependencies.md](dependencies.md) | Every pinned toolchain, library, runtime and model, and how we review updates |
 | — | [glossary.md](glossary.md) | The project's own words |
+| — | [requirements.md](requirements.md) | What the agent editing must do, from the research: each requirement with its evidence, status (have / partial / missing) and roadmap item |
+| — | [research/synthesis.md](research/synthesis.md) | The AI video-editing research, consolidated: sources and trust, fourteen findings, what isn't supported, corrections |
 
 ## Folders
 
@@ -23,7 +25,7 @@ other docs link to it instead of restating it.
 |---|---|
 | [plans/](plans/) | One plan per piece of work that is being built or about to be: design, decisions, build log. [layouts](plans/layouts.md) (built; follow-ups LAY-3, LAY-4 open), [shorts](plans/shorts.md) (partly built; next phases), [evaluation](plans/evaluation.md) (EVAL-1: real agent edits, measured; runner in `eval/`), [local-review-eval](plans/local-review-eval.md) (measurement + data in `review-eval/`). Built plans are deleted; read one with `git log --diff-filter=D -- docs/plans/` |
 | [contracts/](contracts/) | File formats shared with the AeroShoot recorder: [keyboard](contracts/keyboard-telemetry.md), [windows](contracts/window-telemetry.md) |
-| [research/](research/README.md) | Competitors, creator workflows, the paused re-voice lab, and the raw evidence |
+| [research/](research/README.md) | The consolidated research ([synthesis](research/synthesis.md)), competitors, the paused re-voice lab, and the raw evidence |
 | [images/](images/) | The two diagrams (plain SVG with light and dark colours; edit by hand) |
 
 ## Keeping the docs honest
@@ -32,11 +34,14 @@ other docs link to it instead of restating it.
   decisions in `decisions.md`. Link, don't copy.
 - **Plans are for work in flight.** When a plan's work ships, move its lasting design into
   `architecture.md`, its decisions into `decisions.md`, and delete the plan (git keeps it).
-- **No new dated research files.** Add to `research/competitors.md` or
-  `research/creator-workflows.md`; put raw material in `research/evidence/`.
+- **No new research files.** Add findings to `research/synthesis.md` (products to
+  `research/competitors.md`); put raw material in `research/evidence/`; what the product must do
+  goes in `requirements.md`.
 - **Label evidence:** "the code shows", "we measured", "the vendor/creator claims".
 - **Check links** after moving or deleting anything:
   `.venv\Scripts\python.exe scripts/check_doc_links.py` (exit 1 on a broken link).
 - The pre-consolidation tree is kept in git as `refs/backup/docs-before-consolidation`
-  (`git show refs/backup/docs-before-consolidation:docs/<path>` to read an old file).
+  (`git show refs/backup/docs-before-consolidation:docs/<path>` to read an old file). The research
+  folded into `research/synthesis.md` on 30 Oct (the MiniMax and Gemini per-video write-ups,
+  `creator-workflows.md`, `ai-styles.md`) is in `refs/backup/research-before-synthesis`.
 - UI mockups in `output/ui-review/` (git-ignored) are style references, not specs.

@@ -66,6 +66,11 @@ pub struct ShortLayout {
     /// full screen.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub graphic_slots: std::collections::BTreeMap<String, GraphicSlot>,
+    /// Camera push-ins (FX-3): at a jump cut in the camera, the next stretch plays a little
+    /// closer (and the one after back out), so the cut reads as a cut in rather than a jump.
+    /// Off unless turned on.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub push_ins: bool,
 }
 
 /// The part of a short's frame a graphic plays in (and is rendered for).
@@ -268,6 +273,7 @@ impl Default for ShortLayout {
             caption_lines: 1,
             caption_size_pct: 0.0,
             graphic_slots: Default::default(),
+            push_ins: false,
         }
     }
 }
@@ -357,6 +363,63 @@ pub fn screen_window(
     let x = (center.0 - uv_w / 2.0).clamp(cx, cx + cw - uv_w);
     let y = (center.1 - uv_h / 2.0).clamp(cy, cy + ch - uv_h);
     (x, y, uv_w, uv_h)
+}
+
+/// How much closer a pushed-in camera stretch plays (FX-3).
+pub const PUSH_IN: f32 = 1.15;
+/// The least a framing holds before a jump cut may change it: a cleaned take is cut every few
+/// tenths of a second, and changing at each of those would strobe.
+pub const PUSH_HOLD_US: u64 = 2_500_000;
+
+/// With push-ins on, how much closer each camera clip plays, by clip id: at a jump cut (the
+/// next camera clip starts where the last ended but plays another moment of the camera) the
+/// framing goes in or back out, once it has held for [`PUSH_HOLD_US`]; a clip that carries
+/// straight on keeps it, and anything between them (footage, a gap) starts it over at the
+/// normal framing.
+pub fn push_ins(document: &EditDocument) -> std::collections::HashMap<String, f32> {
+    let mut found = std::collections::HashMap::new();
+    if !document.short_layout.as_ref().is_some_and(|l| l.push_ins) {
+        return found;
+    }
+    let mut cameras: Vec<&crate::sequence::Clip> = document
+        .sequence
+        .video_tracks()
+        .flat_map(|track| {
+            track.clips.iter().filter(move |clip| {
+                crate::sequence::clip_role(&document.assets, track, clip)
+                    == Some(crate::sequence::Role::Webcam)
+            })
+        })
+        .collect();
+    cameras.sort_by_key(|c| c.start_us);
+    let mut last: Option<&crate::sequence::Clip> = None;
+    let mut closer = false;
+    let mut since = 0;
+    for clip in cameras {
+        match last {
+            // Straight on from the last one: the same take carries on.
+            Some(prev)
+                if prev.end_us() == clip.start_us
+                    && prev.asset == clip.asset
+                    && prev.out_us() == clip.in_us => {}
+            // A jump cut: in, or back out, once the framing has held long enough.
+            Some(prev) if prev.end_us() == clip.start_us => {
+                if clip.start_us - since >= PUSH_HOLD_US {
+                    closer = !closer;
+                    since = clip.start_us;
+                }
+            }
+            _ => {
+                closer = false;
+                since = clip.start_us;
+            }
+        }
+        if closer {
+            found.insert(clip.id.clone(), PUSH_IN);
+        }
+        last = Some(clip);
+    }
+    found
 }
 
 /// How camera clip `clip` is framed under `style`, as `render::focus_uv` takes it: the face to
@@ -457,6 +520,29 @@ pub fn caption_y(
     y.clamp(0.0, (canvas - h).max(0.0))
 }
 
+/// Where captions sit while a graphic fills one part of a split (`filled`): out of that part,
+/// at the bottom of the other, since the graphic is drawn over the part it fills and would
+/// hide the half of a seam caption on its side.
+pub fn caption_spot_beside(spot: CaptionSpot, filled: Option<GraphicSlot>) -> CaptionSpot {
+    match (filled, spot) {
+        (Some(GraphicSlot::Screen), CaptionSpot::Seam | CaptionSpot::Screen) => CaptionSpot::Camera,
+        (Some(GraphicSlot::Camera), CaptionSpot::Seam | CaptionSpot::Camera) => CaptionSpot::Screen,
+        _ => spot,
+    }
+}
+
+/// One stretch of a source a clip plays, in the source's own time.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortPiece {
+    pub source_start_us: u64,
+    pub source_end_us: u64,
+    /// Where it starts in the video now; absent when cut from it since. Filled in for the UI
+    /// and cleared before storing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_start_us: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Short {
@@ -488,6 +574,13 @@ pub struct Short {
     /// video's. Caption text stays shared with the video.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub caption_marks: CaptionMarks,
+    /// What it is about: the premise or hook a clip gathered from anywhere serves.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub idea: String,
+    /// A clip gathered from several stretches of the video (SHT-1): each on the `media`
+    /// clock, in play order. Its own timeline joins them, as edited when it was made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pieces: Vec<ShortPiece>,
     /// How long the short plays now. Filled in for the UI and cleared before storing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_us: Option<u64>,
@@ -527,34 +620,43 @@ pub fn new_look(document: &EditDocument, take: bool) -> (ShortLayout, crate::lay
 pub fn with_found_clips(
     document: &EditDocument,
     track_id: &str,
-    found: Vec<Short>,
+    found: Vec<crate::ai::shorts::Found>,
 ) -> Result<Vec<Short>, String> {
     // The words' times are their recording's or file's own.
-    let media = crate::sequence::StreamRef::parse(track_id).map(|r| r.asset);
-    let (layout, layouts) = new_look(document, false);
+    let media = crate::sequence::StreamRef::parse(track_id)
+        .map(|r| r.asset)
+        .or_else(|| document.clock_asset(None).map(String::from))
+        .ok_or("This transcript plays no recording")?;
     let mut shorts = document.shorts.clone();
     let mut added = 0;
-    for mut clip in found {
-        clip.media = media.clone();
+    for pick in found {
+        let Some((&(start, end), rest)) = pick.pieces.split_first() else {
+            continue;
+        };
         let overlaps = shorts.iter().any(|s| {
             s.take.is_none()
-                && s.media == clip.media
-                && s.source_start_us < clip.source_end_us
-                && clip.source_start_us < s.source_end_us
+                && document.clock_asset(s.media.as_deref()) == Some(media.as_str())
+                && stretches(s)
+                    .iter()
+                    .any(|&(a, b)| pick.pieces.iter().any(|&(c, d)| a < d && c < b))
         });
         if overlaps {
             continue;
         }
-        let base = clip.id.clone();
-        clip.id = (1..)
-            .map(|n| match n {
-                1 => base.clone(),
-                n => format!("{base}-{n}"),
-            })
-            .find(|id| !shorts.iter().any(|s| &s.id == id))
-            .unwrap_or(base);
-        clip.layout = layout.clone();
-        clip.layouts = layouts.clone();
+        let mut clip = new_clip(document, media.clone(), start, end, pick.title);
+        clip.idea = pick.idea;
+        clip.reason = pick.reason;
+        // A gathered pick plays its pieces one after another, as the video has them now; one
+        // a later edit cut is left out.
+        if rest
+            .iter()
+            .any(|&(a, b)| add_piece(document, &mut clip, a, b).is_err())
+        {
+            continue;
+        }
+        clip.id = crate::ids::free_id(&format!("clip-{}", start / 1000), |id| {
+            shorts.iter().any(|s| s.id == id)
+        });
         shorts.push(clip);
         added += 1;
     }
@@ -562,6 +664,19 @@ pub fn with_found_clips(
         return Err("The AI found no new moment: each one overlaps a clip already made".into());
     }
     Ok(shorts)
+}
+
+/// The source stretches a clip plays: its pieces, or its one stretch.
+fn stretches(short: &Short) -> Vec<(u64, u64)> {
+    if short.pieces.is_empty() {
+        vec![(short.source_start_us, short.source_end_us)]
+    } else {
+        short
+            .pieces
+            .iter()
+            .map(|p| (p.source_start_us, p.source_end_us))
+            .collect()
+    }
 }
 
 /// Caption marks by transcript (`<asset>.<stream>`), then word id. A mark all off still
@@ -646,11 +761,11 @@ pub fn give_own_timelines(document: &mut EditDocument) {
         if short.edit.is_some() {
             continue;
         }
-        if let Some((start, end)) = edited_range_in(short, document) {
+        if let Ok(sequence) = video_sequence(short, document) {
             owned.push((
                 i,
                 ShortEdit {
-                    sequence: slice_sequence(&document.sequence, &document.assets, start, end),
+                    sequence,
                     noise_mutes: document.noise_mutes.clone(),
                 },
             ));
@@ -695,6 +810,270 @@ pub fn slice_sequence(
     out
 }
 
+/// Stretches of the edited timeline played one after another, every track: a clip gathered
+/// from anywhere in the video.
+pub fn join_slices(
+    sequence: &Sequence,
+    assets: &[crate::sequence::Asset],
+    ranges: &[(u64, u64)],
+) -> Sequence {
+    let mut empty = sequence.clone();
+    for track in &mut empty.tracks {
+        track.clips.clear();
+    }
+    append_slices(empty, sequence, assets, ranges)
+}
+
+/// `onto` with stretches of `source` (the edited timeline) played after what it has, every
+/// track by its id (a track the video gained since is added). A clip sliced again gets a new
+/// id (and link), as the stretches no longer move together.
+pub fn append_slices(
+    mut onto: Sequence,
+    source: &Sequence,
+    assets: &[crate::sequence::Asset],
+    ranges: &[(u64, u64)],
+) -> Sequence {
+    let mut ids: std::collections::HashSet<String> =
+        onto.clips().map(|(_, c)| c.id.clone()).collect();
+    let mut offset = onto.duration_us();
+    for &(start, end) in ranges {
+        let slice = slice_sequence(source, assets, start, end);
+        for sliced in slice.tracks {
+            let at = match onto.tracks.iter().position(|t| t.id == sliced.id) {
+                Some(at) => at,
+                None => {
+                    // Video tracks stay before audio tracks.
+                    let at = if sliced.kind == crate::sequence::TrackKind::Video {
+                        onto.video_tracks().count()
+                    } else {
+                        onto.tracks.len()
+                    };
+                    let mut track = sliced.clone();
+                    track.clips.clear();
+                    onto.tracks.insert(at, track);
+                    at
+                }
+            };
+            for mut clip in sliced.clips {
+                clip.start_us += offset;
+                let mut n = 2;
+                let (id, link) = (clip.id.clone(), clip.link.clone());
+                while ids.contains(&clip.id) {
+                    clip.id = format!("{id}-p{n}");
+                    clip.link = link.as_ref().map(|l| format!("{l}-p{n}"));
+                    n += 1;
+                }
+                ids.insert(clip.id.clone());
+                onto.tracks[at].clips.push(clip);
+            }
+        }
+        offset += end - start;
+    }
+    onto
+}
+
+/// A new clip of the source stretch `start..end` on `media`'s clock, in the look of the clips
+/// made so far, with an id from where it starts.
+pub fn new_clip(
+    document: &EditDocument,
+    media: String,
+    start: u64,
+    end: u64,
+    title: String,
+) -> Short {
+    let (layout, layouts) = new_look(document, false);
+    let id = crate::ids::free_id(&format!("clip-{}", start / 1000), |id| {
+        document.shorts.iter().any(|s| s.id == id)
+    });
+    Short {
+        id,
+        title,
+        source_start_us: start,
+        source_end_us: end,
+        reason: String::new(),
+        layout,
+        layouts,
+        media: Some(media),
+        edit: None,
+        take: None,
+        caption_marks: Default::default(),
+        idea: String::new(),
+        pieces: Vec::new(),
+        length_us: None,
+        edited_start_us: None,
+        edited_end_us: None,
+    }
+}
+
+/// Adds the source stretch `start..end` (on the clip's media clock) to the end of `clip`, as
+/// the video has it now. What the clip plays so far stays as it is, its own cuts too; its first
+/// stretch becomes its first piece. Refused when the stretch was cut from the video, overlaps
+/// a piece it has, or makes it longer than a clip may be.
+pub fn add_piece(
+    document: &EditDocument,
+    clip: &mut Short,
+    start: u64,
+    end: u64,
+) -> Result<(), String> {
+    if clip.take.is_some() {
+        return Err("A short made from a take plays its take; add footage under it instead".into());
+    }
+    let asset = document
+        .clock_asset(clip.media.as_deref())
+        .ok_or("This clip plays no recording")?
+        .to_string();
+    let mapper = document.asset_clock(&asset);
+    let range = edited_span(&mapper, start, end)
+        .ok_or("A word at one end was cut from the video; pick words that are kept")?;
+    let had = match &clip.edit {
+        Some(own) => own.sequence.clone(),
+        None => video_sequence(clip, document)?,
+    };
+    if clip.pieces.is_empty() {
+        clip.pieces.push(ShortPiece {
+            source_start_us: clip.source_start_us,
+            source_end_us: clip.source_end_us,
+            edited_start_us: None,
+        });
+    }
+    if clip
+        .pieces
+        .iter()
+        .any(|p| start < p.source_end_us && p.source_start_us < end)
+    {
+        return Err("Those words are already in this clip".into());
+    }
+    let sequence = append_slices(had, &document.sequence, &document.assets, &[range]);
+    let length = sequence.duration_us();
+    if length > MAX_SHORT_US {
+        return Err(format!(
+            "That makes it {:.1} s; a clip is at most 3 min",
+            length as f64 / 1e6
+        ));
+    }
+    clip.pieces.push(ShortPiece {
+        source_start_us: start,
+        source_end_us: end,
+        edited_start_us: None,
+    });
+    clip.source_start_us = clip.source_start_us.min(start);
+    clip.source_end_us = clip.source_end_us.max(end);
+    let noise_mutes = clip.edit.as_ref().map_or_else(
+        || document.noise_mutes.clone(),
+        |own| own.noise_mutes.clone(),
+    );
+    clip.edit = Some(ShortEdit {
+        sequence,
+        noise_mutes,
+    });
+    Ok(())
+}
+
+/// Where each of a gathered clip's pieces plays on its own timeline, in order: from where its
+/// first kept moment plays to where the next piece's does (the last to the end), so the clip's
+/// own cuts, graphics and every track between stay with their piece. `None` for a piece the
+/// clip's own cuts removed whole.
+pub fn piece_spans(
+    clip: &Short,
+    document: &EditDocument,
+) -> Result<Vec<Option<(u64, u64)>>, String> {
+    let own = clip
+        .edit
+        .as_ref()
+        .filter(|_| clip.pieces.len() > 1)
+        .ok_or("This clip is one stretch: there are no pieces to arrange")?;
+    let asset = document
+        .clock_asset(clip.media.as_deref())
+        .ok_or("This clip plays no recording")?;
+    let mapper = crate::sequence::clock::asset_clock(&own.sequence, asset);
+    let starts: Vec<Option<u64>> = clip
+        .pieces
+        .iter()
+        .map(|p| {
+            mapper
+                .source_range_to_edited(p.source_start_us, p.source_end_us)
+                .iter()
+                .map(|r| r.0)
+                .min()
+        })
+        .collect();
+    let kept: Vec<u64> = starts.iter().flatten().copied().collect();
+    if kept.windows(2).any(|w| w[1] <= w[0]) {
+        return Err("This clip's pieces no longer play in their order; make it again".into());
+    }
+    let length = own.sequence.duration_us();
+    let mut spans = Vec::with_capacity(starts.len());
+    let mut first = true;
+    for (i, start) in starts.iter().enumerate() {
+        spans.push(start.map(|s| {
+            let from = if std::mem::take(&mut first) { 0 } else { s };
+            let to = starts[i + 1..]
+                .iter()
+                .flatten()
+                .next()
+                .copied()
+                .unwrap_or(length);
+            (from, to)
+        }));
+    }
+    Ok(spans)
+}
+
+/// Plays a gathered clip's pieces in `order` (indices into its pieces; one left out is
+/// removed), each with what its own timeline has for it (see [`piece_spans`]).
+pub fn arrange_pieces(
+    document: &EditDocument,
+    clip: &mut Short,
+    order: &[usize],
+) -> Result<(), String> {
+    let spans = piece_spans(clip, document)?;
+    if order.is_empty() {
+        return Err("A clip keeps at least one piece; remove the clip instead".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    if order.iter().any(|&i| i >= spans.len() || !seen.insert(i)) {
+        return Err(format!(
+            "Give each piece once, by its number (this clip has {})",
+            spans.len()
+        ));
+    }
+    let own = clip
+        .edit
+        .as_ref()
+        .ok_or("This clip has no timeline of its own")?;
+    let ranges: Vec<(u64, u64)> = order.iter().filter_map(|&i| spans[i]).collect();
+    if ranges.is_empty() {
+        return Err("Those pieces play nothing: the clip's own cuts removed them".into());
+    }
+    let mut empty = own.sequence.clone();
+    for track in &mut empty.tracks {
+        track.clips.clear();
+    }
+    let sequence = append_slices(empty, &own.sequence, &document.assets, &ranges);
+    if sequence.duration_us() < MIN_SHORT_US {
+        return Err("That leaves less than 3 s; keep more of it".into());
+    }
+    clip.pieces = order.iter().map(|&i| clip.pieces[i]).collect();
+    clip.source_start_us = clip
+        .pieces
+        .iter()
+        .map(|p| p.source_start_us)
+        .min()
+        .unwrap_or(0);
+    clip.source_end_us = clip
+        .pieces
+        .iter()
+        .map(|p| p.source_end_us)
+        .max()
+        .unwrap_or(0);
+    let noise_mutes = own.noise_mutes.clone();
+    clip.edit = Some(ShortEdit {
+        sequence,
+        noise_mutes,
+    });
+    Ok(())
+}
+
 /// The short a sound is the take of, when it plays only there (not on the video's timeline):
 /// its words and cuts are then on that short's timeline.
 pub fn take_short_of<'a>(document: &'a EditDocument, key: &str) -> Option<&'a Short> {
@@ -709,6 +1088,40 @@ pub fn take_short_of<'a>(document: &'a EditDocument, key: &str) -> Option<&'a Sh
         .shorts
         .iter()
         .find(|s| s.take.as_ref().is_some_and(|t| t.voice == key))
+}
+
+/// What a clip plays of the video as edited now, every track: its stretch, or a gathered
+/// clip's pieces one after another in their order. A piece the video has since trimmed plays
+/// what is kept of it, and one it cut whole is left out.
+pub fn video_sequence(short: &Short, document: &EditDocument) -> Result<Sequence, String> {
+    if short.pieces.len() < 2 {
+        let (start, end) = edited_range_in(short, document)
+            .ok_or("Part of this short was cut from the video; adjust it first")?;
+        return Ok(slice_sequence(
+            &document.sequence,
+            &document.assets,
+            start,
+            end,
+        ));
+    }
+    let asset = document
+        .clock_asset(short.media.as_deref())
+        .ok_or("This clip plays no recording")?;
+    let mapper = document.asset_clock(asset);
+    let ranges: Vec<(u64, u64)> = short
+        .pieces
+        .iter()
+        .filter_map(|p| {
+            let kept = mapper.source_range_to_edited(p.source_start_us, p.source_end_us);
+            let start = kept.iter().map(|r| r.0).min()?;
+            let end = kept.iter().map(|r| r.1).max()?;
+            (end > start).then_some((start, end))
+        })
+        .collect();
+    if ranges.is_empty() {
+        return Err("Every piece of this clip was cut from the video".into());
+    }
+    Ok(join_slices(&document.sequence, &document.assets, &ranges))
 }
 
 /// The short as a timeline of its own, in the short's time: its own edit when it has one,
@@ -729,11 +1142,7 @@ pub fn short_timeline(base: &EditDocument, short: &Short) -> Result<EditDocument
             timeline.noise_mutes = own.noise_mutes.clone();
             own.sequence.clone()
         }
-        None => {
-            let (start, end) = edited_range_in(short, base)
-                .ok_or("Part of this short was cut from the video; adjust it first")?;
-            slice_sequence(&base.sequence, &base.assets, start, end)
-        }
+        None => video_sequence(short, base)?,
     };
     // A take's footage sound is lowered under its voice, by the project's amount unless it
     // has its own.
@@ -791,6 +1200,9 @@ pub fn normalized(mut shorts: Vec<Short>) -> Vec<Short> {
         short.edited_start_us = None;
         short.edited_end_us = None;
         short.length_us = None;
+        for piece in &mut short.pieces {
+            piece.edited_start_us = None;
+        }
     }
     shorts.sort_by(|a, b| {
         a.source_start_us
@@ -808,11 +1220,17 @@ pub fn edited_range_in(short: &Short, document: &EditDocument) -> Option<(u64, u
 
 /// The edited range of a short whose ends are on `mapper`'s clock.
 pub fn edited_range(short: &Short, mapper: &TimelineMapper) -> Option<(u64, u64)> {
-    let start = mapper.source_to_edited_us(short.source_start_us)?;
-    let end = mapper
-        .source_to_edited_us(short.source_end_us.saturating_sub(1))?
+    edited_span(mapper, short.source_start_us, short.source_end_us)
+}
+
+/// The edited range of the source stretch `start`..`end` on `mapper`'s clock, if both ends are
+/// still on the timeline in order.
+pub fn edited_span(mapper: &TimelineMapper, start: u64, end: u64) -> Option<(u64, u64)> {
+    let first = mapper.source_to_edited_us(start)?;
+    let last = mapper
+        .source_to_edited_us(end.saturating_sub(1))?
         .saturating_add(1);
-    (end > start).then_some((start, end))
+    (last > first).then_some((first, last))
 }
 
 /// Fills in where each short sits on the video and how long it plays. Lengths come from the
@@ -827,6 +1245,16 @@ pub fn attach_edited(shorts: &mut [Short], document: &EditDocument) {
             short.length_us = Some(own.sequence.duration_us());
             short.edited_start_us = None;
             short.edited_end_us = None;
+            // A gathered clip's pieces: where each is in the video now.
+            if let Some(asset) = document.clock_asset(short.media.as_deref()) {
+                let clock = clocks
+                    .entry(asset.to_string())
+                    .or_insert_with(|| document.asset_clock(asset));
+                for piece in &mut short.pieces {
+                    piece.edited_start_us =
+                        edited_span(clock, piece.source_start_us, piece.source_end_us).map(|r| r.0);
+                }
+            }
             continue;
         }
         let range = document
@@ -881,6 +1309,45 @@ pub(crate) mod tests {
 
     const S: u64 = 1_000_000;
 
+    /// Camera push-ins (FX-3): off unless asked; on, each jump cut goes in or back out, a take
+    /// carrying straight on keeps its framing, and a gap starts over.
+    #[test]
+    fn push_ins_go_in_and_out_at_jump_cuts_only_when_turned_on() {
+        let clip = |id: &str, at: u64, from: u64, length: u64| {
+            serde_json::json!({ "id": id, "asset": "cam", "stream": "picture",
+                "startUs": at * S, "inUs": from * S, "durationUs": length * S })
+        };
+        let mut document = EditDocument::default();
+        document.assets = vec![serde_json::from_value(serde_json::json!({
+            "id": "cam", "name": "cam.mp4", "kind": "video", "path": "C:/cam.mp4",
+            "streams": [{ "id": "picture", "kind": "picture", "role": "webcam", "name": "Camera" }],
+            "durationUs": 60 * S, "width": 1920, "height": 1080
+        }))
+        .unwrap()];
+        document.sequence.tracks = vec![serde_json::from_value(serde_json::json!({
+            "id": "V1", "kind": "video", "name": "V1",
+            "clips": [
+                clip("a", 0, 0, 3),   // the take
+                clip("b", 3, 3, 3),   // carrying straight on
+                clip("c", 6, 10, 3),  // a jump cut: in
+                clip("d", 9, 20, 3),  // another: back out
+                clip("e", 13, 30, 1), // after a gap: starts over
+                clip("f", 14, 40, 1), // a jump cut too soon after: holds
+                clip("g", 15, 50, 1), // still too soon
+                clip("h", 16, 60, 2)  // held 3 s: in
+            ]
+        }))
+        .unwrap()];
+        document.short_layout = Some(ShortLayout::default());
+        assert!(push_ins(&document).is_empty(), "off by default");
+        document.short_layout.as_mut().unwrap().push_ins = true;
+        let pushed = push_ins(&document);
+        let mut ids: Vec<&str> = pushed.keys().map(String::as_str).collect();
+        ids.sort();
+        assert_eq!(ids, ["c", "h"]);
+        assert_eq!(pushed["c"], PUSH_IN);
+    }
+
     fn doc(len: u64) -> EditDocument {
         EditDocument::from_recording(crate::sequence::tests::recording("rec", len, &[])).unwrap()
     }
@@ -915,6 +1382,8 @@ pub(crate) mod tests {
             edit: None,
             take: None,
             caption_marks: Default::default(),
+            idea: String::new(),
+            pieces: Vec::new(),
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,
@@ -935,25 +1404,52 @@ pub(crate) mod tests {
         made.media = Some("rec".into());
         made.layout.caption_max_words = 2;
         document.shorts = vec![take, made];
-        let found = |start: u64, end: u64| {
-            let mut s = short(start, end);
-            s.id = "clip-a".into();
-            s
+        let found = |pieces: Vec<(u64, u64)>| crate::ai::shorts::Found {
+            title: "Found".into(),
+            idea: "An idea".into(),
+            reason: String::new(),
+            pieces,
         };
         // One overlaps the clip made (left out); the other is new, with an id of its own and
         // the clips' look. The take short stays though it covers the same time.
         let shorts = with_found_clips(
             &document,
             "rec.mic",
-            vec![found(15 * S, 25 * S), found(30 * S, 45 * S)],
+            vec![found(vec![(15 * S, 25 * S)]), found(vec![(30 * S, 45 * S)])],
         )
         .unwrap();
         let ids: Vec<&str> = shorts.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, ["take", "clip-a", "clip-a-2"]);
+        assert_eq!(ids, ["take", "clip-a", "clip-30000"]);
         assert_eq!(shorts[2].media.as_deref(), Some("rec"));
         assert_eq!(shorts[2].layout.caption_max_words, 2);
+        assert_eq!(shorts[2].idea, "An idea");
+        assert!(shorts[2].edit.is_none());
         // Nothing new: refused, so the list is never emptied or replaced.
-        assert!(with_found_clips(&document, "rec.mic", vec![found(12 * S, 18 * S)]).is_err());
+        assert!(
+            with_found_clips(&document, "rec.mic", vec![found(vec![(12 * S, 18 * S)])]).is_err()
+        );
+        // A gathered pick plays its pieces in its order on its own timeline; one that takes a
+        // piece of a clip made is left out, though its other piece is free.
+        let shorts = with_found_clips(
+            &document,
+            "rec.mic",
+            vec![
+                found(vec![(40 * S, 50 * S), (25 * S, 30 * S)]),
+                found(vec![(52 * S, 58 * S), (18 * S, 22 * S)]),
+            ],
+        )
+        .unwrap();
+        assert_eq!(shorts.len(), 3);
+        let gathered = &shorts[2];
+        assert_eq!(gathered.pieces.len(), 2);
+        assert_eq!(
+            (gathered.source_start_us, gathered.source_end_us),
+            (25 * S, 50 * S)
+        );
+        assert_eq!(
+            gathered.edit.as_ref().map(|e| e.sequence.duration_us()),
+            Some(15 * S)
+        );
     }
 
     #[test]
@@ -1202,6 +1698,18 @@ pub(crate) mod tests {
             caption_y(CaptionSpot::Camera, &top, 100, 1920),
             (672 - 100 - 48) as f32
         );
+        // A graphic filling the screen's part takes seam captions up into the camera's.
+        let beside = caption_spot_beside(CaptionSpot::Seam, Some(GraphicSlot::Screen));
+        assert_eq!(beside, CaptionSpot::Camera);
+        assert!(caption_y(beside, &top, 100, 1920) + 100.0 <= 672.0);
+        assert_eq!(
+            caption_spot_beside(CaptionSpot::Seam, Some(GraphicSlot::Camera)),
+            CaptionSpot::Screen
+        );
+        assert_eq!(
+            caption_spot_beside(CaptionSpot::Seam, Some(GraphicSlot::OverScreen)),
+            CaptionSpot::Seam
+        );
         let under = arrange(&bottom, &style, canvas, both);
         assert_eq!(caption_y(CaptionSpot::Seam, &under, 100, 1920), 910.0);
         let alone = arrange(
@@ -1390,6 +1898,130 @@ pub(crate) mod tests {
         assert_eq!(shorts[1].length_us, Some(7 * S));
         assert_eq!(shorts[1].edited_start_us, None, "edited on its own");
         assert_eq!(shorts[2].length_us, None, "its start was cut");
+    }
+
+    #[test]
+    fn gathered_pieces_play_one_after_another_in_their_order() {
+        let base = doc(60 * S);
+        // A later stretch first, then an earlier one, both from the one recording's clips.
+        let joined = join_slices(
+            &base.sequence,
+            &base.assets,
+            &[(40 * S, 45 * S), (10 * S, 13 * S)],
+        );
+        assert_eq!(joined.duration_us(), 8 * S);
+        crate::sequence::validate_sequence(&joined, &base.assets).unwrap();
+        for track in &joined.tracks {
+            let [first, second] = &track.clips[..] else {
+                panic!("two pieces on every track");
+            };
+            assert_eq!((first.start_us, first.duration_us), (0, 5 * S));
+            assert_eq!((second.start_us, second.duration_us), (5 * S, 3 * S));
+            // Each plays its own stretch of the source.
+            assert_eq!(second.in_us + 3 * S, first.in_us - 27 * S);
+            assert_ne!(first.id, second.id);
+        }
+    }
+
+    #[test]
+    fn a_piece_added_to_a_clip_plays_after_it_and_keeps_its_own_cuts() {
+        let base = doc(60 * S);
+        let mut clip = short(10 * S, 20 * S);
+        // Its own timeline with a second cut out of it.
+        let mut own = slice_sequence(&base.sequence, &base.assets, 10 * S, 20 * S);
+        for track in &mut own.tracks {
+            for c in &mut track.clips {
+                c.duration_us -= S;
+            }
+        }
+        clip.edit = Some(ShortEdit {
+            sequence: own,
+            ..Default::default()
+        });
+        add_piece(&base, &mut clip, 40 * S, 44 * S).unwrap();
+        let own = &clip.edit.as_ref().unwrap().sequence;
+        assert_eq!(
+            own.duration_us(),
+            9 * S + 4 * S,
+            "its cut stays, the piece follows"
+        );
+        assert_eq!(clip.pieces.len(), 2);
+        assert_eq!((clip.source_start_us, clip.source_end_us), (10 * S, 44 * S));
+        crate::sequence::validate_sequence(own, &base.assets).unwrap();
+        // The same words again, or words inside it, are refused.
+        assert!(add_piece(&base, &mut clip, 41 * S, 42 * S).is_err());
+        assert!(add_piece(&base, &mut clip, 12 * S, 14 * S).is_err());
+    }
+
+    #[test]
+    fn pieces_move_and_go_with_what_their_stretch_holds() {
+        let base = doc(60 * S);
+        let mut clip = short(10 * S, 20 * S);
+        add_piece(&base, &mut clip, 40 * S, 44 * S).unwrap();
+        add_piece(&base, &mut clip, 30 * S, 33 * S).unwrap();
+        let spans = piece_spans(&clip, &base).unwrap();
+        assert_eq!(
+            spans,
+            vec![
+                Some((0, 10 * S)),
+                Some((10 * S, 14 * S)),
+                Some((14 * S, 17 * S))
+            ]
+        );
+        // The third first, the second left out.
+        arrange_pieces(&base, &mut clip, &[2, 0]).unwrap();
+        let own = &clip.edit.as_ref().unwrap().sequence;
+        assert_eq!(own.duration_us(), 13 * S);
+        crate::sequence::validate_sequence(own, &base.assets).unwrap();
+        let first = &own.tracks[0].clips[0];
+        assert_eq!((first.start_us, first.duration_us), (0, 3 * S));
+        assert_eq!(
+            clip.pieces
+                .iter()
+                .map(|p| p.source_start_us)
+                .collect::<Vec<_>>(),
+            vec![30 * S, 10 * S]
+        );
+        assert!(arrange_pieces(&base, &mut clip, &[0, 0]).is_err());
+        assert!(arrange_pieces(&base, &mut clip, &[]).is_err());
+    }
+
+    #[test]
+    fn a_gathered_clip_takes_the_videos_cuts_again_piece_by_piece() {
+        use crate::project::revision::EditHistory;
+        let dir = tempfile::tempdir().unwrap();
+        let mut history = EditHistory::new(doc(60 * S));
+        let mut clip = short(40 * S, 50 * S);
+        clip.media = Some("rec".into());
+        add_piece(&history.current, &mut clip, 10 * S, 20 * S).unwrap();
+        history.set_shorts(0, vec![clip], dir.path()).unwrap();
+        // The video then loses 12-14 s (inside the second piece) and 42-44 s (inside the
+        // first); the clip's own timeline keeps them until it takes the video's cuts again.
+        history
+            .ripple_cuts(1, &[(12 * S, 14 * S), (42 * S, 44 * S)], dir.path())
+            .unwrap();
+        let before = short_timeline(&history.current, &history.current.shorts[0]).unwrap();
+        assert_eq!(before.duration_us(), 20 * S);
+        history.resync_short(2, "s1", dir.path()).unwrap();
+        let clip = &history.current.shorts[0];
+        assert_eq!(clip.pieces.len(), 2);
+        let after = short_timeline(&history.current, clip).unwrap();
+        // Each piece as the video has it now, still the first one first.
+        assert_eq!(after.duration_us(), 16 * S);
+        let first = &after.sequence.tracks[0].clips[0];
+        assert_eq!((first.in_us, first.duration_us), (40 * S, 2 * S));
+        // A piece cut whole is left out; the rest still plays.
+        history
+            .ripple_cuts(3, &[(10 * S, 18 * S)], dir.path())
+            .unwrap();
+        history.resync_short(4, "s1", dir.path()).unwrap();
+        let clip = &history.current.shorts[0];
+        assert_eq!(
+            short_timeline(&history.current, clip)
+                .unwrap()
+                .duration_us(),
+            8 * S
+        );
     }
 
     #[test]

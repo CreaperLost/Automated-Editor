@@ -5,7 +5,7 @@ import { IconButton, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { assetById, findClip } from "../../lib/sequence";
-import type { GraphicVariable, GraphicView } from "../../lib/types";
+import type { GraphicListed, GraphicVariable, GraphicView, OpenedProject } from "../../lib/types";
 import { RenderBadge } from "../graphics/GraphicsPanel";
 import { LibrarySave } from "../graphics/LibrarySave";
 import { useGraphicsUpdates, useStyles } from "../graphics/graphicsEvents";
@@ -147,6 +147,7 @@ export const GraphicSection: React.FC = () => {
             />
             <RenderBadge graphic={graphic} ready={ready} />
           </div>
+          <Versions assetId={graphic.assetId} disabled={!!track.locked} onError={setError} />
           <div className="flex items-center justify-between gap-2 text-label text-studio-300">
             <span title="Everything behind the graphic darkens while it plays, so it stands out">Dim behind it</span>
             <Switch checked={!!behind("dim")} onChange={(on) => void setBehind("dim", on)} title="Dim the video behind this graphic" />
@@ -289,6 +290,74 @@ export const GraphicSection: React.FC = () => {
         </p>
       )}
     </InspectorSection>
+  );
+};
+
+/// The graphic's versions (GFX-4): the one playing here and the others kept beside it. A new
+/// version is a copy that plays at once, so changes go into it and the one before stays to go
+/// back to; picking another plays it in the same places. Each is one undo step.
+const Versions: React.FC<{ assetId: string; disabled: boolean; onError: (message: string) => void }> = ({
+  assetId,
+  disabled,
+  onError,
+}) => {
+  const handle = useProjectStore((s) => s.openedProject?.projectHandle);
+  const revision = useProjectStore((s) => s.openedProject?.revision);
+  const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
+  const [listed, setListed] = useState<GraphicListed[]>();
+  useEffect(() => {
+    if (!handle) return;
+    let live = true;
+    void api
+      .projectGraphicsList(handle)
+      .then((graphics) => live && setListed(graphics))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [handle, revision, assetId]);
+  const me = listed?.find((g) => g.assetId === assetId);
+  if (!listed || !me) return null;
+  const first = me.versionOf ?? me.assetId;
+  const family = listed.filter((g) => g.assetId === first || g.versionOf === first);
+  const change = (call: (handle: string, revision: number) => Promise<OpenedProject>) => {
+    const now = useProjectStore.getState().openedProject;
+    if (!now) return;
+    void call(now.projectHandle, now.revision)
+      .then(applyOpenedProject)
+      .catch((err) => onError(String(err)));
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-label text-studio-300">
+      <span className="shrink-0 mr-1">Version</span>
+      {family.map((g, i) => {
+        const here = g.assetId === assetId;
+        return (
+          <button
+            key={g.assetId}
+            type="button"
+            disabled={disabled || here}
+            title={here ? "Plays here now" : `Play this version here instead${g.note ? `: ${g.note}` : ""}`}
+            className={`max-w-[10rem] truncate px-1.5 py-0.5 rounded border text-meta ${
+              here ? "border-accent-hover text-studio-100" : "border-studio-700 text-studio-400 hover:text-white"
+            }`}
+            onClick={() => change((h, r) => api.projectGraphicVersionUse(h, r, g.assetId))}
+          >
+            {i + 1}
+            {g.note ? ` · ${g.note}` : ""}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        disabled={disabled}
+        title="Copy it into a new version that plays here; this one is kept and you can go back to it"
+        className="px-1.5 py-0.5 text-meta text-studio-400 hover:text-white hover:underline"
+        onClick={() => change(async (h, r) => (await api.projectGraphicVersionNew(h, r, assetId, true)).project)}
+      >
+        + New
+      </button>
+    </div>
   );
 };
 

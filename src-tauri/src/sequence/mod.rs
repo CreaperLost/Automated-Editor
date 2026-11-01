@@ -472,6 +472,55 @@ impl Clip {
     }
 }
 
+/// A video track's own screen framing: imported footage often wants none of the recording's
+/// crop or zoom-out. The frame's corners and shadow stay the style's.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScreenLook {
+    /// Percent of the picture trimmed from each edge.
+    pub crop_left: f32,
+    pub crop_top: f32,
+    pub crop_right: f32,
+    pub crop_bottom: f32,
+    /// Size as a percent of the padded content area.
+    pub scale_pct: f32,
+}
+
+impl Default for ScreenLook {
+    fn default() -> Self {
+        Self {
+            crop_left: 0.0,
+            crop_top: 0.0,
+            crop_right: 0.0,
+            crop_bottom: 0.0,
+            scale_pct: 100.0,
+        }
+    }
+}
+
+impl ScreenLook {
+    pub fn validate(&self) -> Result<(), String> {
+        use crate::project::layout::{MAX_SCREEN_CROP_PCT, MIN_SCREEN_SCALE_PCT};
+        let crops = [
+            self.crop_left,
+            self.crop_top,
+            self.crop_right,
+            self.crop_bottom,
+        ];
+        if crops
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=MAX_SCREEN_CROP_PCT).contains(v))
+        {
+            return Err(format!("A crop is 0 to {MAX_SCREEN_CROP_PCT}%"));
+        }
+        if !self.scale_pct.is_finite() || !(MIN_SCREEN_SCALE_PCT..=100.0).contains(&self.scale_pct)
+        {
+            return Err(format!("The size is {MIN_SCREEN_SCALE_PCT} to 100%"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
@@ -492,6 +541,9 @@ pub struct Track {
     /// What the track's clips stand for; unset, each stream's own role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
+    /// How the track's screen clips are framed instead of the project's screen settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<ScreenLook>,
     /// In timeline order, never overlapping.
     #[serde(default)]
     pub clips: Vec<Clip>,
@@ -507,6 +559,7 @@ impl Track {
             muted: false,
             locked: false,
             role: None,
+            look: None,
             clips: Vec::new(),
         }
     }

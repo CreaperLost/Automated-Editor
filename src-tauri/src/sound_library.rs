@@ -341,16 +341,7 @@ pub fn add(
     let slug = slug(&stem);
     let base = format!("my-{}", if slug.is_empty() { "sound" } else { &slug });
     let taken = |id: &str| BUILTIN.iter().any(|b| b.id == id) || mine.iter().any(|m| m.id == id);
-    let id = (1..)
-        .map(|n| {
-            if n == 1 {
-                base.clone()
-            } else {
-                format!("{base}-{n}")
-            }
-        })
-        .find(|id| !taken(id))
-        .unwrap_or(base);
+    let id = crate::ids::free_id(&base, taken);
     let ext = file
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())

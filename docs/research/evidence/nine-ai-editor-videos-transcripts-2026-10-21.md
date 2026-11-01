@@ -7,8 +7,8 @@ through third-party transcript indexers (ReelStack, prepublish.ai, primalvideo.c
 moderncreator.app, babbl-labs.com), then a short "what we can use" line.
 
 The list is **two different** from the eleven in
-[reference-video-review-2026-10-21.md](../creator-workflows.md) and the
-previous ten in [ten-ai-editor-videos-2026-10-21.md](../creator-workflows.md):
+[reference-video-review-2026-10-21.md](../synthesis.md) and the
+previous ten in [ten-ai-editor-videos-2026-10-21.md](../synthesis.md):
 - **removed:** Pat Simmons (Premiere + GPT-6 Astra) and Justin Brown / Primal Video.
   Both were reclassified by the project owner: Pat because the workflow is now natively
   covered by AeroEdits' text-driven cut surface, and Justin because his v3hzMGTb7Es video
@@ -139,7 +139,7 @@ description is empty) / transcript extracts / the inference "what we can use".
 - **What we can use.** This is a perfect three-way head-to-head for the
   gap we already named in the gaps doc — *Cloud agent → cloud editor vs
   coding agent → local editor vs coding agent → local NLE MCP*. The
-  finding here lines up with our [agent-video-gaps-and-proposals-2026-10-21.md](../creator-workflows.md)
+  finding here lines up with our [agent-video-gaps-and-proposals-2026-10-21.md](../synthesis.md)
   position: the *boring setup* is what the user is happy to delegate;
   the *creative* calls (which takes to keep, the hook, the colour grade)
   stay with them. The tokens claim ("I haven't run into any token

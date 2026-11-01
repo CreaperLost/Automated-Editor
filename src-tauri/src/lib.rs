@@ -12,6 +12,7 @@ pub mod export;
 pub mod face;
 pub mod fixtures;
 pub mod graphics;
+pub mod ids;
 pub mod joins;
 pub mod layouts;
 pub mod mcp;
@@ -1193,25 +1194,40 @@ fn with_joins(
     }
 }
 
-/// What was said, in every transcript (the Search panel).
+/// What was said, in every transcript (the Search panel). Searched on a worker off the project
+/// lock; a newer search from the same window stops one still running.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn source_search(
-    state: State<'_, AppState>,
+async fn source_search(
+    app: tauri::AppHandle,
+    window: tauri::Window,
     project_handle: String,
     query: String,
     limit: Option<usize>,
 ) -> Result<source_search::Results, String> {
-    let opened = state.opened_project.lock();
-    let reader = opened.as_ref().ok_or("No opened project")?;
-    commands::require_handle(reader, &project_handle)?;
-    source_search::search(
-        reader.root(),
-        &reader.history().current,
-        &query,
-        None,
-        limit.unwrap_or(source_search::LIMIT_MAX),
-    )
+    let latest = source_search::Latest::new(window.label());
+    let (root, document) = {
+        let state = app.state::<AppState>();
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        commands::require_handle(reader, &project_handle)?;
+        (
+            reader.root().to_path_buf(),
+            reader.history().current.clone(),
+        )
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        source_search::search_until(
+            &root,
+            &document,
+            &query,
+            None,
+            limit.unwrap_or(source_search::LIMIT_MAX),
+            &|| latest.replaced(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1367,6 +1383,38 @@ fn project_shorts_set(
     commands::project_shorts_set_impl(&state, project_handle, expected_revision, shorts)
 }
 
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_clip_add_words(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    clip: Option<String>,
+    track_id: String,
+    word_ids: Vec<String>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_clip_add_words_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        clip,
+        track_id,
+        word_ids,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_clip_arrange(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    clip: String,
+    order: Vec<usize>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_clip_arrange_impl(&state, project_handle, expected_revision, clip, order)
+}
+
 /// Async: lining up the take's sounds reads them, which must not hold the main thread.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -1437,8 +1485,15 @@ fn project_short_export(
     project_handle: String,
     short_id: String,
     settings: export::ExportSettings,
+    queue: Option<bool>,
 ) -> Result<export::ExportStatus, String> {
-    commands::project_short_export_impl(&state, project_handle, short_id, settings)
+    commands::project_short_export_impl(
+        &state,
+        project_handle,
+        short_id,
+        settings,
+        queue.unwrap_or(false),
+    )
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1573,6 +1628,58 @@ impl mcp::Host for McpHost {
 #[cfg(feature = "tauri-app")]
 fn mcp_host(app: &tauri::AppHandle) -> std::sync::Arc<dyn mcp::Host> {
     std::sync::Arc::new(McpHost(app.clone()))
+}
+
+/// The stop of the preset run going now (AUTO-1), if one is.
+#[cfg(feature = "tauri-app")]
+static PRESET_RUN: parking_lot::Mutex<Option<std::sync::Arc<mcp::tools::Stop>>> =
+    parking_lot::Mutex::new(None);
+
+/// What running the open project's preset would do: its steps (online ones only when
+/// `online`) and what is left for the agent.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_run_plan(app: tauri::AppHandle, online: bool) -> Result<mcp::first_steps::Plan, String> {
+    mcp::first_steps::plan_open(mcp_host(&app).as_ref(), online)
+}
+
+/// Runs the open project's preset up to where the agent takes over, telling the windows how
+/// each step goes (`aeroedits-preset-run`).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn preset_run(app: tauri::AppHandle, online: bool) -> Result<(), String> {
+    use tauri::Emitter;
+    let stop = std::sync::Arc::new(mcp::tools::Stop::default());
+    {
+        let mut running = PRESET_RUN.lock();
+        if running.is_some() {
+            return Err("The preset is running already".into());
+        }
+        *running = Some(stop.clone());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let host = mcp_host(&app);
+        let plan = mcp::first_steps::plan_open(host.as_ref(), online)?;
+        let emit = |event: mcp::first_steps::Event| {
+            let _ = app.emit("aeroedits-preset-run", event);
+        };
+        mcp::first_steps::run(host.as_ref(), &plan, stop, &emit);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    *PRESET_RUN.lock() = None;
+    result
+}
+
+/// Stops the preset run at its next step (and the transcription or review running in it).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_run_stop(app: tauri::AppHandle) {
+    if let Some(stop) = PRESET_RUN.lock().as_ref() {
+        stop.stop(mcp_host(&app).transcripts());
+    }
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2249,6 +2356,44 @@ fn project_graphic_set(
     )
 }
 
+/// A version of a graphic beside it (GFX-4), playing in its place at once with `use_it`.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphic_version_new(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    note: Option<String>,
+    use_it: bool,
+) -> Result<commands::graphics::GraphicVersioned, String> {
+    commands::graphics::project_graphic_version_new_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        note,
+        use_it,
+    )
+}
+
+/// Plays version `asset_id` where its family plays now.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_graphic_version_use(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+) -> Result<project::OpenedProject, String> {
+    commands::graphics::project_graphic_version_use_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        asset_id,
+    )
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn project_graphic_look_set(
@@ -2438,6 +2583,39 @@ async fn style_preview(
     .map_err(|e| e.to_string())?
 }
 
+/// Keeps a style asked for from references in the Style panel for the user's agent (STY-3) and
+/// answers it as a prompt to paste.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_request_set(
+    references: Vec<String>,
+    brief: String,
+    name: Option<String>,
+) -> Result<String, String> {
+    let request = style::request::save(
+        &transcript::settings::config_dir(),
+        style::request::StyleRequest {
+            references,
+            brief,
+            name,
+        },
+    )?;
+    Ok(style::request::prompt(&request))
+}
+
+/// The style request waiting for the agent, if one is.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_request_get() -> Option<style::request::StyleRequest> {
+    style::request::load(&transcript::settings::config_dir())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn style_request_clear() {
+    style::request::clear(&transcript::settings::config_dir())
+}
+
 /// A logo or font file for a style.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -2581,8 +2759,40 @@ fn export_start(
     state: State<'_, AppState>,
     project_handle: String,
     settings: export::ExportSettings,
+    queue: Option<bool>,
 ) -> Result<export::ExportStatus, String> {
-    commands::export_start_impl(&state, project_handle, settings)
+    commands::export_start_impl(&state, project_handle, settings, queue.unwrap_or(false))
+}
+
+/// The open project's exports: waiting, running, and what went out (DLV-2).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn export_deliveries(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<Vec<export::deliveries::DeliveryView>, String> {
+    commands::export_deliveries_impl(&state, project_handle)
+}
+
+/// Makes an export in the list again from the edit as it is now.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn export_again(
+    state: State<'_, AppState>,
+    project_handle: String,
+    job_id: String,
+) -> Result<(), String> {
+    commands::export_again_impl(&state, project_handle, job_id)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn export_forget(
+    state: State<'_, AppState>,
+    project_handle: String,
+    job_id: String,
+) -> Result<(), String> {
+    commands::export_forget_impl(&state, project_handle, job_id)
 }
 
 /// Saves subtitles, the transcript or the sound alone; answers with the file's path.
@@ -2816,6 +3026,8 @@ pub fn run() {
             project_frame_thumbnail,
             project_clip_thumbnails,
             project_graphic_set,
+            project_graphic_version_new,
+            project_graphic_version_use,
             project_graphic_look_set,
             presets,
             project_preset_set,
@@ -2834,6 +3046,9 @@ pub fn run() {
             graphics_in_line_plan,
             project_graphics_in_line,
             pick_brand_file,
+            style_request_set,
+            style_request_get,
+            style_request_clear,
             graphics_library,
             graphics_library_remove,
             graphics_library_sheet,
@@ -2915,6 +3130,9 @@ pub fn run() {
             export_start,
             export_file,
             export_status,
+            export_deliveries,
+            export_again,
+            export_forget,
             export_cancel,
             detect_silence,
             detect_non_speech_gaps,
@@ -2930,6 +3148,9 @@ pub fn run() {
             transcript_settings_get,
             transcript_settings_set,
             transcript_set_api_key,
+            preset_run_plan,
+            preset_run,
+            preset_run_stop,
             mcp_status,
             mcp_set_enabled,
             mcp_set_autopilot,
@@ -2955,6 +3176,8 @@ pub fn run() {
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,
+            project_clip_add_words,
+            project_clip_arrange,
             project_short_from_take,
             project_short_footage,
             project_shorts_generate,

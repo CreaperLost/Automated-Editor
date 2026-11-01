@@ -411,24 +411,6 @@ fn cue_from(words: Vec<CueWord>) -> CaptionCue {
     }
 }
 
-/// Which transcript captions read from: the chosen one, else the first transcribed of the
-/// recording's microphones, then its system audio, then imported speech. `recorded` lists
-/// the recording's audio track ids, microphones first; `imported` the imported speech ids.
-pub fn caption_source(
-    settings: &CaptionSettings,
-    recorded: impl IntoIterator<Item = String>,
-    imported: impl IntoIterator<Item = String>,
-    load: impl Fn(&str) -> Option<Transcript>,
-) -> Option<Transcript> {
-    if let Some(id) = &settings.track_id {
-        return load(id);
-    }
-    recorded
-        .into_iter()
-        .chain(imported)
-        .find_map(|id| load(&id))
-}
-
 /// The cue on screen at `edited_us`, by index.
 pub fn cue_at(cues: &[CaptionCue], edited_us: u64) -> Option<usize> {
     let i = cues.partition_point(|c| c.start_us <= edited_us);

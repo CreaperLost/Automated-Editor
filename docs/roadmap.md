@@ -8,15 +8,20 @@ What is still to do, in order. What shipped is in [done.md](done.md); each item'
 link its plan (in `plans/`); when it ships, add it to [done.md](done.md) with the date and its
 ID as an anchor, and delete it here. Keep IDs stable; never renumber or reuse one.
 
-## Where things stand (26 Oct 2026)
+## Where things stand (1 Nov 2026)
 
 **Milestones (decided 21 Oct):** (1) a great long-form tutorial, (2) tutorial shorts, (3) gaming
 shorts and gaming videos. Gaming work is not scheduled yet.
 
 Milestone 1 is close: everything built up to 24 Oct was tried in the dev app and in EVAL-1 run
-4, and 25–26 Oct added music, screen effects, take matching and cleaner filler cuts. What it
-still lacks is **graphics an agent makes well**, which is why Next is STY-2, then GFX-8. Shorts
-from a take (milestone 2's first half) are built; idea-first clips (SHT-1) follow.
+4; 25–26 Oct added music, screen effects, take matching and cleaner filler cuts; 31 Oct–1 Nov
+added graphics an agent makes well ([GFX-8](done.md#gfx-8), kept by George), the plan file
+([PLAN-1](done.md#plan-1)), graphic versions ([GFX-4](done.md#gfx-4)) and a preset the app runs
+itself ([AUTO-1](done.md#auto-1)). Milestone 2: shorts from a take and idea-first clips
+([SHT-1](done.md#sht-1)) are built, and getting everything out ([DLV-2](done.md#dlv-2)) with
+push-ins for jump cuts ([FX-3](done.md#fx-3)); what is left is the shorts look (STY-2 step 4),
+which George can now start from the Style panel ([STY-3](done.md#sty-3)). EVAL-1 run 5 (1 Nov) measured
+all of it ([done](done.md#eval-1-run-5)), and its findings are fixed ([QUAL-5](done.md#qual-5)).
 
 ## Standing preferences
 
@@ -42,30 +47,17 @@ from a take (milestone 2's first half) are built; idea-first clips (SHT-1) follo
 
 Bad graphics aren't a shorts-only problem, and a style today holds only look settings, so agents
 fall back on stock templates (George, 25 Oct). Merges GFX-5's AI-proposed styles
-([research](research/ai-styles.md)), the old STY-2 and GFX-8's worked examples. A style gains
+([research](research/synthesis.md), F6), the old STY-2 and GFX-8's worked examples. A style gains
 motion rules, the kinds of graphics it uses (with their 9:16 placement), 2–3 examples linked from
 the library, its references and the agent's breakdown of them, look rules, a richer shorts
 variant and a small sound set; fonts must resolve or ship with it. `library` `kind: style`
 `op: propose` makes one from references: breakdown first, stills to narrow, one clip in place for
-the pick. First test: a "my library" long-form style from George's own graphics.
-
-<a id="gfx-8"></a>
-### 2. GFX-8 · Graphics an agent makes well — L, plan: [plans/graphics-quality.md](plans/graphics-quality.md)
-
-On top of STY-2. The 25 Oct test (one short take, three agents) gave generic text cards every
-time: stock templates, approval on a written plan, no sample, uninstalled fonts, cards over the
-face, captions cut by splits. To build: picking per moment what to show (text cards and
-demonstrations are equals), one sample clip before the set, the plan always shown as a table,
-checks the agent runs (face, captions, fonts), honest style knobs. George's decisions are in the
-plan; the same test's bugs (FIX-8 to FIX-10) are fixed.
-
-<a id="sht-1"></a>
-### 3. SHT-1 · Idea-first clips — L, plan: [plans/shorts.md](plans/shorts.md)
-
-A clip is an idea plus pieces gathered from anywhere in the video, found with source search
-(FTG-1, built). **Decided 22 Oct:** Shorts and Clips are two tabs that share their parts.
-**Shorts** start from a take recorded outside the app (built: SHT-2 to SHT-7); **Clips** cut the
-best moments out of the long video, and SHT-1 makes them idea-first.
+the pick. First test: a "my library" long-form style from George's own graphics. **Step 1 (the
+style's new parts, `show`/`set`/`check`, the font rule) shipped 30 Oct**
+([done](done.md#sty-2-parts)); step 2's "My library" style is saved and tested
+([done](done.md#sty-2-my-library)); step 3 `op: propose` shipped 31 Oct
+([done](done.md#sty-2-propose)), step 5 the sound set ([done](done.md#sty-2-sound)). Left:
+step 4, the shorts variant, once George brings references.
 
 ---
 
@@ -84,6 +76,8 @@ Small checks only George can do; nothing else is blocked on them.
 - **Listening:** the 38 built-in music tracks ([SND-3](done.md#snd-3); Komiku's moods are guessed
   from titles), and take matching on real pickups ([AUTO-2](done.md#auto-2); its EQ strength,
   60 % of the difference and 4 dB at most, is a first guess). Feedback whenever, no rush.
+- **The ElevenLabs key** is rejected ("Invalid API key"): transcription falls back to
+  OpenRouter. Renew it in Transcription settings, or leave OpenRouter as the route.
 - **A longer Greek recording** for the review eval: EL-B is 13 seconds, so Greek still rests
   mostly on the scripted EL-A ([LNG-4](done.md#lng-4),
   [local-review-eval](plans/local-review-eval.md)).
@@ -96,18 +90,6 @@ Order within an area is the suggested order.
 
 ### Direction: plan, style, method
 
-<a id="plan-1"></a>
-- **PLAN-1 · Plan file and style trial (M).** The agent writes and keeps a plan in the project
-  (a Markdown file it reads back: per moment the purpose, treatment and reason, and what the
-  user locked), so the context survives between turns and runs without new storage or UI. Then
-  a **style trial**: build 2–3 beats on a 5–10 s range, approve the look, then scale.
-  (Graphics already keep their word: cuts before a graphic move it along and no cut goes
-  through one, `sequence/edit.rs`.)
-<a id="auto-1"></a>
-- **AUTO-1 · Run a preset on request after opening (S).** After opening a project the user picks
-  a preset (Tutorial, Shorts, Clips…) and its method runs up to its first question, with only
-  free local steps unless the user confirms. Replaces folder watch, which was turned down.
-  Decision: [Q-WATCH](decisions.md#q-watch).
 <a id="auto-3"></a>
 - **AUTO-3 · "Save this workflow" (M).** From an approved edit: instructions, defaults,
   exceptions and checks as a named, versioned workflow shown as a readable summary first. Proven
@@ -121,22 +103,12 @@ Order within an area is the suggested order.
   Data-driven, never free-text rules learned on the side (the 17 Oct condition for bringing
   learning back).
 
-### Graphics
-
-<a id="gfx-3"></a>
-- **GFX-3 · Templates for real tutorial jobs (M + design).** Word-timed emphasis (each word at
-  its own word id, re-timed after cuts); highlight a real UI target; step sequence; before/after;
-  a lower-half overlay prototype. Purpose tags and search in the library. 8–12 total, all
-  passing the gate with real English and Greek copy. Likely shaped by STY-2 and GFX-8.
-<a id="gfx-4"></a>
-- **GFX-4 · Graphic variants (M).** Independent variant folders with source snapshots;
-  Create / Revise / Compare / Use; "Use this version" is one undo step; revision scope (element /
-  graphic / scene) so a colour fix never regenerates a sequence.
-
 ### Sound
 
 <a id="snd-2"></a>
-- **SND-2 · Cues at graphic events (M/L).** Templates declare event markers (card lands, counter
+- **SND-2 · Cues at graphic events (M/L).** Opt-in only: sounds on graphics are added when the
+  user asks (decided 31 Oct; the first cues sounded "a bit bad", so the set needs better sounds
+  too). Templates declare event markers (card lands, counter
   completes); a small procedural palette (tap, tick, pop, chime, airy whoosh, impact) plus the
   sound library; a deterministic cue compiler (`cueStart = visualPeak − soundPeakOffset`, density
   limits, ducking); the agent picks which events deserve sound; the style's sound set (STY-2)
@@ -177,18 +149,12 @@ Order within an area is the suggested order.
 - **FX-1 · Webcam background removal, blur, replacement (L).** A segmentation matte computed once
   per recording and cached like face tracks, composited in wgpu. Also enables text drawn behind
   the presenter, and LAY-4.
-<a id="fx-3"></a>
-- **FX-3 · Camera push-ins (M).** Start/end scale, pivot, easing, hold, return; matched framing
-  across jump cuts; separate from screen zooms.
 <a id="fx-5"></a>
 - **FX-5 · Colour: LUT import and a simple grade (M). Parked 21 Oct: not needed now.** Per clip,
   preview/export parity, `clip_grade` op.
 
 ### Delivery
 
-<a id="dlv-2"></a>
-- **DLV-2 · Delivery list (M).** Video + shorts + sidecars as one queue; per-output status,
-  retry, the revision each output rendered.
 <a id="dlv-4"></a>
 - **DLV-4 · Translated subtitles (M).** Greek ↔ English cues with stable source anchors and their
   own revision history; glossary for product names. Dubbing stays out (YouTube auto-dubs).
@@ -227,7 +193,8 @@ edit stays as good. (COST-2's last check is under [Waiting on George](#cost-2).)
   passes, the MCP actions vs the UI commands, and the front-end panels and dialogs; move repeats
   into shared helpers with tests; note the patterns to reuse in `architecture.md`. Seen so far:
   the same Tauri event-listener effect in `App.tsx` and several panels; line-ending-safe edits;
-  Clips and Shorts sharing one set of short panels.
+  Clips and Shorts sharing one set of short panels. 31 Oct: the nine "name, name-2" id loops
+  became `ids::free_id` / `free_name`.
 <a id="qual-2"></a>
 - **QUAL-2 · Review the tests (M), not urgent.** Drop tests that guard behaviour that is gone
   (old project formats, removed alignment, superseded passes), merge near-duplicates, keep the
@@ -274,4 +241,4 @@ Reasons are in [decisions.md](decisions.md#not-doing).
 | NOTE-1 | Anchored notes, "Ask AI about this" | 24 Oct | The chat, the agent's history and "the graphic titled X" already do it |
 | — | Finding secrets on screen automatically | 26 Oct | The agent covers what it sees in frames; the user draws the rest |
 | LNG-1, LNG-2, LNG-3 | Greek word aligner, more languages, more transcription models | 23 Oct | Not needed |
-| — | Folder watch (start editing when a recording lands) | 21 Oct | Replaced by [AUTO-1](#auto-1) |
+| — | Folder watch (start editing when a recording lands) | 21 Oct | Replaced by [AUTO-1](done.md#auto-1) |

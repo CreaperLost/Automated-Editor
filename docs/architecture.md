@@ -73,7 +73,8 @@ mounted at `recordings/<asset id>/`.
   every agent run (newest five kept). Going back is one step (when the edit differs), puts the
   graphic files and caption marks back (marks only onto the same words), asks for the graphics'
   renders, withdraws waiting batches, and saves what was there first as a checkpoint. Graphic
-  source edits are not undo steps (GFX-4).
+  source edits made in place are not undo steps; a redo goes into a version (GFX-4), and which
+  version plays is.
 - **Shorts** are windows anchored in source time that follow the video's edits until edited on
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
   from the video under it (`take_short.rs`), each piece at its own speed. Their own layout
@@ -146,6 +147,10 @@ The principles it was built on (AI readiness, 13 Oct):
    time, so later cuts don't knock them out of place.
 6. **One source for the look:** the style feeds every graphic, caption and the frame.
 
+The app runs a preset's first steps itself through the same tools (`first_steps.rs`, AUTO-1:
+Preset → Run), as author "AeroEdits", so its steps are undo steps like an agent's and `status`
+can tell a later agent what already ran.
+
 Why MCP only: it works with any agent, costs the app nothing, stays inside every provider's
 terms, keeps secrets out of the app and keeps it testable. Coding agents are the main target;
 the app renders graphics itself and offers `graphic_write_file`, so a client without a shell
@@ -201,6 +206,10 @@ zhuyansen/awesome-claude-video-skills.
 
 - **Asset:** a HyperFrames project in `graphics/<id>/` (`index.html`, `graphic.json` with
   variables, its own style if any, its own look tokens, length). Variables are declared with `data-composition-variables`.
+- **Versions** (`versions.rs`, GFX-4): a version is a graphic of its own whose `graphic.json`
+  names the family's first (`versionOf`); "use" swaps the clips' asset on the video's and every
+  short's own timeline (clip ids stay, so a short's slots stay). Frame tools draw an unused
+  version in place through `frames::trying`, which swaps a copy of the document.
 - **Slots, not safe zones:** where a graphic plays decides its render box (whole canvas; a short's
   camera, screen or over-screen part). Full-screen graphics cut in and out (`data-entrance`); an
   overlay on the camera may ease.
@@ -245,6 +254,10 @@ zhuyansen/awesome-claude-video-skills.
 
 ## Check, storyboard, export
 
+- **Exports** (`export/deliveries.rs`, DLV-2): one worker runs the queued exports in order; a
+  busy owner refuses an export unless it is queued; every export that ends is recorded in the
+  project's `exports.json` with a fingerprint of the document it was made from, so the list
+  can tell what is older than the edit by content, not revision.
 - **`check`** (`check.rs`) reads the edit only (no decode, no model, ~3 ms): missing media, black
   frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
   bubble, chapter rules, loudness not normalised, pending proposals. Safe
@@ -340,6 +353,10 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
 - The local-LLM build needs a short `CARGO_TARGET_DIR` (`C:\aeb`), the Vulkan SDK, LLVM and Ninja;
   `scripts/build-windows.ps1` sets it up.
 - After any docs change, run `.venv\Scripts\python.exe scripts/check_doc_links.py`.
+- Shared helpers to reach for before writing one (QUAL-1): `ids::free_id` / `free_name` for a
+  new id or name beside the ones in use (`base`, `base-2`...); `shorts::video_sequence` for what
+  a clip plays of the video now (its stretch or its pieces); `shorts::edited_span` for a source
+  stretch on the edited timeline.
 - Front-end behaviour tests are `front-end/tests/*.test.ts` (`npm run test:cleanup`, also run by
   CI): stores with a mocked `api`, no browser. A change of a store's async flow (queued saves,
   late replies) gets a test there.

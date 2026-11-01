@@ -7,7 +7,8 @@ import type { Clip } from "../../lib/types";
 export const MIN_THUMB_LANE_PX = 32;
 /** Times asked for in one call (the backend's limit too). */
 const BATCH = 64;
-/** Pictures kept in memory, the oldest going first (the backend keeps them on disk). */
+/** Pictures kept in memory, the oldest no clip on show wants going first (the backend keeps them
+ * on disk). Wanted ones always stay, so a timeline wanting more never asks for them again. */
 const KEEP = 2_000;
 /** Source times are rounded to one of these steps (seconds), so zooming a little or moving a
  * clip asks for pictures already made. */
@@ -69,7 +70,10 @@ function flush() {
     .catch(() => keys.forEach((k) => made.set(k, null)))
     .finally(() => {
       keys.forEach((k) => asked.delete(k));
-      while (made.size > KEEP) made.delete(made.keys().next().value as string);
+      for (const key of made.keys()) {
+        if (made.size <= KEEP) break;
+        if (!wanted.has(key)) made.delete(key);
+      }
       busy = false;
       notify();
       schedule();

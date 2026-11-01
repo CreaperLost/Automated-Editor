@@ -253,15 +253,130 @@ fn font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The installed upright, static file of `family` nearest `weight`. Only files whose name
+/// The installed upright, static file of `family` nearest `weight`.
+fn installed(family: &str, weight: u16) -> Option<PathBuf> {
+    installed_faces(family)
+        .into_iter()
+        .min_by_key(|(w, _)| (*w as i32 - weight as i32).abs())
+        .map(|(_, path)| path)
+}
+
+/// How far an installed weight may be from the one asked for and still count as it.
+const WEIGHT_SLACK: i32 = 100;
+
+/// Whether `font` (its file in `folder`, or installed on this computer) is there for a render
+/// at each of `weights`: `Ok` says how, `Err` why not and what is there instead. A style's
+/// file is one weight, drawn at all of them.
+pub fn availability(
+    font: &crate::style::Font,
+    folder: Option<&Path>,
+    weights: &[u16],
+) -> Result<String, String> {
+    let family = font.family.trim();
+    if family.is_empty() {
+        return Ok("the system's font".into());
+    }
+    if let Some(file) = font.file.as_deref().filter(|f| !f.trim().is_empty()) {
+        let path = match folder {
+            Some(folder) if !Path::new(file).is_absolute() => folder.join(file),
+            _ => PathBuf::from(file),
+        };
+        return if path.is_file() {
+            Ok(format!("{family}, the style's file {file}"))
+        } else {
+            Err(format!("{family}'s file {file} is missing from the style"))
+        };
+    }
+    let faces = installed_faces(family);
+    if faces.is_empty() {
+        let like = similar_installed(family);
+        return Err(format!(
+            "{family} is not installed on this computer and the style has no file for it{}: \
+             give its file (`file`, a .ttf, .otf or .woff2 path), install it, or leave the \
+             family empty for the system's font",
+            if like.is_empty() {
+                String::new()
+            } else {
+                format!(" (installed with a name like it: {})", like.join(", "))
+            }
+        ));
+    }
+    let mut have: Vec<u16> = faces.iter().map(|(w, _)| *w).collect();
+    have.sort_unstable();
+    have.dedup();
+    let missing: Vec<String> = weights
+        .iter()
+        .filter(|w| {
+            !have
+                .iter()
+                .any(|h| (*h as i32 - **w as i32).abs() <= WEIGHT_SLACK)
+        })
+        .map(|w| w.to_string())
+        .collect();
+    let have_text = have
+        .iter()
+        .map(|w| w.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if missing.is_empty() {
+        Ok(format!("{family}, installed at {have_text}"))
+    } else {
+        Err(format!(
+            "{family} is installed only at {have_text}, and the style uses {}: install that \
+             weight or give the style a file",
+            missing.join(", ")
+        ))
+    }
+}
+
+/// Up to six installed font files whose names start like `family`'s first word, for a family
+/// that isn't there.
+fn similar_installed(family: &str) -> Vec<String> {
+    let first = family.split_whitespace().next().unwrap_or(family);
+    let key: String = normalized(first).chars().take(4).collect();
+    if key.len() < 3 {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for dir in font_dirs() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let lower = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !(lower.ends_with(".ttf") || lower.ends_with(".otf")) {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .split(['-', '_'])
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if normalized(&stem).starts_with(&key) && !out.contains(&stem) {
+                out.push(stem);
+            }
+            if out.len() == 6 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// The installed upright, static files of `family`, with their weights. Only files whose name
 /// starts with the family's (`Montserrat-Bold.ttf`, `segoeuib.ttf`) are opened, so a folder of
 /// a thousand fonts is not read through.
-fn installed(family: &str, weight: u16) -> Option<PathBuf> {
+fn installed_faces(family: &str) -> Vec<(u16, PathBuf)> {
     let key = normalized(family);
     if key.is_empty() {
-        return None;
+        return Vec::new();
     }
-    let mut best: Option<(i32, PathBuf)> = None;
+    let mut faces = Vec::new();
     for dir in font_dirs() {
         for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let path = entry.path();
@@ -291,13 +406,10 @@ fn installed(family: &str, weight: u16) -> Option<PathBuf> {
             if !named {
                 continue;
             }
-            let distance = (face.weight().to_number() as i32 - weight as i32).abs();
-            if best.as_ref().is_none_or(|(d, _)| distance < *d) {
-                best = Some((distance, path));
-            }
+            faces.push((face.weight().to_number(), path));
         }
     }
-    best.map(|(_, path)| path)
+    faces
 }
 
 #[cfg(test)]

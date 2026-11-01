@@ -261,6 +261,8 @@ mod tests {
             edit: None,
             take: None,
             caption_marks: Default::default(),
+            idea: String::new(),
+            pieces: Vec::new(),
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,

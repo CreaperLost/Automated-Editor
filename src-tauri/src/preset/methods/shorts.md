@@ -94,7 +94,8 @@ Ask for an OK or changes (automatic: go).
 
 Graphics go on the take only once it is cut (step 3): on uncut words they play long, and the
 app warns when they would. Pick graphics for the take's words too. First the **long video's
-own graphics** (`graphics` lists them with where they play), only if one is related (none is
+own graphics** (`graphics` lists them with where they play; `rules: false` when this conversation
+has its rules already), only if one is related (none is
 when step 5 found nothing): where a beat retells a part of the video that had a graphic, reuse
 it (`graphic`, its id: a copy made for 9:16, its text changeable without touching the
 video's). Then new ones (`template` or `library`), or one of your own: a title card on the
@@ -108,8 +109,9 @@ Pick how each one shows, with its kind, before it is made (it renders once, for 
 callout or arrows: then write it as an overlay (no full background; the templates do this for
 you as a panel at the bottom). Don't cover the face with full-frame graphics for long: keep
 them short, or split. Each shows what its words say (the claim, the number, the name), not
-just the topic. Add them to the plan as a table (start, end, template, mode, what it shows,
-the words it sits on); ask for an OK (automatic: go).
+just the topic: a demonstration where they describe an action, a card for a quote or number
+(the graphics rules). Add them to the plan as a table (start, end, kind and template or own,
+mode, what the viewer sees, the words it sits on); ask for an OK (automatic: go).
 
 ## 6b. Captions (automatic)
 
@@ -122,6 +124,10 @@ that reads as two thoughts (`{"line": 3, "word": "but"}`, the word the new line 
 word or a false start. One call: `args: {"short": <id>, "emphasis": [{"line": 0, "word":
 "never"}, ...], "split": [...], "join": [...], "hide": [...]}`; line numbers are as listed
 before the call. These are the short's own (undo steps); the take's text stays shared.
+
+Camera push-ins at jump cuts are off. Only when the user asks for them: `library` (`kind:
+preset`, `op: set`, `set: {"short": {"pushIns": true}}`) turns them on for new shorts; the
+Shorts tab's Look panel ("Push in at jump cuts") for one short.
 Emphasis is drawn in the style's accent.
 How the words come on (pop by default at 9:16) is the project's style (`library` `kind: style`).
 

@@ -1342,17 +1342,10 @@ impl EditHistory {
                 "This short is made from a take: it has no stretch of the video to follow".into(),
             );
         }
-        // Its stretch of the video as edited now; its own muted noises stay.
+        // Its stretch (or its pieces) of the video as edited now; its own muted noises stay.
         let noise_mutes = short.edit.take().map(|e| e.noise_mutes).unwrap_or_default();
-        let (start, end) = crate::shorts::edited_range_in(short, &self.current)
-            .ok_or("Part of this short was cut from the video; adjust it first")?;
         short.edit = Some(crate::shorts::ShortEdit {
-            sequence: crate::shorts::slice_sequence(
-                &self.current.sequence,
-                &self.current.assets,
-                start,
-                end,
-            ),
+            sequence: crate::shorts::video_sequence(short, &self.current)?,
             noise_mutes,
         });
         self.commit_next(expected_revision, persist_root, next)

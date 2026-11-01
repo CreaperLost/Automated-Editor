@@ -329,6 +329,87 @@ fn add_graphic(
     })
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicVersioned {
+    pub project: OpenedProject,
+    /// The new version.
+    pub asset_id: String,
+}
+
+/// Makes a version of graphic `asset_id` beside it (GFX-4): a copy to change while the graphic
+/// plays on, or, with `use_it`, that plays in its place at once (what the editor does: its
+/// changes then go into the copy). One undo step.
+pub fn project_graphic_version_new_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    note: Option<String>,
+    use_it: bool,
+) -> Result<GraphicVersioned, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    graphic_asset(reader, &asset_id)?;
+    let asset = graphics::versions::copy(reader.root(), &asset_id, note.as_deref())?;
+    let mut next = reader.document().clone();
+    next.assets.push(asset.clone());
+    if use_it {
+        next = graphics::versions::swap(&next, reader.root(), &asset.id);
+    }
+    reader.name_next_step(format!("New version of \"{}\"", asset.name));
+    let project = match reader.commit_document(expected_revision, next) {
+        Ok(project) => project,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(graphics::folder(reader.root(), &asset.id));
+            return Err(error);
+        }
+    };
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok(GraphicVersioned {
+        project,
+        asset_id: asset.id,
+    })
+}
+
+/// Plays version `asset_id` wherever its family plays now, one undo step.
+pub fn project_graphic_version_use_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+) -> Result<OpenedProject, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    graphic_asset(reader, &asset_id)?;
+    let document = reader.document();
+    if graphics::versions::plays(document, &asset_id) {
+        return Err("That version plays already".into());
+    }
+    if graphics::versions::playing_instead(document, reader.root(), &asset_id).is_none() {
+        return Err("No graphic of its family plays on a timeline to put it in place of".into());
+    }
+    let next = graphics::versions::swap(document, reader.root(), &asset_id);
+    let name = next
+        .asset(&asset_id)
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    reader.name_next_step(format!("Use another version of \"{name}\""));
+    let project = reader.commit_document(expected_revision, next)?;
+    state
+        .playback
+        .lock()
+        .apply_document(&reader.history().current)?;
+    Ok(project)
+}
+
 fn graphic_asset(
     reader: &crate::project::ProjectReader,
     asset_id: &str,
@@ -613,7 +694,11 @@ pub fn style_preview_impl(
             .collect()
     };
     if specs.is_empty() {
-        return Err("This video has no graphics to show the style on".into());
+        return Err(
+            "This video has no graphics to show the style on: add one at a typical moment \
+             (`graphic_add`), then preview"
+                .into(),
+        );
     }
     let cancel = AtomicBool::new(false);
     let stills: Vec<Result<LookStill, String>> = std::thread::scope(|scope| {

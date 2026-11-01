@@ -33,6 +33,7 @@ pub enum Op {
     Save,
     Reset,
     ProposeRule,
+    Propose,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -40,10 +41,8 @@ pub enum Op {
 pub struct LibraryArgs {
     /// style, preset, layout, sound or music.
     pub kind: Kind,
-    /// list (default), show, use (in this project), set, remove; for styles also preview,
-    /// check (graphics not following the style) and bring_in_line; for presets also save (the
-    /// project's settings into its preset, or a new one with `saveAs`) and reset (the
-    /// project's changes back to its preset's values).
+    /// list (default), show, use (in this project), set, remove; each kind's others are in
+    /// the tool's description.
     #[serde(default)]
     pub op: Op,
     /// Which one; for show, set and preview the project's when left out.
@@ -70,6 +69,13 @@ pub struct LibraryArgs {
     /// Presets, reset: only this part (captions, layout, zoomSettings, audio, layouts).
     #[serde(default)]
     pub part: Option<String>,
+    /// Styles, propose: image or clip files (full paths), or graphics library items (id or
+    /// name), to make a style from.
+    #[serde(default)]
+    pub references: Vec<String>,
+    /// Styles, propose: the user's own words about the look they want.
+    #[serde(default)]
+    pub brief: Option<String>,
     /// Sounds and music, list: words its name or tags hold (`whoosh`, `riser hit`, `calm`).
     #[serde(default)]
     pub query: Option<String>,
@@ -85,15 +91,18 @@ pub struct LibraryArgs {
 
 pub static TOOLS: [ToolDef; 1] = [ToolDef {
     name: "library",
-    description: "The user's styles (how graphics, captions and the frame look: brand \
-        colours, fonts, logo, graphics look, caption look, frame, 9:16 variant), presets (what \
-        the app does for a kind of video: cleanup, captions, zooms, layouts, shorts, export, \
-        the method you follow) and favourite layouts, kept for every project. `op`: list, \
-        show, use (this project takes it: one undo step), set (change fields app-wide, every \
-        project using it follows: ask the user first; a built-in goes into a copy), remove \
-        (at the user's word). Styles also: preview (stills of the video's graphics with `set` \
-        applied, changing nothing: show the user before set), check (graphics not following \
-        the style) and bring_in_line (one batch rewriting them, for the user to accept). \
+    description: "The user's styles (how graphics, captions and the frame look and move: \
+        brand, graphics look, captions, frame, 9:16 variant, motion, kinds, examples, look \
+        rules, references, sounds), presets (what the app does for a kind of video: cleanup, \
+        captions, zooms, layouts, shorts, export, the method you follow) and favourite \
+        layouts, kept for every project. `op`: list, show (a style's brief: read it before \
+        making graphics), use (this project takes it: one undo step), set (change fields \
+        app-wide, every project using it follows: ask the user first; a built-in goes into a \
+        copy), remove (at the user's word). Styles also: preview (stills of the video's \
+        graphics with `set` applied, changing nothing: show the user before set), check (the \
+        style's fonts, examples and sounds; with a project, graphics not following it), \
+        bring_in_line (one batch rewriting those graphics) and propose (a new style from \
+        `references`: shows them to you and the steps; saves nothing). \
         Presets also: save (the project's settings into its preset, or a new one: \
         `saveAs`), reset (the project's changes back), propose_rule (`rule`, `example`: the \
         user accepts it in the Agent panel). Sounds (CC0 whooshes, risers, hits, clicks, \
@@ -148,18 +157,7 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 .collect();
             pretty(&json!({ "styles": styles, "folder": store::dir().display().to_string() }))
         }
-        Op::Show => {
-            let style = store::load(&named())?;
-            pretty(&json!({
-                "name": style.name,
-                "builtIn": crate::style::is_builtin(&style.name),
-                "style": style,
-                "graphicsTokens": style.graphics.values(),
-                "graphicsPresets": crate::graphics::look::presets(),
-                "backgrounds": crate::project::layout::BACKGROUND_PRESETS,
-                "folder": store::folder_of(&style).map(|f| f.display().to_string()),
-            }))
-        }
+        Op::Show => text(brief(&store::load(&named())?)),
         Op::Use => {
             let name = args.name.ok_or("Give the style's `name`")?;
             let before = opened(ctx)?;
@@ -182,6 +180,18 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
         }
         Op::Set => {
             let patch = args.set.ok_or("Give the fields to change in `set`")?;
+            // A style can't name a font it doesn't carry: a font changed here must be there.
+            let current = store::load(&named())?;
+            let next = current.patched(&patch)?;
+            let folder = store::folder_of(&current);
+            for ((which, font, weights), (_, before, _)) in
+                next.font_weights().into_iter().zip(current.font_weights())
+            {
+                if font != before {
+                    crate::captions::fonts::availability(font, folder.as_deref(), &weights)
+                        .map_err(|why| format!("Not saved: the {which} font. {why}"))?;
+                }
+            }
             let (saved, copied) = commands::style::style_patch_impl(
                 ctx.state,
                 &named(),
@@ -238,18 +248,31 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             Ok(out)
         }
         Op::Check => {
-            let before = opened(ctx)?;
-            let plans =
-                commands::graphics::graphics_in_line_plan_impl(ctx.state, before.handle.clone())?;
-            let view = commands::style::styles_impl(ctx.state, Some(before.handle))?;
-            pretty(&json!({
-                "notInLine": plans.iter().map(|p| json!({
-                    "graphic": p.graphic, "name": p.name, "changes": p.changes,
-                })).collect::<Vec<_>>(),
-                "ownStyleOrTokens": view.own.iter().map(|(name, style, tokens)| json!({
-                    "name": name, "style": style, "tokens": tokens,
-                })).collect::<Vec<_>>(),
-            }))
+            let style = store::load(&named())?;
+            let mut out = json!({
+                "style": style.name,
+                "problems": problems(&style),
+            });
+            // With a project open, also its graphics that don't follow its style.
+            if let Ok(before) = opened(ctx) {
+                let plans = commands::graphics::graphics_in_line_plan_impl(
+                    ctx.state,
+                    before.handle.clone(),
+                )?;
+                let view = commands::style::styles_impl(ctx.state, Some(before.handle))?;
+                out["notInLine"] = json!(plans
+                    .iter()
+                    .map(|p| json!({ "graphic": p.graphic, "name": p.name, "changes": p.changes }))
+                    .collect::<Vec<_>>());
+                out["ownStyleOrTokens"] = json!(view
+                    .own
+                    .iter()
+                    .map(|(name, style, tokens)| json!({
+                        "name": name, "style": style, "tokens": tokens,
+                    }))
+                    .collect::<Vec<_>>());
+            }
+            pretty(&out)
         }
         // One undo step at once, like every pass: no Accept card for graphics.
         Op::BringInLine => {
@@ -275,10 +298,362 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             )?;
             text(applied(ctx, "bring_in_line", &before, lines)?)
         }
-        Op::Save | Op::Reset | Op::ProposeRule => {
-            Err("Styles take list, show, use, set, remove, preview, check or bring_in_line".into())
+        Op::Propose => {
+            let out = propose(&args.references, args.brief.as_deref())?;
+            // The Style panel's request is taken up (STY-3).
+            crate::style::request::clear(&ctx.host.config_dir());
+            Ok(out)
+        }
+        Op::Save | Op::Reset | Op::ProposeRule => Err(
+            "Styles take list, show, use, set, remove, preview, check, bring_in_line or propose"
+                .into(),
+        ),
+    }
+}
+
+const MAX_REFERENCES: usize = 8;
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+const CLIP_EXTENSIONS: &[&str] = &["mp4", "mov", "webm", "mkv", "m4v"];
+/// A clip is read at two frames a second (the rate references are read at), up to a board.
+const BOARD_FRAMES: u32 = 24;
+
+/// The first step of a style from references: each reference as the agent can see it (an
+/// image, a clip as one board of frames, a library graphic's contact sheet and source), then
+/// what to do next. Nothing is made or saved.
+fn propose(references: &[String], brief: Option<&str>) -> Result<Vec<Output>, String> {
+    if references.is_empty() {
+        return Err(
+            "Give `references`: image or clip files (full paths), or graphics library \
+             items (id or name). If the user has none, ask for one; you can still work from \
+             their words."
+                .into(),
+        );
+    }
+    if references.len() > MAX_REFERENCES {
+        return Err(format!("Give at most {MAX_REFERENCES} references"));
+    }
+    let library = crate::graphics::library::dir();
+    let mut lines = vec!["References, in the order of the images below:".to_string()];
+    let mut images = Vec::new();
+    for (i, reference) in references.iter().enumerate() {
+        let n = i + 1;
+        let reference = reference.trim();
+        if let Ok(item) = crate::graphics::library::view(&library, reference) {
+            let source = std::path::Path::new(&item.folder).join(crate::graphics::ENTRY);
+            let sheet = item.sheet.as_ref().and_then(|s| std::fs::read(s).ok());
+            lines.push(format!(
+                "{n}. Library graphic {} ({}): {} Source: {}{}",
+                item.item.label,
+                item.id,
+                item.item.use_when,
+                source.display(),
+                if sheet.is_some() {
+                    " (its contact sheet below)"
+                } else {
+                    " (no contact sheet: read its source)"
+                }
+            ));
+            images.extend(sheet.map(Output::Png));
+            continue;
+        }
+        let path = std::path::Path::new(reference);
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if !path.is_absolute() || !path.is_file() {
+            lines.push(format!(
+                "{n}. {reference}: no such file (give a full path) or library graphic"
+            ));
+        } else if ext == "svg" {
+            lines.push(format!("{n}. {reference}: an SVG, read it as a file"));
+        } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+            images.push(Output::Jpeg(crate::media::ffmpeg::still_jpeg(path, 1280)?));
+            lines.push(format!("{n}. Image {reference}"));
+        } else if CLIP_EXTENSIONS.contains(&ext.as_str()) {
+            let length = crate::media::ffmpeg::duration_us(path)? as f64 / 1e6;
+            let every = (length / BOARD_FRAMES as f64).max(0.5);
+            let frames = ((length / every).floor() as u32).clamp(1, BOARD_FRAMES);
+            images.push(Output::Jpeg(crate::media::ffmpeg::board_jpeg(
+                path, every, frames, 320, 6,
+            )?));
+            lines.push(format!(
+                "{n}. Clip {reference} ({length:.1} s): a board of {frames} frames, one every \
+                 {every:.2} s from its start, left to right in rows of 6"
+            ));
+        } else {
+            lines.push(format!(
+                "{n}. {reference}: not an image ({}) or clip ({})",
+                IMAGE_EXTENSIONS.join(", "),
+                CLIP_EXTENSIONS.join(", ")
+            ));
         }
     }
+    if let Some(brief) = brief.map(str::trim).filter(|b| !b.is_empty()) {
+        lines.push(format!("\nThe user's words: {brief}"));
+    }
+    lines.push(
+        "\nNothing is made yet. Next:\n\
+         1. Breakdown: a short table of what you see (palette, type, motion moves, kinds of \
+         graphics, what to leave out and why). Show it to the user before making anything.\n\
+         2. Up to three styles that differ in a named way (one when the references agree), \
+         each a `set` patch on the closest style: colours, fonts that are there, the look, \
+         motion rules, kinds, look rules. Show each with `op: preview` on this video's \
+         graphics; with none, add one at a typical moment first.\n\
+         3. On the user's pick only: `op: set` with `saveAs` (a new name), `references` \
+         ([{\"file\": full path, \"note\": what it gives}]; library graphics go in `examples`) \
+         and `breakdown`. Then `op: check`."
+            .into(),
+    );
+    let mut out = vec![Output::Text(lines.join("\n"))];
+    out.extend(images);
+    Ok(out)
+}
+
+/// A library item as an example line: what it is, its kind, when to use it and its source.
+fn example_line(example: &crate::style::Example) -> String {
+    let kind = if example.kind.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", example.kind)
+    };
+    match crate::graphics::library::view(&crate::graphics::library::dir(), &example.graphic) {
+        Ok(item) => format!(
+            "- {} ({}{kind}): {} Source: {}",
+            item.item.label,
+            item.id,
+            item.item.use_when,
+            std::path::Path::new(&item.folder)
+                .join(crate::graphics::ENTRY)
+                .display()
+        ),
+        Err(_) => format!("- {}{kind}: not in the graphics library", example.graphic),
+    }
+}
+
+fn kind_line(kind: &crate::style::GraphicKind) -> String {
+    let short = kind
+        .shorts
+        .map(|slot| format!(" In a short: {}.", slot.describe()))
+        .unwrap_or_default();
+    format!("- {}: {}{short}", kind.name, kind.when)
+}
+
+fn section(out: &mut Vec<String>, title: &str, lines: Vec<String>) {
+    if !lines.is_empty() {
+        out.push(format!("\n## {title}"));
+        out.extend(lines);
+    }
+}
+
+fn bullets(items: &[String]) -> Vec<String> {
+    items.iter().map(|i| format!("- {i}")).collect()
+}
+
+/// What an agent reads before it makes a graphic in `style`: its settings, how its graphics
+/// move, the kinds it uses, its examples, its rules and sounds, then its fields for `set`.
+fn brief(style: &crate::style::Style) -> String {
+    use crate::style::store;
+    let c = &style.brand.colors;
+    let fonts: Vec<String> = style
+        .fonts_status()
+        .into_iter()
+        .map(|(which, status)| match status {
+            Ok(how) => format!("{which} font {how}"),
+            Err(why) => format!("{which} font NOT AVAILABLE: {why}"),
+        })
+        .collect();
+    let look = &style.graphics;
+    let tokens = look
+        .values()
+        .into_iter()
+        .filter(|(name, _)| *name != "font")
+        .map(|(name, value)| format!("{name} {value}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut out = vec![
+        format!(
+            "# Style {}{}",
+            style.name,
+            if crate::style::is_builtin(&style.name) {
+                " (built in)"
+            } else {
+                ""
+            }
+        ),
+        format!(
+            "Colours: background {}, text {}, accent {}, muted {}. Fonts: {}. Logo: {}.",
+            c.background,
+            c.text,
+            c.accent,
+            c.muted,
+            if fonts.is_empty() {
+                "the system's".to_string()
+            } else {
+                fonts.join("; ")
+            },
+            style.brand.logo.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Graphics look: {} (size {}, roundness {}, speed {}, energy {}, density {}). \
+             Tokens, as var(--look-NAME): {tokens}.",
+            look.preset, look.size, look.roundness, look.speed, look.energy, look.density
+        ),
+    ];
+    if style.motion.is_empty() && style.kinds.is_empty() && style.examples.is_empty() {
+        out.push(
+            "It has no motion rules, kinds or examples yet: only a look. Adding them changes \
+             the user's style, so ask first."
+                .into(),
+        );
+    }
+    section(&mut out, "Motion", bullets(&style.motion));
+    section(
+        &mut out,
+        "Kinds of graphics (pick per moment from these)",
+        style.kinds.iter().map(kind_line).collect(),
+    );
+    section(
+        &mut out,
+        "Examples (read their source and adapt it)",
+        style.examples.iter().map(example_line).collect(),
+    );
+    section(&mut out, "Look rules", bullets(&style.rules));
+    let mut sound = Vec::new();
+    if !style.sound.policy.is_empty() {
+        sound.push(style.sound.policy.clone());
+    }
+    if !style.sound.cues.is_empty() {
+        let library = crate::sound_library::list(&crate::sound_library::dir()).unwrap_or_default();
+        sound.extend(style.sound.cues.iter().map(|cue| {
+            match library.iter().find(|s| s.id == cue.sound) {
+                Some(s) => format!(
+                    "- {}: {} ({}, {:.2} s)",
+                    cue.role,
+                    s.id,
+                    s.name,
+                    s.duration_us as f64 / 1e6
+                ),
+                None => format!("- {}: {}, not in the sound library", cue.role, cue.sound),
+            }
+        }));
+        sound.push(
+            "Only when the user asks for sounds on graphics: place one with `library` \
+             `kind: sound` `op: use` (`name` = its id, `atWord` on the graphic's event); not \
+             every event gets one."
+                .into(),
+        );
+    }
+    section(&mut out, "Sound", sound);
+    let folder = store::folder_of(style);
+    section(
+        &mut out,
+        "References",
+        style
+            .references
+            .iter()
+            .map(|r| {
+                let path = folder
+                    .as_ref()
+                    .map(|f| f.join(&r.file).display().to_string())
+                    .unwrap_or_else(|| r.file.clone());
+                if r.note.is_empty() {
+                    format!("- {path}")
+                } else {
+                    format!("- {path}: {}", r.note)
+                }
+            })
+            .collect(),
+    );
+    if !style.breakdown.is_empty() {
+        section(&mut out, "Breakdown", vec![style.breakdown.clone()]);
+    }
+    let p = &style.portrait;
+    let mut short = vec![format!(
+        "Look × size {}, energy {}, speed {}; captions {}.",
+        p.graphics.size,
+        p.graphics.energy,
+        p.graphics.speed,
+        p.caption_style.unwrap_or(style.captions.style).label()
+    )];
+    short.extend(bullets(&p.motion));
+    short.extend(p.kinds.iter().map(kind_line));
+    short.extend(p.examples.iter().map(example_line));
+    section(&mut out, "In a short (9:16)", short);
+    // The parts written out above aren't repeated as fields.
+    let settings = crate::style::Style {
+        motion: Vec::new(),
+        kinds: Vec::new(),
+        examples: Vec::new(),
+        rules: Vec::new(),
+        references: Vec::new(),
+        breakdown: String::new(),
+        sound: Default::default(),
+        portrait: crate::style::Portrait {
+            motion: Vec::new(),
+            kinds: Vec::new(),
+            examples: Vec::new(),
+            ..style.portrait.clone()
+        },
+        ..style.clone()
+    };
+    out.push(format!(
+        "\nFields, for `set` (motion, kinds, examples, rules, references, breakdown and sound \
+         as above; a list given replaces the whole list): {}\nLook presets: {}. Backgrounds: {}.",
+        serde_json::to_string(&settings).unwrap_or_default(),
+        crate::graphics::look::presets()
+            .iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>()
+            .join(", "),
+        crate::project::layout::BACKGROUND_PRESETS.join(", ")
+    ));
+    out.join("\n")
+}
+
+/// What is wrong with `style` itself: fonts that aren't there, examples and sounds missing
+/// from their libraries, reference files gone.
+fn problems(style: &crate::style::Style) -> Vec<String> {
+    let mut out: Vec<String> = style
+        .fonts_status()
+        .into_iter()
+        .filter_map(|(which, status)| status.err().map(|why| format!("The {which} font: {why}")))
+        .collect();
+    let library = crate::graphics::library::dir();
+    for example in style.examples.iter().chain(&style.portrait.examples) {
+        match crate::graphics::library::view(&library, &example.graphic) {
+            Err(_) => out.push(format!(
+                "The example {} is not in the graphics library",
+                example.graphic
+            )),
+            Ok(item) if !item.item.general => out.push(format!(
+                "The example {} was saved as is (failed: {})",
+                item.item.label,
+                item.item.failed.join(", ")
+            )),
+            Ok(_) => {}
+        }
+    }
+    let sounds = crate::sound_library::dir();
+    for cue in &style.sound.cues {
+        if crate::sound_library::find(&sounds, &cue.sound).is_err() {
+            out.push(format!(
+                "The {} cue's sound {} is not in the sound library",
+                cue.role, cue.sound
+            ));
+        }
+    }
+    if let Some(folder) = crate::style::store::folder_of(style) {
+        for reference in &style.references {
+            if !folder.join(&reference.file).is_file() {
+                out.push(format!(
+                    "The reference {} is missing from the style's folder",
+                    reference.file
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn sound(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
@@ -463,5 +838,55 @@ mod tests {
             "{placed}"
         );
         assert!(library(&ctx, json!({ "kind": "sound", "op": "use", "name": "pop" })).is_err());
+    }
+
+    #[test]
+    fn a_style_proposal_shows_each_reference_and_saves_nothing() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("board.png");
+        image::RgbaImage::from_pixel(1600, 900, image::Rgba([250, 250, 250, 255]))
+            .save(&image)
+            .unwrap();
+        let clip = dir.path().join("reel.mp4");
+        let made = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg("testsrc=size=640x360:rate=30:duration=4")
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let host = crate::mcp::tests_support::BareHost::default();
+        let ctx = Ctx::new(&host, "agent", false);
+        let out = library(
+            &ctx,
+            json!({ "kind": "style", "op": "propose", "brief": "calm, lots of white",
+                "references": [image.display().to_string(), clip.display().to_string(), "nothing.png"] }),
+        )
+        .unwrap();
+        let text = match &out[0] {
+            Output::Text(text) => text.clone(),
+            _ => panic!("expected text"),
+        };
+        assert!(
+            text.contains("1. Image ") && text.contains("calm, lots of white"),
+            "{text}"
+        );
+        // Four seconds at two frames a second.
+        assert!(
+            text.contains("(4.0 s): a board of 8 frames, one every 0.50 s"),
+            "{text}"
+        );
+        assert!(text.contains("3. nothing.png: no such file"), "{text}");
+        assert!(text.contains("Breakdown") && text.contains("On the user's pick only"));
+        let jpegs = out[1..]
+            .iter()
+            .filter(|o| matches!(o, Output::Jpeg(b) if b.starts_with(&[0xFF, 0xD8])))
+            .count();
+        assert_eq!(jpegs, 2, "the image and the clip's board");
+        assert!(library(&ctx, json!({ "kind": "style", "op": "propose" })).is_err());
     }
 }

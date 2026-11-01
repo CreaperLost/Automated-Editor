@@ -205,6 +205,18 @@ impl EditLayout {
         Ok(())
     }
 
+    /// This style with the screen framed by `look` (a track's own) instead.
+    pub fn with_screen_look(&self, look: &crate::sequence::ScreenLook) -> Self {
+        Self {
+            screen_crop_left: look.crop_left,
+            screen_crop_top: look.crop_top,
+            screen_crop_right: look.crop_right,
+            screen_crop_bottom: look.crop_bottom,
+            screen_scale_pct: look.scale_pct,
+            ..self.clone()
+        }
+    }
+
     /// The visible screen source rectangle after cropping, as normalized (x, y, w, h).
     pub fn screen_crop_uv(&self) -> (f32, f32, f32, f32) {
         let pct = |v: f32| v.clamp(0.0, MAX_SCREEN_CROP_PCT) / 100.0;
@@ -458,9 +470,9 @@ mod tests {
         assert!(rel.ends_with(".png"));
         assert!(dir.path().join(&rel).is_file());
 
-        let link = dir.path().join("link.png");
         #[cfg(unix)]
         {
+            let link = dir.path().join("link.png");
             std::os::unix::fs::symlink(&file, &link).unwrap();
             assert!(ingest_wallpaper(dir.path(), &link)
                 .unwrap_err()

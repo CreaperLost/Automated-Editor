@@ -32,7 +32,7 @@ pub fn validate_dependencies(
     Ok(())
 }
 
-fn transcript_path(root: &Path, track_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn transcript_path(root: &Path, track_id: &str) -> Result<PathBuf, String> {
     // A sound's key, `<asset>.<stream>`.
     if track_id.is_empty()
         || track_id.len() > 160
@@ -94,6 +94,7 @@ pub fn save_transcript(root: &Path, transcript: &Transcript) -> Result<(), Strin
     temp.as_file().sync_all().map_err(|e| e.to_string())?;
     temp.persist(&path).map_err(|e| e.to_string())?;
     CHANGES.fetch_add(1, Ordering::Relaxed);
+    crate::source_search::forget(root, &transcript.track_id);
     Ok(())
 }
 
@@ -105,6 +106,7 @@ pub fn delete_transcript(root: &Path, track_id: &str) -> Result<(), String> {
         Err(e) => Err(e.to_string()),
     };
     CHANGES.fetch_add(1, Ordering::Relaxed);
+    crate::source_search::forget(root, track_id);
     removed
 }
 

@@ -44,12 +44,14 @@ export const SearchPanel: React.FC = () => {
   const asked = useRef(0);
 
   // Searches as you type (after a short pause), and again when the edit or a transcript changes.
+  // Every run starts a new ask, so an answer to a query since cleared or changed is dropped.
   useEffect(() => {
+    const id = ++asked.current;
     if (!handle || query.trim().length < 2) {
       setResults(null);
+      setError(null);
       return;
     }
-    const id = ++asked.current;
     const timer = window.setTimeout(() => {
       void api
         .sourceSearch(handle, query)

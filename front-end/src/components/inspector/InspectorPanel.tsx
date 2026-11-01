@@ -189,6 +189,9 @@ export const InspectorPanel: React.FC = () => {
               }
             >
               <PresetMarks part="layout" />
+              <p className="text-meta text-studio-500">
+                Size and crop frame the recordings. Imported files show whole; give a track its own framing from the Clip page.
+              </p>
               <Field label="Canvas">
                 <Segmented
                   label="Canvas aspect ratio"
