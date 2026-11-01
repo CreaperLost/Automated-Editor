@@ -49,9 +49,22 @@ export function mountHook<T>(body: () => T) {
     useDebugValue: () => undefined,
     useContext: (context: { _currentValue: unknown }) => context._currentValue,
   };
-  const internals = (React as unknown as {
-    __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: { ReactCurrentDispatcher: { current: unknown } };
-  }).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher;
+  // Where React keeps the hook dispatcher: `H` since React 19, `ReactCurrentDispatcher` before.
+  const shared = React as unknown as {
+    __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: { H: unknown };
+    __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?: { ReactCurrentDispatcher: { current: unknown } };
+  };
+  const modern = shared.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  const legacy = shared.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher;
+  const internals = {
+    get current(): unknown {
+      return modern ? modern.H : legacy?.current;
+    },
+    set current(value: unknown) {
+      if (modern) modern.H = value;
+      else if (legacy) legacy.current = value;
+    },
+  };
   let result!: T;
   const render = () => {
     index = 0;

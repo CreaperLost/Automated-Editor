@@ -8,6 +8,11 @@ once built), the design in [architecture.md](architecture.md), the choices in
 When a roadmap item ships, add it at the top here with the date and its ID as an anchor
 (`<a id="xxx-n"></a>`), and delete it from the roadmap.
 
+- **1 Nov 2026** — <a id="dep-2-nov"></a>**DEP-2 dependency review, 1 Nov round**
+  ([log](dependencies.md#review-log)): React 19, Vite 8 and HyperFrames 0.8.228 (same Chrome,
+  Node and GSAP; renders identical or within 0.05 %, the gate about 10 % faster). Tailwind 4
+  became [DEP-3](roadmap.md#dep-3); `ort` is still a release candidate, so parakeet-rs 0.4
+  waits as [DEP-4](roadmap.md#dep-4).
 - **1 Nov 2026** — <a id="qual-5"></a>**QUAL-5 what EVAL-1 run 5 found**: `check` with
   `short` checks a short or clip as its export plays it (its own timeline, captions and
   graphics; its fixes stay with the short's own tools), and the export steps say so;

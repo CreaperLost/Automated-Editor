@@ -25,10 +25,11 @@ Work items: [DEP-1](done.md#dep-1) (pin what isn't pinned, first review) and
 
 | Package | Locked | Notes |
 |---|---|---|
-| React / React DOM | 18.3.1 | React 19 is the next major |
-| Vite | 5.4.21 | Two majors behind current |
-| Tailwind CSS | 3.4.19 | Tailwind 4 changes configuration |
-| dockview-react | 8.4.0 | Workspace layouts; layout keys are versioned |
+| React / React DOM | 19.3.1 (1 Nov) | The test harness's hook dispatcher reads React 19's internals (`tests/hooks.ts`) |
+| Vite | 8.3.5 (1 Nov), `@vitejs/plugin-react` 6.1.2 | Minifies with its own minifier; `esbuild` 0.28.2 is a dev dependency of its own for the test runner |
+| Tailwind CSS | 3.4.19 | Tailwind 4 is its own item, [DEP-3](roadmap.md#dep-3) |
+| dockview-react | 8.8.3 (1 Nov) | Workspace layouts; layout keys are versioned |
+| lucide-react | 1.66.0 (1 Nov) | Icons; 0.344 did not accept React 19 |
 | zustand | 4.5.7 | v5 is the next major |
 
 ### Back end crates (`src-tauri/Cargo.toml`, locked by `src-tauri/Cargo.lock`)
@@ -37,7 +38,7 @@ Work items: [DEP-1](done.md#dep-1) (pin what isn't pinned, first review) and
 |---|---|---|
 | `wgpu` | 27.0.1 | Compositor and preview; parity tests guard updates |
 | `rmcp` | 3.5 | MCP server; protocol version answered by the bridge |
-| `ort` (ONNX Runtime) | `=2.0.0-rc.13` (exact) | Parakeet, YuNet; ONNX Runtime 1.28 CUDA build |
+| `ort` (ONNX Runtime) | `=2.0.0-rc.13` (exact) | Parakeet, YuNet; ONNX Runtime 1.28 CUDA build. Still release candidates on 1 Nov (rc.15); moving is [DEP-4](roadmap.md#dep-4) |
 | `llama-cpp-2` | `=0.1.160` (exact) | Local filler review on Vulkan; lacks Gemma's chat template |
 | `tokio` | 1.38 | — |
 | `serde_json` | 1.0 with `float_roundtrip` (locked 1.0.151) | Exact float parsing since 23 Oct: the default parser can read a number back one bit off, which made a reopened edit look changed to the undo history |
@@ -51,10 +52,10 @@ build with exactly the same crates. `cargo update` happens only in a review.
 
 | Component | Version | Where | Notes |
 |---|---|---|---|
-| **HyperFrames** | **0.8.162** | `src-tauri/graphics/runtime/package.json` + lock, `graphics/runtime.rs` | Stays pinned (decided 21 Oct). Recheck at each review: changelog, our gate on every bundled template, render determinism |
+| **HyperFrames** | **0.8.228** (1 Nov) | `src-tauri/graphics/runtime/package.json` + lock, `graphics/runtime.rs` | Stays pinned (decided 21 Oct). Recheck at each review: changelog, our gate on every bundled template, render determinism. It pins `undici` 7.25.0 exactly, which has high-severity advisories (SOCKS5 proxies, cookies, shared caches) that our offline renders don't reach; 0.8.162 had the same version |
 | Node.js (graphics runtime) | 22.23.4 | `graphics/runtime.rs` `NODE_VERSION` | Separate from the build's Node |
 | chrome-headless-shell | 152.0.7977.30 | `graphics/runtime.rs` `CHROME_VERSION` | Must match what HyperFrames pins; bump together |
-| GSAP | 3.15.0 (sha256-pinned npm tarball) | `graphics/runtime.rs` `GSAP_VERSION`, `graphics/gsap.rs` | The version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`); bump together. Fetched from npm onto the user's computer when a graphic first loads it (and at runtime install), never shipped in the repo or installer: its licence is GreenSock's "Standard 'no charge' licence" ("free, even for commercial use" per its README; the full terms at gsap.com/standard-license did not load on 22 Oct, so redistribution terms are unread) |
+| GSAP | 3.15.0 (sha256-pinned npm tarball) | `graphics/runtime.rs` `GSAP_VERSION`, `graphics/gsap.rs` | The version HyperFrames (0.8.162 and 0.8.228) links from its CDN (`GSAP_CDN_VERSION`); bump together. Fetched from npm onto the user's computer when a graphic first loads it (and at runtime install), never shipped in the repo or installer: its licence is GreenSock's "Standard 'no charge' licence" ("free, even for commercial use" per its README; the full terms at gsap.com/standard-license did not load on 22 Oct, so redistribution terms are unread) |
 | GSAP | not yet | — | To be vendored and pinned by [GFX-2](done.md#gfx-2) |
 | FFmpeg (bundled) | `n8.1.3-9-g29e619e767`, BtbN release `autobuild-2026-09-30-13-08` | `src-tauri/scripts/fetch-ffmpeg.mjs` (`RELEASE`, `VERSION`, `SHA256`) | Yes, checksums in the script (21 Oct). BtbN prunes daily builds after ~2 weeks but keeps month-end ones, so pin month-end releases only |
 | CUDA / cuDNN (GPU pack) | CUDA 13.4 (cudart 13.4.92, cuBLAS 13.8), cuFFT 12.4, cuDNN 9.27 | `src-tauri/src/cuda.rs` | Must match the ONNX Runtime CUDA build |
@@ -95,4 +96,9 @@ a needed feature or a measured performance gain points at one component.
 | 21 Oct 2026 | Node.js | 18+ / 20 / 22 → 22 everywhere | Front end unchanged; CI moved off Node 20 (end of life) |
 | 21 Oct 2026 | FFmpeg | BtbN `latest` (8.1.3-20, moving) → 30 Sep build 8.1.3-9 | Pinned with checksums; a real download verified. Same 8.1 branch, a month older than `latest` |
 | 21 Oct 2026 | Crates | `Cargo.lock` ignored → committed | No version changes |
+| 1 Nov 2026 | Vite + `@vitejs/plugin-react` | 5.4.21 + 4.3 → 8.3.5 + 6.1.2 | `minify: "esbuild"` is gone in Vite 8 (boolean now); the test runner bundles with esbuild, now a dev dependency of its own. `tsc`, the 32 front-end tests and the build pass |
+| 1 Nov 2026 | React + React DOM (+ types, lucide-react, dockview-react) | 18.3.1 → 19.3.1 | Typing: `useRef<T>()` needs its first value (5 places). The test harness reads React 19's dispatcher. StrictMode's second effect run left the dock's api unset in development; the workspace registers it again. Dev app: every panel opens, no console errors, playback plays |
+| 1 Nov 2026 | Tailwind CSS | 3.4.19 → 4 tried, not kept | The upgrade tool's 266 changes in 45 files include rewriting an `EffectKind` value; its own item, [DEP-3](roadmap.md#dep-3) |
+| 1 Nov 2026 | `ort` / parakeet-rs | rc.13 / 0.3.8, unchanged | `ort` is still a release candidate (rc.15); parakeet-rs 0.4 needs exactly rc.15 and a new ONNX Runtime set-up; [DEP-4](roadmap.md#dep-4) |
+| 1 Nov 2026 | HyperFrames | 0.8.162 → 0.8.228 | 64 releases, nothing breaking; Windows fixes (a locked Chrome log no longer fails a render, audio scratch files, child processes left by a killed CLI, a 45 s wait for a graphic with no timeline). Same Chrome (152.0.7977.30), Node 22 and GSAP 3.15.0, so only the npm packages change. A fresh install from the lock passes; the gate passes all 13 templates and the GSAP graphic, and the one-off fails for each reason it should, as on 0.8.162. Gate 801 s against 895 s on 0.8.162; the 4K final render 63 s against 74 s. The two draft renders (16:9 and 9:16) are bit-identical, 4K at 60 fps SSIM 0.9995 (PSNR 63.5 dB, alpha identical). The app's installed runtime shows "Update the graphics renderer"; each graphic renders once again (the cache key holds the version) |
 | Next | Everything else in the inventory | — | January 2027, or sooner when a gain or advisory appears |

@@ -11,10 +11,10 @@ import type { OpenedProject } from "../lib/types";
  * at once rather than lost.
  */
 export function useDebouncedSave(delayMs: number) {
-  const timer = useRef<number>();
-  const pending = useRef<(() => void) | undefined>();
+  const timer = useRef<number | undefined>(undefined);
+  const pending = useRef<(() => void) | undefined | undefined>(undefined);
   /** The project and timeline the waiting save is for. */
-  const owner = useRef<{ handle: string; shortView?: string }>();
+  const owner = useRef<{ handle: string; shortView?: string } | undefined>(undefined);
 
   const flush = useCallback(() => {
     window.clearTimeout(timer.current);

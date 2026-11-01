@@ -13,9 +13,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const NODE_VERSION: &str = "22.23.4";
-/// The version HyperFrames 0.8.162 itself pins (`CHROME_VERSION` in its browser manager).
+/// The version HyperFrames 0.8.228 itself pins (`CHROME_VERSION` in its browser manager).
 pub const CHROME_VERSION: &str = "152.0.7977.30";
-pub const HYPERFRAMES_VERSION: &str = "0.8.162";
+pub const HYPERFRAMES_VERSION: &str = "0.8.228";
 /// GSAP, the version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`): fetched from
 /// npm onto this computer when a graphic first uses it, never shipped with the app.
 pub const GSAP_VERSION: &str = "3.15.0";

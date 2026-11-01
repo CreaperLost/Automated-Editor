@@ -211,8 +211,20 @@ edit stays as good. (COST-2's last check is under [Waiting on George](#cost-2).)
 <a id="dep-2"></a>
 - **DEP-2 · Recurring dependency review (S each).** Follow the cadence in
   [dependencies.md](dependencies.md): read changelogs, update on a branch, run tests, `perf.rs`
-  and the parity probes, record the result. Candidates: React 18 → 19, Vite 5 → current,
-  Tailwind 3 → 4, `ort` leaving release candidates, HyperFrames past 0.8.162.
+  and the parity probes, record the result. Next: January 2027 (the 1 Nov round is in
+  [dependencies.md](dependencies.md#review-log)).
+<a id="dep-3"></a>
+- **DEP-3 · Tailwind 3 → 4 (M).** Sized in the 1 Nov review: the upgrade tool changes 266
+  places in 45 files (renamed utilities, the config moving into CSS), and it also rewrote the
+  string `"blur"` in an `EffectKind` (a value saved in projects and sent to the back end), so
+  its output cannot be taken as it is. Do it by hand or check every change, then look at
+  every panel against the old build.
+<a id="dep-4"></a>
+- **DEP-4 · `ort` 2.0 and parakeet-rs 0.4 (S–M), when `ort` leaves release candidates.** On
+  1 Nov `ort` was at rc.15 and parakeet-rs 0.4.x needs exactly it, plus one explicit ONNX
+  Runtime environment handed to every model (seven call sites, in Parakeet and YuNet). The
+  CUDA pack must match the newer ONNX Runtime's CUDA build; the Parakeet probe, face
+  detection and the pack probe recheck it.
 
 ### Ideas not yet scheduled
 

@@ -160,7 +160,7 @@ export function NativePreviewHost({
   const underlay = status?.attached === true && status.surface === "underlay";
   // Read by the layout effect, which outlives status changes.
   const underlayRef = useRef(false);
-  const markDirtyRef = useRef<() => void>();
+  const markDirtyRef = useRef<() => void | undefined>(undefined);
 
   // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
   useEngineFrames(canvasRef, webviewGeneration !== undefined, webviewGeneration);

@@ -120,7 +120,12 @@ export const DockWorkspace: React.FC = () => {
   const shown = useRef(workspace);
   const saveTimer = useRef(0);
 
-  useEffect(() => () => setActiveDockApi(null), []);
+  // Registered again when the effect runs again (React 19's StrictMode runs it twice in
+  // development, after the dock is ready), cleared when the workspace goes.
+  useEffect(() => {
+    if (apiRef.current) setActiveDockApi(apiRef.current);
+    return () => setActiveDockApi(null);
+  }, []);
 
   // An agent shows the user a moment (back to the video, the playhead in view), or hands them
   // joins to listen to (the Joins panel comes forward).
