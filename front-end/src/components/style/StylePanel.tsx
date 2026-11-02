@@ -133,7 +133,7 @@ export const StylePanel: React.FC = () => {
   const [stills, setStills] = useState<LookStill[]>();
   const [previewing, setPreviewing] = useState(false);
   const [plans, setPlans] = useState<InLinePlan[]>([]);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // What is being saved, so a save in flight is not overtaken by an older one.
   const saving = useRef<Promise<unknown>>(Promise.resolve());
 

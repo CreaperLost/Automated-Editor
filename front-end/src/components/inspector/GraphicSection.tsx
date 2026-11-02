@@ -35,7 +35,7 @@ export const GraphicSection: React.FC = () => {
   const styles = useStyles(handle, openedProject?.revision);
   // Only the selected graphic's fields show, so an edit never lands on another graphic.
   const graphic = loaded?.assetId === assetId ? loaded : undefined;
-  const showing = useRef<string>();
+  const showing = useRef<string | undefined>(undefined);
   showing.current = handle && assetId ? `${handle}:${assetId}` : undefined;
   /** A reply about a graphic selected before (or in another project) is dropped. */
   const take = useCallback((view: GraphicView, from: string) => {
@@ -378,7 +378,7 @@ const ColorField: React.FC<{
   onReset?: () => void;
 }> = ({ label, value, disabled, onChange, note, onReset }) => {
   const hex = typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   return (
     <label className="flex items-center justify-between gap-2 text-label text-studio-300">

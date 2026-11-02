@@ -97,7 +97,7 @@ const TrackLookControl: React.FC<{
   onSave: (look: ScreenLook | null) => void;
 }> = ({ track, recording, current, disabled, onSave }) => {
   const [draft, setDraft] = useState<ScreenLook>();
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   useEffect(() => setDraft(undefined), [track.id, JSON.stringify(track.look ?? null)]);
   const look = draft ?? track.look;
