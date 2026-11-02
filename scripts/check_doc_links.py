@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Check that the relative Markdown links in the docs folder actually resolve.
 
-This repo is link-heavy: `docs/roadmap.md`, `docs/gaps.md` and the plans cross-reference each
-other by anchor, and the research folder adds more. A renamed or deleted file silently breaks
+The core documents cross-reference one another and the root README. They should remain
+navigable after consolidation. A renamed or deleted file silently breaks
 every link that pointed at it, and nothing else in the build notices.
 
 Usage
 -----
     .venv\\Scripts\\python.exe scripts/check_doc_links.py
-    .venv\\Scripts\\python.exe scripts/check_doc_links.py --path docs/plans
+    .venv\\Scripts\\python.exe scripts/check_doc_links.py --path docs/architecture.md
     .venv\\Scripts\\python.exe scripts/check_doc_links.py --all
 
 Exit code is 1 if any link is broken, so it can be used as a pre-commit gate.

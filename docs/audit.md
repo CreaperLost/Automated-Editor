@@ -1,9 +1,10 @@
 # Performance and application bug audit
 
-Last updated: 30 October 2026. Baseline: `f3233e0` plus the existing working-tree
-changes. This is a living record of investigated defects, not a claim that the
-whole app has been audited. All five findings of the first pass were fixed the
-same day; see [Fixes](#fixes-30-october).
+Last updated: 2 November 2026. The follow-up fixes AUD-006 through AUD-008;
+there are no remaining open findings from this pass. This is a living record of
+investigated defects, not a claim that the whole app has been audited. The five
+findings from 30 October remain recorded as fixed. Historical verification below
+is dated and was not all rerun in this pass.
 
 Evidence labels: **Code** means the relevant execution path was traced;
 **Reproduced** means a controlled executable check exercised the production
@@ -12,11 +13,161 @@ or incorrect edits; P2 means a narrower correctness or performance problem.
 Keep IDs stable, add new evidence as it is found, and mark a finding fixed only
 after its regression check passes.
 
-## Open findings
+## Fixed findings, 2 November
 
-None.
+| ID | Priority | Finding | Evidence | Status |
+|---|---|---|---|---|
+| AUD-006 | P2 | A transient thumbnail failure permanently suppresses retries for that cache key | Reproduced; code | Fixed 2 Nov; regression tests |
+| AUD-007 | P1 | Layout edits made during another layout save are silently discarded | Reproduced; code | Fixed 2 Nov; regression tests |
+| AUD-008 | P2 | Thumbnail cache stays above its retention limit after all clips unmount | Reproduced; code | Fixed 2 Nov; regression test |
 
-## Fixed findings
+The original evidence below describes the defects before the fixes. Source line
+numbers refer to that investigation; each finding ends with its correction.
+
+### AUD-006: Failed thumbnail batches become permanent negative cache entries
+
+- **Location:** [ClipThumbs.tsx](../front-end/src/components/timeline/ClipThumbs.tsx),
+  `flush` lines 49, 69–70 and the mounting effect lines 140–143.
+- **Trigger:** A thumbnail IPC request fails temporarily, then succeeds again
+  without changing the project handle, asset, stream, size or sample time.
+- **Cause:** The rejection handler writes `null` into `made` for every requested
+  key. Both scheduling and loading treat `made.has(key)` as completed regardless
+  of value. There is no retry, expiry or explicit invalidation. Backend per-frame
+  decode failures also become null results in
+  [thumbs.rs](../src-tauri/src/commands/thumbs.rs).
+- **Impact:** Affected slots remain blank even after recovery and scrolling away
+  and back. They can recover if evicted or requested under another key; this is
+  not a claim that they survive an application restart.
+- **Evidence, 2 Nov:** Mounted the production component with the existing hook
+  harness and fake timers. Rejected every API batch for a 400-slot clip: six
+  batches completed. Unmounted it, replaced the API with a successful responder,
+  and remounted the identical clip. **Zero recovery requests** were sent.
+- **Fix direction:** Distinguish permanent absence from transient failure. Retry
+  transient failures with bounded backoff and permit a later mount or explicit
+  refresh to retry; do not introduce an immediate idle retry loop.
+- **Regression check:** Reject a batch, restore the API, and require recovery
+  without changing keys. Verify persistent failure has bounded request traffic
+  and genuine no-picture results do not retry continuously.
+- **Fixed, 2 Nov:** Request failures and per-frame `{error}` replies stay separate
+  from cached pictures and genuine `null` absence. Failed wanted keys retry after
+  500 ms and 2 seconds (plus the normal batch delay), then stop until demand is
+  released and mounted again. Unmount cancels retry timers for keys nobody wants.
+  The backend preserves successful frames in a mixed batch and reports decode
+  errors explicitly. Regression tests cover recovery on the same mounted keys,
+  bounded persistent failure, recovery on remount, genuine absence, and mixed
+  replies that retry only the failed frame.
+
+### AUD-007: The main video's layout save path drops edits while busy
+
+- **Location:** [layoutsStore.ts](../front-end/src/stores/layoutsStore.ts),
+  `run` lines 41–52; [LayoutsSection.tsx](../front-end/src/components/layouts/LayoutsSection.tsx),
+  `editLayout`, `setPick`, and the enabled `LayoutEditor` at line 214;
+  [useDebouncedSave.ts](../front-end/src/hooks/useDebouncedSave.ts), `flush`.
+- **Trigger:** On the main video, move a layout slider, pause for the 200 ms
+  debounce to send it, then change it again while the first request is pending.
+  Let the second debounce fire before the first request completes. Clicking an
+  enabled layout tile during a pending save reaches the same guard immediately.
+- **Cause:** `run` returns whenever `useLayoutsStore.busy` is non-null. It neither
+  queues the new change nor reports rejection. The debounce has already consumed
+  its callback. The editor remains enabled, so the user can create this change;
+  the first response's revision change then clears the local draft.
+- **Impact:** The final chosen layout is not persisted and no error appears.
+  This finding concerns the main-video branch; short operations normally use
+  their separate queue.
+- **Evidence, 2 Nov:** Ran the production debounce and layout store with a deferred
+  `projectLayoutsChange` promise. Scheduled distinct first and second base edits,
+  advancing 200 ms after each, then completed the first at revision 2 and drained
+  promises/timers. **One backend request**, carrying the first edit; **no pending
+  save and no error** after completion. No real project was changed.
+- **Fix direction:** Serialize main-video layout edits using the latest revision,
+  with explicit project/timeline ownership. Coalesce compatible slider updates
+  while retaining the latest value; preserve ordered independent operations.
+- **Regression check:** Hold the first save pending and issue a later slider/tile
+  change. After release, require the final value to reach the backend on the new
+  revision. Also test a failure and project switch while work is queued.
+- **Fixed, 2 Nov:** Main-video saves, automatic picks, and keyboard layout switches
+  share a serial queue that reads the latest revision after applying the previous
+  response. Adjacent compatible base, settings, and section snapshots coalesce;
+  different fields, sections, and independent operations retain their order.
+  Project/timeline ownership changes cancel waiting work and invalidate late
+  responses. A failed save reports an error and releases later work. The editor
+  keeps newer slider drafts while a debounce or queue save is pending.
+  Regression tests cover deferred saves, coalescing, ordered tiles/settings,
+  keyboard switches, failure recovery, draft visibility, and project/view changes.
+
+### AUD-008: Unmounting thumbnails never prunes the oversized resident cache
+
+- **Location:** [ClipThumbs.tsx](../front-end/src/components/timeline/ClipThumbs.tsx),
+  module-level `made`, pruning at lines 73–76, cleanup at lines 144–150.
+- **Trigger:** Display more than 2,000 distinct samples, finish loading, then
+  close the project or hide/remove those clips without loading new thumbnails.
+- **Cause:** AUD-001 correctly keeps wanted pictures even above `KEEP`, but
+  pruning only runs in a request's `finally` handler. Unmount cleanup decreases
+  `wanted` without pruning `made`. With no new request, nothing enforces the
+  retention limit; merely scheduling `flush` would also be insufficient because
+  it returns early when no keys need loading.
+- **Impact:** The module retains excess JPEG data URL strings for the remainder
+  of the session unless a later request triggers pruning. Demand is limited per
+  clip, not globally, so large timelines can leave much more than 2,000 entries.
+  This is retained JS cache data, not a measured GPU/decoded-image memory leak.
+- **Evidence, 2 Nov:** Loaded seven 400-slot clips through the production component
+  and a successful stub API. The cache contained **2,688 distinct entries**.
+  Unmounted every clip, advanced fake time by 60 seconds and drained promises:
+  **2,688 entries remained, zero pending timers**. Observed the private map using
+  an accessor appended only to the in-memory esbuild bundle; production source
+  was not modified.
+- **Fix direction:** Prune unused entries when demand falls or the project closes,
+  using batched cleanup if needed. Continue protecting wanted keys so AUD-001
+  does not return. A byte budget could also account for different JPEG sizes.
+- **Regression check:** Exceed capacity, finish loading, unmount all clips, and
+  assert unused entries fall to the retention limit without another API request.
+  Also require a still-mounted over-capacity timeline to remain settled.
+- **Fixed, 2 Nov:** Demand cleanup runs the same unused-entry pruning as batch
+  completion. Wanted keys remain protected above capacity. The regression loads
+  2,688 distinct pictures, unmounts every clip, and verifies at most 2,000 are
+  still resident before any new request or response; an idle minute sends no IPC.
+
+### Original investigation, 2 November (before fixes)
+
+- Controlled Node checks used the installed esbuild to bundle current production
+  modules, [hooks.ts](../front-end/tests/hooks.ts), fake timers and stub/deferred
+  IPC promises. All three assertions above passed; they assert observed defects,
+  not corrected behavior. Temporary probes were removed after use.
+- `npm run test:cleanup` in `front-end`: **32 passed, zero failed**. These existing
+  tests do not cover the three newly documented cases.
+- `.venv/Scripts/python.exe scripts/check_doc_links.py --path docs/audit.md`:
+  **27 relative link targets, zero broken**. `git diff --check -- docs/audit.md`
+  passed.
+- No desktop interaction, native benchmark, export, heap-byte measurement or
+  application fix was performed. The 60 seconds above is simulated time.
+- The audit file was absent in the working tree; its committed history was
+  restored at the user's requested path and extended. Other existing edits and
+  document deletions were left alone. References to deleted historical documents
+  below are kept as text instead of broken links.
+
+### Follow-up verification, 2 November
+
+- `npm run test:cleanup` in `front-end`: **43 passed, zero failed**, including
+  11 new regression tests. `npx tsc --noEmit`: clean.
+- `cargo check --features tauri-app`: builds; existing visibility and incremental
+  cache hard-link warnings remain. Targeted `rustfmt --check` for `thumbs.rs`: clean.
+- `cargo test --lib commands::thumbs::tests`: **2 passed, zero failed**, including
+  a new native test that serializes successful images, frame errors, and genuine
+  gaps distinctly. Existing visibility, dead-code, and cache hard-link warnings
+  remain.
+- [auditRecovery.test.ts](../front-end/tests/auditRecovery.test.ts) exercises the
+  production component, debounce, layout store, and editor through the existing
+  hook harness and fake timers. The three core regressions were also bundled
+  against the original committed thumbnail component and layout store in memory:
+  all three failed, confirming the checks detect AUD-006, AUD-007, and AUD-008.
+- `.venv/Scripts/python.exe scripts/check_doc_links.py --path docs/audit.md`:
+  **28 relative link targets, zero broken**. `git diff --check` for the touched
+  files: clean.
+- No desktop session, native performance benchmark, export, or heap-byte
+  measurement was performed. Original investigation and 30 October checks below
+  retain their historical scope.
+
+## Fixed findings, 30 October
 
 | ID | Priority | Finding | Evidence | Status |
 |---|---|---|---|---|
@@ -233,7 +384,7 @@ Verification:
 Completed the first targeted pass over frontend project lifecycle, timeline
 navigation and thumbnails, debounced settings saves, source search, and their
 backend entry points. Existing performance observations remain in
-[gaps.md](gaps.md#12-performance); they are not new measurements from this audit.
+`gaps.md`, section 12 (since deleted); they are not new measurements from this audit.
 
 - Four controlled Node checks reproduced AUD-001 through AUD-004 using the current
   production source, mocked API responses, and controlled timers/hook state. They
