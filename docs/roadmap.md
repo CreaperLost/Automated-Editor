@@ -187,10 +187,6 @@ edit stays as good. (COST-2's last check is under [Waiting on George](#cost-2).)
 
 ### Code health and performance
 
-<a id="perf-3"></a>
-- **PERF-3 · Alternating JPEG encoders (S).** Two alternating encoder threads for the non-wgpu
-  preview path (O02), still untried. One thread takes 7.6 ms at 720p and 17–27 ms at 1080p, so it
-  may not be needed at 30 fps. Dense timelines (O01) are done.
 <a id="dep-2"></a>
 - **DEP-2 · Recurring dependency review (S each).** Follow the cadence in
   [dependencies.md](dependencies.md): read changelogs, update on a branch, run tests and `perf.rs`,

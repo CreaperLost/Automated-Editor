@@ -329,6 +329,117 @@ fn perf_preview() {
     }
 }
 
+/// The webview preview's loop for `seconds`: draws the clock's frame while an encoder is free,
+/// encodes on `threads` threads and shows only a frame newer than the one showing.
+fn webview_run(
+    root: &Path,
+    document: &crate::project::revision::EditDocument,
+    quality: PreviewQuality,
+    threads: usize,
+    seconds: u64,
+) {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+    crate::media::ffmpeg::release_decoders();
+    let (w, h) = document.layout.preview_dimensions().unwrap();
+    let (w, h) = quality.canvas(w, h);
+    let mut evaluator = SceneEvaluator::new_reusing(root.into(), document.clone(), w, h, None)
+        .unwrap()
+        .with_decode_limit(quality.decode_limit((w, h), true));
+    let (sender, jobs) = mpsc::sync_channel::<(u64, Instant, crate::media::VideoFrame)>(threads);
+    let jobs = Mutex::new(jobs);
+    let busy = Arc::new(AtomicUsize::new(0));
+    let (showing, late) = (AtomicU64::new(0), AtomicU64::new(0));
+    let (encodes, ages) = (Mutex::new(Vec::new()), Mutex::new(Vec::new()));
+    let mut draws = Vec::new();
+    let end = (seconds * 1_000_000).min(document.duration_us());
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let job = jobs.lock().unwrap().recv();
+                let Ok((seq, drawn, frame)) = job else { return };
+                let encode = Instant::now();
+                crate::playback::preview::encode_webview_frame(&frame).unwrap();
+                encodes
+                    .lock()
+                    .unwrap()
+                    .push(encode.elapsed().as_secs_f64() * 1000.0);
+                if showing.fetch_max(seq, Ordering::AcqRel) < seq {
+                    ages.lock()
+                        .unwrap()
+                        .push(drawn.elapsed().as_secs_f64() * 1000.0);
+                } else {
+                    late.fetch_add(1, Ordering::Relaxed);
+                }
+                busy.fetch_sub(1, Ordering::AcqRel);
+            });
+        }
+        let mut last = None;
+        let mut seq = 0;
+        loop {
+            let t = started.elapsed().as_micros() as u64;
+            if t >= end {
+                break;
+            }
+            let at = quality.frame_time(t);
+            if last == Some(at) || busy.load(Ordering::Acquire) >= threads {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            }
+            let drawn = Instant::now();
+            let frame = evaluator.preview_at(at).unwrap();
+            draws.push(drawn.elapsed().as_secs_f64() * 1000.0);
+            evaluator.prefetch(at, 1_200_000);
+            seq += 1;
+            busy.fetch_add(1, Ordering::AcqRel);
+            sender.send((seq, drawn, frame)).unwrap();
+            last = Some(at);
+        }
+        drop(sender);
+    });
+    let ages = ages.into_inner().unwrap();
+    let wall = started.elapsed().as_secs_f64();
+    println!(
+        "PERF webview {}p {} fps, {threads} thread(s): shown {:.1} fps, {} late",
+        quality.resolution,
+        quality.fps,
+        ages.len() as f64 / wall,
+        late.load(Ordering::Relaxed)
+    );
+    println!("PERF   {}", Stats(draws).line("draw"));
+    println!(
+        "PERF   {}",
+        Stats(encodes.into_inner().unwrap()).line("encode")
+    );
+    println!("PERF   {}", Stats(ages).line("drawn to shown"));
+}
+
+/// One encoder thread against two at the sizes and rates the webview preview can be set to.
+#[test]
+#[ignore]
+fn perf_webview_encoders() {
+    let Some(dir) = probe_dir() else { return };
+    let work = tempfile::tempdir().unwrap();
+    let (state, _, root) = opened(work.path(), &dir);
+    if let Some(settle) = std::env::var_os("AERO_PERF_SETTLE") {
+        let seconds: u64 = settle.to_string_lossy().parse().unwrap_or(15);
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+    }
+    let document = document(&state);
+    for (resolution, fps) in [(720, 30), (720, 60), (1080, 30), (1080, 60)] {
+        for threads in [1, 2, 1, 2] {
+            webview_run(
+                &root,
+                &document,
+                PreviewQuality { resolution, fps },
+                threads,
+                15,
+            );
+        }
+    }
+}
+
 /// `document` with `count` layout sections spread over it, alternating side by side and the
 /// bubble (`flip` starts with the other one): what a picked tutorial has.
 fn with_sections(

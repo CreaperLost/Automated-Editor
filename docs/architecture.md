@@ -306,7 +306,8 @@ Rules that keep it fast (break one and it shows):
 - Panels reload only when what they depend on changes (sequence, transcript, their own settings),
   never on every revision.
 - Long reads (transcript, cues, waveforms) run on the blocking pool, not Tauri's main thread.
-- The preview worker never blocks on the JPEG encoder (fallback path); on Windows the preview is
+- The preview worker never blocks on the JPEG encoders (fallback path; two threads take turns and
+  a frame finishing after a newer one isn't shown); on Windows the preview is
   drawn by wgpu under a transparent webview.
 - A graphic waiting for its render shows its newest older render, found once per render
   generation, not by listing the cache folder every frame.

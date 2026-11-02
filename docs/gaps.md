@@ -119,8 +119,6 @@ The research is clear that sound is **placement and art direction, not library b
 | Gap | Evidence | Fix |
 |---|---|---|
 | A layout edit rebuilds the playback evaluator *and* the audio mixer; fine for occasional edits, wrong for dragging a section edge or live layout keys | Log: `plans/layouts.md` | [LAY-1](done.md#lay-1) |
-| With the whole timeline in view, every clip is a separate element (8,000 clips: ~1.5 s per shifting edit in dev) | Log: O01 | [PERF-3](roadmap.md#perf-3) |
-| The JPEG preview transport (non-wgpu fallback path) is near budget at 1080p (~30 ms per detailed frame) | Log: O02 | [PERF-3](roadmap.md#perf-3) |
 | Recorder segment boundaries overlap by up to a frame; system audio has a 10 ms gap at each segment boundary | Log: O03, O04, **in the AeroShoot repo**, not here | Recorder backlog |
 
 ## 13. Verification debt
