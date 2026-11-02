@@ -90,6 +90,18 @@ pub fn wait_for_graphics(
     from_us: u64,
     to_us: u64,
 ) -> Result<(), String> {
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    wait_for_graphics_until(state, short, from_us, to_us, &cancel)
+}
+
+/// [`wait_for_graphics`], giving up when `cancel` is set: what rendered so far stays rendered.
+pub fn wait_for_graphics_until(
+    state: &AppState,
+    short: Option<&str>,
+    from_us: u64,
+    to_us: u64,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
     let (document, root, _) = document(state, short)?;
     let playing: std::collections::HashSet<&str> = document
         .sequence
@@ -107,12 +119,7 @@ pub fn wait_for_graphics(
     if specs.is_empty() {
         return Ok(());
     }
-    crate::graphics::render::ensure(
-        &specs,
-        &std::sync::atomic::AtomicBool::new(false),
-        &mut |_, _, _| {},
-    )
-    .map(|_| ())
+    crate::graphics::render::ensure(&specs, cancel, &mut |_, _, _| {}).map(|_| ())
 }
 
 /// Runs `use_it` on an evaluator of [`document`] at `width` (the height follows the canvas

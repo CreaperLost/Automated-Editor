@@ -1,7 +1,9 @@
 //! Check before export: problems a viewer would notice, found from the edit itself (nothing is
 //! decoded, no model runs), each with where it is on the timeline and, when one is safe, a fix
 //! that applies as one undo step. The export dialog lists them; agents get them from the
-//! `check` action and fix them before asking to export.
+//! `check` action and fix them before asking to export. What only a graphic's drawn frames show
+//! (a face covered, words under a platform's bars) is measured apart, as it decodes and waits
+//! for renders (`mcp::graphic_checks::findings`), and joins the report with [`with_frames`].
 use crate::project::revision::EditDocument;
 use crate::sequence::{Asset, Role};
 use crate::timeline::TimelineMapper;
@@ -65,6 +67,11 @@ pub enum Kind {
     PastMediaEnd,
     GraphicFont,
     GraphicReadingTime,
+    GraphicCoversFace,
+    GraphicHidesCaptions,
+    CaptionsCrossSplit,
+    GraphicUnderPlatformUi,
+    GraphicFramesNotChecked,
 }
 
 impl Kind {
@@ -140,7 +147,16 @@ impl Builder {
         title: String,
         detail: String,
     ) -> &mut Finding {
-        self.findings.push(Finding {
+        self.findings
+            .push(Finding::new(kind, severity, title, detail));
+        self.findings.last_mut().unwrap()
+    }
+}
+
+impl Finding {
+    /// A finding with no moment or fix yet, and no id until [`finished`] gives it one.
+    pub(crate) fn new(kind: Kind, severity: Severity, title: String, detail: String) -> Self {
+        Self {
             id: String::new(),
             kind,
             severity,
@@ -150,13 +166,10 @@ impl Builder {
             end_us: None,
             fix_label: None,
             fix: None,
-        });
-        self.findings.last_mut().unwrap()
+        }
     }
-}
 
-impl Finding {
-    fn at(&mut self, start_us: u64, end_us: u64) -> &mut Self {
+    pub(crate) fn at(&mut self, start_us: u64, end_us: u64) -> &mut Self {
         self.start_us = Some(start_us);
         self.end_us = Some(end_us.max(start_us));
         self
@@ -203,8 +216,23 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     past_media_end(&mut out, document);
     graphic_fonts(&mut out, root, document);
     graphic_reading_time(&mut out, root, document);
+    CheckReport {
+        revision: document.revision,
+        duration_us: document.duration_us(),
+        findings: finished(out.findings),
+    }
+}
 
-    let mut findings = cap(out.findings);
+/// `report` with what the graphics' frames showed.
+pub fn with_frames(mut report: CheckReport, frames: Vec<Finding>) -> CheckReport {
+    report.findings.extend(frames);
+    report.findings = finished(report.findings);
+    report
+}
+
+/// Capped, in report order (errors first, each severity in timeline order), each with its id.
+pub(crate) fn finished(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut findings = cap(findings);
     findings.sort_by(|a, b| {
         (a.severity, a.start_us.is_some(), a.start_us).cmp(&(
             b.severity,
@@ -227,11 +255,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
         taken.insert(id.clone());
         finding.id = id;
     }
-    CheckReport {
-        revision: document.revision,
-        duration_us: document.duration_us(),
-        findings,
-    }
+    findings
 }
 
 /// At most [`MAX_PER_KIND`] findings of each kind; the last one says how many more there are.

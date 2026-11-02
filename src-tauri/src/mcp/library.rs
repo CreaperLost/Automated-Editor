@@ -34,6 +34,8 @@ pub enum Op {
     Reset,
     ProposeRule,
     Propose,
+    Versions,
+    Restore,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -56,6 +58,19 @@ pub struct LibraryArgs {
     /// it the change goes into a copy, "My <name>").
     #[serde(default)]
     pub save_as: Option<String>,
+    /// Presets, save: this edit, as the user approved it, becomes a saved workflow. When the
+    /// usual steps don't apply, one each, in the user's words.
+    #[serde(default)]
+    pub exceptions: Option<Vec<String>>,
+    /// Presets, save: what must hold before export, one each.
+    #[serde(default)]
+    pub checks: Option<Vec<String>>,
+    /// Presets, save: what the user approved, in a line.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Presets, restore: which version (`versions` lists them).
+    #[serde(default)]
+    pub version: Option<u32>,
     /// propose_rule: the rule, in the user's words.
     #[serde(default)]
     pub rule: Option<String>,
@@ -104,7 +119,9 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         bring_in_line (one batch rewriting those graphics) and propose (a new style from \
         `references`: shows them to you and the steps; saves nothing). \
         Presets also: save (the project's settings into its preset, or a new one: \
-        `saveAs`), reset (the project's changes back), propose_rule (`rule`, `example`: the \
+        `saveAs`; with `exceptions`, `checks`, `note` it is a workflow the user approved on this \
+        edit: only at their word), versions and restore (`version`: each change to one is a new \
+        version), reset (the project's changes back), propose_rule (`rule`, `example`: the \
         user accepts it in the Agent panel). Sounds (CC0 whooshes, risers, hits, clicks, \
         pops; the user's own): list (`query`), use (`name` = id, at `atUs`/`atWord`). Music \
         (CC0 beds by mood): the same, until `untilUs` or the end, kept under the speech.",
@@ -304,7 +321,7 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             crate::style::request::clear(&ctx.host.config_dir());
             Ok(out)
         }
-        Op::Save | Op::Reset | Op::ProposeRule => Err(
+        Op::Save | Op::Reset | Op::ProposeRule | Op::Versions | Op::Restore => Err(
             "Styles take list, show, use, set, remove, preview, check, bring_in_line or propose"
                 .into(),
         ),

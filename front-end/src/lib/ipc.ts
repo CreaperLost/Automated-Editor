@@ -1,6 +1,9 @@
 import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
+  CheckFinding,
   CheckReport,
+  PresetVersion,
+  PresetWorkflow,
   OpenedProject,
   SegmentPage,
   WaveformOverview,
@@ -586,8 +589,12 @@ export const api = {
       field: field ?? null,
     }),
   /** The project's settings into its preset, or a new one called `name` it then follows. */
-  presetSaveFromProject: (projectHandle: string, expectedRevision: number, name?: string) =>
-    invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null }),
+  presetSaveFromProject: (projectHandle: string, expectedRevision: number, name?: string, workflow?: PresetWorkflow) =>
+    invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null, workflow: workflow ?? null }),
+  /** Every save kept of a preset, the current one first. */
+  presetVersions: (name: string) => invokeTauri<PresetVersion[]>("preset_versions", { name }),
+  /** Makes an earlier version the current one, as a new version. */
+  presetRestore: (name: string, version: number) => invokeTauri<PresetView>("preset_restore", { name, version }),
   presetSave: (input: PresetInput) => invokeTauri<PresetView>("preset_save", { input }),
   presetRemove: (name: string) => invokeTauri<void>("preset_remove", { name }),
   /** What running the open project's preset would do: its first steps (online ones only when `online`). */
@@ -767,8 +774,11 @@ export const api = {
   /** Asks the AI provider for chapters from a track's transcript. */
   projectChaptersGenerate: (projectHandle: string, trackId: string) =>
     invokeTauri<OpenedProject>("project_chapters_generate", { projectHandle, trackId }),
-  /** The check before export, of the edit as it is now. */
-  projectCheck: (projectHandle: string) => invokeTauri<CheckReport>("project_check", { projectHandle }),
+  /** The check before export, of the edit as it is now (or of a short, as its export plays it). */
+  projectCheck: (projectHandle: string, shortId?: string) => invokeTauri<CheckReport>("project_check", { projectHandle, shortId }),
+  /** What the graphics' frames show: slower than the check, as it draws them (and waits for their renders). */
+  projectCheckFrames: (projectHandle: string, shortId?: string) =>
+    invokeTauri<CheckFinding[]>("project_check_frames", { projectHandle, shortId }),
   /** Applies the fixes of these findings (or `["all"]`), each as its own undo step. */
   projectCheckFix: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_check_fix", { projectHandle, expectedRevision, ids }),

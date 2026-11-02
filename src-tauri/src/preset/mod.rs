@@ -8,8 +8,13 @@
 //! `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). A project names
 //! one preset (and one for its shorts) and stores only what it changed from it ([`stored`]): a
 //! value the project never changed follows the preset, also when the preset changes later.
+//!
+//! A saved workflow (AUTO-3) is a preset the user approved on a real edit: the same settings,
+//! choices, method and rules, with its exceptions, its checks before export and where it was
+//! approved. Each change to a preset of the user's is a new version that can be restored.
 pub mod settings;
 pub mod store;
+pub mod workflow;
 
 use crate::project::revision::EditDocument;
 use serde::{Deserialize, Serialize};
@@ -75,6 +80,25 @@ pub struct Preset {
     /// The user's own rules for this kind of video (Markdown, `rules.md`).
     #[serde(skip)]
     pub rules: String,
+    /// Which save of it this is; the store counts them (built-ins have none).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub version: u32,
+    /// When this save was made.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub saved_at: String,
+    /// When the usual steps don't apply, one each ("a take under a minute gets no chapters").
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub exceptions: Vec<String>,
+    /// What must hold before export, one each ("the intro is under 20 s").
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<String>,
+    /// The edit the user approved it on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved: Option<workflow::Approved>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// The choices the tutorial method starts from.
@@ -115,6 +139,7 @@ pub fn builtin() -> Vec<Preset> {
             choices: tutorial_choices(),
             method: include_str!("methods/tutorial.md").replace("\r\n", "\n"),
             rules: String::new(),
+            ..Preset::default()
         },
         Preset {
             name: SHORTS.into(),
@@ -134,6 +159,7 @@ pub fn builtin() -> Vec<Preset> {
             })),
             method: include_str!("methods/shorts.md").replace("\r\n", "\n"),
             rules: String::new(),
+            ..Preset::default()
         },
         Preset {
             name: CLIPS.into(),
@@ -152,6 +178,7 @@ pub fn builtin() -> Vec<Preset> {
             })),
             method: include_str!("methods/clips.md").replace("\r\n", "\n"),
             rules: String::new(),
+            ..Preset::default()
         },
     ]
 }
@@ -286,6 +313,7 @@ impl Preset {
         if self.method.len() > 200_000 || self.rules.len() > 100_000 {
             return Err("A preset's method or rules are too long".into());
         }
+        workflow::validate(self)?;
         Ok(())
     }
 
@@ -470,10 +498,13 @@ pub struct PresetView {
     pub method: String,
     pub rules: String,
     pub folder: Option<String>,
+    /// All of it in a few readable lines.
+    pub summary: String,
 }
 
 pub fn view(preset: &Preset) -> PresetView {
     PresetView {
+        summary: workflow::summary(preset),
         name: preset.name.clone(),
         builtin: is_builtin(&preset.name),
         preset: preset.clone(),

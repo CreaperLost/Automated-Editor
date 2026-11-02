@@ -237,3 +237,10 @@ history.
 
 Ask before exporting; on the go, `preset` with this `name` and `part: "export"` gives the
 export steps.
+
+## 10. Keep what worked (ask, once)
+
+When the user is happy with the edit, ask once: "Save this as a workflow for the next tutorial?"
+On a yes: `library` (`kind: preset`, `op: save`, with `saveAs` a name of theirs unless they follow
+their own already), `exceptions` and `checks` in their words from what they corrected or asked
+for here, and `note`: what they approved. Show them the summary it answers. Never save one unasked.

@@ -1,7 +1,10 @@
 //! What a graphic's frames show that a contact sheet can hide: a face partly covered, captions
 //! drawn under a graphic, captions across a short's split line, a graphic that holds still.
 //! Measured from the scene the export draws at the sheet's moments (layers with their pixels),
-//! not judged by a model. Each finding names its moments; what can't be checked says so.
+//! not judged by a model. Each finding names its moments; what can't be checked says so. `run`
+//! answers `frame_render` about one graphic; `findings` is the same look across every graphic,
+//! for the check before export.
+use crate::check::{Finding, Kind, Severity};
 use crate::render::{Layer, LayerRole, Scene};
 
 /// Scenes are measured this wide: enough to place a face and a caption line.
@@ -37,6 +40,15 @@ const WORD_EDGES: usize = 6;
 const WORD_EDGES_NARROW: usize = 4;
 /// Rows of words in a band from which it counts (a stray descender doesn't).
 const WORD_ROWS: usize = 3;
+/// In the check before export: a frame every so often across a graphic, at least and at most
+/// this many, on at most this many graphics (a look at each, not a sheet of it).
+const CHECK_EVERY_US: u64 = 1_500_000;
+const CHECK_MIN_FRAMES: usize = 3;
+const CHECK_MAX_FRAMES: usize = 6;
+const CHECK_MAX_GRAPHICS: usize = 40;
+/// How long the check waits for renders and face tracks before it says what it couldn't look
+/// at: renders take most of a minute each, and whatever finished stays for the next check.
+const CHECK_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
 
 type Rect = (f64, f64, f64, f64);
 
@@ -229,6 +241,284 @@ fn times(moments: &[u64]) -> String {
         .join(", ")
 }
 
+/// What frames showed, by the moments it showed it.
+#[derive(Default)]
+struct Seen {
+    face_hidden: Vec<u64>,
+    face_seen: bool,
+    camera_seen: bool,
+    captions_hidden: Vec<u64>,
+    captions_split: Vec<u64>,
+    unsafe_words: Vec<(u64, Vec<&'static str>)>,
+    signatures: Vec<(u64, Vec<u8>)>,
+}
+
+impl Seen {
+    /// The platform bands words sat under, each once.
+    fn bands(&self) -> Vec<&'static str> {
+        let mut bands: Vec<&'static str> = Vec::new();
+        for band in self.unsafe_words.iter().flat_map(|(_, b)| b) {
+            if !bands.contains(band) {
+                bands.push(band);
+            }
+        }
+        bands
+    }
+}
+
+/// Measures the scenes at `moments`.
+fn look_at(
+    evaluator: &mut crate::export::SceneEvaluator,
+    root: &std::path::Path,
+    document: &crate::project::revision::EditDocument,
+    moments: &[u64],
+) -> Result<Seen, String> {
+    let portrait = crate::style::is_portrait(document);
+    let mut seen = Seen::default();
+    for &at in moments {
+        let scene = evaluator.scene_at(at)?;
+        let canvas = (scene.width as f64) * (scene.height as f64);
+        let whole = (0.0, 0.0, scene.width as f64, scene.height as f64);
+        let overlays: Vec<(usize, &Layer)> = scene
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.role == LayerRole::Overlay
+                    && (l.width as f64 * l.height as f64) >= MIN_OVERLAY_SHARE * canvas
+            })
+            .collect();
+        if let Some((_, largest)) = overlays
+            .iter()
+            .max_by_key(|(_, l)| l.width as u64 * l.height as u64)
+        {
+            seen.signatures.push((at, signature(largest, &scene)));
+        }
+        if portrait {
+            let mut bands: Vec<&'static str> = Vec::new();
+            for (_, overlay) in &overlays {
+                for band in bands_with_words(overlay, &scene) {
+                    if !bands.contains(&band) {
+                        bands.push(band);
+                    }
+                }
+            }
+            if !bands.is_empty() {
+                seen.unsafe_words.push((at, bands));
+            }
+        }
+        seen.camera_seen |= scene.layers.iter().any(|l| l.role == LayerRole::Webcam);
+        if let Some(face) = face_rect(root, document, at, &scene) {
+            seen.face_seen = true;
+            let covered = overlays.iter().any(|(_, o)| {
+                opaque_share(o, whole) < CARD_SHARE && opaque_share(o, face) >= FACE_HIDDEN
+            });
+            if covered {
+                seen.face_hidden.push(at);
+            }
+        }
+        for (ci, caption) in scene
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.role == LayerRole::Caption)
+        {
+            let line = rect_of(caption);
+            // Drawn after the captions, a graphic hides them (a card that replaces the
+            // whole picture hides them on purpose).
+            if overlays.iter().any(|(oi, o)| {
+                *oi > ci
+                    && opaque_share(o, whole) < CARD_SHARE
+                    && opaque_share(o, line) >= CAPTION_HIDDEN
+            }) && !seen.captions_hidden.contains(&at)
+            {
+                seen.captions_hidden.push(at);
+            }
+            if portrait {
+                if let Some(y) = split_line(&scene) {
+                    let slack = scene.height as f64 * 0.01;
+                    if line.1 < y - slack
+                        && line.1 + line.3 > y + slack
+                        && !seen.captions_split.contains(&at)
+                    {
+                        seen.captions_split.push(at);
+                    }
+                }
+            }
+        }
+    }
+    Ok(seen)
+}
+
+/// The moments of a graphic's clip to look at in the check before export.
+fn check_moments(start_us: u64, end_us: u64) -> Vec<u64> {
+    let count = ((end_us.saturating_sub(start_us) / CHECK_EVERY_US) as usize)
+        .clamp(CHECK_MIN_FRAMES, CHECK_MAX_FRAMES);
+    super::storyboard::spread(start_us, end_us, count)
+}
+
+/// The findings of one graphic's frames: only what gets in a viewer's way, as holding still is
+/// often fine and `frame_render` says so when someone is looking at it.
+fn graphic_findings(name: &str, seen: &Seen, out: &mut Vec<Finding>) {
+    let mut add = |kind: Kind, title: String, detail: String, moments: &[u64]| {
+        let (Some(&first), Some(&last)) = (moments.first(), moments.last()) else {
+            return;
+        };
+        let mut finding = Finding::new(kind, Severity::Warning, title, detail);
+        finding.at(first, last);
+        out.push(finding);
+    };
+    add(
+        Kind::GraphicCoversFace,
+        format!("\"{name}\" covers part of the face"),
+        format!(
+            "At {}. Move it beside the face, make that part see-through, or make it a full card.",
+            times(&seen.face_hidden)
+        ),
+        &seen.face_hidden,
+    );
+    add(
+        Kind::GraphicHidesCaptions,
+        format!("\"{name}\" hides the captions"),
+        format!(
+            "At {}. Keep its opaque parts off the caption line, or leave the line clear.",
+            times(&seen.captions_hidden)
+        ),
+        &seen.captions_hidden,
+    );
+    add(
+        Kind::CaptionsCrossSplit,
+        format!("Captions cross the split line under \"{name}\""),
+        format!(
+            "At {}. Move them into one part.",
+            times(&seen.captions_split)
+        ),
+        &seen.captions_split,
+    );
+    let moments: Vec<u64> = seen.unsafe_words.iter().map(|(at, _)| *at).collect();
+    add(
+        Kind::GraphicUnderPlatformUi,
+        format!("\"{name}\" has words under the platform's bars"),
+        format!(
+            "Words or detail sit under {} at {}: Shorts and TikTok draw their own over it there. \
+             Keep them between 8% and 80% of the height, 5% in from the sides and, below the \
+             middle, off the right 12%.",
+            seen.bands().join(", "),
+            times(&moments)
+        ),
+        &moments,
+    );
+}
+
+/// Runs `wait`, setting the flag it is given once `CHECK_MAX_WAIT` has passed.
+fn within_the_wait<T>(wait: impl FnOnce(&std::sync::atomic::AtomicBool) -> T) -> T {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (cancel, done) = (AtomicBool::new(false), AtomicBool::new(false));
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let started = std::time::Instant::now();
+            while !done.load(Ordering::SeqCst) {
+                if started.elapsed() >= CHECK_MAX_WAIT {
+                    cancel.store(true, Ordering::SeqCst);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+        let out = wait(&cancel);
+        done.store(true, Ordering::SeqCst);
+        out
+    })
+}
+
+/// What every graphic's frames show, for the check before export of the video or of `short`.
+/// Renders what isn't rendered yet (export would have to anyway) and waits for face tracks, for
+/// so long; past that it says so rather than hold up whoever asked.
+pub fn findings(
+    state: &crate::commands::AppState,
+    short: Option<&str>,
+) -> Result<Vec<Finding>, String> {
+    let (document, root, _) = super::frames::document(state, short)?;
+    let graphics = |document: &crate::project::revision::EditDocument| -> Vec<(String, u64, u64)> {
+        let mut clips: Vec<(String, u64, u64)> = document
+            .sequence
+            .video_tracks()
+            .filter(|t| !t.hidden)
+            .flat_map(|t| &t.clips)
+            .filter_map(|c| {
+                let asset = document.asset(&c.asset).filter(|a| a.is_graphic())?;
+                Some((asset.name.clone(), c.start_us, c.end_us()))
+            })
+            .collect();
+        clips.sort_by_key(|c| c.1);
+        clips
+    };
+    if graphics(&document).is_empty() {
+        return Ok(Vec::new());
+    }
+    let rendered = within_the_wait(|cancel| {
+        let rendered =
+            super::frames::wait_for_graphics_until(state, short, 0, document.duration_us(), cancel);
+        crate::face::wait_for_tracks(&root, &document, cancel, &mut |_| {});
+        rendered.map_err(|why| {
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                format!(
+                    "Graphics were still rendering after {} minutes. What finished is kept: \
+                     `graphic_render` waits for the rest, then check again.",
+                    CHECK_MAX_WAIT.as_secs() / 60
+                )
+            } else {
+                why
+            }
+        })
+    });
+    rendered?;
+    let mut out = Vec::new();
+    super::frames::with_document_evaluator(state, short, CHECK_WIDTH, |evaluator, document| {
+        let clips = graphics(document);
+        let mut face_unknown = false;
+        for (name, start, end) in clips.iter().take(CHECK_MAX_GRAPHICS) {
+            let seen = look_at(evaluator, &root, document, &check_moments(*start, *end))?;
+            graphic_findings(name, &seen, &mut out);
+            face_unknown |= seen.camera_seen && !seen.face_seen;
+        }
+        // A placeholder isn't the graphic: measuring it would only mislead.
+        if evaluator.drew_placeholder() {
+            out.clear();
+            out.push(Finding::new(
+                Kind::GraphicFramesNotChecked,
+                Severity::Info,
+                "Graphics' frames not checked".into(),
+                "A graphic is still rendering. Check again once it has.".into(),
+            ));
+            return Ok(());
+        }
+        if face_unknown {
+            out.push(Finding::new(
+                Kind::GraphicFramesNotChecked,
+                Severity::Info,
+                "Faces under graphics not checked".into(),
+                "The camera has no face track, so whether a graphic covers the face is unknown."
+                    .into(),
+            ));
+        }
+        if clips.len() > CHECK_MAX_GRAPHICS {
+            out.push(Finding::new(
+                Kind::GraphicFramesNotChecked,
+                Severity::Info,
+                "Not every graphic's frames were checked".into(),
+                format!(
+                    "The first {CHECK_MAX_GRAPHICS} of {} were. `frame_render` with `graphic` \
+                     looks at any other.",
+                    clips.len()
+                ),
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(crate::check::finished(out))
+}
+
 /// The checks of `graphic`'s frames at `moments` (of the edit, or of `short`), as lines for the
 /// agent: findings first, then what wasn't checked.
 pub fn run(
@@ -239,7 +529,6 @@ pub fn run(
 ) -> Result<Vec<String>, String> {
     let (_, root, _) = super::frames::document(state, short)?;
     super::frames::with_document_evaluator(state, short, CHECK_WIDTH, |evaluator, document| {
-        let portrait = crate::style::is_portrait(document);
         let length = document
             .sequence
             .video_tracks()
@@ -248,85 +537,7 @@ pub fn run(
             .map(|c| c.duration_us)
             .max()
             .unwrap_or(0);
-        let mut face_hidden: Vec<u64> = Vec::new();
-        let mut face_seen = false;
-        let mut camera_seen = false;
-        let mut captions_hidden: Vec<u64> = Vec::new();
-        let mut captions_split: Vec<u64> = Vec::new();
-        let mut unsafe_words: Vec<(u64, Vec<&str>)> = Vec::new();
-        let mut signatures: Vec<(u64, Vec<u8>)> = Vec::new();
-        for &at in moments {
-            let scene = evaluator.scene_at(at)?;
-            let canvas = (scene.width as f64) * (scene.height as f64);
-            let whole = (0.0, 0.0, scene.width as f64, scene.height as f64);
-            let overlays: Vec<(usize, &Layer)> = scene
-                .layers
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| {
-                    l.role == LayerRole::Overlay
-                        && (l.width as f64 * l.height as f64) >= MIN_OVERLAY_SHARE * canvas
-                })
-                .collect();
-            if let Some((_, largest)) = overlays
-                .iter()
-                .max_by_key(|(_, l)| l.width as u64 * l.height as u64)
-            {
-                signatures.push((at, signature(largest, &scene)));
-            }
-            if portrait {
-                let mut bands: Vec<&str> = Vec::new();
-                for (_, overlay) in &overlays {
-                    for band in bands_with_words(overlay, &scene) {
-                        if !bands.contains(&band) {
-                            bands.push(band);
-                        }
-                    }
-                }
-                if !bands.is_empty() {
-                    unsafe_words.push((at, bands));
-                }
-            }
-            camera_seen |= scene.layers.iter().any(|l| l.role == LayerRole::Webcam);
-            if let Some(face) = face_rect(&root, document, at, &scene) {
-                face_seen = true;
-                let covered = overlays.iter().any(|(_, o)| {
-                    opaque_share(o, whole) < CARD_SHARE && opaque_share(o, face) >= FACE_HIDDEN
-                });
-                if covered {
-                    face_hidden.push(at);
-                }
-            }
-            for (ci, caption) in scene
-                .layers
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.role == LayerRole::Caption)
-            {
-                let line = rect_of(caption);
-                // Drawn after the captions, a graphic hides them (a card that replaces the
-                // whole picture hides them on purpose).
-                if overlays.iter().any(|(oi, o)| {
-                    *oi > ci
-                        && opaque_share(o, whole) < CARD_SHARE
-                        && opaque_share(o, line) >= CAPTION_HIDDEN
-                }) && !captions_hidden.contains(&at)
-                {
-                    captions_hidden.push(at);
-                }
-                if portrait {
-                    if let Some(y) = split_line(&scene) {
-                        let slack = scene.height as f64 * 0.01;
-                        if line.1 < y - slack
-                            && line.1 + line.3 > y + slack
-                            && !captions_split.contains(&at)
-                        {
-                            captions_split.push(at);
-                        }
-                    }
-                }
-            }
-        }
+        let seen = look_at(evaluator, &root, document, moments)?;
         // A placeholder isn't the graphic: measuring it would only mislead.
         if evaluator.drew_placeholder() {
             return Ok(vec![
@@ -336,46 +547,40 @@ pub fn run(
             ]);
         }
         let mut lines = Vec::new();
-        if !face_hidden.is_empty() {
+        if !seen.face_hidden.is_empty() {
             lines.push(format!(
                 "- The graphic covers part of the face at {}: move it beside the face, make that \
                  part see-through, or make it a full card.",
-                times(&face_hidden)
+                times(&seen.face_hidden)
             ));
         }
-        if !captions_hidden.is_empty() {
+        if !seen.captions_hidden.is_empty() {
             lines.push(format!(
                 "- It hides the captions at {}: keep its opaque parts off the caption line, or \
                  leave the line clear.",
-                times(&captions_hidden)
+                times(&seen.captions_hidden)
             ));
         }
-        if !captions_split.is_empty() {
+        if !seen.captions_split.is_empty() {
             lines.push(format!(
                 "- The captions cross the split line at {}: move them into one part.",
-                times(&captions_split)
+                times(&seen.captions_split)
             ));
         }
-        if !unsafe_words.is_empty() {
-            let mut bands: Vec<&str> = Vec::new();
-            for band in unsafe_words.iter().flat_map(|(_, b)| b) {
-                if !bands.contains(band) {
-                    bands.push(band);
-                }
-            }
-            let moments: Vec<u64> = unsafe_words.iter().map(|(at, _)| *at).collect();
+        if !seen.unsafe_words.is_empty() {
+            let moments: Vec<u64> = seen.unsafe_words.iter().map(|(at, _)| *at).collect();
             lines.push(format!(
                 "- Words or detail sit under {} at {}: Shorts and TikTok draw their own over it \
                  there. Keep them between 8% and 80% of the height, 5% in from the sides and, \
                  below the middle, off the right 12%.",
-                bands.join(", "),
+                seen.bands().join(", "),
                 times(&moments)
             ));
         }
         // The longest stretch of moments in a row where it doesn't change.
         let mut still_from: Option<u64> = None;
         let mut longest = (0u64, 0u64);
-        for pair in signatures.windows(2) {
+        for pair in seen.signatures.windows(2) {
             let ((a, sa), (b, sb)) = (&pair[0], &pair[1]);
             if changed(sa, sb) < STILL_CHANGE {
                 let from = *still_from.get_or_insert(*a);
@@ -405,7 +610,7 @@ pub fn run(
             all
         };
         // Reading time is `check`'s (from the words and the length, no frames needed).
-        if camera_seen && !face_seen {
+        if seen.camera_seen && !seen.face_seen {
             found.push("Not checked: the face (the camera has no face track yet).".to_string());
         }
         Ok(found)
@@ -423,6 +628,42 @@ mod tests {
             pixel[3] = alpha;
         }
         Layer::placed(frame, rect.0, rect.1, rect.2, rect.3).with_role(role)
+    }
+
+    #[test]
+    fn findings_name_the_graphic_and_where_and_only_what_gets_in_the_way() {
+        let mut out = Vec::new();
+        graphic_findings("Clean", &Seen::default(), &mut out);
+        assert!(out.is_empty());
+        let seen = Seen {
+            face_hidden: vec![2_000_000, 3_500_000],
+            unsafe_words: vec![(3_500_000, vec!["the top bar"])],
+            // Holding still is `frame_render`'s to mention, not a problem before export.
+            signatures: vec![(0, vec![0; 4]), (9_000_000, vec![0; 4])],
+            ..Seen::default()
+        };
+        graphic_findings("Prize pool", &seen, &mut out);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].kind, Kind::GraphicCoversFace);
+        assert_eq!(out[0].severity, Severity::Warning);
+        assert!(out[0].title.contains("Prize pool"), "{}", out[0].title);
+        assert_eq!(
+            (out[0].start_us, out[0].end_us),
+            (Some(2_000_000), Some(3_500_000))
+        );
+        assert_eq!(out[1].kind, Kind::GraphicUnderPlatformUi);
+        assert!(out[1].detail.contains("the top bar"), "{}", out[1].detail);
+        // With ids and in order, ready for the report.
+        let done = crate::check::finished(out);
+        assert_eq!(done[0].id, "graphic_covers_face-2000");
+        assert_eq!(done[1].id, "graphic_under_platform_ui-3500");
+    }
+
+    #[test]
+    fn a_graphic_gets_a_few_frames_however_long_it_plays() {
+        assert_eq!(check_moments(1_000_000, 2_000_000).len(), CHECK_MIN_FRAMES);
+        assert_eq!(check_moments(0, 6_000_000).len(), 4);
+        assert_eq!(check_moments(0, 600_000_000).len(), CHECK_MAX_FRAMES);
     }
 
     #[test]
