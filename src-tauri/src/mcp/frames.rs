@@ -306,7 +306,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (host, _) = crate::mcp::tests_support::lesson(dir.path());
         let path = sample_clip(&host.state, None, 1_000_000, 2_500_000, "Step: one/two").unwrap();
-        assert!(path.starts_with(std::env::temp_dir().join("AeroEdits samples")));
+        // The export names its file by the folder's real path, which the temporary folder's
+        // may not be (a short name on Windows, a link on macOS).
+        let folder = dunce::canonicalize(std::env::temp_dir().join("AeroEdits samples")).unwrap();
+        assert!(path.starts_with(folder));
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         assert!(
             name.starts_with("Step_ one_two ") && name.ends_with(".mp4"),
