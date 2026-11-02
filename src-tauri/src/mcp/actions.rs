@@ -5652,14 +5652,6 @@ pub struct CaptionsArgs {
     pub to_s: Option<f64>,
 }
 
-/// A word as it reads, for matching what an agent wrote: letters and digits, lower case.
-fn plain_word(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
 fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: CaptionsArgs = params(args)?;
     let open = opened(ctx)?;
@@ -5765,11 +5757,11 @@ fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         else {
             return Ok(None);
         };
-        let wanted = plain_word(word);
+        let wanted = crate::transcript::vocabulary::letters(word);
         let index = cue
             .text
             .split(' ')
-            .position(|w| plain_word(w) == wanted)
+            .position(|w| crate::transcript::vocabulary::letters(w) == wanted)
             .filter(|i| *i < cue.word_ids.len())
             .ok_or_else(|| {
                 format!(
@@ -5913,15 +5905,6 @@ mod tests {
             "<p>hi</p>"
         );
         assert!(crate::graphics::read_file(dir.path(), "../outside.html").is_err());
-    }
-
-    #[test]
-    #[ignore]
-    fn dump_graphics_answer() {
-        let host = crate::mcp::tests_support::BareHost::default();
-        let ctx = Ctx::new(&host, "claude-code", false);
-        let out = call(&ctx, "graphics", json!({})).unwrap();
-        eprintln!("LEN {}\n{out}", out.len());
     }
 
     #[test]

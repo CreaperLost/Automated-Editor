@@ -21,13 +21,7 @@ import {
 import { Button, IconButton, Notice } from "../ui";
 import type { Short } from "../../lib/types";
 import { TakeForm } from "./TakeForm";
-
-function formatTime(us: number): string {
-  const total = Math.max(0, us) / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
+import { formatTime } from "../../lib/format";
 
 /// A gathered clip's pieces, in the order they play: each can move up or down or go (its
 /// stretch of the clip's own timeline, own cuts and graphics included, goes with it).

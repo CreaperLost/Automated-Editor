@@ -953,11 +953,7 @@ impl History {
         }
         ensure_dirs(root)?;
         let path = safe_path(root, LOG_FILE)?;
-        let dir = safe_path(root, HISTORY_DIR)?;
-        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-        temp.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-        temp.as_file().sync_all().map_err(|e| e.to_string())?;
-        temp.persist(path).map_err(|e| e.to_string())?;
+        crate::files::write_durable(&path, text.as_bytes())?;
         Ok(())
     }
 }
@@ -1020,8 +1016,12 @@ fn clean_name(name: &str) -> String {
 /// The largest graphic file a checkpoint keeps (a graphic's whole source is capped at this).
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
+fn is_hash(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn file_path(root: &Path, hash: &str) -> Result<std::path::PathBuf, String> {
-    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_hash(hash) {
         return Err("Invalid kept file".into());
     }
     safe_path(root, &format!("{FILES_DIR}/{hash}.gz"))
@@ -1039,16 +1039,18 @@ fn write_packed(root: &Path, dir: &str, path: &Path, bytes: &[u8]) -> Result<u64
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(bytes).map_err(|e| e.to_string())?;
     let packed = encoder.finish().map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    temp.write_all(&packed).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(path).map_err(|e| e.to_string())?;
+    crate::files::write_durable(path, &packed)?;
     Ok(packed.len() as u64)
 }
 
 fn file_sizes(root: &Path) -> HashMap<String, u64> {
+    hashed_sizes(root, FILES_DIR, ".gz")
+}
+
+/// The size of each file named by a hash in folder `dir`.
+fn hashed_sizes(root: &Path, dir: &str, suffix: &str) -> HashMap<String, u64> {
     let mut sizes = HashMap::new();
-    let Ok(dir) = safe_path(root, FILES_DIR) else {
+    let Ok(dir) = safe_path(root, dir) else {
         return sizes;
     };
     let Ok(entries) = fs::read_dir(dir) else {
@@ -1056,11 +1058,11 @@ fn file_sizes(root: &Path) -> HashMap<String, u64> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(hash) = name.to_str().and_then(|n| n.strip_suffix(".gz")) else {
+        let Some(hash) = name.to_str().and_then(|n| n.strip_suffix(suffix)) else {
             continue;
         };
         if let Ok(meta) = entry.metadata() {
-            if meta.is_file() && file_path(root, hash).is_ok() {
+            if meta.is_file() && is_hash(hash) {
                 sizes.insert(hash.to_string(), meta.len());
             }
         }
@@ -1078,7 +1080,7 @@ fn ensure_dirs(root: &Path) -> Result<(), String> {
 }
 
 fn state_path(root: &Path, hash: &str) -> Result<std::path::PathBuf, String> {
-    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_hash(hash) {
         return Err("Invalid history state".into());
     }
     safe_path(root, &format!("{STATES_DIR}/{hash}.json.gz"))
@@ -1113,11 +1115,7 @@ fn store_state(
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&json).map_err(|e| e.to_string())?;
     let packed = encoder.finish().map_err(|e| e.to_string())?;
-    let dir = safe_path(root, STATES_DIR)?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    temp.write_all(&packed).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
+    crate::files::write_durable(&path, &packed)?;
     sizes.insert(hash.clone(), packed.len() as u64);
     Ok(hash)
 }
@@ -1144,25 +1142,7 @@ fn load_state(root: &Path, hash: &str) -> Result<EditDocument, String> {
 }
 
 fn state_sizes(root: &Path) -> HashMap<String, u64> {
-    let mut sizes = HashMap::new();
-    let Ok(dir) = safe_path(root, STATES_DIR) else {
-        return sizes;
-    };
-    let Ok(entries) = fs::read_dir(dir) else {
-        return sizes;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(hash) = name.to_str().and_then(|n| n.strip_suffix(".json.gz")) else {
-            continue;
-        };
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() && state_path(root, hash).is_ok() {
-                sizes.insert(hash.to_string(), meta.len());
-            }
-        }
-    }
-    sizes
+    hashed_sizes(root, STATES_DIR, ".json.gz")
 }
 
 fn line_text(line: &Line) -> Result<String, String> {

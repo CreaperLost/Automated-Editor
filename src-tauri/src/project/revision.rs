@@ -12,7 +12,7 @@ use crate::zoom::{
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 pub use super::audio::AudioSettings;
@@ -427,10 +427,7 @@ pub fn save_edit_document(root: &Path, document: &EditDocument) -> Result<(), St
     if serialized.len() as u64 > MAX_EDIT_BYTES {
         return Err("Edit document exceeds size limit".into());
     }
-    let mut temp = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
-    temp.write_all(&serialized).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
+    crate::files::write_durable(&path, &serialized)?;
     // The document is committed after the atomic rename. Directory sync is best-effort:
     // reporting a failed edit after publication would leave memory and disk divergent.
     if let Ok(directory) = fs::File::open(root) {
@@ -852,7 +849,7 @@ impl EditHistory {
         let next_ranges = if unmute {
             crate::transcript::pauses::subtract_ranges(&current, &changed)
         } else {
-            crate::transcript::pauses::merge_ranges([current, changed].concat())
+            crate::ranges::merge([current, changed].concat())
         };
         if next_ranges.len() > MAX_NOISE_MUTES {
             return Err(format!("Mute at most {MAX_NOISE_MUTES} moments of a sound"));

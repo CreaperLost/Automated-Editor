@@ -159,35 +159,12 @@ impl RecordingActivity {
 
 /// The activity of the recording in `folder`, read once while its telemetry is unchanged.
 pub fn recording_activity(folder: &Path) -> Arc<RecordingActivity> {
-    use std::sync::{Mutex, OnceLock};
-    type Cache = Mutex<
-        std::collections::HashMap<
-            std::path::PathBuf,
-            ([Option<std::time::SystemTime>; 2], Arc<RecordingActivity>),
-        >,
-    >;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let modified = ["events.jsonl", "keys.jsonl"].map(|name| {
-        std::fs::metadata(folder.join("telemetry").join(name))
-            .and_then(|m| m.modified())
-            .ok()
-    });
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((stamp, activity)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
-        if *stamp == modified {
-            return activity.clone();
-        }
-    }
-    let activity = Arc::new(
+    static CACHE: super::stream::FolderCache<RecordingActivity> = std::sync::OnceLock::new();
+    super::stream::read_once(&CACHE, folder, &["events.jsonl", "keys.jsonl"], || {
         super::reader::read_telemetry(folder)
             .map(|stream| RecordingActivity::from_stream(&stream))
-            .unwrap_or_default(),
-    );
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(folder.to_path_buf(), (modified, activity.clone()));
-    activity
+            .unwrap_or_default()
+    })
 }
 
 #[cfg(test)]

@@ -707,14 +707,6 @@ pub fn clip_role(assets: &[Asset], track: &Track, clip: &Clip) -> Option<Role> {
     )
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 fn valid_stream_id(id: &str) -> bool {
     crate::project::reader::is_safe_track_id(id) && id.len() <= 64
 }
@@ -726,7 +718,7 @@ pub fn validate_assets(assets: &[Asset]) -> Result<(), String> {
     }
     let mut ids = std::collections::BTreeSet::new();
     for asset in assets {
-        if !valid_id(&asset.id) || !ids.insert(asset.id.as_str()) {
+        if !crate::ids::is_plain_id(&asset.id) || !ids.insert(asset.id.as_str()) {
             return Err("Invalid media id".into());
         }
         if asset.path.is_empty()
@@ -789,7 +781,7 @@ pub fn validate_sequence(sequence: &Sequence, assets: &[Asset]) -> Result<(), St
     let mut clip_ids = std::collections::BTreeSet::new();
     let mut count = 0;
     for track in &sequence.tracks {
-        if !valid_id(&track.id) || !track_ids.insert(track.id.as_str()) {
+        if !crate::ids::is_plain_id(&track.id) || !track_ids.insert(track.id.as_str()) {
             return Err("Invalid track id".into());
         }
         if track.name.chars().count() > 40 || track.name.chars().any(char::is_control) {
@@ -808,10 +800,14 @@ pub fn validate_sequence(sequence: &Sequence, assets: &[Asset]) -> Result<(), St
         }
         let mut end = 0;
         for clip in &track.clips {
-            if !valid_id(&clip.id) || !clip_ids.insert(clip.id.as_str()) {
+            if !crate::ids::is_plain_id(&clip.id) || !clip_ids.insert(clip.id.as_str()) {
                 return Err("Invalid clip id".into());
             }
-            if clip.link.as_deref().is_some_and(|l| !valid_id(l)) {
+            if clip
+                .link
+                .as_deref()
+                .is_some_and(|l| !crate::ids::is_plain_id(l))
+            {
                 return Err("Invalid link id".into());
             }
             if clip.duration_us == 0 {

@@ -45,34 +45,29 @@ impl TimelineMapper {
     /// Maps an edited timeline position to source time for a decodable sample.
     /// The exclusive edited duration is not a sample and returns `None`.
     pub fn edited_to_source_us(&self, edited_us: u64) -> Option<u64> {
-        let mut accumulated_us: u64 = 0;
+        let (interval, offset_us) = self.interval_at(edited_us)?;
+        interval
+            .is_recording()
+            .then(|| interval.source_at(offset_us))
+    }
 
+    /// The interval playing at `edited_us`, and how far into it that is.
+    fn interval_at(&self, edited_us: u64) -> Option<(&SourceInterval, u64)> {
+        let mut accumulated_us: u64 = 0;
         for interval in &self.intervals {
             let dur = interval.duration_us();
             if edited_us < accumulated_us + dur {
-                if !interval.is_recording() {
-                    return None;
-                }
-                return Some(interval.source_at(edited_us - accumulated_us));
+                return Some((interval, edited_us - accumulated_us));
             }
             accumulated_us += dur;
         }
-
         None
     }
 
     /// The imported media playing at `edited_us`: asset id and the time within it.
     pub fn media_at(&self, edited_us: u64) -> Option<(&str, u64)> {
-        let mut accumulated_us: u64 = 0;
-        for interval in &self.intervals {
-            let dur = interval.duration_us();
-            if edited_us < accumulated_us + dur {
-                let media = interval.media.as_deref()?;
-                return Some((media, interval.source_at(edited_us - accumulated_us)));
-            }
-            accumulated_us += dur;
-        }
-        None
+        let (interval, offset_us) = self.interval_at(edited_us)?;
+        Some((interval.media.as_deref()?, interval.source_at(offset_us)))
     }
 
     /// Maps a half-open edited range onto source ranges, in edited order (not necessarily

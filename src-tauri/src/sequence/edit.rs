@@ -16,6 +16,7 @@ use super::{
     source_len, timeline_len, validate_sequence, Asset, Clip, Fit, Role, Sequence, SourceRange,
     StreamKind, Track, TrackKind, IMAGE_CLIP_US, MAX_SPEED, MAX_TRACKS, MIN_PIECE_US, MIN_SPEED,
 };
+use crate::ranges::merge;
 use crate::zoom::EditedRange;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -282,27 +283,6 @@ pub fn graphic_spans(sequence: &Sequence, assets: &[Asset]) -> Vec<(u64, u64)> {
     )
 }
 
-/// `ranges` less the time `spans` (sorted, disjoint) cover.
-pub fn outside(ranges: &[(u64, u64)], spans: &[(u64, u64)]) -> Vec<(u64, u64)> {
-    let mut out = Vec::new();
-    for &(a, b) in ranges {
-        let mut from = a;
-        for &(s, e) in spans {
-            if e <= from || s >= b {
-                continue;
-            }
-            if s > from {
-                out.push((from, s));
-            }
-            from = from.max(e);
-        }
-        if from < b {
-            out.push((from, b));
-        }
-    }
-    out
-}
-
 /// A cut that reaches into a graphic keeps only what lies outside every graphic.
 fn around_graphics(
     sequence: &Sequence,
@@ -314,7 +294,7 @@ fn around_graphics(
     };
     let spans = graphic_spans(sequence, assets);
     let asked: Vec<(u64, u64)> = ranges.iter().map(|r| (r.start_us, r.end_us)).collect();
-    let kept = outside(&asked, &spans);
+    let kept = crate::ranges::subtract(&asked, &spans);
     if kept == asked {
         return Ok(None);
     }
@@ -645,7 +625,7 @@ impl<'a> Editor<'a> {
         let mut free = merge(ranges.to_vec());
         for t in self.unlocked() {
             for clip in &self.seq.tracks[t].clips {
-                free = subtract(&free, clip.start_us, clip.end_us());
+                free = crate::ranges::subtract(&free, &[(clip.start_us, clip.end_us())]);
             }
         }
         // Nothing after the last clip needs closing.
@@ -1663,37 +1643,6 @@ fn after_closing(t: u64, closed: &[(u64, u64)]) -> u64 {
     t - shift
 }
 
-/// Sorts and merges overlapping or touching ranges.
-fn merge(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
-    ranges.retain(|(a, b)| b > a);
-    ranges.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::new();
-    for (a, b) in ranges {
-        match out.last_mut() {
-            Some(last) if a <= last.1 => last.1 = last.1.max(b),
-            _ => out.push((a, b)),
-        }
-    }
-    out
-}
-
-fn subtract(ranges: &[(u64, u64)], a: u64, b: u64) -> Vec<(u64, u64)> {
-    let mut out = Vec::new();
-    for &(x, y) in ranges {
-        if b <= x || a >= y {
-            out.push((x, y));
-            continue;
-        }
-        if x < a {
-            out.push((x, a));
-        }
-        if b < y {
-            out.push((b, y));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1882,16 +1831,6 @@ mod tests {
             },
         );
         assert_eq!(longer.clip(&graphic).unwrap().1.duration_us, 3 * S);
-    }
-
-    #[test]
-    fn outside_keeps_what_no_span_covers() {
-        assert_eq!(
-            outside(&[(0, 10)], &[(2, 4), (6, 7)]),
-            vec![(0, 2), (4, 6), (7, 10)]
-        );
-        assert_eq!(outside(&[(3, 4)], &[(2, 5)]), vec![]);
-        assert_eq!(outside(&[(0, 2)], &[(5, 6)]), vec![(0, 2)]);
     }
 
     #[test]

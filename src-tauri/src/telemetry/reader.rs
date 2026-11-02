@@ -149,33 +149,39 @@ fn insert_uncertainty_gap(stream: &mut TelemetryStream, reason: &str) {
 }
 
 fn read_geometry_file(root: &Path, stream: &mut TelemetryStream) -> Result<(), String> {
-    let path = match safe_path(root, "telemetry/geometry.jsonl") {
-        Ok(path) => path,
-        Err(error) => {
-            push_diag(stream, format!("Telemetry geometry path rejected: {error}"));
-            return Ok(());
-        }
-    };
-    if !path.exists() {
-        push_diag(stream, "No telemetry geometry file".into());
-        return Ok(());
-    }
-    parse_jsonl(&path, GEOMETRY_LIMIT, stream, parse_geometry_line)
+    read_file(
+        root,
+        "geometry",
+        GEOMETRY_LIMIT,
+        stream,
+        parse_geometry_line,
+    )
 }
 
 fn read_events_file(root: &Path, stream: &mut TelemetryStream) -> Result<(), String> {
-    let path = match safe_path(root, "telemetry/events.jsonl") {
+    read_file(root, "events", EVENTS_LIMIT, stream, parse_event_line)
+}
+
+/// Reads `telemetry/<name>.jsonl`; a file that is missing or refused is noted in `stream`.
+fn read_file(
+    root: &Path,
+    name: &str,
+    limit: u64,
+    stream: &mut TelemetryStream,
+    on_line: impl FnMut(&[u8], usize, &mut TelemetryStream) -> Result<(), String>,
+) -> Result<(), String> {
+    let path = match safe_path(root, &format!("telemetry/{name}.jsonl")) {
         Ok(path) => path,
         Err(error) => {
-            push_diag(stream, format!("Telemetry events path rejected: {error}"));
+            push_diag(stream, format!("Telemetry {name} path rejected: {error}"));
             return Ok(());
         }
     };
     if !path.exists() {
-        push_diag(stream, "No telemetry events file".into());
+        push_diag(stream, format!("No telemetry {name} file"));
         return Ok(());
     }
-    parse_jsonl(&path, EVENTS_LIMIT, stream, parse_event_line)
+    parse_jsonl(&path, limit, stream, on_line)
 }
 
 fn parse_jsonl(

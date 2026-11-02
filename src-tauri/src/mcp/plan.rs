@@ -67,11 +67,7 @@ pub fn load(root: &Path) -> Result<Option<String>, String> {
 }
 
 fn save(root: &Path, plan: &str) -> Result<(), String> {
-    let mut temp = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, plan.as_bytes()).map_err(|e| e.to_string())?;
-    temp.persist(root.join(PLAN_FILE))
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_atomic(&root.join(PLAN_FILE), plan.as_bytes())
 }
 
 /// `plan` with each `old_text` replaced once by its `new_text`, in order.

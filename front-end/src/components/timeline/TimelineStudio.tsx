@@ -34,7 +34,7 @@ import { Badge, Button, IconButton, cn } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
 import { useTimeline } from "../../hooks/useTimeline";
-import { ClipWaveform } from "../waveform/ClipWaveform";
+import { ClipWaveform, RunWaveform } from "../waveform/ClipWaveform";
 import { MEDIA_DRAG_TYPE, currentMediaDrag } from "../media/MediaPanel";
 import { placedChapters } from "../chapters/ChaptersPanel";
 import { api } from "../../lib/ipc";
@@ -55,6 +55,10 @@ import {
   formatRulerLabel,
   formatSpeed,
   rulerStepUs,
+  groupDenseClips,
+  groupDenseMarks,
+  runClipAt,
+  runMutes,
   sequenceEdges,
   snapStart,
   streamKey,
@@ -436,6 +440,100 @@ const ClipBlock = React.memo(function ClipBlock({
   );
 });
 
+const sameClips = (a: Clip[], b: Clip[]) => a === b || (a.length === b.length && a.every((clip, i) => clip === b[i]));
+
+/**
+ * A stretch of clips too thin to see one by one, drawn as one block. A press or click acts on
+ * the clip under the pointer, as it would on that clip's own block; zooming in shows them apart.
+ */
+const ClipRun = React.memo(
+  function ClipRun({
+    run,
+    trackId,
+    trackNo,
+    audio,
+    locked,
+    speech,
+    spanUs,
+    pxPerUs,
+    waveform,
+    mutes,
+    actions,
+  }: {
+    run: Clip[];
+    trackId: string;
+    trackNo: string;
+    audio: boolean;
+    locked: boolean;
+    speech: boolean;
+    spanUs: number;
+    pxPerUs: number;
+    waveform?: WaveformOverview;
+    mutes?: SourceSpan[];
+    actions: React.MutableRefObject<ClipActions>;
+  }) {
+    const startUs = run[0].startUs;
+    const widthUs = clipEnd(run[run.length - 1]) - startUs;
+    const clipUnder = (event: React.MouseEvent<HTMLElement>) => {
+      const box = event.currentTarget.getBoundingClientRect();
+      return runClipAt(run, startUs + (box.width > 0 ? ((event.clientX - box.left) / box.width) * widthUs : 0));
+    };
+    const marks = useMemo(() => (mutes ? runMutes(run, mutes, pxPerUs) : []), [run, mutes, pxPerUs]);
+    return (
+      <div
+        role="button"
+        data-clip
+        aria-label={`${run.length} clips on ${trackNo}`}
+        className={cn(
+          "absolute top-1 bottom-1 rounded-control overflow-hidden",
+          locked ? "cursor-not-allowed" : "cursor-grab",
+          audio ? "bg-audio/20 hover:bg-audio/30" : "bg-video/30 hover:bg-video/40",
+        )}
+        style={{ left: `${(startUs / spanUs) * 100}%`, width: `${(widthUs / spanUs) * 100}%` }}
+        title={`${run.length} clips here, too thin to show apart: ${(widthUs / 1e6).toFixed(1)}s. Click or drag acts on the one under the pointer; zoom in to see them.`}
+        onClick={(event) => {
+          event.stopPropagation();
+          const suppress = actions.current.suppressClick;
+          if (suppress.current) {
+            suppress.current = false;
+            return;
+          }
+          actions.current.pick(clipUnder(event), event);
+        }}
+        onPointerDown={(event) => actions.current.begin(event, trackId, clipUnder(event), "move")}
+        onPointerMove={(event) => actions.current.move(event)}
+        onPointerUp={(event) => actions.current.end(event)}
+        onPointerCancel={() => actions.current.cancel()}
+      >
+        {waveform && (
+          <div className="absolute inset-0 pointer-events-none">
+            <RunWaveform overview={waveform} run={run} speech={speech} />
+          </div>
+        )}
+        {marks.map((mark) => (
+          <div
+            key={mark.startUs}
+            aria-hidden
+            className="absolute inset-y-0 bg-danger/60 pointer-events-none"
+            style={{ left: `${((mark.startUs - startUs) / widthUs) * 100}%`, width: `max(1px, ${((mark.endUs - mark.startUs) / widthUs) * 100}%)` }}
+          />
+        ))}
+      </div>
+    );
+  },
+  (a, b) =>
+    sameClips(a.run, b.run) &&
+    a.trackId === b.trackId &&
+    a.trackNo === b.trackNo &&
+    a.audio === b.audio &&
+    a.locked === b.locked &&
+    a.speech === b.speech &&
+    a.spanUs === b.spanUs &&
+    a.pxPerUs === b.pxPerUs &&
+    a.waveform === b.waveform &&
+    a.mutes === b.mutes,
+);
+
 /** The cuts on one track, each a mark whose cap puts the cut time back. Memoized: the marks
  * redraw only when the cuts, the scale or the busy state change. */
 const CutMarks = React.memo(function CutMarks({
@@ -451,12 +549,23 @@ const CutMarks = React.memo(function CutMarks({
   editing: boolean;
   restore: React.MutableRefObject<(clipId: string) => void>;
 }) {
+  const marks = groupDenseMarks(joins, pxPerUs);
   return (
     <>
-      {joins.map((join, index) => {
+      {marks.map((join, index) => {
         const left = `${(join.atUs / spanUs) * 100}%`;
-        const before = join.atUs - (joins[index - 1]?.atUs ?? 0);
-        const after = (joins[index + 1]?.atUs ?? spanUs) - join.atUs;
+        if ("toUs" in join) {
+          return (
+            <span
+              key={`joins-${join.atUs}`}
+              className="absolute top-0 bottom-0 bg-danger/70 z-10 pointer-events-none"
+              style={{ left, width: `max(1px, ${((join.toUs - join.atUs) / spanUs) * 100}%)` }}
+            />
+          );
+        }
+        const previous = marks[index - 1];
+        const before = join.atUs - (previous ? ("toUs" in previous ? previous.toUs : previous.atUs) : 0);
+        const after = (marks[index + 1]?.atUs ?? spanUs) - join.atUs;
         const capWidth = Math.min(14, Math.max(0, Math.min(before, after) * pxPerUs - 2));
         return (
           <React.Fragment key={`join-${join.clipId}`}>
@@ -1685,7 +1794,26 @@ export const TimelineStudio: React.FC = () => {
         className={cn("relative rounded-md bg-studio-850/30", (track.hidden || track.muted) && "opacity-50", track.locked && "bg-[repeating-linear-gradient(135deg,transparent_0_6px,rgb(255_255_255/0.025)_6px_12px)]")}
         style={{ height: lanes.height(audio ? "lane:audio" : "lane:video") }}
       >
-        {inView(track.clips).map(({ clip, index }) => clipBlock(track, trackNo, clip, index))}
+        {groupDenseClips(inView(track.clips), pxPerUs, (clip) => selected.has(clip.id) || !!clipInfo.get(clip.id)?.missing).map((drawn) =>
+          drawn.run ? (
+            <ClipRun
+              key={`run-${drawn.run[0].id}`}
+              run={drawn.run}
+              trackId={track.id}
+              trackNo={trackNo}
+              audio={audio}
+              locked={!!track.locked}
+              speech={clipInfo.get(drawn.run[0].id)?.role === "mic"}
+              spanUs={spanUs}
+              pxPerUs={pxPerUs}
+              waveform={audio ? waveforms[streamKey(drawn.run[0].asset, drawn.run[0].stream)] : undefined}
+              mutes={audio ? noiseMutes[streamKey(drawn.run[0].asset, drawn.run[0].stream)] : undefined}
+              actions={clipActions}
+            />
+          ) : (
+            clipBlock(track, trackNo, drawn.clip, drawn.index)
+          ),
+        )}
         {/* Cut time between two pieces of one stretch: click to put it back */}
         {trackJoins && trackJoins.length > 0 && (
           <CutMarks joins={joinsInView(trackJoins)} spanUs={spanUs} pxPerUs={pxPerUs} editing={editing} restore={restoreCut} />

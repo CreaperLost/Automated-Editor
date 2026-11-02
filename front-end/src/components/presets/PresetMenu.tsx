@@ -3,8 +3,9 @@ import { BookOpen, Check, Circle, AlertCircle, Copy, FolderOpen, Loader2, Pencil
 import { api } from "../../lib/ipc";
 import type { OpenedProject, PresetRunEvent, PresetRunPlan, PresetView } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
-import { Button, Menu, MenuButton, type MenuEntry } from "../ui";
+import { Button, Menu, MenuButton, type MenuEntry, DialogBackdrop } from "../ui";
 import { presetsChanged, usePresets } from "./usePresets";
+import { listenTo } from "../../lib/windowSync";
 
 /// The project's preset: what the app and the agent do for this kind of video. Following
 /// another is one undo step (what was changed here stays changed); the project's settings can
@@ -209,12 +210,7 @@ const Dialog: React.FC<{ label: string; wide?: boolean; onClose: () => void; chi
   children,
   onSubmit,
 }) => (
-  <div
-    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-    onPointerDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}
-  >
+  <DialogBackdrop onClose={onClose} selectable>
     <form
       role="dialog"
       aria-modal="true"
@@ -230,7 +226,7 @@ const Dialog: React.FC<{ label: string; wide?: boolean; onClose: () => void; chi
     >
       {children}
     </form>
-  </div>
+  </DialogBackdrop>
 );
 
 const NameDialog: React.FC<{
@@ -374,38 +370,27 @@ const RunDialog: React.FC<{ onClose: () => void; onError: (message: string) => v
   }, [online, phase, onError]);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let live = true;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<PresetRunEvent>("aeroedits-preset-run", ({ payload: event }) => {
-        if (event.kind === "finished") {
-          setPhase("finished");
-          return;
-        }
-        setSteps((now) =>
-          now.map((step, i): StepState => {
-            if (i !== event.index) return step;
-            switch (event.kind) {
-              case "started":
-                return { status: "running" };
-              case "progress":
-                return { status: "running", progress: `${Math.round(event.fraction * 100)} % ${event.message}` };
-              case "done":
-                return { status: "done", line: event.line };
-              case "stopped":
-                return { status: "stopped", line: event.line };
-            }
-          }),
-        );
-      }).then((fn) => {
-        if (live) unlisten = fn;
-        else fn();
-      }),
-    );
-    return () => {
-      live = false;
-      unlisten?.();
-    };
+    return listenTo<PresetRunEvent>("aeroedits-preset-run", (event) => {
+      if (event.kind === "finished") {
+        setPhase("finished");
+        return;
+      }
+      setSteps((now) =>
+        now.map((step, i): StepState => {
+          if (i !== event.index) return step;
+          switch (event.kind) {
+            case "started":
+              return { status: "running" };
+            case "progress":
+              return { status: "running", progress: `${Math.round(event.fraction * 100)} % ${event.message}` };
+            case "done":
+              return { status: "done", line: event.line };
+            case "stopped":
+              return { status: "stopped", line: event.line };
+          }
+        }),
+      );
+    });
   }, []);
 
   const start = () => {

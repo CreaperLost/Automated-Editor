@@ -6,7 +6,7 @@ use super::RetainedInterval;
 use crate::timeline::TimelineMapper;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub const ANALYSIS_VERSION: u32 = 3;
@@ -787,7 +787,6 @@ fn write_cache(
             return Err("Cache directory must not be a symlink".into());
         }
     }
-    let parent = path.parent().ok_or("Cache path has no parent")?;
     let mut header = [0u8; CACHE_HEADER_SIZE];
     header[0..4].copy_from_slice(b"ASWF");
     header[4..8].copy_from_slice(&ANALYSIS_VERSION.to_le_bytes());
@@ -806,11 +805,7 @@ fn write_cache(
     }
     let checksum = fnv1a64_continue(fnv1a64(&header[..56]), &body[CACHE_HEADER_SIZE..]);
     body[56..64].copy_from_slice(&checksum.to_le_bytes());
-    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    temp.write_all(&body).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_durable(path, &body)
 }
 
 #[cfg(test)]

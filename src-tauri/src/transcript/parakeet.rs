@@ -179,6 +179,15 @@ pub const PLAN: ChunkPlan = ChunkPlan {
 };
 
 /// The default model's folder. Other models' folders sit beside it.
+/// The folder of another model, beside this one's.
+pub fn sibling_model_dir(name: &str) -> PathBuf {
+    default_model_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(name)
+}
+
 pub fn default_model_dir() -> PathBuf {
     ParakeetModel::default().default_dir()
 }

@@ -1,12 +1,5 @@
 import type { TranscriptViewWord } from "../../lib/types";
 
-export function formatTime(us: number): string {
-  const total = Math.max(0, us) / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
-
 /** A sentence of the video as it plays: edited times. */
 export interface VideoLine {
   startUs: number;

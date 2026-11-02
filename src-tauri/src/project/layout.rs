@@ -3,7 +3,7 @@
 use super::reader::{open_regular, safe_path};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 pub const MAX_PADDING_PX: u32 = 80;
@@ -349,10 +349,7 @@ pub fn ingest_wallpaper(root: &Path, source: &Path) -> Result<String, String> {
     if dest.exists() {
         return Err("Wallpaper asset already exists".into());
     }
-    let mut temp = tempfile::NamedTempFile::new_in(&assets).map_err(|e| e.to_string())?;
-    temp.write_all(&bytes).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&dest).map_err(|e| e.to_string())?;
+    crate::files::write_durable(&dest, &bytes)?;
     if let Ok(directory) = File::open(&assets) {
         let _ = directory.sync_all();
     }

@@ -27,7 +27,7 @@ import {
   type DockPanelId,
 } from "./dockLayout";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
-import { isTauriEnvironment } from "../../lib/ipc";
+import { listenTo } from "../../lib/windowSync";
 import type { DockviewApi } from "dockview-react";
 
 const THEME: DockviewTheme = {
@@ -125,27 +125,16 @@ export const DockWorkspace: React.FC = () => {
   // An agent shows the user a moment (back to the video, the playhead in view), or hands them
   // joins to listen to (the Joins panel comes forward).
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    const unlisteners: (() => void)[] = [];
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      Promise.all([
-        listen<{ atUs: number }>("aeroedits-agent-show", (event) => {
-          if (isShortsWorkspace(useWorkspaceStore.getState().workspace)) useWorkspaceStore.getState().setWorkspace("edit");
-          const store = useProjectStore.getState();
-          store.setCurrentTimeUs(event.payload.atUs);
-          store.revealPlayhead();
-        }),
-        listen("aeroedits-joins-updated", () => requestPanel("joins")),
-      ]).then((fns) => {
-        if (disposed) fns.forEach((fn) => fn());
-        else unlisteners.push(...fns);
+    const unlisteners = [
+      listenTo<{ atUs: number }>("aeroedits-agent-show", (payload) => {
+        if (isShortsWorkspace(useWorkspaceStore.getState().workspace)) useWorkspaceStore.getState().setWorkspace("edit");
+        const store = useProjectStore.getState();
+        store.setCurrentTimeUs(payload.atUs);
+        store.revealPlayhead();
       }),
-    );
-    return () => {
-      disposed = true;
-      unlisteners.forEach((fn) => fn());
-    };
+      listenTo("aeroedits-joins-updated", () => requestPanel("joins")),
+    ];
+    return () => unlisteners.forEach((fn) => fn());
   }, []);
 
   // Switching workspace: keep this one's arrangement, then show the other's.

@@ -12,7 +12,7 @@ import {
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
 import { UnderTake } from "./UnderTake";
-import { formatTime } from "./underTakeParts";
+import { formatTime } from "../../lib/format";
 
 /// How loud the footage and B-roll sound plays under the take, and how far it is lowered while
 /// the voice talks: both play on the short's one Footage sound track, so one setting does both.

@@ -5,13 +5,7 @@ import { api } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { SearchHit, SearchResults } from "../../lib/types";
 import { Badge, cn } from "../ui";
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
+import { formatTime } from "../../lib/format";
 
 /** The excerpt with the hit (between `[` and `]`) in bold. */
 function Excerpt({ text }: { text: string }) {

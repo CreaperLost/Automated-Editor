@@ -3,17 +3,12 @@
 //! recorded source, and gaps where that was not known. Same clock as `events.jsonl`.
 //!
 //! No file means the windows were not recorded: the screen is never cropped to one.
-use crate::project::reader::{open_regular, safe_path};
+use super::stream::{read_once, read_stream, FolderCache};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 pub const WINDOWS_VERSION: u32 = 1;
-const WINDOWS_LIMIT: u64 = 64 * 1024 * 1024;
-const LINE_LIMIT: u64 = 16 * 1024;
-const RECORD_LIMIT: usize = 1_000_000;
-const DIAGNOSTIC_LIMIT: usize = 64;
-const MAX_SAFE_TIME: u64 = 9_007_199_254_740_991;
+use super::stream::MAX_SAFE_TIME;
 
 /// What kind of window is in front. Popups, menus and tooltips never decide the crop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,14 +99,6 @@ enum RawKind {
     Unknown,
 }
 
-#[derive(Deserialize)]
-struct RawRecord {
-    version: u32,
-    t_us: u64,
-    #[serde(flatten)]
-    kind: RawKind,
-}
-
 /// The part of `bounds` on the source, or `None` when none of it is.
 fn on_source(bounds: &RawBounds) -> Option<(f64, f64, f64, f64)> {
     let values = [bounds.norm_x, bounds.norm_y, bounds.norm_w, bounds.norm_h];
@@ -131,65 +118,14 @@ pub fn read_windows(
     root: &Path,
     diagnostics: &mut Vec<String>,
 ) -> Result<Option<WindowStream>, String> {
-    let path = match safe_path(root, "telemetry/windows.jsonl") {
-        Ok(path) => path,
-        Err(error) => {
-            diagnostics.push(format!("Window telemetry path rejected: {error}"));
-            return Ok(None);
-        }
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-    let file = open_regular(&path)?;
-    let mut reader = BufReader::new(file.take(WINDOWS_LIMIT + 1));
     let mut stream = WindowStream::default();
-    let mut total = 0u64;
-    for line_number in 1..=RECORD_LIMIT {
-        let mut line = Vec::new();
-        let count = reader
-            .by_ref()
-            .take(LINE_LIMIT + 1)
-            .read_until(b'\n', &mut line)
-            .map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        total += count as u64;
-        if count as u64 > LINE_LIMIT || total > WINDOWS_LIMIT {
-            stream
-                .diagnostics
-                .push("Window telemetry is too large; the rest was not read".into());
-            break;
-        }
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let had_newline = line.ends_with(b"\n");
-        let record: RawRecord = match serde_json::from_slice(&line) {
-            Ok(record) => record,
-            // A crash mid-write leaves a cut-off last line.
-            Err(_) if !had_newline => break,
-            Err(error) => {
-                if stream.diagnostics.len() < DIAGNOSTIC_LIMIT {
-                    stream.diagnostics.push(format!(
-                        "Corrupt window telemetry line {line_number}: {error}"
-                    ));
-                }
-                continue;
-            }
-        };
-        if record.version != WINDOWS_VERSION {
-            diagnostics.push(format!(
-                "Window telemetry version {} is not supported; it was ignored",
-                record.version
-            ));
-            return Ok(None);
-        }
-        if record.t_us > MAX_SAFE_TIME {
-            continue;
-        }
-        match record.kind {
+    let problems = read_stream(
+        root,
+        "windows.jsonl",
+        "Window",
+        WINDOWS_VERSION,
+        diagnostics,
+        |t_us, kind| match kind {
             RawKind::Capture { platform } => stream.platform = platform,
             RawKind::Front {
                 window,
@@ -209,10 +145,7 @@ pub fn read_windows(
                         maximized,
                     })
                 });
-                stream.fronts.push(FrontWindow {
-                    t_us: record.t_us,
-                    window,
-                });
+                stream.fronts.push(FrontWindow { t_us: t_us, window });
             }
             RawKind::Gap { start_us, end_us } => {
                 if end_us >= start_us && end_us <= MAX_SAFE_TIME {
@@ -220,8 +153,12 @@ pub fn read_windows(
                 }
             }
             RawKind::Unknown => {}
-        }
-    }
+        },
+    )?;
+    let Some(problems) = problems else {
+        return Ok(None);
+    };
+    stream.diagnostics = problems;
     stream.fronts.sort_by_key(|f| f.t_us);
     stream.gaps.sort_unstable();
     Ok(Some(stream))
@@ -229,29 +166,10 @@ pub fn read_windows(
 
 /// The front windows of the recording in `folder`, read once while the file is unchanged.
 pub fn recording_windows(folder: &Path) -> std::sync::Arc<Option<WindowStream>> {
-    use std::sync::{Arc, Mutex, OnceLock};
-    type Cache = Mutex<
-        std::collections::HashMap<
-            std::path::PathBuf,
-            (Option<std::time::SystemTime>, Arc<Option<WindowStream>>),
-        >,
-    >;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let modified = std::fs::metadata(folder.join("telemetry").join("windows.jsonl"))
-        .and_then(|m| m.modified())
-        .ok();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((stamp, windows)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
-        if *stamp == modified {
-            return windows.clone();
-        }
-    }
-    let windows = Arc::new(read_windows(folder, &mut Vec::new()).ok().flatten());
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(folder.to_path_buf(), (modified, windows.clone()));
-    windows
+    static CACHE: FolderCache<Option<WindowStream>> = std::sync::OnceLock::new();
+    read_once(&CACHE, folder, &["windows.jsonl"], || {
+        read_windows(folder, &mut Vec::new()).ok().flatten()
+    })
 }
 
 #[cfg(test)]

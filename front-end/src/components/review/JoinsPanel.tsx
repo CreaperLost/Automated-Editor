@@ -1,20 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Ear, Play, Search, Trash2, Wrench } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
-import { api, isTauriEnvironment } from "../../lib/ipc";
+import { api } from "../../lib/ipc";
 import { pausePlayback, seekPlayback, togglePlayback } from "../../lib/playbackControl";
 import { JoinMark, JoinsView, JoinView } from "../../lib/types";
 import { Badge, Button, IconButton, cn } from "../ui";
+import { formatTime } from "../../lib/format";
+import { listenTo } from "../../lib/windowSync";
 
 /** How much is heard either side of a join. */
 const AROUND_US = 2_000_000;
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
 
 /** Stops the join playing now, if one is. */
 let stopPlaying: (() => void) | null = null;
@@ -81,19 +76,7 @@ export const JoinsPanel: React.FC = () => {
   // Joins move with the edit: read them again at each revision, and when an agent changes them.
   useEffect(() => load(), [load, revision]);
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen("aeroedits-joins-updated", () => load()).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo("aeroedits-joins-updated", () => load());
   }, [load]);
   useEffect(() => () => stopPlaying?.(), []);
 

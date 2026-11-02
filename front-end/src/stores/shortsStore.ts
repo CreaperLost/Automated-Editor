@@ -4,6 +4,7 @@ import { GAP_PRESETS } from "../lib/jumpCutConfig";
 import { clipEnd, clipSourceAt, soundSources } from "../lib/sequence";
 import type { ExportStatus, Footage, GraphicSlot, OpenedProject, Short, ShortGraphicFrom, ShortLayout } from "../lib/types";
 import { useProjectStore } from "./projectStore";
+import { errorMessage } from "../lib/format";
 
 export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   cameraClips: {},
@@ -59,12 +60,6 @@ const INITIAL: ShortsState = {
 export const useShortsStore = create<ShortsState>(() => ({ ...INITIAL }));
 
 const set = useShortsStore.setState;
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err.trim()) return err;
-  return "Something went wrong.";
-}
 
 export const setShortsError = (err: unknown) => set({ error: err === undefined ? undefined : errorMessage(err) });
 

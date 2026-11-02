@@ -3,6 +3,7 @@ pub mod event;
 pub mod keys;
 pub mod native;
 pub mod reader;
+pub mod stream;
 pub mod windows;
 
 pub use event::{GeometryRecord, TelemetryEvent, TelemetryKind};

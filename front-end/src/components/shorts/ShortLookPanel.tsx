@@ -20,6 +20,7 @@ import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "./CameraFraming";
 import { TakeFootage } from "./TakeFootage";
 import { Switch } from "../ui";
+import { formatTime } from "../../lib/format";
 
 /** Where a graphic can play in a short: value, label, what it does. */
 const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
@@ -29,13 +30,6 @@ const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
   ["overFace", "Over face", "Your face fills the frame and the graphic is drawn over it, see-through"],
   ["overScreen", "Over screen", "Over the screen's part, under the captions; its see-through parts show the screen"],
 ];
-
-function formatTime(us: number): string {
-  const total = Math.max(0, us) / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
 
 const segmented = (active: boolean) =>
   `flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-[5px] text-label font-medium transition-colors ${

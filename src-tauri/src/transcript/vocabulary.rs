@@ -86,7 +86,7 @@ pub fn apply(words: &mut Vec<TranscriptWord>, terms: &[String], sound_alike: boo
 }
 
 /// Letters and digits, lower case: what a word spells whatever its spacing and punctuation.
-fn letters(text: &str) -> String {
+pub(crate) fn letters(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)

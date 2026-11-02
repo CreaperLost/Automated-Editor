@@ -9,14 +9,11 @@ import { selectShort } from "../../stores/shortsStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { formatTimeUs } from "../../hooks/useTimeline";
 import { Badge, Button, IconButton, Notice, PanelHeader, Segmented, Switch, cn, type Tone } from "../ui";
+import { errorMessage } from "../../lib/format";
 
 const KIND_LABEL: Record<ProposalItem["kind"], string> = { filler: "Filler", retake: "Retake", cut: "Cut" };
 /** Lines of an edit batch's diff shown before "Show all". */
 const SUMMARY_LINES = 4;
-
-function errorMessage(err: unknown) {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function statusBadge(batch: ProposalBatch): { label: string; tone: Tone; title?: string } {
   if (batch.status === "pending") {

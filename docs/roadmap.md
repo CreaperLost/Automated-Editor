@@ -187,31 +187,14 @@ edit stays as good. (COST-2's last check is under [Waiting on George](#cost-2).)
 
 ### Code health and performance
 
-<a id="qual-1"></a>
-- **QUAL-1 · Code reuse check (M).** The same logic is often written again instead of shared,
-  which costs time and causes bugs fixed in one copy only (asked for 22 Oct). Sweep the Rust
-  passes, the MCP actions vs the UI commands, and the front-end panels and dialogs; move repeats
-  into shared helpers with tests; note the patterns to reuse in `architecture.md`. Seen so far:
-  the same Tauri event-listener effect in `App.tsx` and several panels; line-ending-safe edits;
-  Clips and Shorts sharing one set of short panels. 31 Oct: the nine "name, name-2" id loops
-  became `ids::free_id` / `free_name`.
-<a id="qual-2"></a>
-- **QUAL-2 · Review the tests (M), not urgent.** Drop tests that guard behaviour that is gone
-  (old project formats, removed alignment, superseded passes), merge near-duplicates, keep the
-  ones that pin decisions; note how long the suite takes before and after (asked for 23 Oct).
 <a id="perf-3"></a>
-- **PERF-3 · Dense timelines and the JPEG fallback (M).** Draw sub-pixel clip runs as one strip
-  per track at full view (O01); two alternating encoder threads for the non-wgpu preview path
-  (O02).
-<a id="qual-4"></a>
-- **QUAL-4 · Faster builds, round two (M), only if builds feel slow again.** After
-  [QUAL-3](done.md#qual-3) a one-file change builds in 15–28 s. Left: split the crate (a
-  refactor); sccache helps only clean builds and the extra target folders; a whole installer
-  build with `rust-lld` not yet run (a plain release build links and runs).
+- **PERF-3 · Alternating JPEG encoders (S).** Two alternating encoder threads for the non-wgpu
+  preview path (O02), still untried. One thread takes 7.6 ms at 720p and 17–27 ms at 1080p, so it
+  may not be needed at 30 fps. Dense timelines (O01) are done.
 <a id="dep-2"></a>
 - **DEP-2 · Recurring dependency review (S each).** Follow the cadence in
-  [dependencies.md](dependencies.md): read changelogs, update on a branch, run tests, `perf.rs`
-  and the parity probes, record the result. Candidates: React 18 → 19, Vite 5 → current,
+  [dependencies.md](dependencies.md): read changelogs, update on a branch, run tests and `perf.rs`,
+  record the result. Candidates: React 18 → 19, Vite 5 → current,
   Tailwind 3 → 4, `ort` leaving release candidates, HyperFrames past 0.8.162.
 
 ### Ideas not yet scheduled

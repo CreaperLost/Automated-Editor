@@ -8,7 +8,7 @@ import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { CheckPanel } from "./CheckPanel";
 import { DeliveryList } from "./DeliveryList";
 import { ExportLog } from "./ExportLog";
-import { Button, IconButton, Segmented, cn } from "../ui";
+import { Button, IconButton, Segmented, cn, DialogBackdrop } from "../ui";
 import type {
   ExportFileKind,
   ExportPreferences,
@@ -19,6 +19,7 @@ import type {
 } from "../../lib/types";
 import { PresetMarks } from "../presets/PresetMarks";
 import { useUiMode } from "../../stores/uiModeStore";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
 const RESOLUTIONS = [
@@ -134,13 +135,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       ? Math.min(1, exportJob.progressNumerator / exportJob.progressDenominator)
       : 0;
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const start = (queue = false) => {
     if (custom && !mbpsValid) return;
@@ -208,12 +203,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   );
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <DialogBackdrop onClose={onClose}>
       <div
         role="dialog"
         aria-modal="true"
@@ -482,6 +472,6 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </DialogBackdrop>
   );
 };

@@ -657,30 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn automatic_silence_keeps_sparse_quiet_speech_without_a_pause() {
-        let rate = 16_000;
-        let samples: Vec<f32> = (0..rate * 20)
-            .map(|i| {
-                let t = i as f32 / rate as f32;
-                let amplitude = if (10.0..11.0).contains(&t) {
-                    0.003
-                } else {
-                    0.1
-                };
-                (t * 440.0 * std::f32::consts::TAU).sin() * amplitude
-            })
-            .collect();
-        let config = SilenceConfig {
-            auto_level: Some(0.2),
-            min_duration_ms: 500,
-            padding_ms: 120,
-            ..SilenceConfig::default()
-        };
-        let cuts = SilenceDetector::detect_silence(&samples, rate, &config).unwrap();
-        assert!(cuts.is_empty(), "{cuts:?}");
-    }
-
-    #[test]
     fn sensitivity_changes_the_fallback_and_removes_more_sounding_pauses() {
         let rate = 8_000;
         let samples: Vec<f32> = (0..rate * 4)
@@ -822,11 +798,12 @@ mod tests {
     #[test]
     fn continuous_clean_audio_preserves_common_quiet_phrases() {
         let rate = 16_000;
-        for quiet_duration in [1.0, 2.0] {
-            let samples: Vec<f32> = (0..rate * 5)
+        // Short phrases, and one quiet word in a long stretch of speech.
+        for (seconds, quiet_at, quiet_duration) in [(5, 1.0, 1.0), (5, 1.0, 2.0), (20, 10.0, 1.0)] {
+            let samples: Vec<f32> = (0..rate * seconds)
                 .map(|i| {
                     let t = i as f32 / rate as f32;
-                    let amplitude = if (1.0..1.0 + quiet_duration).contains(&t) {
+                    let amplitude = if (quiet_at..quiet_at + quiet_duration).contains(&t) {
                         0.003
                     } else {
                         0.1

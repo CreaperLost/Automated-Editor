@@ -1069,8 +1069,7 @@ pub fn placement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timeline::SourceInterval;
-    use crate::transcript::{test_word, ProviderKind};
+    use crate::transcript::edit::tests::{mapper, transcript};
 
     #[test]
     fn the_caption_font_draws_greek() {
@@ -1079,27 +1078,6 @@ mod tests {
         {
             assert_ne!(font.lookup_glyph_index(c), 0, "no glyph for {c}");
         }
-    }
-
-    fn transcript(words: &[(&str, u64, u64)]) -> Transcript {
-        Transcript::new(
-            "mic".into(),
-            ProviderKind::ElevenLabs,
-            "scribe_v2".into(),
-            None,
-            words.iter().map(|(t, s, e)| test_word(t, *s, *e)).collect(),
-        )
-    }
-
-    fn mapper(ranges: &[(u64, u64)]) -> TimelineMapper {
-        TimelineMapper::try_new(
-            ranges
-                .iter()
-                .enumerate()
-                .map(|(i, (s, e))| SourceInterval::new(format!("r{i}"), s * 1000, e * 1000))
-                .collect(),
-        )
-        .unwrap()
     }
 
     #[test]

@@ -13,6 +13,8 @@ import { saveCleanupSoon, useCleanupFromProject } from "../../lib/cleanupSetting
 import { PresetMarks } from "../presets/PresetMarks";
 import { Button, IconButton, Segmented, cn } from "../ui";
 import { useUiMode } from "../../stores/uiModeStore";
+import { formatTime } from "../../lib/format";
+import { errorMessage } from "../../lib/format";
 
 /** Scans every sound the timeline plays as speech at once (the backend's `ALL_SPEECH`). */
 const ALL_SPEECH = "speech";
@@ -33,19 +35,6 @@ function scannableSounds(project: OpenedProject | null) {
 /** Speech on the timeline first, else any sound there. */
 function preferredAudioTrackId(project: OpenedProject | null): string | undefined {
   return scannableSounds(project)[0]?.key;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err.trim()) return err;
-  return "Silence detection failed.";
-}
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
 /// Jump cuts: find the pauses in a sound, review them, and cut the chosen ones from every
@@ -114,7 +103,7 @@ export const JumpCutsPanel: React.FC = () => {
         transcriptDependencies: result.transcriptDependencies,
       });
     } catch (err) {
-      store.failScan(activePass, generation, errorMessage(err));
+      store.failScan(activePass, generation, errorMessage(err, "Silence detection failed."));
     }
   };
 
@@ -172,7 +161,7 @@ export const JumpCutsPanel: React.FC = () => {
       .catch((err) => {
         const store = useJumpCutStore.getState();
         store.invalidate("Find suggestions again after the latest change.");
-        store.failScan(activePass, store.reviews[activePass].generation, errorMessage(err));
+        store.failScan(activePass, store.reviews[activePass].generation, errorMessage(err, "Silence detection failed."));
       }).finally(() => setIsApplying(false));
   };
 

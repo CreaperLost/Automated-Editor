@@ -1615,9 +1615,9 @@ impl SceneEvaluator {
                         .flat_map(|(a, b)| clock.source_range_to_edited(a, b + 1))
                         .collect();
                     // Only while this bubble is the one showing.
-                    out.extend(crate::layouts::subtract(
+                    out.extend(crate::ranges::subtract(
                         &edited,
-                        &crate::layouts::subtract(&[(0, u64::MAX)], showing),
+                        &crate::ranges::subtract(&[(0, u64::MAX)], showing),
                     ));
                 }
             }
@@ -4077,36 +4077,14 @@ mod tests {
         document.captions.enabled = true;
         document.captions.text_color = "#FFFFFF".into();
         document.captions.style = crate::captions::CaptionStyle::Static;
-        let evaluator = SceneEvaluator {
-            root: root.clone(),
+        let evaluator = SceneEvaluator::with_parts(
+            root.clone(),
             document,
-            compositor: None,
-            width: 320,
-            height: 180,
-            decode_limit: DecodeLimit::NONE,
-            nv12_output: false,
-            wallpaper: std::cell::OnceCell::new(),
-            layouts: std::cell::OnceCell::new(),
-            camera_framing: Default::default(),
-            push_ins: std::cell::OnceCell::new(),
-            full_camera: std::cell::OnceCell::new(),
-            graphics_quality: Default::default(),
-            pinned_graphics: Default::default(),
-            screen_styles: std::cell::OnceCell::new(),
-            caption_cues: std::cell::OnceCell::new(),
-            caption_look: std::cell::OnceCell::new(),
-            caption_free: std::cell::OnceCell::new(),
-            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            cursors: Default::default(),
-            prefetched: Default::default(),
-            zooms: Default::default(),
-            sources: Default::default(),
-            cursor_images: Default::default(),
-            graphic_placeholders: Default::default(),
-            shortcut_badge: Default::default(),
-            window_crops: Default::default(),
-            bubble_hidden: std::cell::OnceCell::new(),
-        };
+            None,
+            320,
+            180,
+            std::cell::OnceCell::new(),
+        );
         let (_, _, y) = evaluator.caption_at(100_000).unwrap();
         assert!(y > 90, "caption sits in the lower half, y {y}");
         // Every style draws a moment the same whatever was drawn before (the preview seeks,
@@ -4164,36 +4142,14 @@ mod tests {
 
     /// An evaluator without a GPU: scenes only.
     fn scenes(root: &Path, document: EditDocument, width: u32, height: u32) -> SceneEvaluator {
-        SceneEvaluator {
-            root: root.into(),
+        SceneEvaluator::with_parts(
+            root.into(),
             document,
-            compositor: None,
+            None,
             width,
             height,
-            decode_limit: DecodeLimit::NONE,
-            nv12_output: false,
-            wallpaper: std::cell::OnceCell::new(),
-            layouts: std::cell::OnceCell::new(),
-            camera_framing: Default::default(),
-            push_ins: std::cell::OnceCell::new(),
-            full_camera: std::cell::OnceCell::new(),
-            graphics_quality: Default::default(),
-            pinned_graphics: Default::default(),
-            screen_styles: std::cell::OnceCell::new(),
-            caption_cues: std::cell::OnceCell::new(),
-            caption_look: std::cell::OnceCell::new(),
-            caption_free: std::cell::OnceCell::new(),
-            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            cursors: Default::default(),
-            prefetched: Default::default(),
-            zooms: Default::default(),
-            sources: Default::default(),
-            cursor_images: Default::default(),
-            graphic_placeholders: Default::default(),
-            shortcut_badge: Default::default(),
-            window_crops: Default::default(),
-            bubble_hidden: std::cell::OnceCell::new(),
-        }
+            std::cell::OnceCell::new(),
+        )
     }
 
     /// A 2x2 red picture on `count` video tracks, as overlays.

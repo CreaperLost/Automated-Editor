@@ -20,7 +20,8 @@ import {
   useShortsStore,
 } from "../../stores/shortsStore";
 import { Button, Segmented } from "../ui";
-import { formatTime, placement, videoLines, type VideoLine } from "./underTakeParts";
+import { formatTime } from "../../lib/format";
+import { placement, videoLines, type VideoLine } from "./underTakeParts";
 
 type Source = "video" | "graphic" | "file";
 

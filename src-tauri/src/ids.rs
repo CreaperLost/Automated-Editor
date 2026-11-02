@@ -20,6 +20,15 @@ fn first_free(base: &str, separator: &str, taken: impl Fn(&str) -> bool) -> Stri
         .expect("an id is free")
 }
 
+/// A safe id for a file name or a reference: 1 to 128 ASCII letters, digits, `-` or `_`.
+pub fn is_plain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -33,5 +42,13 @@ mod tests {
             free_name("My tutorial", |n| n == "My tutorial"),
             "My tutorial 2"
         );
+    }
+
+    #[test]
+    fn a_plain_id_has_no_path_in_it() {
+        assert!(is_plain_id("clip-5_a"));
+        assert!(!is_plain_id(""));
+        assert!(!is_plain_id("../clip"));
+        assert!(!is_plain_id(&"a".repeat(129)));
     }
 }

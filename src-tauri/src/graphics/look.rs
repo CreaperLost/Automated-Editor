@@ -408,11 +408,7 @@ pub fn check_tokens(tokens: &BTreeMap<String, String>) -> Result<(), String> {
 /// `html` with `css` as the last style in its head, so it wins over the composition's own (and
 /// before the style's, which only sets `--brand-*` and the page font).
 pub fn inject_css(html: &str, css: &str) -> String {
-    let block = format!("<style id=\"{STYLE_ID}\">\n{css}</style>\n");
-    match html.find("</head>") {
-        Some(at) => format!("{}{block}{}", &html[..at], &html[at..]),
-        None => format!("{block}{html}"),
-    }
+    crate::style::brand::inject_style(html, STYLE_ID, css)
 }
 
 /// What the editor and agents see of the presets.

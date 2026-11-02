@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import React from "react";
-import { fakeTimers, mountHook, settle } from "./hooks";
+import { fakeTimers, mountHook, settle, elements } from "./hooks";
 import { api } from "../src/lib/ipc";
 import { useProjectStore } from "../src/stores/projectStore";
 import { changeLayouts } from "../src/stores/layoutsStore";
@@ -18,14 +18,6 @@ const project = (handle: string, revision: number, shortView?: string): OpenedPr
   sequence: { tracks: [], magnetic: true }, fps: 30, diagnostics: [], previewAvailable: false, undoAvailable: false, redoAvailable: false,
   shorts, shortView,
 });
-
-/** Every element in a rendered tree (elements only: components are not called). */
-function elements(node: unknown): React.ReactElement[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!React.isValidElement(node)) return [];
-  const props = node.props as { children?: unknown };
-  return [node, ...elements(props.children)];
-}
 
 // AUD-001
 test("thumbnails wanted beyond the memory limit settle, and unwanted ones are reclaimed", async () => {

@@ -105,16 +105,8 @@ fn source_of(asset: &Asset) -> String {
     format!("{}|{}", asset.path, asset.duration_us)
 }
 
-fn valid_part(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 pub fn track_path(root: &Path, asset: &str, stream: &str) -> Result<PathBuf, String> {
-    if !valid_part(asset) || !valid_part(stream) {
+    if !crate::ids::is_plain_id(asset) || !crate::ids::is_plain_id(stream) {
         return Err("Invalid camera stream for a face track".into());
     }
     crate::project::reader::safe_path(root, &format!("{FACES_DIR}/{asset}.{stream}.json"))
@@ -142,10 +134,7 @@ pub fn save_track(root: &Path, track: &FaceTrack) -> Result<(), String> {
     let dir = path.parent().ok_or("No folder for face tracks")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let bytes = serde_json::to_vec(track).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_atomic(&path, &bytes)
 }
 
 /// The camera streams in the project: picture streams whose role is the camera.

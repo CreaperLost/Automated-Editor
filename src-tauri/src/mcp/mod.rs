@@ -34,7 +34,6 @@ use crate::commands::AppState;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -92,16 +91,11 @@ pub struct McpSettings {
 }
 
 pub fn load_settings(dir: &Path) -> McpSettings {
-    fs::read(dir.join(SETTINGS_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<McpSettings>(&bytes).ok())
-        .unwrap_or_default()
+    crate::files::load_json(&dir.join(SETTINGS_FILE)).unwrap_or_default()
 }
 
 fn save_settings(dir: &Path, settings: &McpSettings) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(dir.join(SETTINGS_FILE), json).map_err(|e| e.to_string())
+    crate::files::save_json(&dir.join(SETTINGS_FILE), settings)
 }
 
 /// One tool call, for the activity list in the app.
@@ -773,7 +767,7 @@ mod tests {
     fn project_with(dir: &Path, autopilot: bool) -> Arc<TestHost> {
         let wav = dir.join("voice.wav");
         let samples = vec![0i16; 48_000 * 2];
-        fs::write(
+        std::fs::write(
             &wav,
             crate::fixtures::generate_pcm16_wav(48_000, 1, &samples),
         )

@@ -4,6 +4,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { clipAt, clipSourceAt, soundSources } from "../../lib/sequence";
 import type { Chapter, OpenedProject } from "../../lib/types";
+import { errorMessage } from "../../lib/format";
 
 /** YouTube's rules for description chapters. */
 const YOUTUBE_MIN_CHAPTERS = 3;
@@ -34,12 +35,6 @@ function youtubeProblems(placed: { atUs: number }[], durationUs: number): string
   const short = placed.filter((c, i) => (placed[i + 1]?.atUs ?? durationUs) - c.atUs < YOUTUBE_MIN_LENGTH_US).length;
   if (short > 0) problems.push(`${short} chapter${short === 1 ? " is" : "s are"} shorter than 10 seconds.`);
   return problems;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err.trim()) return err;
-  return "Something went wrong.";
 }
 
 /// Chapter markers: find them with AI from the transcript, add, rename, delete, and copy a

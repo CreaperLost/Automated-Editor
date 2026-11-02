@@ -299,7 +299,10 @@ Rules that keep it fast (break one and it shows):
 - Lookahead decoders start before clip **and** segment boundaries (at most 4 at once).
 - Clocks are built once per recording per summary (binary search + local merge), never per zoom.
 - Timeline clips are memoised components, drawn only near the view; drags use an index map and a
-  selection set, one redraw per animation frame.
+  selection set, one redraw per animation frame. Neighbouring clips thinner than 3 px of one
+  stream draw as one `ClipRun` (one waveform canvas across them), and cut marks under a pixel
+  apart as one band. A press acts on the clip under the pointer; selected and missing clips
+  stay on their own. A drag must not change a run's key: it holds the pointer capture.
 - Panels reload only when what they depend on changes (sequence, transcript, their own settings),
   never on every revision.
 - Long reads (transcript, cues, waveforms) run on the blocking pool, not Tauri's main thread.
@@ -354,9 +357,16 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
   `scripts/build-windows.ps1` sets it up.
 - After any docs change, run `.venv\Scripts\python.exe scripts/check_doc_links.py`.
 - Shared helpers to reach for before writing one (QUAL-1): `ids::free_id` / `free_name` for a
-  new id or name beside the ones in use (`base`, `base-2`...); `shorts::video_sequence` for what
-  a clip plays of the video now (its stretch or its pieces); `shorts::edited_span` for a source
-  stretch on the edited timeline.
+  new id or name beside the ones in use (`base`, `base-2`...), `ids::is_plain_id` to check one;
+  `shorts::video_sequence` for what a clip plays of the video now (its stretch or its pieces);
+  `shorts::edited_span` for a source stretch on the edited timeline; `files::write_atomic`,
+  `write_durable`, `save_json`, `load_json` for files replaced whole; `ranges::merge`,
+  `merge_near`, `subtract` for stretches of time; `own_library` for a library's own files, tags,
+  search and import; `proposals::load_file` / `save_file` in the agent folder;
+  `telemetry::stream` for recorder streams and `read_once` for what a recording's files give;
+  `commands::sounds::place_on_shown` and `on_shown` for a change on the timeline shown.
+  In the window: `lib/format` (`formatTime`, `errorMessage`), `listenTo` for app events,
+  `useBusyRun`, `useEscapeKey`, `DialogBackdrop` and `media/libraryParts`.
 - Front-end behaviour tests are `front-end/tests/*.test.ts` (`npm run test:cleanup`, also run by
   CI): stores with a mocked `api`, no browser. A change of a store's async flow (queued saves,
   late replies) gets a test there.

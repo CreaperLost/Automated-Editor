@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, isTauriEnvironment } from "../lib/ipc";
 import type { McpStatus, ProposalsView } from "../lib/types";
 import { useProjectStore } from "./projectStore";
+import { listenTo } from "../lib/windowSync";
 
 const EVENT = "aeroedits-proposals-updated";
 /** An agent's call started, progressed or ended. */
@@ -88,16 +89,8 @@ export function startAgentSync(): () => void {
         .catch(() => undefined);
     }, 150);
   };
-  const unlisteners: (() => void)[] = [];
-  let disposed = false;
-  void import("@tauri-apps/api/event").then(({ listen }) =>
-    Promise.all([listen(EVENT, refresh), listen(ACTIVITY_EVENT, refreshStatus)]).then((fns) => {
-      if (disposed) fns.forEach((fn) => fn());
-      else unlisteners.push(...fns);
-    }),
-  );
+  const unlisteners = [listenTo(EVENT, refresh), listenTo(ACTIVITY_EVENT, refreshStatus)];
   return () => {
-    disposed = true;
     window.clearTimeout(statusTimer);
     unsubscribe();
     unlisteners.forEach((fn) => fn());

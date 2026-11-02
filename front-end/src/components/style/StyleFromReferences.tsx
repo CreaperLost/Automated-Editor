@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Check, Copy, FilePlus2, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import type { StyleRequest } from "../../lib/types";
-import { Button, IconButton } from "../ui";
+import { Button, IconButton, DialogBackdrop } from "../ui";
 
 const MAX_REFERENCES = 8;
 
@@ -60,12 +60,7 @@ export const StyleFromReferences: React.FC<{ onClose: () => void }> = ({ onClose
   const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <DialogBackdrop onClose={onClose} selectable>
       <form
         role="dialog"
         aria-modal="true"
@@ -169,6 +164,6 @@ export const StyleFromReferences: React.FC<{ onClose: () => void }> = ({ onClose
           </>
         )}
       </form>
-    </div>
+    </DialogBackdrop>
   );
 };

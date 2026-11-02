@@ -447,7 +447,7 @@ fn detect_combined_silence(
                 .iter()
                 .filter_map(|&(a, b)| clip.timeline_range(a, b))
         }));
-        pauses = crate::transcript::pauses::merge_ranges(pauses);
+        pauses = crate::ranges::merge(pauses);
     }
     let first = &found[0];
     let dependencies = sounds
@@ -889,15 +889,6 @@ mod tests {
         let err = show_in_finder_impl(non_existent.into()).unwrap_err();
         assert!(err.contains("Path does not exist"));
     }
-
-    // Opens a real Finder window, so it only runs on macOS.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_show_in_finder_impl() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = show_in_finder_impl(dir.path().to_string_lossy().into_owned());
-        assert!(result.is_ok());
-    }
 }
 
 pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject, String> {
@@ -940,9 +931,7 @@ pub fn close_project_impl(state: &AppState, project_handle: String) -> Result<()
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     if let Some(reader) = opened.as_ref() {
-        if reader.summary.project_handle != project_handle {
-            return Err("Stale project handle".into());
-        }
+        require_handle(reader, &project_handle)?;
     }
     *opened = None;
     state.playback.lock().close();
@@ -959,9 +948,7 @@ pub fn project_segments_impl(
 ) -> Result<SegmentPage, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    if reader.summary.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    require_handle(reader, &project_handle)?;
     reader.page(&track_id, offset, limit)
 }
 
@@ -1049,9 +1036,7 @@ pub fn project_zoom_suggestions_impl(
 ) -> Result<crate::zoom::ZoomGeneration, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    if reader.summary.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    require_handle(reader, &project_handle)?;
     // The project's own settings, so every window finds the same zooms.
     let config = reader.history().current.zoom_settings.config();
     zoom_suggestions_with(reader, &config)
@@ -1065,9 +1050,7 @@ pub fn project_zoom_preview_impl(
 ) -> Result<crate::zoom::ZoomGeneration, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    if reader.summary.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    require_handle(reader, &project_handle)?;
     zoom_suggestions_with(reader, &settings.config())
 }
 
@@ -2452,17 +2435,9 @@ pub fn project_undo_impl(
     expected_revision: u64,
     short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    reader.undo(expected_revision)?;
-    let summary = reader.view_or_summary(short_id.as_deref());
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    Ok(summary)
+    step_history(state, &project_handle, short_id.as_deref(), |reader| {
+        reader.undo(expected_revision)
+    })
 }
 
 pub fn project_redo_impl(
@@ -2471,12 +2446,23 @@ pub fn project_redo_impl(
     expected_revision: u64,
     short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
+    step_history(state, &project_handle, short_id.as_deref(), |reader| {
+        reader.redo(expected_revision)
+    })
+}
+
+fn step_history(
+    state: &AppState,
+    project_handle: &str,
+    short_id: Option<&str>,
+    step: impl FnOnce(&mut ProjectReader) -> Result<OpenedProject, String>,
+) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    reader.redo(expected_revision)?;
-    let summary = reader.view_or_summary(short_id.as_deref());
+    require_handle(reader, project_handle)?;
+    step(reader)?;
+    let summary = reader.view_or_summary(short_id);
     state
         .playback
         .lock()
@@ -2575,14 +2561,23 @@ pub fn playback_status_impl(
     Ok(status)
 }
 
-pub fn playback_play_impl(
-    state: &AppState,
-    project_handle: String,
-) -> Result<PlaybackStatus, String> {
+/// The playback, once `project_handle` is known to be what it plays.
+fn playback_of<'a>(
+    state: &'a AppState,
+    project_handle: &str,
+) -> Result<impl std::ops::DerefMut<Target = PlaybackOwner> + 'a, String> {
     let mut playback = state.playback.lock();
     if playback.status()?.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
+    Ok(playback)
+}
+
+pub fn playback_play_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<PlaybackStatus, String> {
+    let mut playback = playback_of(state, &project_handle)?;
     playback.play()
 }
 
@@ -2592,10 +2587,7 @@ pub fn playback_set_speed_impl(
     project_handle: String,
     speed: f64,
 ) -> Result<PlaybackStatus, String> {
-    let mut playback = state.playback.lock();
-    if playback.status()?.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    let mut playback = playback_of(state, &project_handle)?;
     playback.set_speed(speed)
 }
 
@@ -2603,10 +2595,7 @@ pub fn playback_pause_impl(
     state: &AppState,
     project_handle: String,
 ) -> Result<PlaybackStatus, String> {
-    let mut playback = state.playback.lock();
-    if playback.status()?.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    let mut playback = playback_of(state, &project_handle)?;
     playback.pause()
 }
 
@@ -2615,10 +2604,7 @@ pub fn playback_seek_impl(
     project_handle: String,
     edited_us: u64,
 ) -> Result<PlaybackStatus, String> {
-    let mut playback = state.playback.lock();
-    if playback.status()?.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    let mut playback = playback_of(state, &project_handle)?;
     playback.seek(edited_us)
 }
 

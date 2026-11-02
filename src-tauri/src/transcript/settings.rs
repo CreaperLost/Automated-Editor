@@ -3,7 +3,6 @@
 //! Keychain), or in an owner-only file on other platforms. `ELEVENLABS_API_KEY` overrides it.
 use super::{parakeet, ProviderKind, SpokenLanguage};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const SETTINGS_FILE: &str = "transcription.json";
@@ -131,22 +130,14 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn load_settings(dir: &Path) -> TranscriptSettings {
-    fs::read(dir.join(SETTINGS_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<TranscriptSettings>(&bytes).ok())
+    crate::files::load_json::<TranscriptSettings>(&dir.join(SETTINGS_FILE))
         .filter(|s| s.validate().is_ok())
         .unwrap_or_default()
 }
 
 pub fn save_settings(dir: &Path, settings: &TranscriptSettings) -> Result<(), String> {
     settings.validate()?;
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-    temp.persist(dir.join(SETTINGS_FILE))
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::save_json(&dir.join(SETTINGS_FILE), settings)
 }
 
 pub fn settings_view(dir: &Path) -> TranscriptSettingsView {
@@ -220,7 +211,7 @@ mod tests {
         s.keyterms = vec!["Factorio".into()];
         save_settings(dir.path(), &s).unwrap();
         assert_eq!(load_settings(dir.path()), s);
-        fs::write(dir.path().join(SETTINGS_FILE), b"{not json").unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), b"{not json").unwrap();
         assert_eq!(load_settings(dir.path()), TranscriptSettings::default());
     }
 

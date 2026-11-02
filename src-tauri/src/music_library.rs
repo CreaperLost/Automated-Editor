@@ -11,9 +11,9 @@
 //! Placing a track fills a stretch of the timeline on a music track (repeating it when the
 //! stretch is longer), with fades, and sets the music under speech when the project has no
 //! level for it, so a bed never drowns the voice. One undo step; nothing else moves.
+use crate::own_library;
 use crate::project::revision::EditDocument;
 use crate::sequence::{Asset, Licence, LicenceKind, Role};
-use crate::sound_library::tidy_tags;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -22,8 +22,6 @@ use std::path::{Path, PathBuf};
 
 /// The name of the track music goes on when no music track is free.
 pub const TRACK_NAME: &str = "Music";
-const MINE_FILE: &str = "mine.json";
-const MAX_MINE: usize = 500;
 /// A track's length at most (an hour); at least ten seconds, shorter is a sound effect.
 const MAX_TRACK_US: u64 = 3_600_000_000;
 const MIN_TRACK_US: u64 = 10_000_000;
@@ -599,18 +597,6 @@ pub struct Track {
     pub lufs: Option<f32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct Mine {
-    id: String,
-    name: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    duration_us: u64,
-    file: String,
-    licence: Licence,
-}
-
 /// The library's folder: the app's, or a test run's own.
 pub fn dir() -> PathBuf {
     crate::style::store::config().join("music")
@@ -633,24 +619,6 @@ pub fn refused(licence: &Licence) -> Option<&'static str> {
         LicenceKind::NonCommercial => Some("its licence forbids monetised use"),
         _ => Some("its licence isn't known"),
     }
-}
-
-fn load_mine(root: &Path) -> Vec<Mine> {
-    fs::read(root.join("mine").join(MINE_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-
-fn save_mine(root: &Path, mine: &[Mine]) -> Result<(), String> {
-    let dir = root.join("mine");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec_pretty(mine).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-    temp.persist(dir.join(MINE_FILE))
-        .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// Every track: the built-in ones first, then the user's own, in the order they were added.
@@ -677,7 +645,7 @@ pub fn list(root: &Path) -> Vec<Track> {
         })
         .collect();
     let mine_dir = root.join("mine");
-    tracks.extend(load_mine(root).into_iter().map(|m| Track {
+    tracks.extend(own_library::load(root).into_iter().map(|m| Track {
         path: mine_dir.join(&m.file).to_string_lossy().into_owned(),
         downloaded: true,
         id: m.id,
@@ -694,18 +662,9 @@ pub fn list(root: &Path) -> Vec<Track> {
 
 /// The tracks matching `query` (every word in its name, id or tags), all of them when empty.
 pub fn search(tracks: Vec<Track>, query: &str) -> Vec<Track> {
-    let words: Vec<String> = query
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    tracks
-        .into_iter()
-        .filter(|t| {
-            let hay = format!("{} {} {}", t.id, t.name, t.tags.join(" ")).to_lowercase();
-            words.iter().all(|w| hay.contains(w.as_str()))
-        })
-        .collect()
+    own_library::search(tracks, query, |t| {
+        format!("{} {} {}", t.id, t.name, t.tags.join(" "))
+    })
 }
 
 pub fn find(root: &Path, id: &str) -> Result<Track, String> {
@@ -788,40 +747,20 @@ pub fn add(
                 .into(),
         );
     }
-    let mut mine = load_mine(root);
-    if mine.len() >= MAX_MINE {
-        return Err(format!(
-            "The library holds {MAX_MINE} tracks of your own at most"
-        ));
-    }
-    let stem = file
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "track".into());
-    let slug = crate::sound_library::slug(&stem);
-    let base = format!("my-{}", if slug.is_empty() { "track" } else { &slug });
-    let taken = |id: &str| builtin(id).is_some() || mine.iter().any(|m| m.id == id);
-    let id = crate::ids::free_id(&base, taken);
-    let ext = file
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_else(|| "mp3".into());
-    let copy = format!("{id}.{ext}");
-    let dir = root.join("mine");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::copy(file, dir.join(&copy)).map_err(|e| format!("Could not copy the track: {e}"))?;
-    mine.push(Mine {
-        id: id.clone(),
-        name: name
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-            .unwrap_or(stem),
-        tags: tidy_tags(tags),
+    let mut mine = own_library::load(root);
+    let id = own_library::copy_in(
+        root,
+        &mut mine,
+        file,
+        "track",
+        "mp3",
+        name,
+        tags,
         duration_us,
-        file: copy,
         licence,
-    });
-    save_mine(root, &mine)?;
+        |id| builtin(id).is_some(),
+    )?;
+    own_library::save(root, &mine)?;
     find(root, &id)
 }
 
@@ -833,7 +772,7 @@ pub fn update(
     tags: Option<Vec<String>>,
     licence: Option<Licence>,
 ) -> Result<Track, String> {
-    let mut mine = load_mine(root);
+    let mut mine = own_library::load(root);
     let Some(entry) = mine.iter_mut().find(|m| m.id == id) else {
         return Err(if builtin(id).is_some() {
             "Built-in tracks can't be changed".into()
@@ -846,29 +785,14 @@ pub fn update(
             "The music library only takes tracks that need no credit: {why}. Remove it instead."
         ));
     }
-    if let Some(name) = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
-        entry.name = name;
-    }
-    if let Some(tags) = tags {
-        entry.tags = tidy_tags(tags);
-    }
-    if let Some(licence) = licence {
-        entry.licence = licence;
-    }
-    save_mine(root, &mine)?;
+    own_library::change(entry, name, tags, licence);
+    own_library::save(root, &mine)?;
     find(root, id)
 }
 
 /// Takes a track of the user's out of the library (projects that used it keep their media).
 pub fn remove(root: &Path, id: &str) -> Result<(), String> {
-    let mut mine = load_mine(root);
-    let Some(at) = mine.iter().position(|m| m.id == id) else {
-        return Err(format!("No track {id} of your own"));
-    };
-    let entry = mine.remove(at);
-    save_mine(root, &mine)?;
-    let _ = fs::remove_file(root.join("mine").join(entry.file));
-    Ok(())
+    own_library::remove(root, id, "track")
 }
 
 /// The project's media for `track` (on disk already): the asset holding its file, or a new
@@ -878,23 +802,14 @@ pub fn asset_for(
     project_root: &Path,
     track: &Track,
 ) -> Result<(Asset, bool), String> {
-    let ours = Path::new(&track.path);
-    let same = |a: &Asset| {
-        Path::new(&a.path) == ours
-            || dunce::canonicalize(ours)
-                .map(|p| Path::new(&a.path) == p)
-                .unwrap_or(false)
-    };
-    if let Some(asset) = document.assets.iter().find(|a| same(a)) {
-        return Ok((asset.clone(), false));
-    }
-    let mut asset = crate::media_bin::import(project_root, ours)?;
-    asset.name = track.name.clone();
-    for stream in &mut asset.streams {
-        stream.role = Role::Music;
-    }
-    asset.licence = Some(track.licence.clone());
-    Ok((asset, true))
+    own_library::asset_for(
+        document,
+        project_root,
+        Path::new(&track.path),
+        &track.name,
+        &track.licence,
+        Role::Music,
+    )
 }
 
 /// What a placed bed covers and how it was made.
@@ -1073,7 +988,7 @@ mod tests {
             .unwrap_err();
             assert!(error.contains("no credit"), "{error}");
         }
-        assert!(load_mine(dir.path()).is_empty());
+        assert!(own_library::load(dir.path()).is_empty());
     }
 
     #[test]

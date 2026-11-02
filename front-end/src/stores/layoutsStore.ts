@@ -3,6 +3,7 @@ import { api } from "../lib/ipc";
 import { BUILT_IN_LAYOUTS, type FavouriteLayout, type Layout, type LayoutChange, type OpenedProject, type PickSettings } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 import { shortOp } from "./shortsStore";
+import { errorMessage } from "../lib/format";
 
 interface LayoutsState {
   /** The layout section picked on the timeline's Layouts lane. */
@@ -26,11 +27,6 @@ export const useLayoutsStore = create<LayoutsState>(() => ({
 
 const set = useLayoutsStore.setState;
 
-function message(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  return typeof err === "string" && err.trim() ? err : "Something went wrong.";
-}
-
 export const selectSection = (id: string | null) => set({ selectedId: id });
 export const setLayoutsError = (error?: string) => set({ error });
 
@@ -48,7 +44,7 @@ function run(label: string, work: (project: OpenedProject) => Promise<OpenedProj
   set({ busy: label, error: undefined });
   void work(project)
     .then((next) => useProjectStore.getState().applyOpenedProject(next))
-    .catch((err) => set({ error: message(err) }))
+    .catch((err) => set({ error: errorMessage(err) }))
     .finally(() => set({ busy: null }));
 }
 
@@ -135,14 +131,14 @@ export function pressLayoutKey(id: string) {
       if (!project || project.projectHandle !== handle || project.shortView) return;
       useProjectStore.getState().applyOpenedProject(await work(project));
     })
-    .catch((err) => set({ error: message(err) }));
+    .catch((err) => set({ error: errorMessage(err) }));
 }
 
 export async function loadFavourites() {
   try {
     set({ favourites: await api.layoutFavouritesList() });
   } catch (err) {
-    set({ error: message(err) });
+    set({ error: errorMessage(err) });
   }
 }
 
@@ -151,7 +147,7 @@ export async function saveFavourite(name: string, layout: Layout) {
     set({ favourites: await api.layoutFavouriteSave(name, layout), error: undefined });
     return true;
   } catch (err) {
-    set({ error: message(err) });
+    set({ error: errorMessage(err) });
     return false;
   }
 }
@@ -160,6 +156,6 @@ export async function removeFavourite(id: string) {
   try {
     set({ favourites: await api.layoutFavouriteRemove(id), error: undefined });
   } catch (err) {
-    set({ error: message(err) });
+    set({ error: errorMessage(err) });
   }
 }

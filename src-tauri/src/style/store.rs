@@ -40,8 +40,8 @@ pub(crate) fn config() -> PathBuf {
     crate::transcript::settings::config_dir()
 }
 
-/// A style's name is also a folder name: letters, digits, spaces, `-` and `_`, 1 to 40.
-pub fn check_name(name: &str) -> Result<(), String> {
+/// A name that is also a folder name: letters, digits, spaces, `-` and `_`, 1 to 40.
+pub(crate) fn check_folder_name(name: &str, noun: &str) -> Result<(), String> {
     let ok = !name.trim().is_empty()
         && name == name.trim()
         && name.chars().count() <= 40
@@ -51,8 +51,36 @@ pub fn check_name(name: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err("Name a style with letters, digits, spaces, - or _ (at most 40)".into())
+        Err(format!(
+            "Name a {noun} with letters, digits, spaces, - or _ (at most 40)"
+        ))
     }
+}
+
+/// The folders in `dir` holding a `file`, by name.
+pub(crate) fn folders_with(dir: &Path, file: &str) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join(file).is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect()
+}
+
+/// A folder's record of which name became which.
+pub(crate) fn read_renames(path: &Path) -> BTreeMap<String, String> {
+    crate::files::load_json(path).unwrap_or_default()
+}
+
+pub(crate) fn write_renames(path: &Path, renames: &BTreeMap<String, String>) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(renames).map_err(|e| e.to_string())?;
+    std::fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A style's name is also a folder name.
+pub fn check_name(name: &str) -> Result<(), String> {
+    check_folder_name(name, "style")
 }
 
 /// A file name in a style's folder (no paths).
@@ -146,15 +174,10 @@ pub fn cached(name: &str) -> Option<Style> {
 
 /// Every style: the built-ins, then the user's by name.
 pub fn list_in(styles: &Path) -> Vec<Style> {
-    let mut own: Vec<Style> = std::fs::read_dir(styles)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join(FILE).is_file())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            (!is_builtin(&name)).then(|| load_in(styles, &name).ok())?
-        })
+    let mut own: Vec<Style> = folders_with(styles, FILE)
+        .iter()
+        .filter(|name| !is_builtin(name))
+        .filter_map(|name| load_in(styles, name).ok())
         .collect();
     own.sort_by_key(|s| s.name.to_lowercase());
     builtin().into_iter().chain(own).collect()
@@ -321,7 +344,7 @@ pub fn remove_in(styles: &Path, name: &str) -> Result<(), String> {
     let before = map.len();
     map.retain(|_, target| *target != name);
     if map.len() != before {
-        let _ = write_renames(styles, &map);
+        let _ = write_renames(&styles.join(RENAMES_FILE), &map);
     }
     crate::graphics::render::sources_changed();
     Ok(())
@@ -332,16 +355,7 @@ pub fn remove(name: &str) -> Result<(), String> {
 }
 
 fn renames(styles: &Path) -> BTreeMap<String, String> {
-    std::fs::read_to_string(styles.join(RENAMES_FILE))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
-}
-
-fn write_renames(styles: &Path, renames: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = styles.join(RENAMES_FILE);
-    let text = serde_json::to_string_pretty(renames).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+    read_renames(&styles.join(RENAMES_FILE))
 }
 
 fn record_rename(styles: &Path, old: &str, new: &str) -> Result<(), String> {
@@ -353,7 +367,7 @@ fn record_rename(styles: &Path, old: &str, new: &str) -> Result<(), String> {
     }
     map.remove(new);
     map.insert(old.to_string(), new.to_string());
-    write_renames(styles, &map)
+    write_renames(&styles.join(RENAMES_FILE), &map)
 }
 
 /// The style's name now: `name` while a style has it, else the name it was renamed to.

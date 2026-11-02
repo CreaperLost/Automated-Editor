@@ -89,7 +89,12 @@ pub fn css(style: &Style, own_colors: bool) -> String {
 
 /// `html` with `css` as the last style in its head, so it wins over the composition's own.
 pub fn inject_css(html: &str, css: &str) -> String {
-    let block = format!("<style id=\"aeroedits-brand\">\n{css}</style>\n");
+    inject_style(html, "aeroedits-brand", css)
+}
+
+/// `html` with `css` as the last style in its head, under the given id.
+pub(crate) fn inject_style(html: &str, id: &str, css: &str) -> String {
+    let block = format!("<style id=\"{id}\">\n{css}</style>\n");
     match html.find("</head>") {
         Some(at) => format!("{}{block}{}", &html[..at], &html[at..]),
         None => format!("{block}{html}"),

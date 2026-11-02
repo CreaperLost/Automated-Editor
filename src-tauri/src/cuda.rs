@@ -87,28 +87,32 @@ pub fn wanted() -> bool {
     cfg!(all(windows, feature = "parakeet-cuda"))
 }
 
+/// A library in Windows' system folder loads (a driver's is there when it is installed).
+#[cfg(windows)]
+pub(crate) fn system_library_loads(file: &str) -> bool {
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    use windows_sys::Win32::System::LibraryLoader::{LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
+    let name: Vec<u16> = file.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: a NUL-terminated name; the module is freed again at once.
+    unsafe {
+        let module = LoadLibraryExW(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
+        if module.is_null() {
+            return false;
+        }
+        FreeLibrary(module);
+    }
+    true
+}
+
 /// An NVIDIA driver is installed (its CUDA driver library loads).
 pub fn nvidia_driver() -> bool {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::FreeLibrary;
-        use windows_sys::Win32::System::LibraryLoader::{
-            LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
-        };
-        let name: Vec<u16> = "nvcuda.dll\0".encode_utf16().collect();
-        // SAFETY: a NUL-terminated name; the module is freed again at once.
-        unsafe {
-            let module = LoadLibraryExW(
-                name.as_ptr(),
-                std::ptr::null_mut(),
-                LOAD_LIBRARY_SEARCH_SYSTEM32,
-            );
-            if module.is_null() {
-                return false;
-            }
-            FreeLibrary(module);
-        }
-        true
+        system_library_loads("nvcuda.dll")
     }
     #[cfg(not(windows))]
     {

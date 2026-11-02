@@ -116,3 +116,10 @@ export function fakeTimers() {
 
 /** Lets settled promises run their callbacks. */
 export const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Every element in a rendered tree (elements only: components are not called). */
+export function elements(node: unknown): React.ReactElement[] {
+  if (Array.isArray(node)) return node.flatMap(elements);
+  if (!React.isValidElement(node)) return [];
+  return [node, ...elements((node.props as { children?: unknown }).children)];
+}

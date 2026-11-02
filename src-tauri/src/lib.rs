@@ -10,6 +10,7 @@ pub mod dsp;
 pub mod effects;
 pub mod export;
 pub mod face;
+pub mod files;
 pub mod fixtures;
 pub mod graphics;
 pub mod ids;
@@ -19,12 +20,13 @@ pub mod mcp;
 pub mod media;
 pub mod media_bin;
 pub mod music_library;
-mod parity;
+pub mod own_library;
 mod perf;
 pub mod playback;
 pub mod preset;
 pub mod project;
 pub mod proposals;
+pub mod ranges;
 pub mod render;
 pub mod secrets;
 pub mod sequence;
@@ -200,11 +202,10 @@ async fn project_waveform_overview(
     project_handle: String,
     track_id: String,
 ) -> Result<project::waveform::WaveformOverview, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::project_waveform_overview_impl(&app.state::<AppState>(), project_handle, track_id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -214,11 +215,10 @@ async fn project_face_tracks(
     project_handle: String,
     start: bool,
 ) -> Result<Vec<face::FaceTrackStatus>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::project_face_tracks_impl(&app.state::<AppState>(), project_handle, start)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -228,11 +228,10 @@ async fn project_zoom_suggestions(
     project_handle: String,
     config: Option<zoom::ZoomConfig>,
 ) -> Result<zoom::ZoomGeneration, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::project_zoom_suggestions_impl(&app.state::<AppState>(), project_handle, config)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -322,7 +321,7 @@ async fn project_layouts_pick(
     short_id: Option<String>,
     settings: Option<layouts::pick::PickSettings>,
 ) -> Result<commands::LayoutPick, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::project_layouts_pick_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -332,7 +331,6 @@ async fn project_layouts_pick(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -402,7 +400,7 @@ async fn project_audio_update(
     expected_revision: u64,
     audio: project::AudioSettings,
 ) -> Result<project::OpenedProject, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::project_audio_update_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -411,7 +409,6 @@ async fn project_audio_update(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -569,7 +566,7 @@ async fn project_effects_at(
     project_handle: String,
     edited_us: u64,
 ) -> Result<Vec<commands::effects::EffectAt>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::effects::project_effects_at_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -577,7 +574,6 @@ async fn project_effects_at(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Adds a screen effect over a box drawn on the preview: one undo step.
@@ -594,7 +590,7 @@ async fn project_effect_add(
     canvas: effects::Area,
     amount: Option<f32>,
 ) -> Result<commands::effects::EffectAdded, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::effects::project_effect_add_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -607,7 +603,6 @@ async fn project_effect_add(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Ends a screen effect at a moment: one undo step.
@@ -640,7 +635,7 @@ async fn project_effect_move(
     at_us: u64,
     canvas: effects::Area,
 ) -> Result<project::OpenedProject, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::effects::project_effect_move_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -651,7 +646,6 @@ async fn project_effect_move(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Sets the video's screen effects: one undo step.
@@ -734,7 +728,7 @@ async fn project_music_place(
     until_us: Option<u64>,
     short_id: Option<String>,
 ) -> Result<commands::music::MusicPlaced, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::music::project_music_place_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -746,7 +740,6 @@ async fn project_music_place(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// One timeline edit: tracks, clips, cuts, links. In a short's own timeline with `short_id`.
@@ -804,47 +797,60 @@ fn playback_focus_short(
     )
 }
 
+/// Runs a command's slow work off the window's thread.
 #[cfg(feature = "tauri-app")]
-#[tauri::command]
-async fn pick_media_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Shows a dialog on the main thread, as the system wants, while the window's thread stays free.
+#[cfg(feature = "tauri-app")]
+async fn on_main_thread<T: Send + 'static>(
+    app: tauri::AppHandle,
+    show: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    blocking(move || {
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Import media")
-                .add_filter("Video, images and audio", &media_bin::import_extensions())
-                .pick_files()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
-            let _ = tx.send(picked);
+            let _ = tx.send(show());
         })
         .map_err(|error| error.to_string())?;
         rx.recv().map_err(|error| error.to_string())
     })
     .await
-    .map_err(|error| error.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn pick_media_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    on_main_thread(app, move || {
+        rfd::FileDialog::new()
+            .set_title("Import media")
+            .add_filter("Video, images and audio", &media_bin::import_extensions())
+            .pick_files()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+    })
+    .await
 }
 
 /// A folder whose videos, images and audio are imported together.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_media_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Import a folder of media")
-                .pick_folder()
-                .map(|path| path.to_string_lossy().into_owned());
-            let _ = tx.send(picked);
-        })
-        .map_err(|error| error.to_string())?;
-        rx.recv().map_err(|error| error.to_string())
+    on_main_thread(app, move || {
+        rfd::FileDialog::new()
+            .set_title("Import a folder of media")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1046,7 +1052,7 @@ async fn detect_silence(
     transcript_assisted: Option<bool>,
     short_id: Option<String>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         let short = short_id.as_deref();
         if transcript_assisted.unwrap_or(false) {
             return commands::transcript_pauses::detect_transcript_pauses_for(
@@ -1076,7 +1082,6 @@ async fn detect_silence(
         }
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1095,7 +1100,7 @@ async fn detect_non_speech_gaps(
     config: transcript::pauses::TranscriptGapConfig,
     short_id: Option<String>,
 ) -> Result<dsp::SilenceDetectionResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::transcript_pauses::detect_non_speech_gaps_for(
             &app.state::<AppState>(),
             project_handle,
@@ -1106,7 +1111,6 @@ async fn detect_non_speech_gaps(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1118,7 +1122,7 @@ async fn detect_mouth_noises(
     config: dsp::noises::NoiseConfig,
     short_id: Option<String>,
 ) -> Result<commands::noises::NoiseScan, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::noises::detect_mouth_noises_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -1128,7 +1132,6 @@ async fn detect_mouth_noises(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1139,11 +1142,10 @@ async fn noise_review(
     key: String,
     short_id: Option<String>,
 ) -> Result<commands::noises::NoiseScan, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::noises::noise_review_impl(&app.state::<AppState>(), project_handle, key, short_id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1157,7 +1159,7 @@ async fn project_noise_mutes(
     unmute: bool,
     short_id: Option<String>,
 ) -> Result<project::OpenedProject, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::noises::project_noise_mutes_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -1169,7 +1171,6 @@ async fn project_noise_mutes(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The joins to listen to (`joins.rs`), for the Joins panel: what changes them, then the list.
@@ -1216,7 +1217,7 @@ async fn source_search(
             reader.history().current.clone(),
         )
     };
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         source_search::search_until(
             &root,
             &document,
@@ -1227,7 +1228,6 @@ async fn source_search(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1360,7 +1360,7 @@ async fn project_chapters_generate(
     project_handle: String,
     track_id: String,
 ) -> Result<project::OpenedProject, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::transcript::project_chapters_generate_impl(
             &app.state::<AppState>(),
             &app.state::<commands::transcript::TranscriptState>(),
@@ -1369,7 +1369,6 @@ async fn project_chapters_generate(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1466,7 +1465,7 @@ async fn project_shorts_generate(
     project_handle: String,
     track_id: String,
 ) -> Result<project::OpenedProject, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::transcript::project_shorts_generate_impl(
             &app.state::<AppState>(),
             &app.state::<commands::transcript::TranscriptState>(),
@@ -1475,7 +1474,6 @@ async fn project_shorts_generate(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1505,7 +1503,7 @@ async fn short_preview_frame(
     layout: shorts::ShortLayout,
     offset_us: u64,
 ) -> Result<tauri::ipc::Response, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::short_preview_frame_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -1516,7 +1514,6 @@ async fn short_preview_frame(
         .map(tauri::ipc::Response::new)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The project open in the editor, for windows that open after it (the Shorts Studio).
@@ -1912,7 +1909,7 @@ async fn transcript_ai_suggest(
     short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
     use tauri::Emitter;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         let emitter = app.clone();
         commands::transcript::transcript_ai_suggest_impl(
             &app.state::<AppState>(),
@@ -1927,7 +1924,6 @@ async fn transcript_ai_suggest(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1939,7 +1935,7 @@ async fn transcript_get(
     short_id: Option<String>,
 ) -> Result<Option<transcript::TranscriptView>, String> {
     // A long transcript takes a while to read and place: not on the window's thread.
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::transcript::transcript_get_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -1948,7 +1944,6 @@ async fn transcript_get(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1959,7 +1954,7 @@ async fn transcript_run(
     track_id: String,
 ) -> Result<commands::transcript::TranscriptRunResult, String> {
     use tauri::Emitter;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         let emitter = app.clone();
         commands::transcript::transcript_run_impl(
             &app.state::<AppState>(),
@@ -1973,7 +1968,6 @@ async fn transcript_run(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2000,7 +1994,7 @@ async fn transcript_suggestions(
     track_id: String,
     short_id: Option<String>,
 ) -> Result<Vec<transcript::TranscriptCutSuggestion>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::transcript::transcript_suggestions_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2009,7 +2003,6 @@ async fn transcript_suggestions(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The caption track: the captioned transcript's cues in edited time.
@@ -2020,7 +2013,7 @@ async fn project_caption_cues(
     project_handle: String,
     short_id: Option<String>,
 ) -> Result<commands::transcript::CaptionTrackView, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::transcript::project_caption_cues_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2028,7 +2021,6 @@ async fn project_caption_cues(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// The sound effects lane: its clicks and whooshes in edited time.
@@ -2039,11 +2031,10 @@ async fn project_sound_effects(
     project_handle: String,
     short_id: Option<String>,
 ) -> Result<Vec<sound_effects::Effect>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::project_sound_effects_impl(&app.state::<AppState>(), project_handle, short_id)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Edits a caption from the timeline (text, timing, split, merge, hide), saved in the transcript.
@@ -2150,7 +2141,7 @@ async fn transcript_download_model(
     model: Option<String>,
 ) -> Result<transcript::TranscriptSettingsView, String> {
     use tauri::Emitter;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         let emitter = app.clone();
         commands::transcript::transcript_download_model_impl(
             &app.state::<commands::transcript::TranscriptState>(),
@@ -2161,7 +2152,6 @@ async fn transcript_download_model(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2176,13 +2166,12 @@ async fn graphics_runtime_install(
     app: tauri::AppHandle,
 ) -> Result<graphics::runtime::RuntimeStatus, String> {
     use tauri::Emitter;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::graphics_runtime_install_impl(&mut |progress| {
             let _ = app.emit("graphics-runtime-progress", progress);
         })
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2224,7 +2213,7 @@ async fn project_graphic_create(
     at_us: u64,
     length_us: Option<u64>,
 ) -> Result<commands::graphics::GraphicCreated, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::project_graphic_create_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2237,7 +2226,6 @@ async fn project_graphic_create(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Makes a graphic (a template, a library item, or a copy of one of the video's) and places it
@@ -2255,7 +2243,7 @@ async fn project_short_graphic_add(
     length_us: Option<u64>,
     mode: Option<shorts::GraphicSlot>,
 ) -> Result<commands::graphics::GraphicCreated, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::project_short_graphic_add_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2268,7 +2256,6 @@ async fn project_short_graphic_add(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2298,7 +2285,7 @@ async fn project_frame_thumbnail(
     at_us: u64,
     width: u32,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::project_frame_thumbnail_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2307,7 +2294,6 @@ async fn project_frame_thumbnail(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2320,7 +2306,7 @@ async fn project_clip_thumbnails(
     times_us: Vec<u64>,
     height: u32,
 ) -> Result<Vec<Option<String>>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::thumbs::project_clip_thumbnails_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2331,7 +2317,6 @@ async fn project_clip_thumbnails(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2576,11 +2561,10 @@ async fn style_preview(
     project_handle: String,
     style: style::Style,
 ) -> Result<Vec<commands::graphics::LookStill>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::style_preview_impl(&app.state::<AppState>(), project_handle, style)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Keeps a style asked for from references in the Style panel for the user's agent (STY-3) and
@@ -2620,34 +2604,27 @@ fn style_request_clear() {
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_brand_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let (title, label, extensions): (&str, &str, &[&str]) = if kind == "font" {
-                (
-                    "Choose a font file",
-                    "Fonts",
-                    &["woff2", "woff", "ttf", "otf"],
-                )
-            } else {
-                (
-                    "Choose a logo",
-                    "Images",
-                    &["png", "svg", "jpg", "jpeg", "webp"],
-                )
-            };
-            let picked = rfd::FileDialog::new()
-                .set_title(title)
-                .add_filter(label, extensions)
-                .pick_file()
-                .map(|path| path.to_string_lossy().into_owned());
-            let _ = tx.send(picked);
-        })
-        .map_err(|error| error.to_string())?;
-        rx.recv().map_err(|error| error.to_string())
+    on_main_thread(app, move || {
+        let (title, label, extensions): (&str, &str, &[&str]) = if kind == "font" {
+            (
+                "Choose a font file",
+                "Fonts",
+                &["woff2", "woff", "ttf", "otf"],
+            )
+        } else {
+            (
+                "Choose a logo",
+                "Images",
+                &["png", "svg", "jpg", "jpeg", "webp"],
+            )
+        };
+        rfd::FileDialog::new()
+            .set_title(title)
+            .add_filter(label, extensions)
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2685,7 +2662,7 @@ async fn project_graphic_check(
     project_handle: String,
     asset_id: String,
 ) -> Result<commands::graphics::GateView, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::project_graphic_check_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2695,7 +2672,6 @@ async fn project_graphic_check(
         .map(Into::into)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2705,7 +2681,7 @@ async fn project_graphic_library_save(
     project_handle: String,
     request: commands::graphics::LibrarySave,
 ) -> Result<commands::graphics::LibrarySaved, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::project_graphic_library_save_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2714,7 +2690,6 @@ async fn project_graphic_library_save(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2727,7 +2702,7 @@ async fn project_graphic_from_library(
     at_us: u64,
     length_us: Option<u64>,
 ) -> Result<commands::graphics::GraphicCreated, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::graphics::project_graphic_from_library_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2738,7 +2713,6 @@ async fn project_graphic_from_library(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2805,7 +2779,7 @@ async fn export_file(
     kind: export::files::FileKind,
     destination: Option<String>,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         commands::export_file_impl(
             &app.state::<AppState>(),
             project_handle,
@@ -2817,7 +2791,6 @@ async fn export_file(
         .map(|path| path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2861,43 +2834,29 @@ async fn pick_directory_dialog(
     title: &'static str,
     directory: std::path::PathBuf,
 ) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let mut dialog = rfd::FileDialog::new().set_title(title);
-            if directory.is_dir() {
-                dialog = dialog.set_directory(&directory);
-            }
-            let picked = dialog
-                .pick_folder()
-                .map(|path| path.to_string_lossy().into_owned());
-            let _ = tx.send(picked);
-        })
-        .map_err(|error| error.to_string())?;
-        rx.recv().map_err(|error| error.to_string())
+    on_main_thread(app, move || {
+        let mut dialog = rfd::FileDialog::new().set_title(title);
+        if directory.is_dir() {
+            dialog = dialog.set_directory(&directory);
+        }
+        dialog
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn pick_wallpaper_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Choose wallpaper")
-                .add_filter("Images", &["png", "jpg", "jpeg"])
-                .pick_file()
-                .map(|path| path.to_string_lossy().into_owned());
-            let _ = tx.send(picked);
-        })
-        .map_err(|error| error.to_string())?;
-        rx.recv().map_err(|error| error.to_string())
+    on_main_thread(app, move || {
+        rfd::FileDialog::new()
+            .set_title("Choose wallpaper")
+            .add_filter("Images", &["png", "jpg", "jpeg"])
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[cfg(feature = "tauri-app")]

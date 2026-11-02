@@ -196,10 +196,7 @@ fn restore_graphic(
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let mut temp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(&dir))
-            .map_err(|e| e.to_string())?;
-        std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-        temp.persist(&path).map_err(|e| e.to_string())?;
+        crate::files::write_atomic(&path, &bytes)?;
         changed = true;
     }
     Ok(changed)

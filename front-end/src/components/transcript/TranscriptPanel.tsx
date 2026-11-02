@@ -2,7 +2,7 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import { AudioLines, Captions, Check, Eye, EyeOff, Loader2, Pencil, Play, RotateCcw, Scissors, Settings2, Sparkles } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
-import { api, isTauriEnvironment } from "../../lib/ipc";
+import { api } from "../../lib/ipc";
 import {
   OpenedProject,
   TranscriptCutSuggestion,
@@ -15,6 +15,9 @@ import { buildTimeIndex, findAt } from "../../lib/transcriptIndex";
 import { Badge, Button, IconButton, Notice, cn } from "../ui";
 import { useLineWindow } from "./useLineWindow";
 import { TakeCleanBar } from "../shorts/TakeCleanBar";
+import { formatTime } from "../../lib/format";
+import { errorMessage } from "../../lib/format";
+import { listenTo } from "../../lib/windowSync";
 
 // Loaded when first opened.
 const TranscriptSettingsModal = React.lazy(() =>
@@ -27,13 +30,6 @@ function audioTracks(project: OpenedProject | null) {
   return soundSources(project)
     .filter((sound) => !project?.shortView || sound.placed)
     .map((sound) => ({ ...sound, id: sound.key }));
-}
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
 
@@ -76,12 +72,6 @@ function transcriptLines(words: LineWord[]): TranscriptLine[] {
   }
   flush();
   return lines;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err.trim()) return err;
-  return "Something went wrong.";
 }
 
 /** What a transcript line does for clicks and typing; read through a ref, so a line does not
@@ -353,19 +343,7 @@ export const TranscriptPanel: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<TranscriptionProgress>("transcript-progress", (event) => setProgress(event.payload)).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo<TranscriptionProgress>("transcript-progress", setProgress);
   }, []);
 
   const words = view?.words ?? [];

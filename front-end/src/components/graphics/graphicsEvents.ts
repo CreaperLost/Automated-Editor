@@ -1,33 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, isTauriEnvironment } from "../../lib/ipc";
 import type { GraphicLibraryItem, StylesView } from "../../lib/types";
+import { listenTo } from "../../lib/windowSync";
 
 /** Calls `onUpdate` (throttled) whenever a graphic render moves along, finishes or fails. */
 export function useGraphicsUpdates(onUpdate: () => void) {
   const latest = useRef(onUpdate);
   latest.current = onUpdate;
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen("aeroedits-graphics-updated", () => {
-        // Progress comes many times a second; a few refreshes a second are enough.
-        if (timer) return;
-        timer = setTimeout(() => {
-          timer = undefined;
-          latest.current();
-        }, 300);
-      }).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
+    const unlisten = listenTo("aeroedits-graphics-updated", () => {
+      // Progress comes many times a second; a few refreshes a second are enough.
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        latest.current();
+      }, 300);
+    });
     return () => {
-      disposed = true;
       if (timer) clearTimeout(timer);
-      unlisten?.();
+      unlisten();
     };
   }, []);
 }

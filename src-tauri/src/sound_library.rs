@@ -6,6 +6,7 @@
 //!
 //! Built-in sounds are written once into the app's folder (`sounds/built-in`), since media
 //! is used in place; the user's own are copied into `sounds/mine` with `mine.json`.
+use crate::own_library;
 use crate::project::revision::EditDocument;
 use crate::sequence::{Asset, Licence, LicenceKind, Role};
 use serde::{Deserialize, Serialize};
@@ -14,9 +15,6 @@ use std::path::{Path, PathBuf};
 
 /// The name of the track sounds go on when no effects track is free.
 pub const TRACK_NAME: &str = "Sound effects";
-const MINE_FILE: &str = "mine.json";
-/// Sounds of the user's own, at most.
-const MAX_MINE: usize = 500;
 /// A sound effect's length at most: longer is music, not an effect.
 const MAX_SOUND_US: u64 = 30_000_000;
 
@@ -179,20 +177,6 @@ pub struct Sound {
     pub licence: Licence,
 }
 
-/// A sound of the user's own, as `mine.json` keeps it.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct Mine {
-    id: String,
-    name: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    duration_us: u64,
-    /// The copy's file name inside `mine`.
-    file: String,
-    licence: Licence,
-}
-
 /// The library's folder: the app's, or a test run's own.
 pub fn dir() -> PathBuf {
     crate::style::store::config().join("sounds")
@@ -211,24 +195,6 @@ fn built_in_dir(root: &Path) -> Result<PathBuf, String> {
         }
     }
     Ok(dir)
-}
-
-fn load_mine(root: &Path) -> Vec<Mine> {
-    fs::read(root.join("mine").join(MINE_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-
-fn save_mine(root: &Path, mine: &[Mine]) -> Result<(), String> {
-    let dir = root.join("mine");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec_pretty(mine).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-    temp.persist(dir.join(MINE_FILE))
-        .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// Every sound: the built-in set first, then the user's own, in the order they were added.
@@ -253,7 +219,7 @@ pub fn list(root: &Path) -> Result<Vec<Sound>, String> {
         })
         .collect();
     let mine_dir = root.join("mine");
-    sounds.extend(load_mine(root).into_iter().map(|m| Sound {
+    sounds.extend(own_library::load(root).into_iter().map(|m| Sound {
         path: mine_dir.join(&m.file).to_string_lossy().into_owned(),
         id: m.id,
         name: m.name,
@@ -267,18 +233,9 @@ pub fn list(root: &Path) -> Result<Vec<Sound>, String> {
 
 /// The sounds matching `query` (every word in its name, id or tags), all of them when empty.
 pub fn search(sounds: Vec<Sound>, query: &str) -> Vec<Sound> {
-    let words: Vec<String> = query
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    sounds
-        .into_iter()
-        .filter(|s| {
-            let hay = format!("{} {} {}", s.id, s.name, s.tags.join(" ")).to_lowercase();
-            words.iter().all(|w| hay.contains(w.as_str()))
-        })
-        .collect()
+    own_library::search(sounds, query, |s| {
+        format!("{} {} {}", s.id, s.name, s.tags.join(" "))
+    })
 }
 
 pub fn find(root: &Path, id: &str) -> Result<Sound, String> {
@@ -286,31 +243,6 @@ pub fn find(root: &Path, id: &str) -> Result<Sound, String> {
         .into_iter()
         .find(|s| s.id == id)
         .ok_or_else(|| format!("No sound {id} in the library"))
-}
-
-pub(crate) fn tidy_tags(tags: Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for tag in tags {
-        let tag = tag.trim().to_lowercase();
-        if !tag.is_empty() && tag.chars().count() <= 30 && !out.contains(&tag) {
-            out.push(tag);
-        }
-    }
-    out.truncate(12);
-    out
-}
-
-/// A file name as an id: lower case letters and digits, at most six words joined by dashes.
-pub(crate) fn slug(stem: &str) -> String {
-    stem.to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|p| !p.is_empty())
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("-")
 }
 
 /// Copies a sound file of the user's into the library with its tags and licence.
@@ -328,41 +260,20 @@ pub fn add(
     if duration_us == 0 || duration_us > MAX_SOUND_US {
         return Err("A sound effect runs between a moment and 30 seconds; longer is music".into());
     }
-    let mut mine = load_mine(root);
-    if mine.len() >= MAX_MINE {
-        return Err(format!(
-            "The library holds {MAX_MINE} sounds of your own at most"
-        ));
-    }
-    let stem = file
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "sound".into());
-    let slug = slug(&stem);
-    let base = format!("my-{}", if slug.is_empty() { "sound" } else { &slug });
-    let taken = |id: &str| BUILTIN.iter().any(|b| b.id == id) || mine.iter().any(|m| m.id == id);
-    let id = crate::ids::free_id(&base, taken);
-    let ext = file
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_else(|| "wav".into());
-    let copy = format!("{id}.{ext}");
-    let dir = root.join("mine");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::copy(file, dir.join(&copy)).map_err(|e| format!("Could not copy the sound: {e}"))?;
-    let entry = Mine {
-        id: id.clone(),
-        name: name
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-            .unwrap_or(stem),
-        tags: tidy_tags(tags),
+    let mut mine = own_library::load(root);
+    let id = own_library::copy_in(
+        root,
+        &mut mine,
+        file,
+        "sound",
+        "wav",
+        name,
+        tags,
         duration_us,
-        file: copy,
         licence,
-    };
-    mine.push(entry);
-    save_mine(root, &mine)?;
+        |id| BUILTIN.iter().any(|b| b.id == id),
+    )?;
+    own_library::save(root, &mine)?;
     find(root, &id)
 }
 
@@ -374,7 +285,7 @@ pub fn update(
     tags: Option<Vec<String>>,
     licence: Option<Licence>,
 ) -> Result<Sound, String> {
-    let mut mine = load_mine(root);
+    let mut mine = own_library::load(root);
     let Some(entry) = mine.iter_mut().find(|m| m.id == id) else {
         return Err(if BUILTIN.iter().any(|b| b.id == id) {
             "Built-in sounds can't be changed".into()
@@ -382,29 +293,14 @@ pub fn update(
             format!("No sound {id} of your own")
         });
     };
-    if let Some(name) = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
-        entry.name = name;
-    }
-    if let Some(tags) = tags {
-        entry.tags = tidy_tags(tags);
-    }
-    if let Some(licence) = licence {
-        entry.licence = licence;
-    }
-    save_mine(root, &mine)?;
+    own_library::change(entry, name, tags, licence);
+    own_library::save(root, &mine)?;
     find(root, id)
 }
 
 /// Takes a sound of the user's out of the library (projects that used it keep their media).
 pub fn remove(root: &Path, id: &str) -> Result<(), String> {
-    let mut mine = load_mine(root);
-    let Some(at) = mine.iter().position(|m| m.id == id) else {
-        return Err(format!("No sound {id} of your own"));
-    };
-    let entry = mine.remove(at);
-    save_mine(root, &mine)?;
-    let _ = fs::remove_file(root.join("mine").join(entry.file));
-    Ok(())
+    own_library::remove(root, id, "sound")
 }
 
 /// The project's media for `sound`: the asset already holding its file, or a new one imported
@@ -415,23 +311,14 @@ pub fn asset_for(
     project_root: &Path,
     sound: &Sound,
 ) -> Result<(Asset, bool), String> {
-    let same = |a: &Asset| {
-        let ours = Path::new(&sound.path);
-        Path::new(&a.path) == ours
-            || dunce::canonicalize(ours)
-                .map(|p| Path::new(&a.path) == p)
-                .unwrap_or(false)
-    };
-    if let Some(asset) = document.assets.iter().find(|a| same(a)) {
-        return Ok((asset.clone(), false));
-    }
-    let mut asset = crate::media_bin::import(project_root, Path::new(&sound.path))?;
-    asset.name = sound.name.clone();
-    for stream in &mut asset.streams {
-        stream.role = Role::Effects;
-    }
-    asset.licence = Some(sound.licence.clone());
-    Ok((asset, true))
+    own_library::asset_for(
+        document,
+        project_root,
+        Path::new(&sound.path),
+        &sound.name,
+        &sound.licence,
+        Role::Effects,
+    )
 }
 
 /// The document's sequence with an unlocked audio track for `role` free over `[from, to)`: one

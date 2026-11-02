@@ -16,7 +16,6 @@ pub mod shorts;
 
 use crate::secrets::KeySpec;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 const SETTINGS_FILE: &str = "ai.json";
@@ -142,22 +141,14 @@ pub struct AiSettingsView {
 }
 
 pub fn load_settings(dir: &Path) -> AiSettings {
-    fs::read(dir.join(SETTINGS_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<AiSettings>(&bytes).ok())
+    crate::files::load_json::<AiSettings>(&dir.join(SETTINGS_FILE))
         .filter(|s| s.validate().is_ok())
         .unwrap_or_default()
 }
 
 pub fn save_settings(dir: &Path, settings: &AiSettings) -> Result<(), String> {
     settings.validate()?;
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-    temp.persist(dir.join(SETTINGS_FILE))
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::save_json(&dir.join(SETTINGS_FILE), settings)
 }
 
 pub fn settings_view(dir: &Path) -> AiSettingsView {
@@ -207,7 +198,7 @@ mod tests {
         save_settings(dir.path(), &settings).unwrap();
         assert_eq!(load_settings(dir.path()), settings);
         assert_eq!(settings.model(), "anthropic/claude-sonnet-4.5");
-        let json = fs::read_to_string(dir.path().join(SETTINGS_FILE)).unwrap();
+        let json = std::fs::read_to_string(dir.path().join(SETTINGS_FILE)).unwrap();
         assert!(json.contains("\"provider\": \"openRouter\""));
         assert!(!json.to_lowercase().contains("key"));
         let bad = AiSettings {

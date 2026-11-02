@@ -89,11 +89,7 @@ pub(crate) fn load_project_file(root: &Path) -> Result<Option<ProjectFile>, Stri
 
 pub(crate) fn save_project_file(root: &Path, file: &ProjectFile) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(file).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut temp, &bytes).map_err(|e| e.to_string())?;
-    temp.persist(root.join(PROJECT_FILE))
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_atomic(&root.join(PROJECT_FILE), &bytes)
 }
 
 /// A folder name from a project name: no path separators or characters Windows refuses.

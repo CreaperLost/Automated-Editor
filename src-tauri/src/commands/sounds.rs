@@ -3,7 +3,7 @@
 use super::{require_handle, AppState};
 use crate::project::revision::EditDocument;
 use crate::project::OpenedProject;
-use crate::sequence::Licence;
+use crate::sequence::{Asset, Licence};
 use crate::sound_library::{self as library, Sound};
 use serde::Serialize;
 use std::path::Path;
@@ -19,12 +19,20 @@ pub fn sound_library_list_impl(query: Option<String>) -> Result<Vec<Sound>, Stri
 
 /// A sound as a data URL for the window to play.
 pub fn sound_library_preview_impl(id: String) -> Result<String, String> {
-    use base64::Engine;
     let sound = library::find(&library::dir(), &id)?;
-    let path = Path::new(&sound.path);
+    audio_data_url(
+        Path::new(&sound.path),
+        MAX_PREVIEW_BYTES,
+        "The sound file is too big to preview",
+    )
+}
+
+/// A sound file as a data URL for the window to play.
+pub(crate) fn audio_data_url(path: &Path, max_bytes: u64, too_big: &str) -> Result<String, String> {
+    use base64::Engine;
     let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if size > MAX_PREVIEW_BYTES {
-        return Err("The sound file is too big to preview".into());
+    if size > max_bytes {
+        return Err(too_big.into());
     }
     let mime = match path
         .extension()
@@ -33,7 +41,7 @@ pub fn sound_library_preview_impl(id: String) -> Result<String, String> {
     {
         Some("flac") => "audio/flac",
         Some("mp3") => "audio/mpeg",
-        Some("ogg") => "audio/ogg",
+        Some("ogg") | Some("opus") => "audio/ogg",
         Some("m4a") | Some("aac") => "audio/mp4",
         _ => "audio/wav",
     };
@@ -121,25 +129,51 @@ pub fn project_sound_place_impl(
     short_id: Option<String>,
 ) -> Result<SoundPlaced, String> {
     let sound = library::find(&library::dir(), &sound_id)?;
+    let (project, asset_id, clip_id) = place_on_shown(
+        state,
+        &project_handle,
+        expected_revision,
+        short_id.as_deref(),
+        |document, root| library::asset_for(document, root, &sound),
+        |shown, asset, taken| library::place(shown, asset, at_us, taken),
+    )?;
+    Ok(SoundPlaced {
+        project,
+        asset_id,
+        clip_id,
+    })
+}
+
+/// Puts a library file on the timeline shown as one undo step, importing it into the project
+/// the first time (and taking an import away again when placing fails). `asset_for` finds or
+/// imports it. Answers the project, the asset's id and what `place` says.
+pub(crate) fn place_on_shown<T>(
+    state: &AppState,
+    project_handle: &str,
+    expected_revision: u64,
+    short_id: Option<&str>,
+    asset_for: impl FnOnce(&EditDocument, &Path) -> Result<(Asset, bool), String>,
+    place: impl FnOnce(&EditDocument, Asset, &[String]) -> Result<(EditDocument, T), String>,
+) -> Result<(OpenedProject, String, T), String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
+    require_handle(reader, project_handle)?;
     let root = reader.root().to_path_buf();
-    let (asset, new) = library::asset_for(reader.document(), &root, &sound)?;
+    let (asset, new) = asset_for(reader.document(), &root)?;
     let asset_id = asset.id.clone();
-    let placed = on_shown(reader.document(), short_id.as_deref(), |shown, taken| {
-        library::place(shown, asset.clone(), at_us, taken)
+    let placed = on_shown(reader.document(), short_id, |shown, taken| {
+        place(shown, asset.clone(), taken)
     })
-    .and_then(|(next, clip_id)| {
+    .and_then(|(next, out)| {
         let project = reader.commit_document(expected_revision, next)?;
-        let project = match short_id.as_deref() {
+        let project = match short_id {
             Some(id) => reader.short_view(id)?,
             None => project,
         };
-        Ok((project, clip_id))
+        Ok((project, out))
     });
-    let (project, clip_id) = match placed {
+    let (project, out) = match placed {
         Ok(done) => done,
         Err(error) => {
             if new {
@@ -153,11 +187,7 @@ pub fn project_sound_place_impl(
         .lock()
         .apply_document(&reader.history().current)?;
     state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
-    Ok(SoundPlaced {
-        project,
-        asset_id,
-        clip_id,
-    })
+    Ok((project, asset_id, out))
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ pub mod favourites;
 pub mod pick;
 pub mod resolve;
 
+pub(crate) use crate::ranges::{merge_near as merge, subtract};
 use crate::timeline::TimelineMapper;
 use crate::zoom::EditedRange;
 use schemars::JsonSchema;
@@ -604,39 +605,6 @@ impl<F: Fn(Option<&str>) -> Option<TimelineMapper>> Clocks<F> {
         }
         self.built.get(&key).and_then(Option::as_ref)
     }
-}
-
-/// `ranges` sorted, with any closer than `gap` joined.
-pub fn merge(mut ranges: Vec<(u64, u64)>, gap: u64) -> Vec<(u64, u64)> {
-    ranges.retain(|(a, b)| b > a);
-    ranges.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
-    for (a, b) in ranges {
-        match out.last_mut() {
-            Some(last) if a <= last.1.saturating_add(gap) => last.1 = last.1.max(b),
-            _ => out.push((a, b)),
-        }
-    }
-    out
-}
-
-/// What is left of `ranges` outside `remove`.
-pub fn subtract(ranges: &[(u64, u64)], remove: &[(u64, u64)]) -> Vec<(u64, u64)> {
-    let remove = merge(remove.to_vec(), 0);
-    let mut out = Vec::new();
-    for &(a, b) in ranges {
-        let mut at = a;
-        for &(x, y) in remove.iter().filter(|(x, y)| *x < b && *y > a) {
-            if x > at {
-                out.push((at, x));
-            }
-            at = at.max(y);
-        }
-        if at < b {
-            out.push((at, b));
-        }
-    }
-    out
 }
 
 /// The sections a timeline range makes on `clock` (asset `media`): one over the whole source

@@ -1187,38 +1187,13 @@ pub fn path_center(path: &[(u64, f32, f32)], t_us: u64) -> Option<(f64, f64)> {
 
 /// The cursor samples of the recording in `folder`, read once while the file is unchanged.
 pub fn recording_cursor_samples(folder: &std::path::Path) -> std::sync::Arc<Vec<(u64, f64, f64)>> {
-    use std::sync::{Arc, Mutex, OnceLock};
-    type Cache = Mutex<
-        std::collections::HashMap<
-            std::path::PathBuf,
-            (
-                [Option<std::time::SystemTime>; 2],
-                Arc<Vec<(u64, f64, f64)>>,
-            ),
-        >,
-    >;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let modified = ["events.jsonl", "keys.jsonl"].map(|name| {
-        std::fs::metadata(folder.join("telemetry").join(name))
-            .and_then(|m| m.modified())
-            .ok()
-    });
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((stamp, samples)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
-        if *stamp == modified {
-            return samples.clone();
-        }
-    }
-    let samples = Arc::new(
+    use crate::telemetry::stream::{read_once, FolderCache};
+    static CACHE: FolderCache<Vec<(u64, f64, f64)>> = std::sync::OnceLock::new();
+    read_once(&CACHE, folder, &["events.jsonl", "keys.jsonl"], || {
         crate::telemetry::reader::read_telemetry(folder)
             .map(|stream| cursor_samples(&stream))
-            .unwrap_or_default(),
-    );
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(folder.to_path_buf(), (modified, samples.clone()));
-    samples
+            .unwrap_or_default()
+    })
 }
 
 #[cfg(test)]
