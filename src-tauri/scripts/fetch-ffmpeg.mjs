@@ -6,7 +6,7 @@
 //
 // Builds come from one pinned BtbN/FFmpeg-Builds release (release branch 8.1), checked against
 // the SHA-256 sums written below, so every build bundles the same FFmpeg. To move to a newer
-// FFmpeg, follow the review in docs/dependencies.md: pick a month-end `autobuild-*` release
+// FFmpeg, follow the review in docs/verification.md#dependency-review: pick a month-end `autobuild-*` release
 // (BtbN prunes the daily ones after about two weeks), copy its asset names and sums from its
 // checksums.sha256, and update RELEASE, VERSION and SHA256. The default GPL build includes
 // libx264 and the NVENC, AMF and Quick Sync GPU encoders; it is a separate program the app

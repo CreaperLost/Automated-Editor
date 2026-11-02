@@ -63,6 +63,8 @@ pub enum Kind {
     MusicLicence,
     OutOfSync,
     PastMediaEnd,
+    GraphicFont,
+    GraphicReadingTime,
 }
 
 impl Kind {
@@ -199,6 +201,8 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     music_licences(&mut out, document);
     linked_sync(&mut out, document);
     past_media_end(&mut out, document);
+    graphic_fonts(&mut out, root, document);
+    graphic_reading_time(&mut out, root, document);
 
     let mut findings = cap(out.findings);
     findings.sort_by(|a, b| {
@@ -219,12 +223,8 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
                 .unwrap_or_else(|| "all".into()),
         };
         let base = format!("{}-{about}", finding.kind.name());
-        let mut id = base.clone();
-        let mut n = 2;
-        while !taken.insert(id.clone()) {
-            id = format!("{base}-{n}");
-            n += 1;
-        }
+        let id = crate::ids::free_id(&base, |id| taken.contains(id));
+        taken.insert(id.clone());
         finding.id = id;
     }
     CheckReport {
@@ -588,13 +588,10 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
     if !settings.enabled || document.short_layout.is_some() {
         return;
     }
-    let transcript = crate::captions::caption_source(
-        settings,
-        crate::export::caption_candidates(document),
-        Vec::new(),
-        |key| store::load_transcript(root, key).ok().flatten(),
-    );
-    let Some(transcript) = transcript else {
+    let cues = crate::export::caption_track_cues(document, settings, |key| {
+        store::load_transcript(root, key).ok().flatten()
+    });
+    let Some(cues) = cues else {
         out.push(
             Kind::CaptionsWithoutTranscript,
             Severity::Warning,
@@ -604,13 +601,10 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
         return;
     };
     let layout = &document.layout;
-    let Ok(mapper) = document.transcript_clock(&transcript.track_id) else {
-        return;
-    };
     let Ok((canvas_w, canvas_h)) = layout.preview_dimensions() else {
         return;
     };
-    let cues = crate::captions::build_cues(&transcript, &mapper, settings);
+    let cues: Vec<_> = cues.into_iter().map(|(_, cue)| cue).collect();
     let look = crate::captions::CaptionLook::of(document);
     let layouts = crate::layouts::resolve::of_document(document);
     let mut sizes = std::collections::HashMap::<(String, String), (u32, u32)>::new();
@@ -831,6 +825,176 @@ fn music_licences(out: &mut Builder, document: &EditDocument) {
             )
             .at(clip.start_us, clip.end_us());
         }
+    }
+}
+
+/// Names in a `font-family` list that are always there: CSS's generic families, the system
+/// font's names, and the style's fonts by variable (checked as the style's).
+fn always_there(family: &str) -> bool {
+    let f = family.trim().to_ascii_lowercase();
+    f.starts_with("var(")
+        || matches!(
+            f.as_str(),
+            "serif"
+                | "sans-serif"
+                | "monospace"
+                | "cursive"
+                | "fantasy"
+                | "system-ui"
+                | "ui-sans-serif"
+                | "ui-serif"
+                | "ui-monospace"
+                | "ui-rounded"
+                | "-apple-system"
+                | "blinkmacsystemfont"
+                | "inherit"
+                | "initial"
+                | "unset"
+                | "segoe ui"
+        )
+}
+
+/// The first family of each `font-family` declaration in a composition: the one it asks for
+/// (later ones are fallbacks).
+fn wanted_families(html: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (i, _) in html.match_indices("font-family") {
+        let rest = &html[i + "font-family".len()..];
+        let Some(rest) = rest.trim_start().strip_prefix(':') else {
+            continue;
+        };
+        // Up to the declaration's end, or an inline style attribute's.
+        let value = rest.split([';', '}', '>', '\n']).next().unwrap_or("");
+        let first = value
+            .split(',')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['\'', '"'])
+            .trim();
+        if !first.is_empty() && !always_there(first) && !out.iter().any(|f| f == first) {
+            out.push(first.to_string());
+        }
+    }
+    out
+}
+
+/// Graphics whose fonts aren't there when they render: their style's fonts, and families a
+/// composition names itself. The renderer then draws a fallback, so the graphic looks wrong.
+fn graphic_fonts(out: &mut Builder, root: &Path, document: &EditDocument) {
+    let mut styles_seen: Vec<String> = Vec::new();
+    let mut assets_seen: Vec<&str> = Vec::new();
+    for clip in document.sequence.video_tracks().flat_map(|t| &t.clips) {
+        let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
+            continue;
+        };
+        if assets_seen.contains(&asset.id.as_str()) {
+            continue;
+        }
+        assets_seen.push(&asset.id);
+        let dir = crate::graphics::folder(root, &asset.id);
+        let style_name = crate::graphics::read_source(&dir)
+            .ok()
+            .and_then(|s| s.style)
+            .unwrap_or_else(|| document.style.clone());
+        if !styles_seen.contains(&style_name) {
+            styles_seen.push(style_name.clone());
+            let style = crate::style::store::resolve(&style_name);
+            for (which, status) in style.fonts_status() {
+                if let Err(why) = status {
+                    out.push(
+                        Kind::GraphicFont,
+                        Severity::Warning,
+                        format!("Style {}'s {which} font isn't there", style.name),
+                        format!(
+                            "Its graphics (\"{}\" first) render in a fallback. {why}.",
+                            asset.name
+                        ),
+                    )
+                    .at(clip.start_us, clip.end_us());
+                }
+            }
+        }
+        let html = std::fs::read_to_string(dir.join(crate::graphics::ENTRY)).unwrap_or_default();
+        for family in wanted_families(&html) {
+            let font = crate::style::Font {
+                family: family.clone(),
+                file: None,
+            };
+            // A family the style carries as a file is loaded by the render.
+            let style = crate::style::store::resolve(&style_name);
+            let fonts = &style.brand.fonts;
+            if [&fonts.title, &fonts.body]
+                .iter()
+                .any(|f| f.family.eq_ignore_ascii_case(&family) && f.file.is_some())
+            {
+                continue;
+            }
+            if crate::captions::fonts::availability(&font, None, &[]).is_err() {
+                out.push(
+                    Kind::GraphicFont,
+                    Severity::Warning,
+                    format!("\"{}\" asks for a font that isn't there", asset.name),
+                    format!(
+                        "{family} is not installed on this computer, so it renders in a \
+                         fallback. Use the style's fonts (var(--brand-font), \
+                         var(--brand-body-font)) or one that is installed."
+                    ),
+                )
+                .at(clip.start_us, clip.end_us());
+            }
+        }
+    }
+}
+
+/// Words a viewer reads in a second.
+const READ_WORDS_PER_S: f64 = 3.0;
+
+/// The words a graphic puts on screen: its text variables (as set, else their defaults) and
+/// any text written into its composition.
+fn graphic_words(dir: &Path) -> usize {
+    let html = std::fs::read_to_string(dir.join(crate::graphics::ENTRY)).unwrap_or_default();
+    let set = crate::graphics::read_source(dir)
+        .map(|s| s.variables)
+        .unwrap_or_default();
+    let words = |text: &str| text.split_whitespace().count();
+    let variables: usize = crate::graphics::parse_declarations(&html)
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| d.kind == "string")
+        .filter_map(|d| set.get(&d.id).unwrap_or(&d.default).as_str().map(words))
+        .sum();
+    let fixed: usize = crate::graphics::gate::fixed_text(&html)
+        .iter()
+        .map(|t| words(t))
+        .sum();
+    variables + fixed
+}
+
+/// Graphics on screen for less time than their words take to read (about three a second):
+/// a hint, as a diagram read at a glance can hold more.
+fn graphic_reading_time(out: &mut Builder, root: &Path, document: &EditDocument) {
+    for clip in document.sequence.video_tracks().flat_map(|t| &t.clips) {
+        let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
+            continue;
+        };
+        let words = graphic_words(&crate::graphics::folder(root, &asset.id));
+        let needs_us = (words as f64 / READ_WORDS_PER_S * 1e6) as u64;
+        if words == 0 || needs_us <= clip.duration_us {
+            continue;
+        }
+        out.push(
+            Kind::GraphicReadingTime,
+            Severity::Info,
+            format!("\"{}\" may be too short to read", asset.name),
+            format!(
+                "It shows {words} words for {}; reading them takes about {}. Lengthen it, \
+                 cut words, or keep it if it is read at a glance.",
+                seconds(clip.duration_us),
+                seconds(needs_us)
+            ),
+        )
+        .at(clip.start_us, clip.end_us());
     }
 }
 
@@ -1219,6 +1383,67 @@ mod tests {
             "{:?}",
             report.findings
         );
+    }
+
+    #[test]
+    fn a_graphic_with_more_words_than_its_time_gets_a_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut variables = serde_json::Map::new();
+        variables.insert(
+            "statement".into(),
+            "Reset the chat whenever it drifts, but keep the plan file it wrote, because the plan is what carries the work forward".into(),
+        );
+        let asset =
+            crate::graphics::create(dir.path(), "key-point", Some("Rule"), &variables).unwrap();
+        let words = graphic_words(&crate::graphics::folder(dir.path(), &asset.id));
+        assert!(words >= 22, "{words}");
+        let place = |length_us: u64| {
+            let mut doc = document(60);
+            doc.assets.push(asset.clone());
+            let edit = SequenceEdit::OnNewTrack {
+                track_kind: crate::sequence::TrackKind::Video,
+                edit: Box::new(SequenceEdit::PlaceAsset {
+                    asset_id: asset.id.clone(),
+                    at_us: 5 * S,
+                    track_id: None,
+                    streams: Vec::new(),
+                    range: Some(crate::sequence::SourceRange {
+                        start_us: 0,
+                        end_us: length_us,
+                    }),
+                }),
+            };
+            doc.sequence = crate::sequence::edit::apply(&doc.sequence, &doc.assets, &edit)
+                .unwrap()
+                .0;
+            run(dir.path(), &doc, &[])
+        };
+        let short = place(2 * S);
+        let hint = short
+            .findings
+            .iter()
+            .find(|f| f.kind == Kind::GraphicReadingTime)
+            .expect("two seconds for twenty-odd words");
+        assert_eq!(hint.severity, Severity::Info);
+        assert!(hint.detail.contains("2.00 s"), "{}", hint.detail);
+        assert!(!kinds(&place(10 * S)).contains(&Kind::GraphicReadingTime));
+    }
+
+    #[test]
+    fn a_composition_asks_for_the_first_family_of_each_list() {
+        let html = r#"<style>body{font-family:-apple-system,"Segoe UI",sans-serif}
+            .title { font-family: 'Fancy Display', Inter, serif; }
+            .note{font-family:var(--brand-font),sans-serif}
+            .tag{font-family: "Fancy Display"}</style>
+            <div style="font-family: Mono Pro; color: red">x</div>"#;
+        assert_eq!(wanted_families(html), ["Fancy Display", "Mono Pro"]);
+        assert_eq!(
+            wanted_families(
+                r#"<p style="font-family: Quoted Sans">a</p><style>h1{font-family: "Other One", serif}</style>"#
+            ),
+            ["Quoted Sans", "Other One"]
+        );
+        assert!(wanted_families("<p>no fonts</p>").is_empty());
     }
 
     #[test]

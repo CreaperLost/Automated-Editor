@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { BookOpen, Check, Copy, FolderOpen, Pencil, RotateCcw, Save, Smartphone, Trash2 } from "lucide-react";
+import { BookOpen, Check, Circle, AlertCircle, Copy, FolderOpen, Loader2, Pencil, Play, RotateCcw, Save, Smartphone, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
-import type { OpenedProject, PresetView } from "../../lib/types";
+import type { OpenedProject, PresetRunEvent, PresetRunPlan, PresetView } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
-import { Button, Menu, MenuButton, type MenuEntry } from "../ui";
+import { Button, Menu, MenuButton, type MenuEntry, DialogBackdrop } from "../ui";
 import { presetsChanged, usePresets } from "./usePresets";
+import { listenTo } from "../../lib/windowSync";
 
 /// The project's preset: what the app and the agent do for this kind of video. Following
 /// another is one undo step (what was changed here stays changed); the project's settings can
@@ -17,6 +18,7 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
   const [naming, setNaming] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [editing, setEditing] = useState<PresetView>();
+  const [runOpen, setRunOpen] = useState(false);
   const [notice, setNotice] = useState<string>();
 
   useEffect(() => {
@@ -40,6 +42,13 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
   };
 
   const entries: MenuEntry[] = [
+    {
+      label: `Run ${view.projectPreset}…`,
+      icon: Play,
+      hint: "The app runs its first steps (transcribe, clean up) up to where the agent takes over",
+      onSelect: () => setRunOpen(true),
+    },
+    { kind: "separator" },
     { kind: "heading", label: "This video follows" },
     ...view.presets.map(
       (p): MenuEntry => ({
@@ -175,6 +184,7 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
           }}
         />
       )}
+      {runOpen && <RunDialog onClose={() => setRunOpen(false)} onError={onError} />}
       {editing && (
         <MethodDialog
           preset={editing}
@@ -200,12 +210,7 @@ const Dialog: React.FC<{ label: string; wide?: boolean; onClose: () => void; chi
   children,
   onSubmit,
 }) => (
-  <div
-    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-    onPointerDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}
-  >
+  <DialogBackdrop onClose={onClose} selectable>
     <form
       role="dialog"
       aria-modal="true"
@@ -221,7 +226,7 @@ const Dialog: React.FC<{ label: string; wide?: boolean; onClose: () => void; chi
     >
       {children}
     </form>
-  </div>
+  </DialogBackdrop>
 );
 
 const NameDialog: React.FC<{
@@ -333,6 +338,142 @@ const MethodDialog: React.FC<{
         <Button type="submit" variant="primary" disabled={preset.builtin && !copyName.trim()}>
           {preset.builtin ? "Save as a copy" : "Save"}
         </Button>
+      </div>
+    </Dialog>
+  );
+};
+
+type StepState = { status: "waiting" | "running" | "done" | "stopped"; line?: string; progress?: string };
+
+/** Runs the project's preset up to where the agent takes over (AUTO-1): free steps on this
+ *  computer only, unless the user allows the online ones for this run. Each step is one undo step. */
+const RunDialog: React.FC<{ onClose: () => void; onError: (message: string) => void }> = ({ onClose, onError }) => {
+  const [online, setOnline] = useState(false);
+  const [plan, setPlan] = useState<PresetRunPlan>();
+  const [steps, setSteps] = useState<StepState[]>([]);
+  const [phase, setPhase] = useState<"ready" | "running" | "finished">("ready");
+
+  useEffect(() => {
+    if (phase !== "ready") return;
+    let live = true;
+    void api
+      .presetRunPlan(online)
+      .then((next) => {
+        if (!live) return;
+        setPlan(next);
+        setSteps(next.steps.map(() => ({ status: "waiting" })));
+      })
+      .catch((err) => onError(String(err)));
+    return () => {
+      live = false;
+    };
+  }, [online, phase, onError]);
+
+  useEffect(() => {
+    return listenTo<PresetRunEvent>("aeroedits-preset-run", (event) => {
+      if (event.kind === "finished") {
+        setPhase("finished");
+        return;
+      }
+      setSteps((now) =>
+        now.map((step, i): StepState => {
+          if (i !== event.index) return step;
+          switch (event.kind) {
+            case "started":
+              return { status: "running" };
+            case "progress":
+              return { status: "running", progress: `${Math.round(event.fraction * 100)} % ${event.message}` };
+            case "done":
+              return { status: "done", line: event.line };
+            case "stopped":
+              return { status: "stopped", line: event.line };
+          }
+        }),
+      );
+    });
+  }, []);
+
+  const start = () => {
+    setPhase("running");
+    void api.presetRun(online).catch((err) => {
+      onError(String(err));
+      setPhase("finished");
+    });
+  };
+  const stoppedAt = steps.findIndex((s) => s.status === "stopped");
+
+  return (
+    <Dialog label={`Run ${plan?.preset ?? "the preset"}`} wide onClose={phase === "running" ? () => {} : onClose} onSubmit={start}>
+      <h2 className="text-body font-semibold text-studio-100">Run {plan?.preset ?? "the preset"}</h2>
+      <p className="text-label text-studio-400 leading-relaxed">
+        The app runs the preset&apos;s first steps itself, each one undo step, and stops where your agent takes over or
+        a result looks wrong.
+      </p>
+      <label className="flex items-center gap-2 text-label text-studio-300">
+        <input type="checkbox" checked={online} disabled={phase !== "ready"} onChange={(e) => setOnline(e.target.checked)} />
+        Allow online steps for this run (transcription and the fillers&apos; review use your keys)
+      </label>
+      <ol className="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto">
+        {plan?.steps.map((step, i) => {
+          const state = steps[i] ?? { status: "waiting" };
+          const Icon =
+            state.status === "done" ? Check : state.status === "stopped" ? AlertCircle : state.status === "running" ? Loader2 : Circle;
+          return (
+            <li key={i} className="flex gap-2 text-label">
+              <Icon
+                className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${state.status === "running" ? "animate-spin text-studio-300" : state.status === "done" ? "text-audio-fg" : state.status === "stopped" ? "text-danger-fg" : "text-studio-600"}`}
+              />
+              <div className="min-w-0">
+                <div className="text-studio-200">
+                  {step.label}
+                  {step.online && <span className="text-studio-500"> · online</span>}
+                </div>
+                {state.progress && state.status === "running" && <div className="text-meta text-studio-500">{state.progress}</div>}
+                {state.line && (
+                  <div
+                    title={state.line}
+                    className={`text-meta whitespace-pre-wrap line-clamp-4 ${state.status === "stopped" ? "text-danger-fg" : "text-studio-400"}`}
+                  >
+                    {state.line}
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      {plan && plan.left.length > 0 && (
+        <div className="text-label text-studio-400">
+          <div className="text-studio-300">{phase === "finished" ? "Next, for your agent" : "Then, for your agent"}</div>
+          <ul className="list-disc pl-5">
+            {plan.left.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          {phase === "finished" && (
+            <p className="mt-1">
+              {stoppedAt >= 0
+                ? "The run stopped at the step marked above: tell your agent what to do there, or run that pass yourself."
+                : `Ask your agent to continue the ${plan.preset} preset on this project.`}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        {phase === "running" ? (
+          <Button type="button" variant="ghost" onClick={() => void api.presetRunStop()}>
+            Stop
+          </Button>
+        ) : (
+          <Button type="button" variant={phase === "finished" ? "primary" : "ghost"} onClick={onClose}>
+            {phase === "finished" ? "Done" : "Cancel"}
+          </Button>
+        )}
+        {phase === "ready" && (
+          <Button type="submit" variant="primary" disabled={!plan}>
+            Run
+          </Button>
+        )}
       </div>
     </Dialog>
   );

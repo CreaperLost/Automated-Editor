@@ -9,13 +9,15 @@
 use crate::mcp::tools::clock;
 use crate::project::reader::{open_regular, safe_path, OpenedProject, ProjectReader};
 use crate::project::revision::EditDocument;
+use crate::ranges::merge;
 use crate::sequence::edit::SequenceEdit;
 use crate::transcript::edit::{word_cuts, ProposalRef, SuggestionSource};
 use crate::transcript::{store, Transcript, TranscriptCutSuggestion, TranscriptSuggestionKind};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 pub const PROPOSALS_DIR: &str = "agent";
@@ -173,38 +175,62 @@ fn now() -> String {
 // The file.
 
 pub fn load(root: &Path) -> Result<Proposals, String> {
-    let path = safe_path(root, PROPOSALS_FILE)?;
-    if !path.is_file() {
-        return Ok(Proposals::default());
-    }
-    let mut bytes = Vec::new();
-    open_regular(&path)?
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("The agent proposals file is too large".into());
-    }
-    serde_json::from_slice(&bytes).map_err(|e| format!("Invalid agent proposals file: {e}"))
+    load_file(root, PROPOSALS_FILE, MAX_FILE_BYTES, "agent proposals")
 }
 
 pub fn save(root: &Path, proposals: &Proposals) -> Result<(), String> {
+    save_file(
+        root,
+        PROPOSALS_FILE,
+        MAX_FILE_BYTES,
+        "agent proposals",
+        proposals,
+    )
+}
+
+/// A JSON file in the project's agent folder, of at most `max_bytes`; the default without one.
+/// `what` names it in errors.
+pub(crate) fn load_file<T: Default + DeserializeOwned>(
+    root: &Path,
+    file: &str,
+    max_bytes: u64,
+    what: &str,
+) -> Result<T, String> {
+    let path = safe_path(root, file)?;
+    if !path.is_file() {
+        return Ok(T::default());
+    }
+    let mut bytes = Vec::new();
+    open_regular(&path)?
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!("The {what} file is too large"));
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("Invalid {what} file: {e}"))
+}
+
+/// Writes what [`load_file`] reads, making the agent folder if it isn't there.
+pub(crate) fn save_file<T: Serialize>(
+    root: &Path,
+    file: &str,
+    max_bytes: u64,
+    what: &str,
+    value: &T,
+) -> Result<(), String> {
     let dir = safe_path(root, PROPOSALS_DIR)?;
     match fs::symlink_metadata(&dir) {
         Ok(meta) if !meta.is_dir() => return Err("The agent folder is not a folder".into()),
         Ok(_) => (),
         Err(_) => fs::create_dir(&dir).map_err(|e| e.to_string())?,
     }
-    let path = safe_path(root, PROPOSALS_FILE)?;
-    let bytes = serde_json::to_vec_pretty(proposals).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("The agent proposals file is too large".into());
+    let path = safe_path(root, file)?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!("The {what} file is too large"));
     }
-    let mut temp = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
-    temp.write_all(&bytes).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_durable(&path, &bytes)
 }
 
 impl Proposals {
@@ -372,20 +398,6 @@ fn span_text(transcript: &Transcript, ids: &[String]) -> String {
     } else {
         text
     }
-}
-
-/// Sorted, merged ranges.
-fn merge(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
-    ranges.retain(|(a, b)| b > a);
-    ranges.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::new();
-    for (a, b) in ranges {
-        match out.last_mut() {
-            Some(last) if a <= last.1 => last.1 = last.1.max(b),
-            _ => out.push((a, b)),
-        }
-    }
-    out
 }
 
 /// Where the items would cut the edit as it is now; `None` for items with nothing left to cut.
@@ -2071,14 +2083,6 @@ mod tests {
             // The revision number moved on, so even after the user's undo it is not the batch's.
             assert!(undo(reader, proposals, &id, now, Some("claude-code")).is_err());
         });
-    }
-
-    #[test]
-    fn merge_sorts_and_joins_overlaps() {
-        assert_eq!(
-            merge(vec![(50, 60), (0, 10), (5, 20), (20, 30), (40, 40)]),
-            vec![(0, 30), (50, 60)]
-        );
     }
 
     #[test]

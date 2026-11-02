@@ -447,7 +447,7 @@ fn detect_combined_silence(
                 .iter()
                 .filter_map(|&(a, b)| clip.timeline_range(a, b))
         }));
-        pauses = crate::transcript::pauses::merge_ranges(pauses);
+        pauses = crate::ranges::merge(pauses);
     }
     let first = &found[0];
     let dependencies = sounds
@@ -492,6 +492,47 @@ fn detect_combined_silence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exported again next to the project, the video becomes "<project> (2).mp4" instead of
+    /// being refused because "<project>.mp4" is there.
+    #[test]
+    fn an_export_next_to_the_project_takes_a_free_name() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let state = &host.state;
+        let (handle, root, name) = {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().unwrap();
+            (
+                reader.summary.project_handle.clone(),
+                reader.root().to_path_buf(),
+                reader.summary.name.clone(),
+            )
+        };
+        let first = crate::export::default_destination(&root, &name, 0);
+        std::fs::write(&first, b"an earlier export").unwrap();
+        let settings = crate::export::ExportSettings {
+            width: 320,
+            height: 180,
+            ..Default::default()
+        };
+        let status = export_start_impl(state, handle, settings, false).unwrap();
+        assert_ne!(
+            status.state,
+            crate::export::ExportState::Failed,
+            "{:?}",
+            status.failure
+        );
+        let _ = state.export.lock().cancel(&status.job_id);
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            b"an earlier export",
+            "the earlier file stays"
+        );
+    }
 
     #[test]
     fn captions_take_a_chosen_sound_by_its_stream_key() {
@@ -889,15 +930,6 @@ mod tests {
         let err = show_in_finder_impl(non_existent.into()).unwrap_err();
         assert!(err.contains("Path does not exist"));
     }
-
-    // Opens a real Finder window, so it only runs on macOS.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_show_in_finder_impl() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = show_in_finder_impl(dir.path().to_string_lossy().into_owned());
-        assert!(result.is_ok());
-    }
 }
 
 pub fn open_project_impl(state: &AppState, path: String) -> Result<OpenedProject, String> {
@@ -940,9 +972,7 @@ pub fn close_project_impl(state: &AppState, project_handle: String) -> Result<()
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     if let Some(reader) = opened.as_ref() {
-        if reader.summary.project_handle != project_handle {
-            return Err("Stale project handle".into());
-        }
+        require_handle(reader, &project_handle)?;
     }
     *opened = None;
     state.playback.lock().close();
@@ -959,9 +989,7 @@ pub fn project_segments_impl(
 ) -> Result<SegmentPage, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    if reader.summary.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    require_handle(reader, &project_handle)?;
     reader.page(&track_id, offset, limit)
 }
 
@@ -1049,9 +1077,7 @@ pub fn project_zoom_suggestions_impl(
 ) -> Result<crate::zoom::ZoomGeneration, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    if reader.summary.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    require_handle(reader, &project_handle)?;
     // The project's own settings, so every window finds the same zooms.
     let config = reader.history().current.zoom_settings.config();
     zoom_suggestions_with(reader, &config)
@@ -1065,9 +1091,7 @@ pub fn project_zoom_preview_impl(
 ) -> Result<crate::zoom::ZoomGeneration, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
-    if reader.summary.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    require_handle(reader, &project_handle)?;
     zoom_suggestions_with(reader, &settings.config())
 }
 
@@ -1356,6 +1380,8 @@ pub fn layouts_find_impl(
         media: String,
         folder: std::path::PathBuf,
         range: (u64, u64),
+        /// The stretches to pick in: a gathered clip's pieces, else the range.
+        pieces: Vec<(u64, u64)>,
         move_us: u64,
         /// Speech from the transcript's words, or the mic to scan for it.
         words: Option<Vec<(u64, u64)>>,
@@ -1366,6 +1392,7 @@ pub fn layouts_find_impl(
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, project_handle)?;
         let document = reader.document();
+        let mut pieces = Vec::new();
         let (track, media, range) = match short {
             Some(id) => {
                 let short = document
@@ -1384,6 +1411,11 @@ pub fn layouts_find_impl(
                 let media = document
                     .clock_asset(short.media.as_deref())
                     .ok_or("This short plays no recording")?;
+                pieces = short
+                    .pieces
+                    .iter()
+                    .map(|p| (p.source_start_us, p.source_end_us))
+                    .collect();
                 (
                     &short.layouts,
                     media.to_string(),
@@ -1438,6 +1470,11 @@ pub fn layouts_find_impl(
             settings,
             media,
             folder: std::path::PathBuf::from(&asset.path),
+            pieces: if pieces.is_empty() {
+                vec![range]
+            } else {
+                pieces
+            },
             range,
             words,
             mic,
@@ -1474,17 +1511,24 @@ pub fn layouts_find_impl(
             "No mouse activity was recorded, so the whole recording counts as idle".into()
         });
     }
-    let sections = pick::pick(
-        &PickInput {
-            start_us: plan.range.0,
-            end_us: plan.range.1,
-            media: Some(plan.media),
-            telemetry: &telemetry,
-            speech: &speech,
-            move_us: plan.move_us,
-        },
-        &plan.settings,
-    );
+    // Sections are in the recording's time, so a gathered clip's pieces each get their own.
+    let sections = plan
+        .pieces
+        .iter()
+        .flat_map(|&(start_us, end_us)| {
+            pick::pick(
+                &PickInput {
+                    start_us,
+                    end_us,
+                    media: Some(plan.media.clone()),
+                    telemetry: &telemetry,
+                    speech: &speech,
+                    move_us: plan.move_us,
+                },
+                &plan.settings,
+            )
+        })
+        .collect();
     Ok(LayoutsFound {
         sections,
         settings: plan.settings,
@@ -1712,6 +1756,16 @@ pub fn project_check_impl(
     state: &AppState,
     project_handle: String,
 ) -> Result<crate::check::CheckReport, String> {
+    project_check_of(state, project_handle, None)
+}
+
+/// The check of the video, or with `short_id` of that short as its export plays it (its own
+/// timeline, captions and graphics).
+pub fn project_check_of(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<&str>,
+) -> Result<crate::check::CheckReport, String> {
     let opened = state.opened_project.lock();
     let reader = opened.as_ref().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
@@ -1722,11 +1776,22 @@ pub fn project_check_impl(
         .filter(|a| a.missing)
         .map(|a| a.id.as_str())
         .collect();
-    Ok(crate::check::run(
-        reader.root(),
-        reader.document(),
-        &missing,
-    ))
+    let short_document;
+    let document = match short_id {
+        None => reader.document(),
+        Some(id) => {
+            let base = reader.document();
+            let short = base
+                .shorts
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("That short no longer exists")?;
+            short_document =
+                crate::shorts::short_document(base, short, has_speech_transcript(reader))?;
+            &short_document
+        }
+    };
+    Ok(crate::check::run(reader.root(), document, &missing))
 }
 
 /// Applies the fixes of the findings `ids` of the check at `expected_revision`, each as its
@@ -1937,6 +2002,100 @@ pub fn project_shorts_set_impl(
     })
 }
 
+/// Gathers words for a clip (SHT-1): the words `word_ids` of transcript `track_id`, as the video
+/// plays them, go after what clip `clip` plays, or make a new clip when `clip` is none.
+pub fn project_clip_add_words_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    clip: Option<String>,
+    track_id: String,
+    word_ids: Vec<String>,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        let transcript = crate::transcript::store::load_transcript(reader.root(), &track_id)?
+            .ok_or("That sound is not transcribed")?;
+        let chosen: Vec<&crate::transcript::TranscriptWord> = transcript
+            .words
+            .iter()
+            .filter(|w| word_ids.contains(&w.id))
+            .collect();
+        let start = chosen.iter().map(|w| w.source_start_us).min();
+        let end = chosen.iter().map(|w| w.source_end_us).max();
+        let (Some(start), Some(end)) = (start, end) else {
+            return Err("Select the words to add".into());
+        };
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        match clip {
+            Some(id) => {
+                let i = shorts
+                    .iter()
+                    .position(|s| s.id == id)
+                    .ok_or("That clip no longer exists")?;
+                crate::shorts::add_piece(document, &mut shorts[i], start, end)?;
+            }
+            None => {
+                // Named after its first words, as a clip's title is also its file name.
+                let title: String = chosen
+                    .iter()
+                    .take(6)
+                    .map(|w| w.text.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let title = title
+                    .trim_matches(|c: char| !c.is_alphanumeric())
+                    .chars()
+                    .take(60)
+                    .collect::<String>();
+                let media = document.stream_ref(&track_id)?.asset;
+                let new = crate::shorts::new_clip(
+                    document,
+                    media,
+                    start,
+                    end,
+                    if title.is_empty() {
+                        "New clip".into()
+                    } else {
+                        title
+                    },
+                );
+                let (a, b) = crate::shorts::edited_range_in(&new, document)
+                    .ok_or("A word at one end was cut from the video; pick words that are kept")?;
+                let length =
+                    crate::shorts::slice_sequence(&document.sequence, &document.assets, a, b)
+                        .duration_us();
+                if length < crate::shorts::MIN_SHORT_US {
+                    return Err("A clip is at least 3 s: select more words".into());
+                }
+                shorts.push(new);
+            }
+        }
+        reader.set_shorts(expected_revision, shorts)
+    })
+}
+
+/// Plays clip `clip`'s pieces in `order` (indices; one left out is removed), each with what
+/// its own timeline has for it.
+pub fn project_clip_arrange_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    clip: String,
+    order: Vec<usize>,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        let i = shorts
+            .iter()
+            .position(|s| s.id == clip)
+            .ok_or("That clip no longer exists")?;
+        crate::shorts::arrange_pieces(document, &mut shorts[i], &order)?;
+        reader.set_shorts(expected_revision, shorts)
+    })
+}
+
 /// A short made from a take, and how its camera was lined up with its voice.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1974,16 +2133,7 @@ pub fn project_short_from_take_impl(
     };
     let sync = crate::take_short::sync(&root, &document, &sources);
     let base = format!("take-{}", sources.voice.asset);
-    let id = (1..)
-        .map(|n| {
-            if n == 1 {
-                base.clone()
-            } else {
-                format!("{base}-{n}")
-            }
-        })
-        .find(|id| !document.shorts.iter().any(|s| &s.id == id))
-        .unwrap_or(base);
+    let id = crate::ids::free_id(&base, |id| document.shorts.iter().any(|s| s.id == id));
     let title = if title.trim().is_empty() {
         format!("Short {}", document.shorts.len() + 1)
     } else {
@@ -2069,6 +2219,7 @@ pub fn project_short_export_impl(
     project_handle: String,
     short_id: String,
     settings: crate::export::ExportSettings,
+    queue: bool,
 ) -> Result<crate::export::ExportStatus, String> {
     let _guard = state.command_lock.lock();
     let opened = state.opened_project.lock();
@@ -2083,7 +2234,9 @@ pub fn project_short_export_impl(
     let document = crate::shorts::short_document(base, short, has_speech_transcript(reader))?;
     let root = reader.root().to_path_buf();
     let stem = format!("{} - {}", reader.summary.name, short.title);
+    let label = short.title.clone();
     drop(opened);
+    let waiting = state.export.lock().waiting_destinations(&root);
     // The first free "<project> - <short>.mp4", then " (2)", " (3)" and so on.
     let name = (1..1000)
         .map(|n| {
@@ -2094,14 +2247,19 @@ pub fn project_short_export_impl(
             }
         })
         .find(|name| {
-            settings.destination.is_some()
-                || !crate::export::default_destination(&root, name, 0).exists()
+            let dest = crate::export::default_destination(&root, name, 0);
+            settings.destination.is_some() || (!dest.exists() && !waiting.contains(&dest))
         })
         .ok_or("Too many exports of this short already exist")?;
     let gate = Arc::clone(&state.encoder_gate);
     let mut owner = state.export.lock();
+    let request = crate::export::deliveries::Request {
+        short_id: Some(short_id),
+        settings: settings.clone(),
+        file: None,
+    };
     match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
-        Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
+        Ok(captured) => Ok(owner.start(captured, &label, request, queue, gate)),
         Err(status) => {
             owner.install_failed(status.clone());
             Ok(status)
@@ -2318,17 +2476,9 @@ pub fn project_undo_impl(
     expected_revision: u64,
     short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    reader.undo(expected_revision)?;
-    let summary = reader.view_or_summary(short_id.as_deref());
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    Ok(summary)
+    step_history(state, &project_handle, short_id.as_deref(), |reader| {
+        reader.undo(expected_revision)
+    })
 }
 
 pub fn project_redo_impl(
@@ -2337,12 +2487,23 @@ pub fn project_redo_impl(
     expected_revision: u64,
     short_id: Option<String>,
 ) -> Result<OpenedProject, String> {
+    step_history(state, &project_handle, short_id.as_deref(), |reader| {
+        reader.redo(expected_revision)
+    })
+}
+
+fn step_history(
+    state: &AppState,
+    project_handle: &str,
+    short_id: Option<&str>,
+    step: impl FnOnce(&mut ProjectReader) -> Result<OpenedProject, String>,
+) -> Result<OpenedProject, String> {
     let _guard = state.command_lock.lock();
     let mut opened = state.opened_project.lock();
     let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    reader.redo(expected_revision)?;
-    let summary = reader.view_or_summary(short_id.as_deref());
+    require_handle(reader, project_handle)?;
+    step(reader)?;
+    let summary = reader.view_or_summary(short_id);
     state
         .playback
         .lock()
@@ -2441,14 +2602,23 @@ pub fn playback_status_impl(
     Ok(status)
 }
 
-pub fn playback_play_impl(
-    state: &AppState,
-    project_handle: String,
-) -> Result<PlaybackStatus, String> {
+/// The playback, once `project_handle` is known to be what it plays.
+fn playback_of<'a>(
+    state: &'a AppState,
+    project_handle: &str,
+) -> Result<impl std::ops::DerefMut<Target = PlaybackOwner> + 'a, String> {
     let mut playback = state.playback.lock();
     if playback.status()?.project_handle != project_handle {
         return Err("Stale project handle".into());
     }
+    Ok(playback)
+}
+
+pub fn playback_play_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<PlaybackStatus, String> {
+    let mut playback = playback_of(state, &project_handle)?;
     playback.play()
 }
 
@@ -2458,10 +2628,7 @@ pub fn playback_set_speed_impl(
     project_handle: String,
     speed: f64,
 ) -> Result<PlaybackStatus, String> {
-    let mut playback = state.playback.lock();
-    if playback.status()?.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    let mut playback = playback_of(state, &project_handle)?;
     playback.set_speed(speed)
 }
 
@@ -2469,10 +2636,7 @@ pub fn playback_pause_impl(
     state: &AppState,
     project_handle: String,
 ) -> Result<PlaybackStatus, String> {
-    let mut playback = state.playback.lock();
-    if playback.status()?.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    let mut playback = playback_of(state, &project_handle)?;
     playback.pause()
 }
 
@@ -2481,10 +2645,7 @@ pub fn playback_seek_impl(
     project_handle: String,
     edited_us: u64,
 ) -> Result<PlaybackStatus, String> {
-    let mut playback = state.playback.lock();
-    if playback.status()?.project_handle != project_handle {
-        return Err("Stale project handle".into());
-    }
+    let mut playback = playback_of(state, &project_handle)?;
     playback.seek(edited_us)
 }
 
@@ -2591,10 +2752,13 @@ pub fn media_run_parity_impl(state: &AppState) -> Result<MediaParityReport, Stri
     report
 }
 
+/// Exports the video, or with `queue` queues it behind the export running (without it a busy
+/// export refuses it, so one runs at a time unless asked).
 pub fn export_start_impl(
     state: &AppState,
     project_handle: String,
-    settings: crate::export::ExportSettings,
+    mut settings: crate::export::ExportSettings,
+    queue: bool,
 ) -> Result<crate::export::ExportStatus, String> {
     let _guard = state.command_lock.lock();
     let opened = state.opened_project.lock();
@@ -2604,10 +2768,27 @@ pub fn export_start_impl(
     let root = reader.root().to_path_buf();
     let name = reader.summary.name.clone();
     drop(opened);
+    // Next to the project (no place chosen), an export again is "<project> (2).mp4" rather than
+    // refused; a queued one never writes over a file there or one an export before it will.
+    if queue || settings.destination.is_none() {
+        let taken = state.export.lock().waiting_destinations(&root);
+        let wanted = settings.destination.clone().map_or_else(
+            || crate::export::default_destination(&root, &name, 0),
+            PathBuf::from,
+        );
+        if wanted.exists() || taken.contains(&wanted) {
+            settings.destination = Some(free_path(&wanted, &taken));
+        }
+    }
     let gate = Arc::clone(&state.encoder_gate);
     let mut owner = state.export.lock();
+    let request = crate::export::deliveries::Request {
+        short_id: None,
+        settings: settings.clone(),
+        file: None,
+    };
     match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
-        Ok(captured) => Ok(crate::export::spawn_job(captured, &mut owner, gate)),
+        Ok(captured) => Ok(owner.start(captured, "Video", request, queue, gate)),
         Err(status) => {
             owner.install_failed(status.clone());
             Ok(status)
@@ -2615,18 +2796,135 @@ pub fn export_start_impl(
     }
 }
 
+/// The export `job_id`, or without one the export running (else the last one asked for).
 pub fn export_status_impl(
     state: &AppState,
     job_id: Option<String>,
 ) -> Result<crate::export::ExportStatus, String> {
     let mut owner = state.export.lock();
-    let status = owner.status();
-    if let Some(id) = job_id {
-        if !status.job_id.is_empty() && status.job_id != id {
-            return Err("Stale export job id".into());
-        }
+    match owner.status_of(job_id.as_deref()) {
+        Some(status) => Ok(status),
+        None if job_id.is_some() => Err("Stale export job id".into()),
+        None => Ok(crate::export::ExportStatus::idle()),
     }
-    Ok(status)
+}
+
+/// The open project's exports (DLV-2): what waits or runs, then what went out, newest first,
+/// each marked when it is older than the edit or its file is gone.
+pub fn export_deliveries_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<Vec<crate::export::deliveries::DeliveryView>, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let base = &reader.history().current;
+    let transcribed = has_speech_transcript(reader);
+    // What each output would be made from now, to tell the ones the edit has moved past.
+    let now = |request: &crate::export::deliveries::Request| match &request.short_id {
+        None => Some(crate::export::deliveries::fingerprint(base)),
+        Some(id) => {
+            let short = base.shorts.iter().find(|s| &s.id == id)?;
+            let document = crate::shorts::short_document(base, short, transcribed).ok()?;
+            Some(crate::export::deliveries::fingerprint(&document))
+        }
+    };
+    let mut owner = state.export.lock();
+    Ok(crate::export::deliveries::list(
+        &mut owner,
+        reader.root(),
+        base.revision,
+        &now,
+    ))
+}
+
+/// Makes export `job_id` again from the edit as it is now, with the same settings: a video
+/// beside the old file, queued when another export runs; a file (subtitles...) over the old one.
+pub fn export_again_impl(
+    state: &AppState,
+    project_handle: String,
+    job_id: String,
+) -> Result<(), String> {
+    let root = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        reader.root().to_path_buf()
+    };
+    let old = crate::export::deliveries::records(&root)
+        .into_iter()
+        .find(|d| d.job_id == job_id)
+        .ok_or("That export is not in the list")?;
+    if let Some(kind) = old.request.file {
+        export_file_impl(
+            state,
+            project_handle,
+            old.request.short_id,
+            kind,
+            old.output_path,
+            &mut |_| {},
+        )?;
+        return crate::export::deliveries::forget(&root, &job_id);
+    }
+    let mut settings = old.request.settings;
+    // Beside the old file, never over it: "name (2).mp4" and so on.
+    if let Some(path) = old
+        .output_path
+        .as_deref()
+        .or(settings.destination.as_deref())
+    {
+        let taken = state.export.lock().waiting_destinations(&root);
+        settings.destination = Some(free_path(std::path::Path::new(path), &taken));
+    }
+    let started = match old.request.short_id {
+        Some(short_id) => {
+            project_short_export_impl(state, project_handle, short_id, settings, true)?
+        }
+        None => export_start_impl(state, project_handle, settings, true)?,
+    };
+    match started.failure {
+        Some(failure) if started.state == crate::export::ExportState::Failed => {
+            Err(failure.message().to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `path` if nothing is there (and no export in `taken` will write it), else the first free
+/// "stem (2).ext", "stem (3).ext"...
+fn free_path(path: &std::path::Path, taken: &[PathBuf]) -> String {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("export");
+    // An earlier copy's "(n)" is not kept twice.
+    let stem = match stem.rsplit_once(" (") {
+        Some((base, n)) if n.ends_with(')') && n[..n.len() - 1].parse::<u32>().is_ok() => base,
+        _ => stem,
+    };
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let dir = path.parent().unwrap_or(std::path::Path::new(""));
+    (1..1000)
+        .map(|n| match n {
+            1 => dir.join(format!("{stem}.{ext}")),
+            n => dir.join(format!("{stem} ({n}).{ext}")),
+        })
+        .find(|p| !p.exists() && !taken.contains(p))
+        .unwrap_or_else(|| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Takes `job_id` out of the open project's list of exports; its file stays.
+pub fn export_forget_impl(
+    state: &AppState,
+    project_handle: String,
+    job_id: String,
+) -> Result<(), String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    crate::export::deliveries::forget(reader.root(), &job_id)
 }
 
 pub fn export_cancel_impl(
@@ -2648,7 +2946,7 @@ pub fn export_file_impl(
     on_progress: &mut dyn FnMut(f64),
 ) -> Result<PathBuf, String> {
     use crate::export::files;
-    let (root, stem, assets, contents, sound) = {
+    let (root, stem, assets, contents, sound, label, revision) = {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
@@ -2682,8 +2980,11 @@ pub fn export_file_impl(
         } else {
             let (timeline, cues) =
                 transcript::caption_cues(reader, short_id.as_deref(), !kind.is_subtitles())?;
-            let (_, cues) =
-                cues.ok_or("Nothing is transcribed yet: transcribe the speech first")?;
+            let cues: Vec<_> = cues
+                .ok_or("Nothing is transcribed yet: transcribe the speech first")?
+                .into_iter()
+                .map(|(_, cue)| cue)
+                .collect();
             if cues.is_empty() {
                 return Err("No words are left in the edit to write".into());
             }
@@ -2696,12 +2997,23 @@ pub fn export_file_impl(
             };
             (Some(text), None)
         };
+        let what = match kind {
+            files::FileKind::Srt | files::FileKind::Vtt => "Subtitles",
+            files::FileKind::Txt | files::FileKind::Md => "Transcript",
+            files::FileKind::Wav => "Sound",
+        };
+        let label = match short {
+            Some(short) => format!("{}: {what}", short.title),
+            None => what.to_string(),
+        };
         (
             reader.root().to_path_buf(),
             stem,
             base.assets.clone(),
             contents,
             sound,
+            label,
+            base.revision,
         )
     };
     let requested = match destination {
@@ -2722,6 +3034,34 @@ pub fn export_file_impl(
         }
         crate::export::files::write_wav(&mixer, &path, on_progress)?;
     }
+    // In the list of exports (DLV-2), replacing an earlier line for the same file.
+    let output = path.to_string_lossy().into_owned();
+    for earlier in crate::export::deliveries::records(&root) {
+        if earlier.request.file.is_some() && earlier.output_path.as_deref() == Some(&output) {
+            let _ = crate::export::deliveries::forget(&root, &earlier.job_id);
+        }
+    }
+    let _ = crate::export::deliveries::record(
+        &root,
+        crate::export::deliveries::Delivery {
+            job_id: uuid::Uuid::new_v4().to_string(),
+            label: format!("{label} ({})", kind.extension().to_uppercase()),
+            request: crate::export::deliveries::Request {
+                short_id,
+                settings: Default::default(),
+                file: Some(kind),
+            },
+            state: crate::export::ExportState::Completed,
+            revision,
+            width: 0,
+            height: 0,
+            progress: 1.0,
+            output_path: Some(output),
+            failure: None,
+            finished_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()),
+            fingerprint: None,
+        },
+    );
     Ok(path)
 }
 

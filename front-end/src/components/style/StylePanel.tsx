@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Captions, Copy, Eye, FolderOpen, Frame, Loader2, Palette, Pencil, Smartphone, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Captions, Copy, Eye, FolderOpen, Frame, ImagePlus, Loader2, Palette, Pencil, Smartphone, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { InspectorSection, MoreSettings, RangeRow } from "../inspector/InspectorSection";
+import { StyleFromReferences } from "./StyleFromReferences";
 import { CAPTION_STYLES, CAPTION_WEIGHTS, ColorRow, Toggle } from "../captions/CaptionsSection";
 import { Button, Field, IconButton, Notice, Segmented, cn } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
@@ -128,10 +129,11 @@ export const StylePanel: React.FC = () => {
   const [notice, setNotice] = useState<string>();
   const [draft, setDraft] = useState<{ name: string; style: Style }>();
   const [renaming, setRenaming] = useState<string>();
+  const [fromReferences, setFromReferences] = useState(false);
   const [stills, setStills] = useState<LookStill[]>();
   const [previewing, setPreviewing] = useState(false);
   const [plans, setPlans] = useState<InLinePlan[]>([]);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // What is being saved, so a save in flight is not overtaken by an older one.
   const saving = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -207,6 +209,7 @@ export const StylePanel: React.FC = () => {
         style.brand.logo = at(style.brand.logo);
         style.brand.fonts.title.file = at(style.brand.fonts.title.file);
         style.brand.fonts.body.file = at(style.brand.fonts.body.file);
+        style.references = style.references?.map((r) => ({ ...r, file: at(r.file) ?? r.file }));
       }
       await api.styleSave({ name, style });
       await useStyle(name);
@@ -272,7 +275,10 @@ export const StylePanel: React.FC = () => {
 
   const s = draft.style;
   const editing = view.styles.find((v) => v.name === draft.name);
-  const set = <K extends keyof Style>(key: K, value: Partial<Style[K]>) =>
+  const set = <K extends "brand" | "graphics" | "captions" | "frame" | "portrait">(
+    key: K,
+    value: Partial<Style[K]>,
+  ) =>
     change((was) => ({ ...was, [key]: { ...was[key], ...value } }));
   const colors = s.brand.colors;
   const setColor = (role: keyof typeof colors, value: string) =>
@@ -354,8 +360,15 @@ export const StylePanel: React.FC = () => {
               <IconButton icon={Trash2} size="sm" label="Remove this style" onClick={() => void remove()} />
             </>
           )}
+          <IconButton
+            icon={ImagePlus}
+            size="sm"
+            label="New style from references: pictures or clips whose look you want, made by your agent"
+            onClick={() => setFromReferences(true)}
+          />
           <IconButton icon={FolderOpen} size="sm" label="Open the styles folder" onClick={() => void api.showInFinder(view.folder)} />
         </div>
+        {fromReferences && <StyleFromReferences onClose={() => setFromReferences(false)} />}
         <p className="text-meta text-studio-500 leading-relaxed">
           {editing?.builtin
             ? "Built in: a change makes your own copy."

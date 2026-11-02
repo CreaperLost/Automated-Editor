@@ -30,11 +30,7 @@ const CONTEXT_TOKENS: u32 = 8192;
 const MAX_ANSWER_TOKENS: usize = 1536;
 
 pub fn default_dir() -> PathBuf {
-    crate::transcript::parakeet::default_model_dir()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(MODEL_NAME)
+    crate::transcript::parakeet::sibling_model_dir(MODEL_NAME)
 }
 
 pub fn present(dir: &Path) -> bool {
@@ -108,24 +104,7 @@ mod engine {
     fn vulkan_present() -> bool {
         #[cfg(windows)]
         {
-            use windows_sys::Win32::Foundation::FreeLibrary;
-            use windows_sys::Win32::System::LibraryLoader::{
-                LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
-            };
-            let name: Vec<u16> = "vulkan-1.dll\0".encode_utf16().collect();
-            // SAFETY: a NUL-terminated name; the module is freed again at once.
-            unsafe {
-                let module = LoadLibraryExW(
-                    name.as_ptr(),
-                    std::ptr::null_mut(),
-                    LOAD_LIBRARY_SEARCH_SYSTEM32,
-                );
-                if module.is_null() {
-                    return false;
-                }
-                FreeLibrary(module);
-            }
-            true
+            crate::cuda::system_library_loads("vulkan-1.dll")
         }
         #[cfg(not(windows))]
         {

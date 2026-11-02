@@ -5,13 +5,7 @@ import { api } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { SearchHit, SearchResults } from "../../lib/types";
 import { Badge, cn } from "../ui";
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
+import { formatTime } from "../../lib/format";
 
 /** The excerpt with the hit (between `[` and `]`) in bold. */
 function Excerpt({ text }: { text: string }) {
@@ -44,12 +38,14 @@ export const SearchPanel: React.FC = () => {
   const asked = useRef(0);
 
   // Searches as you type (after a short pause), and again when the edit or a transcript changes.
+  // Every run starts a new ask, so an answer to a query since cleared or changed is dropped.
   useEffect(() => {
+    const id = ++asked.current;
     if (!handle || query.trim().length < 2) {
       setResults(null);
+      setError(null);
       return;
     }
-    const id = ++asked.current;
     const timer = window.setTimeout(() => {
       void api
         .sourceSearch(handle, query)

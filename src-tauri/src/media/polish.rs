@@ -988,6 +988,7 @@ mod tests {
                     source_end: 3_000_000,
                     segments: segments.clone(),
                     mutes: Default::default(),
+                    room: None,
                 })
                 .collect(),
         }];
@@ -1007,6 +1008,7 @@ mod tests {
                 source_end: 3_000_000,
                 segments,
                 mutes: Default::default(),
+                room: None,
             }],
         });
         let settings = crate::project::AudioSettings {
@@ -1059,6 +1061,7 @@ mod tests {
                     source_end: 2_000_000,
                     segments: segments.clone(),
                     mutes: Default::default(),
+                    room: None,
                 })
                 .collect(),
         };
@@ -1125,6 +1128,7 @@ mod tests {
             source_end: len,
             segments: segments.clone(),
             mutes: Default::default(),
+            room: None,
         };
         let lane = Lane {
             music: false,
@@ -1225,6 +1229,7 @@ mod tests {
                 source_end: 2_000_000,
                 segments,
                 mutes: Default::default(),
+                room: None,
             }],
         };
         let settings = crate::project::AudioSettings {

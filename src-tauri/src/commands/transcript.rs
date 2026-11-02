@@ -1112,6 +1112,8 @@ pub fn project_shorts_generate_impl(
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionCueView {
+    /// The transcript its words are from (each recording has its own).
+    pub track_id: String,
     pub start_us: u64,
     pub end_us: u64,
     pub text: String,
@@ -1166,9 +1168,9 @@ pub enum CaptionEdit {
     Emphasis { word_ids: Vec<String>, on: bool },
 }
 
-/// The timeline of the video or the short `short`, and the cues of the transcript its captions
-/// read (with that transcript's id), or `None` when nothing is transcribed. `written` keeps the
-/// words as written, not in capitals: for a transcript rather than captions.
+/// The timeline of the video or the short `short`, and its captions, each with the transcript
+/// it reads, or `None` when nothing is transcribed. `written` keeps the words as written, not
+/// in capitals: for a transcript rather than captions.
 pub(crate) fn caption_cues(
     reader: &crate::project::reader::ProjectReader,
     short: Option<&str>,
@@ -1176,7 +1178,7 @@ pub(crate) fn caption_cues(
 ) -> Result<
     (
         crate::project::revision::EditDocument,
-        Option<(String, Vec<crate::captions::CaptionCue>)>,
+        Option<Vec<(String, crate::captions::CaptionCue)>>,
     ),
     String,
 > {
@@ -1186,25 +1188,32 @@ pub(crate) fn caption_cues(
         settings.uppercase = false;
     }
     let root = reader.root();
-    let candidates = crate::export::caption_candidates(&timeline);
-    let Some(transcript) =
-        crate::captions::caption_source(&settings, candidates, Vec::new(), |id| {
-            store::load_transcript(root, id).ok().flatten()
-        })
-    else {
-        return Ok((timeline, None));
-    };
-    let mapper = timeline.transcript_clock(&transcript.track_id)?;
-    let cues = crate::captions::build_cues(&transcript, &mapper, &settings);
-    Ok((timeline, Some((transcript.track_id, cues))))
+    let cues = crate::export::caption_track_cues(&timeline, &settings, |id| {
+        store::load_transcript(root, id).ok().flatten()
+    });
+    Ok((timeline, cues))
 }
 
 fn caption_track(
     reader: &crate::project::reader::ProjectReader,
     short: Option<&str>,
 ) -> Result<CaptionTrackView, String> {
-    let (timeline, Some((track_id, cues))) = caption_cues(reader, short, false)? else {
+    let (timeline, Some(cues)) = caption_cues(reader, short, false)? else {
         return Ok(CaptionTrackView::default());
+    };
+    // Shown while anything is transcribed, even before a caption lands on the timeline.
+    let track_id = match cues.first() {
+        Some((id, _)) => id.clone(),
+        None => timeline
+            .captions
+            .track_id
+            .clone()
+            .or_else(|| {
+                crate::export::caption_candidates(&timeline)
+                    .into_iter()
+                    .next()
+            })
+            .unwrap_or_default(),
     };
     // A short's graphics fill its frame or not by their mode, which its own document knows.
     let shown =
@@ -1219,7 +1228,8 @@ fn caption_track(
     let free = crate::graphics::render::whole_frame_ranges(reader.root(), &shown);
     let cues = cues
         .into_iter()
-        .map(|cue| CaptionCueView {
+        .map(|(track_id, cue)| CaptionCueView {
+            track_id,
             under_graphic: crate::graphics::render::meets_ranges(&free, cue.start_us, cue.end_us),
             start_us: cue.start_us,
             end_us: cue.end_us,
@@ -1241,11 +1251,15 @@ fn caption_track(
     })
 }
 
-/// The emphasis words to drop so each caption keeps one when `picked` are emphasized; an error
-/// when two picked words share a caption.
-fn emphasis_replaced(track: &CaptionTrackView, picked: &[String]) -> Result<Vec<String>, String> {
+/// The emphasis words to drop so each caption keeps one when `picked` (words of transcript
+/// `track_id`) are emphasized; an error when two picked words share a caption.
+fn emphasis_replaced(
+    track: &CaptionTrackView,
+    track_id: &str,
+    picked: &[String],
+) -> Result<Vec<String>, String> {
     let mut replaced = Vec::new();
-    for cue in &track.cues {
+    for cue in track.cues.iter().filter(|cue| cue.track_id == track_id) {
         let here: Vec<&String> = picked
             .iter()
             .filter(|id| cue.word_ids.contains(id))
@@ -1335,7 +1349,11 @@ pub fn transcript_caption_edit_impl(
             let opened = state.opened_project.lock();
             let reader = opened.as_ref().ok_or("No opened project")?;
             super::require_handle(reader, &project_handle)?;
-            emphasis_replaced(&caption_track(reader, short_id.as_deref())?, word_ids)?
+            emphasis_replaced(
+                &caption_track(reader, short_id.as_deref())?,
+                &track_id,
+                word_ids,
+            )?
         }
         _ => Vec::new(),
     };

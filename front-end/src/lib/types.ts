@@ -842,6 +842,9 @@ export interface GraphicView {
   style: string | null;
   /** Graphics look tokens of its own over its style's. */
   look?: Record<string, string>;
+  /** The graphic this is a version of (GFX-4), and what the version changes. */
+  versionOf?: string;
+  note?: string;
 }
 
 /** A style's graphics look: design tokens every graphic takes (src-tauri graphics/look.rs). */
@@ -942,7 +945,36 @@ export interface Style {
     captionStyle?: CaptionStyle | null;
     /** Absent keeps the frame's. */
     background?: StyleBackground | null;
+    motion?: string[];
+    kinds?: StyleGraphicKind[];
+    examples?: StyleExample[];
   };
+  /** How its graphics move, in words; the look's tokens are the numbers. */
+  motion?: string[];
+  /** The kinds of graphics it uses, and when. */
+  kinds?: StyleGraphicKind[];
+  /** Graphics library items that show it done well. */
+  examples?: StyleExample[];
+  /** Rules about the look ("never an opaque card over the face"). */
+  rules?: string[];
+  /** Images and clips it was made from: files in its folder, or full paths to copy in. */
+  references?: { file: string; note?: string }[];
+  /** What was taken from the references and what was left out. */
+  breakdown?: string;
+  sound?: { policy?: string; cues?: { role: string; sound: string }[] };
+}
+
+export interface StyleGraphicKind {
+  name: string;
+  when: string;
+  /** Where it shows in a short. */
+  shorts?: "full" | "camera" | "screen" | "overScreen" | "overFace" | null;
+}
+
+export interface StyleExample {
+  /** A graphics library item's id or name. */
+  graphic: string;
+  kind?: string;
 }
 
 export interface StyleView {
@@ -1005,6 +1037,57 @@ export interface PresetsView {
   inherited: Partial<Record<PresetPart, Record<string, unknown>>>;
   folder: string;
 }
+
+/** One export in the project's list (DLV-2): waiting, running or done. */
+export interface DeliveryView {
+  jobId: string;
+  /** "Video", or the short's title. */
+  label: string;
+  /** `file`: subtitles, a transcript or the sound beside the video, not a video. */
+  request: { shortId?: string; settings: ExportSettings; file?: ExportFileKind };
+  state: ExportState;
+  /** The edit revision it was made from. */
+  revision: number;
+  width: number;
+  height: number;
+  progress: number;
+  outputPath?: string;
+  failure?: string;
+  finishedAt?: string;
+  /** Made from an earlier revision than the edit's now. */
+  older: boolean;
+  /** Its file is gone. */
+  missing: boolean;
+}
+
+/** A style asked for from references in the Style panel, waiting for the agent (STY-3). */
+export interface StyleRequest {
+  references: string[];
+  brief: string;
+  name?: string;
+}
+
+/** One step the app runs for a preset (AUTO-1). */
+export interface PresetRunStep {
+  label: string;
+  /** It sends something off the computer, with the user's key. */
+  online: boolean;
+}
+
+/** What running the project's preset would do, and what is left for the agent after it. */
+export interface PresetRunPlan {
+  preset: string;
+  steps: PresetRunStep[];
+  left: string[];
+}
+
+/** How the preset run goes, step by step (`aeroedits-preset-run`). */
+export type PresetRunEvent =
+  | { kind: "started"; index: number }
+  | { kind: "progress"; index: number; fraction: number; message: string }
+  | { kind: "done"; index: number; line: string }
+  | { kind: "stopped"; index: number; line: string }
+  | { kind: "finished"; stopped: boolean };
 
 export interface PresetInput {
   name: string;
@@ -1113,6 +1196,12 @@ export interface GraphicListed extends GraphicView {
   clips: [string, number, number][];
 }
 
+export interface GraphicVersioned {
+  project: OpenedProject;
+  /** The new version. */
+  assetId: string;
+}
+
 export interface GraphicCreated {
   project: OpenedProject;
   assetId: string;
@@ -1164,7 +1253,18 @@ export interface SeqTrack {
   locked?: boolean;
   /** What its clips stand for; absent: each stream's own role. */
   role?: Role;
+  /** A video track's own screen framing, instead of the project's. */
+  look?: ScreenLook;
   clips: Clip[];
+}
+
+/** How a video track frames its screen clips: percent cropped from each edge, and size. */
+export interface ScreenLook {
+  cropLeft: number;
+  cropTop: number;
+  cropRight: number;
+  cropBottom: number;
+  scalePct: number;
 }
 
 export interface Sequence {
@@ -1181,6 +1281,7 @@ export type SequenceEdit =
   | { kind: "addTrack"; trackKind: TrackKind }
   | { kind: "removeTrack"; trackId: string }
   | { kind: "setTrack"; trackId: string; name: string; hidden: boolean; muted: boolean; locked: boolean; role: Role | null }
+  | { kind: "setTrackLook"; trackId: string; look: ScreenLook | null }
   | { kind: "moveTrack"; trackId: string; up: boolean }
   | {
       kind: "placeAsset";
@@ -1268,6 +1369,8 @@ export interface OpenedProject {
 
 /** One caption on the timeline's caption track (src-tauri/src/commands/transcript.rs). */
 export interface CaptionCueView {
+  /** The transcript its words are from (each recording has its own). */
+  trackId: string;
   startUs: number;
   endUs: number;
   text: string;
@@ -1868,6 +1971,8 @@ export interface ShortLayout {
   captionSizePct: number;
   /** Where each graphic plays, by clip id; one not listed plays full frame. */
   graphicSlots?: Record<string, GraphicSlot>;
+  /** Camera push-ins at jump cuts (FX-3); off unless turned on. */
+  pushIns?: boolean;
 }
 
 /** Where a camera stream's face track stands; shorts frame their camera on it. */
@@ -1901,6 +2006,10 @@ export interface Short {
   take?: ShortTake;
   /** Its own caption breaks, joins, hidden words and emphasis, by transcript then word id, where they differ from the video's. */
   captionMarks?: Record<string, Record<string, CaptionMark>>;
+  /** What it is about: the premise a clip gathered from anywhere serves. */
+  idea?: string;
+  /** A clip gathered from several stretches of the video, in play order (source time). */
+  pieces?: { sourceStartUs: number; sourceEndUs: number; /** Where it starts in the video now; absent when cut from it since. */ editedStartUs?: number }[];
   /** How long it plays now. */
   lengthUs?: number;
   /** Absent when an end was cut from the video. Filled in by the backend. */

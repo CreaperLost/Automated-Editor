@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Pause, Play, Plus, Search, Trash2, Upload } from "lucide-react";
-import { Badge, Button, IconButton, Notice, Segmented } from "../ui";
+import React, { useEffect, useRef, useState } from "react";
+import { Pause, Play, Plus, Trash2 } from "lucide-react";
+import { Badge, IconButton, Notice } from "../ui";
+import { useBusyRun } from "../../hooks/useBusyRun";
+import { AddOwnFile, LibrarySearch, pickOwnFile, splitTags, useLibrarySearch, type OwnFile } from "./libraryParts";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import type { LibrarySound, Licence, LicenceKind } from "../../lib/types";
@@ -27,10 +29,9 @@ export const SoundsPage: React.FC = () => {
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const [sounds, setSounds] = useState<LibrarySound[]>([]);
   const [search, setSearch] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string>();
+  const { busy, error, setError, run } = useBusyRun();
   const [playing, setPlaying] = useState<string | null>(null);
-  const [adding, setAdding] = useState<{ path: string; name: string; tags: string; licence: LicenceKind } | null>(null);
+  const [adding, setAdding] = useState<OwnFile | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
 
   const load = () =>
@@ -42,19 +43,6 @@ export const SoundsPage: React.FC = () => {
     void load();
     return () => audio.current?.pause();
   }, []);
-
-  const run = async (label: string, work: () => Promise<void>) => {
-    if (busy) return;
-    setBusy(label);
-    setError(undefined);
-    try {
-      await work();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const play = async (sound: LibrarySound) => {
     audio.current?.pause();
@@ -85,17 +73,14 @@ export const SoundsPage: React.FC = () => {
 
   const pickOwn = () =>
     run("Choosing…", async () => {
-      const [path] = await api.pickMediaFiles();
-      if (!path) return;
-      const name = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "";
-      setAdding({ path, name, tags: "", licence: "noCredit" });
+      const file = await pickOwnFile();
+      if (file) setAdding(file);
     });
 
   const saveOwn = () =>
     run("Adding…", async () => {
       if (!adding) return;
-      const tags = adding.tags.split(",").map((t) => t.trim()).filter(Boolean);
-      await api.soundLibraryAdd(adding.path, adding.name || null, tags, { kind: adding.licence, source: "My own file" });
+      await api.soundLibraryAdd(adding.path, adding.name || null, splitTags(adding.tags), { kind: adding.licence, source: "My own file" });
       setAdding(null);
       await load();
     });
@@ -106,97 +91,37 @@ export const SoundsPage: React.FC = () => {
       await load();
     });
 
-  const words = search.trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
-  const shown = useMemo(
-    () =>
-      sounds.filter((s) => {
-        const hay = `${s.id} ${s.name} ${s.tags.join(" ")}`.toLowerCase();
-        return words.every((w) => hay.includes(w));
-      }),
-    [sounds, search],
-  );
+  const shown = useLibrarySearch(sounds, search);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="shrink-0 space-y-2 p-3 border-b border-studio-800">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-studio-500 pointer-events-none" />
-            <input
-              type="search"
-              aria-label="Search sounds"
-              placeholder="Search sounds…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="ui-field w-full pl-8"
-            />
-          </div>
-          <IconButton
-            icon={Upload}
-            variant="secondary"
-            label="Add a sound of your own to the library"
-            disabled={busy !== null}
-            onClick={() => void pickOwn()}
-          />
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {QUICK_TAGS.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              onClick={() => setSearch((s) => (s.trim().toLowerCase() === tag ? "" : tag))}
-              className={`h-6 px-2 rounded-control border text-meta transition-colors ${
-                search.trim().toLowerCase() === tag
-                  ? "border-audio/60 bg-audio/15 text-audio-fg"
-                  : "border-studio-700 text-studio-300 hover:bg-studio-850"
-              }`}
-            >
-              {tag}
-            </button>
-          ))}
-        </div>
-      </div>
+      <LibrarySearch
+        noun="sounds"
+        addLabel="Add a sound of your own to the library"
+        tags={QUICK_TAGS}
+        search={search}
+        setSearch={setSearch}
+        disabled={busy !== null}
+        onAdd={() => void pickOwn()}
+      />
       {adding && (
-        <div className="m-3 space-y-2 rounded-panel border border-studio-700 p-3">
-          <p className="text-label text-studio-200">Add to your sounds</p>
-          <input
-            aria-label="Name"
-            className="ui-field w-full"
-            value={adding.name}
-            onChange={(e) => setAdding({ ...adding, name: e.target.value })}
-          />
-          <input
-            aria-label="Tags"
-            placeholder="Tags, comma separated (whoosh, click…)"
-            className="ui-field w-full"
-            value={adding.tags}
-            onChange={(e) => setAdding({ ...adding, tags: e.target.value })}
-          />
-          <Segmented<LicenceKind>
-            label="Licence"
-            size="sm"
-            className="w-full"
-            value={adding.licence}
-            onChange={(licence) => setAdding({ ...adding, licence })}
-            options={[
-              { value: "noCredit", label: "Mine / no credit" },
-              { value: "cc0", label: "CC0" },
-              { value: "creditRequired", label: "Needs credit" },
-              { value: "unknown", label: "Unknown" },
-            ]}
-          />
-          {!needsNoCredit({ kind: adding.licence }) && (
-            <p className="text-meta text-suggest-fg">Check flags it before export wherever it plays.</p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setAdding(null)}>
-              Cancel
-            </Button>
-            <Button variant="primary" size="sm" disabled={busy !== null} onClick={() => void saveOwn()}>
-              Add
-            </Button>
-          </div>
-        </div>
+        <AddOwnFile
+          noun="sounds"
+          tagsHint="Tags, comma separated (whoosh, click…)"
+          licences={[
+            { value: "noCredit", label: "Mine / no credit" },
+            { value: "cc0", label: "CC0" },
+            { value: "creditRequired", label: "Needs credit" },
+            { value: "unknown", label: "Unknown" },
+          ]}
+          adding={adding}
+          setAdding={setAdding}
+          warning={
+            !needsNoCredit({ kind: adding.licence }) && <p className="text-meta text-suggest-fg">Check flags it before export wherever it plays.</p>
+          }
+          disabled={busy !== null}
+          onSave={() => void saveOwn()}
+        />
       )}
       {error && (
         <Notice tone="danger" className="mx-3 mt-3 rounded-control border" onDismiss={() => setError(undefined)}>

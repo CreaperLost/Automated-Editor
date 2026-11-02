@@ -9,8 +9,9 @@ import { Button, Notice } from "./components/ui";
 import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
-import { api, isTauriEnvironment } from "./lib/ipc";
+import { api } from "./lib/ipc";
 import { ExportSettings, ExportStatus, OpenedProject } from "./lib/types";
+import { listenTo } from "./lib/windowSync";
 
 // The start screen needs none of the editor: it and the dialogs load when first needed (the
 // editor in the background once the start screen is up, so opening a project does not wait).
@@ -85,22 +86,10 @@ export const App: React.FC = () => {
   useEffect(() => startAgentSync(), []);
   // An agent opened or created a project: show it as if opened from the menu.
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<{ path: string; project: OpenedProject }>("aeroedits-agent-opened", (event) => {
-        useProjectStore.getState().loadOpenedProject(event.payload.project, event.payload.path);
-        setExportDestination("");
-      }).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo<{ path: string; project: OpenedProject }>("aeroedits-agent-opened", (payload) => {
+      useProjectStore.getState().loadOpenedProject(payload.project, payload.path);
+      setExportDestination("");
+    });
   }, []);
 
   // Once the start screen is up, fetch the editor so opening a project does not wait for it.
@@ -116,22 +105,10 @@ export const App: React.FC = () => {
 
   // An agent started an export: follow it here, and show the Export dialog for the video.
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<{ status: ExportStatus; short: boolean }>("aeroedits-agent-export", (event) => {
-        setExportJob(event.payload.status);
-        if (!event.payload.short) setExportOpen(true);
-      }).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo<{ status: ExportStatus; short: boolean }>("aeroedits-agent-export", (payload) => {
+      setExportJob(payload.status);
+      if (!payload.short) setExportOpen(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -142,7 +119,12 @@ export const App: React.FC = () => {
     const timer = window.setInterval(() => {
       void api
         .exportStatus(exportJob.jobId)
-        .then((next) => {
+        .then(async (next) => {
+          // When it ends and a queued export starts, follow that one.
+          if (next.state !== "queued" && next.state !== "running") {
+            const running = await api.exportStatus().catch(() => undefined);
+            if (running && running.jobId !== next.jobId && running.state === "running") next = running;
+          }
           if (active) setExportJob(next);
         })
         .catch((err) => {
@@ -218,15 +200,17 @@ export const App: React.FC = () => {
     }
   };
 
-  const startExport = async (settings: ExportSettings) => {
+  const startExport = async (settings: ExportSettings, queue = false) => {
     if (!project) return;
     setError(undefined);
     try {
-      const next = await api.exportStart(project.projectHandle, {
-        ...settings,
-        destination: exportDestination.trim() || undefined,
-      });
-      setExportJob(next);
+      const next = await api.exportStart(
+        project.projectHandle,
+        { ...settings, destination: exportDestination.trim() || undefined },
+        queue,
+      );
+      // A queued export shows in the list; the progress here stays on the one running.
+      if (!queue || next.state === "failed") setExportJob(next);
     } catch (err) {
       setError(String(err));
     }

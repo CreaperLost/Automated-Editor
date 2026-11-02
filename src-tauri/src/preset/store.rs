@@ -20,19 +20,9 @@ pub fn dir() -> PathBuf {
         .unwrap_or_else(|| crate::style::store::config().join("presets"))
 }
 
-/// A preset's name is also a folder name: letters, digits, spaces, `-` and `_`, 1 to 40.
+/// A preset's name is also a folder name.
 pub fn check_name(name: &str) -> Result<(), String> {
-    let ok = !name.trim().is_empty()
-        && name == name.trim()
-        && name.chars().count() <= 40
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'));
-    if ok {
-        Ok(())
-    } else {
-        Err("Name a preset with letters, digits, spaces, - or _ (at most 40)".into())
-    }
+    crate::style::store::check_folder_name(name, "preset")
 }
 
 pub fn folder_of(preset: &Preset) -> Option<PathBuf> {
@@ -77,16 +67,7 @@ fn folder_named(presets: &Path, name: &str) -> Option<String> {
 }
 
 fn renames(presets: &Path) -> BTreeMap<String, String> {
-    std::fs::read_to_string(presets.join(RENAMES_FILE))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
-}
-
-fn write_renames(presets: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = presets.join(RENAMES_FILE);
-    let text = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+    crate::style::store::read_renames(&presets.join(RENAMES_FILE))
 }
 
 /// Remembers that preset `old` is now `new`; names that led to `old` now lead to `new`.
@@ -99,7 +80,7 @@ fn record_rename(presets: &Path, old: &str, new: &str) -> Result<(), String> {
     }
     map.retain(|k, _| !k.eq_ignore_ascii_case(new));
     map.insert(old.to_lowercase(), new.to_string());
-    write_renames(presets, &map)
+    crate::style::store::write_renames(&presets.join(RENAMES_FILE), &map)
 }
 
 /// The preset's name now: `name` while a preset has it, else the name it was renamed to.
@@ -170,15 +151,10 @@ pub fn cached(name: &str) -> Option<Preset> {
 
 /// Every preset: the built-ins, then the user's by name.
 pub fn list_in(presets: &Path) -> Vec<Preset> {
-    let mut own: Vec<Preset> = std::fs::read_dir(presets)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join(FILE).is_file())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            (!is_builtin(&name)).then(|| load_in(presets, &name).ok())?
-        })
+    let mut own: Vec<Preset> = crate::style::store::folders_with(presets, FILE)
+        .iter()
+        .filter(|name| !is_builtin(name))
+        .filter_map(|name| load_in(presets, name).ok())
         .collect();
     own.sort_by_key(|p| p.name.to_lowercase());
     builtin().into_iter().chain(own).collect()
@@ -275,7 +251,7 @@ pub fn remove_in(presets: &Path, name: &str) -> Result<(), String> {
     let before = map.len();
     map.retain(|_, target| !target.eq_ignore_ascii_case(&preset.name));
     if map.len() != before {
-        let _ = write_renames(presets, &map);
+        let _ = crate::style::store::write_renames(&presets.join(RENAMES_FILE), &map);
     }
     Ok(())
 }

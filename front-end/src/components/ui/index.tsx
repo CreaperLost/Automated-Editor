@@ -553,6 +553,22 @@ export const Field: React.FC<{
 };
 
 /** A message in a strip: errors, notices. */
+/** The dimmed screen behind a dialog. A press on it, not on the dialog, calls `onClose`. */
+export const DialogBackdrop: React.FC<{ onClose?: () => void; selectable?: boolean; children: React.ReactNode }> = ({
+  onClose,
+  selectable,
+  children,
+}) => (
+  <div
+    className={cn("fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4", !selectable && "select-none")}
+    onPointerDown={(event) => {
+      if (event.target === event.currentTarget) onClose?.();
+    }}
+  >
+    {children}
+  </div>
+);
+
 export const Notice: React.FC<{
   tone?: "danger" | "accent" | "suggest" | "neutral";
   children: React.ReactNode;

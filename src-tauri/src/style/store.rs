@@ -11,6 +11,11 @@ const MAX_STYLES: usize = 100;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const LOGO_EXTENSIONS: &[&str] = &["png", "svg", "jpg", "jpeg", "webp"];
 const FONT_EXTENSIONS: &[&str] = &["woff2", "woff", "ttf", "otf"];
+const REFERENCE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "svg", "mp4", "mov", "webm", "mkv",
+];
+/// A reference clip may be larger than a font or logo.
+const MAX_CLIP_BYTES: u64 = 300 * 1024 * 1024;
 const RENAMES_FILE: &str = "renamed.json";
 const MAX_RENAME_HOPS: usize = 16;
 
@@ -35,8 +40,8 @@ pub(crate) fn config() -> PathBuf {
     crate::transcript::settings::config_dir()
 }
 
-/// A style's name is also a folder name: letters, digits, spaces, `-` and `_`, 1 to 40.
-pub fn check_name(name: &str) -> Result<(), String> {
+/// A name that is also a folder name: letters, digits, spaces, `-` and `_`, 1 to 40.
+pub(crate) fn check_folder_name(name: &str, noun: &str) -> Result<(), String> {
     let ok = !name.trim().is_empty()
         && name == name.trim()
         && name.chars().count() <= 40
@@ -46,8 +51,36 @@ pub fn check_name(name: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err("Name a style with letters, digits, spaces, - or _ (at most 40)".into())
+        Err(format!(
+            "Name a {noun} with letters, digits, spaces, - or _ (at most 40)"
+        ))
     }
+}
+
+/// The folders in `dir` holding a `file`, by name.
+pub(crate) fn folders_with(dir: &Path, file: &str) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join(file).is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect()
+}
+
+/// A folder's record of which name became which.
+pub(crate) fn read_renames(path: &Path) -> BTreeMap<String, String> {
+    crate::files::load_json(path).unwrap_or_default()
+}
+
+pub(crate) fn write_renames(path: &Path, renames: &BTreeMap<String, String>) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(renames).map_err(|e| e.to_string())?;
+    std::fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A style's name is also a folder name.
+pub fn check_name(name: &str) -> Result<(), String> {
+    check_folder_name(name, "style")
 }
 
 /// A file name in a style's folder (no paths).
@@ -141,15 +174,10 @@ pub fn cached(name: &str) -> Option<Style> {
 
 /// Every style: the built-ins, then the user's by name.
 pub fn list_in(styles: &Path) -> Vec<Style> {
-    let mut own: Vec<Style> = std::fs::read_dir(styles)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join(FILE).is_file())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            (!is_builtin(&name)).then(|| load_in(styles, &name).ok())?
-        })
+    let mut own: Vec<Style> = folders_with(styles, FILE)
+        .iter()
+        .filter(|name| !is_builtin(name))
+        .filter_map(|name| load_in(styles, name).ok())
         .collect();
     own.sort_by_key(|s| s.name.to_lowercase());
     builtin().into_iter().chain(own).collect()
@@ -219,11 +247,7 @@ pub fn save_in(styles: &Path, input: &StyleInput) -> Result<Style, String> {
     let mut style = input.style.clone().normalized();
     style.name = name.clone();
     // Checked without its files, which are taken in below.
-    let mut bare = style.clone();
-    bare.brand.fonts.title.file = None;
-    bare.brand.fonts.body.file = None;
-    bare.brand.logo = None;
-    bare.validate()?;
+    style.validate_parts()?;
     std::fs::create_dir_all(styles).map_err(|e| format!("{}: {e}", styles.display()))?;
     let stage = styles.join(format!(".saving-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
@@ -236,6 +260,16 @@ pub fn save_in(styles: &Path, input: &StyleInput) -> Result<Style, String> {
             "logo",
             LOGO_EXTENSIONS,
         )?;
+        for (i, reference) in style.references.iter_mut().enumerate() {
+            reference.file = take_file(
+                Some(&reference.file),
+                src,
+                &stage,
+                &format!("reference-{}", i + 1),
+                REFERENCE_EXTENSIONS,
+            )?
+            .ok_or("Give each reference its `file`")?;
+        }
         style.brand.fonts.title.file = take_file(
             input.style.brand.fonts.title.file.as_deref(),
             src,
@@ -310,7 +344,7 @@ pub fn remove_in(styles: &Path, name: &str) -> Result<(), String> {
     let before = map.len();
     map.retain(|_, target| *target != name);
     if map.len() != before {
-        let _ = write_renames(styles, &map);
+        let _ = write_renames(&styles.join(RENAMES_FILE), &map);
     }
     crate::graphics::render::sources_changed();
     Ok(())
@@ -321,16 +355,7 @@ pub fn remove(name: &str) -> Result<(), String> {
 }
 
 fn renames(styles: &Path) -> BTreeMap<String, String> {
-    std::fs::read_to_string(styles.join(RENAMES_FILE))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
-}
-
-fn write_renames(styles: &Path, renames: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = styles.join(RENAMES_FILE);
-    let text = serde_json::to_string_pretty(renames).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+    read_renames(&styles.join(RENAMES_FILE))
 }
 
 fn record_rename(styles: &Path, old: &str, new: &str) -> Result<(), String> {
@@ -342,7 +367,7 @@ fn record_rename(styles: &Path, old: &str, new: &str) -> Result<(), String> {
     }
     map.remove(new);
     map.insert(old.to_string(), new.to_string());
-    write_renames(styles, &map)
+    write_renames(&styles.join(RENAMES_FILE), &map)
 }
 
 /// The style's name now: `name` while a style has it, else the name it was renamed to.
@@ -372,8 +397,8 @@ pub fn current_name(styles: &Path, name: &str) -> String {
     }
 }
 
-/// The style's file for `given`: its own file kept (copied from `from`), a full path copied
-/// in as `<stem>.<ext>`, or none.
+/// The style's file for `given`: its own file kept (linked or copied from `from`), a full path
+/// copied in as `<stem>.<ext>`, or none.
 fn take_file(
     given: Option<&str>,
     from: Option<&Path>,
@@ -384,7 +409,8 @@ fn take_file(
     let Some(given) = given.map(str::trim).filter(|g| !g.is_empty()) else {
         return Ok(None);
     };
-    let path = if plain_file(given) && !Path::new(given).is_absolute() {
+    let own = plain_file(given) && !Path::new(given).is_absolute();
+    let path = if own {
         from.map(|k| k.join(given))
             .filter(|p| p.is_file())
             .ok_or_else(|| format!("The style has no file \"{given}\""))?
@@ -399,11 +425,17 @@ fn take_file(
     let size = std::fs::metadata(&path)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .len();
-    if size > MAX_FILE_BYTES {
+    let clip = matches!(ext.as_str(), "mp4" | "mov" | "webm" | "mkv");
+    if size > if clip { MAX_CLIP_BYTES } else { MAX_FILE_BYTES } {
         return Err(format!("That {stem} file is too big"));
     }
     let name = format!("{stem}.{ext}");
-    std::fs::copy(&path, stage.join(&name)).map_err(|e| format!("{}: {e}", path.display()))?;
+    // The style's own files are linked into the new folder where the disk allows, so saving a
+    // style with clips doesn't copy them each time.
+    let target = stage.join(&name);
+    if !(own && std::fs::hard_link(&path, &target).is_ok()) {
+        std::fs::copy(&path, &target).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     Ok(Some(name))
 }
 
@@ -453,6 +485,38 @@ mod tests {
         remove_in(styles, "Acme").unwrap();
         assert!(load_in(styles, "Acme Dark").is_err());
         assert!(remove_in(styles, "Light").is_err());
+    }
+
+    #[test]
+    fn references_are_taken_in_and_kept_through_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let styles = dir.path().join("styles");
+        let clip = dir.path().join("Launch film.mp4");
+        std::fs::write(&clip, "clip").unwrap();
+        let mut first = input("Refs");
+        first.style.references = vec![super::super::Reference {
+            file: clip.display().to_string(),
+            note: "the card reveal at 0:04".into(),
+        }];
+        let saved = save_in(&styles, &first).unwrap();
+        assert_eq!(saved.references[0].file, "reference-1.mp4");
+        let mut renamed = input("Refs 2");
+        renamed.previous = Some("Refs".into());
+        renamed.style = saved.clone();
+        let kept = save_in(&styles, &renamed).unwrap();
+        assert_eq!(kept.references, saved.references);
+        assert_eq!(
+            std::fs::read_to_string(styles.join("Refs 2").join("reference-1.mp4")).unwrap(),
+            "clip"
+        );
+        // Only images and clips.
+        let mut text = input("Notes");
+        text.style.references = vec![super::super::Reference {
+            file: dir.path().join("notes.txt").display().to_string(),
+            note: String::new(),
+        }];
+        std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+        assert!(save_in(&styles, &text).unwrap_err().contains("reference-1"));
     }
 
     #[test]

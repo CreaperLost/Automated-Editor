@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Check, AlertCircle, Loader2, X } from "lucide-react";
 import { Badge, Button } from "../ui";
-import { api, isTauriEnvironment } from "../../lib/ipc";
+import { api } from "../../lib/ipc";
 import type { GateReport, GraphicCloseMatch, GraphicLibrarySave } from "../../lib/types";
 import { libraryChanged } from "./graphicsEvents";
+import { listenTo } from "../../lib/windowSync";
 
 const fieldClass =
   "w-full min-w-0 bg-studio-950 text-studio-100 text-label rounded px-2 py-1 border border-studio-700 focus:outline-none focus:border-accent-hover";
@@ -31,21 +32,8 @@ export const LibrarySave: React.FC<{
   const running = busy !== undefined;
 
   useEffect(() => {
-    if (!running || !isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<{ fraction: number; message: string }>("graphics-check-progress", (event) =>
-        setBusy(event.payload.message),
-      ).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    if (!running) return;
+    return listenTo<{ fraction: number; message: string }>("graphics-check-progress", (payload) => setBusy(payload.message));
   }, [running]);
 
   const save = async (extra: Pick<GraphicLibrarySave, "update" | "asNew" | "asIs"> = {}) => {

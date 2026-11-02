@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run.sh <log-name> <prompt-file> [session-id]
-# One headless EVAL-1 agent turn against the dev app's MCP server only (see evaluation.md).
+# One headless EVAL-1 agent turn against the dev app's MCP server only (see docs/verification.md).
 # EVAL_DIR is the run's folder in scratch, holding mcp.json; the stream goes to
 # $EVAL_DIR/logs/<log-name>.jsonl, then the turn's summary and what the agent read are printed.
 E="${EVAL_DIR:?set EVAL_DIR to the run folder (with mcp.json)}"

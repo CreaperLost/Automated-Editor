@@ -478,7 +478,7 @@ const VOID: [&str; 10] = [
 
 /// Visible text in the body that no variable fills: neither inside an element with a
 /// `data-var-*` attribute nor inside one the script looks up by id (and so fills itself).
-fn fixed_text(html: &str) -> Vec<String> {
+pub(crate) fn fixed_text(html: &str) -> Vec<String> {
     let lower = html.to_ascii_lowercase();
     let scripts = blocks(html, "script");
     let filled_by_script = |tag: &str| {

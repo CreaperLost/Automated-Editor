@@ -9,8 +9,9 @@
 use super::{mutate_opened, require_handle, AppState};
 use crate::dsp::noises::{find_noises, NoiseConfig, NoiseKind};
 use crate::project::{pcm::PcmReader, reader::safe_path, OpenedProject};
+use crate::ranges::merge as merge_ranges;
 use crate::sequence::{SourceRange, StreamKind};
-use crate::transcript::pauses::{merge_ranges, subtract_ranges};
+use crate::transcript::pauses::subtract_ranges;
 use crate::transcript::{store, ProviderKind, Transcript, WordKind};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -425,15 +426,10 @@ fn scan_path(root: &Path, key: &str) -> Result<std::path::PathBuf, String> {
 }
 
 fn save_scan(root: &Path, scan: &SavedScan) -> Result<(), String> {
-    use std::io::Write;
     let path = scan_path(root, &scan.key)?;
     let dir = path.parent().ok_or("Invalid noise cache path")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    temp.write_all(&serde_json::to_vec(scan).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_atomic(&path, &serde_json::to_vec(scan).map_err(|e| e.to_string())?)
 }
 
 /// The last scan of `key`, if one was kept and still reads.

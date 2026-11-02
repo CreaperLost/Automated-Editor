@@ -7,7 +7,7 @@ use crate::{
 };
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc, Arc,
     },
     thread,
@@ -60,7 +60,7 @@ fn warm_neighbour_shorts(app: &tauri::AppHandle, warmer: DecoderWarmer, short_id
             // Starting decoders takes the CPU: not while the frame is still being encoded.
             let deadline = std::time::Instant::now() + Duration::from_millis(300);
             thread::sleep(Duration::from_millis(20));
-            while ENCODING.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            while ENCODING.load(Ordering::Acquire) > 0 && std::time::Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(5));
             }
             for _ in 0..WARM_TRIES {
@@ -153,6 +153,8 @@ fn fall_back_to_webview(
 
 /// A composited frame waiting for JPEG encoding and presentation on the webview surface.
 struct WebviewJob {
+    /// Its place in drawing order: a frame that finishes after a newer one isn't shown.
+    order: u64,
     frame: crate::media::VideoFrame,
     generation: u64,
     surface_generation: u64,
@@ -161,86 +163,128 @@ struct WebviewJob {
     for_short: bool,
 }
 
-/// Set while the encoder works on a frame. The media worker then skips drawing a frame it
-/// would have to wait to hand over: it goes on feeding audio and draws a fresh frame once
-/// the encoder is free, rather than blocking on a frame that is stale by the time it is sent.
-static ENCODING: AtomicBool = AtomicBool::new(false);
+/// One thread gives a frame per draw + encode: 33-37 fps at 1080p60 in a release build, and 19
+/// at 1080p30 where encoding takes 40 ms. Two reach 57-58 and 29 (PERF-3).
+const ENCODER_THREADS: usize = 2;
 
-/// Clears [`ENCODING`] however a job ends.
+/// Frames handed to the encoders and not finished. While all the encoders are taken, the media
+/// worker skips drawing a frame it would have to wait to hand over: it goes on feeding audio
+/// and draws a fresh frame once one is free, rather than blocking on a frame that is stale by
+/// the time it is sent.
+static ENCODING: AtomicUsize = AtomicUsize::new(0);
+
+/// The next [`WebviewJob::order`].
+static NEXT_ORDER: AtomicU64 = AtomicU64::new(1);
+
+/// Takes one off [`ENCODING`] however a job ends.
 struct Encoding;
 
 impl Drop for Encoding {
     fn drop(&mut self) {
-        ENCODING.store(false, Ordering::Release);
+        ENCODING.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
-/// Encodes and presents webview frames on their own thread, so the next frame decodes and
-/// composites while this one is compressed. One frame waits at most: the media worker draws
-/// one only while the encoder is free (see [`ENCODING`]), and never waits to hand it over.
-fn start_webview_encoder(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
-    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(1);
-    thread::spawn(move || {
-        // With AEROEDITS_PROFILE set, reports the presented preview rate every two seconds.
-        let mut window = std::time::Instant::now();
-        let mut presented = 0u32;
-        for job in jobs {
-            ENCODING.store(true, Ordering::Release);
-            let _encoding = Encoding;
-            if window.elapsed() >= Duration::from_secs(2) {
-                if presented > 0 && crate::media::profiling() {
-                    eprintln!(
-                        "[profile] preview presented {:.1} fps",
-                        presented as f64 / window.elapsed().as_secs_f64()
-                    );
-                }
-                window = std::time::Instant::now();
-                presented = 0;
+/// With AEROEDITS_PROFILE set, reports the presented preview rate every two seconds.
+struct PresentedRate {
+    window: std::time::Instant,
+    presented: u32,
+}
+
+impl PresentedRate {
+    fn count(&mut self) {
+        self.presented += 1;
+        if self.window.elapsed() >= Duration::from_secs(2) {
+            if crate::media::profiling() {
+                eprintln!(
+                    "[profile] preview presented {:.1} fps",
+                    self.presented as f64 / self.window.elapsed().as_secs_f64()
+                );
             }
-            let state = app.state::<AppState>();
-            let started = std::time::Instant::now();
-            let jpeg = super::preview::encode_webview_frame(&job.frame);
-            crate::media::profile("jpeg", started);
-            let mut owner = state.playback.lock();
-            if !owner.status().is_ok_and(|s| {
-                s.generation == job.generation
-                    && !matches!(s.state, PlaybackState::Closed | PlaybackState::Error)
-            }) {
-                continue;
-            }
-            let jpeg = match jpeg {
-                Ok(jpeg) => jpeg,
-                Err(e) => {
-                    owner.fail(job.generation, e);
-                    continue;
-                }
-            };
-            let mut surface = state.preview.lock();
-            let current = surface.status();
-            if current.attached
-                && current.generation == job.surface_generation
-                && (current.visible || job.for_short)
-            {
-                match surface.present_encoded(jpeg, job.surface_generation, job.generation) {
-                    Ok(()) => {
-                        owner.mark_presented(job.generation);
-                        if job.for_short {
-                            crate::media::switch_stage("frame ready for the studio", true);
-                        }
-                        presented += 1;
-                        state.preview_frame_ready.notify_waiters();
-                    }
-                    Err(e) => owner.fail(job.generation, e),
-                }
-            }
+            self.window = std::time::Instant::now();
+            self.presented = 0;
         }
-    });
+    }
+}
+
+/// Encodes and presents one webview frame; returns when it is shown or dropped.
+fn encode_and_present(
+    app: &tauri::AppHandle,
+    job: WebviewJob,
+    shown: &AtomicU64,
+    rate: &parking_lot::Mutex<PresentedRate>,
+) {
+    let _encoding = Encoding;
+    let state = app.state::<AppState>();
+    let started = std::time::Instant::now();
+    let jpeg = super::preview::encode_webview_frame(&job.frame);
+    crate::media::profile("jpeg", started);
+    let mut owner = state.playback.lock();
+    if !owner.status().is_ok_and(|s| {
+        s.generation == job.generation
+            && !matches!(s.state, PlaybackState::Closed | PlaybackState::Error)
+    }) {
+        return;
+    }
+    let jpeg = match jpeg {
+        Ok(jpeg) => jpeg,
+        Err(e) => {
+            owner.fail(job.generation, e);
+            return;
+        }
+    };
+    let mut surface = state.preview.lock();
+    let current = surface.status();
+    if current.attached
+        && current.generation == job.surface_generation
+        && (current.visible || job.for_short)
+        && shown.fetch_max(job.order, Ordering::AcqRel) < job.order
+    {
+        match surface.present_encoded(jpeg, job.surface_generation, job.generation) {
+            Ok(()) => {
+                owner.mark_presented(job.generation);
+                if job.for_short {
+                    crate::media::switch_stage("frame ready for the studio", true);
+                }
+                rate.lock().count();
+                state.preview_frame_ready.notify_waiters();
+            }
+            Err(e) => owner.fail(job.generation, e),
+        }
+    }
+}
+
+/// Runs [`ENCODER_THREADS`] threads taking turns, so a frame can be compressed while the one
+/// before it still is. One frame waits at most: the media worker draws one only while an encoder
+/// is free (see [`ENCODING`]), and never waits to hand it over.
+fn start_webview_encoders(app: tauri::AppHandle) -> mpsc::SyncSender<WebviewJob> {
+    let (sender, jobs) = mpsc::sync_channel::<WebviewJob>(1);
+    let jobs = Arc::new(parking_lot::Mutex::new(jobs));
+    let shown = Arc::new(AtomicU64::new(0));
+    let rate = Arc::new(parking_lot::Mutex::new(PresentedRate {
+        window: std::time::Instant::now(),
+        presented: 0,
+    }));
+    for _ in 0..ENCODER_THREADS {
+        let (app, jobs, shown, rate) = (
+            app.clone(),
+            Arc::clone(&jobs),
+            Arc::clone(&shown),
+            Arc::clone(&rate),
+        );
+        thread::spawn(move || loop {
+            // Let go before encoding, so the other thread can take the next frame.
+            let job = jobs.lock().recv();
+            let Ok(job) = job else { return };
+            encode_and_present(&app, job, &shown, &rate);
+        });
+    }
     sender
 }
 
 pub fn start(app: tauri::AppHandle) {
     thread::spawn(move || {
-        let encoder = start_webview_encoder(app.clone());
+        let encoder = start_webview_encoders(app.clone());
         let mut runtime: Option<Runtime> = None;
         let mut underlay = Underlay::default();
         let pending = Arc::new(AtomicBool::new(false));
@@ -564,7 +608,7 @@ fn tick(
         }
         return Ok(playing);
     }
-    if preview.surface == "webview" && ENCODING.load(Ordering::Acquire) {
+    if preview.surface == "webview" && ENCODING.load(Ordering::Acquire) >= ENCODER_THREADS {
         return Ok(playing);
     }
     let frame = runtime.evaluator.preview_at(render_us).map_err(error)?;
@@ -588,12 +632,18 @@ fn tick(
     }
     if preview.surface == "webview" || in_window {
         // The webview fetches frames itself, so nothing here needs the UI thread.
-        match encoder.try_send(WebviewJob {
+        ENCODING.fetch_add(1, Ordering::AcqRel);
+        let sent = encoder.try_send(WebviewJob {
+            order: NEXT_ORDER.fetch_add(1, Ordering::Relaxed),
             frame,
             generation,
             surface_generation: preview.generation,
             for_short,
-        }) {
+        });
+        if sent.is_err() {
+            ENCODING.fetch_sub(1, Ordering::AcqRel);
+        }
+        match sent {
             Ok(()) => {
                 *last_frame = Some(key);
                 // Paused on a short with its frame out: get its neighbours' first frames ready.

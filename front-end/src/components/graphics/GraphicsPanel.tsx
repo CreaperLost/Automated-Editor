@@ -13,6 +13,8 @@ import type {
   GraphicsRuntimeStatus,
 } from "../../lib/types";
 import { formatSeconds, libraryChanged, useGraphicsLibrary, useGraphicsUpdates } from "./graphicsEvents";
+import { formatTime } from "../../lib/format";
+import { listenTo } from "../../lib/windowSync";
 
 const MB = 1024 * 1024;
 
@@ -52,19 +54,7 @@ export const GraphicsPanel: React.FC = () => {
   useGraphicsUpdates(refreshGraphics);
 
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<GraphicsInstallProgress>("graphics-runtime-progress", (event) => setInstall(event.payload)).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo<GraphicsInstallProgress>("graphics-runtime-progress", setInstall);
   }, []);
 
   const installRuntime = async () => {
@@ -382,12 +372,6 @@ function keepThumbnail(key: string, url: string) {
   }
 }
 
-function formatClock(us: number) {
-  const total = us / 1e6;
-  const minutes = Math.floor(total / 60);
-  return `${minutes}:${(total - minutes * 60).toFixed(1).padStart(4, "0")}`;
-}
-
 /** The words a graphic shows: its text values, colours and switches left out. */
 function graphicText(graphic: GraphicListed): string {
   const values = graphic.declarations
@@ -464,7 +448,7 @@ const ProjectGraphicRow: React.FC<{
         <div className="flex items-center gap-1.5 text-meta text-studio-400 min-w-0">
           <Badge tone="neutral">{templateLabel}</Badge>
           <span className="truncate font-mono tabular-nums">
-            {first ? `${formatClock(first[1])} · ${formatSeconds(first[2])}${more > 0 ? ` · +${more} more` : ""}` : "Not on the timeline"}
+            {first ? `${formatTime(first[1])} · ${formatSeconds(first[2])}${more > 0 ? ` · +${more} more` : ""}` : "Not on the timeline"}
           </span>
           <RenderBadge graphic={graphic} ready={ready} />
         </div>

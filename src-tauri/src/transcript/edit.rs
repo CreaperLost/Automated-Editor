@@ -704,12 +704,12 @@ fn push_suggestion(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::timeline::SourceInterval;
     use crate::transcript::{test_word, ProviderKind};
 
-    fn transcript(words: &[(&str, u64, u64)]) -> Transcript {
+    pub(crate) fn transcript(words: &[(&str, u64, u64)]) -> Transcript {
         Transcript::new(
             "mic".into(),
             ProviderKind::ElevenLabs,
@@ -719,7 +719,7 @@ mod tests {
         )
     }
 
-    fn mapper(ranges: &[(u64, u64)]) -> TimelineMapper {
+    pub(crate) fn mapper(ranges: &[(u64, u64)]) -> TimelineMapper {
         TimelineMapper::try_new(
             ranges
                 .iter()

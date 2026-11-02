@@ -108,13 +108,9 @@ pub fn style_patch_impl(
                 .map(|s| s.name.to_lowercase())
                 .collect();
             let base = format!("My {}", current.name.to_lowercase());
-            let mut name = base.clone();
-            let mut n = 2;
-            while taken.contains(&name.to_lowercase()) {
-                name = format!("{base} {n}");
-                n += 1;
-            }
-            Some(name)
+            Some(crate::ids::free_name(&base, |name| {
+                taken.contains(&name.to_lowercase())
+            }))
         }
         None => None,
     };
@@ -123,15 +119,7 @@ pub fn style_patch_impl(
         // A copy: its files are taken from the style it copies.
         Some(target) => {
             if let Some(folder) = store::folder_of(&current) {
-                let fonts = &mut next.brand.fonts;
-                for file in [
-                    &mut fonts.title.file,
-                    &mut fonts.body.file,
-                    &mut next.brand.logo,
-                ]
-                .into_iter()
-                .flatten()
-                {
+                for file in next.files_mut() {
                     if store::plain_file(file) {
                         *file = folder.join(&*file).display().to_string();
                     }

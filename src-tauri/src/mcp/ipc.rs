@@ -224,11 +224,20 @@ mod imp {
 
     pub async fn connect(endpoint: &Endpoint) -> Result<NamedPipeClient, String> {
         const NOT_RUNNING: &str = super::super::bridge::NOT_RUNNING;
+        // An app that stays busy this long has stopped answering (QUAL-7): say so rather
+        // than wait for ever.
+        const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+        let started = std::time::Instant::now();
         let client = loop {
             match ClientOptions::new().open(&endpoint.0) {
                 Ok(client) => break client,
                 // Every instance is taken for the moment: the app makes a new one at once.
                 Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
+                    if started.elapsed() > PATIENCE {
+                        return Err(
+                            "AeroEdits is not answering: restart it, then try again.".into()
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
                 Err(_) => return Err(NOT_RUNNING.into()),

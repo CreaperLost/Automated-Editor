@@ -10,22 +10,12 @@ import type { FoundNoise, NoiseKind } from "../../lib/types";
 import { Button, IconButton, Segmented, cn } from "../ui";
 import { requestPanel } from "../layout/dockLayout";
 import { saveCleanupSoon, useCleanupFromProject } from "../../lib/cleanupSettings";
+import { formatTime } from "../../lib/format";
+import { errorMessage } from "../../lib/format";
 
 const KIND_LABELS: Record<NoiseKind, string> = { click: "Click", knock: "Pop", mouth: "Mouth noise", breath: "Breath" };
 
 const kindLabel = (noise: FoundNoise) => (noise.kind ? KIND_LABELS[noise.kind] : "Muted moment");
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  return `${minutes}:${(total - minutes * 60).toFixed(2).padStart(5, "0")}`;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err.trim()) return err;
-  return "Finding noises failed.";
-}
 
 const isFound = (n: FoundNoise) => !n.muted && n.kind !== null && !n.nearSpeech;
 const isNear = (n: FoundNoise) => !n.muted && n.kind !== null && n.nearSpeech;
@@ -64,7 +54,7 @@ export const NoisesPanel: React.FC = () => {
         if (!stale) useNoiseStore.getState().reviewed(next);
       })
       .catch((err) => {
-        if (!stale) useNoiseStore.setState({ error: errorMessage(err) });
+        if (!stale) useNoiseStore.setState({ error: errorMessage(err, "Finding noises failed.") });
       });
     return () => {
       stale = true;
@@ -99,7 +89,7 @@ export const NoisesPanel: React.FC = () => {
     try {
       store.finish(generation, await api.detectMouthNoises(openedProject.projectHandle, soundKey, sensitivity, paddingMs));
     } catch (err) {
-      store.fail(generation, errorMessage(err));
+      store.fail(generation, errorMessage(err, "Finding noises failed."));
     }
   };
 
@@ -119,7 +109,7 @@ export const NoisesPanel: React.FC = () => {
       const count = `${list.length} place${list.length === 1 ? "" : "s"}`;
       useNoiseStore.getState().say(muted ? `Muted ${count}. Remove silence next: muted noises count as silence.` : `Unmuted ${count}.`);
     } catch (err) {
-      useNoiseStore.setState({ error: errorMessage(err) });
+      useNoiseStore.setState({ error: errorMessage(err, "Finding noises failed.") });
     } finally {
       setApplying(false);
     }
@@ -299,10 +289,10 @@ export const NoisesPanel: React.FC = () => {
                 disabled={noise.muted || noise.kind === null}
                 onClick={(e) => e.stopPropagation()}
                 onChange={() => useNoiseStore.getState().toggle(id)}
-                aria-label={`Choose the ${kindLabel(noise).toLowerCase()} at ${formatTime(noise.startUs)}`}
+                aria-label={`Choose the ${kindLabel(noise).toLowerCase()} at ${formatTime(noise.startUs, 2)}`}
                 className="w-4 h-4 cursor-pointer shrink-0"
               />
-              <span className="font-mono text-meta tabular-nums text-studio-200">{formatTime(noise.startUs)}</span>
+              <span className="font-mono text-meta tabular-nums text-studio-200">{formatTime(noise.startUs, 2)}</span>
               <span className={cn("min-w-0 flex-1 truncate text-label", noise.muted ? "text-studio-500" : "text-studio-300")}>
                 {kindLabel(noise)}
                 {noise.count > 1 && <span className="text-studio-500"> ×{noise.count}</span>}

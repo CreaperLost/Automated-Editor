@@ -7,13 +7,10 @@
 //! cuts on (the first speech on the timeline), so later edits move it with the edit. A join a
 //! later edit takes away or changes (the fix) shows as changed.
 use crate::check::{self, Kind, Piece};
-use crate::project::reader::{open_regular, safe_path, ProjectReader};
+use crate::project::reader::ProjectReader;
 use crate::project::revision::EditDocument;
-use crate::proposals::PROPOSALS_DIR;
 use crate::transcript::{store, TranscriptWord, WordKind};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::{Read, Write};
 use std::path::Path;
 
 const JOINS_FILE: &str = "agent/joins.json";
@@ -104,35 +101,11 @@ pub struct JoinsView {
 // The file.
 
 pub fn load(root: &Path) -> Result<Joins, String> {
-    let path = safe_path(root, JOINS_FILE)?;
-    if !path.is_file() {
-        return Ok(Joins::default());
-    }
-    let mut bytes = Vec::new();
-    open_regular(&path)?
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("The joins file is too large".into());
-    }
-    serde_json::from_slice(&bytes).map_err(|e| format!("Invalid joins file: {e}"))
+    crate::proposals::load_file(root, JOINS_FILE, MAX_FILE_BYTES, "joins")
 }
 
 pub fn save(root: &Path, joins: &Joins) -> Result<(), String> {
-    let dir = safe_path(root, PROPOSALS_DIR)?;
-    match fs::symlink_metadata(&dir) {
-        Ok(meta) if !meta.is_dir() => return Err("The agent folder is not a folder".into()),
-        Ok(_) => (),
-        Err(_) => fs::create_dir(&dir).map_err(|e| e.to_string())?,
-    }
-    let path = safe_path(root, JOINS_FILE)?;
-    let bytes = serde_json::to_vec_pretty(joins).map_err(|e| e.to_string())?;
-    let mut temp = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
-    temp.write_all(&bytes).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::proposals::save_file(root, JOINS_FILE, MAX_FILE_BYTES, "joins", joins)
 }
 
 // ---------------------------------------------------------------------------------------

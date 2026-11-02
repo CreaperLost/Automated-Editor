@@ -1368,6 +1368,59 @@ pub fn thumbnail_jpeg(path: &Path, time_us: u64, height: u32) -> Result<Vec<u8>,
     Ok(output.stdout)
 }
 
+/// An image file (or a video's first frame) as a JPEG no wider or taller than `long_side`.
+pub fn still_jpeg(path: &Path, long_side: u32) -> Result<Vec<u8>, String> {
+    let side = long_side.clamp(64, 2048);
+    let (mut cmd, mut log) = command(ffmpeg_path()?)?;
+    cmd.arg("-i")
+        .arg(file_arg(path))
+        .args(["-map", "0:v:0", "-frames:v", "1", "-an", "-vf"])
+        .arg(format!(
+            "scale='min({side},iw)':'min({side},ih)':force_original_aspect_ratio=decrease"
+        ))
+        .args(["-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
+        .stdout(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg did not start: {e}"))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(failure("Could not read the image", &mut log));
+    }
+    Ok(output.stdout)
+}
+
+/// A clip as one board of `frames` frames, one every `every_s` seconds from its start, each
+/// `tile_width` wide, left to right in rows of `columns`, as a JPEG.
+pub fn board_jpeg(
+    path: &Path,
+    every_s: f64,
+    frames: u32,
+    tile_width: u32,
+    columns: u32,
+) -> Result<Vec<u8>, String> {
+    let frames = frames.max(1);
+    let columns = columns.clamp(1, frames);
+    let rows = frames.div_ceil(columns);
+    let (mut cmd, mut log) = command(ffmpeg_path()?)?;
+    cmd.arg("-i")
+        .arg(file_arg(path))
+        .args(["-map", "0:v:0", "-an", "-frames:v", "1", "-vf"])
+        .arg(format!(
+            "fps=1/{every:.4},scale={w}:-2,tile={columns}x{rows}:padding=6:margin=6:color=white",
+            every = every_s.max(0.05),
+            w = tile_width.clamp(64, 960) & !1,
+        ))
+        .args(["-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
+        .stdout(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg did not start: {e}"))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(failure("Could not read the clip", &mut log));
+    }
+    Ok(output.stdout)
+}
+
 /// Decodes the frame shown at `time_us` (relative to the start of the file) as BGRA.
 pub fn decode_bgra(path: &Path, time_us: u64) -> Result<VideoFrame, String> {
     decode_bgra_limited(path, time_us, DecodeLimit::NONE)

@@ -264,9 +264,9 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "The check before export, the one the export dialog shows: black frames, \
             blips and words cut partway, zooms that flash by, captions \
             over the webcam, chapters YouTube would drop, loudness, missing files, proposals \
-            waiting. Each finding has an id, a time and, when one is safe, a fix. Without `fix` \
-            it changes nothing; `fix` applies the fixes of those ids (or [\"all\"]), each as its \
-            own undo step. Run it after the last edit, fix, and only then ask about export.",
+            waiting. Each finding has an id, a time and maybe a safe fix; `fix` applies those \
+            ids' fixes (or [\"all\"]), each one undo step. Run it after the last edit, fix, \
+            then ask about export.",
         schema: schema::<CheckArgs>,
         read_only: false,
         run: check,
@@ -292,14 +292,13 @@ pub static ACTIONS: [ToolDef; 36] = [
     },
     ToolDef {
         name: "graphics",
-        description: "Motion graphics: whether the renderer is installed, the templates (with \
-            their variables, types and defaults), the user's graphics library (templates saved \
-            from earlier projects, each with when to use it: look there before writing a new \
-            graphic) and the graphics in the project (id, where they play, their variables, \
-            style, how their render is going). Graphics play full screen over everything \
-            (screen, camera, captions), and cuts never go through one, so add them as one of \
-            the last passes, after the cuts are checked and before chapters.",
-        schema: schema::<NoArgs>,
+        description: "Motion graphics and their rules: whether the renderer is installed, the \
+            templates (variables, types, defaults), the user's library (saved \
+            templates, each with when to use it: look there before writing a new graphic) and \
+            the project's graphics (id, where they play, variables, style, render). They play \
+            over everything and cuts never go through one: add them \
+            after the cuts are checked, before chapters.",
+        schema: schema::<GraphicsArgs>,
         read_only: true,
         run: graphics_list,
     },
@@ -318,13 +317,12 @@ pub static ACTIONS: [ToolDef; 36] = [
     ToolDef {
         name: "graphic_set",
         description: "Changes a graphic: its variables (checked against what it declares; \
-            null puts one back to its default), its name, its length on the timeline, its \
+            null resets one), its name, its length on the timeline, its \
             style (`project` or a style from `library`), `look` tokens of its own, and with \
             `short` how it shows there (`slot`: `full` frame, `screen` split beside the face, \
             `overFace` over the face filling the frame, `camera`, or `overScreen` under the \
-            captions). It renders again by itself. `moveToUs` or \
-            `moveToWord` moves it; `remove: true` takes it out of the project with its clips \
-            (one undo step).",
+            captions). It renders again. `moveToUs` or \
+            `moveToWord` moves it. Each call is one undo step.",
         schema: schema::<GraphicSetArgs>,
         read_only: false,
         run: graphic_set,
@@ -669,8 +667,12 @@ fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let project = match status_text(ctx) {
         Ok(lines) => lines,
         Err(error) if error == super::tools::NO_PROJECT_MESSAGE => {
+            // A style asked for in the Style panel needs no project.
+            let request = crate::style::request::status_line(&ctx.host.config_dir())
+                .map(|line| format!("{line}\n"))
+                .unwrap_or_default();
             return text(format!(
-                "No project is open: `open` or `create` one.\n{}",
+                "No project is open: `open` or `create` one.\n{request}{}",
                 readiness_text()
             ));
         }
@@ -906,6 +908,35 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
                 newest.name,
                 newest.id,
                 newest.at
+            ));
+        }
+        // The passes the app ran itself for the preset (AUTO-1), still in the edit.
+        let mut ran: Vec<&str> = Vec::new();
+        for (step, undone) in reader.history().steps().recent_steps(500) {
+            let tool = step.tool.as_deref().filter(|_| !undone);
+            if let Some(tool) =
+                tool.filter(|_| step.agent.as_deref() == Some(super::first_steps::AUTHOR))
+            {
+                if !ran.contains(&tool) {
+                    ran.insert(0, tool);
+                }
+            }
+        }
+        if !ran.is_empty() {
+            lines.push(format!(
+                "The app already ran the preset's {} here: don't run them again unless the user \
+                 asks.",
+                ran.join(", ")
+            ));
+        }
+        if let Some(line) = crate::style::request::status_line(&ctx.host.config_dir()) {
+            lines.push(line);
+        }
+        if let Ok(Some(plan)) = super::plan::load(reader.root()) {
+            lines.push(format!(
+                "Plan: {} lines kept for this edit; read it first (`more` `tool: plan`) and \
+                 follow what it locks.",
+                plan.lines().count()
             ));
         }
         let faces = crate::face::status(reader.root(), document);
@@ -1583,7 +1614,7 @@ impl Transcriber {
 }
 
 /// Why a transcriber can't run now, if it can't.
-fn not_ready(
+pub(super) fn not_ready(
     view: &crate::transcript::settings::TranscriptSettingsView,
     kind: crate::transcript::ProviderKind,
 ) -> Option<String> {
@@ -2436,7 +2467,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         FillerReview::OpenRouter => Some(FillerEngine::Cloud),
         FillerReview::Local => Some(FillerEngine::Local),
         // The OpenRouter review first: measured against the local one on 21 Oct 2026 it missed
-        // fewer cuts and made no wrong ones (docs/plans/local-review-eval.md).
+        // fewer cuts and made no wrong ones (docs/verification.md#speech-review-evaluation).
         FillerReview::Auto if ctx.host.ai_review_ready() => Some(FillerEngine::Cloud),
         FillerReview::Auto if ctx.host.local_review_ready() => Some(FillerEngine::Local),
         FillerReview::Auto | FillerReview::InHouse => None,
@@ -3917,7 +3948,7 @@ fn take_short_id(ctx: &Ctx, wanted: &str) -> Result<String, String> {
     let short = short_named(ctx, wanted)?;
     if short.take.is_none() {
         return Err(format!(
-            "\"{}\" is a clip cut from the video: clean the video itself, then `clips` with `op: range` (or the Clips tab's \"Take the video's cuts again\") brings the cleaned words into it",
+            "\"{}\" is a clip cut from the video: clean the video itself, then `clips` with `op: resync` (or the Clips tab's \"Take the video's cuts again\") brings the cleaned words into it",
             short.title
         ));
     }
@@ -3937,15 +3968,34 @@ fn video_speech(reader: &ProjectReader, take_voice: &str) -> Result<String, Stri
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckArgs {
-    /// Ids of findings to fix, from a check of the edit as it is now, or ["all"] for every
-    /// finding that has a fix. Without it nothing changes.
+    /// Ids of findings to fix (from a check of the edit as it is now), or ["all"]. Without it
+    /// nothing changes.
     #[serde(default)]
     pub fix: Option<Vec<String>>,
+    /// A short or clip (id or title) to check instead.
+    #[serde(default)]
+    pub short: Option<String>,
 }
 
 fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: CheckArgs = params(args)?;
     let before = opened(ctx)?;
+    if let Some(wanted) = &args.short {
+        if args.fix.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            return Err(
+                "A short's findings are fixed on its own timeline, with the tools that \
+                 take `short`; `fix` is for the video"
+                    .into(),
+            );
+        }
+        let short = short_named(ctx, wanted)?;
+        let report = commands::project_check_of(ctx.state, before.handle, Some(&short.id))?;
+        return text(format!(
+            "\"{}\": {}",
+            short.title,
+            crate::check::report_text(&report)
+        ));
+    }
     let report = commands::project_check_impl(ctx.state, before.handle.clone())?;
     let Some(ids) = args.fix.filter(|ids| !ids.is_empty()) else {
         return text(crate::check::report_text(&report));
@@ -4038,7 +4088,7 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let stale = chapters_stale(ctx)
         .map(|w| format!("\n{w}"))
         .unwrap_or_default();
-    let started = commands::export_start_impl(ctx.state, open.handle, settings)?;
+    let started = commands::export_start_impl(ctx.state, open.handle, settings, false)?;
     // Refused before it began (a folder that doesn't exist, say): say so, not "started".
     if started.state == crate::export::ExportState::Failed {
         return Err(export_failure(&started).replace("stopped", "did not start"));
@@ -4207,6 +4257,7 @@ fn export_shorts(
             handle.to_string(),
             id.clone(),
             settings.clone(),
+            false,
         )?;
         ctx.host.export_started(&started, true);
         let doing = format!("Exporting short {} of {} ({title})", i + 1, chosen.len());
@@ -4307,8 +4358,16 @@ fn render_line(render: &crate::graphics::render::RenderState) -> String {
     }
 }
 
+#[derive(Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicsArgs {
+    /// false: without the rules (read before in this conversation).
+    #[serde(default)]
+    pub rules: Option<bool>,
+}
+
 fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    params::<NoArgs>(args)?;
+    let args: GraphicsArgs = params(args)?;
     let runtime = crate::graphics::runtime::status();
     let templates = crate::graphics::templates::views();
     let in_project = match current(ctx) {
@@ -4386,12 +4445,19 @@ fn graphics_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             if !g.graphic.look.is_empty() {
                 listed["look"] = json!(g.graphic.look);
             }
+            if let Some(of) = &g.graphic.version_of {
+                listed["versionOf"] = json!(of);
+                listed["note"] = json!(g.graphic.note);
+            }
             listed
         })
         .collect::<Vec<_>>());
     let graphics = serde_json::to_string(&out["graphics"]).map_err(|e| e.to_string())?;
     lines.push(format!("Graphics in the project: {graphics}"));
     // The rules for graphics come with the list: only edits with graphics need them.
+    if args.rules == Some(false) {
+        return text(lines.join("\n"));
+    }
     let shorts =
         with_reader(ctx.state, |reader| Ok(!reader.document().shorts.is_empty())).unwrap_or(false);
     text(format!(
@@ -4489,6 +4555,9 @@ pub struct GraphicAddArgs {
     /// Not here: graphics under a take short go in `short_footage` items.
     #[serde(default)]
     pub short: Option<String>,
+    /// Add nothing: answer with their table for the user (times, words said, source, shows).
+    #[serde(default)]
+    pub plan: bool,
 }
 
 fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -4509,6 +4578,9 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .collect();
     if items.is_empty() {
         return Err("Give `template` or `library` (or `items`)".into());
+    }
+    if args.plan {
+        return text(graphic_plan(ctx, &items, args.stream.clone())?);
     }
     let several = items.len() > 1;
     let mut graphics = Vec::with_capacity(items.len());
@@ -4568,6 +4640,114 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     text(applied(ctx, "graphic_add", &before, lines)?)
 }
 
+/// The plan table for `items`, checked as `graphic_add` checks them but adding nothing: a row
+/// each with where it plays, the words said there, where it comes from and what it shows.
+fn graphic_plan(
+    ctx: &Ctx,
+    items: &[GraphicItem],
+    stream: Option<String>,
+) -> Result<String, String> {
+    let key = pick_sound(ctx, stream.clone(), Want::Transcribed).ok();
+    let words: Vec<(u64, String)> = match &key {
+        Some(key) => with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let Some(transcript) = store::load_transcript(reader.root(), key)? else {
+                return Ok(Vec::new());
+            };
+            let view = crate::transcript::edit::view(
+                &transcript,
+                &document.transcript_clock(key)?,
+                document.revision,
+            );
+            Ok(view
+                .words
+                .into_iter()
+                .filter(|w| w.word.kind == crate::transcript::WordKind::Word)
+                .filter_map(|w| Some((w.edited_start_us?, w.word.text)))
+                .collect())
+        })?,
+        None => Vec::new(),
+    };
+    let library = crate::graphics::library::dir();
+    let mut rows = vec![
+        "| # | Start | End | Said there | From | Shows |".to_string(),
+        "|---|---|---|---|---|---|".to_string(),
+    ];
+    let mut spans: Vec<(u64, u64)> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        let at = |error: String| format!("Graphic {}: {error}", n + 1);
+        let start = match (item.at_us, &item.at_word) {
+            (Some(us), None) => us,
+            (None, Some(word)) => word_edited_us(ctx, stream.clone(), word).map_err(at)?,
+            _ => return Err(at("give one of `atUs` or `atWord`".into())),
+        };
+        let (from, length) = match (&item.template, &item.library) {
+            (Some(template), None) => {
+                let found = crate::graphics::templates::find(template).map_err(at)?;
+                (template.clone(), item.length_us.unwrap_or(found.length_us))
+            }
+            (None, Some(id)) => {
+                let found = crate::graphics::library::view(&library, id).map_err(at)?;
+                (
+                    format!("library {}", found.item.name),
+                    item.length_us.unwrap_or(found.item.length_us),
+                )
+            }
+            _ => return Err(at("give one of `template` or `library`".into())),
+        };
+        let end = start + length;
+        let said: Vec<&str> = words
+            .iter()
+            .filter(|(t, _)| (start..end).contains(t))
+            .map(|(_, w)| w.as_str())
+            .collect();
+        let said = match said.len() {
+            0 => "(no words)".to_string(),
+            n if n > 12 => format!("{} ...", said[..12].join(" ")),
+            _ => said.join(" "),
+        };
+        let shows: Vec<String> = item
+            .variables
+            .iter()
+            .filter(|(id, _)| !matches!(id.as_str(), "background" | "text" | "accent"))
+            .map(|(id, value)| {
+                let value = match value {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                format!("{id}: {}", value.chars().take(60).collect::<String>())
+            })
+            .collect();
+        let overlaps = spans.iter().any(|&(a, b)| start < b && a < end);
+        spans.push((start, end));
+        let cell = |text: String| text.replace('|', "/").replace('\n', " ");
+        rows.push(format!(
+            "| {} | {} | {} | {} | {}{} | {} |",
+            n + 1,
+            clock(start),
+            clock(end),
+            cell(said),
+            cell(from),
+            if overlaps {
+                " (overlaps one above)"
+            } else {
+                ""
+            },
+            cell(if shows.is_empty() {
+                item.name.clone().unwrap_or_else(|| "its defaults".into())
+            } else {
+                shows.join("; ")
+            }),
+        ));
+    }
+    rows.push(
+        "Nothing was added. Show the user this table (with what the viewer sees for each); \
+         once they agree, the same call without `plan` adds them, and `plan` keeps it."
+            .into(),
+    );
+    Ok(rows.join("\n"))
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphicSetArgs {
@@ -4588,16 +4768,22 @@ pub struct GraphicSetArgs {
     /// takes one back.
     #[serde(default)]
     pub look: std::collections::BTreeMap<String, Option<String>>,
-    /// A short or clip (id or title): set the graphic's `slot` in it; for a short made from a take,
-    /// moves and lengths are on its own timeline too (`moveToWord` a word of the take).
+    /// A short or clip (id or title) for `slot`; in a take short, moves and lengths are on its
+    /// own timeline (`moveToWord` a word of the take).
     #[serde(default)]
     pub short: Option<String>,
     /// Where it plays in that short.
     #[serde(default)]
     pub slot: Option<crate::shorts::GraphicSlot>,
-    /// Take the graphic out of the project, with its clips. One undo step.
+    /// Take it out of the project, with its clips.
     #[serde(default)]
     pub remove: bool,
+    /// A copy to redo it beside (say what changes); it plays after `use`.
+    #[serde(default)]
+    pub new_version: Option<String>,
+    /// Play this version in its family's place.
+    #[serde(default, rename = "use")]
+    pub use_it: bool,
     /// Move it so it starts here, microseconds on the edited timeline...
     #[serde(default)]
     pub move_to_us: Option<u64>,
@@ -4629,6 +4815,11 @@ pub(super) fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> R
 }
 
 fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    // Its text, look, length and place change together: one undo step.
+    crate::project::history::as_one_step(|| graphic_set_parts(ctx, args))
+}
+
+fn graphic_set_parts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicSetArgs = params(args)?;
     let before = opened(ctx)?;
     let dir = graphic_folder(ctx, &args.graphic)?;
@@ -4640,6 +4831,36 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             args.graphic.clone(),
         )?;
         let line = format!("Removed graphic {} and its clips.", args.graphic);
+        return text(applied(ctx, "graphic_set", &before, vec![line])?);
+    }
+    if let Some(note) = &args.new_version {
+        let made = commands::graphics::project_graphic_version_new_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            args.graphic.clone(),
+            Some(note.clone()),
+            false,
+        )?;
+        let line = format!(
+            "Made {}, a version of {} that doesn't play yet. Change it (graphic_set, \
+             graphic_write_file on {}), look with frame_render `graphic: {}` (shown in place), \
+             then graphic_set `use: true` on the one the user picks.",
+            made.asset_id, args.graphic, made.asset_id, made.asset_id
+        );
+        return text(applied(ctx, "graphic_set", &before, vec![line])?);
+    }
+    if args.use_it {
+        commands::graphics::project_graphic_version_use_impl(
+            ctx.state,
+            before.handle.clone(),
+            before.revision,
+            args.graphic.clone(),
+        )?;
+        let line = format!(
+            "{} plays where its family played (undo puts the other back).",
+            args.graphic
+        );
         return text(applied(ctx, "graphic_set", &before, vec![line])?);
     }
     // What can be wrong with the call is found before anything changes.
@@ -4764,13 +4985,13 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 args.graphic.clone(),
                 args.look.clone(),
             )?;
-            lines.push(if view.look.is_empty() {
+            lines.push(if view.graphic.look.is_empty() {
                 format!("Graphic {} takes its style's look.", args.graphic)
             } else {
                 format!(
                     "Graphic {} has look tokens of its own: {}.",
                     args.graphic,
-                    serde_json::to_string(&view.look).unwrap_or_default()
+                    serde_json::to_string(&view.graphic.look).unwrap_or_default()
                 )
             });
         }
@@ -4929,7 +5150,16 @@ fn graphic_write_file(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         }
         (Some(contents), true) => contents.into_bytes(),
     };
-    crate::graphics::write_file(&dir, &args.path, &bytes)?;
+    let before = opened(ctx)?;
+    // One undo step (SAFE-3).
+    commands::graphics::project_graphic_write_file_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        args.graphic.clone(),
+        &args.path,
+        &bytes,
+    )?;
     let mut lines = vec![format!("Wrote {} ({} bytes).", args.path, bytes.len())];
     if args.path.ends_with(".html") {
         match crate::graphics::render::lint(&dir) {
@@ -4937,7 +5167,7 @@ fn graphic_write_file(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             Err(why) => lines.push(format!("Not linted: {why}")),
         }
     }
-    text(lines.join("\n"))
+    text(applied(ctx, "graphic_write_file", &before, lines)?)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -4960,18 +5190,31 @@ fn graphic_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .map(|s| short_named(ctx, s))
         .transpose()?;
     let (root, specs) = with_reader(ctx.state, |reader| {
+        // A version that doesn't play yet renders where its family plays.
+        let swapped;
+        let base = match args.graphic.as_deref().filter(|g| {
+            crate::graphics::versions::playing_instead(reader.document(), reader.root(), g)
+                .is_some()
+        }) {
+            Some(version) => {
+                swapped =
+                    crate::graphics::versions::swap(reader.document(), reader.root(), version);
+                &swapped
+            }
+            None => reader.document(),
+        };
         // A short's graphics render on its own timeline at its own size, as its export does.
         let shown;
         let document = match &short {
             Some(short) => {
                 shown = crate::shorts::short_document(
-                    reader.document(),
+                    base,
                     short,
                     commands::has_speech_transcript(reader),
                 )?;
                 &shown
             }
-            None => reader.document(),
+            None => base,
         };
         let canvas = document.layout.preview_dimensions()?;
         let specs: Vec<_> =
@@ -5423,14 +5666,6 @@ pub struct CaptionsArgs {
     pub to_s: Option<f64>,
 }
 
-/// A word as it reads, for matching what an agent wrote: letters and digits, lower case.
-fn plain_word(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
 fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: CaptionsArgs = params(args)?;
     let open = opened(ctx)?;
@@ -5536,11 +5771,11 @@ fn captions(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         else {
             return Ok(None);
         };
-        let wanted = plain_word(word);
+        let wanted = crate::transcript::vocabulary::letters(word);
         let index = cue
             .text
             .split(' ')
-            .position(|w| plain_word(w) == wanted)
+            .position(|w| crate::transcript::vocabulary::letters(w) == wanted)
             .filter(|i| *i < cue.word_ids.len())
             .ok_or_else(|| {
                 format!(
@@ -5684,15 +5919,6 @@ mod tests {
             "<p>hi</p>"
         );
         assert!(crate::graphics::read_file(dir.path(), "../outside.html").is_err());
-    }
-
-    #[test]
-    #[ignore]
-    fn dump_graphics_answer() {
-        let host = crate::mcp::tests_support::BareHost::default();
-        let ctx = Ctx::new(&host, "claude-code", false);
-        let out = call(&ctx, "graphics", json!({})).unwrap();
-        eprintln!("LEN {}\n{out}", out.len());
     }
 
     #[test]
@@ -6687,6 +6913,277 @@ mod tests {
     }
 
     #[test]
+    fn a_graphics_plan_is_a_table_and_adds_nothing() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let revision = with_reader(ctx.state, |reader| Ok(reader.document().revision)).unwrap();
+        let plan = call(
+            &ctx,
+            "graphic_add",
+            json!({ "plan": true, "items": [
+                { "template": "step", "atWord": "w-0", "lengthUs": 1_000_000,
+                  "variables": { "title": "Install | run" } },
+                { "template": "key-point", "atUs": 500_000,
+                  "variables": { "statement": "Keep the plan", "accent": "#ff0000" } },
+            ] }),
+        )
+        .unwrap();
+        let lines: Vec<&str> = plan.lines().collect();
+        assert_eq!(lines[0], "| # | Start | End | Said there | From | Shows |");
+        assert!(
+            lines[2].starts_with("| 1 | 0:00.00 | 0:01.00 | ")
+                && lines[2].ends_with("| step | title: Install / run |"),
+            "{plan}"
+        );
+        assert!(
+            lines[3].contains("key-point (overlaps one above) | statement: Keep the plan |"),
+            "{plan}"
+        );
+        assert!(plan.contains("Nothing was added"), "{plan}");
+        let after = with_reader(ctx.state, |reader| Ok(reader.document().revision)).unwrap();
+        assert_eq!(after, revision);
+        // A wrong template is found here too, before anything is shown.
+        let wrong = call(
+            &ctx,
+            "graphic_add",
+            json!({ "plan": true, "items": [{ "template": "nope", "atUs": 0 }] }),
+        )
+        .unwrap_err();
+        assert!(wrong.starts_with("Graphic 1:"), "{wrong}");
+    }
+
+    #[test]
+    fn a_graphics_text_and_files_come_back_with_undo_and_redo() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        call(
+            &ctx,
+            "graphic_add",
+            json!({ "template": "key-point", "atUs": 0, "lengthUs": 2_000_000,
+                    "variables": { "statement": "First" } }),
+        )
+        .unwrap();
+        let (id, root) = with_reader(ctx.state, |reader| {
+            let id = reader
+                .document()
+                .assets
+                .iter()
+                .find(|a| a.is_graphic())
+                .unwrap()
+                .id
+                .clone();
+            Ok((id, reader.root().to_path_buf()))
+        })
+        .unwrap();
+        let folder = crate::graphics::folder(&root, &id);
+        let statement = || {
+            crate::graphics::read_source(&folder).unwrap().variables["statement"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let undo_steps =
+            |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.history().steps().undo_len())).unwrap();
+        let steps = undo_steps(&ctx);
+        // Text and length in one call: one undo step.
+        call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "variables": { "statement": "Second" }, "lengthUs": 3_000_000 }),
+        )
+        .unwrap();
+        assert_eq!(statement(), "Second");
+        assert_eq!(undo_steps(&ctx), steps + 1, "one undo step");
+        call(&ctx, "undo", json!({})).unwrap();
+        assert_eq!(statement(), "First", "undo puts the text back");
+        call(&ctx, "redo", json!({})).unwrap();
+        assert_eq!(statement(), "Second", "redo brings it again");
+
+        // A file an agent writes, and one it adds.
+        let page = std::fs::read_to_string(folder.join("index.html")).unwrap();
+        call(
+            &ctx,
+            "graphic_write_file",
+            json!({ "graphic": id, "path": "index.html", "contents": page.replace("<body", "<!-- mine --><body") }),
+        )
+        .unwrap();
+        call(
+            &ctx,
+            "graphic_write_file",
+            json!({ "graphic": id, "path": "notes.txt", "contents": "extra" }),
+        )
+        .unwrap();
+        assert!(folder.join("notes.txt").is_file());
+        call(&ctx, "undo", json!({})).unwrap();
+        assert!(
+            !folder.join("notes.txt").exists(),
+            "an added file goes again"
+        );
+        call(&ctx, "undo", json!({})).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join("index.html")).unwrap(),
+            page,
+            "the page as it was"
+        );
+        assert_eq!(statement(), "Second", "a step the undo didn't reach stays");
+    }
+
+    #[test]
+    fn graphics_can_leave_out_the_rules_already_read() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let full = call(&ctx, "graphics", json!({})).unwrap();
+        let list = call(&ctx, "graphics", json!({ "rules": false })).unwrap();
+        let rules = super::super::skill::graphics_guide(false);
+        assert!(full.starts_with(&rules[..200]));
+        assert!(
+            !list.contains(&rules[..200]) && list.starts_with("Renderer:"),
+            "{list}"
+        );
+        assert!(list.len() + rules.len() <= full.len() + 2);
+    }
+
+    #[test]
+    fn check_reads_a_short_as_its_export_plays_it() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        call(
+            &ctx,
+            "clips",
+            json!({ "op": "create", "title": "Next step", "fromWord": "w-1", "toWord": "w-6", "scenes": false }),
+        )
+        .unwrap();
+        let video = call(&ctx, "check", json!({})).unwrap();
+        let short = call(&ctx, "check", json!({ "short": "Next step" })).unwrap();
+        assert!(short.starts_with("\"Next step\": "), "{short}");
+        assert_ne!(short, video);
+        // The lesson's 4 s and the clip's few seconds: each check measures its own length.
+        let length = |report: &str| report.contains("0:04");
+        assert!(length(&video) && !length(&short), "{video}\n{short}");
+        let refused = call(
+            &ctx,
+            "check",
+            json!({ "short": "Next step", "fix": ["all"] }),
+        );
+        assert!(refused.unwrap_err().contains("own timeline"));
+    }
+
+    #[test]
+    fn a_version_is_changed_beside_the_graphic_then_used_in_one_undo_step() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        call(
+            &ctx,
+            "graphic_add",
+            json!({ "template": "key-point", "atUs": 0, "lengthUs": 2_000_000,
+                    "variables": { "statement": "Old take" } }),
+        )
+        .unwrap();
+        let graphic_ids = |ctx: &Ctx| {
+            with_reader(ctx.state, |reader| {
+                Ok(reader
+                    .document()
+                    .assets
+                    .iter()
+                    .filter(|a| a.is_graphic())
+                    .map(|a| a.id.clone())
+                    .collect::<Vec<_>>())
+            })
+            .unwrap()
+        };
+        let first = graphic_ids(&ctx)[0].clone();
+        let made = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": first, "newVersion": "a sharper line" }),
+        )
+        .unwrap();
+        let version = graphic_ids(&ctx)[1].clone();
+        assert!(
+            made.starts_with(&format!("Made {version}, a version of {first}")),
+            "{made}"
+        );
+        assert!(!made.contains("  "), "{made}");
+        call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": version, "variables": { "statement": "New take" } }),
+        )
+        .unwrap();
+        let statement = |id: &str| {
+            let root = with_reader(ctx.state, |reader| Ok(reader.root().to_path_buf())).unwrap();
+            crate::graphics::read_source(&crate::graphics::folder(&root, id))
+                .unwrap()
+                .variables["statement"]
+                .clone()
+        };
+        assert_eq!(
+            statement(&first),
+            "Old take",
+            "the graphic that plays is untouched"
+        );
+        assert_eq!(statement(&version), "New take");
+        let listed = call(&ctx, "graphics", json!({})).unwrap();
+        assert!(
+            listed.contains(&format!("\"versionOf\":\"{first}\""))
+                && listed.contains("a sharper line"),
+            "{listed}"
+        );
+
+        let plays = |ctx: &Ctx, id: &str| {
+            with_reader(ctx.state, |reader| {
+                Ok(crate::graphics::versions::plays(reader.document(), id))
+            })
+            .unwrap()
+        };
+        assert!(plays(&ctx, &first) && !plays(&ctx, &version));
+        call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": version, "use": true }),
+        )
+        .unwrap();
+        assert!(plays(&ctx, &version) && !plays(&ctx, &first));
+        let undo = with_reader(ctx.state, |reader| {
+            Ok(reader.history().undo_label().map(String::from))
+        })
+        .unwrap();
+        assert_eq!(
+            undo.as_deref(),
+            Some("Use another version of \"Key point\"")
+        );
+        call(&ctx, "undo", json!({})).unwrap();
+        assert!(plays(&ctx, &first) && !plays(&ctx, &version));
+        // A version used already, or one with nothing of its family playing, is refused.
+        let again = call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": first, "use": true }),
+        );
+        assert!(again.unwrap_err().contains("plays already"));
+    }
+
+    #[test]
     fn graphics_are_added_at_a_word_changed_and_skipped_by_cuts() {
         if !crate::media::ffmpeg::available() {
             return;
@@ -6777,7 +7274,10 @@ mod tests {
         // A style: shown, never changed when built in, copied and changed app-wide.
         let shown = call(&ctx, "library", json!({ "kind": "style", "op": "show" })).unwrap();
         assert!(
-            shown.contains("\"accent\"") && shown.contains("radius"),
+            shown.starts_with("# Style Dark (built in)")
+                && shown.contains("\"accent\"")
+                && shown.contains("radius")
+                && shown.contains("only a look"),
             "{shown}"
         );
         // The project wears Light: a change to it goes into a copy the project then wears.
@@ -6821,6 +7321,51 @@ mod tests {
         .unwrap();
         let listed = call(&ctx, "library", json!({ "kind": "style" })).unwrap();
         assert!(listed.contains("\"name\": \"Mine\""), "{listed}");
+        // How its graphics move, what kinds it uses and its sound, read back as a brief.
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "set": {
+                "motion": ["Enter with ease-out; hold the result"],
+                "kinds": [{ "name": "quote card", "when": "a line worth reading", "shorts": "overFace" }],
+                "examples": [{ "graphic": "no-such-graphic", "kind": "quote card" }],
+                "sound": { "policy": "Minimal", "cues": [{ "role": "pop", "sound": "no-such-sound" }, { "role": "hit", "sound": "hit-soft" }] }
+            } }),
+        )
+        .unwrap();
+        let shown = call(&ctx, "library", json!({ "kind": "style", "op": "show" })).unwrap();
+        assert!(
+            shown.contains("## Motion\n- Enter with ease-out")
+                && shown.contains("- quote card: a line worth reading In a short: over the face")
+                && shown.contains("no-such-graphic, quote card: not in the graphics library")
+                && shown.contains("- pop: no-such-sound, not in the sound library")
+                && shown.contains("- hit: hit-soft (Soft hit, 0.53 s)")
+                && !shown.contains("only a look"),
+            "{shown}"
+        );
+        let problems = call(&ctx, "library", json!({ "kind": "style", "op": "check" })).unwrap();
+        assert!(
+            problems.contains("example no-such-graphic is not in the graphics library")
+                && problems.contains("pop cue's sound no-such-sound"),
+            "{problems}"
+        );
+        // A font the style doesn't carry is refused.
+        let font = call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "set": { "brand": { "fonts": { "title": { "family": "No Such Font Qzx" } } } } }),
+        )
+        .unwrap_err();
+        assert!(
+            font.contains("Not saved: the title font") && font.contains("not installed"),
+            "{font}"
+        );
+        call(
+            &ctx,
+            "library",
+            json!({ "kind": "style", "op": "set", "set": { "motion": null, "kinds": null, "examples": null, "sound": null } }),
+        )
+        .unwrap();
 
         // A graphic's own tokens put it out of line: one batch brings it back.
         let own = call(

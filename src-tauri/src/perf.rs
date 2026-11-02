@@ -329,6 +329,117 @@ fn perf_preview() {
     }
 }
 
+/// The webview preview's loop for `seconds`: draws the clock's frame while an encoder is free,
+/// encodes on `threads` threads and shows only a frame newer than the one showing.
+fn webview_run(
+    root: &Path,
+    document: &crate::project::revision::EditDocument,
+    quality: PreviewQuality,
+    threads: usize,
+    seconds: u64,
+) {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+    crate::media::ffmpeg::release_decoders();
+    let (w, h) = document.layout.preview_dimensions().unwrap();
+    let (w, h) = quality.canvas(w, h);
+    let mut evaluator = SceneEvaluator::new_reusing(root.into(), document.clone(), w, h, None)
+        .unwrap()
+        .with_decode_limit(quality.decode_limit((w, h), true));
+    let (sender, jobs) = mpsc::sync_channel::<(u64, Instant, crate::media::VideoFrame)>(threads);
+    let jobs = Mutex::new(jobs);
+    let busy = Arc::new(AtomicUsize::new(0));
+    let (showing, late) = (AtomicU64::new(0), AtomicU64::new(0));
+    let (encodes, ages) = (Mutex::new(Vec::new()), Mutex::new(Vec::new()));
+    let mut draws = Vec::new();
+    let end = (seconds * 1_000_000).min(document.duration_us());
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let job = jobs.lock().unwrap().recv();
+                let Ok((seq, drawn, frame)) = job else { return };
+                let encode = Instant::now();
+                crate::playback::preview::encode_webview_frame(&frame).unwrap();
+                encodes
+                    .lock()
+                    .unwrap()
+                    .push(encode.elapsed().as_secs_f64() * 1000.0);
+                if showing.fetch_max(seq, Ordering::AcqRel) < seq {
+                    ages.lock()
+                        .unwrap()
+                        .push(drawn.elapsed().as_secs_f64() * 1000.0);
+                } else {
+                    late.fetch_add(1, Ordering::Relaxed);
+                }
+                busy.fetch_sub(1, Ordering::AcqRel);
+            });
+        }
+        let mut last = None;
+        let mut seq = 0;
+        loop {
+            let t = started.elapsed().as_micros() as u64;
+            if t >= end {
+                break;
+            }
+            let at = quality.frame_time(t);
+            if last == Some(at) || busy.load(Ordering::Acquire) >= threads {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            }
+            let drawn = Instant::now();
+            let frame = evaluator.preview_at(at).unwrap();
+            draws.push(drawn.elapsed().as_secs_f64() * 1000.0);
+            evaluator.prefetch(at, 1_200_000);
+            seq += 1;
+            busy.fetch_add(1, Ordering::AcqRel);
+            sender.send((seq, drawn, frame)).unwrap();
+            last = Some(at);
+        }
+        drop(sender);
+    });
+    let ages = ages.into_inner().unwrap();
+    let wall = started.elapsed().as_secs_f64();
+    println!(
+        "PERF webview {}p {} fps, {threads} thread(s): shown {:.1} fps, {} late",
+        quality.resolution,
+        quality.fps,
+        ages.len() as f64 / wall,
+        late.load(Ordering::Relaxed)
+    );
+    println!("PERF   {}", Stats(draws).line("draw"));
+    println!(
+        "PERF   {}",
+        Stats(encodes.into_inner().unwrap()).line("encode")
+    );
+    println!("PERF   {}", Stats(ages).line("drawn to shown"));
+}
+
+/// One encoder thread against two at the sizes and rates the webview preview can be set to.
+#[test]
+#[ignore]
+fn perf_webview_encoders() {
+    let Some(dir) = probe_dir() else { return };
+    let work = tempfile::tempdir().unwrap();
+    let (state, _, root) = opened(work.path(), &dir);
+    if let Some(settle) = std::env::var_os("AERO_PERF_SETTLE") {
+        let seconds: u64 = settle.to_string_lossy().parse().unwrap_or(15);
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+    }
+    let document = document(&state);
+    for (resolution, fps) in [(720, 30), (720, 60), (1080, 30), (1080, 60)] {
+        for threads in [1, 2, 1, 2] {
+            webview_run(
+                &root,
+                &document,
+                PreviewQuality { resolution, fps },
+                threads,
+                15,
+            );
+        }
+    }
+}
+
 /// `document` with `count` layout sections spread over it, alternating side by side and the
 /// bubble (`flip` starts with the other one): what a picked tutorial has.
 fn with_sections(
@@ -884,95 +995,6 @@ fn probe_restore_all_cuts() {
             .unwrap_or(0)
     );
     assert_eq!(before, after);
-}
-
-/// Export frames of the probe recording as the GPU now converts them (NV12) against what the
-/// export made before (BGRA through FFmpeg's default conversion): worst and mean difference in
-/// levels per plane.
-#[test]
-#[ignore]
-fn probe_export_nv12_against_bgra() {
-    use std::io::{Read, Write};
-    let Some(dir) = probe_dir() else { return };
-    let work = tempfile::tempdir().unwrap();
-    let (state, _, root) = opened(work.path(), &dir);
-    let document = document(&state);
-    let (w, h) = (1920usize, 1080usize);
-    let evaluator = |nv12: bool| {
-        SceneEvaluator::new(root.clone(), document.clone(), w as u32, h as u32)
-            .unwrap()
-            .with_nv12_output(nv12)
-    };
-    let (mut bgra, mut nv12) = (evaluator(false), evaluator(true));
-    let mut worst = [0u8; 3];
-    let mut total = [0u64; 3];
-    let mut count = [0u64; 3];
-    let duration = document.duration_us();
-    for i in 0..12 {
-        let at = duration * i / 12;
-        let rgb = bgra.preview_at(at).unwrap();
-        let yuv = nv12.preview_at(at).unwrap();
-        let mut child = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path().unwrap())
-            .args([
-                "-v",
-                "error",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "bgra",
-                "-video_size",
-            ])
-            .arg(format!("{w}x{h}"))
-            .args(["-i", "pipe:0", "-vf"])
-            .arg("scale=out_color_matrix=bt709:out_range=tv,format=yuv420p")
-            .args(["-f", "rawvideo", "pipe:1"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let pixels = rgb.data.clone();
-        let feed = std::thread::spawn(move || stdin.write_all(&pixels).unwrap());
-        let mut old = Vec::new();
-        child.stdout.take().unwrap().read_to_end(&mut old).unwrap();
-        feed.join().unwrap();
-        child.wait().unwrap();
-        let quarter = w * h / 4;
-        let chroma = &yuv.data[w * h..];
-        let planes: [Vec<(u8, u8)>; 3] = [
-            yuv.data[..w * h]
-                .iter()
-                .copied()
-                .zip(old[..w * h].iter().copied())
-                .collect(),
-            chroma
-                .iter()
-                .step_by(2)
-                .copied()
-                .zip(old[w * h..][..quarter].iter().copied())
-                .collect(),
-            chroma[1..]
-                .iter()
-                .step_by(2)
-                .copied()
-                .zip(old[w * h + quarter..].iter().copied())
-                .collect(),
-        ];
-        for (p, pairs) in planes.iter().enumerate() {
-            for &(a, b) in pairs {
-                worst[p] = worst[p].max(a.abs_diff(b));
-                total[p] += a.abs_diff(b) as u64;
-                count[p] += 1;
-            }
-        }
-    }
-    for (p, name) in ["Y", "Cb", "Cr"].iter().enumerate() {
-        println!(
-            "PROBE {name}: worst {} levels, mean {:.3}",
-            worst[p],
-            total[p] as f64 / count[p] as f64
-        );
-    }
 }
 
 /// Jump cuts on an imported video's sound.

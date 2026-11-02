@@ -4,7 +4,7 @@
 //! data folder, like the Parakeet model; nothing on `PATH` is used or changed.
 //!
 //! Pinned on purpose: recheck these three together at each dependency review
-//! (`docs/dependencies.md`) and bump them only after the gate passes on every bundled template.
+//! (`docs/verification.md#dependency-review`) and bump them only after the gate passes on every bundled template.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -13,10 +13,10 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const NODE_VERSION: &str = "22.23.4";
-/// The version HyperFrames 0.8.162 itself pins (`CHROME_VERSION` in its browser manager).
+/// The version HyperFrames 0.8.228 itself pins (`CHROME_VERSION` in its browser manager).
 pub const CHROME_VERSION: &str = "152.0.7977.30";
-pub const HYPERFRAMES_VERSION: &str = "0.8.162";
-/// GSAP, the version HyperFrames 0.8.162 links from its CDN (`GSAP_CDN_VERSION`): fetched from
+pub const HYPERFRAMES_VERSION: &str = "0.8.228";
+/// GSAP, the version HyperFrames 0.8.228 links from its CDN (`GSAP_CDN_VERSION`): fetched from
 /// npm onto this computer when a graphic first uses it, never shipped with the app.
 pub const GSAP_VERSION: &str = "3.15.0";
 const GSAP_SHA256: &str = "d2e33ad202d4811e9084883f7ff9a27967ac4095caef51ca4c9d20697a253b1c";

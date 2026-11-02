@@ -22,10 +22,16 @@ pub static TOOLS: [ToolDef; 2] = [
             with `title`, `fromWord`, `toWord` (word ids from `transcript_get`) and `reason`: \
             a clip of those words, in the look of the clips made so far; its layout sections \
             are picked unless `scenes: false`; 3 s to 3 min, 20-60 s works best. `find`: the \
-            app's AI pass picks moments and adds them (it needs the user's AI key; when you \
-            can read the transcript, pick them yourself with `create`). `range` with `clip`, \
+            app's AI pass picks ideas (a stretch or gathered pieces) and adds them (it \
+            needs the user's AI key; when you can read the transcript, pick them yourself \
+            with `create`). `range` with `clip`, \
             `fromWord` and `toWord`: it plays those words instead. `rename` with `clip` and \
-            `title`; `remove` with `clip`. Each change is one undo step.",
+            `title`; `remove` with `clip`. Each change is one undo step. Idea first: `create` \
+            with `idea` and `pieces` (`[{fromWord, toWord}]`, from anywhere, in play order) \
+            gathers a clip that serves one idea; `add` with `clip` and `pieces` plays more \
+            after it; `arrange` with `clip` and `order` (piece numbers) reorders or drops \
+            pieces. A clip keeps its own timeline: after the video's edit changes, `resync` \
+            with `clip` takes the video's cuts again (each piece's; its own cuts go).",
         schema: schema::<ClipsArgs>,
         read_only: false,
         run: clips,
@@ -176,6 +182,9 @@ fn new_title(title: Option<&str>) -> Result<String, String> {
 // ---------------------------------------------------------------------------------------
 // Clips
 
+/// The most stretches one clip gathers.
+const MAX_PIECES: usize = 12;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ClipsOp {
@@ -188,6 +197,12 @@ pub enum ClipsOp {
     Find,
     /// `clip` plays the words `fromWord` to `toWord` instead.
     Range,
+    /// `clip` plays `pieces` (or `fromWord` to `toWord`) after what it plays now.
+    Add,
+    /// `clip` plays its pieces in `order`.
+    Arrange,
+    /// `clip` takes the video's cuts again.
+    Resync,
     /// `clip` gets the title `title`.
     Rename,
     /// Remove `clip`.
@@ -197,10 +212,10 @@ pub enum ClipsOp {
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipsArgs {
-    /// list (default), create, find, range, rename or remove.
+    /// list (default), create, find, range, add, arrange, resync, rename or remove.
     #[serde(default)]
     pub op: ClipsOp,
-    /// range, rename, remove: the clip's id or title.
+    /// range, add, arrange, resync, rename, remove: the clip's id or title.
     #[serde(default)]
     pub clip: Option<String>,
     /// create, rename: the title (under 60 characters, also the file name).
@@ -214,6 +229,17 @@ pub struct ClipsArgs {
     /// create: why it works on its own, in a sentence (shown in the Clips tab).
     #[serde(default)]
     pub reason: Option<String>,
+    /// create: what the clip is about, the premise its pieces serve (shown in the Clips tab).
+    #[serde(default)]
+    pub idea: Option<String>,
+    /// create, add: stretches from anywhere in the video, in the order they play, instead of
+    /// `fromWord`/`toWord`. Each must still be in the edit.
+    #[serde(default)]
+    pub pieces: Vec<PieceArg>,
+    /// arrange: the pieces' numbers (from 1, as `list` shows them) in the order they play; one
+    /// left out is removed.
+    #[serde(default)]
+    pub order: Vec<usize>,
     /// create: pick its layout sections right away. Default true.
     #[serde(default)]
     pub scenes: Option<bool>,
@@ -223,18 +249,62 @@ pub struct ClipsArgs {
     pub stream: Option<String>,
 }
 
+/// One stretch of a clip gathered from anywhere.
+#[derive(Deserialize, JsonSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PieceArg {
+    pub from_word: String,
+    pub to_word: String,
+}
+
 fn clips(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ClipsArgs = params(args)?;
     match args.op {
         ClipsOp::List => list_clips(ctx),
         ClipsOp::Create => create_clip(ctx, args),
         ClipsOp::Find => find_clips(ctx, args),
-        ClipsOp::Range | ClipsOp::Rename | ClipsOp::Remove => change_clip(ctx, args),
+        ClipsOp::Add => add_to_clip(ctx, args),
+        ClipsOp::Arrange => arrange_clip(ctx, args),
+        ClipsOp::Range | ClipsOp::Resync | ClipsOp::Rename | ClipsOp::Remove => {
+            change_clip(ctx, args)
+        }
     }
 }
 
 fn list_clips(ctx: &Ctx) -> Result<Vec<Output>, String> {
     let clips = of_kind(ctx, Kind::Clip)?;
+    // Where each gathered clip's pieces are in the video now, by number.
+    let pieces: Vec<Vec<String>> = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        Ok(clips
+            .iter()
+            .map(|c| {
+                let Some(mapper) = document
+                    .clock_asset(c.media.as_deref())
+                    .map(|a| document.asset_clock(a))
+                    .filter(|_| c.pieces.len() > 1)
+                else {
+                    return Vec::new();
+                };
+                c.pieces
+                    .iter()
+                    .enumerate()
+                    .map(|(n, p)| {
+                        match crate::shorts::edited_span(
+                            &mapper,
+                            p.source_start_us,
+                            p.source_end_us,
+                        ) {
+                            Some((a, b)) => {
+                                format!("  {}. {}-{} of the video", n + 1, clock(a), clock(b))
+                            }
+                            None => format!("  {}. an end was cut from the video since", n + 1),
+                        }
+                    })
+                    .collect()
+            })
+            .collect())
+    })?;
     if clips.is_empty() {
         return text(
             "No clips yet: `clips` with `op: create` (you pick the words) or `op: find`."
@@ -242,18 +312,34 @@ fn list_clips(ctx: &Ctx) -> Result<Vec<Output>, String> {
         );
     }
     let mut lines = vec![format!("{}:", plural(clips.len(), "clip"))];
-    lines.extend(clips.iter().map(|c| {
+    lines.extend(clips.iter().zip(&pieces).flat_map(|(c, pieces)| {
         let place = match (c.edited_start_us, c.edited_end_us, &c.edit) {
             (_, _, Some(_)) => "on its own timeline".to_string(),
             (Some(a), Some(b), None) => format!("{}-{} of the video", clock(a), clock(b)),
             _ => "an end was cut from the video".to_string(),
+        };
+        let place = match c.pieces.len() {
+            0 | 1 => place,
+            n => format!("{n} pieces {place}"),
+        };
+        let idea = if c.idea.is_empty() {
+            String::new()
+        } else {
+            format!(" (idea: {})", c.idea)
         };
         let reason = if c.reason.is_empty() {
             String::new()
         } else {
             format!(": {}", c.reason)
         };
-        format!("{} \"{}\", {}, {}{reason}", c.id, c.title, place, length(c))
+        std::iter::once(format!(
+            "{} \"{}\"{idea}, {}, {}{reason}",
+            c.id,
+            c.title,
+            place,
+            length(c)
+        ))
+        .chain(pieces.iter().cloned())
     }));
     text(lines.join("\n"))
 }
@@ -291,41 +377,47 @@ fn words(args: &ClipsArgs) -> Result<(String, String), String> {
 fn create_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
     let before = opened(ctx)?;
     let title = new_title(args.title.as_deref())?;
-    let (from, to) = words(&args)?;
+    let wanted: Vec<(String, String)> = if args.pieces.is_empty() {
+        vec![words(&args)?]
+    } else {
+        args.pieces
+            .iter()
+            .map(|p| (p.from_word.clone(), p.to_word.clone()))
+            .collect()
+    };
+    if wanted.len() > MAX_PIECES {
+        return Err(format!("Gather at most {MAX_PIECES} pieces"));
+    }
     let key = pick_sound(ctx, args.stream.clone(), Want::Transcribed)?;
     let (shorts, clip) = with_reader(ctx.state, |reader| {
         let document = reader.document();
-        let (start, end) = word_span(reader, &key, &from, &to)?;
-        let (layout, layouts) = crate::shorts::new_look(document, false);
-        let base = format!("clip-{}", start / 1000);
-        let id = (1..)
-            .map(|n| match n {
-                1 => base.clone(),
-                n => format!("{base}-{n}"),
-            })
-            .find(|id| !document.shorts.iter().any(|s| &s.id == id))
-            .unwrap_or(base);
-        let clip = Short {
-            id,
+        let spans = wanted
+            .iter()
+            .map(|(from, to)| word_span(reader, &key, from, to))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (first, rest) = spans.split_first().ok_or("Give the words")?;
+        let mut clip = crate::shorts::new_clip(
+            document,
+            document.stream_ref(&key)?.asset,
+            first.0,
+            first.1,
             title,
-            source_start_us: start,
-            source_end_us: end,
-            reason: args.reason.unwrap_or_default().trim().to_string(),
-            layout,
-            layouts,
-            media: Some(document.stream_ref(&key)?.asset),
-            edit: None,
-            take: None,
-            caption_marks: Default::default(),
-            length_us: None,
-            edited_start_us: None,
-            edited_end_us: None,
-        };
+        );
+        clip.reason = args.reason.clone().unwrap_or_default().trim().to_string();
+        clip.idea = args.idea.clone().unwrap_or_default().trim().to_string();
         let (start, end) = crate::shorts::edited_range_in(&clip, document)
             .ok_or("A word at one end was cut from the video; pick words that are kept")?;
-        let length =
+        let mut length =
             crate::shorts::slice_sequence(&document.sequence, &document.assets, start, end)
                 .duration_us();
+        // Gathered: each further piece plays after the ones before, as the video has it now.
+        for (&(a, b), (from, to)) in rest.iter().zip(&wanted[1..]) {
+            crate::shorts::add_piece(document, &mut clip, a, b)
+                .map_err(|why| format!("{from}..{to}: {why}"))?;
+        }
+        if let Some(own) = &clip.edit {
+            length = own.sequence.duration_us();
+        }
         if !(crate::shorts::MIN_SHORT_US..=crate::shorts::MAX_SHORT_US).contains(&length) {
             return Err(format!(
                 "That is {:.1} s; a clip is 3 s to 3 min",
@@ -337,7 +429,17 @@ fn create_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
         Ok((shorts, clip))
     })?;
     save(ctx, &before, shorts)?;
-    let mut lines = vec![format!("Made clip {} \"{}\".", clip.id, clip.title)];
+    let mut lines = vec![if clip.pieces.is_empty() {
+        format!("Made clip {} \"{}\".", clip.id, clip.title)
+    } else {
+        format!(
+            "Made clip {} \"{}\" from {} pieces, {:.1} s, on its own timeline.",
+            clip.id,
+            clip.title,
+            clip.pieces.len(),
+            clip.edit.as_ref().map_or(0, |e| e.sequence.duration_us()) as f64 / 1e6
+        )
+    }];
     if args.scenes != Some(false) {
         match super::layouts::run_pick(ctx, Some(clip.id.clone()), None, true) {
             // Its first line; the revision comes once, at the end.
@@ -346,6 +448,82 @@ fn create_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
         }
     }
     text(applied(ctx, "clips", &before, lines)?)
+}
+
+fn add_to_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
+    let before = opened(ctx)?;
+    let wanted = args
+        .clip
+        .as_deref()
+        .ok_or("Give `clip`: its id or title (`clips` lists them)")?;
+    let clip = named_of(ctx, wanted, Kind::Clip)?;
+    let pieces: Vec<(String, String)> = if args.pieces.is_empty() {
+        vec![words(&args)?]
+    } else {
+        args.pieces
+            .iter()
+            .map(|p| (p.from_word.clone(), p.to_word.clone()))
+            .collect()
+    };
+    if clip.pieces.len().max(1) + pieces.len() > MAX_PIECES {
+        return Err(format!("A clip gathers at most {MAX_PIECES} pieces"));
+    }
+    let key = pick_sound(ctx, args.stream.clone(), Want::Transcribed)?;
+    let (shorts, line) = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        let i = shorts
+            .iter()
+            .position(|s| s.id == clip.id)
+            .ok_or("That clip no longer exists")?;
+        for (from, to) in &pieces {
+            let (a, b) = word_span(reader, &key, from, to)?;
+            crate::shorts::add_piece(document, &mut shorts[i], a, b)
+                .map_err(|why| format!("{from}..{to}: {why}"))?;
+        }
+        let short = &shorts[i];
+        let line = format!(
+            "Clip \"{}\" now plays {} pieces, {:.1} s, on its own timeline.",
+            short.title,
+            short.pieces.len(),
+            short.edit.as_ref().map_or(0, |e| e.sequence.duration_us()) as f64 / 1e6
+        );
+        Ok((shorts, line))
+    })?;
+    save(ctx, &before, shorts)?;
+    text(applied(ctx, "clips", &before, vec![line])?)
+}
+
+fn arrange_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
+    let before = opened(ctx)?;
+    let wanted = args
+        .clip
+        .as_deref()
+        .ok_or("Give `clip`: its id or title (`clips` lists them)")?;
+    let clip = named_of(ctx, wanted, Kind::Clip)?;
+    if args.order.contains(&0) {
+        return Err("Pieces are numbered from 1, as `clips` lists them".into());
+    }
+    let order: Vec<usize> = args.order.iter().map(|n| n - 1).collect();
+    let (shorts, line) = with_reader(ctx.state, |reader| {
+        let document = reader.document();
+        let mut shorts = document.shorts.clone();
+        let i = shorts
+            .iter()
+            .position(|s| s.id == clip.id)
+            .ok_or("That clip no longer exists")?;
+        crate::shorts::arrange_pieces(document, &mut shorts[i], &order)?;
+        let short = &shorts[i];
+        let line = format!(
+            "Clip \"{}\" now plays {} pieces, {:.1} s.",
+            short.title,
+            short.pieces.len(),
+            short.edit.as_ref().map_or(0, |e| e.sequence.duration_us()) as f64 / 1e6
+        );
+        Ok((shorts, line))
+    })?;
+    save(ctx, &before, shorts)?;
+    text(applied(ctx, "clips", &before, vec![line])?)
 }
 
 fn find_clips(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
@@ -378,12 +556,20 @@ fn find_clips(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
         plural(added.len(), "clip")
     )];
     for clip in &mut added {
+        let pieces = match clip.pieces.len() {
+            0 | 1 => String::new(),
+            n => format!(", {n} pieces"),
+        };
         lines.push(format!(
-            "{} \"{}\", {}: {}",
+            "{} \"{}\", {}{pieces}: {}",
             clip.id,
             clip.title,
             length(clip),
-            clip.reason
+            if clip.idea.is_empty() {
+                &clip.reason
+            } else {
+                &clip.idea
+            }
         ));
     }
     text(applied(ctx, "clips", &before, lines)?)
@@ -411,6 +597,28 @@ fn change_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
                 ))
             })?
         }
+        ClipsOp::Resync => with_reader(ctx.state, |reader| {
+            let document = reader.document();
+            let mut shorts = document.shorts.clone();
+            let short = shorts
+                .iter_mut()
+                .find(|s| s.id == clip.id)
+                .ok_or("That clip no longer exists")?;
+            // Its stretch, or each piece, as the video has it now; its muted noises stay.
+            let sequence = crate::shorts::video_sequence(short, document)?;
+            let line = format!(
+                "Clip \"{}\" takes the video's cuts again: {:.1} s (its own cuts are gone; \
+                 undo brings them back).",
+                short.title,
+                sequence.duration_us() as f64 / 1e6
+            );
+            let noise_mutes = short.edit.take().map(|e| e.noise_mutes).unwrap_or_default();
+            short.edit = Some(crate::shorts::ShortEdit {
+                sequence,
+                noise_mutes,
+            });
+            Ok((shorts, line))
+        })?,
         _ => {
             let (from, to) = words(&args)?;
             let key = pick_sound(ctx, args.stream.clone(), Want::Transcribed)?;
@@ -426,6 +634,7 @@ fn change_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
                 // A new stretch follows the video again, as "Take the video's cuts again"
                 // does: its own cuts go.
                 let dropped = short.edit.take().is_some();
+                short.pieces.clear();
                 short.source_start_us = start;
                 short.source_end_us = end;
                 short.media = Some(document.stream_ref(&key)?.asset);

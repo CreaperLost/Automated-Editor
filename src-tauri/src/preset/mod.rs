@@ -62,7 +62,7 @@ pub struct Preset {
     #[schemars(with = "Map<String, Value>")]
     pub values: Map<String, Value>,
     /// What a new short of a project whose shorts follow this preset starts with (fields of a
-    /// short's look: captions, captionSpot, captionMaxWords, screenZoom, followZooms...).
+    /// short's look: captions, captionSpot, captionMaxWords, screenZoom, followZooms, pushIns...).
     #[schemars(with = "Map<String, Value>")]
     pub short: Map<String, Value>,
     /// The choices the method asks about (cleanup passes and depth, graphics, export), in the

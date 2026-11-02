@@ -9,6 +9,7 @@ import {
 } from "../../stores/hotkeyStore";
 import { loadFavourites, useLayoutsStore } from "../../stores/layoutsStore";
 import { BUILT_IN_LAYOUTS } from "../../lib/types";
+import { DialogBackdrop } from "../ui";
 
 /** One shortcut line: an action, or a layout to switch to. */
 interface Row {
@@ -110,12 +111,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   // On the body: an ancestor with a backdrop filter (the top bar) would otherwise become the
   // box `fixed` positions against, and the dialog would be pinned to it and cut off.
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <DialogBackdrop onClose={onClose}>
       <div
         role="dialog"
         aria-modal="true"
@@ -251,7 +247,7 @@ export const HotkeysDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           </section>
         </div>
       </div>
-    </div>,
+    </DialogBackdrop>,
     document.body,
   );
 };

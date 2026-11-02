@@ -326,7 +326,7 @@ pub(crate) fn detect_track_silence_with_words(
         let mut ranges =
             crate::transcript::pauses::protect_words(source_ranges, words, config.padding_ms);
         ranges.extend(edges.iter().copied());
-        crate::transcript::pauses::merge_ranges(ranges)
+        crate::ranges::merge(ranges)
     } else {
         source_ranges
     };

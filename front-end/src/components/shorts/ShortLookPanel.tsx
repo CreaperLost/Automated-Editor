@@ -20,6 +20,7 @@ import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "./CameraFraming";
 import { TakeFootage } from "./TakeFootage";
 import { Switch } from "../ui";
+import { formatTime } from "../../lib/format";
 
 /** Where a graphic can play in a short: value, label, what it does. */
 const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
@@ -29,13 +30,6 @@ const GRAPHIC_SLOTS: readonly (readonly [GraphicSlot, string, string])[] = [
   ["overFace", "Over face", "Your face fills the frame and the graphic is drawn over it, see-through"],
   ["overScreen", "Over screen", "Over the screen's part, under the captions; its see-through parts show the screen"],
 ];
-
-function formatTime(us: number): string {
-  const total = Math.max(0, us) / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
 
 const segmented = (active: boolean) =>
   `flex-1 h-7 inline-flex items-center justify-center gap-1 rounded-[5px] text-label font-medium transition-colors ${
@@ -95,7 +89,11 @@ export const ShortLookPanel: React.FC = () => {
                     void runShorts("Re-syncing", (p) => api.projectShortResync(p.projectHandle, p.revision, selected.id))
                   }
                   className="h-7 px-2.5 rounded-control border border-suggest/50 text-suggest-fg hover:bg-suggest/15 disabled:opacity-40"
-                  title="Replace this short's timeline with its stretch of the video as edited now; its muted noises stay"
+                  title={
+                    (selected.pieces?.length ?? 0) > 1
+                      ? "Replace this clip's timeline with its pieces as the video has them now, in their order; its muted noises stay"
+                      : "Replace this short's timeline with its stretch of the video as edited now; its muted noises stay"
+                  }
                 >
                   Take the video's cuts again
                 </button>
@@ -114,6 +112,12 @@ export const ShortLookPanel: React.FC = () => {
 
           <InspectorSection id="short-camera" title="Camera framing" icon={Camera}>
             <CameraFramingControl project={project} layout={layout} onChange={changeLayout} segmented={segmented} />
+            <Switch
+              checked={!!layout.pushIns}
+              onChange={(pushIns) => changeLayout({ pushIns })}
+              label="Push in at jump cuts"
+              title="At each jump cut the camera goes a little closer, and back out at the next, so the cut reads as a cut in rather than a jump"
+            />
           </InspectorSection>
 
           {shortGraphics.length > 0 && (

@@ -31,22 +31,32 @@ one's arguments, with `args` it runs it (`more` `tool: clips` `args: {"op": "cre
 
 ## 3. Pick (ask)
 
-Ask how many (default 3, at most 5). Pick moments that:
-- make sense on their own, with no "as I said", "like before", "this one" pointing elsewhere;
-- open with a hook in the first sentence: a question, a bold claim, a result, "here's how to";
-- run 20 to 60 seconds and start and end on whole sentences, ending on the payoff;
-- show something on screen while they talk, when there is a choice;
-- don't overlap each other or the clips already made.
+Ask how many (default 3, at most 5). Start from **ideas**, not stretches: one premise a viewer
+gets in a sentence (a claim, a how-to, a result), then gather the words that serve it from
+anywhere in the video, in the order that tells it best, hook first. One stretch is fine when
+the idea sits in one place. Each clip:
+- makes sense on its own, with no "as I said", "like before", "this one" pointing elsewhere;
+- opens with a hook in the first sentence: a question, a bold claim, a result, "here's how to";
+- runs 20 to 60 seconds; every piece starts and ends on whole sentences, the last on the payoff;
+- shows something on screen while they talk, when there is a choice;
+- uses each word once, and doesn't repeat the clips already made.
 
-Show them as a numbered list: time in the video, length, a catchy title (under 60 characters,
-it is also the file name) and one line on why it works. Ask for an OK or changes (automatic: go).
+Show them as a numbered list: the idea, its pieces (time in the video, first words), length,
+a catchy title (under 60 characters, it is also the file name) and one line on why it works.
+Ask for an OK or changes (automatic: go).
 
 ## 4. Make (automatic)
 
-For each pick, `clips` with `op: create`, `title`, `fromWord`, `toWord` and `reason`. It copies
-the look of the clips already made (else the project's clips preset) and picks its layout
-sections. Report one line per clip with its sections (`layouts` with `short`: the clip's id).
-To fix a pick: `op: range` with `clip`, `fromWord`, `toWord`; `op: rename` with `clip` and
+For each pick, `clips` with `op: create`, `title`, `idea`, `reason` and `pieces`
+(`[{fromWord, toWord}]` in play order; one stretch can be `fromWord`/`toWord`). A gathered clip
+gets its own timeline, the pieces as the video has them now. It copies the look of the clips
+already made (else the project's clips preset) and picks its layout sections. Report one line per clip with its sections (`layouts` with `short`: the clip's id).
+To fix a pick: `op: add` with `clip` and `pieces` plays more after it (its own cuts stay);
+`op: arrange` with `clip` and `order` (piece numbers, as `list` shows them) reorders or drops
+pieces;
+`op: resync` with `clip` takes the video's cuts again after the video changed (each piece's; the
+clip's own cuts go);
+`op: range` with `clip`, `fromWord`, `toWord` makes it one stretch again; `op: rename` with `clip` and
 `title`. The other tools take a clip's id as `short`. To change a clip's sections: `layouts` with `short` and `op: add`
 (`sections` [{fromS, toS, layout}], seconds on the clip's own timeline; layouts like "Camera
 only", "Screen only", "Side by side"), `update`, `remove` or `clear`; `op: base` changes the

@@ -358,13 +358,9 @@ pub fn preset_patch_impl(
                 .map(|p| p.name.to_lowercase())
                 .collect();
             let base = format!("My {}", current.name.to_lowercase());
-            let mut name = base.clone();
-            let mut n = 2;
-            while taken.contains(&name.to_lowercase()) {
-                name = format!("{base} {n}");
-                n += 1;
-            }
-            Some(name)
+            Some(crate::ids::free_name(&base, |name| {
+                taken.contains(&name.to_lowercase())
+            }))
         }
         _ => None,
     };

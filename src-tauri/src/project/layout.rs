@@ -3,7 +3,7 @@
 use super::reader::{open_regular, safe_path};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 pub const MAX_PADDING_PX: u32 = 80;
@@ -205,6 +205,18 @@ impl EditLayout {
         Ok(())
     }
 
+    /// This style with the screen framed by `look` (a track's own) instead.
+    pub fn with_screen_look(&self, look: &crate::sequence::ScreenLook) -> Self {
+        Self {
+            screen_crop_left: look.crop_left,
+            screen_crop_top: look.crop_top,
+            screen_crop_right: look.crop_right,
+            screen_crop_bottom: look.crop_bottom,
+            screen_scale_pct: look.scale_pct,
+            ..self.clone()
+        }
+    }
+
     /// The visible screen source rectangle after cropping, as normalized (x, y, w, h).
     pub fn screen_crop_uv(&self) -> (f32, f32, f32, f32) {
         let pct = |v: f32| v.clamp(0.0, MAX_SCREEN_CROP_PCT) / 100.0;
@@ -337,10 +349,7 @@ pub fn ingest_wallpaper(root: &Path, source: &Path) -> Result<String, String> {
     if dest.exists() {
         return Err("Wallpaper asset already exists".into());
     }
-    let mut temp = tempfile::NamedTempFile::new_in(&assets).map_err(|e| e.to_string())?;
-    temp.write_all(&bytes).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&dest).map_err(|e| e.to_string())?;
+    crate::files::write_durable(&dest, &bytes)?;
     if let Ok(directory) = File::open(&assets) {
         let _ = directory.sync_all();
     }
@@ -458,9 +467,9 @@ mod tests {
         assert!(rel.ends_with(".png"));
         assert!(dir.path().join(&rel).is_file());
 
-        let link = dir.path().join("link.png");
         #[cfg(unix)]
         {
+            let link = dir.path().join("link.png");
             std::os::unix::fs::symlink(&file, &link).unwrap();
             assert!(ingest_wallpaper(dir.path(), &link)
                 .unwrap_err()

@@ -289,3 +289,91 @@ export function shareSequence(previous: Sequence | undefined, next: Sequence): S
   });
   return allSame ? previous : { ...next, tracks };
 }
+
+/** Clips narrower than this on screen, side by side, draw as one run: each is too thin to see or aim at. */
+export const RUN_CLIP_PX = 3;
+
+export type DrawnClip = { clip: Clip; index: number; run?: undefined } | { run: Clip[]; index: number; clip?: undefined };
+
+/**
+ * The clips of a track as they are drawn. Neighbouring clips thinner than `RUN_CLIP_PX`, of one
+ * stream and with no visible space between them, become a run; `apart` clips (selected, missing)
+ * stay on their own. A timeline cut thousands of times, zoomed out, then costs a few elements.
+ */
+export function groupDenseClips(clips: { clip: Clip; index: number }[], pxPerUs: number, apart: (clip: Clip) => boolean): DrawnClip[] {
+  const out: DrawnClip[] = [];
+  let run: Clip[] = [];
+  let runIndex = 0;
+  const close = () => {
+    if (run.length === 1) out.push({ clip: run[0], index: runIndex });
+    else if (run.length > 1) out.push({ run, index: runIndex });
+    run = [];
+  };
+  for (const { clip, index } of clips) {
+    if (clip.durationUs * pxPerUs >= RUN_CLIP_PX || apart(clip)) {
+      close();
+      out.push({ clip, index });
+      continue;
+    }
+    const last = run[run.length - 1];
+    if (last && (last.asset !== clip.asset || last.stream !== clip.stream || (clip.startUs - clipEnd(last)) * pxPerUs >= 1)) close();
+    if (run.length === 0) runIndex = index;
+    run.push(clip);
+  }
+  close();
+  return out;
+}
+
+/** The clip of a run (in order) at `us`, or the one nearest it in a gap. */
+export function runClipAt(run: Clip[], us: number): Clip {
+  let lo = 0;
+  let hi = run.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (clipEnd(run[mid]) <= us) lo = mid + 1;
+    else hi = mid;
+  }
+  const clip = run[lo];
+  const before = run[lo - 1];
+  return before && us < clip.startUs && us - clipEnd(before) < clip.startUs - us ? before : clip;
+}
+
+/**
+ * Marks at `atUs` as drawn: one each, or a band from `atUs` to `toUs` over those less than a
+ * pixel apart. Marks that close have no room for anything to press.
+ */
+export function groupDenseMarks<T extends { atUs: number }>(marks: T[], pxPerUs: number): (T | { atUs: number; toUs: number; count: number })[] {
+  const out: (T | { atUs: number; toUs: number; count: number })[] = [];
+  for (let i = 0; i < marks.length; ) {
+    let last = i;
+    while (last + 1 < marks.length && (marks[last + 1].atUs - marks[last].atUs) * pxPerUs < 1) last++;
+    out.push(last === i ? marks[i] : { atUs: marks[i].atUs, toUs: marks[last].atUs, count: last - i + 1 });
+    i = last + 1;
+  }
+  return out;
+}
+
+/** The muted stretches (the sound's own time) over a run, on the timeline: joined when they would touch on screen. */
+export function runMutes(run: Clip[], mutes: { startUs: number; endUs: number }[], pxPerUs: number): { startUs: number; endUs: number }[] {
+  const sorted = [...mutes].sort((a, b) => a.startUs - b.startUs);
+  const marks: { startUs: number; endUs: number }[] = [];
+  for (const clip of run) {
+    const out = clipOut(clip);
+    let lo = 0;
+    let hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid].endUs <= clip.inUs) lo = mid + 1;
+      else hi = mid;
+    }
+    const perSource = clip.durationUs / Math.max(1, out - clip.inUs);
+    for (let i = lo; i < sorted.length && sorted[i].startUs < out; i++) {
+      const startUs = clip.startUs + (Math.max(sorted[i].startUs, clip.inUs) - clip.inUs) * perSource;
+      const endUs = clip.startUs + (Math.min(sorted[i].endUs, out) - clip.inUs) * perSource;
+      const last = marks[marks.length - 1];
+      if (last && (startUs - last.endUs) * pxPerUs < 1) last.endUs = Math.max(last.endUs, endUs);
+      else marks.push({ startUs, endUs });
+    }
+  }
+  return marks;
+}

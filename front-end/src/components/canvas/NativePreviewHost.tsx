@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../../stores/projectStore";
-import { api, isTauriEnvironment, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
+import { api, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
 import { PreviewHitMode, PreviewStatus } from "../../lib/types";
 import { usePreviewQualityStore } from "../../stores/previewQualityStore";
 import { restoreSeeThrough, seeThroughPath } from "./seeThrough";
 import { switchStage } from "../../lib/switchTiming";
+import { listenTo } from "../../lib/windowSync";
 
 type Picture = ImageBitmap | HTMLImageElement;
 
@@ -160,7 +161,7 @@ export function NativePreviewHost({
   const underlay = status?.attached === true && status.surface === "underlay";
   // Read by the layout effect, which outlives status changes.
   const underlayRef = useRef(false);
-  const markDirtyRef = useRef<() => void>();
+  const markDirtyRef = useRef<() => void | undefined>(undefined);
 
   // Without a native child view, pull JPEG frames from the backend and draw them on a canvas.
   useEngineFrames(canvasRef, webviewGeneration !== undefined, webviewGeneration);
@@ -191,23 +192,9 @@ export function NativePreviewHost({
 
   // The engine went back to the webview (the window could not draw): it says so here.
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<PreviewStatus>("preview-status", (event) => {
-        setStatus((current) =>
-          current && current.generation === event.payload.generation ? event.payload : current,
-        );
-      }).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo<PreviewStatus>("preview-status", (payload) => {
+      setStatus((current) => (current && current.generation === payload.generation ? payload : current));
+    });
   }, []);
 
   // Tells the backend where the preview is on screen (and whether it can be seen). Measuring

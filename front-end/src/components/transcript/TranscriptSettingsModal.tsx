@@ -1,16 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertCircle, Check, ChevronDown, ChevronRight, Download, KeyRound, X } from "lucide-react";
-import { api, isTauriEnvironment } from "../../lib/ipc";
+import { api } from "../../lib/ipc";
 import { AiSettings, AiSettingsView, ModelDownloadProgress, TranscriptSettings, TranscriptSettingsView } from "../../lib/types";
-import { Segmented } from "../ui";
+import { Segmented, DialogBackdrop } from "../ui";
 import { useUiMode } from "../../stores/uiModeStore";
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err.trim()) return err;
-  return "Something went wrong.";
-}
+import { errorMessage } from "../../lib/format";
+import { listenTo } from "../../lib/windowSync";
 
 function formatMb(bytes: number): string {
   return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB`;
@@ -51,19 +47,7 @@ export const TranscriptSettingsModal: React.FC<{
   }, []);
 
   useEffect(() => {
-    if (!isTauriEnvironment()) return;
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<ModelDownloadProgress>("transcript-model-progress", (event) => setDownload(event.payload)).then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      }),
-    );
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return listenTo<ModelDownloadProgress>("transcript-model-progress", setDownload);
   }, []);
 
   useEffect(() => {
@@ -123,9 +107,7 @@ export const TranscriptSettingsModal: React.FC<{
 
   if (!view || !aiView) {
     return createPortal(
-      <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-        {error && <p className="text-danger-fg">{error}</p>}
-      </div>,
+      <DialogBackdrop selectable>{error && <p className="text-danger-fg">{error}</p>}</DialogBackdrop>,
       document.body,
     );
   }
@@ -249,12 +231,7 @@ export const TranscriptSettingsModal: React.FC<{
 
   // Rendered into <body>: inside a dock panel the panel resize bars would sit on top of it.
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <DialogBackdrop onClose={onClose}>
       <div
         role="dialog"
         aria-modal="true"
@@ -490,7 +467,7 @@ export const TranscriptSettingsModal: React.FC<{
           </div>
         )}
       </div>
-    </div>,
+    </DialogBackdrop>,
     document.body,
   );
 };

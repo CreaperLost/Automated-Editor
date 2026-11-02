@@ -12,16 +12,10 @@ app…) over MCP or the `aeroedits do` command line. The app runs the editing pa
 runs them in order, asks you with real numbers, and you approve. Agent proposals wait in the
 Agent panel, and every change is one undo step.
 
-![How the user's agent works with AeroEdits today](docs/images/ai-collaboration-today.svg)
+The agent can keep a word-anchored project plan, trial a style in context and make
+editable graphics. It reviews stills and boards; you judge motion, listen and approve export.
 
-Where this is heading: the agent moves from running passes to directing the edit, with a plan
-you approve, a style trial, moving previews with sound, and rules it learns from your
-corrections. This is a proposal from the 21 Oct 2026 research, not a commitment.
-
-![The AeroEdits AI loop: today and tomorrow](docs/images/ai-loop-today-vs-tomorrow.svg)
-
-Start with [docs/](docs/README.md) for the vision, the current state, the
-gaps and the roadmap.
+Start with [docs/](docs/README.md) for product direction, architecture, the roadmap and verification.
 
 ## Features
 
@@ -71,7 +65,7 @@ gaps and the roadmap.
   in any order. All cuts share timeline mapping and undo; timeline or transcript changes
   invalidate stale suggestions, including analyses still running.
 - **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
-  `telemetry/keys.jsonl` ([format](docs/contracts/keyboard-telemetry.md)): typing stretches with a key
+  `telemetry/keys.jsonl` ([format](docs/architecture.md#keyboard-telemetry)): typing stretches with a key
   count (never the text) and shortcuts pressed. Typing counts as screen activity, so the
   picked layouts keep the screen in view while you type with a
   resting mouse. Long typing gets a zoom on the text caret (or the click into the field), and
@@ -81,7 +75,7 @@ gaps and the roadmap.
 - **Style:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows,
   and the camera's border, shadow and mirror. Every camera clip is centred on the face (found
   once per recording on this computer, YuNet) unless framed by hand or switched off.
-- **Layouts** ([plan](docs/plans/layouts.md)): camera bubble (a 3x3 grid of spots or anywhere,
+- **Layouts** ([design](docs/architecture.md#picture-layouts-zooms-telemetry)): camera bubble (a 3x3 grid of spots or anywhere,
   Small/Medium/Large or any size, rect/circle/squircle), side by side (camera left or right,
   top or bottom in 9:16, any share, an even split or a card over the screen, the screen fitted
   or filled), camera only (with a punch-in) and screen only. Each timeline (the video, every
@@ -98,7 +92,7 @@ gaps and the roadmap.
   **Hide while you work under it** in the Camera settings (`webcamAutoHide` for agents). Only
   while a bubble layout sits over a fitted screen.
 - **Crop to the active window:** recordings from AeroShoot with window recording on carry
-  `telemetry/windows.jsonl` ([format](docs/contracts/window-telemetry.md)). When the window in front is
+  `telemetry/windows.jsonl` ([format](docs/architecture.md#window-telemetry)). When the window in front is
   clearly smaller than the recorded display, the screen shows just that window with room
   around it and glides to the next one when you switch; quick switches, menus, popups and
   tiny windows never move it. Zooms work inside the crop and keep their targets, in shorts
@@ -169,7 +163,7 @@ gaps and the roadmap.
   source in `graphics/<id>/` (`index.html` and `graphic.json`) and rendered by the app in the
   background for the canvas it plays on, so the same graphic fits a 16:9 video and a 9:16
   short; renders are cached in `assets/graphics/` and export waits for them. The renderer
-  (HyperFrames 0.8.162 with its own Node 22 and chrome-headless-shell, each pinned and checked
+  (HyperFrames 0.8.228 with its own Node 22 and chrome-headless-shell, each pinned and checked
   by hash; npm packages installed with `npm ci` from the shipped lock file) is a 200 MB
   download on first use into the app's data folder; nothing on `PATH` is used or changed.
   Agents use the `graphics`, `graphic_add` (at a time or a transcript word), `graphic_set`,

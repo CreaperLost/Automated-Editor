@@ -59,10 +59,11 @@ export function useCaptionLane({
   }, [openedProject?.projectHandle, openedProject?.sequence, captionsVersion, JSON.stringify(openedProject?.captions ?? null)]);
   useEffect(() => setSelected(null), [openedProject?.projectHandle]);
 
-  const edit = async (change: CaptionEdit) => {
-    if (!openedProject || !track.trackId) return false;
+  /** Changes `of`, a caption, in the transcript its words are from. */
+  const edit = async (of: CaptionCueView, change: CaptionEdit) => {
+    if (!openedProject) return false;
     try {
-      const next = await api.transcriptCaptionEdit(openedProject.projectHandle, track.trackId, change);
+      const next = await api.transcriptCaptionEdit(openedProject.projectHandle, of.trackId, change);
       if (next.project) useProjectStore.getState().applyOpenedProject(next.project);
       setTrack(next);
       onError(undefined);
@@ -82,11 +83,13 @@ export function useCaptionLane({
       onError("Put the playhead between two words of the caption to split it.");
       return;
     }
-    void edit({ kind: "split", wordId: cue.wordIds[index] });
+    void edit(cue, { kind: "split", wordId: cue.wordIds[index] });
   };
+  // Only into the caption before it from the same recording.
+  const mergeable = !!cue && selected !== null && track.cues[selected - 1]?.trackId === cue.trackId;
   const mergeCue = () => {
-    if (!cue || selected === 0) return;
-    void edit({ kind: "merge", wordId: cue.wordIds[0] });
+    if (!cue || !mergeable) return;
+    void edit(cue, { kind: "merge", wordId: cue.wordIds[0] });
   };
   /** The word at the playhead becomes the caption's emphasis word, or stops being it. */
   const emphasizeWord = () => {
@@ -98,11 +101,11 @@ export function useCaptionLane({
       return;
     }
     const wordId = cue.wordIds[index];
-    void edit({ kind: "emphasis", wordIds: [wordId], on: cue.emphasis !== wordId });
+    void edit(cue, { kind: "emphasis", wordIds: [wordId], on: cue.emphasis !== wordId });
   };
   const hideCue = () => {
     if (!cue) return;
-    void edit({ kind: "hide", wordIds: cue.wordIds, hidden: true });
+    void edit(cue, { kind: "hide", wordIds: cue.wordIds, hidden: true });
     setSelected(null);
   };
   const endDrag = () => {
@@ -113,7 +116,7 @@ export function useCaptionLane({
     if (!moved) return;
     const startUs = current.side === "end" ? moved.startUs : Math.max(0, moved.startUs + current.deltaUs);
     const endUs = current.side === "start" ? moved.endUs : moved.endUs + current.deltaUs;
-    void edit({ kind: "retime", wordIds: moved.wordIds, startUs, endUs });
+    void edit(moved, { kind: "retime", wordIds: moved.wordIds, startUs, endUs });
   };
   const dragHandlers = (index: number, side: "start" | "end" | "move") => ({
     onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
@@ -154,7 +157,7 @@ export function useCaptionLane({
             <Button size="sm" variant="ghost" onClick={splitCue} title={`Split the caption at the playhead${hint("split")}`}>
               Split
             </Button>
-            <Button size="sm" variant="ghost" onClick={mergeCue} disabled={selected === 0} title="Join this caption to the one before it">
+            <Button size="sm" variant="ghost" onClick={mergeCue} disabled={!mergeable} title="Join this caption to the one before it">
               Merge
             </Button>
             <Button
@@ -191,7 +194,7 @@ export function useCaptionLane({
           const editing = typing?.index === index;
           return (
             <div
-              key={`${item.wordIds[0]}-${index}`}
+              key={`${item.trackId}-${item.wordIds[0]}-${index}`}
               role="button"
               aria-label={`Caption: ${item.text}`}
               aria-pressed={isSelected}
@@ -228,7 +231,7 @@ export function useCaptionLane({
                     if (e.key === "Enter") {
                       const text = typing.text.trim();
                       setTyping(null);
-                      if (text && text !== item.text) void edit({ kind: "setText", wordIds: item.wordIds, text });
+                      if (text && text !== item.text) void edit(item, { kind: "setText", wordIds: item.wordIds, text });
                     } else if (e.key === "Escape") {
                       setTyping(null);
                     }

@@ -1,19 +1,14 @@
 //! Keyboard activity recorded beside the mouse stream (`telemetry/keys.jsonl`), as specified
-//! in `docs/contracts/keyboard-telemetry.md`: shortcuts by key, typing as stretches with a key count and
+//! in `docs/architecture.md#keyboard-telemetry`: shortcuts by key, typing as stretches with a key count and
 //! never the text, and gaps where the keyboard was not seen. Same clock as `events.jsonl`.
 //!
 //! No file means the keyboard was not recorded, and everything falls back to the mouse.
-use crate::project::reader::{open_regular, safe_path};
+use super::stream::{read_once, read_stream, FolderCache};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 pub const KEYS_VERSION: u32 = 1;
-const KEYS_LIMIT: u64 = 64 * 1024 * 1024;
-const LINE_LIMIT: u64 = 16 * 1024;
-const RECORD_LIMIT: usize = 1_000_000;
-const DIAGNOSTIC_LIMIT: usize = 64;
-const MAX_SAFE_TIME: u64 = 9_007_199_254_740_991;
+use super::stream::MAX_SAFE_TIME;
 /// How long a shortcut badge stays up.
 pub const BADGE_US: u64 = 1_400_000;
 
@@ -180,14 +175,6 @@ enum RawKind {
     Unknown,
 }
 
-#[derive(Deserialize)]
-struct RawRecord {
-    version: u32,
-    t_us: u64,
-    #[serde(flatten)]
-    kind: RawKind,
-}
-
 const MODIFIERS: [&str; 4] = ["ctrl", "alt", "shift", "meta"];
 
 fn caret(raw: Option<RawCaret>) -> Option<Caret> {
@@ -201,65 +188,14 @@ fn caret(raw: Option<RawCaret>) -> Option<Caret> {
 /// Reads `telemetry/keys.jsonl` under `root`. `Ok(None)` when the recording has none or the
 /// file is of a version this build does not read (`diagnostics` says why).
 pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<KeyStream>, String> {
-    let path = match safe_path(root, "telemetry/keys.jsonl") {
-        Ok(path) => path,
-        Err(error) => {
-            diagnostics.push(format!("Keyboard telemetry path rejected: {error}"));
-            return Ok(None);
-        }
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-    let file = open_regular(&path)?;
-    let mut reader = BufReader::new(file.take(KEYS_LIMIT + 1));
     let mut stream = KeyStream::default();
-    let mut total = 0u64;
-    for line_number in 1..=RECORD_LIMIT {
-        let mut line = Vec::new();
-        let count = reader
-            .by_ref()
-            .take(LINE_LIMIT + 1)
-            .read_until(b'\n', &mut line)
-            .map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        total += count as u64;
-        if count as u64 > LINE_LIMIT || total > KEYS_LIMIT {
-            stream
-                .diagnostics
-                .push("Keyboard telemetry is too large; the rest was not read".into());
-            break;
-        }
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        let had_newline = line.ends_with(b"\n");
-        let record: RawRecord = match serde_json::from_slice(&line) {
-            Ok(record) => record,
-            // A crash mid-write leaves a cut-off last line.
-            Err(_) if !had_newline => break,
-            Err(error) => {
-                if stream.diagnostics.len() < DIAGNOSTIC_LIMIT {
-                    stream.diagnostics.push(format!(
-                        "Corrupt keyboard telemetry line {line_number}: {error}"
-                    ));
-                }
-                continue;
-            }
-        };
-        if record.version != KEYS_VERSION {
-            diagnostics.push(format!(
-                "Keyboard telemetry version {} is not supported; it was ignored",
-                record.version
-            ));
-            return Ok(None);
-        }
-        if record.t_us > MAX_SAFE_TIME {
-            continue;
-        }
-        match record.kind {
+    let problems = read_stream(
+        root,
+        "keys.jsonl",
+        "Keyboard",
+        KEYS_VERSION,
+        diagnostics,
+        |t_us, kind| match kind {
             RawKind::Capture { platform } => stream.platform = platform,
             RawKind::Shortcut {
                 modifiers,
@@ -268,7 +204,7 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
                 focus_inside_source,
             } => {
                 if focus_inside_source == Some(false) {
-                    continue;
+                    return;
                 }
                 let modifiers: Vec<String> = MODIFIERS
                     .iter()
@@ -277,10 +213,10 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
                     .collect();
                 let label: String = label.chars().take(16).collect();
                 if modifiers.is_empty() && label.trim().is_empty() {
-                    continue;
+                    return;
                 }
                 stream.shortcuts.push(Shortcut {
-                    t_us: record.t_us,
+                    t_us: t_us,
                     modifiers,
                     code: code.map(|c| c.chars().take(32).collect()),
                     label,
@@ -296,7 +232,7 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
             } => {
                 if focus_inside_source == Some(false) || end_us < start_us || end_us > MAX_SAFE_TIME
                 {
-                    continue;
+                    return;
                 }
                 stream.typing.push(TypingRun {
                     start_us,
@@ -312,7 +248,7 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
                 end_us,
             } => {
                 if end_us < start_us || end_us > MAX_SAFE_TIME {
-                    continue;
+                    return;
                 }
                 stream.gaps.push(KeyGap {
                     reason: reason.chars().take(64).collect(),
@@ -321,8 +257,12 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
                 });
             }
             RawKind::Unknown => {}
-        }
-    }
+        },
+    )?;
+    let Some(problems) = problems else {
+        return Ok(None);
+    };
+    stream.diagnostics = problems;
     stream.shortcuts.sort_by_key(|s| s.t_us);
     stream.typing.sort_by_key(|r| (r.start_us, r.end_us));
     stream.gaps.sort_by_key(|g| (g.start_us, g.end_us));
@@ -331,29 +271,10 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
 
 /// The keyboard activity of the recording in `folder`, read once while the file is unchanged.
 pub fn recording_keys(folder: &Path) -> std::sync::Arc<Option<KeyStream>> {
-    use std::sync::{Arc, Mutex, OnceLock};
-    type Cache = Mutex<
-        std::collections::HashMap<
-            std::path::PathBuf,
-            (Option<std::time::SystemTime>, Arc<Option<KeyStream>>),
-        >,
-    >;
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-    let modified = std::fs::metadata(folder.join("telemetry").join("keys.jsonl"))
-        .and_then(|m| m.modified())
-        .ok();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((stamp, keys)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
-        if *stamp == modified {
-            return keys.clone();
-        }
-    }
-    let keys = Arc::new(read_keys(folder, &mut Vec::new()).ok().flatten());
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(folder.to_path_buf(), (modified, keys.clone()));
-    keys
+    static CACHE: FolderCache<Option<KeyStream>> = std::sync::OnceLock::new();
+    read_once(&CACHE, folder, &["keys.jsonl"], || {
+        read_keys(folder, &mut Vec::new()).ok().flatten()
+    })
 }
 
 #[cfg(test)]

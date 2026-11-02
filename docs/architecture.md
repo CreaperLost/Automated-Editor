@@ -1,10 +1,8 @@
 # Architecture: how AeroEdits is built
 
-The system as it stands on 24 Oct 2026, condensed from the finished plans (Premiere-style
-tracks, the 4 Oct performance pass, AI readiness, history and checkpoints, presets and styles).
-Those plans were deleted once built; git keeps them (`git log --diff-filter=D -- docs/plans/`).
-Repository layout, build and test commands are in the [root README](../README.md). Why things are
-the way they are is in [decisions.md](decisions.md).
+Implementation invariants and recorder contracts, consolidated 1 November 2026.
+Build and setup: [root README](../README.md). Product constraints: [Product](product.md).
+Measured checks and dependency policy: [Verification](verification.md).
 
 ## Stack
 
@@ -45,7 +43,7 @@ mounted at `recordings/<asset id>/`.
   library and flagged by `check`.
 - **Magnetic** ripples every unlocked track; off, cuts leave gaps and moves overwrite. Empty time
   is black.
-- **Edits** are a typed `SequenceEdit` enum (17 kinds: add/move/remove track, place asset, move,
+- **Edits** are a typed `SequenceEdit` enum (including: add/move/remove track, place asset, move,
   trim, ripple trim, split, delete, delete range, link, unlink, set clip, set magnetic, set speed,
   restore cuts…), applied to a copy and committed as one revision (`project/revision.rs`).
 - **Clocks: one mapping primitive.** `sequence/clock.rs` builds, from the clips that play a stream
@@ -73,7 +71,10 @@ mounted at `recordings/<asset id>/`.
   every agent run (newest five kept). Going back is one step (when the edit differs), puts the
   graphic files and caption marks back (marks only onto the same words), asks for the graphics'
   renders, withdraws waiting batches, and saves what was there first as a checkpoint. Graphic
-  source edits are not undo steps (GFX-4).
+  edits are undo steps (SAFE-3): the edit records each graphic's files by content
+  (`graphicFiles`, bytes in `history/files`), each step lists the files it changed so pruning
+  keeps them, and undo or redo puts back only the graphics that step changed
+  (`EditHistory::restore_graphic_files`). A redo can also go into a version (GFX-4).
 - **Shorts** are windows anchored in source time that follow the video's edits until edited on
   their own (`ShortEdit`, an own sequence); take shorts carry a take (camera + voice) with footage
   from the video under it (`take_short.rs`), each piece at its own speed. Their own layout
@@ -110,11 +111,11 @@ mounted at `recordings/<asset id>/`.
   arrangements for moves. One drawing path for the video and shorts in
   `export::SceneEvaluator::scene_at`. `pick` rules: rest (camera while the mouse rests and you
   talk), busy (screen while clicks/typing come fast), hook (camera on a short's opening line),
-  no-footage (take shorts). Plan and follow-ups: [plans/layouts.md](plans/layouts.md).
+  no-footage (take shorts). Plan and follow-ups: [roadmap](roadmap.md#lay-3).
 - **Zooms** from clicks, dwell, click clusters and typing (`zoom/`), eased in recording time.
 - **Telemetry** (`telemetry/`): `events.jsonl` + `geometry.jsonl` (mouse), `keys.jsonl`
-  ([contract](contracts/keyboard-telemetry.md)), `windows.jsonl`
-  ([contract](contracts/window-telemetry.md)). Drives zooms, layout picks, window crop, bubble hide,
+  ([contract](#keyboard-telemetry)), `windows.jsonl`
+  ([contract](#window-telemetry)). Drives zooms, layout picks, window crop, bubble hide,
   shortcut badges and the click/whoosh lane (`sound_effects.rs`).
 - **Screen effects** (`effects.rs`, FX-2): a box of a screen recording's own picture (0..1) over
   a stretch of its own clock, so crops, zooms, layouts and cuts never move it. `scene_at` draws
@@ -130,29 +131,13 @@ mounted at `recordings/<asset id>/`.
 ## The agent connection (MCP)
 
 `src-tauri/src/mcp/`. Measurements of real agent edits are in
-[plans/evaluation.md](plans/evaluation.md).
+[Verification](verification.md#agent-edit-evaluation-eval-1).
 
-The principles it was built on (AI readiness, 13 Oct):
+The editing contract and approval rules live in [Product](product.md#editing-contract).
 
-1. **The app is a tool server, the agent is the editor.** The agent decides; the app does
-   everything deterministic (cuts, rendering, alpha, compositing, mapping times through edits).
-2. **The agent proposes, the app checks, the user accepts** for judgement calls; built-in passes
-   apply directly, one undo step each. Autopilot accepts proposals automatically.
-3. **Text first, pixels when needed.** The compact transcript and telemetry are the working
-   surface; frames, sheets and the storyboard only at decision points.
-4. **Check the output, not the plan:** graphics over the real footage, cuts against the
-   transcript.
-5. **Pin to meaning, not to time:** graphics, footage and notes hang off words or recording
-   time, so later cuts don't knock them out of place.
-6. **One source for the look:** the style feeds every graphic, caption and the frame.
-
-Why MCP only: it works with any agent, costs the app nothing, stays inside every provider's
-terms, keeps secrets out of the app and keeps it testable. Coding agents are the main target;
-the app renders graphics itself and offers `graphic_write_file`, so a client without a shell
-still works. MCP sampling is not relied on (clients support it unevenly). Ideas were taken from
-browser-use/video-use (packed transcript, self-checks), adukhan98/video-edit (brand intake,
-storyboard approval), kamgasimo/ai-video-editor (pinned HyperFrames, cut lists with evidence) and
-zhuyansen/awesome-claude-video-skills.
+The app runs a preset's first steps itself through the same tools (`first_steps.rs`, AUTO-1:
+Preset → Run), as author "AeroEdits", so its steps are undo steps like an agent's and `status`
+can tell a later agent what already ran.
 
 - **Transport.** Agents start `aeroedits --mcp-stdio` (`bridge.rs`). The bridge answers
   `initialize`, `ping` and `tools/list` itself (so the client sees tools while the app is closed)
@@ -197,16 +182,20 @@ zhuyansen/awesome-claude-video-skills.
 
 ## Graphics
 
-`src-tauri/src/graphics/`. Decided in Graphics v1 (15 Oct; see [decisions](decisions.md)).
+`src-tauri/src/graphics/`. Decided in Graphics v1 (15 Oct; see [Product](product.md#settled-constraints)).
 
 - **Asset:** a HyperFrames project in `graphics/<id>/` (`index.html`, `graphic.json` with
   variables, its own style if any, its own look tokens, length). Variables are declared with `data-composition-variables`.
+- **Versions** (`versions.rs`, GFX-4): a version is a graphic of its own whose `graphic.json`
+  names the family's first (`versionOf`); "use" swaps the clips' asset on the video's and every
+  short's own timeline (clip ids stay, so a short's slots stay). Frame tools draw an unused
+  version in place through `frames::trying`, which swaps a copy of the document.
 - **Slots, not safe zones:** where a graphic plays decides its render box (whole canvas; a short's
   camera, screen or over-screen part). Full-screen graphics cut in and out (`data-entrance`); an
   overlay on the camera may ease.
 - **Never chopped:** passes skip the time a graphic covers, a cut inside one is refused, cuts
   before it move it along.
-- **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.162 with its own
+- **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.228 with its own
   Node 22 and chrome-headless-shell (`runtime.rs`, hash-checked, ~200 MB download, ~500 MB on
   disk); WebM VP9 alpha decoded with `libvpx-vp9` forced; cache key over source files, canvas,
   length, fps, density, style (settings and files) and version. Every render of a graphic in an
@@ -245,7 +234,11 @@ zhuyansen/awesome-claude-video-skills.
 
 ## Check, storyboard, export
 
-- **`check`** (`check.rs`) reads the edit only (no decode, no model, ~3 ms): missing media, black
+- **Exports** (`export/deliveries.rs`, DLV-2): one worker runs the queued exports in order; a
+  busy owner refuses an export unless it is queued; every export that ends is recorded in the
+  project's `exports.json` with a fingerprint of the document it was made from, so the list
+  can tell what is older than the edit by content, not revision.
+- **`check`** (`check.rs`) reads the selected video or short edit only (no decode, no model, ~3 ms): missing media, black
   frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
   bubble, chapter rules, loudness not normalised, pending proposals. Safe
   fixes, each its own undo step.
@@ -260,22 +253,7 @@ zhuyansen/awesome-claude-video-skills.
   queue; the finished file is checked (duration, first/last frame). 1080p30 export ran at 2.6×
   real time (1.8× with jump cuts) on an RTX 3060.
 
-## Performance baseline and rules
-
-From the 4–5 Oct pass (R01–R20; all of the earlier P01–P07 findings fixed). The benchmark is
-`src-tauri/src/perf.rs` (needs `AERO_PROBE=<dir>` with a real recording).
-
-11-minute recording, release build:
-
-| Operation | Time |
-|---|---|
-| Open the project | 52 ms |
-| First waveform, mic / system | 155 / 220 ms (8 ms cached) |
-| Find pauses (179) / cut them all | 106 ms / 8 ms |
-| An edit or undo | 12 ms |
-| Rebuild the preview after an edit | ~7 ms |
-| Build the audio mixer, all effects, first / again | 122 / 13 ms |
-| Seek | 65 ms typical, 170 ms p95 |
+## Performance rules
 
 Rules that keep it fast (break one and it shows):
 
@@ -286,11 +264,15 @@ Rules that keep it fast (break one and it shows):
 - Lookahead decoders start before clip **and** segment boundaries (at most 4 at once).
 - Clocks are built once per recording per summary (binary search + local merge), never per zoom.
 - Timeline clips are memoised components, drawn only near the view; drags use an index map and a
-  selection set, one redraw per animation frame.
+  selection set, one redraw per animation frame. Neighbouring clips thinner than 3 px of one
+  stream draw as one `ClipRun` (one waveform canvas across them), and cut marks under a pixel
+  apart as one band. A press acts on the clip under the pointer; selected and missing clips
+  stay on their own. A drag must not change a run's key: it holds the pointer capture.
 - Panels reload only when what they depend on changes (sequence, transcript, their own settings),
   never on every revision.
 - Long reads (transcript, cues, waveforms) run on the blocking pool, not Tauri's main thread.
-- The preview worker never blocks on the JPEG encoder (fallback path); on Windows the preview is
+- The preview worker never blocks on the JPEG encoders (fallback path; two threads take turns and
+  a frame finishing after a newer one isn't shown); on Windows the preview is
   drawn by wgpu under a transparent webview.
 - A graphic waiting for its render shows its newest older render, found once per render
   generation, not by listing the cache folder every frame.
@@ -340,6 +322,288 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
 - The local-LLM build needs a short `CARGO_TARGET_DIR` (`C:\aeb`), the Vulkan SDK, LLVM and Ninja;
   `scripts/build-windows.ps1` sets it up.
 - After any docs change, run `.venv\Scripts\python.exe scripts/check_doc_links.py`.
+- Shared helpers to reach for before writing one (QUAL-1): `ids::free_id` / `free_name` for a
+  new id or name beside the ones in use (`base`, `base-2`...), `ids::is_plain_id` to check one;
+  `shorts::video_sequence` for what a clip plays of the video now (its stretch or its pieces);
+  `shorts::edited_span` for a source stretch on the edited timeline; `files::write_atomic`,
+  `write_durable`, `save_json`, `load_json` for files replaced whole; `ranges::merge`,
+  `merge_near`, `subtract` for stretches of time; `own_library` for a library's own files, tags,
+  search and import; `proposals::load_file` / `save_file` in the agent folder;
+  `telemetry::stream` for recorder streams and `read_once` for what a recording's files give;
+  `commands::sounds::place_on_shown` and `on_shown` for a change on the timeline shown.
+  In the window: `lib/format` (`formatTime`, `errorMessage`), `listenTo` for app events,
+  `useBusyRun`, `useEscapeKey`, `DialogBackdrop` and `media/libraryParts`.
 - Front-end behaviour tests are `front-end/tests/*.test.ts` (`npm run test:cleanup`, also run by
   CI): stores with a mocked `api`, no browser. A change of a store's async flow (queued saves,
   late replies) gets a test there.
+
+## Recent implementation details
+
+- **Graphic file history (SAFE-3):** content-addressed files participate in undo/redo; restore
+  only the graphics changed by that step so unrelated manual edits remain untouched.
+- **Room tone (SND-4):** `media/room_tone.rs` chooses the quietest eligible 0.4 s (at most
+  -40 dBFS, excluding silence), plays it back and forth under muted noises, and falls back to
+  silence when no candidate exists. Preview and export use the same path.
+- **Plan (PLAN-1):** `plan` behind `more` reads/writes/edits the project's `plan.md`. Each edit
+  match must be unique. Reads append current positions for referenced word IDs, including cut
+  words, without rewriting the file. Status advertises it.
+- **Style brief:** `style.json` includes motion, kinds, examples linked by library ID, rules,
+  reference files/notes, breakdown, sound cues and portrait overrides. Motion uses existing
+  look tokens. `library` style `propose` returns references and guidance without saving;
+  save only the selected proposal. Style `check` checks references, fonts and library entries,
+  but does not render examples. Website references must be fetched by the agent into files.
+- **Graphic review:** `graphic_add` with `plan: true` validates and returns the table without
+  adding. `frame_render` with `sample: true` writes an in-context clip with sound for the user,
+  alongside the agent's sheet. Sampled frame checks flag face coverage, caption conflicts,
+  portrait platform bands and long static holds; unavailable face tracks are “not checked”.
+  These checks live in `mcp/graphic_checks.rs`, separate from `check`'s font/reading-time checks.
+  Wait for the current render before claiming a graphic fix is visible.
+- **Seek-safe graphics:** all visible changes must follow deterministic timeline state. Avoid
+  callback-driven text updates or measurements before HyperFrames sets the root height.
+  Use transform-based movement; inspect the actual render and short-duration placements.
+- **Timeouts (QUAL-7):** the agent pipe gives up after 10 s of a busy app; the AI client's test
+  server bounds its waits. Do not filter libtest's notice of tests running over 60 s.
+
+## Recorder contracts
+
+These specifications are retained in full because a different application writes the files.
+They are not subject to the editor's no-project-migration rule.
+
+<a id="keyboard-telemetry"></a>
+## Keyboard telemetry (`telemetry/keys.jsonl`), version 1
+
+The contract between the AeroShoot recorder (writer) and AeroEdits (reader) for keyboard
+activity in an `.aero` recording. It sits next to the mouse stream (`telemetry/events.jsonl`)
+and uses the same clock.
+
+**What the editor does with it:** typing and shortcuts count as screen activity, so the
+webcam no longer fills the frame while you type with a resting mouse, and short scenes keep
+the screen. Typing stretches become zoom targets. Shortcuts can show as a small badge
+("Ctrl + Shift + P").
+
+**Privacy rule:** the file never holds typed text. Typing is stored as stretches with a key
+count only. Only shortcuts name a key, and only keys pressed with Ctrl, Alt or Win/Cmd held,
+or F-keys.
+
+### File
+
+- Path: `<project>.aero/telemetry/keys.jsonl`. UTF-8, one JSON object per line, `\n` endings.
+- Written incrementally and flushed on the same cadence as `events.jsonl`, so a crash loses at
+  most the last flush. The editor ignores a truncated final line.
+- No file means "keyboard not recorded": the editor falls back to mouse-only behaviour.
+  The recorder writes no file when keyboard recording is switched off.
+- Typical size: a few KB per hour.
+
+### Common fields
+
+Every record has:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | `1` | Format version. The editor ignores the whole file for any other value. |
+| `seq` | u64 | 0 for the first record, then +1 per record. Its own counter, separate from `events.jsonl`. |
+| `t_us` | u64 | Microseconds on the recording clock: the same clock as `events.jsonl` `t_us` (0 = recording start after the countdown; paused time is included and written as a `gap`). |
+| `kind` | string | One of the kinds below. The editor skips kinds it does not know. |
+
+### Kinds
+
+#### `capture` (exactly one, the first record)
+
+What this recorder captures. Written at recording start (`t_us` 0, `seq` 0).
+
+```json
+{"version":1,"seq":0,"t_us":0,"kind":"capture","platform":"windows","shortcuts":true,"typing":true,"caret":true}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `platform` | `"windows"` \| `"macos"` | Lets the editor draw Win vs ⌘ and Alt vs ⌥. |
+| `shortcuts` | bool | `shortcut` records are written. |
+| `typing` | bool | `typing` records are written. |
+| `caret` | bool | The recorder tries to report caret positions. Some apps never expose one, so `true` still allows records without them. |
+
+#### `shortcut`
+
+One shortcut press, at its key-down time.
+
+```json
+{"version":1,"seq":12,"t_us":8412000,"kind":"shortcut","modifiers":["ctrl","shift"],"code":"KeyP","label":"P","focus_inside_source":true}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `modifiers` | string[] | Held modifiers, in the order `ctrl`, `alt`, `shift`, `meta` (Win on Windows, Cmd on macOS). Left/right not distinguished. |
+| `code` | string \| null | The physical key as a W3C `KeyboardEvent.code` (`KeyP`, `Digit1`, `Slash`, `Enter`, `F5`, `ArrowUp`, `Escape`, …). `null` for a modifier tapped alone. |
+| `label` | string | What the key shows in the active layout, ready to draw: letters in upper case (`P`), symbols as typed without Shift (`/`), named keys in English (`Enter`, `Esc`, `Tab`, `Space`, `Backspace`, `Delete`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PgUp`, `PgDn`, `F5`). Empty for a modifier tapped alone. |
+| `focus_inside_source` | bool, optional | The window receiving the key is in the recorded source: on the recorded display, or the recorded window itself. Omit if unknown. The editor ignores shortcuts with `false`. |
+
+A key-down is written as a `shortcut` when, and only when:
+
+1. a non-modifier key goes down while `ctrl`, `alt` or `meta` is held (Shift may be held too), or
+2. F1–F24 go down (alone or with modifiers), or
+3. `meta` is pressed and released with no other key in between, within 1 s (opening the
+   Start menu or Spotlight). It is written at the release with `modifiers: ["meta"]`,
+   `code: null`, `label: ""`.
+
+Never a `shortcut`:
+
+- **AltGr.** Windows reports AltGr as LeftCtrl plus RightAlt; keys typed with it are typing.
+  This matters on Greek, German and other layouts.
+- Shift plus a character (typing).
+- Auto-repeat: a held key writes one `shortcut` at its first down only.
+- The recorder's own hotkeys (start, stop, pause): nothing is written for them.
+- Anything during the countdown or while paused.
+
+#### `typing`
+
+A run of typing, written once the run ends.
+
+```json
+{"version":1,"seq":13,"t_us":15230000,"kind":"typing","start_us":12010000,"end_us":15230000,"keys":38,"caret_start":{"geometry_id":"g1","norm_x":0.412,"norm_y":0.633},"caret_end":{"geometry_id":"g1","norm_x":0.598,"norm_y":0.633},"focus_inside_source":true}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `start_us` | u64 | Key-down time of the run's first key. |
+| `end_us` | u64 | Key-down time of the run's last key (not the idle timeout after it). Equals `t_us`. |
+| `keys` | u32 | Key-downs in the run, auto-repeat excluded. Never the keys themselves. |
+| `caret_start`, `caret_end` | object, optional | The text caret at the first and the last key, when the OS reports one. `geometry_id`, `norm_x` and `norm_y` mean exactly what they mean in `events.jsonl` (normalized to the recorded source under that geometry). Omit when the caret is unknown or outside the source. |
+| `focus_inside_source` | bool, optional | As for `shortcut`, taken at the first key. |
+
+Typing keys: characters (with or without Shift or AltGr), `Space`, `Enter`, `Tab`,
+`Backspace`, `Delete`, arrows, `Home`, `End`, `PageUp`, `PageDown` and `Insert`, pressed
+without Ctrl, Alt or Win/Cmd.
+
+- A run ends when no typing key goes down for **500 ms**, or at pause, stop, or a `gap`.
+  The editor joins runs itself where it wants longer ones, so keep this short.
+- A `shortcut` in the middle of a run does not end the run.
+- A run with a single key is still written (`keys: 1`).
+- Records stay in `seq` order. A `typing` record's `t_us` is its `end_us`, so a `shortcut`
+  pressed during the run can have a later `seq` but an earlier `t_us` than the run. The
+  editor sorts by time.
+
+#### `gap`
+
+A stretch where the keyboard state is unknown. The editor treats it as "might be typing",
+never as "no typing". The exception is `hook_unavailable`: there the editor uses the mouse
+alone, as if the keyboard had not been recorded, so a missing permission never blocks the
+webcam for a whole recording.
+
+```json
+{"version":1,"seq":20,"t_us":61000000,"kind":"gap","reason":"recording_paused","start_us":42000000,"end_us":61000000,"dropped_events":0}
+```
+
+| `reason` | When |
+|---|---|
+| `recording_paused` | The recording was paused (written on resume or at stop). |
+| `hook_unavailable` | The keyboard hook or event tap could not be installed or was removed. Written from that time to the end (or to when it came back). On macOS this includes missing Input Monitoring permission. |
+| `queue_overflow` | Events were dropped between the hook and the writer. `dropped_events` is how many. |
+| `secure_input` | macOS secure event input was on (password fields), so keys were not seen. |
+
+### Platform notes for the writer
+
+- **Windows:** `WH_KEYBOARD_LL` on the same kind of hook thread as the mouse hook
+  (`capture/windows/record/mouse.rs`), with the same `RecordingClock`, pause flag and
+  dropped-event counter pattern. `LLKHF_INJECTED` keys are recorded like any other key.
+  Caret: `GetGUIThreadInfo` on the foreground thread (`rcCaret`, converted to screen
+  coordinates, then normalized like the mouse). Many apps (Chromium, Electron) report no
+  caret; then omit it.
+- **macOS:** a listen-only `CGEventTap` for `keyDown` and `flagsChanged`, beside the mouse tap
+  in `MouseHookMac.swift`. Caret: the focused element's `AXSelectedTextRange` bounds through
+  Accessibility, when permitted; otherwise omit it.
+- Labels come from the active layout at the time of the press (`ToUnicodeEx` with modifiers
+  cleared on Windows, `UCKeyTranslate` on macOS).
+
+### Versioning
+
+New optional fields may be added to version 1; readers ignore fields they do not know.
+A change to the meaning of an existing field, or to a rule above, needs `version: 2`.
+
+
+<a id="window-telemetry"></a>
+## Window telemetry (`telemetry/windows.jsonl`), version 1
+
+The contract between the AeroShoot recorder (writer) and AeroEdits (reader) for the window in
+front during an `.aero` recording. It sits next to the mouse stream (`telemetry/events.jsonl`)
+and uses the same clock. `telemetry/geometry.jsonl` only describes the recorded display, so
+the editor needs this file to know where the window you work in is.
+
+**What the editor does with it:** when the front window is clearly smaller than the recorded
+display (a big or second monitor), the screen is cropped to that window with a little room
+around it, and the crop glides to the next window when you switch. Quick app switches,
+popups, menus and tiny windows never move it. The user can switch it off for the whole video
+or for any stretch.
+
+**Privacy rule:** the file never holds window titles or window contents. Only an opaque id,
+the executable name, the window's kind and its box.
+
+### File
+
+- Path: `<project>.aero/telemetry/windows.jsonl`. UTF-8, one JSON object per line, `\n`
+  endings.
+- Written incrementally and flushed on the same cadence as `events.jsonl`. The editor ignores
+  a truncated final line.
+- No file means "windows not recorded": the editor never crops. The recorder writes no file
+  when it records a single window or an area (the crop only makes sense for a display).
+- Typical size: a few KB per hour.
+
+### Common fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | `1` | Format version. The editor ignores the whole file for any other value. |
+| `seq` | u64 | 0 for the first record, then +1 per record. Its own counter. |
+| `t_us` | u64 | Microseconds on the recording clock, the same clock as `events.jsonl` `t_us`. |
+| `kind` | string | One of the kinds below. The editor skips kinds it does not know. |
+
+### Kinds
+
+#### `capture` (exactly one, the first record)
+
+```json
+{"version":1,"seq":0,"t_us":0,"kind":"capture","platform":"windows"}
+```
+
+#### `front`
+
+From `t_us` on, this window is in front. Written at recording start, whenever the foreground
+window changes, and when the front window's box changes (after a move or resize settles; at
+most 4 per second while it is being dragged).
+
+```json
+{"version":1,"seq":7,"t_us":8412000,"kind":"front","window":"0x000A12F4","app":"Code.exe","role":"window","bounds":{"norm_x":0.052,"norm_y":0.041,"norm_w":0.611,"norm_h":0.808},"maximized":false}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `window` | string \| null | An opaque id, stable while the window lives (the HWND in hex on Windows, the CGWindowID on macOS). `null`: no app window in front on the recorded display (the desktop, or the front window is on another display). |
+| `app` | string, optional | The executable or bundle id. Informational; the editor does not use it yet. |
+| `role` | string | `window` (an ordinary top-level window), `dialog` (an owned window such as Save As), `fullscreen`, or a short-lived one: `popup`, `menu`, `tooltip`. The editor never crops to short-lived ones. |
+| `bounds` | object | The window's visible frame (no invisible resize borders or drop shadow) normalized to the recorded source exactly like `norm_x`/`norm_y` in `events.jsonl`: `norm_x`, `norm_y` its top-left, `norm_w`, `norm_h` its size. It may reach past 0..1 where the window is partly off the display; the editor cuts it to the display. |
+| `maximized` | bool, optional | The window is maximized (shown whole, never cropped to). |
+
+#### `gap`
+
+A stretch where the front window was not seen (the recording was paused, or the hook failed).
+The editor keeps the crop it had.
+
+```json
+{"version":1,"seq":20,"t_us":61000000,"kind":"gap","reason":"recording_paused","start_us":42000000,"end_us":61000000}
+```
+
+### Platform notes for the writer
+
+- **Windows:** `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` plus `EVENT_OBJECT_LOCATIONCHANGE`
+  filtered to the foreground window, on the hook thread beside the mouse hook. Bounds from
+  `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)`, converted to the recorded display and
+  normalized like the mouse. Role: `menu` for `#32768`, `tooltip` for `tooltips_class32`,
+  `popup` for `WS_POPUP` windows without a caption, `dialog` for owned windows,
+  `fullscreen` when the box covers the display.
+- **macOS:** `NSWorkspace.didActivateApplicationNotification` plus the front window's
+  `kAXPositionAttribute`/`kAXSizeAttribute` (or `CGWindowListCopyWindowInfo` layer 0), in the
+  display's points converted like the mouse.
+
+### Versioning
+
+New optional fields may be added to version 1; readers ignore fields they do not know.
+A change to the meaning of an existing field, or to a rule above, needs `version: 2`.

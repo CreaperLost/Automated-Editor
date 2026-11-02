@@ -2,7 +2,7 @@
 //! CPU. It is downloaded on first use next to the other models, the way the transcription and
 //! alignment models are. Decoding its outputs is plain Rust, so it is tested without the model.
 use super::FaceBox;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,11 +21,7 @@ const MIN_SCORE: f32 = 0.6;
 const NMS_IOU: f32 = 0.3;
 
 pub fn default_model_dir() -> PathBuf {
-    crate::transcript::parakeet::default_model_dir()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(MODEL_NAME)
+    crate::transcript::parakeet::sibling_model_dir(MODEL_NAME)
 }
 
 pub fn model_path(dir: &Path) -> PathBuf {
@@ -82,11 +78,7 @@ pub fn download_model(dir: &Path, cancel: &AtomicBool) -> Result<(), String> {
             bytes.len()
         ));
     }
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    temp.write_all(&bytes).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(model_path(dir)).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::files::write_durable(&model_path(dir), &bytes)
 }
 
 /// The size a `w` x `h` picture is scaled to for the model: it fits in the input, at most

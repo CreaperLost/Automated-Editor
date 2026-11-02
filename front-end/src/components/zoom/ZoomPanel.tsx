@@ -7,13 +7,7 @@ import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomS
 import { InspectorSection, MoreSettings } from "../inspector/InspectorSection";
 import { PresetMarks } from "../presets/PresetMarks";
 import { Notice, Switch } from "../ui";
-
-function formatTime(us: number): string {
-  const total = us / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
+import { formatTime } from "../../lib/format";
 
 const ORIGIN_LABEL = { click: "Click", dwell: "Hover", cluster: "Clicks", typing: "Typing" } as const;
 /** One click, one undoable edit: preset amounts rather than a slider for saved zooms. */

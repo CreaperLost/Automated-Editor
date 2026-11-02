@@ -47,7 +47,8 @@ pub struct Look {
     /// How fast things move: 2 plays every entrance in half the time.
     #[serde(default = "one")]
     pub speed: f32,
-    /// How far things travel as they come in (0 only fades them).
+    /// How far things travel as they come in (0 only fades them). It scales the motion a
+    /// graphic already has and adds none.
     #[serde(default = "one")]
     pub energy: f32,
     /// Padding, gaps and margins, as a multiple of the preset's.
@@ -407,11 +408,7 @@ pub fn check_tokens(tokens: &BTreeMap<String, String>) -> Result<(), String> {
 /// `html` with `css` as the last style in its head, so it wins over the composition's own (and
 /// before the style's, which only sets `--brand-*` and the page font).
 pub fn inject_css(html: &str, css: &str) -> String {
-    let block = format!("<style id=\"{STYLE_ID}\">\n{css}</style>\n");
-    match html.find("</head>") {
-        Some(at) => format!("{}{block}{}", &html[..at], &html[at..]),
-        None => format!("{block}{html}"),
-    }
+    crate::style::brand::inject_style(html, STYLE_ID, css)
 }
 
 /// What the editor and agents see of the presets.

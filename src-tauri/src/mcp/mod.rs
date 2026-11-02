@@ -12,10 +12,13 @@ pub mod cli;
 pub mod clients;
 mod clips;
 mod effects;
+pub mod first_steps;
 pub(crate) mod frames;
+mod graphic_checks;
 pub mod ipc;
 mod layouts;
 mod library;
+mod plan;
 mod presets;
 mod propose;
 mod review;
@@ -31,7 +34,6 @@ use crate::commands::AppState;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -89,16 +91,11 @@ pub struct McpSettings {
 }
 
 pub fn load_settings(dir: &Path) -> McpSettings {
-    fs::read(dir.join(SETTINGS_FILE))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<McpSettings>(&bytes).ok())
-        .unwrap_or_default()
+    crate::files::load_json(&dir.join(SETTINGS_FILE)).unwrap_or_default()
 }
 
 fn save_settings(dir: &Path, settings: &McpSettings) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(dir.join(SETTINGS_FILE), json).map_err(|e| e.to_string())
+    crate::files::save_json(&dir.join(SETTINGS_FILE), settings)
 }
 
 /// One tool call, for the activity list in the app.
@@ -643,8 +640,10 @@ pub(crate) fn tool_entry(tool: &tools::ToolDef) -> rmcp::model::Tool {
 }
 
 /// What agents are sent of a tool's schema, without what changes nothing about a call: the
-/// `$schema` and `title` labels, `format` hints, `default: null`; and "a string or null" said
-/// the short way (`type: ["string", "null"]`, the same thing). Agents read every tool's schema
+/// `$schema` and `title` labels, `format` hints, `default: null`, `default: false` and
+/// `minimum: 0` (unsigned numbers say it; the call is checked anyway); "a string or null" said
+/// the short way (`type: ["string", "null"]`, the same thing); and an argument that may be left
+/// out (not `required`) without its "or null" at all (QUAL-6). Agents read every tool's schema
 /// on each connection, so this is paid again and again. The `aeroedits do --help` text keeps
 /// the full schema.
 fn lean(schema: &mut serde_json::Map<String, serde_json::Value>) {
@@ -652,8 +651,14 @@ fn lean(schema: &mut serde_json::Map<String, serde_json::Value>) {
     schema.remove("$schema");
     schema.remove("title");
     schema.remove("format");
-    if schema.get("default") == Some(&Value::Null) {
+    if matches!(
+        schema.get("default"),
+        Some(Value::Null | Value::Bool(false))
+    ) {
         schema.remove("default");
+    }
+    if schema.get("minimum") == Some(&serde_json::json!(0)) {
+        schema.remove("minimum");
     }
     for (key, value) in schema.iter_mut() {
         match (key.as_str(), value) {
@@ -690,6 +695,47 @@ fn lean(schema: &mut serde_json::Map<String, serde_json::Value>) {
             }
         }
     }
+    // Arguments that may be left out need no "or null": leaving one out is the same call.
+    let required: Vec<String> = match schema.get("required") {
+        Some(Value::Array(names)) => names
+            .iter()
+            .filter_map(|n| n.as_str().map(String::from))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        for (name, value) in properties.iter_mut() {
+            if required.contains(name) {
+                continue;
+            }
+            if let Value::Object(property) = value {
+                without_null(property);
+            }
+        }
+    }
+}
+
+/// `property` as a value that is never null: `type: [X, "null"]` → `type: X`, and
+/// `anyOf: [S, {type: null}]` → S.
+fn without_null(property: &mut serde_json::Map<String, serde_json::Value>) {
+    use serde_json::Value;
+    let null = serde_json::json!({ "type": "null" });
+    if let Some(Value::Array(kinds)) = property.get("type") {
+        let kept: Vec<Value> = kinds.iter().filter(|k| *k != "null").cloned().collect();
+        if kept.len() == 1 && kinds.len() == 2 {
+            property.insert("type".into(), kept[0].clone());
+        }
+    }
+    if let Some(Value::Array(options)) = property.get("anyOf") {
+        if options.len() == 2 && options.contains(&null) {
+            if let Some(Value::Object(other)) = options.iter().find(|o| **o != null).cloned() {
+                property.remove("anyOf");
+                for (key, value) in other {
+                    property.entry(key).or_insert(value);
+                }
+            }
+        }
+    }
 }
 
 /// Adds the `project` argument [`tools::call`] takes out before a tool sees its arguments.
@@ -704,7 +750,7 @@ fn bind_to_project(schema: &mut serde_json::Map<String, serde_json::Value>, requ
             "project".into(),
             json!({
                 "type": "string",
-                "description": "The open project's id, from status.",
+                "description": "From status.",
             }),
         );
     }
@@ -770,7 +816,7 @@ mod tests {
     fn project_with(dir: &Path, autopilot: bool) -> Arc<TestHost> {
         let wav = dir.join("voice.wav");
         let samples = vec![0i16; 48_000 * 2];
-        fs::write(
+        std::fs::write(
             &wav,
             crate::fixtures::generate_pcm16_wav(48_000, 1, &samples),
         )
@@ -1392,8 +1438,9 @@ mod tests {
                 "type": "object",
                 "properties": {
                     "title": { "type": "string", "description": "kept" },
-                    "format": { "type": ["integer", "null"], "minimum": 0 },
-                    "kind": { "anyOf": [{ "$ref": "#/$defs/Kind" }, { "type": "null" }] },
+                    // May be left out: no "or null", no `minimum: 0`.
+                    "format": { "type": "integer" },
+                    "kind": { "$ref": "#/$defs/Kind" },
                 },
                 "required": ["title"],
                 "$defs": { "Kind": { "enum": ["a", "b"], "default": "a" } },
@@ -1468,7 +1515,9 @@ mod tests {
         // `kind: sound` with `query`, `atUs`, `atWord`, 44,998; the budget moved to 45,500.
         // 25 Oct, later: `effects` (FX-2: blurring keys and emails is too important to sit
         // behind `more`) and `library` `kind: music`, 46,549; the budget moved to 47,000.
+        // 31 Oct (STY-2, GFX-8): `library` `op: propose` with `references` and `brief`, and
+        // `frame_render` `sample` (the sample clip in place), 47,127; the budget moved to 47,500.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 47_000, "the tool list grew to {size} characters");
+        assert!(size < 47_500, "the tool list grew to {size} characters");
     }
 }

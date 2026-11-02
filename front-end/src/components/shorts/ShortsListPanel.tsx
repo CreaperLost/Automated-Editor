@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Check, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Trash2, Video } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Trash2, Video, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { focusShortPlayback } from "../../lib/playbackControl";
 import { switchStage, switchStarted } from "../../lib/switchTiming";
@@ -12,20 +12,45 @@ import {
   ofKind,
   removeShort,
   renameShort,
+  runShorts,
   selectShort,
   setShortsError,
   useSelectedShort,
   useShortsStore,
 } from "../../stores/shortsStore";
-import { Button, Notice } from "../ui";
+import { Button, IconButton, Notice } from "../ui";
+import type { Short } from "../../lib/types";
 import { TakeForm } from "./TakeForm";
+import { formatTime } from "../../lib/format";
 
-function formatTime(us: number): string {
-  const total = Math.max(0, us) / 1_000_000;
-  const minutes = Math.floor(total / 60);
-  const seconds = total - minutes * 60;
-  return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}
+/// A gathered clip's pieces, in the order they play: each can move up or down or go (its
+/// stretch of the clip's own timeline, own cuts and graphics included, goes with it).
+const PieceList: React.FC<{ clip: Short; disabled: boolean }> = ({ clip, disabled }) => {
+  const pieces = clip.pieces ?? [];
+  const arrange = (order: number[], label: string) =>
+    void runShorts(label, (p) => api.projectClipArrange(p.projectHandle, p.revision, clip.id, order));
+  const indices = pieces.map((_, i) => i);
+  const swap = (a: number, b: number) => {
+    const order = [...indices];
+    [order[a], order[b]] = [order[b], order[a]];
+    return order;
+  };
+  return (
+    <ol className="mt-1.5 pl-6 space-y-0.5" aria-label={`Pieces of ${clip.title}`} onClick={(e) => e.stopPropagation()}>
+      {pieces.map((piece, i) => (
+        <li key={`${piece.sourceStartUs}`} className="group/piece flex items-center gap-1 text-meta tabular-nums text-studio-400">
+          <span className="flex-1 min-w-0 truncate">
+            {i + 1}. {piece.editedStartUs !== undefined ? `from ${formatTime(piece.editedStartUs)} of the video` : "cut from the video since"},{" "}
+            {((piece.sourceEndUs - piece.sourceStartUs) / 1e6).toFixed(1)}s
+          </span>
+          <IconButton size="sm" icon={ChevronUp} label={`Play piece ${i + 1} earlier`} disabled={disabled || i === 0} onClick={() => arrange(swap(i, i - 1), "Moving a piece")} />
+          <IconButton size="sm" icon={ChevronDown} label={`Play piece ${i + 1} later`} disabled={disabled || i === pieces.length - 1} onClick={() => arrange(swap(i, i + 1), "Moving a piece")} />
+          <IconButton size="sm" icon={X} label={`Remove piece ${i + 1} from the clip`} disabled={disabled || pieces.length < 2} onClick={() => arrange(indices.filter((j) => j !== i), "Removing a piece")} />
+        </li>
+      ))}
+    </ol>
+  );
+};
 
 /// The list of one tab: in Shorts the shorts made from a take (your camera and voice, footage
 /// from the video under it), in Clips the clips cut from the video. Pick one to show and edit
@@ -177,7 +202,7 @@ export const ShortsListPanel: React.FC = () => {
                   <>
                     <span
                       className="flex-1 truncate font-medium text-studio-100"
-                      title={s.reason ? `${s.title}\nAI: ${s.reason}` : s.title}
+                      title={[s.title, s.idea && `Idea: ${s.idea}`, s.reason && `AI: ${s.reason}`].filter(Boolean).join("\n")}
                       onDoubleClick={(e) => {
                         e.stopPropagation();
                         setRenaming(s.id);
@@ -216,12 +241,15 @@ export const ShortsListPanel: React.FC = () => {
               <div className="mt-1 pl-6 text-meta tabular-nums text-studio-500">
                 {s.take
                   ? `From a take · ${((s.lengthUs ?? 0) / 1e6).toFixed(1)}s`
+                  : s.pieces && s.pieces.length > 1
+                    ? `${s.pieces.length} pieces · ${((s.lengthUs ?? 0) / 1e6).toFixed(1)}s`
                   : s.edit
                     ? `Own timeline · ${((s.lengthUs ?? 0) / 1e6).toFixed(1)}s`
                     : ok
                     ? `${formatTime(s.editedStartUs!)} · ${((s.editedEndUs! - s.editedStartUs!) / 1e6).toFixed(1)}s`
                     : "Part of it was cut; adjust it on its timeline"}
               </div>
+              {s.id === selected?.id && (s.pieces?.length ?? 0) > 1 && <PieceList clip={s} disabled={!!busy} />}
               {row && (
                 <div className="mt-1 pl-6 flex items-center gap-1 text-meta">
                   {row.state === "completed" ? (

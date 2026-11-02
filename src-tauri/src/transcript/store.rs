@@ -3,7 +3,7 @@
 use super::Transcript;
 use crate::project::reader::{open_regular, safe_path};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,7 +32,7 @@ pub fn validate_dependencies(
     Ok(())
 }
 
-fn transcript_path(root: &Path, track_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn transcript_path(root: &Path, track_id: &str) -> Result<PathBuf, String> {
     // A sound's key, `<asset>.<stream>`.
     if track_id.is_empty()
         || track_id.len() > 160
@@ -89,11 +89,9 @@ pub fn save_transcript(root: &Path, transcript: &Transcript) -> Result<(), Strin
     if serialized.len() as u64 > MAX_TRANSCRIPT_BYTES {
         return Err("Transcript exceeds size limit".into());
     }
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
-    temp.write_all(&serialized).map_err(|e| e.to_string())?;
-    temp.as_file().sync_all().map_err(|e| e.to_string())?;
-    temp.persist(&path).map_err(|e| e.to_string())?;
+    crate::files::write_durable(&path, &serialized)?;
     CHANGES.fetch_add(1, Ordering::Relaxed);
+    crate::source_search::forget(root, &transcript.track_id);
     Ok(())
 }
 
@@ -105,6 +103,7 @@ pub fn delete_transcript(root: &Path, track_id: &str) -> Result<(), String> {
         Err(e) => Err(e.to_string()),
     };
     CHANGES.fetch_add(1, Ordering::Relaxed);
+    crate::source_search::forget(root, track_id);
     removed
 }
 

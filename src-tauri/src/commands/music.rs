@@ -1,13 +1,12 @@
 //! The music library's commands (SND-3): browse, hear (downloading a built-in track the first
 //! time), add the user's own (refused unless it needs no credit), and place one under the video
 //! in the open project as one undo step.
-use super::{require_handle, AppState};
+use super::AppState;
 use crate::music_library::{self as library, Bed, Track};
 use crate::project::OpenedProject;
 use crate::sequence::Licence;
 use serde::Serialize;
 use std::path::Path;
-use std::sync::atomic::Ordering;
 
 /// Biggest file the preview hands the window whole.
 const MAX_PREVIEW_BYTES: u64 = 24 * 1024 * 1024;
@@ -26,29 +25,12 @@ pub fn music_library_fetch_impl(id: String) -> Result<Track, String> {
 
 /// A track as a data URL for the window to play.
 pub fn music_library_preview_impl(id: String) -> Result<String, String> {
-    use base64::Engine;
     let track = music_library_fetch_impl(id)?;
-    let path = Path::new(&track.path);
-    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if size > MAX_PREVIEW_BYTES {
-        return Err("The track is too big to preview here; add it to hear it".into());
-    }
-    let mime = match path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .as_deref()
-    {
-        Some("flac") => "audio/flac",
-        Some("mp3") => "audio/mpeg",
-        Some("ogg") | Some("opus") => "audio/ogg",
-        Some("m4a") | Some("aac") => "audio/mp4",
-        _ => "audio/wav",
-    };
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "data:{mime};base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+    super::sounds::audio_data_url(
+        Path::new(&track.path),
+        MAX_PREVIEW_BYTES,
+        "The track is too big to preview here; add it to hear it",
+    )
 }
 
 pub fn music_library_add_impl(
@@ -96,38 +78,14 @@ pub fn project_music_place_impl(
 ) -> Result<MusicPlaced, String> {
     // Downloaded before taking the project's locks: it can take a few seconds.
     let track = music_library_fetch_impl(track_id)?;
-    let _guard = state.command_lock.lock();
-    let mut opened = state.opened_project.lock();
-    let reader = opened.as_mut().ok_or("No opened project")?;
-    require_handle(reader, &project_handle)?;
-    let root = reader.root().to_path_buf();
-    let (asset, new) = library::asset_for(reader.document(), &root, &track)?;
-    let asset_id = asset.id.clone();
-    let placed = super::sounds::on_shown(reader.document(), short_id.as_deref(), |shown, taken| {
-        library::place(shown, &track, asset.clone(), at_us, until_us, taken)
-    })
-    .and_then(|(next, bed)| {
-        let project = reader.commit_document(expected_revision, next)?;
-        let project = match short_id.as_deref() {
-            Some(id) => reader.short_view(id)?,
-            None => project,
-        };
-        Ok((project, bed))
-    });
-    let (project, bed) = match placed {
-        Ok(done) => done,
-        Err(error) => {
-            if new {
-                crate::media_bin::remove_files(&root, &asset);
-            }
-            return Err(error);
-        }
-    };
-    state
-        .playback
-        .lock()
-        .apply_document(&reader.history().current)?;
-    state.waveform_epoch.fetch_add(1, Ordering::SeqCst);
+    let (project, asset_id, bed) = super::sounds::place_on_shown(
+        state,
+        &project_handle,
+        expected_revision,
+        short_id.as_deref(),
+        |document, root| library::asset_for(document, root, &track),
+        |shown, asset, taken| library::place(shown, &track, asset, at_us, until_us, taken),
+    )?;
     Ok(MusicPlaced {
         project,
         asset_id,

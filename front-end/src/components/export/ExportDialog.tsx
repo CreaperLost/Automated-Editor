@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, Download, Film, FolderOpen, X, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, Download, Film, FolderOpen, ListPlus, X, XCircle } from "lucide-react";
 import { api, PREVIEW_FRAME_HEADER } from "../../lib/ipc";
 import { seekPlayback } from "../../lib/playbackControl";
 import { FILE_MANAGER } from "../../lib/projectActions";
 import { useProjectStore } from "../../stores/projectStore";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { CheckPanel } from "./CheckPanel";
+import { DeliveryList } from "./DeliveryList";
 import { ExportLog } from "./ExportLog";
-import { Button, IconButton, Segmented, cn } from "../ui";
+import { Button, IconButton, Segmented, cn, DialogBackdrop } from "../ui";
 import type {
   ExportFileKind,
   ExportPreferences,
@@ -18,6 +19,7 @@ import type {
 } from "../../lib/types";
 import { PresetMarks } from "../presets/PresetMarks";
 import { useUiMode } from "../../stores/uiModeStore";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 
 /** Base 16:9 sizes; the backend fits them to the canvas aspect ratio. */
 const RESOLUTIONS = [
@@ -91,7 +93,8 @@ interface ExportDialogProps {
   destination: string;
   exportJob?: ExportStatus;
   onChooseDestination: () => void;
-  onStart: (settings: ExportSettings) => void;
+  /** `queue`: wait behind the export running instead of being refused. */
+  onStart: (settings: ExportSettings, queue?: boolean) => void;
   onCancel: () => void;
   onClose: () => void;
 }
@@ -132,17 +135,12 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       ? Math.min(1, exportJob.progressNumerator / exportJob.progressDenominator)
       : 0;
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
-  const start = () => {
+  const start = (queue = false) => {
     if (custom && !mbpsValid) return;
-    onStart({
+    onStart(
+      {
       videoCodec: "h264",
       audioCodec: "aac",
       width: resolution.width,
@@ -150,8 +148,11 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       fps: preferences.fps,
       quality: custom ? "high" : (preferences.quality as ExportQuality),
       bitrateKbps: custom ? Math.round(preferences.mbps * 1000) : null,
-    });
+      },
+      queue,
+    );
   };
+  const revision = useProjectStore((s) => s.openedProject?.revision ?? 0);
 
   const seconds = editedDurationUs / 1e6;
   const [outWidth, outHeight] = fittedSize(resolution.width, resolution.height, aspectRatio);
@@ -202,12 +203,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   );
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <DialogBackdrop onClose={onClose}>
       <div
         role="dialog"
         aria-modal="true"
@@ -246,9 +242,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               </div>
             </div>
 
+            {/* The choices, beside the picture */}
+            <div className="space-y-3 min-w-0">
             <PresetMarks part="export" />
-
-            {/* The choices */}
             <fieldset disabled={exporting} className="space-y-5 min-w-0 disabled:opacity-60">
               {field(
                 "Quality",
@@ -391,6 +387,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               </div>
               )}
             </fieldset>
+            </div>
           </div>
 
           <div className="px-6 pb-6">
@@ -442,25 +439,39 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               <ExportLog lines={exportJob.log ?? []} failed={exportJob.state === "failed"} />
             </div>
           )}
+          {projectHandle && (
+            <DeliveryList projectHandle={projectHandle} revision={revision} refreshKey={`${exportJob?.jobId}:${exportJob?.state}:${saved?.path}`} />
+          )}
         </div>
 
         <div className="px-6 py-4 border-t border-studio-800 flex items-center justify-end gap-2">
           {exporting ? (
-            <Button variant="danger" icon={XCircle} onClick={onCancel}>
-              Cancel export
-            </Button>
+            <>
+              <Button variant="danger" icon={XCircle} onClick={onCancel}>
+                Cancel export
+              </Button>
+              <Button
+                variant="secondary"
+                icon={ListPlus}
+                disabled={custom && !mbpsValid}
+                title="Export with these settings after the one running, from the edit as it is now"
+                onClick={() => start(true)}
+              >
+                Add to queue
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="ghost" onClick={onClose}>
                 Close
               </Button>
-              <Button variant="primary" size="lg" icon={Download} disabled={custom && !mbpsValid} onClick={start}>
+              <Button variant="primary" size="lg" icon={Download} disabled={custom && !mbpsValid} onClick={() => start()}>
                 Export video
               </Button>
             </>
           )}
         </div>
       </div>
-    </div>
+    </DialogBackdrop>
   );
 };

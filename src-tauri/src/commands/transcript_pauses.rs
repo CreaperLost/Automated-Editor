@@ -223,7 +223,7 @@ pub fn detect_non_speech_gaps_for(
                     .iter()
                     .flat_map(|clip| edges.iter().filter_map(|&(a, b)| clip.timeline_range(a, b))),
             );
-            gaps = pauses::merge_ranges(gaps);
+            gaps = crate::ranges::merge(gaps);
         }
         gaps
     } else {
@@ -320,7 +320,7 @@ fn guarded_primary_gaps(
     let padding_us = u64::from(padding_ms.max(pauses::PC_AUDIO_PADDING_MS)) * 1_000;
     let mut protected = Vec::new();
     for (plays, quiet) in secondary {
-        let quiet = pauses::merge_ranges(quiet.clone());
+        let quiet = crate::ranges::merge(quiet.clone());
         for &(start, end) in plays {
             let mut cursor = start;
             let first = quiet.partition_point(|&(_, b)| b <= start);
@@ -338,7 +338,7 @@ fn guarded_primary_gaps(
             }
         }
     }
-    let protected = pauses::merge_ranges(
+    let protected = crate::ranges::merge(
         protected
             .into_iter()
             .map(|(a, b)| (a.saturating_sub(padding_us), b.saturating_add(padding_us)))

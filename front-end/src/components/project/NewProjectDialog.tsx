@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { FilePlus2, Film, FolderOpen, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import type { OpenedProject } from "../../lib/types";
+import { DialogBackdrop } from "../ui";
 
 interface NewProjectDialogProps {
   /** Pre-picked recording, e.g. when starting from "Edit a recording". */
@@ -72,7 +73,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
     }`;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 select-none">
+    <DialogBackdrop>
       <div
         role="dialog"
         aria-label="New project"
@@ -180,7 +181,7 @@ export const NewProjectDialog: React.FC<NewProjectDialogProps> = ({
           </div>
         </form>
       </div>
-    </div>,
+    </DialogBackdrop>,
     document.body,
   );
 };

@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { Bot, Check, Copy, Download, Link2, Link2Off, Trash2, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import type { McpApp, McpAppState, McpSkillHome, McpSkillState, McpStatus } from "../../lib/types";
-import { Button, Switch, Tabs, cn } from "../ui";
+import { Button, Switch, Tabs, cn, DialogBackdrop } from "../ui";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 
 const APP_NAMES: Record<McpApp, { name: string; restart: string }> = {
   claudeApp: { name: "Claude app", restart: "Restart the Claude app to load it." },
@@ -199,13 +200,7 @@ export const AgentsDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => 
     };
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const act = (call: () => Promise<McpStatus>, after?: () => void) => {
     setBusy(true);
@@ -231,12 +226,7 @@ export const AgentsDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => 
         : `Connected: ${connected.join(", ")}`;
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <DialogBackdrop onClose={onClose} selectable>
       <div
         role="dialog"
         aria-modal="true"
@@ -378,7 +368,7 @@ export const AgentsDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => 
           )}
         </div>
       </div>
-    </div>,
+    </DialogBackdrop>,
     document.body,
   );
 };

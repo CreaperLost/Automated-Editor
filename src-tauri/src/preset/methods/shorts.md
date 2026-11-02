@@ -11,8 +11,8 @@ Step by step by default; automatic when the user says so ("auto", "no questions"
 the defaults below, report in one message and go on. Export still waits for the user's go.
 
 The shorts' own tools (`media_import`, `short_from_take`, `short_footage`, `shorts`, `faces`,
-`captions`) are behind `more`: `more` with `tool` alone gives one's arguments, with `args` it
-runs it. This is the Shorts tab: clips cut from the video (`clips`, the Clips tab) are another
+`captions`) are behind `more`: call them with `tool` and `args` as shown below, straight away
+(`tool` alone only repeats their arguments). This is the Shorts tab: clips cut from the video (`clips`, the Clips tab) are another
 kind; never touch them here.
 
 ## 1. Project (automatic)
@@ -26,13 +26,14 @@ kind; never touch them here.
 ## 2. The take (ask only if unclear)
 
 - If the user gave file paths, `media_import` them (all the take's files at once) into the
-  project that is open. A .aero recording folder is a take too (its camera and microphone come
+  project that is open: `{"tool": "media_import", "args": {"paths": ["<full path>"]}}`. A .aero recording folder is a take too (its camera and microphone come
   in together): import it, never `open` it or `create` a project from it.
   Otherwise the take is already in Media: `project_info` lists the media; the take is what
   the user names, else the newest imported files.
 - `short_from_take` with a `title` (under 60 characters, also the file name), `media` (the
   take's file ids: the app tells the camera from the microphone; a separate microphone wins
-  over the camera's own) and `idea` (one line: what the user said the take is about). With no
+  over the camera's own) and `idea` (one line: what the user said the take is about):
+  `{"tool": "short_from_take", "args": {"title": "...", "media": ["<id>"], "idea": "..."}}`. With no
   title given, make one from that; when the user said nothing about it, name it after the
   transcript (`shorts` with `op: rename`), never after the video. Pass on what it says about lining the camera
   up with the voice; if the match was weak, tell the user to check the lip sync.
@@ -94,7 +95,8 @@ Ask for an OK or changes (automatic: go).
 
 Graphics go on the take only once it is cut (step 3): on uncut words they play long, and the
 app warns when they would. Pick graphics for the take's words too. First the **long video's
-own graphics** (`graphics` lists them with where they play), only if one is related (none is
+own graphics** (`graphics` lists them with where they play; `rules: false` when this conversation
+has its rules already), only if one is related (none is
 when step 5 found nothing): where a beat retells a part of the video that had a graphic, reuse
 it (`graphic`, its id: a copy made for 9:16, its text changeable without touching the
 video's). Then new ones (`template` or `library`), or one of your own: a title card on the
@@ -108,8 +110,9 @@ Pick how each one shows, with its kind, before it is made (it renders once, for 
 callout or arrows: then write it as an overlay (no full background; the templates do this for
 you as a panel at the bottom). Don't cover the face with full-frame graphics for long: keep
 them short, or split. Each shows what its words say (the claim, the number, the name), not
-just the topic. Add them to the plan as a table (start, end, template, mode, what it shows,
-the words it sits on); ask for an OK (automatic: go).
+just the topic: a demonstration where they describe an action, a card for a quote or number
+(the graphics rules). Add them to the plan as a table (start, end, kind and template or own,
+mode, what the viewer sees, the words it sits on); ask for an OK (automatic: go).
 
 ## 6b. Captions (automatic)
 
@@ -122,6 +125,10 @@ that reads as two thoughts (`{"line": 3, "word": "but"}`, the word the new line 
 word or a false start. One call: `args: {"short": <id>, "emphasis": [{"line": 0, "word":
 "never"}, ...], "split": [...], "join": [...], "hide": [...]}`; line numbers are as listed
 before the call. These are the short's own (undo steps); the take's text stays shared.
+
+Camera push-ins at jump cuts are off. Only when the user asks for them: `library` (`kind:
+preset`, `op: set`, `set: {"short": {"pushIns": true}}`) turns them on for new shorts; the
+Shorts tab's Look panel ("Push in at jump cuts") for one short.
 Emphasis is drawn in the style's accent.
 How the words come on (pop by default at 9:16) is the project's style (`library` `kind: style`).
 
@@ -133,7 +140,9 @@ from the take, and `sourceWord` (a word id from the video's transcript where the
 starts; it must be one the video keeps) or `videoS`; its game or desktop sound plays ducked
 under the voice, `sound: false` where it distracts; `speed` as planned. Graphics: `fromWord`
 (and `toWord`, else its own length) with `template`, `library` or `graphic`, `mode`, plus
-`name` and `variables`. Report
+`name` and `variables`: `{"tool": "short_footage", "args": {"short": "<id>", "op": "add",
+"reason": "...", "items": [{"fromWord": "w-3", "toWord": "w-9", "sourceWord": "w-120"},
+{"fromWord": "w-12", "template": "key-point", "mode": "full", "variables": {...}}]}}`. Report
 the summary it answers in a line. Graphics play one at a time: the app refuses a call whose
 graphics would overlap, and says where (nothing is added). Then: `storyboard` with `short` to look at the frames, and fix what reads badly (a mode changed
 later with `graphic_set` `short` and `slot` renders that graphic again):

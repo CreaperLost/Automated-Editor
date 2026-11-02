@@ -74,7 +74,7 @@ pub(crate) fn gap_ranges(
     config: &TranscriptGapConfig,
 ) -> Vec<(u64, u64)> {
     let spans = word_spans(transcript, config.keep_sound_events);
-    let covered = merge_ranges(covered.to_vec());
+    let covered = crate::ranges::merge(covered.to_vec());
     let padding = u64::from(config.padding_ms) * 1_000;
     let mut gaps = Vec::new();
     for pair in spans.windows(2) {
@@ -126,7 +126,7 @@ pub(crate) fn edge_ranges(
     keep_sound_events: bool,
 ) -> Vec<(u64, u64)> {
     let spans = word_spans(transcript, keep_sound_events);
-    let covered = merge_ranges(covered.to_vec());
+    let covered = crate::ranges::merge(covered.to_vec());
     let padding = u64::from(padding_ms) * 1_000;
     let min_us = u64::from(min_duration_ms) * 1_000;
     let mut edges = Vec::new();
@@ -164,7 +164,7 @@ pub(crate) fn protect_words(
     padding_ms: u32,
 ) -> Vec<(u64, u64)> {
     let pad = u64::from(padding_ms) * 1_000;
-    let protected = merge_ranges(
+    let protected = crate::ranges::merge(
         transcript
             .words
             .iter()
@@ -205,8 +205,8 @@ pub(crate) fn refine_quiet_edges(
     covered: &[(u64, u64)],
 ) -> Transcript {
     let mut refined = transcript.clone();
-    let quiet = merge_ranges(quiet.to_vec());
-    let covered = merge_ranges(covered.to_vec());
+    let quiet = crate::ranges::merge(quiet.to_vec());
+    let covered = crate::ranges::merge(covered.to_vec());
     for word in &mut refined.words {
         if word.kind != WordKind::Word || word.confidence.is_some_and(|c| c < 0.5) {
             continue;
@@ -268,8 +268,8 @@ pub(crate) fn tighten_loose_words(
     drop_detached: bool,
 ) -> Transcript {
     let mut tightened = transcript.clone();
-    let quiet = merge_ranges(quiet.to_vec());
-    let covered = merge_ranges(covered.to_vec());
+    let quiet = crate::ranges::merge(quiet.to_vec());
+    let covered = crate::ranges::merge(covered.to_vec());
     for word in &mut tightened.words {
         if word.kind != WordKind::Word || word.confidence.is_some_and(|c| c < 0.5) {
             continue;
@@ -309,38 +309,9 @@ pub(crate) fn tighten_loose_words(
     tightened
 }
 
-pub(crate) fn merge_ranges(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
-    ranges.retain(|&(a, b)| b > a);
-    ranges.sort_unstable();
-    let mut merged: Vec<(u64, u64)> = Vec::new();
-    for (a, b) in ranges {
-        match merged.last_mut() {
-            Some(last) if a <= last.1 => last.1 = last.1.max(b),
-            _ => merged.push((a, b)),
-        }
-    }
-    merged
-}
-
 /// `ranges` less `remove` (both any order), merged and in order.
 pub(crate) fn subtract_ranges(ranges: &[(u64, u64)], remove: &[(u64, u64)]) -> Vec<(u64, u64)> {
-    let mut out = merge_ranges(ranges.to_vec());
-    for &(a, b) in &merge_ranges(remove.to_vec()) {
-        out = out
-            .into_iter()
-            .flat_map(|(x, y)| {
-                if b <= x || a >= y {
-                    vec![(x, y)]
-                } else {
-                    [(x, a.max(x)), (b.min(y), y)]
-                        .into_iter()
-                        .filter(|(p, q)| q > p)
-                        .collect()
-                }
-            })
-            .collect();
-    }
-    out
+    crate::ranges::subtract(&crate::ranges::merge(ranges.to_vec()), remove)
 }
 
 #[cfg(test)]

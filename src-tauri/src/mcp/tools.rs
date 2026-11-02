@@ -214,6 +214,7 @@ pub fn all() -> &'static [ToolDef] {
             .chain(super::clips::TOOLS.iter())
             .chain(super::review::TOOLS.iter())
             .chain(super::search::TOOLS.iter())
+            .chain(super::plan::TOOLS.iter())
             .copied()
             .collect()
     })
@@ -255,6 +256,7 @@ pub const MORE: &[&str] = &[
     "graphic_check",
     "library_save",
     "library_remove",
+    "plan",
 ];
 
 #[derive(Deserialize, JsonSchema)]
@@ -360,7 +362,7 @@ static TOOLS: [ToolDef; 14] = [
         name: "more",
         description: "Tools an edit rarely needs, left out of this list to save tokens: `tool` \
             alone gives one's description and arguments; with `args` it runs, as if called \
-            directly. Shorts (made from a take, the Shorts tab): media_import (bring the take's \
+            directly. plan (the edit's plan, kept in the project: read it first when \n            `status` names one). Shorts (made from a take, the Shorts tab): media_import (bring the take's \
             files in), short_from_take (make one), short_footage (the video's footage, B-roll \
             and graphics under it), shorts (list, rename, remove them). Clips (cut from the \
             video, the Clips tab): clips (list, create, find, range, rename, remove). Both: \
@@ -870,6 +872,10 @@ pub struct FrameParams {
     /// A graphic's id.
     #[serde(default)]
     pub graphic: Option<String>,
+    /// With `graphic` (or `moments`: first to last, up to 20 s): also a playable clip of it in
+    /// place, with sound, for the user to watch.
+    #[serde(default)]
+    pub sample: bool,
     /// One frame's width in pixels, 240 to 1920. Default 960. A sheet sizes its own tiles.
     #[serde(default)]
     pub width: Option<u32>,
@@ -877,6 +883,9 @@ pub struct FrameParams {
     #[serde(default)]
     pub short: Option<String>,
 }
+
+/// The longest sample clip of `moments` (a style trial of a few beats).
+const SAMPLE_MAX_US: u64 = 20_000_000;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -886,11 +895,65 @@ pub struct AtParams {
 }
 
 fn frame_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
-    let state = ctx.state;
     let args: FrameParams = params(args)?;
+    // A version that doesn't play yet is shown in place of the graphic of its family that does.
+    if let Some(version) = args.graphic.clone() {
+        let (document, root, _) = super::frames::document(ctx.state, args.short.as_deref())?;
+        if let Some(used) = crate::graphics::versions::playing_instead(&document, &root, &version) {
+            return super::frames::trying(&version, || {
+                let (document, root, _) =
+                    super::frames::document(ctx.state, args.short.as_deref())?;
+                let canvas = document.layout.preview_dimensions()?;
+                let specs: Vec<_> = crate::graphics::render::specs_for(
+                    &root,
+                    &document,
+                    canvas,
+                    Default::default(),
+                )
+                .into_iter()
+                .filter(|s| s.asset_id == version)
+                .collect();
+                crate::graphics::render::ensure(
+                    &specs,
+                    ctx.stop_flag(),
+                    &mut |fraction, label, _| ctx.progress(fraction, label),
+                )?;
+                let mut out = frames_of(ctx, args)?;
+                out.push(Output::Text(format!(
+                    "Shown in place of {used}, which still plays; graphic_set `use: true` on \
+                     {version} puts it there."
+                )));
+                Ok(out)
+            });
+        }
+    }
+    frames_of(ctx, args)
+}
+
+fn frames_of(ctx: &Ctx, args: FrameParams) -> Result<Vec<Output>, String> {
+    let state = ctx.state;
     let short = args.short.as_deref();
+    if args.sample && args.graphic.is_none() && args.moments.is_none() {
+        return Err("`sample` goes with `graphic` or `moments`".into());
+    }
+    let mut sample = None;
     let moments = match (&args.moments, &args.graphic) {
-        (Some(moments), None) => Some(moments.clone()),
+        (Some(moments), None) => {
+            if args.sample {
+                let from = moments.iter().copied().min().unwrap_or(0);
+                let to = moments.iter().copied().max().unwrap_or(0);
+                // At least a few seconds to watch; a trial longer than 20 s is a draft.
+                let to = to.max(from + 3_000_000);
+                if to - from > SAMPLE_MAX_US {
+                    return Err(format!(
+                        "A sample is at most {} s: give moments closer together",
+                        SAMPLE_MAX_US / 1_000_000
+                    ));
+                }
+                sample = Some((from, to, "Style trial".to_string()));
+            }
+            Some(moments.clone())
+        }
         (None, Some(graphic)) => {
             let (document, _, _) = super::frames::document(state, short)?;
             let clip = document
@@ -900,6 +963,17 @@ fn frame_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 .filter(|c| c.asset == *graphic)
                 .min_by_key(|c| c.start_us)
                 .ok_or_else(|| format!("Graphic {graphic} is not on the timeline"))?;
+            if args.sample {
+                let name = document
+                    .asset(graphic)
+                    .map_or(graphic.as_str(), |a| a.name.as_str());
+                sample = Some((
+                    clip.start_us
+                        .saturating_sub(super::frames::SAMPLE_MARGIN_US),
+                    (clip.end_us() + super::frames::SAMPLE_MARGIN_US).min(document.duration_us()),
+                    name.to_string(),
+                ));
+            }
             // A frame a second, 4 to 12.
             let count = (clip.duration_us / 1_000_000).clamp(4, 12) as usize;
             Some(super::storyboard::spread(
@@ -914,14 +988,29 @@ fn frame_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     if let Some(moments) = moments {
         let (png, width, height, cols, drawn) = super::storyboard::sheet(state, short, &moments)?;
         let times: Vec<String> = drawn.iter().map(|&at| clock(at)).collect();
-        return Ok(vec![
-            Output::Png(png),
-            Output::Text(format!(
-                "{} frames, {width}x{height}, left to right in rows of {cols}: {}.",
-                drawn.len(),
-                times.join(", ")
-            )),
-        ]);
+        let mut text = format!(
+            "{} frames, {width}x{height}, left to right in rows of {cols}: {}.",
+            drawn.len(),
+            times.join(", ")
+        );
+        // Across a graphic, what its frames show that the sheet can hide.
+        if let Some(graphic) = &args.graphic {
+            match super::graphic_checks::run(state, short, graphic, &drawn) {
+                Ok(lines) => text.push_str(&format!("\n{}", lines.join("\n"))),
+                Err(error) => text.push_str(&format!("\nThe checks could not run: {error}")),
+            }
+        }
+        if let Some((from, to, name)) = sample {
+            let path = super::frames::sample_clip(state, short, from, to, &name)?;
+            text.push_str(&format!(
+                "\nA clip of it in place ({} to {}, with sound) for the user to watch: {}. \
+                 Look at the frames yourself first; give the user the path.",
+                clock(from),
+                clock(to),
+                path.display()
+            ));
+        }
+        return Ok(vec![Output::Png(png), Output::Text(text)]);
     }
     let at_us = args
         .at_us
@@ -931,6 +1020,7 @@ fn frame_render(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         .width
         .unwrap_or(if args.short.is_some() { 540 } else { 960 })
         .clamp(240, 1920);
+    super::frames::wait_for_graphics(state, short, at_us, at_us)?;
     let (frame, at) = super::frames::render(state, short, at_us, width)?;
     let png = super::frames::png(&frame)?;
     Ok(vec![

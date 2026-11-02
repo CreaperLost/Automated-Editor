@@ -17,6 +17,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import type { Asset } from "../../lib/types";
 import { GraphicsPanel } from "../graphics/GraphicsPanel";
+import { useBusyRun } from "../../hooks/useBusyRun";
 
 /** dataTransfer type for dragging a media bin item onto the timeline. */
 export const MEDIA_DRAG_TYPE = "application/x-aeroedits-media";
@@ -64,25 +65,11 @@ export const MediaPanel: React.FC = () => {
 const MediaList: React.FC = () => {
   const openedProject = useProjectStore((s) => s.openedProject);
   const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string>();
+  const { busy, error, setError, run } = useBusyRun();
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | Asset["kind"]>("all");
   const assets = openedProject?.assets ?? [];
   const placed = new Set(openedProject?.sequence.tracks.flatMap((t) => t.clips.map((c) => c.asset)) ?? []);
-
-  const run = async (label: string, work: () => Promise<void>) => {
-    if (busy) return;
-    setBusy(label);
-    setError(undefined);
-    try {
-      await work();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const importFrom = (pick: () => Promise<string[]>) =>
     run("Importing…", async () => {

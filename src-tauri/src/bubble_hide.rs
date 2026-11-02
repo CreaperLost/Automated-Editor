@@ -7,6 +7,7 @@
 //! hysteresis (activity near the bubble keeps it hidden, only activity on it hides it) and
 //! minimum hidden and visible times so it never flickers. Preview and export read the same
 //! stretches.
+use crate::ranges::merge_near as merge;
 use crate::telemetry::activity::RecordingActivity;
 
 /// How long the bubble takes to fade out or back in.
@@ -86,18 +87,6 @@ pub fn hits(probes: &[Probe], inside: impl Fn(u64, f64, f64) -> bool) -> Vec<(u6
         out.extend(open);
     }
     out.sort_unstable();
-    out
-}
-
-fn merge(mut ranges: Vec<(u64, u64)>, gap: u64) -> Vec<(u64, u64)> {
-    ranges.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::new();
-    for (a, b) in ranges {
-        match out.last_mut() {
-            Some(last) if a <= last.1.saturating_add(gap) => last.1 = last.1.max(b),
-            _ => out.push((a, b)),
-        }
-    }
     out
 }
 

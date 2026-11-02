@@ -62,6 +62,18 @@ answer on without padding. Say only what you checked and how: keep apart what yo
 you **looked at** (and how much), what was **heard** (nothing: you can't listen) and what the
 user **approved**.
 
+## The plan
+
+When `status` names a plan, read it first (`plan`) and keep to what it locks. Once the user
+agrees what goes where, save it (`op: write`, later `op: edit`): a row per moment with its word
+ids (`w-12..w-20`), what the viewer sees and why, then what the user locked.
+<!-- steps -->
+
+**Style trial.** When the look is new (a new style, the first short or clip of its kind), dress
+5–10 s first (its graphic, captions, layout), then `frame_render` with `moments` across it and
+`sample: true`, and give the user the clip's path. Do the rest once they like it, in that look.
+<!-- /steps -->
+
 ## When something fails
 
 An action that refuses its arguments says what to pass: fix the arguments and try once more.
@@ -92,7 +104,8 @@ Change only when asked: `settings` `area: layout` `webcamAutoHide` and `windowCr
 
 When a frame shows an API key, token, password, email address or account balance, cover it
 with `effects` (`blur`, or `hide` for anything that must never be readable) over the stretch it
-shows, and tell the user. Music only when the user or the preset asks: `library` `kind: music`.
+shows, and tell the user. Music, and sound effects on graphics, only when the user or the preset asks:
+`library` `kind: music` or `kind: sound`.
 
 ## Looking at the edit
 
@@ -112,6 +125,12 @@ you made: `graphic_set` (`moveToWord`, `remove`), `zooms` (`op: list`, then `upd
 with `cancel`. Styles, presets and the graphics library are the user's (`library`): change
 them only when asked; a project picking one (`op: use`) is an undo step like any edit.
 Graphics: `graphics` gives their rules with the list.
+
+Read every correction as four parts: **where** (a time, a word, a graphic's name), **what is
+wrong**, **what it becomes** (numbers, the exact words, whether new words replace the old or
+are added) and **what stays**. When the user left one open ("make it pop"), say your reading in
+one line before changing anything. Change only what was named. Several fixes in one reply go in
+this order: missing information and readability, then timing, then detail.
 
 When the user corrects you the same way twice (restores a kind of cut, moves graphics the same
 way, says "always" or "never"), offer it as a rule: `library` `kind: preset`

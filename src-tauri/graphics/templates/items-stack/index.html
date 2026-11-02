@@ -1,0 +1,373 @@
+<!doctype html>
+<!--
+  Items, stacked: an AeroEdits graphic (a HyperFrames composition), built like `blank` (see
+  its notes): the look's tokens, the style's colours, a portrait block, cut unless eased.
+  A demonstration: up to five items land one on top of another and build a stack, each a
+  little narrower and stronger in colour, with a line under it once the last has landed. For
+  "on top of that, you also get", what adds up. `cue` is the second (into the graphic) the
+  first item lands; the rest follow evenly, the last by about three quarters of its length.
+  Every change is a tween or a set on a paused GSAP timeline, so any seek draws the same frame.
+-->
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"label","type":"string","label":"Label","default":"What you get"},
+    {"id":"title","type":"string","label":"Title","default":"It all adds up"},
+    {"id":"items","type":"string","label":"Items, first at the bottom (one per line, up to 5)","default":"Trading fee cashback\nVolume points\nA share of the prize pool"},
+    {"id":"detail","type":"string","label":"Line under it","default":"All from the same trades"},
+    {"id":"cue","type":"number","label":"First item at (s)","default":0.8,"min":0,"max":60},
+    {"id":"background","type":"color","label":"Background","default":"#FFFFFF"},
+    {"id":"text","type":"color","label":"Text","default":"#1D1D1F"},
+    {"id":"accent","type":"color","label":"Accent","default":"#0071E3"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Items, stacked</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+      /* The look: AeroEdits sets these for the whole video after this block (the defaults here
+         are its "App" look). Sizes, corners, gaps and motion come from them, colours from the
+         background, text and accent variables (the brand kit's). */
+      [data-composition-id] {
+        --look-font: var(--brand-font, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif);
+        --look-align: center;
+        --look-body: 3.8vmin;
+        --look-border: 0.12vmin;
+        --look-distance: 1.8vmin;
+        --look-duration: 700;
+        --look-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --look-entry: rise;
+        --look-gap: 2.2vmin;
+        --look-gsap-ease: expo.out;
+        --look-heading: 5.2vmin;
+        --look-label: 3vmin;
+        --look-label-case: none;
+        --look-label-tracking: 0em;
+        --look-leading: 1.15;
+        --look-line-mix: 8%;
+        --look-margin: 8vw;
+        --look-muted-mix: 62%;
+        --look-out: 350;
+        --look-pad: 2.6vmin;
+        --look-radius: 2.6vmin;
+        --look-radius-small: 1.4vmin;
+        --look-shadow-mix: 5%;
+        --look-stagger: 90;
+        --look-tint-mix: 10%;
+        --look-title: 8vmin;
+        --look-title-tracking: -0.035em;
+        --look-title-weight: 650;
+        --look-wash-mix: 5%;
+        --look-muted: color-mix(in srgb, var(--text, #1D1D1F) var(--look-muted-mix), var(--background, #FFFFFF));
+        --look-line: color-mix(in srgb, var(--text, #1D1D1F) var(--look-line-mix), var(--background, #FFFFFF));
+        --look-tint: color-mix(in srgb, var(--accent, #0071E3) var(--look-tint-mix), var(--background, #FFFFFF));
+        --look-wash: color-mix(in srgb, var(--accent, #0071E3) var(--look-wash-mix), transparent);
+        --look-shadow: 0 1vmin 3vmin color-mix(in srgb, var(--text, #1D1D1F) var(--look-shadow-mix), transparent);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #1d1d1f);
+        font-family: var(--look-font);
+        -webkit-font-smoothing: antialiased;
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #ffffff);
+      }
+      #card-back::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 15% 90%, var(--look-wash), transparent 60%),
+          radial-gradient(ellipse at 90% 5%, var(--look-wash), transparent 55%);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: var(--look-gap);
+        padding: 0 var(--look-margin);
+        text-align: center;
+      }
+      [data-align="left"] .layout {
+        align-items: flex-start;
+        text-align: left;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 1vmin;
+        padding: 0.7vmin 1.8vmin;
+        border-radius: 99vmin;
+        background: var(--look-tint);
+        color: var(--accent, #0071e3);
+        font-size: var(--look-label);
+        font-weight: 600;
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
+      }
+      .pill:empty {
+        display: none;
+      }
+      .title {
+        margin: 0;
+        font-size: var(--look-title);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: var(--look-leading);
+        max-width: 80vw;
+        max-height: calc(var(--look-title) * var(--look-leading) * 3);
+        overflow-wrap: anywhere;
+      }
+      .muted {
+        margin: 0;
+        font-size: var(--look-body);
+        line-height: 1.35;
+        color: var(--look-muted);
+        max-width: 70vw;
+        max-height: calc(var(--look-body) * 1.35 * 2);
+        overflow-wrap: anywhere;
+      }
+      .muted:empty {
+        display: none;
+      }
+      .card {
+        box-sizing: border-box;
+        background: var(--background, #ffffff);
+        border: var(--look-border) solid var(--look-line);
+        border-radius: var(--look-radius);
+        box-shadow: var(--look-shadow);
+      }
+      /* Over a picture that shows through (over the face in a short, data-mode="over"): no
+         background of its own; the content sits on a panel in the lower part of the frame. */
+      [data-mode="over"] #card-back {
+        display: none;
+      }
+      [data-mode="over"] .layout {
+        inset: auto 6% 8% 6%;
+        padding: calc(var(--look-pad) * 1.6) calc(var(--look-pad) * 1.8);
+        border-radius: calc(var(--look-radius) * 1.3);
+        background: var(--background, #ffffff);
+        box-shadow: var(--look-shadow), 0 2vmin 6vmin color-mix(in srgb, var(--text, #1d1d1f) 22%, transparent);
+      }
+      [data-mode="over"] .layout > * {
+        zoom: 0.8;
+      }
+      [data-mode="over"] .layout .card {
+        border: none;
+        box-shadow: none;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding: 0 calc(var(--look-margin) * 0.8);
+          gap: calc(var(--look-gap) * 1.2);
+        }
+        .pill {
+          font-size: calc(var(--look-label) * 1.35);
+          padding: 1vmin 2.4vmin;
+        }
+        .title {
+          font-size: calc(var(--look-title) * 1.35);
+          max-width: none;
+          max-height: calc(var(--look-title) * 1.35 * var(--look-leading) * 4);
+        }
+        .muted {
+          font-size: calc(var(--look-body) * 1.4);
+          max-width: none;
+          max-height: calc(var(--look-body) * 1.4 * 1.35 * 3);
+        }
+      }
+      .stack {
+        flex: none;
+        display: flex;
+        flex-direction: column-reverse;
+        align-items: center;
+        gap: calc(var(--look-gap) * 0.5);
+        width: 62vw;
+      }
+      .block {
+        flex: none;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: var(--look-gap);
+        padding: calc(var(--look-pad) * 0.8) calc(var(--look-pad) * 1.2);
+        border-radius: var(--look-radius);
+        text-align: left;
+      }
+      .block b {
+        flex: none;
+        width: 1.6vmin;
+        height: 1.6vmin;
+        border-radius: 50%;
+        background: var(--accent, #0071E3);
+      }
+      .block span {
+        flex: 1;
+        min-width: 0;
+        font-size: calc(var(--look-body) * 1.1);
+        font-weight: 600;
+        line-height: 1.3;
+        max-height: calc(var(--look-body) * 1.1 * 1.3 * 2);
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+      .block.top {
+        color: var(--background, #FFFFFF);
+      }
+      .block.top b {
+        background: var(--background, #FFFFFF);
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding-bottom: 10vh;
+        }
+        .title {
+          font-size: var(--look-title);
+          max-height: calc(var(--look-title) * var(--look-leading) * 2);
+        }
+        .stack {
+          width: 76vw;
+        }
+        .block span {
+          font-size: calc(var(--look-body) * 1.35);
+          max-height: calc(var(--look-body) * 1.35 * 1.3 * 2);
+        }
+      }
+    </style>
+    <script src="gsap.min.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <span class="pill" id="label" data-var-text="label">What you get</span>
+        <h1 class="title" id="title" data-var-text="title">It all adds up</h1>
+        <div class="stack" id="stack"></div>
+        <p class="muted" id="detail" data-var-text="detail">All from the same trades</p>
+      </div>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const length = parseFloat(root.dataset.duration) || 6;
+      const vars = window.__hyperframes?.getVariables?.() || {};
+      document.querySelectorAll("[data-var-text]").forEach((el) => {
+        const value = vars[el.dataset.varText];
+        if (value != null) el.textContent = String(value);
+      });
+      const num = (id, fallback) => {
+        const value = parseFloat(vars[id]);
+        return Number.isFinite(value) ? value : fallback;
+      };
+      // The video's look: durations, easing and travel for every tween.
+      const style = getComputedStyle(root);
+      const token = (name, fallback) => style.getPropertyValue(`--look-${name}`).trim() || fallback;
+      const seconds = parseFloat(token("duration", "700")) / 1000;
+      const out = parseFloat(token("out", "350")) / 1000;
+      const stagger = parseFloat(token("stagger", "90")) / 1000;
+      const rise = token("distance", "1.8vmin");
+      gsap.defaults({ duration: seconds, ease: token("gsap-ease", "expo.out") });
+      root.dataset.align = token("align", "center");
+      // Text a long value would push out of its box gets smaller until it fits: while more
+      // than half a line spills (a line too many), and by width too (`wide`) where the box's
+      // width doesn't follow its text. What spills after that is the letters themselves (a
+      // font whose glyphs reach past tight lines, at any size): the box grows to hold them,
+      // as shrinking would never stop.
+      function fit(el, wide = false) {
+        const unit = Math.min(innerWidth, innerHeight) / 100;
+        let size = parseFloat(getComputedStyle(el).fontSize);
+        const over = () =>
+          el.scrollHeight - el.clientHeight > size * 0.5 ||
+          (wide && el.scrollWidth > el.clientWidth + 1);
+        for (let n = 0; n < 45 && over(); n++) {
+          size *= 0.93;
+          el.style.fontSize = `${size / unit}vmin`;
+        }
+        if (el.scrollHeight > el.clientHeight + 1) el.style.maxHeight = `${el.scrollHeight}px`;
+      }
+
+      const items = String(vars.items ?? "Trading fee cashback\nVolume points\nA share of the prize pool")
+        .split(/\r?\n|\|/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 5);
+      const stack = document.getElementById("stack");
+      // The first item at the bottom and widest; each one above narrower and stronger, the
+      // top one in the accent itself.
+      const blocks = items.map((text, i) => {
+        const block = document.createElement("div");
+        const top = i === items.length - 1 && items.length > 1;
+        block.className = top ? "block top" : "block";
+        block.style.width = `${100 - i * 7}%`;
+        const mix = top ? 100 : 12 + Math.round((i / Math.max(1, items.length - 1)) * 28);
+        block.style.background = `color-mix(in srgb, var(--accent, #0071E3) ${mix}%, var(--background, #FFFFFF))`;
+        const dot = document.createElement("b");
+        const say = document.createElement("span");
+        say.textContent = text;
+        block.append(dot, say);
+        stack.appendChild(block);
+        return { block, say };
+      });
+      if (!items.length) stack.style.display = "none";
+      ["title", "label", "detail"].forEach((id) => fit(document.getElementById(id)));
+      blocks.forEach(({ say }) => fit(say));
+      // The stack as a whole fits its share of the frame (a short's part is shorter than a
+      // phone): the items' text shrinks together until it does.
+      {
+        const unit = Math.min(innerWidth, innerHeight) / 100;
+        for (let n = 0; n < 30 && stack.offsetHeight > innerHeight * 0.45; n++) {
+          blocks.forEach(({ say }) => {
+            say.style.fontSize = `${(parseFloat(getComputedStyle(say).fontSize) * 0.93) / unit}vmin`;
+          });
+        }
+      }
+
+      // Each item drops onto the one before; the first on `cue`, the last by about three
+      // quarters in, so a short placement still shows them all.
+      const cue = Math.min(Math.max(num("cue", 0.8), 0.3), Math.max(0.3, length * 0.4));
+      const last = Math.max(cue, length * 0.72 - 0.4);
+      const every = items.length > 1 ? (last - cue) / (items.length - 1) : 0;
+      const drop = Math.min(0.5, Math.max(0.3, every * 0.8));
+      const tl = gsap.timeline({ paused: true });
+      tl.from(["#label", "#title"], { y: rise, opacity: 0, stagger: stagger }, 0.1);
+      blocks.forEach(({ block }, i) => {
+        const at = cue + every * i;
+        tl.from(block, { yPercent: -70, opacity: 0, duration: drop, ease: "power2.in" }, at - drop);
+        // Landed: the stack under it gives a little.
+        tl.to(blocks.slice(0, i + 1).map((b) => b.block), { y: "0.5vmin", duration: 0.1, ease: "power1.out", yoyo: true, repeat: 1 }, at);
+      });
+      tl.from("#detail", { y: rise, opacity: 0 }, last + 0.15);
+      // Full screen: cut in and out unless AeroEdits asks for an ease.
+      if (root.dataset.entrance === "ease") {
+        tl.from(["#card-back", "#layout"], { opacity: 0, duration: 0.3, ease: "power1.out" }, 0);
+        tl.to(["#card-back", "#layout"], { opacity: 0, duration: out, ease: "power1.in" }, Math.max(1.2, length - out));
+      }
+      // One paused timeline, exactly as long as the clip; HyperFrames seeks it.
+      tl.set({}, {}, length);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["graphic"] = tl;
+    </script>
+  </body>
+</html>

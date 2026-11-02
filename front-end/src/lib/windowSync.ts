@@ -6,7 +6,8 @@ import type { OpenedProject } from "./types";
 const EVENT = "aeroedits-project-updated";
 const CAPTIONS_EVENT = "aeroedits-captions-changed";
 
-function listenTo<T>(event: string, handler: (payload: T) => void): () => void {
+/** Calls `handler` with each `event` from the app; returns the unsubscribe. Nothing outside the app. */
+export function listenTo<T>(event: string, handler: (payload: T) => void): () => void {
   if (!isTauriEnvironment()) return () => undefined;
   let unlisten: (() => void) | undefined;
   let disposed = false;

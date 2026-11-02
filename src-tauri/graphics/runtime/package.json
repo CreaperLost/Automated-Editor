@@ -3,6 +3,6 @@
   "private": true,
   "description": "The HyperFrames version AeroEdits renders graphics with. Installed with npm ci into the app data folder.",
   "dependencies": {
-    "hyperframes": "0.8.162"
+    "hyperframes": "0.8.228"
   }
 }

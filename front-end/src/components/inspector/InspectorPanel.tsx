@@ -65,16 +65,16 @@ export const InspectorPanel: React.FC = () => {
     }
   };
 
+  const saveLayout = (opened: NonNullable<typeof openedProject>, layout: Parameters<typeof api.projectLayoutUpdate>[2], wallpaper?: string) =>
+    api.projectLayoutUpdate(opened.projectHandle, opened.revision, layout, wallpaper).then((updated) => {
+      applyOpenedProject(updated);
+      setPersistError(undefined);
+    });
+
   const persistLayout = (nextCanvas = canvas, nextCamera = cameraBubble) => {
     layoutSave.schedule((opened) => {
       const layout = layoutFromSettings(nextCanvas, nextCamera, opened.layout);
-      void api
-        .projectLayoutUpdate(opened.projectHandle, opened.revision, layout)
-        .then((updated) => {
-          applyOpenedProject(updated);
-          setPersistError(undefined);
-        })
-        .catch((err) => setPersistError(String(err)));
+      void saveLayout(opened, layout).catch((err) => setPersistError(String(err)));
     });
   };
 
@@ -93,13 +93,7 @@ export const InspectorPanel: React.FC = () => {
     const opened = openedRef.current;
     if (!opened) return;
     const layout = layoutFromSettings(canvas, cameraBubble, { ...opened.layout, aspectRatio: canvas.aspectRatio, paddingPx: 0, cameraClips });
-    void api
-      .projectLayoutUpdate(opened.projectHandle, opened.revision, layout)
-      .then((updated) => {
-        applyOpenedProject(updated);
-        setPersistError(undefined);
-      })
-      .catch((err) => setPersistError(String(err)));
+    void saveLayout(opened, layout).catch((err) => setPersistError(String(err)));
   };
 
   /** Copies a chosen image into the project's assets/ and switches the background to it. */
@@ -113,13 +107,7 @@ export const InspectorPanel: React.FC = () => {
       .pickWallpaperSource()
       .then((source) => {
         if (!source) return;
-        const layout = layoutFromSettings(canvas, cameraBubble, opened.layout);
-        return api
-          .projectLayoutUpdate(opened.projectHandle, opened.revision, layout, source)
-          .then((updated) => {
-            applyOpenedProject(updated);
-            setPersistError(undefined);
-          });
+        return saveLayout(opened, layoutFromSettings(canvas, cameraBubble, opened.layout), source);
       })
       .catch((err) => setPersistError(String(err)));
   };
@@ -130,13 +118,7 @@ export const InspectorPanel: React.FC = () => {
     if (!opened) return;
     const layout = layoutFromSettings(canvas, cameraBubble, { ...opened.layout, wallpaperAsset: null } as typeof opened.layout);
     layout.wallpaperAsset = null;
-    void api
-      .projectLayoutUpdate(opened.projectHandle, opened.revision, layout)
-      .then((updated) => {
-        applyOpenedProject(updated);
-        setPersistError(undefined);
-      })
-      .catch((err) => setPersistError(String(err)));
+    void saveLayout(opened, layout).catch((err) => setPersistError(String(err)));
   };
 
   return (
@@ -189,6 +171,9 @@ export const InspectorPanel: React.FC = () => {
               }
             >
               <PresetMarks part="layout" />
+              <p className="text-meta text-studio-500">
+                Size and crop frame the recordings. Imported files show whole; give a track its own framing from the Clip page.
+              </p>
               <Field label="Canvas">
                 <Segmented
                   label="Canvas aspect ratio"

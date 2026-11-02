@@ -1,6 +1,8 @@
 //! Immutable-revision export job. Preview and export share one scene evaluator.
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
+pub mod deliveries;
 pub mod files;
+pub use deliveries::ExportOwner;
 mod native;
 
 use crate::media::ffmpeg::{DecodeLimit, FfmpegExport};
@@ -10,6 +12,7 @@ use crate::media::{
 };
 use crate::project::reader::{safe_path, SegmentSummary};
 use crate::project::revision::EditDocument;
+use crate::project::EditLayout;
 use crate::render::present::{Placement, WindowPresenter, WindowTarget};
 use crate::render::{Compositor, Scene};
 use crate::sequence::{Asset, Clip, Role};
@@ -22,7 +25,6 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 use uuid::Uuid;
 
 pub const ALLOWED_FPS: [u32; 6] = [10, 15, 24, 25, 30, 60];
@@ -199,111 +201,6 @@ impl ExportStatus {
     }
 }
 
-struct LiveJob {
-    id: String,
-    cancel: Arc<AtomicBool>,
-    status: Arc<Mutex<ExportStatus>>,
-    join: Option<JoinHandle<()>>,
-}
-
-pub struct ExportOwner {
-    job: Option<LiveJob>,
-}
-
-impl ExportOwner {
-    pub fn new() -> Self {
-        Self { job: None }
-    }
-
-    pub fn status(&mut self) -> ExportStatus {
-        self.reap();
-        self.job
-            .as_ref()
-            .map(|job| job.status.lock().clone())
-            .unwrap_or_else(ExportStatus::idle)
-    }
-
-    pub fn cancel(&mut self, job_id: &str) -> Result<ExportStatus, String> {
-        self.reap();
-        let job = self.job.as_mut().ok_or("No export job")?;
-        if job.id != job_id {
-            return Err("Stale export job id".into());
-        }
-        job.cancel.store(true, Ordering::SeqCst);
-        let mut status = job.status.lock();
-        if matches!(status.state, ExportState::Queued | ExportState::Running) {
-            status.diagnostics = vec!["Cancellation requested; waiting for cleanup".into()];
-        }
-        Ok(status.clone())
-    }
-
-    pub fn busy(&mut self) -> bool {
-        self.reap();
-        self.job
-            .as_ref()
-            .map(|job| {
-                job.join.as_ref().is_some_and(|join| !join.is_finished())
-                    || matches!(
-                        job.status.lock().state,
-                        ExportState::Queued | ExportState::Running
-                    )
-            })
-            .unwrap_or(false)
-    }
-
-    pub fn install_failed(&mut self, status: ExportStatus) {
-        self.reap();
-        if self.busy() {
-            return;
-        }
-        self.job = Some(LiveJob {
-            id: status.job_id.clone(),
-            cancel: Arc::new(AtomicBool::new(false)),
-            status: Arc::new(Mutex::new(status)),
-            join: None,
-        });
-    }
-
-    fn reap(&mut self) {
-        if let Some(job) = self.job.as_mut() {
-            if job
-                .join
-                .as_ref()
-                .map(|handle| handle.is_finished())
-                .unwrap_or(true)
-            {
-                if let Some(handle) = job.join.take() {
-                    if handle.join().is_err() {
-                        let mut status = job.status.lock();
-                        status.state = ExportState::Failed;
-                        status.output_path = None;
-                        status.failure = Some(ExportFailure::Native {
-                            message: "Export worker terminated unexpectedly".into(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl Default for ExportOwner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Drop for ExportOwner {
-    fn drop(&mut self) {
-        if let Some(job) = self.job.as_mut() {
-            job.cancel.store(true, Ordering::SeqCst);
-            if let Some(handle) = job.join.take() {
-                let _ = handle.join();
-            }
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct CapturedExport {
     pub job_id: String,
@@ -338,12 +235,17 @@ pub struct SceneEvaluator {
     camera_framing: std::cell::RefCell<
         std::collections::HashMap<String, (Option<crate::face::FocusPoint>, (f32, f32))>,
     >,
+    /// How much closer each camera clip plays with push-ins on (FX-3), by clip id.
+    push_ins: std::cell::OnceCell<std::collections::HashMap<String, f32>>,
     /// Where the camera fills the frame, for the graphics that ease in over it.
     full_camera: std::cell::OnceCell<Vec<(u64, u64)>>,
     /// The graphics renders it plays: the draft, or an export's final ones.
     graphics_quality: crate::graphics::render::Quality,
     /// An export's own copies of the renders it prepared, played in place of the cache's.
     pinned_graphics: std::collections::HashMap<crate::graphics::render::Spec, PathBuf>,
+    /// How screen clips not on the project's framing are framed: a file's (no crop, full
+    /// size), and each video track's own look by track id.
+    screen_styles: std::cell::OnceCell<(EditLayout, std::collections::HashMap<String, EditLayout>)>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
     /// The captions' typeface and accent, from the style and the look.
@@ -549,6 +451,11 @@ impl<'a> Shown<'a> {
 }
 
 impl SceneEvaluator {
+    /// Whether a graphic still rendering was drawn as its placeholder in a scene so far.
+    pub fn drew_placeholder(&self) -> bool {
+        !self.graphic_placeholders.borrow().is_empty()
+    }
+
     pub fn new(
         root: PathBuf,
         document: EditDocument,
@@ -625,9 +532,11 @@ impl SceneEvaluator {
             wallpaper,
             layouts: std::cell::OnceCell::new(),
             camera_framing: Default::default(),
+            push_ins: std::cell::OnceCell::new(),
             full_camera: std::cell::OnceCell::new(),
             graphics_quality: Default::default(),
             pinned_graphics: Default::default(),
+            screen_styles: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
             caption_look: std::cell::OnceCell::new(),
             caption_free: std::cell::OnceCell::new(),
@@ -670,6 +579,7 @@ impl SceneEvaluator {
         self.full_camera = std::cell::OnceCell::new();
         self.bubble_hidden = std::cell::OnceCell::new();
         self.camera_framing.borrow_mut().clear();
+        self.push_ins = std::cell::OnceCell::new();
         *self.prefetched.borrow_mut() = Default::default();
     }
 
@@ -869,9 +779,10 @@ impl SceneEvaluator {
         local: u64,
         frame: (u32, u32),
         rect: crate::layouts::arrange::Rect,
+        style: &EditLayout,
     ) -> (crate::layouts::arrange::Rect, (f32, f32, f32, f32)) {
         let short = self.document.short_layout.clone().unwrap_or_default();
-        let crop = self.screen_crop_at(asset, local);
+        let crop = self.screen_crop_at(asset, local, style);
         let (center, zoom) = if short.follow_zooms {
             let zooms = self.zooms_for(asset);
             let config = crate::zoom::eval_config_for(&self.document.zooms);
@@ -959,6 +870,9 @@ impl SceneEvaluator {
             Ok::<_, String>((screen, webcam))
         })?;
         let style = &self.document.layout;
+        let screen_style = shown
+            .screen
+            .map_or(style, |(index, clip)| self.screen_style(index, clip));
         let unit = crate::render::layout_px_unit(self.width, self.height);
         let screen_clip = shown.screen.map(|(_, clip)| clip);
         let local = screen_clip.map(at);
@@ -989,8 +903,8 @@ impl SceneEvaluator {
             screen: filled(&screen, crate::shorts::GraphicSlot::Screen),
             camera: filled(&webcam, crate::shorts::GraphicSlot::Camera),
         };
-        let from = arrange(frame.from, style, canvas, sources);
-        let to = arrange(frame.to, style, canvas, sources);
+        let from = arrange(frame.from, screen_style, canvas, sources);
+        let to = arrange(frame.to, screen_style, canvas, sources);
         let parts = blend(&from, &to, frame.weight);
         // Nothing to frame: the canvas is black, with any overlays on it.
         let mut scene = if screen.is_some() || webcam.is_some() {
@@ -1015,9 +929,9 @@ impl SceneEvaluator {
             let size = (picture.width, picture.height);
             let view = |s: &crate::layouts::arrange::ScreenSlot| {
                 if s.fill {
-                    self.fill_view(&clip.asset, local, size, s.rect)
+                    self.fill_view(&clip.asset, local, size, s.rect, screen_style)
                 } else {
-                    (s.rect, self.screen_view(&clip.asset, local))
+                    (s.rect, self.screen_view(&clip.asset, local, screen_style))
                 }
             };
             // Between a fitted and a filled screen, each end's view blends into the other's.
@@ -1035,7 +949,7 @@ impl SceneEvaluator {
                 _ => view(&slot),
             };
             let slot = crate::layouts::arrange::ScreenSlot { rect, ..slot };
-            scene.push_screen(picture, &slot, uv, style, unit);
+            scene.push_screen(picture, &slot, uv, screen_style, unit);
             self.push_cursor(&mut scene, &clip.asset, local)?;
             // Effects on what the recording shows (FX-2): anchored in its picture and clock,
             // so they follow the crop, zoom and layout just drawn.
@@ -1056,6 +970,18 @@ impl SceneEvaluator {
             let (focus, offset) = shown
                 .webcam
                 .map_or((None, (0.0, 0.0)), |clip| self.framing_of(clip));
+            // A push-in at a jump cut plays this stretch closer (FX-3).
+            let push = shown.webcam.map_or(1.0, |clip| {
+                self.push_ins
+                    .get_or_init(|| crate::shorts::push_ins(&self.document))
+                    .get(&clip.id)
+                    .copied()
+                    .unwrap_or(1.0)
+            });
+            let slot = crate::layouts::arrange::CameraSlot {
+                punch_in: slot.punch_in.max(1.0) * push,
+                ..slot
+            };
             let uv =
                 crate::render::camera_uv((picture.width, picture.height), &slot, focus, offset);
             scene.push_camera(picture, &slot, uv, style, unit)?;
@@ -1077,9 +1003,21 @@ impl SceneEvaluator {
             let y = match &self.document.short_layout {
                 // Where the short's layout puts them, moving as the layout changes.
                 Some(short) => {
+                    // A graphic filling one part of the split moves them into the other.
+                    let filled = shown
+                        .graphics
+                        .iter()
+                        .map(|clip| crate::shorts::graphic_slot(short, &clip.id))
+                        .find(|slot| {
+                            matches!(
+                                slot,
+                                crate::shorts::GraphicSlot::Screen
+                                    | crate::shorts::GraphicSlot::Camera
+                            )
+                        });
                     let spot = |parts| {
                         crate::shorts::caption_y(
-                            short.caption_spot,
+                            crate::shorts::caption_spot_beside(short.caption_spot, filled),
                             parts,
                             caption.height,
                             self.height,
@@ -1533,30 +1471,61 @@ impl SceneEvaluator {
         plan
     }
 
-    /// The part of recording `asset`'s screen kept at `local` on its clock: the layout's crop,
-    /// or the active window's.
-    fn screen_crop_at(&self, asset: &str, local: u64) -> (f32, f32, f32, f32) {
-        match self.window_crop(asset) {
-            Some(plan) => plan.rect_at(local),
-            None => self.document.layout.screen_crop_uv(),
+    /// The style screen clip `clip` (on video track `index`) is framed with: its track's own
+    /// look, else the project's. A file other than a recording never takes the recording's
+    /// crop or zoom-out.
+    fn screen_style(&self, index: usize, clip: &Clip) -> &EditLayout {
+        let (imported, tracks) = self.screen_styles.get_or_init(|| {
+            let layout = &self.document.layout;
+            let tracks = self
+                .document
+                .sequence
+                .video_tracks()
+                .filter_map(|t| Some((t.id.clone(), layout.with_screen_look(t.look.as_ref()?))))
+                .collect();
+            (
+                layout.with_screen_look(&crate::sequence::ScreenLook::default()),
+                tracks,
+            )
+        });
+        let track = self.document.sequence.video_tracks().nth(index);
+        if let Some(style) = track.and_then(|t| tracks.get(&t.id)) {
+            return style;
+        }
+        if self
+            .document
+            .asset(&clip.asset)
+            .is_some_and(|a| a.is_recording())
+        {
+            &self.document.layout
+        } else {
+            imported
         }
     }
 
-    /// What of recording `asset`'s screen shows at `local` (UV of the full picture): the crop
-    /// with any zoom inside it.
-    fn screen_view(&self, asset: &str, local: u64) -> (f32, f32, f32, f32) {
-        let crop = self.screen_crop_at(asset, local);
+    /// The part of `asset`'s screen kept at `local` on its clock: `style`'s crop, or the
+    /// active window's on the project's own framing.
+    fn screen_crop_at(&self, asset: &str, local: u64, style: &EditLayout) -> (f32, f32, f32, f32) {
+        if !std::ptr::eq(style, &self.document.layout) {
+            return style.screen_crop_uv();
+        }
+        match self.window_crop(asset) {
+            Some(plan) => plan.rect_at(local),
+            None => style.screen_crop_uv(),
+        }
+    }
+
+    /// What of `asset`'s screen shows at `local` (UV of the full picture) framed by `style`:
+    /// the crop with any zoom inside it.
+    fn screen_view(&self, asset: &str, local: u64, style: &EditLayout) -> (f32, f32, f32, f32) {
+        let crop = self.screen_crop_at(asset, local, style);
         let zooms = self.zooms_for(asset);
         if zooms.is_empty() {
             return crop;
         }
         let config = crate::zoom::eval_config_for(&self.document.zooms);
         let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
-        crate::window_crop::zoom_inside(
-            self.document.layout.screen_crop_uv(),
-            crop,
-            camera.uv_rect(),
-        )
+        crate::window_crop::zoom_inside(style.screen_crop_uv(), crop, camera.uv_rect())
     }
 
     /// When the webcam bubble hides, worked out once per edit.
@@ -1622,7 +1591,7 @@ impl SceneEvaluator {
             }
             // Where a point of the source lands on the canvas, if it shows at all.
             let canvas_point = |t: u64, x: f64, y: f64| {
-                let (ux, uy, uw, uh) = self.screen_view(&asset.id, t);
+                let (ux, uy, uw, uh) = self.screen_view(&asset.id, t, &self.document.layout);
                 let (u, v) = (
                     (x as f32 - ux) / uw.max(1e-6),
                     (y as f32 - uy) / uh.max(1e-6),
@@ -1646,9 +1615,9 @@ impl SceneEvaluator {
                         .flat_map(|(a, b)| clock.source_range_to_edited(a, b + 1))
                         .collect();
                     // Only while this bubble is the one showing.
-                    out.extend(crate::layouts::subtract(
+                    out.extend(crate::ranges::subtract(
                         &edited,
-                        &crate::layouts::subtract(&[(0, u64::MAX)], showing),
+                        &crate::ranges::subtract(&[(0, u64::MAX)], showing),
                     ));
                 }
             }
@@ -1831,30 +1800,22 @@ impl SceneEvaluator {
         })
     }
 
-    /// The transcript captions read from: the chosen sound, else the first speech on the
-    /// timeline, else any speech in the project.
-    fn caption_transcript(&self) -> Option<crate::transcript::Transcript> {
-        let load = |key: &str| {
-            crate::transcript::store::load_transcript(&self.root, key)
-                .ok()
-                .flatten()
-        };
-        let candidates = caption_candidates(&self.document);
-        crate::captions::caption_source(&self.document.captions, candidates, Vec::new(), load)
-    }
-
     fn caption_at(&self, edited_us: u64) -> Option<(VideoFrame, u32, u32)> {
         let settings = &self.document.captions;
         if !settings.enabled {
             return None;
         }
         let cues = self.caption_cues.get_or_init(|| {
-            self.caption_transcript()
-                .and_then(|t| {
-                    let clock = self.document.transcript_clock(&t.track_id).ok()?;
-                    Some(crate::captions::build_cues(&t, &clock, settings))
-                })
+            let load = |key: &str| {
+                crate::transcript::store::load_transcript(&self.root, key)
+                    .ok()
+                    .flatten()
+            };
+            caption_track_cues(&self.document, settings, load)
                 .unwrap_or_default()
+                .into_iter()
+                .map(|(_, cue)| cue)
+                .collect()
         });
         let index = crate::captions::cue_at(cues, edited_us)?;
         let free = self.caption_free.get_or_init(|| {
@@ -1921,6 +1882,57 @@ pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
         }
     }
     out
+}
+
+/// The captions of `document`, each with the transcript it reads, in edited time: the chosen
+/// sound's, else the first transcribed speech of each recording or file, so every recording
+/// on the timeline is captioned. Where two speak at once the earlier caption gives way.
+/// `None` when nothing is transcribed.
+pub fn caption_track_cues(
+    document: &EditDocument,
+    settings: &crate::captions::CaptionSettings,
+    load: impl Fn(&str) -> Option<crate::transcript::Transcript>,
+) -> Option<Vec<(String, crate::captions::CaptionCue)>> {
+    let transcripts: Vec<crate::transcript::Transcript> = match &settings.track_id {
+        Some(id) => load(id).into_iter().collect(),
+        None => {
+            let mut captioned: Vec<String> = Vec::new();
+            caption_candidates(document)
+                .into_iter()
+                .filter_map(|key| {
+                    let asset = crate::sequence::StreamRef::parse(&key)?.asset;
+                    if captioned.contains(&asset) {
+                        return None;
+                    }
+                    let transcript = load(&key)?;
+                    captioned.push(asset);
+                    Some(transcript)
+                })
+                .collect()
+        }
+    };
+    if transcripts.is_empty() {
+        return None;
+    }
+    let mut cues: Vec<(String, crate::captions::CaptionCue)> = Vec::new();
+    for transcript in &transcripts {
+        let Ok(clock) = document.transcript_clock(&transcript.track_id) else {
+            continue;
+        };
+        cues.extend(
+            crate::captions::build_cues(transcript, &clock, settings)
+                .into_iter()
+                .map(|cue| (transcript.track_id.clone(), cue)),
+        );
+    }
+    cues.sort_by_key(|(_, cue)| cue.start_us);
+    for i in 1..cues.len() {
+        let next = cues[i].1.start_us;
+        let before = &mut cues[i - 1].1;
+        before.end_us = before.end_us.min(next);
+    }
+    cues.retain(|(_, cue)| cue.end_us > cue.start_us);
+    Some(cues)
 }
 
 /// Sources larger than twice the output are shrunk by FFmpeg's filtered scaler before
@@ -2306,20 +2318,9 @@ pub fn prepare_job(
     project_name: &str,
     document: EditDocument,
     settings: ExportSettings,
-    owner: &mut ExportOwner,
+    _owner: &mut ExportOwner,
 ) -> Result<CapturedExport, ExportStatus> {
     let job_id = Uuid::new_v4().to_string();
-    if owner.busy() {
-        return Err(status_from(
-            &job_id,
-            &document,
-            &settings,
-            ExportState::Failed,
-            Some(ExportFailure::EncoderBusy {
-                message: "An export job is already running".into(),
-            }),
-        ));
-    }
     if let Err(failure) = validate_settings(&settings) {
         return Err(status_from(
             &job_id,
@@ -2412,35 +2413,6 @@ pub fn prepare_job(
         temp,
         settings,
     })
-}
-
-pub fn spawn_job(
-    captured: CapturedExport,
-    owner: &mut ExportOwner,
-    gate: Arc<EncoderGate>,
-) -> ExportStatus {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let status = Arc::new(Mutex::new(status_from(
-        &captured.job_id,
-        &captured.document,
-        &captured.settings,
-        ExportState::Queued,
-        None,
-    )));
-    let status_clone = Arc::clone(&status);
-    let cancel_clone = Arc::clone(&cancel);
-    let id = captured.job_id.clone();
-    let join = std::thread::spawn(move || {
-        run_job(captured, cancel_clone, status_clone, &gate);
-    });
-    owner.job = Some(LiveJob {
-        id,
-        cancel,
-        status: Arc::clone(&status),
-        join: Some(join),
-    });
-    let snapshot = status.lock().clone();
-    snapshot
 }
 
 pub fn run_job(
@@ -2584,6 +2556,19 @@ fn export_to_temp(
     };
     let duration_us = captured.document.duration_us();
     let frames = frame_count(duration_us, captured.settings.fps)?;
+    // Cameras are framed on the face: an export started before its track is found waits for
+    // it rather than use the centre crop.
+    let finding = "Finding the face in the camera";
+    let waited =
+        crate::face::wait_for_tracks(&captured.root, &captured.document, cancel, &mut |share| {
+            note(ExportNote::Stage(finding.into(), Some(share as f64)))
+        });
+    if waited {
+        note(ExportNote::Line(
+            ExportLogLevel::Info,
+            format!("{finding}: done"),
+        ));
+    }
     // Every graphic's final render must be there before the first frame: at the export's
     // frame rate, and sharper than the preview's draft when the export is larger.
     let graphics_quality = crate::graphics::render::Quality::Final {
@@ -3747,6 +3732,8 @@ mod tests {
             edit: None,
             take: None,
             caption_marks: Default::default(),
+            idea: String::new(),
+            pieces: Vec::new(),
             length_us: None,
             edited_start_us: None,
             edited_end_us: None,
@@ -3909,6 +3896,115 @@ mod tests {
         crate::media::release_decoders();
     }
 
+    /// A file over the recording's screen takes none of its crop or zoom-out, and a track's
+    /// own look frames whatever plays on it.
+    #[test]
+    fn screen_clips_take_their_tracks_look_and_files_skip_the_recordings_crop() {
+        use crate::sequence::tests::{recording, video};
+        use crate::sequence::{Role, ScreenLook, Track, TrackKind};
+
+        const S: u64 = 1_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = EditDocument::from_recording(recording("rec", 4 * S, &[])).unwrap();
+        document.layout.screen_crop_bottom = 5.0;
+        document.layout.screen_scale_pct = 90.0;
+        document.assets.push(video("vid", 2 * S));
+        let screen = document
+            .sequence
+            .video_tracks()
+            .flat_map(|t| &t.clips)
+            .find(|c| document.asset(&c.asset).is_some() && c.stream == "screen")
+            .cloned()
+            .unwrap();
+        let mut track = Track::new("over".into(), TrackKind::Video);
+        track.clips.push(Clip {
+            id: "vid-clip".into(),
+            asset: "vid".into(),
+            stream: "picture".into(),
+            start_us: S,
+            in_us: 0,
+            duration_us: 2 * S,
+            ..screen
+        });
+        document.sequence.tracks.push(track);
+        let style_at = |document: &EditDocument, us: u64| {
+            let scenes = scenes(dir.path(), document.clone(), 320, 180);
+            let (index, clip) = scenes.shown(us).screen.unwrap();
+            let style = scenes.screen_style(index, clip);
+            (
+                clip.asset.clone(),
+                style.screen_crop_bottom,
+                style.screen_scale_pct,
+            )
+        };
+        assert_eq!(style_at(&document, 0), ("rec".into(), 5.0, 90.0));
+        assert_eq!(style_at(&document, 2 * S), ("vid".into(), 0.0, 100.0));
+        // The file's track framed its own way.
+        let over = document.sequence.tracks.last_mut().unwrap();
+        assert_eq!(
+            crate::sequence::clip_role(&document.assets, over, &over.clips[0]),
+            Some(Role::Screen)
+        );
+        over.look = Some(ScreenLook {
+            crop_bottom: 10.0,
+            scale_pct: 80.0,
+            ..ScreenLook::default()
+        });
+        assert_eq!(style_at(&document, 2 * S), ("vid".into(), 10.0, 80.0));
+        assert_eq!(style_at(&document, 0), ("rec".into(), 5.0, 90.0));
+    }
+
+    /// Two recordings one after the other: each is captioned from its own transcript.
+    #[test]
+    fn captions_read_every_recording_on_the_timeline() {
+        use crate::project::revision::EditDocument;
+        use crate::sequence::tests::recording;
+        use crate::transcript::{test_word, ProviderKind, Transcript};
+
+        const S: u64 = 1_000_000;
+        let mut document = EditDocument::from_recording(recording("a", 2 * S, &[])).unwrap();
+        let second = EditDocument::from_recording(recording("b", 2 * S, &[])).unwrap();
+        document.assets.extend(second.assets);
+        for (track, more) in document
+            .sequence
+            .tracks
+            .iter_mut()
+            .zip(second.sequence.tracks)
+        {
+            for mut clip in more.clips {
+                clip.id = format!("b-{}", clip.id);
+                clip.start_us += 2 * S;
+                track.clips.push(clip);
+            }
+        }
+        let transcript = |key: &str, word: &str| {
+            Transcript::new(
+                key.into(),
+                ProviderKind::ElevenLabs,
+                "scribe_v2".into(),
+                None,
+                vec![test_word(word, 0, 400)],
+            )
+        };
+        let load = |key: &str| match key {
+            "a.mic" => Some(transcript(key, "first")),
+            "b.mic" => Some(transcript(key, "second")),
+            _ => None,
+        };
+        let cues = caption_track_cues(&document, &document.captions, load).unwrap();
+        let read: Vec<_> = cues
+            .iter()
+            .map(|(id, cue)| (id.as_str(), cue.words[0].text.as_str(), cue.start_us))
+            .collect();
+        assert_eq!(read, [("a.mic", "first", 0), ("b.mic", "second", 2 * S)]);
+        // A sound chosen for captions is the only one read.
+        let mut chosen = document.captions.clone();
+        chosen.track_id = Some("b.mic".into());
+        let cues = caption_track_cues(&document, &chosen, load).unwrap();
+        assert_eq!(cues.len(), 1);
+        assert!(caption_track_cues(&document, &document.captions, |_| None).is_none());
+    }
+
     /// Captions come from the mic transcript, skip cut words and land in the frame.
     #[test]
     fn captions_render_from_the_transcript_in_edited_time() {
@@ -3981,34 +4077,14 @@ mod tests {
         document.captions.enabled = true;
         document.captions.text_color = "#FFFFFF".into();
         document.captions.style = crate::captions::CaptionStyle::Static;
-        let evaluator = SceneEvaluator {
-            root: root.clone(),
+        let evaluator = SceneEvaluator::with_parts(
+            root.clone(),
             document,
-            compositor: None,
-            width: 320,
-            height: 180,
-            decode_limit: DecodeLimit::NONE,
-            nv12_output: false,
-            wallpaper: std::cell::OnceCell::new(),
-            layouts: std::cell::OnceCell::new(),
-            camera_framing: Default::default(),
-            full_camera: std::cell::OnceCell::new(),
-            graphics_quality: Default::default(),
-            pinned_graphics: Default::default(),
-            caption_cues: std::cell::OnceCell::new(),
-            caption_look: std::cell::OnceCell::new(),
-            caption_free: std::cell::OnceCell::new(),
-            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            cursors: Default::default(),
-            prefetched: Default::default(),
-            zooms: Default::default(),
-            sources: Default::default(),
-            cursor_images: Default::default(),
-            graphic_placeholders: Default::default(),
-            shortcut_badge: Default::default(),
-            window_crops: Default::default(),
-            bubble_hidden: std::cell::OnceCell::new(),
-        };
+            None,
+            320,
+            180,
+            std::cell::OnceCell::new(),
+        );
         let (_, _, y) = evaluator.caption_at(100_000).unwrap();
         assert!(y > 90, "caption sits in the lower half, y {y}");
         // Every style draws a moment the same whatever was drawn before (the preview seeks,
@@ -4066,34 +4142,14 @@ mod tests {
 
     /// An evaluator without a GPU: scenes only.
     fn scenes(root: &Path, document: EditDocument, width: u32, height: u32) -> SceneEvaluator {
-        SceneEvaluator {
-            root: root.into(),
+        SceneEvaluator::with_parts(
+            root.into(),
             document,
-            compositor: None,
+            None,
             width,
             height,
-            decode_limit: DecodeLimit::NONE,
-            nv12_output: false,
-            wallpaper: std::cell::OnceCell::new(),
-            layouts: std::cell::OnceCell::new(),
-            camera_framing: Default::default(),
-            full_camera: std::cell::OnceCell::new(),
-            graphics_quality: Default::default(),
-            pinned_graphics: Default::default(),
-            caption_cues: std::cell::OnceCell::new(),
-            caption_look: std::cell::OnceCell::new(),
-            caption_free: std::cell::OnceCell::new(),
-            caption_cache: std::cell::RefCell::new(CaptionCache::default()),
-            cursors: Default::default(),
-            prefetched: Default::default(),
-            zooms: Default::default(),
-            sources: Default::default(),
-            cursor_images: Default::default(),
-            graphic_placeholders: Default::default(),
-            shortcut_badge: Default::default(),
-            window_crops: Default::default(),
-            bubble_hidden: std::cell::OnceCell::new(),
-        }
+            std::cell::OnceCell::new(),
+        )
     }
 
     /// A 2x2 red picture on `count` video tracks, as overlays.

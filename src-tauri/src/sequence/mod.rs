@@ -472,6 +472,55 @@ impl Clip {
     }
 }
 
+/// A video track's own screen framing: imported footage often wants none of the recording's
+/// crop or zoom-out. The frame's corners and shadow stay the style's.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScreenLook {
+    /// Percent of the picture trimmed from each edge.
+    pub crop_left: f32,
+    pub crop_top: f32,
+    pub crop_right: f32,
+    pub crop_bottom: f32,
+    /// Size as a percent of the padded content area.
+    pub scale_pct: f32,
+}
+
+impl Default for ScreenLook {
+    fn default() -> Self {
+        Self {
+            crop_left: 0.0,
+            crop_top: 0.0,
+            crop_right: 0.0,
+            crop_bottom: 0.0,
+            scale_pct: 100.0,
+        }
+    }
+}
+
+impl ScreenLook {
+    pub fn validate(&self) -> Result<(), String> {
+        use crate::project::layout::{MAX_SCREEN_CROP_PCT, MIN_SCREEN_SCALE_PCT};
+        let crops = [
+            self.crop_left,
+            self.crop_top,
+            self.crop_right,
+            self.crop_bottom,
+        ];
+        if crops
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=MAX_SCREEN_CROP_PCT).contains(v))
+        {
+            return Err(format!("A crop is 0 to {MAX_SCREEN_CROP_PCT}%"));
+        }
+        if !self.scale_pct.is_finite() || !(MIN_SCREEN_SCALE_PCT..=100.0).contains(&self.scale_pct)
+        {
+            return Err(format!("The size is {MIN_SCREEN_SCALE_PCT} to 100%"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
@@ -492,6 +541,9 @@ pub struct Track {
     /// What the track's clips stand for; unset, each stream's own role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
+    /// How the track's screen clips are framed instead of the project's screen settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<ScreenLook>,
     /// In timeline order, never overlapping.
     #[serde(default)]
     pub clips: Vec<Clip>,
@@ -507,6 +559,7 @@ impl Track {
             muted: false,
             locked: false,
             role: None,
+            look: None,
             clips: Vec::new(),
         }
     }
@@ -654,14 +707,6 @@ pub fn clip_role(assets: &[Asset], track: &Track, clip: &Clip) -> Option<Role> {
     )
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 fn valid_stream_id(id: &str) -> bool {
     crate::project::reader::is_safe_track_id(id) && id.len() <= 64
 }
@@ -673,7 +718,7 @@ pub fn validate_assets(assets: &[Asset]) -> Result<(), String> {
     }
     let mut ids = std::collections::BTreeSet::new();
     for asset in assets {
-        if !valid_id(&asset.id) || !ids.insert(asset.id.as_str()) {
+        if !crate::ids::is_plain_id(&asset.id) || !ids.insert(asset.id.as_str()) {
             return Err("Invalid media id".into());
         }
         if asset.path.is_empty()
@@ -736,7 +781,7 @@ pub fn validate_sequence(sequence: &Sequence, assets: &[Asset]) -> Result<(), St
     let mut clip_ids = std::collections::BTreeSet::new();
     let mut count = 0;
     for track in &sequence.tracks {
-        if !valid_id(&track.id) || !track_ids.insert(track.id.as_str()) {
+        if !crate::ids::is_plain_id(&track.id) || !track_ids.insert(track.id.as_str()) {
             return Err("Invalid track id".into());
         }
         if track.name.chars().count() > 40 || track.name.chars().any(char::is_control) {
@@ -755,10 +800,14 @@ pub fn validate_sequence(sequence: &Sequence, assets: &[Asset]) -> Result<(), St
         }
         let mut end = 0;
         for clip in &track.clips {
-            if !valid_id(&clip.id) || !clip_ids.insert(clip.id.as_str()) {
+            if !crate::ids::is_plain_id(&clip.id) || !clip_ids.insert(clip.id.as_str()) {
                 return Err("Invalid clip id".into());
             }
-            if clip.link.as_deref().is_some_and(|l| !valid_id(l)) {
+            if clip
+                .link
+                .as_deref()
+                .is_some_and(|l| !crate::ids::is_plain_id(l))
+            {
                 return Err("Invalid link id".into());
             }
             if clip.duration_us == 0 {
