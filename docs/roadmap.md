@@ -79,6 +79,8 @@ None supersedes the shorts style or George's next real edit.
 | <a id="cost-3"></a>COST-3 | Cheaper narrow reviewers, retained only if EVAL-1 quality holds. Not urgent (1 Nov). | M |
 | <a id="ver-1"></a>VER-1 | Repeat Windows bridge-to-export verification on macOS when macOS work resumes. | M |
 | <a id="dep-2"></a>DEP-2 | Quarterly dependency review, next January 2027, or sooner for an advisory or measured gain; follow Verification. | S |
+| <a id="dep-3"></a>DEP-3 | Tailwind 3 to 4, by hand or checking every change: the upgrade tool changes 266 places in 45 files and also rewrote the saved `EffectKind` value `"blur"`. Then compare every panel with the old build. | M |
+| <a id="dep-4"></a>DEP-4 | `ort` 2.0 and parakeet-rs 0.4, when `ort` leaves release candidates: one ONNX Runtime environment handed to every model (seven call sites), a CUDA pack matching the newer ONNX Runtime, then the Parakeet, face detection and pack probes. | S-M |
 | <a id="fx-5"></a>FX-5 | LUT import/simple grade with preview/export parity. Parked: not needed for the channel. | M |
 
 AeroShoot work belongs in the recorder repo: exact segment boundaries (O03, overlap up to one

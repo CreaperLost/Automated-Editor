@@ -195,7 +195,7 @@ can tell a later agent what already ran.
   overlay on the camera may ease.
 - **Never chopped:** passes skip the time a graphic covers, a cut inside one is refused, cuts
   before it move it along.
-- **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.162 with its own
+- **Render** (`render.rs`): one background job at a time, pinned HyperFrames 0.8.228 with its own
   Node 22 and chrome-headless-shell (`runtime.rs`, hash-checked, ~200 MB download, ~500 MB on
   disk); WebM VP9 alpha decoded with `libvpx-vp9` forced; cache key over source files, canvas,
   length, fps, density, style (settings and files) and version. Every render of a graphic in an

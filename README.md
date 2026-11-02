@@ -163,7 +163,7 @@ Start with [docs/](docs/README.md) for product direction, architecture, the road
   source in `graphics/<id>/` (`index.html` and `graphic.json`) and rendered by the app in the
   background for the canvas it plays on, so the same graphic fits a 16:9 video and a 9:16
   short; renders are cached in `assets/graphics/` and export waits for them. The renderer
-  (HyperFrames 0.8.162 with its own Node 22 and chrome-headless-shell, each pinned and checked
+  (HyperFrames 0.8.228 with its own Node 22 and chrome-headless-shell, each pinned and checked
   by hash; npm packages installed with `npm ci` from the shipped lock file) is a 200 MB
   download on first use into the app's data folder; nothing on `PATH` is used or changed.
   Agents use the `graphics`, `graphic_add` (at a time or a transcript word), `graphic_set`,

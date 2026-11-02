@@ -254,7 +254,7 @@ measured improvement. Exact versions live in source and lockfiles, not a second 
 | Rust and build Node | `rust-toolchain.toml`, `.nvmrc`, CI workflows; keep them consistent |
 | Front end | `front-end/package.json` and `package-lock.json` |
 | Rust libraries | `src-tauri/Cargo.toml` and committed `Cargo.lock` |
-| Graphics | `src-tauri/graphics/runtime/package.json` + lock and `src-tauri/src/graphics/runtime.rs`; HyperFrames remains pinned at 0.8.162 pending review; update its Node, Chrome and GSAP together as required |
+| Graphics | `src-tauri/graphics/runtime/package.json` + lock and `src-tauri/src/graphics/runtime.rs`; HyperFrames remains pinned at 0.8.228; update its Node, Chrome and GSAP together as required |
 | FFmpeg | `src-tauri/scripts/fetch-ffmpeg.mjs`; checksum-pinned month-end BtbN release, not moving latest |
 | Models / GPU pack | Model download code and `src-tauri/src/cuda.rs`; hashes, model licences and ONNX Runtime/CUDA compatibility |
 
@@ -263,6 +263,18 @@ TypeScript checks, then relevant GPU and perf probes and preview/export parity o
 run the gate on every bundled template and compare rerenders; for review models, run labelled
 cases. A major migration is explicit work, never a side effect. Keep changes only with evidence
 of compatibility and worthwhile benefit. Recheck licences, including GSAP redistribution
-terms before bundling it differently. Candidate reviews include React/Vite/Tailwind majors,
-ONNX Runtime leaving release candidates and newer HyperFrames; their existence is not a reason
-to upgrade during unrelated work.
+terms before bundling it differently. Candidate reviews include the Tailwind major
+([DEP-3](roadmap.md#dep-3)), ONNX Runtime leaving release candidates ([DEP-4](roadmap.md#dep-4))
+and newer HyperFrames; their existence is not a reason to upgrade during unrelated work.
+
+**1 Nov 2026 round:**
+
+- Vite 5.4 to 8.3 with plugin-react 6: `minify` is a boolean now, and the test runner bundles
+  with esbuild, a dev dependency of its own.
+- React 18.3 to 19.3, with dockview-react 8.8 and lucide-react 1.66: `useRef<T>()` needs its
+  first value, the test harness reads React 19's dispatcher, and the workspace registers the
+  dock api again after StrictMode's second run.
+- HyperFrames 0.8.162 to 0.8.228: same Chrome, Node and GSAP. The gate passes every template,
+  renders are identical (4K within SSIM 0.9995) and the gate is about 10% faster.
+- Tailwind 4 was tried and not kept (DEP-3). `ort` stays at rc.13, since it is still a release
+  candidate (DEP-4).
