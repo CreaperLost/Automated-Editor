@@ -15,8 +15,30 @@ const MAX_TIMES: usize = 64;
 /// Bump when thumbnails are made differently, so old ones are not used.
 const VERSION: u32 = 1;
 
-/// Each time's thumbnail (`times_us` on the asset's own clock) as a JPEG data URL, or `None`
-/// where there is no picture (a gap in a recording, a missing file, a graphic).
+/// Null is genuine absence; a frame error stays retryable without losing its batch's pictures.
+#[derive(Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum Thumbnail {
+    Picture(String),
+    Absent,
+    Failed { error: String },
+}
+
+impl From<Result<Option<Vec<u8>>, String>> for Thumbnail {
+    fn from(result: Result<Option<Vec<u8>>, String>) -> Self {
+        use base64::Engine;
+        match result {
+            Ok(Some(jpeg)) => Self::Picture(format!(
+                "data:image/jpeg;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(jpeg)
+            )),
+            Ok(None) => Self::Absent,
+            Err(error) => Self::Failed { error },
+        }
+    }
+}
+
+/// Each time's thumbnail (`times_us` on the asset's own clock), absence, or retryable failure.
 pub fn project_clip_thumbnails_impl(
     state: &AppState,
     project_handle: String,
@@ -24,7 +46,7 @@ pub fn project_clip_thumbnails_impl(
     stream: String,
     times_us: Vec<u64>,
     height: u32,
-) -> Result<Vec<Option<String>>, String> {
+) -> Result<Vec<Thumbnail>, String> {
     let (root, asset) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
@@ -37,26 +59,14 @@ pub fn project_clip_thumbnails_impl(
         (reader.root().to_path_buf(), asset)
     };
     if asset.missing {
-        return Ok(vec![None; times_us.len().min(MAX_TIMES)]);
+        return Ok(vec![Thumbnail::Absent; times_us.len().min(MAX_TIMES)]);
     }
     let source = stream_source(&root, &asset, &stream)?;
     let height = height.clamp(16, MAX_HEIGHT);
-    use base64::Engine;
     Ok(times_us
         .iter()
         .take(MAX_TIMES)
-        .map(|&at| {
-            thumbnail(&root, &asset.id, &source, at, height)
-                .map_err(|e| eprintln!("thumbnail of {} at {at}: {e}", asset.id))
-                .ok()
-                .flatten()
-                .map(|jpeg| {
-                    format!(
-                        "data:image/jpeg;base64,{}",
-                        base64::engine::general_purpose::STANDARD.encode(jpeg)
-                    )
-                })
-        })
+        .map(|&at| Thumbnail::from(thumbnail(&root, &asset.id, &source, at, height)))
         .collect())
 }
 
@@ -162,6 +172,32 @@ fn jpeg(frame: &crate::media::VideoFrame, height: u32) -> Result<Vec<u8>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_failures_are_distinct_from_absence_and_keep_successful_pictures() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("picture.png");
+        image::RgbImage::new(32, 32).save(&path).unwrap();
+        let sources = [
+            StreamSource::Image(path),
+            StreamSource::Video(root.path().join("temporarily-missing.mp4")),
+            StreamSource::Segments(vec![]),
+        ];
+        let replies: Vec<_> = sources
+            .iter()
+            .map(|source| Thumbnail::from(thumbnail(root.path(), "asset", source, 0, 32)))
+            .collect();
+        let json = serde_json::to_value(replies).unwrap();
+        assert!(json[0]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,"));
+        assert!(json[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("temporarily-missing"));
+        assert!(json[2].is_null());
+    }
 
     #[test]
     fn a_frame_becomes_a_small_jpeg() {

@@ -532,6 +532,28 @@ pub fn place_on(
 /// `relative` as a plain path inside a graphic's folder (not `graphic.json`, which goes through
 /// the variables).
 fn plain_path(relative: &str) -> Result<&Path, String> {
+    let path = inside_path(relative)?;
+    if relative.eq_ignore_ascii_case(SOURCE_FILE) {
+        return Err("graphic.json is changed through the graphic's variables".into());
+    }
+    Ok(path)
+}
+
+/// Puts back file `relative` of a graphic's folder exactly as it was (undo and redo, SAFE-3);
+/// `graphic.json` too. The same checks as [`write_file`].
+pub fn restore_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
+    let path = inside_path(relative)?;
+    let target = dir.join(path);
+    no_links(dir, path)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    no_links(dir, path)?;
+    write_shared(&target, contents).map_err(|e| format!("{}: {e}", target.display()))
+}
+
+/// `relative` as a plain path inside a graphic's folder.
+fn inside_path(relative: &str) -> Result<&Path, String> {
     let path = Path::new(relative);
     let plain = !relative.is_empty()
         && relative.len() <= 200
@@ -543,9 +565,6 @@ fn plain_path(relative: &str) -> Result<&Path, String> {
         return Err(
             "Give a path inside the graphic's folder, like index.html or assets/logo.svg".into(),
         );
-    }
-    if relative.eq_ignore_ascii_case(SOURCE_FILE) {
-        return Err("graphic.json is changed through the graphic's variables".into());
     }
     Ok(path)
 }

@@ -4,7 +4,7 @@
 //! data folder, like the Parakeet model; nothing on `PATH` is used or changed.
 //!
 //! Pinned on purpose: recheck these three together at each dependency review
-//! (`docs/dependencies.md`) and bump them only after the gate passes on every bundled template.
+//! (`docs/verification.md#dependency-review`) and bump them only after the gate passes on every bundled template.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};

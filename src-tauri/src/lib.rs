@@ -2305,7 +2305,7 @@ async fn project_clip_thumbnails(
     stream: String,
     times_us: Vec<u64>,
     height: u32,
-) -> Result<Vec<Option<String>>, String> {
+) -> Result<Vec<commands::thumbs::Thumbnail>, String> {
     blocking(move || {
         commands::thumbs::project_clip_thumbnails_impl(
             &app.state::<AppState>(),
@@ -2386,7 +2386,7 @@ fn project_graphic_look_set(
     project_handle: String,
     asset_id: String,
     tokens: std::collections::BTreeMap<String, Option<String>>,
-) -> Result<graphics::GraphicView, String> {
+) -> Result<commands::graphics::GraphicUpdated, String> {
     commands::graphics::project_graphic_look_set_impl(&state, project_handle, asset_id, tokens)
 }
 

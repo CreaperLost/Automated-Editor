@@ -56,7 +56,9 @@ export const GraphicSection: React.FC = () => {
       .then((view) => take(view, `${handle}:${assetId}`))
       .catch((e) => setError(String(e)));
   }, [handle, assetId, take]);
-  useEffect(load, [load]);
+  // Again after every edit: an undo or redo can put a graphic's text back (SAFE-3).
+  const revision = openedProject?.revision;
+  useEffect(load, [load, revision]);
   useGraphicsUpdates(load);
   useEffect(() => {
     void api
@@ -191,7 +193,10 @@ export const GraphicSection: React.FC = () => {
                   const tokens = Object.fromEntries(Object.keys(graphic.look ?? {}).map((k) => [k, null]));
                   void api
                     .projectGraphicLookSet(openedProject.projectHandle, graphic.assetId, tokens)
-                    .then((view) => take(view, `${openedProject.projectHandle}:${graphic.assetId}`))
+                    .then((updated) => {
+                      take(updated.graphic, `${openedProject.projectHandle}:${graphic.assetId}`);
+                      if (updated.project) applyOpenedProject(updated.project);
+                    })
                     .catch((err) => setError(String(err)));
                 }}
               >

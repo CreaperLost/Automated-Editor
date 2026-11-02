@@ -217,19 +217,37 @@ mod tests {
         );
     }
 
-    /// Serves each canned (status, body) once and returns the raw requests it got.
+    /// Serves each canned (status, body) once and returns the raw requests it got. It never
+    /// waits long (QUAL-7): a request that doesn't come within 10 s, or a client that hangs up
+    /// half way, ends it, so a test fails instead of hanging the whole run.
     fn fake_server(replies: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
         use std::io::{Read, Write};
+        const PATIENCE: Duration = Duration::from_secs(10);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let handle = std::thread::spawn(move || {
             let mut requests = Vec::new();
             for (status, body) in replies {
-                let (mut stream, _) = listener.accept().unwrap();
+                let started = std::time::Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(started.elapsed() < PATIENCE, "no request came");
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(e) => panic!("{e}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(PATIENCE)).unwrap();
                 let mut raw = Vec::new();
                 let mut buf = [0u8; 4096];
                 loop {
-                    let n = stream.read(&mut buf).unwrap();
+                    let n = stream.read(&mut buf).expect("the request came in time");
+                    // The client hung up before the whole request.
+                    assert!(n > 0, "the request stopped half way");
                     raw.extend_from_slice(&buf[..n]);
                     let text = String::from_utf8_lossy(&raw);
                     if let Some(head_end) = text.find("\r\n\r\n") {

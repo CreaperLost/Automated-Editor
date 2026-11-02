@@ -30,34 +30,77 @@ const set = useLayoutsStore.setState;
 export const selectSection = (id: string | null) => set({ selectedId: id });
 export const setLayoutsError = (error?: string) => set({ error });
 
-/**
- * Runs `work` on the project as it is when it goes out. A short's changes queue behind its look
- * saves, so neither puts back what the other changed.
- */
-function run(label: string, work: (project: OpenedProject) => Promise<OpenedProject>) {
+type LayoutWork = (project: OpenedProject) => Promise<OpenedProject>;
+const pending: { label: string; work: LayoutWork; generation: number; coalesce?: string }[] = [];
+let generation = 0;
+let running = false;
+useProjectStore.subscribe((state, previous) => {
+  if (
+    state.openedProject?.projectHandle !== previous.openedProject?.projectHandle ||
+    state.openedProject?.shortView !== previous.openedProject?.shortView ||
+    state.viewShort !== previous.viewShort
+  ) {
+    generation += 1;
+    pending.length = 0;
+  }
+});
+
+/** Main-video operations share one queue, including keyboard switches. Each reads the
+ * revision after the previous response is applied. Work left by another owner is canceled. */
+async function drain() {
+  if (running) return;
+  running = true;
+  try {
+    while (pending.length) {
+      const task = pending.shift()!;
+      const project = useProjectStore.getState().openedProject;
+      if (!project || project.shortView || task.generation !== generation) continue;
+      set({ busy: task.label });
+      try {
+        const next = await task.work(project);
+        if (task.generation === generation) await useProjectStore.getState().applyOpenedProject(next);
+      } catch (err) {
+        if (task.generation === generation) set({ error: errorMessage(err) });
+      }
+    }
+  } finally {
+    running = false;
+    set({ busy: null });
+  }
+}
+
+/** A short's changes queue behind its look saves. Compatible waiting slider snapshots
+ * coalesce only next to each other, preserving independent operations in order. */
+function run(label: string, work: LayoutWork, coalesce?: string) {
   const project = useProjectStore.getState().openedProject;
-  if (!project || useLayoutsStore.getState().busy) return;
+  if (!project) return;
   if (project.shortView) {
     shortOp(label, work);
     return;
   }
-  set({ busy: label, error: undefined });
-  void work(project)
-    .then((next) => useProjectStore.getState().applyOpenedProject(next))
-    .catch((err) => set({ error: errorMessage(err) }))
-    .finally(() => set({ busy: null }));
+  set({ error: undefined });
+  const last = pending[pending.length - 1];
+  if (coalesce && last?.coalesce === coalesce && last.generation === generation) {
+    last.work = work;
+    last.label = label;
+  } else pending.push({ label, work, generation, coalesce });
+  void drain();
 }
 
 /** One change to the shown timeline's layouts, as one undo step. */
 export function changeLayouts(change: LayoutChange, label = "Changing layouts") {
-  run(label, (p) => api.projectLayoutsChange(p.projectHandle, p.revision, p.shortView ?? null, change));
+  const coalesce = change.op === "base" || change.op === "settings" || change.op === "update"
+    ? `${change.op}:${change.op === "update" ? change.id : ""}:${Object.keys(change).sort().join(",")}`
+    : undefined;
+  run(label, (p) => api.projectLayoutsChange(p.projectHandle, p.revision, p.shortView ?? null, change), coalesce);
 }
 
 /** Picks sections from the recording with `settings` (else the timeline's own). */
 export function pickLayouts(settings?: PickSettings) {
   run("Picking layouts", async (p) => {
+    const owner = generation;
     const picked = await api.projectLayoutsPick(p.projectHandle, p.revision, p.shortView ?? null, settings);
-    set({
+    if (owner === generation) set({
       notes: [
         picked.picked === 0
           ? "Nothing to pick: the base shows throughout."
@@ -94,8 +137,6 @@ export function layoutKeyTarget(id: string): { name: string; layout: Layout } | 
   return favourite ? { name: favourite.name, layout: favourite.layout } : null;
 }
 
-/** Key presses go out one at a time, each on the project the one before left. */
-let keyQueue: Promise<unknown> = Promise.resolve();
 /** The presses of one stretch of playing, which undo as one step. */
 let keyGroup: string | null = null;
 useProjectStore.subscribe((state, previous) => {
@@ -120,18 +161,7 @@ export function pressLayoutKey(id: string) {
       switchChange(p, currentTimeUs, target.layout, target.name),
       group,
     );
-  if (openedProject.shortView) {
-    shortOp("Switching the layout", work);
-    return;
-  }
-  const handle = openedProject.projectHandle;
-  keyQueue = keyQueue
-    .then(async () => {
-      const project = useProjectStore.getState().openedProject;
-      if (!project || project.projectHandle !== handle || project.shortView) return;
-      useProjectStore.getState().applyOpenedProject(await work(project));
-    })
-    .catch((err) => set({ error: errorMessage(err) }));
+  run("Switching the layout", work);
 }
 
 export async function loadFavourites() {

@@ -493,6 +493,47 @@ fn detect_combined_silence(
 mod tests {
     use super::*;
 
+    /// Exported again next to the project, the video becomes "<project> (2).mp4" instead of
+    /// being refused because "<project>.mp4" is there.
+    #[test]
+    fn an_export_next_to_the_project_takes_a_free_name() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let state = &host.state;
+        let (handle, root, name) = {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().unwrap();
+            (
+                reader.summary.project_handle.clone(),
+                reader.root().to_path_buf(),
+                reader.summary.name.clone(),
+            )
+        };
+        let first = crate::export::default_destination(&root, &name, 0);
+        std::fs::write(&first, b"an earlier export").unwrap();
+        let settings = crate::export::ExportSettings {
+            width: 320,
+            height: 180,
+            ..Default::default()
+        };
+        let status = export_start_impl(state, handle, settings, false).unwrap();
+        assert_ne!(
+            status.state,
+            crate::export::ExportState::Failed,
+            "{:?}",
+            status.failure
+        );
+        let _ = state.export.lock().cancel(&status.job_id);
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            b"an earlier export",
+            "the earlier file stays"
+        );
+    }
+
     #[test]
     fn captions_take_a_chosen_sound_by_its_stream_key() {
         if !crate::media::ffmpeg::available() {
@@ -2727,8 +2768,9 @@ pub fn export_start_impl(
     let root = reader.root().to_path_buf();
     let name = reader.summary.name.clone();
     drop(opened);
-    // A queued export never writes over a file there or one an export before it will write.
-    if queue {
+    // Next to the project (no place chosen), an export again is "<project> (2).mp4" rather than
+    // refused; a queued one never writes over a file there or one an export before it will.
+    if queue || settings.destination.is_none() {
         let taken = state.export.lock().waiting_destinations(&root);
         let wanted = settings.destination.clone().map_or_else(
             || crate::export::default_destination(&root, &name, 0),

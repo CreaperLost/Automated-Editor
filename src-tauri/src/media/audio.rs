@@ -87,6 +87,8 @@ struct Span {
     segments: Arc<Vec<SegmentSummary>>,
     /// Moments of its sound that are muted, in the sound's own time.
     mutes: Mutes,
+    /// Its sound's room, played where it is muted (SND-4).
+    room: Option<Arc<super::room_tone::RoomTone>>,
     /// The clip's own gain and fades, over where the clip itself plays (not the crossfade
     /// either side of it).
     mix: crate::sequence::ClipMix,
@@ -142,6 +144,7 @@ impl Span {
             gain: 1.0,
             segments: self.segments.clone(),
             mutes: self.mutes.clone(),
+            room: None,
             mix: Default::default(),
             clip_start: 0,
             clip_len: SOURCE_END_US,
@@ -204,6 +207,8 @@ pub struct LaneClip {
     pub segments: Arc<Vec<SegmentSummary>>,
     /// Moments of its sound that are muted, in the sound's own time (merged, in order).
     pub mutes: Arc<Vec<(u64, u64)>>,
+    /// Its sound's room tone, for its muted moments (SND-4).
+    pub room: Option<Arc<super::room_tone::RoomTone>>,
     /// Its own gain and fades.
     pub mix: crate::sequence::ClipMix,
 }
@@ -260,6 +265,12 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
                     )
                 })
                 .clone();
+            // The room under its muted moments, from the sound's first file.
+            let room = (!mutes.is_empty())
+                .then(|| segments.iter().find(|s| s.available))
+                .flatten()
+                .and_then(|s| crate::project::reader::safe_path(root, &s.relative_path).ok())
+                .and_then(|path| super::room_tone::of_file(&path));
             clips.push(LaneClip {
                 edited_start: clip.start_us,
                 in_us: clip.in_us,
@@ -269,6 +280,7 @@ pub fn lanes(root: &Path, document: &EditDocument) -> Vec<Lane> {
                 source_end: asset.duration_us,
                 segments,
                 mutes,
+                room,
                 mix: clip.mix,
             });
         }
@@ -373,6 +385,7 @@ impl AudioMixer {
                     gain: lane.gain * polish.as_ref().map_or(1.0, |p| p.lane_gain(&lane.id)),
                     segments: clip.segments.clone(),
                     mutes: clip.mutes.clone(),
+                    room: clip.room.clone(),
                     mix: clip.mix,
                     clip_start: clip.edited_start,
                     clip_len: clip.edited_len,
@@ -482,12 +495,19 @@ impl AudioMixer {
                         .fade_gain(t - span.clip_start as f64, span.clip_len as f64);
             }
             // A stretched span's mutes are in the sound it stretches (see `sound`).
+            let mut room = 0.0;
             if span.speed == 1.0 && !span.mutes.is_empty() {
                 let source = span.source_start as f64 + (t - span.edited_start as f64);
-                gain = gain.min(mute_gain(&span.mutes, source));
+                let muted = mute_gain(&span.mutes, source);
+                // The room fills what the mute takes away, at the track's level.
+                if let Some(tone) = &span.room {
+                    room = tone.at(source) * (1.0 - muted) * gain * span.gain;
+                }
+                gain = gain.min(muted);
             }
             for ch in 0..2 {
-                mixed[(frame - start) as usize * 2 + ch] *= gain;
+                let at = (frame - start) as usize * 2 + ch;
+                mixed[at] = mixed[at] * gain + room;
             }
         }
         for (sum, sample) in out.iter_mut().zip(mixed) {
@@ -848,11 +868,13 @@ impl AudioMixer {
                 // Its muted moments, before it is stretched.
                 if !span.mutes.is_empty() {
                     for n in from..b {
-                        let gain = mute_gain(&span.mutes, n as f64 * 1e6 / SAMPLE_RATE as f64);
+                        let us = n as f64 * 1e6 / SAMPLE_RATE as f64;
+                        let gain = mute_gain(&span.mutes, us);
                         if gain < 1.0 {
+                            let room = span.room.as_ref().map_or(0.0, |t| t.at(us) * (1.0 - gain));
                             let at = (n - a) as usize * 2;
-                            samples[at] *= gain;
-                            samples[at + 1] *= gain;
+                            samples[at] = samples[at] * gain + room;
+                            samples[at + 1] = samples[at + 1] * gain + room;
                         }
                     }
                 }
@@ -1570,6 +1592,35 @@ mod tests {
         );
         assert_eq!(frame(&muted, 490_000), frame(&plain, 490_000));
         assert_eq!(frame(&muted, 530_000), frame(&plain, 530_000));
+    }
+
+    /// A muted moment plays the sound's own room (its quietest stretch that isn't silence)
+    /// instead of silence (SND-4); a sound with no quiet stretch keeps silence.
+    #[test]
+    fn muted_moments_play_the_rooms_tone() {
+        // Half a second of a faint hum (the room), then speech.
+        let mut samples: Vec<i16> = (0..24_000)
+            .map(|i| ((i as f64 * 0.05).sin() * 80.0) as i16)
+            .collect();
+        samples.extend(std::iter::repeat_n(16384, 24_000));
+        let (dir, mut doc) = fixture(48_000, 1, samples);
+        let key = crate::sequence::StreamRef::new("mic", "sound0").key();
+        doc.noise_mutes.insert(
+            key,
+            vec![crate::sequence::SourceRange {
+                start_us: 700_000,
+                end_us: 760_000,
+            }],
+        );
+        let muted = mix_all(&AudioMixer::new(dir.path(), &doc).unwrap());
+        let middle: Vec<f64> = (710..750)
+            .map(|ms| muted[(ms * 48) as usize * 2].abs())
+            .collect();
+        let loudest = middle.iter().copied().fold(0.0, f64::max);
+        assert!(
+            loudest > 0.0005 && loudest < 0.01,
+            "the room, not silence nor speech: {loudest}"
+        );
     }
 
     /// A muted moment of a clip played at twice the speed is silent where it plays, half as

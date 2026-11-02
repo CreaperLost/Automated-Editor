@@ -10,6 +10,8 @@ const BATCH = 64;
 /** Pictures kept in memory, the oldest no clip on show wants going first (the backend keeps them
  * on disk). Wanted ones always stay, so a timeline wanting more never asks for them again. */
 const KEEP = 2_000;
+/** Two retries per mounted demand; a later mount starts fresh. */
+const RETRY_MS = [500, 2_000];
 /** Source times are rounded to one of these steps (seconds), so zooming a little or moving a
  * clip asks for pictures already made. */
 const STEPS_S = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 3600];
@@ -20,6 +22,7 @@ const made = new Map<string, string | null>();
 const wanted = new Map<string, number>();
 /** Keys asked for and not answered yet. */
 const asked = new Set<string>();
+const failures = new Map<string, { attempts: number; ready: boolean; timer?: number }>();
 let version = 0;
 const listeners = new Set<() => void>();
 let flushTimer: number | undefined;
@@ -37,6 +40,27 @@ const subscribe = (listener: () => void) => {
 const keyOf = (handle: string, asset: string, stream: string, height: number, atUs: number) =>
   `${handle}\n${asset}\n${stream}\n${height}\n${atUs}`;
 
+function prune() {
+  for (const key of made.keys()) {
+    if (made.size <= KEEP) break;
+    if (!wanted.has(key)) made.delete(key);
+  }
+}
+
+function failed(key: string) {
+  if (!wanted.has(key)) return;
+  const attempts = (failures.get(key)?.attempts ?? 0) + 1;
+  const failure = { attempts, ready: false, timer: undefined as number | undefined };
+  failures.set(key, failure);
+  if (attempts <= RETRY_MS.length) {
+    failure.timer = window.setTimeout(() => {
+      failure.timer = undefined;
+      failure.ready = true;
+      schedule();
+    }, RETRY_MS[attempts - 1]);
+  }
+}
+
 /**
  * Asks for the wanted pictures not made yet, one call at a time per run. Pictures that
  * scrolled away before their turn are never asked for.
@@ -46,7 +70,7 @@ function flush() {
   if (busy) return;
   const groups = new Map<string, { handle: string; asset: string; stream: string; height: number; keys: string[]; times: number[] }>();
   for (const [key, count] of wanted) {
-    if (count <= 0 || made.has(key) || asked.has(key)) continue;
+    if (count <= 0 || made.has(key) || asked.has(key) || failures.get(key)?.ready === false) continue;
     const [handle, asset, stream, height, at] = key.split("\n");
     const group = `${handle}\n${asset}\n${stream}\n${height}`;
     let entry = groups.get(group);
@@ -66,14 +90,19 @@ function flush() {
   keys.forEach((k) => asked.add(k));
   void api
     .projectClipThumbnails(handle, asset, stream, times, height)
-    .then((urls) => keys.forEach((k, i) => made.set(k, urls[i] ?? null)))
-    .catch(() => keys.forEach((k) => made.set(k, null)))
+    .then((urls) => keys.forEach((k, i) => {
+      // Null means a genuine gap/no picture. Missing replies are failures, not absence.
+      const result = urls[i];
+      if (result !== null && typeof result !== "string") failed(k);
+      else {
+        made.set(k, result);
+        failures.delete(k);
+      }
+    }))
+    .catch(() => keys.forEach(failed))
     .finally(() => {
       keys.forEach((k) => asked.delete(k));
-      for (const key of made.keys()) {
-        if (made.size <= KEEP) break;
-        if (!wanted.has(key)) made.delete(key);
-      }
+      prune();
       busy = false;
       notify();
       schedule();
@@ -144,9 +173,14 @@ export const ClipThumbs = React.memo(function ClipThumbs({
     return () => {
       for (const key of mine) {
         const count = (wanted.get(key) ?? 1) - 1;
-        if (count <= 0) wanted.delete(key);
+        if (count <= 0) {
+          wanted.delete(key);
+          window.clearTimeout(failures.get(key)?.timer);
+          failures.delete(key);
+        }
         else wanted.set(key, count);
       }
+      prune();
     };
   }, [keys]);
 

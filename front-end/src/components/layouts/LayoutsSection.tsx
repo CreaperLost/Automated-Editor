@@ -36,8 +36,8 @@ const SAVE_MS = 200;
  * section closes (another Inspector page, another workspace) is saved then, not lost.
  */
 function useLater() {
-  const { schedule } = useDebouncedSave(SAVE_MS);
-  return (work: () => void) => schedule(() => work());
+  const { schedule, isPending } = useDebouncedSave(SAVE_MS);
+  return { later: (work: () => void) => schedule(() => work()), isPending };
 }
 
 const Tile: React.FC<{
@@ -92,7 +92,7 @@ export const LayoutsSection: React.FC = () => {
   const project = useProjectStore((s) => s.openedProject);
   const timelineSelection = useProjectStore((s) => s.timelineSelection);
   const { selectedId, favourites, busy, error, notes } = useLayoutsStore();
-  const later = useLater();
+  const { later, isPending } = useLater();
   const [favouriteName, setFavouriteName] = useState<string | null>(null);
   const [showPick, setShowPick] = useState(false);
   // A slider's change shows here at once and is saved a moment later.
@@ -111,7 +111,13 @@ export const LayoutsSection: React.FC = () => {
   useEffect(() => {
     setDraft(null);
     setPickDraft(null);
-  }, [project?.revision]);
+  }, [project?.projectHandle, project?.shortView]);
+  useEffect(() => {
+    // An earlier response must not replace a newer slider draft still waiting to save.
+    if (busy || isPending()) return;
+    setDraft(null);
+    setPickDraft(null);
+  }, [project?.revision, busy, isPending]);
   if (!project) return null;
 
   const portrait = project.shortView ? true : project.layout?.aspectRatio === "9:16";

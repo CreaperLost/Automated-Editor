@@ -498,8 +498,8 @@ pub struct GraphicUpdated {
     pub project: Option<OpenedProject>,
 }
 
-/// Changes a graphic's variables and style (its source: no undo step; it renders again) and,
-/// with `name`, its name (an edit). `style` is `project` (the project's) or a style's name.
+/// Changes a graphic's variables, style and name, one undo step with its files (SAFE-3); it
+/// renders again. `style` is `project` (the project's) or a style's name.
 #[allow(clippy::too_many_arguments)]
 pub fn project_graphic_set_impl(
     state: &AppState,
@@ -516,6 +516,7 @@ pub fn project_graphic_set_impl(
     require_handle(reader, &project_handle)?;
     let asset = graphic_asset(reader, &asset_id)?;
     let dir = graphics::folder(reader.root(), &asset.id);
+    let before = reader.keep_graphic_files(&asset.id)?;
     let mut source = graphics::read_source(&dir)?;
     if !variables.is_empty() {
         let declared = graphics::declarations(&dir)?;
@@ -531,17 +532,28 @@ pub fn project_graphic_set_impl(
     let name = name
         .map(|n| n.trim().chars().take(80).collect::<String>())
         .filter(|n| !n.is_empty() && *n != asset.name);
-    let mut project = None;
+    let mut next = None;
     if let Some(name) = &name {
-        let mut next = reader.document().clone();
-        if let Some(found) = next.assets.iter_mut().find(|a| a.id == asset.id) {
+        let mut renamed = reader.document().clone();
+        if let Some(found) = renamed.assets.iter_mut().find(|a| a.id == asset.id) {
             found.name = name.clone();
         }
-        project = Some(reader.commit_document(expected_revision, next)?);
+        next = Some(renamed);
         source.name = name.clone();
     }
+    let mut project = None;
     if !variables.is_empty() || name.is_some() || style.is_some() {
+        if reader.history().current.revision != expected_revision {
+            return Err("Stale edit revision".into());
+        }
         graphics::write_source(&dir, &source)?;
+        let label = format!("Change graphic \"{}\"", source.name);
+        project = reader.commit_graphic_files(
+            expected_revision,
+            vec![(asset.id.clone(), before)],
+            next,
+            label,
+        )?;
     }
     if project.is_some() {
         state
@@ -556,20 +568,21 @@ pub fn project_graphic_set_impl(
     })
 }
 
-/// Sets look tokens of a graphic's own over its style's (`None` takes one back to the style's).
-/// Like its variables, its source changes in place (no undo step); it renders again.
+/// Sets look tokens of a graphic's own over its style's (`None` takes one back to the style's),
+/// one undo step like its variables (SAFE-3); it renders again.
 pub fn project_graphic_look_set_impl(
     state: &AppState,
     project_handle: String,
     asset_id: String,
     tokens: std::collections::BTreeMap<String, Option<String>>,
-) -> Result<graphics::GraphicView, String> {
+) -> Result<GraphicUpdated, String> {
     let _guard = state.command_lock.lock();
-    let opened = state.opened_project.lock();
-    let reader = opened.as_ref().ok_or("No opened project")?;
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
     require_handle(reader, &project_handle)?;
     let asset = graphic_asset(reader, &asset_id)?;
     let dir = graphics::folder(reader.root(), &asset.id);
+    let before = reader.keep_graphic_files(&asset.id)?;
     let mut source = graphics::read_source(&dir)?;
     for (name, value) in tokens {
         match value {
@@ -580,7 +593,38 @@ pub fn project_graphic_look_set_impl(
     graphics::look::check_tokens(&source.look)?;
     graphics::write_source(&dir, &source)?;
     render::sources_changed();
-    graphics::view(reader.root(), &asset)
+    let revision = reader.history().current.revision;
+    let label = format!("Change the look of graphic \"{}\"", source.name);
+    let project =
+        reader.commit_graphic_files(revision, vec![(asset.id.clone(), before)], None, label)?;
+    Ok(GraphicUpdated {
+        graphic: graphics::view(reader.root(), &asset)?,
+        project,
+    })
+}
+
+/// Writes file `path` of graphic `asset_id` (its composition, or an image or font it uses),
+/// one undo step (SAFE-3).
+pub fn project_graphic_write_file_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    path: &str,
+    bytes: &[u8],
+) -> Result<Option<OpenedProject>, String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let asset = graphic_asset(reader, &asset_id)?;
+    if reader.history().current.revision != expected_revision {
+        return Err("Stale edit revision".into());
+    }
+    let before = reader.keep_graphic_files(&asset.id)?;
+    graphics::write_file(&graphics::folder(reader.root(), &asset.id), path, bytes)?;
+    let label = format!("Write {path} of graphic \"{}\"", asset.name);
+    reader.commit_graphic_files(expected_revision, vec![(asset.id, before)], None, label)
 }
 
 /// Forgets failed renders and looks at the graphics' files again (after a hand edit).

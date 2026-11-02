@@ -2467,7 +2467,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         FillerReview::OpenRouter => Some(FillerEngine::Cloud),
         FillerReview::Local => Some(FillerEngine::Local),
         // The OpenRouter review first: measured against the local one on 21 Oct 2026 it missed
-        // fewer cuts and made no wrong ones (docs/plans/local-review-eval.md).
+        // fewer cuts and made no wrong ones (docs/verification.md#speech-review-evaluation).
         FillerReview::Auto if ctx.host.ai_review_ready() => Some(FillerEngine::Cloud),
         FillerReview::Auto if ctx.host.local_review_ready() => Some(FillerEngine::Local),
         FillerReview::Auto | FillerReview::InHouse => None,
@@ -4815,6 +4815,11 @@ pub(super) fn word_edited_us(ctx: &Ctx, stream: Option<String>, word: &str) -> R
 }
 
 fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
+    // Its text, look, length and place change together: one undo step.
+    crate::project::history::as_one_step(|| graphic_set_parts(ctx, args))
+}
+
+fn graphic_set_parts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: GraphicSetArgs = params(args)?;
     let before = opened(ctx)?;
     let dir = graphic_folder(ctx, &args.graphic)?;
@@ -4980,13 +4985,13 @@ fn graphic_set(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 args.graphic.clone(),
                 args.look.clone(),
             )?;
-            lines.push(if view.look.is_empty() {
+            lines.push(if view.graphic.look.is_empty() {
                 format!("Graphic {} takes its style's look.", args.graphic)
             } else {
                 format!(
                     "Graphic {} has look tokens of its own: {}.",
                     args.graphic,
-                    serde_json::to_string(&view.look).unwrap_or_default()
+                    serde_json::to_string(&view.graphic.look).unwrap_or_default()
                 )
             });
         }
@@ -5145,7 +5150,16 @@ fn graphic_write_file(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         }
         (Some(contents), true) => contents.into_bytes(),
     };
-    crate::graphics::write_file(&dir, &args.path, &bytes)?;
+    let before = opened(ctx)?;
+    // One undo step (SAFE-3).
+    commands::graphics::project_graphic_write_file_impl(
+        ctx.state,
+        before.handle.clone(),
+        before.revision,
+        args.graphic.clone(),
+        &args.path,
+        &bytes,
+    )?;
     let mut lines = vec![format!("Wrote {} ({} bytes).", args.path, bytes.len())];
     if args.path.ends_with(".html") {
         match crate::graphics::render::lint(&dir) {
@@ -5153,7 +5167,7 @@ fn graphic_write_file(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             Err(why) => lines.push(format!("Not linted: {why}")),
         }
     }
-    text(lines.join("\n"))
+    text(applied(ctx, "graphic_write_file", &before, lines)?)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -6940,6 +6954,86 @@ mod tests {
         )
         .unwrap_err();
         assert!(wrong.starts_with("Graphic 1:"), "{wrong}");
+    }
+
+    #[test]
+    fn a_graphics_text_and_files_come_back_with_undo_and_redo() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        call(
+            &ctx,
+            "graphic_add",
+            json!({ "template": "key-point", "atUs": 0, "lengthUs": 2_000_000,
+                    "variables": { "statement": "First" } }),
+        )
+        .unwrap();
+        let (id, root) = with_reader(ctx.state, |reader| {
+            let id = reader
+                .document()
+                .assets
+                .iter()
+                .find(|a| a.is_graphic())
+                .unwrap()
+                .id
+                .clone();
+            Ok((id, reader.root().to_path_buf()))
+        })
+        .unwrap();
+        let folder = crate::graphics::folder(&root, &id);
+        let statement = || {
+            crate::graphics::read_source(&folder).unwrap().variables["statement"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let undo_steps =
+            |ctx: &Ctx| with_reader(ctx.state, |r| Ok(r.history().steps().undo_len())).unwrap();
+        let steps = undo_steps(&ctx);
+        // Text and length in one call: one undo step.
+        call(
+            &ctx,
+            "graphic_set",
+            json!({ "graphic": id, "variables": { "statement": "Second" }, "lengthUs": 3_000_000 }),
+        )
+        .unwrap();
+        assert_eq!(statement(), "Second");
+        assert_eq!(undo_steps(&ctx), steps + 1, "one undo step");
+        call(&ctx, "undo", json!({})).unwrap();
+        assert_eq!(statement(), "First", "undo puts the text back");
+        call(&ctx, "redo", json!({})).unwrap();
+        assert_eq!(statement(), "Second", "redo brings it again");
+
+        // A file an agent writes, and one it adds.
+        let page = std::fs::read_to_string(folder.join("index.html")).unwrap();
+        call(
+            &ctx,
+            "graphic_write_file",
+            json!({ "graphic": id, "path": "index.html", "contents": page.replace("<body", "<!-- mine --><body") }),
+        )
+        .unwrap();
+        call(
+            &ctx,
+            "graphic_write_file",
+            json!({ "graphic": id, "path": "notes.txt", "contents": "extra" }),
+        )
+        .unwrap();
+        assert!(folder.join("notes.txt").is_file());
+        call(&ctx, "undo", json!({})).unwrap();
+        assert!(
+            !folder.join("notes.txt").exists(),
+            "an added file goes again"
+        );
+        call(&ctx, "undo", json!({})).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.join("index.html")).unwrap(),
+            page,
+            "the page as it was"
+        );
+        assert_eq!(statement(), "Second", "a step the undo didn't reach stays");
     }
 
     #[test]

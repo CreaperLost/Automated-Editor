@@ -96,6 +96,29 @@ pub struct EditDocument {
     /// What the Export dialog starts with.
     #[serde(default)]
     pub export: crate::preset::settings::ExportPreferences,
+    /// Each graphic's source files as they were at this edit (SAFE-3): graphic id, then path
+    /// in its folder, then the hash of the bytes kept in `history/files`. A graphic changed by
+    /// hand since is noted before the next change of it ([`EditHistory::note_graphic_files`]).
+    #[serde(default, skip_serializing_if = "GraphicFiles::is_empty")]
+    pub graphic_files: GraphicFiles,
+}
+
+/// Graphic id, then path in its folder, then the hash of the file's bytes.
+pub type GraphicFiles =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
+
+/// The file hashes of the graphics whose files differ between `was` and `now`: what undoing
+/// or redoing that step puts back.
+pub fn changed_graphic_files(was: &GraphicFiles, now: &GraphicFiles) -> Vec<String> {
+    let mut hashes = std::collections::BTreeSet::new();
+    for id in was.keys().chain(now.keys()) {
+        if was.get(id) != now.get(id) {
+            for files in [was.get(id), now.get(id)].into_iter().flatten() {
+                hashes.extend(files.values().cloned());
+            }
+        }
+    }
+    hashes.into_iter().collect()
 }
 
 fn default_style() -> String {
@@ -139,6 +162,7 @@ impl Default for EditDocument {
             clips_preset: default_clips_preset(),
             cleanup: Default::default(),
             export: Default::default(),
+            graphic_files: Default::default(),
         }
     }
 }
@@ -595,7 +619,9 @@ impl EditHistory {
         let before = self.log.current_state(persist_root, &self.current)?;
         let after = self.log.save_state(persist_root, &next)?;
         persist_revision(persist_root, expected_revision, &next)?;
-        let meta = meta.unwrap_or_else(StepMeta::for_this_thread);
+        let mut meta = meta.unwrap_or_else(StepMeta::for_this_thread);
+        // The graphic files the step changes are kept as long as the step (SAFE-3).
+        meta.files = changed_graphic_files(&self.current.graphic_files, &next.graphic_files);
         let was = &self.current;
         self.log
             .record_commit(persist_root, before, after, meta, next.revision, || {
@@ -1437,6 +1463,65 @@ impl EditHistory {
 
     pub fn delete_checkpoint(&mut self, persist_root: &Path, id: &str) -> Result<(), String> {
         self.log.delete_checkpoint(persist_root, id)
+    }
+
+    /// Notes graphic `id`'s files as they are now in the current edit, without a step: what
+    /// undoing its next change goes back to, even after a change made by hand.
+    pub fn note_graphic_files(
+        &mut self,
+        persist_root: &Path,
+        id: &str,
+        files: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if self.current.graphic_files.get(id) == Some(&files) {
+            return Ok(());
+        }
+        self.current.graphic_files.insert(id.to_string(), files);
+        let hash = self.log.save_state(persist_root, &self.current)?;
+        self.log.adopt_current(hash);
+        Ok(())
+    }
+
+    /// Keeps a graphic file's bytes in the history; returns its hash.
+    pub fn keep_file(&mut self, persist_root: &Path, bytes: &[u8]) -> Result<String, String> {
+        self.log.save_file(persist_root, bytes)
+    }
+
+    /// After an undo or redo from `was`: puts back the files of each graphic whose files
+    /// differ in the edit now, and takes away files it did not have then. Graphics the step
+    /// did not change are left alone (a change made by hand to one stays). Says what failed.
+    pub fn restore_graphic_files(&self, persist_root: &Path, was: &GraphicFiles) -> Vec<String> {
+        let mut problems = Vec::new();
+        let mut changed = false;
+        for (id, files) in &self.current.graphic_files {
+            let before = was.get(id);
+            if before == Some(files) {
+                continue;
+            }
+            let dir = crate::graphics::folder(persist_root, id);
+            for (path, hash) in files {
+                let target = dir.join(path);
+                if before.and_then(|b| b.get(path)) == Some(hash) && target.is_file() {
+                    continue;
+                }
+                match self.log.load_file(persist_root, hash) {
+                    Ok(bytes) => match crate::graphics::restore_file(&dir, path, &bytes) {
+                        Ok(()) => changed = true,
+                        Err(error) => problems.push(error),
+                    },
+                    Err(error) => problems.push(format!("{id}/{path}: {error}")),
+                }
+            }
+            for path in before.into_iter().flat_map(|b| b.keys()) {
+                if !files.contains_key(path) && std::fs::remove_file(dir.join(path)).is_ok() {
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            crate::graphics::render::sources_changed();
+        }
+        problems
     }
 
     pub fn undo(

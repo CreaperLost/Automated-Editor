@@ -4,6 +4,7 @@ pub mod declick;
 pub mod ffmpeg;
 mod native;
 pub mod polish;
+pub mod room_tone;
 
 use crate::project::pcm::PcmReader;
 use serde::{Deserialize, Serialize};

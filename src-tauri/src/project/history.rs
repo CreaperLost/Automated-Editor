@@ -57,13 +57,15 @@ pub struct StepMeta {
     /// Steps in a row with the same group are one undo step (layout keys pressed while
     /// playing, LAY-2).
     pub group: Option<String>,
+    /// The graphic files (hashes) the step changes, kept while the step is (SAFE-3).
+    pub files: Vec<String>,
 }
 
 impl StepMeta {
     /// Who is making a step on this thread: the agent while one of its calls runs, else the
     /// user.
     pub fn for_this_thread() -> Self {
-        AGENT_CALL.with(|call| match &*call.borrow() {
+        let mut meta = AGENT_CALL.with(|call| match &*call.borrow() {
             Some((agent, tool)) => Self {
                 by: Author::Agent,
                 agent: Some(agent.clone()),
@@ -72,8 +74,30 @@ impl StepMeta {
                 ..Self::default()
             },
             None => Self::default(),
-        })
+        });
+        meta.group = ONE_STEP.with(|group| group.borrow().clone());
+        meta
     }
+}
+
+thread_local! {
+    /// While set, the steps made on this thread are one undo step ([`as_one_step`]).
+    static ONE_STEP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `change` with every step it makes on this thread joined into one undo step: one call
+/// that changes several things at once.
+pub fn as_one_step<T>(change: impl FnOnce() -> T) -> T {
+    struct Reset(Option<String>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ONE_STEP.with(|g| *g.borrow_mut() = self.0.take());
+        }
+    }
+    let id = format!("call-{}", uuid::Uuid::new_v4().simple());
+    let previous = ONE_STEP.with(|g| g.borrow_mut().replace(id));
+    let _reset = Reset(previous);
+    change()
 }
 
 thread_local! {
@@ -227,6 +251,9 @@ pub struct Step {
     /// The next step with the same group joins this one ([`StepMeta::group`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The graphic files (hashes in `history/files`) undoing or redoing it puts back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 /// The newest agent run in the undo history, as the Agent panel shows it.
@@ -693,6 +720,7 @@ impl History {
                             revision: current.revision,
                             at: now(),
                             group: None,
+                            files: Vec::new(),
                         });
                         note = Some(
                             "The edit had changed since its undo history was saved; the change \
@@ -768,6 +796,11 @@ impl History {
         store_state(root, document, &mut self.sizes)
     }
 
+    /// The current document is now the state `hash` (saved already), without a step.
+    pub fn adopt_current(&mut self, hash: String) {
+        self.current = Some(hash);
+    }
+
     /// The hash of the current document, saving it first when history starts with it.
     pub fn current_state(
         &mut self,
@@ -810,8 +843,13 @@ impl History {
                 .undo
                 .last()
                 .is_some_and(|top| top.group == meta.group && top.after == before);
+        let mut files = meta.files;
         let before = if joins {
-            self.undo.pop().expect("checked above").before
+            let top = self.undo.pop().expect("checked above");
+            files.extend(top.files);
+            files.sort();
+            files.dedup();
+            top.before
         } else {
             before
         };
@@ -828,6 +866,7 @@ impl History {
             revision,
             at: now(),
             group: meta.group,
+            files,
         };
         self.current = Some(after);
         self.undo.push(step.clone());
@@ -914,10 +953,17 @@ impl History {
                 }
             }
         }
+        // Kept: a checkpoint's graphic files, and those a step still held puts back.
         let kept: std::collections::HashSet<&String> = self
             .checkpoints
             .iter()
             .flat_map(|c| c.graphics.values().flat_map(|files| files.values()))
+            .chain(
+                self.undo
+                    .iter()
+                    .chain(self.redo.iter())
+                    .flat_map(|s| &s.files),
+            )
             .collect();
         let unused: Vec<String> = self
             .file_sizes

@@ -72,7 +72,7 @@ pub enum FillerEngine {
     Local,
     /// The OpenRouter or OpenAI model below, on the user's key; the local model stands in
     /// while no key is set. The default: it misses fewer cuts and makes fewer wrong ones
-    /// (docs/plans/local-review-eval.md).
+    /// (docs/verification.md#speech-review-evaluation).
     #[default]
     Cloud,
 }

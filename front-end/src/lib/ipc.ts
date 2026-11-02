@@ -551,7 +551,7 @@ export const api = {
     invokeTauri<string>("project_frame_thumbnail", { projectHandle, atUs, width }),
   /** Small JPEG data URLs of a clip's source at `timesUs` (its own clock); null where it has no picture. */
   projectClipThumbnails: (projectHandle: string, assetId: string, stream: string, timesUs: number[], height: number) =>
-    invokeTauri<(string | null)[]>("project_clip_thumbnails", { projectHandle, assetId, stream, timesUs, height }),
+    invokeTauri<(string | null | { error: string })[]>("project_clip_thumbnails", { projectHandle, assetId, stream, timesUs, height }),
   /**
    * Sets variables (`null` puts one back to its default) and, optionally, the name and the
    * style ("project" follows the project's).
@@ -622,8 +622,9 @@ export const api = {
   stylePreview: (projectHandle: string, style: Style) =>
     invokeTauri<LookStill[]>("style_preview", { projectHandle, style }),
   /** Look tokens of a graphic's own over its style's (null takes one back). */
+  /** Look tokens of a graphic's own; one undo step (the project comes back with it). */
   projectGraphicLookSet: (projectHandle: string, assetId: string, tokens: Record<string, string | null>) =>
-    invokeTauri<GraphicView>("project_graphic_look_set", { projectHandle, assetId, tokens }),
+    invokeTauri<GraphicUpdated>("project_graphic_look_set", { projectHandle, assetId, tokens }),
   /** What bringing the video's graphics in line with its look would change, changing nothing. */
   graphicsInLinePlan: (projectHandle: string) => invokeTauri<InLinePlan[]>("graphics_in_line_plan", { projectHandle }),
   /** Brings those graphics in line, one undo step. */

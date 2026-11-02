@@ -3,11 +3,60 @@
 //! the words that spell a term with other spacing or case ("claude code", "chat gpt") take
 //! the term's spelling. Parakeet takes no hints, so for it a run of two or more words that
 //! sounds like a term ("cloud code") becomes the term too. A single word that only sounds like
-//! one ("codecs", "cloud") is left alone: it is as likely the real word.
+//! one ("codecs" for Codex) takes it only where the speaker is plainly talking about it: the
+//! term itself, spelled right, within [`NEAR_WORDS`] words, and never an everyday word that
+//! happens to sound alike ("cloud" near Claude is a real cloud).
 use super::{TranscriptWord, WordKind};
 
 /// Most words a heard run may span beyond the term's own.
 const EXTRA_WORDS: usize = 2;
+/// How near (in words either way) the term must be said right for a single sound-alike word
+/// to take it.
+const NEAR_WORDS: usize = 30;
+/// Everyday words that sound like product names; a single one is never respelled.
+const EVERYDAY: &[&str] = &[
+    "cloud",
+    "clouds",
+    "could",
+    "code",
+    "codes",
+    "coded",
+    "coding",
+    "called",
+    "cold",
+    "close",
+    "clause",
+    "claws",
+    "card",
+    "cards",
+    "cord",
+    "course",
+    "cursor",
+    "cursors",
+    "git",
+    "get",
+    "got",
+    "chat",
+    "jam",
+    "gem",
+    "germ",
+    "lama",
+    "llama",
+    "mid",
+    "journey",
+    "notion",
+    "slack",
+    "zoom",
+    "teams",
+    "word",
+    "excel",
+    "copilot",
+    "pilot",
+    "bard",
+    "grok",
+    "rock",
+    "perplexity",
+];
 
 /// Gives terms their spelling in `words`, returning what changed (`"cloud code" -> "Claude
 /// Code" (2)`). `sound_alike` also takes runs that sound like a term. Word ids are numbered
@@ -76,6 +125,7 @@ pub fn apply(words: &mut Vec<TranscriptWord>, terms: &[String], sound_alike: boo
             word.id = format!("w-{n}");
         }
     }
+    near_sound_alikes(words, &terms, &mut changes);
     changes
         .into_iter()
         .map(|(from, to, n)| match n {
@@ -83,6 +133,46 @@ pub fn apply(words: &mut Vec<TranscriptWord>, terms: &[String], sound_alike: boo
             n => format!("\"{from}\" -> \"{to}\" ({n})"),
         })
         .collect()
+}
+
+/// Single words that sound like a one-word term take it where the term is said right nearby
+/// (any transcriber: Scribe's hints miss some too).
+fn near_sound_alikes(
+    words: &mut [TranscriptWord],
+    terms: &[(&str, Vec<&str>, String)],
+    changes: &mut Vec<(String, String, usize)>,
+) {
+    for (term, tokens, key) in terms.iter().filter(|(_, tokens, _)| tokens.len() == 1) {
+        let said: Vec<usize> = words
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.kind == WordKind::Word && letters(&w.text) == *key)
+            .map(|(i, _)| i)
+            .collect();
+        if said.is_empty() {
+            continue;
+        }
+        for i in 0..words.len() {
+            let heard = letters(&words[i].text);
+            let alike = words[i].kind == WordKind::Word
+                && heard != *key
+                && !EVERYDAY.contains(&heard.as_str())
+                && sounds_like(&heard, key);
+            if !alike || !said.iter().any(|&j| j.abs_diff(i) <= NEAR_WORDS) {
+                continue;
+            }
+            let before = words[i]
+                .text
+                .trim_end_matches(|c: char| !c.is_alphanumeric())
+                .to_string();
+            let tail = trailing(&words[i].text).to_string();
+            words[i].text = format!("{}{tail}", tokens[0]);
+            match changes.iter_mut().find(|c| c.0 == before && c.1 == *term) {
+                Some(change) => change.2 += 1,
+                None => changes.push((before, term.to_string(), 1)),
+            }
+        }
+    }
 }
 
 /// Letters and digits, lower case: what a word spells whatever its spacing and punctuation.
@@ -198,6 +288,24 @@ mod tests {
         let mut w = words("I use cloud code and code x daily");
         apply(&mut w, &terms(&["Claude Code", "Codex"]), true);
         assert_eq!(text(&w), "I use Claude Code and Codex daily");
+    }
+
+    #[test]
+    fn a_single_sound_alike_takes_the_term_where_the_term_is_said_nearby() {
+        let list = terms(&["Codex", "Claude"]);
+        // Codex said right a few words before: "codecs" is Codex too, for any transcriber.
+        let mut w = words("open Codex and then codecs writes the plan");
+        let changes = apply(&mut w, &list, false);
+        assert_eq!(text(&w), "open Codex and then Codex writes the plan");
+        assert_eq!(changes, ["\"codecs\" -> \"Codex\""]);
+        // An everyday word stays, even next to the term.
+        let mut w = words("Claude saves it to the cloud.");
+        assert!(apply(&mut w, &list, false).is_empty());
+        assert_eq!(text(&w), "Claude saves it to the cloud.");
+        // Too far from where the term is said: left as heard.
+        let far = format!("Codex {} codecs", "word ".repeat(40));
+        let mut w = words(&far);
+        assert!(apply(&mut w, &list, false).is_empty());
     }
 
     #[test]

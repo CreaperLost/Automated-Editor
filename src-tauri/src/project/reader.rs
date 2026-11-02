@@ -787,17 +787,85 @@ impl ProjectReader {
     pub fn commit_document(
         &mut self,
         expected_revision: u64,
-        next: EditDocument,
+        mut next: EditDocument,
     ) -> Result<OpenedProject, String> {
+        // A graphic new to the edit comes with its files as they are (SAFE-3), so its first
+        // change can be undone.
+        let new: Vec<String> = next
+            .assets
+            .iter()
+            .filter(|a| a.is_graphic() && !next.graphic_files.contains_key(&a.id))
+            .map(|a| a.id.clone())
+            .filter(|id| crate::graphics::folder(&self.root, id).is_dir())
+            .collect();
+        for id in new {
+            match self.keep_graphic_files(&id) {
+                Ok(files) => {
+                    next.graphic_files.insert(id, files);
+                }
+                Err(error) => eprintln!("history: graphic {id}'s files are not kept: {error}"),
+            }
+        }
         self.history
             .commit_next(expected_revision, &self.root, next)?;
         Ok(self.done())
     }
 
     pub fn undo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
+        let was = self.history.current.graphic_files.clone();
         self.history.undo(expected_revision, &self.root)?;
+        self.put_back_graphic_files(&was);
         self.index_recordings_quietly();
         Ok(self.done())
+    }
+
+    /// Graphic `id`'s files as they are on disk, kept in the history (SAFE-3).
+    pub fn keep_graphic_files(
+        &mut self,
+        id: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, String> {
+        let dir = crate::graphics::folder(&self.root, id);
+        let mut files = Vec::new();
+        crate::graphics::render::list_files(&dir, &dir, &mut files)?;
+        let mut kept = std::collections::BTreeMap::new();
+        for (relative, path) in files {
+            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            kept.insert(relative, self.history.keep_file(&self.root, &bytes)?);
+        }
+        Ok(kept)
+    }
+
+    /// One undo step for graphics whose files just changed: `before` holds each one's files
+    /// from just before ([`Self::keep_graphic_files`]), `next` the edit to commit with them
+    /// (the current one when `None`). Nothing is committed when nothing changed.
+    pub fn commit_graphic_files(
+        &mut self,
+        expected_revision: u64,
+        before: Vec<(String, std::collections::BTreeMap<String, String>)>,
+        next: Option<EditDocument>,
+        label: String,
+    ) -> Result<Option<OpenedProject>, String> {
+        let mut after = Vec::with_capacity(before.len());
+        for (id, files) in before {
+            self.history.note_graphic_files(&self.root, &id, files)?;
+            after.push((id.clone(), self.keep_graphic_files(&id)?));
+        }
+        let mut next = next.unwrap_or_else(|| self.history.current.clone());
+        for (id, files) in after {
+            next.graphic_files.insert(id, files);
+        }
+        if next == self.history.current {
+            return Ok(None);
+        }
+        self.name_next_step(label);
+        self.commit_document(expected_revision, next).map(Some)
+    }
+
+    /// After undo or redo: the graphic files the step changed, back as they were.
+    fn put_back_graphic_files(&self, was: &crate::project::revision::GraphicFiles) {
+        for problem in self.history.restore_graphic_files(&self.root, was) {
+            eprintln!("history: a graphic file could not be put back: {problem}");
+        }
     }
 
     /// Takes back the newest agent run as one step (see [`EditHistory::undo_run`]).
@@ -805,7 +873,9 @@ impl ProjectReader {
         &mut self,
         expected_revision: u64,
     ) -> Result<(OpenedProject, crate::project::history::RunUndo), String> {
+        let was = self.history.current.graphic_files.clone();
         let run = self.history.undo_run(expected_revision, &self.root)?;
+        self.put_back_graphic_files(&was);
         self.index_recordings_quietly();
         Ok((self.done(), run))
     }
@@ -865,7 +935,9 @@ impl ProjectReader {
     }
 
     pub fn redo(&mut self, expected_revision: u64) -> Result<OpenedProject, String> {
+        let was = self.history.current.graphic_files.clone();
         self.history.redo(expected_revision, &self.root)?;
+        self.put_back_graphic_files(&was);
         self.index_recordings_quietly();
         Ok(self.done())
     }
