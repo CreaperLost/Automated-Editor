@@ -28,6 +28,40 @@ pub(crate) fn is_filler_sound(normalized: &str) -> bool {
         || (DRAWN_OUT.contains(&folded.as_str()) && normalized.chars().count() >= 2)
 }
 
+/// Words in a transcriber's sound tag that say the speaker is drinking ("[drinking]", "(sips
+/// water)"), as `normalize` gives them. Only the online transcriber writes such tags. Things
+/// near a drink but not one ("[bottle spritzing]") are left out: those tags can span a minute.
+const DRINKING: &[&str] = &[
+    "drink",
+    "drinks",
+    "drinking",
+    "sip",
+    "sips",
+    "sipping",
+    "gulp",
+    "gulps",
+    "gulping",
+    "swig",
+    "swigs",
+    "slurp",
+    "slurps",
+    "slurping",
+    "swallow",
+    "swallows",
+    "swallowing",
+    "πινει",
+    "πινοντας",
+    "γουλια",
+    "γουλιες",
+    "καταπινει",
+];
+
+/// A sound tag for the speaker drinking.
+fn is_drinking_tag(text: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric())
+        .any(|word| DRINKING.contains(&normalize(word).as_str()))
+}
+
 /// Gaps at least this long end a phrase for retake detection.
 const PHRASE_PAUSE_US: u64 = 400_000;
 /// A restart is preceded by at least this much pause, or by punctuation.
@@ -261,6 +295,8 @@ pub struct TranscriptView {
 pub enum TranscriptSuggestionKind {
     Filler,
     Retake,
+    /// The speaker drinking, from a sound tag the transcriber wrote.
+    Drink,
     /// Anything else an agent suggests cutting (a tangent, a mistake, dead air).
     Cut,
 }
@@ -715,6 +751,21 @@ pub fn suggestions(
         }
     }
 
+    // Drinking: a sound tag, not a said word, so it is none of the above.
+    for tag in transcript
+        .words
+        .iter()
+        .filter(|w| w.kind == WordKind::AudioEvent && is_drinking_tag(&w.text) && kept(w, mapper))
+    {
+        push_suggestion(
+            &mut out,
+            TranscriptSuggestionKind::Drink,
+            &[tag],
+            transcript,
+            mapper,
+        );
+    }
+
     out.sort_by_key(|s| s.edited_start_us);
     for s in out.iter_mut() {
         s.id = format!(
@@ -722,6 +773,7 @@ pub fn suggestions(
             match s.kind {
                 TranscriptSuggestionKind::Filler => "filler",
                 TranscriptSuggestionKind::Retake => "retake",
+                TranscriptSuggestionKind::Drink => "drink",
                 TranscriptSuggestionKind::Cut => "cut",
             },
             s.word_ids.first().map(String::as_str).unwrap_or(""),
@@ -842,6 +894,39 @@ pub(crate) mod tests {
         ] {
             assert!(cut(&meant).is_empty(), "{meant:?}");
         }
+    }
+
+    /// The tag and times are the 3 Nov recording's: "list." [drinking] "But".
+    #[test]
+    fn a_drinking_tag_is_suggested_and_cuts_only_the_drink() {
+        let mut t = transcript(&[
+            ("list.", 105_520, 105_900),
+            ("[drinking]", 105_900, 116_880),
+            ("But", 117_000, 117_180),
+            ("[keyboard clacking]", 118_000, 119_000),
+            ("(Sips water)", 120_000, 121_000),
+            ("drinking", 122_000, 122_400),
+        ]);
+        for i in [1, 3, 4] {
+            t.words[i].kind = WordKind::AudioEvent;
+        }
+        let m = mapper(&[(0, 200_000)]);
+        let found: Vec<_> = suggestions(&t, &m)
+            .into_iter()
+            .filter(|s| s.kind == TranscriptSuggestionKind::Drink)
+            .collect();
+        // Not the keyboard, and not the word "drinking" said aloud.
+        let texts: Vec<&str> = found.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["[drinking]", "(Sips water)"]);
+        assert_eq!(found[0].id, format!("drink-{0}-{0}", t.words[1].id));
+        assert_eq!(
+            word_cuts(&t, &found[0].word_ids, &m).unwrap(),
+            [(105_900_000, 116_940_000)]
+        );
+
+        // Already cut: nothing left to suggest.
+        let m = mapper(&[(0, 105_900), (116_880, 200_000)]);
+        assert!(suggestions(&t, &m).iter().all(|s| s.text != "[drinking]"));
     }
 
     pub(crate) fn transcript(words: &[(&str, u64, u64)]) -> Transcript {

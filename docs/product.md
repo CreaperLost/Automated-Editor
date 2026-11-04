@@ -75,6 +75,7 @@ These are product decisions, not invitations to reopen old proposals.
   sounds on graphic events are opt-in. Better sound placement matters more than a bigger library.
 - Cloud filler review is preferred when a key exists; local Qwen is the fallback without one.
   Online fillers apply directly; retakes and local-model suggestions are listed for review.
+  Drinking sounds Scribe tagged (`[drinking]`) are listed too, and agents cut them with the fillers.
   Greek transcription remains online-only. Provider selection alone is not upload consent.
 - Bundled music must permit monetised use without attribution; unknown or incompatible licences
   are refused or flagged on user imports. Every sound carries its licence. New bundled models

@@ -82,7 +82,7 @@ The passes:
      model when it is downloaded. Don't review the words yourself unless the user asks you to
      or `fillers` says no review could run: the app's review costs you nothing.
    - **The OpenRouter review ran** (`fillers` names it): its fillers are cut without asking.
-     Run `fillers` with `kinds: ["filler"]` (and `guard: true`), then dry-run the retakes
+     Run `fillers` with `kinds: ["filler", "drink"]` (and `guard: true`), then dry-run the retakes
      (`kinds: ["retake"]`, `apply: false`): how many, the seconds they would cut and a few
      examples. Read the transcript around a flagged retake only when it looks like content
      (a full sentence or an item of a list). Choices for the retakes: yes / skip.
@@ -96,7 +96,7 @@ The passes:
      save them in one `fillers_review` call with `cuts` and the pages' `stamp`. With a
      thorough review (or when the windows miss things the user points out), read every word
      with `review: "thorough"` instead. Then dry-run `fillers` the same way.
-   Choices (local or in-house review): yes / fillers only (`kinds: ["filler"]`) / skip. Then
+   Choices (local or in-house review): yes / fillers only (`kinds: ["filler", "drink"]`) / skip. Then
    `fillers`. When the user
    wants nothing sent to OpenRouter, use `review: local`.
 5. **Layouts: only when the user talks about layouts or the camera.** Otherwise skip this pass

@@ -1799,7 +1799,7 @@ export interface ModelDownloadProgress {
   bytesTotal: number | null;
 }
 
-export type CutKind = "filler" | "retake" | "cut";
+export type CutKind = "filler" | "retake" | "drink" | "cut";
 
 export interface TranscriptCutSuggestion {
   id: string;

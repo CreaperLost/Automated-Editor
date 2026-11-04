@@ -125,9 +125,9 @@ pub static ACTIONS: [ToolDef; 36] = [
     },
     ToolDef {
         name: "fillers",
-        description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) in the \
-            transcript, one undo step: the app's rules plus an AI review. By default (`review: \
-            auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
+        description: "Cuts filler words (um, uh, ...), retakes (a sentence restarted) and \
+            drinking sounds in the transcript, one undo step: the app's rules plus an AI \
+            review. By default (`review: auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
             else its built-in local model when downloaded, and otherwise uses the review you \
             saved with `fillers_review` (in-house: you read the transcript). `review: \
             in-house`, `openrouter` or `local` forces one. `apply: false` only lists. `auto` \
@@ -2198,7 +2198,8 @@ pub struct FillerArgs {
     /// Sound key of a transcript. Default: the transcribed speech.
     #[serde(default)]
     pub stream: Option<String>,
-    /// Which to cut: `filler`, `retake`. Default both.
+    /// Which to cut: `filler`, `retake`, `drink` (a drinking sound the transcriber tagged; online
+    /// transcripts only). Default all three.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
     /// Whose review adds to the rules (see the tool's description). `local` and `in-house` send
@@ -2459,6 +2460,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         vec![
             TranscriptSuggestionKind::Filler,
             TranscriptSuggestionKind::Retake,
+            TranscriptSuggestionKind::Drink,
         ]
     });
     // Rules and AI together by default: the rules alone miss most fillers and retakes.
@@ -2565,8 +2567,12 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         .or(saved.as_deref())
         .map(describe)
         .unwrap_or_else(|| "the review".into());
+    let drinks = match count(TranscriptSuggestionKind::Drink) {
+        0 => String::new(),
+        n => format!(", {}", plural(n, "drinking sound")),
+    };
     let mut lines = vec![format!(
-        "Found {} and {} in {key}{}.",
+        "Found {} and {}{drinks} in {key}{}.",
         plural(filler_count, "filler"),
         plural(retake_count, "retake"),
         if use_ai {

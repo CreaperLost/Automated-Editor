@@ -11,7 +11,7 @@ import { formatTimeUs } from "../../hooks/useTimeline";
 import { Badge, Button, IconButton, Notice, PanelHeader, Segmented, Switch, cn, type Tone } from "../ui";
 import { errorMessage } from "../../lib/format";
 
-const KIND_LABEL: Record<ProposalItem["kind"], string> = { filler: "Filler", retake: "Retake", cut: "Cut" };
+const KIND_LABEL: Record<ProposalItem["kind"], string> = { filler: "Filler", retake: "Retake", drink: "Drink", cut: "Cut" };
 /** Lines of an edit batch's diff shown before "Show all". */
 const SUMMARY_LINES = 4;
 

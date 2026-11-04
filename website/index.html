@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AeroEdits</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="We're making video editing free. AeroEdits is an open-source editor your own AI agent drives, replacing the editing layer and the motion graphics layer with skills, MCP and a real timeline.">
+<link rel="icon" href="assets/aeroedits-icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Hanken+Grotesk:ital,wght@0,400..700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout concept: the page is one edit. A timeline ruler stays on top, sections are its chapters,
+   and colour means what it means in the app: teal is kept, coral is cut, amber is a zoom, blue is a graphic. */
+:root {
+  color-scheme: dark;
+  --ink: #06171b;
+  --ink-2: #0b2329;
+  --ink-3: #123239;
+  --line: #24474f;
+  --fg: #eef6f3;
+  --fg-2: #a9c3c0;
+  --fg-3: #7f9d9d;
+  --keep: #2dd4bf;
+  --keep-deep: #0d9488;
+  --cut: #ff6b4a;
+  --zoom: #f5b83d;
+  --gfx: #6ea8ff;
+  --paper: #f3f7fc;
+  --paper-2: #ffffff;
+  --paper-fg: #14202b;
+  --paper-fg-2: #4d5d6c;
+  --paper-line: #d3deea;
+  --paper-accent: #0b6fd8;
+  --display: "Bricolage Grotesque", "Arial Narrow", Impact, sans-serif;
+  --body: "Hanken Grotesk", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono", Consolas, Menlo, monospace;
+  --gutter-l: max(clamp(16px, 4vw, 56px), env(safe-area-inset-left, 0px));
+  --gutter-r: max(clamp(16px, 4vw, 56px), env(safe-area-inset-right, 0px));
+  --bar: 58px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--bar) + 12px); background: var(--ink); }
+body { margin: 0; background: var(--ink); color: var(--fg); font: 400 clamp(17px, 1.25vw, 20px)/1.55 var(--body); -webkit-font-smoothing: antialiased; overflow-x: clip; }
+img { max-width: 100%; display: block; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--keep); outline-offset: 3px; border-radius: 2px; }
+.paper :focus-visible { outline-color: var(--paper-accent); }
+h1, h2, h3, p, ul, ol, figure { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+h1, h2 { font-family: var(--display); font-weight: 800; font-stretch: 78%; letter-spacing: -.012em; text-wrap: balance; }
+h2 { font-size: clamp(2.7rem, 7.4vw, 7rem); line-height: .94; }
+h3 { font-size: 1.15em; font-weight: 700; line-height: 1.25; }
+.wrap { padding-left: var(--gutter-l); padding-right: var(--gutter-r); }
+.inner { max-width: 1400px; margin-inline: auto; }
+.lede { font-size: clamp(1.2rem, 1.9vw, 1.65rem); line-height: 1.38; max-width: 36em; color: var(--fg); }
+.prose { max-width: 38em; color: var(--fg-2); }
+.prose strong { color: var(--fg); font-weight: 600; }
+.tc { font: 500 .78rem/1 var(--mono); letter-spacing: .04em; color: var(--keep); display: flex; gap: .9em; align-items: center; }
+.tc::after { content: ""; flex: 0 0 56px; height: 1px; background: currentColor; opacity: .5; }
+.paper .tc { color: var(--paper-accent); }
+sup { line-height: 0; font-size: .62em; font-family: var(--mono); }
+sup a { color: var(--fg-3); text-decoration: none; padding: 0 .1em; }
+sup a:hover { color: var(--keep); }
+section { padding-block: clamp(72px, 10vw, 150px); }
+
+/* Ruler */
+.ruler { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; height: var(--bar); background: color-mix(in srgb, var(--ink) 94%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: clamp(10px, 2vw, 24px); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--ink); }
+.brand { display: flex; align-items: center; gap: 9px; font: 800 1.12rem/1 var(--display); font-stretch: 85%; text-decoration: none; flex: none; }
+.brand img { width: 26px; height: 26px; }
+.strip { position: relative; flex: 1; min-width: 0; height: 30px; display: flex; gap: 2px; }
+.strip a { flex: var(--w) 1 0; min-width: 0; background: var(--ink-3); border-radius: 3px; font: 500 .68rem/30px var(--mono); padding-inline: 8px; color: var(--fg-2); text-decoration: none; white-space: nowrap; overflow: hidden; transition: background .15s, color .15s; }
+.strip a:hover { background: var(--line); color: var(--fg); }
+.strip a.on { background: var(--keep-deep); color: #fff; }
+.playhead { position: absolute; top: -7px; bottom: -7px; left: 0; width: 2px; background: var(--keep); pointer-events: none; box-shadow: 0 0 10px var(--keep); will-change: transform; }
+.time { font: 500 .85rem/1 var(--mono); color: var(--keep); font-variant-numeric: tabular-nums; flex: none; }
+.star { flex: none; font: 600 .82rem/1 var(--body); text-decoration: none; padding: 9px 13px; border-radius: 5px; background: var(--fg); color: var(--ink); }
+.star:hover { background: var(--keep); }
+@media (max-width: 860px) { .strip a, .strip a:hover, .strip a.on { color: transparent; padding: 0; } .star { display: none; } .brand span { display: none; } }
+
+/* Hero */
+.hero { padding-block: clamp(36px, 5vw, 72px) clamp(56px, 7vw, 96px); }
+.hero h1 { font-size: clamp(3.5rem, 13.6vw, 15rem); line-height: .86; letter-spacing: -.022em; }
+.hero h1 .gone { display: inline-block; position: relative; color: var(--keep); }
+.hero h1 .tag { display: inline-block; font: 500 clamp(.8rem, 1.4vw, 1.25rem)/1 var(--mono); letter-spacing: 0; color: var(--cut); text-decoration: line-through; vertical-align: .95em; margin-left: .4em; white-space: nowrap; }
+.hero-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px clamp(24px, 5vw, 80px); align-items: end; margin-top: clamp(24px, 3vw, 44px); }
+.cta { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { display: inline-block; padding: 14px 20px; border-radius: 6px; font-weight: 600; text-decoration: none; font-size: 1rem; line-height: 1.1; border: 1px solid var(--line); }
+.btn.primary { background: var(--keep); color: var(--ink); border-color: var(--keep); }
+.btn.primary:hover { background: #5eead4; border-color: #5eead4; }
+.btn:not(.primary):hover { border-color: var(--fg-2); }
+@media (max-width: 760px) { .hero-foot { grid-template-columns: minmax(0, 1fr); } }
+
+/* Replay */
+.replay { margin-top: clamp(32px, 4vw, 60px); border: 1px solid var(--line); border-radius: 10px; background: var(--ink-2); overflow: hidden; }
+.replay-head { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); font: 400 .78rem/1.3 var(--mono); color: var(--fg-2); }
+.replay-head b { font-weight: 500; color: var(--fg); }
+.readouts { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-left: auto; align-items: center; }
+.readouts span b { color: var(--keep); font-variant-numeric: tabular-nums; font-size: 1.15em; }
+.again { font: 500 .76rem/1 var(--mono); color: var(--fg); background: var(--ink-3); border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.again:hover { background: var(--line); }
+.replay-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); }
+.console { order: 2; border-left: 1px solid var(--line); padding: 14px 16px; font: 400 .76rem/1.45 var(--mono); min-height: 332px; }
+.console li { display: grid; gap: 1px; padding-block: 5px; opacity: .28; transition: opacity .3s; }
+.console li.seen { opacity: .72; }
+.console li.now { opacity: 1; }
+.console code { font: inherit; color: var(--keep); }
+.console li span { color: var(--fg-2); }
+.console li.stop code { color: var(--zoom); }
+.tracks { padding: 10px 14px 14px; min-width: 0; }
+.track-row { display: grid; grid-template-columns: 58px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; }
+.track-row > i { font: 400 .68rem/1 var(--mono); font-style: normal; color: var(--fg-3); }
+.lane { position: relative; height: 34px; display: flex; min-width: 0; }
+.lane.tall { height: 48px; }
+.lane.thin { height: 22px; background: color-mix(in srgb, var(--ink-3) 45%, transparent); border-radius: 3px; display: block; }
+.seg { flex: var(--d) 1 0; min-width: 0; position: relative; overflow: hidden; transition: flex-grow .9s cubic-bezier(.65,0,.2,1), background .35s; }
+.lane.screen .seg { background: #2a5fb0; }
+.lane.cam .seg { background: #3a4fa0; }
+.lane.mic .seg { background: color-mix(in srgb, var(--keep-deep) 34%, var(--ink-2)); }
+.seg svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.seg path { fill: var(--keep); }
+.seg.gap path { fill: var(--fg-3); opacity: .35; }
+.lane .seg.mark { background: var(--cut); }
+.lane .seg.mark path { fill: #fff; opacity: .4; }
+.lane .seg.gone { flex-grow: 0; }
+.lane .seg.kept { box-shadow: inset -1px 0 0 var(--ink); }
+.seg .tick { position: absolute; top: 12%; bottom: 12%; width: 2px; background: var(--zoom); opacity: 0; transition: opacity .3s; }
+.mic.ticks .tick { opacity: 1; }
+.mic.muted .tick { opacity: .22; background: var(--fg-2); }
+.spare { flex: 0 1 0; flex-grow: var(--saved, 0); transition: flex-grow .9s cubic-bezier(.65,0,.2,1); background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--line) 50%, transparent) 5px 6px); }
+.block { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; transform-origin: left; transform: scaleX(0); transition: transform .4s cubic-bezier(.2,.8,.2,1); }
+.block.show { transform: scaleX(1); }
+.block.z { background: var(--zoom); }
+.block.g { background: var(--gfx); }
+.flag { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); opacity: 0; transition: opacity .3s; }
+.flag.show { opacity: 1; }
+.flag::after { content: ""; position: absolute; top: 0; left: 2px; width: 8px; height: 7px; background: var(--fg); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.scale { display: flex; justify-content: space-between; margin-left: 66px; font: 400 .66rem/1 var(--mono); color: var(--fg-3); padding-bottom: 3px; }
+.replay-note { padding: 10px 16px; border-top: 1px solid var(--line); font-size: .86rem; line-height: 1.4; color: var(--fg-3); }
+@media (max-width: 900px) { .replay-body { grid-template-columns: minmax(0, 1fr); } .console { order: 2; border-left: 0; border-top: 1px solid var(--line); min-height: 0; } .track-row { grid-template-columns: minmax(0, 1fr); gap: 3px; } .scale { margin-left: 0; } }
+
+/* Market */
+.split { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: clamp(28px, 4vw, 64px) clamp(16px, 2vw, 32px); }
+.c5 { grid-column: span 5; } .c6 { grid-column: span 6; } .c7 { grid-column: span 7; }
+@media (max-width: 860px) { .c5, .c6, .c7 { grid-column: 1 / -1; } }
+.sec-head { display: grid; gap: 22px; }
+.big-num { font: 800 clamp(5.5rem, 21vw, 21rem)/.82 var(--display); font-stretch: 75%; letter-spacing: -.03em; color: var(--keep); }
+.chart { min-width: 0; }
+.chart h3 { margin-bottom: 4px; }
+.chart .sub { color: var(--fg-3); font-size: .88em; margin-bottom: 18px; }
+.bars { display: grid; gap: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; position: relative; }
+.bar-label { display: flex; justify-content: space-between; gap: 14px; font-size: .92em; color: var(--fg-2); }
+.bar-label b { font-weight: 600; color: var(--fg); font-family: var(--mono); font-size: .92em; white-space: nowrap; }
+.bar-track { height: 14px; border-radius: 3px; background: color-mix(in srgb, var(--ink-3) 55%, transparent); position: relative; }
+.bar-track i { display: block; height: 100%; min-width: 3px; border-radius: 0 4px 4px 0; background: var(--keep); }
+.bar-row.mute .bar-track i { background: var(--fg-3); }
+.axis { display: flex; justify-content: space-between; font: 400 .7rem/1 var(--mono); color: var(--fg-3); margin-top: 2px; }
+.tip { position: fixed; z-index: 30; pointer-events: none; max-width: 290px; padding: 9px 12px; background: var(--fg); color: var(--ink); border-radius: 5px; font-size: .84rem; line-height: 1.35; opacity: 0; transition: opacity .12s; }
+.tip.show { opacity: 1; }
+.tolls { width: 100%; border-collapse: collapse; font-size: .96em; }
+.tolls th { text-align: left; font: 400 .72rem/1.2 var(--mono); color: var(--fg-3); padding: 0 12px 10px 0; border-bottom: 1px solid var(--line); }
+.tolls td { padding: 13px 12px 13px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); color: var(--fg-2); vertical-align: baseline; }
+.tolls td:first-child { color: var(--fg); font-weight: 600; }
+.tolls td.n { font: 500 1.1em/1 var(--mono); color: var(--cut); white-space: nowrap; }
+.tolls tr.us td { border-bottom: 0; color: var(--fg); }
+.tolls tr.us td.n { color: var(--keep); font-size: 1.6em; }
+.scroll-x { overflow-x: auto; }
+
+/* Race */
+.lanes { display: grid; margin-top: clamp(32px, 4vw, 56px); border-top: 1px solid var(--line); }
+.race { display: grid; grid-template-columns: minmax(0, 3.2fr) minmax(0, 4fr) minmax(0, 4fr); gap: 8px clamp(18px, 3vw, 44px); padding-block: 24px; border-bottom: 1px solid var(--line); }
+.race h3 { font: 700 clamp(1.45rem, 2.3vw, 2.15rem)/1.04 var(--display); font-stretch: 85%; }
+.race .who { color: var(--fg); }
+.race .limit { color: var(--fg-2); }
+.race small { display: block; font: 400 .7rem/1.2 var(--mono); color: var(--fg-3); margin-bottom: 6px; }
+.race.ours { background: color-mix(in srgb, var(--keep-deep) 22%, transparent); margin-inline: calc(var(--gutter-l) * -.4); padding-inline: calc(var(--gutter-l) * .4); border-radius: 6px; border-bottom: 0; margin-top: 12px; }
+.race.ours h3 { color: var(--keep); }
+.race.ours small { color: var(--fg-2); }
+@media (max-width: 860px) { .race { grid-template-columns: minmax(0, 1fr); } }
+
+/* Stack */
+.stack-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: clamp(28px, 4vw, 48px) 0 14px; }
+.stack-tabs button { font: 600 .98rem/1.1 var(--body); padding: 12px 16px; background: transparent; color: var(--fg-2); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.stack-tabs button:hover { color: var(--fg); border-color: var(--fg-3); }
+.stack-tabs button[aria-selected="true"] { background: var(--fg); color: var(--ink); border-color: var(--fg); }
+.stack { display: grid; gap: 4px; }
+.band { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) minmax(0, 1fr); gap: 4px 20px; align-items: center; padding: 15px 18px; border-radius: 5px; background: var(--ink-3); transition: background .25s; min-height: 76px; }
+.band .role { font: 400 .72rem/1.25 var(--mono); color: var(--fg-3); }
+.band strong { font: 700 clamp(1.25rem, 2.2vw, 2rem)/1.05 var(--display); font-stretch: 85%; }
+.band p { color: var(--fg-2); font-size: .94em; line-height: 1.38; }
+.band.old { background: color-mix(in srgb, var(--cut) 17%, var(--ink-2)); }
+.band.new { background: color-mix(in srgb, var(--keep-deep) 34%, var(--ink-2)); }
+.band.motion.new { background: color-mix(in srgb, var(--gfx) 26%, var(--ink-2)); }
+@media (max-width: 760px) { .band { grid-template-columns: minmax(0, 1fr); } }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(28px, 4vw, 64px); margin-top: clamp(40px, 5vw, 72px); }
+.two h3 { font: 700 clamp(1.7rem, 3vw, 2.8rem)/1 var(--display); font-stretch: 80%; margin-bottom: 14px; }
+.ticks-list { display: grid; gap: 9px; color: var(--fg-2); }
+.ticks-list li { padding-left: 24px; position: relative; line-height: 1.38; }
+.ticks-list li::before { content: ""; position: absolute; left: 2px; top: .5em; width: 10px; height: 10px; border-radius: 2px; background: var(--keep); }
+.ticks-list li.no::before { background: none; border: 1.5px solid var(--cut); }
+.ticks-list li.no { color: var(--fg-3); }
+.legend-key { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 16px; font: 400 .74rem/1 var(--mono); color: var(--fg-3); }
+.legend-key span { display: inline-flex; gap: 7px; align-items: center; }
+.legend-key i { width: 10px; height: 10px; border-radius: 2px; background: var(--keep); display: inline-block; }
+.legend-key i.no { background: none; border: 1.5px solid var(--cut); }
+@media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
+
+/* Built: the light band is the app's own graphics look */
+.paper { background: var(--paper); color: var(--paper-fg); }
+.paper .lede { color: var(--paper-fg); }
+.paper .prose { color: var(--paper-fg-2); }
+.paper sup a { color: var(--paper-fg-2); }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 18px; margin-top: clamp(32px, 4vw, 52px); }
+.stats div { display: grid; gap: 2px; align-content: start; }
+.stats b { font: 800 clamp(2.4rem, 5vw, 4.8rem)/.95 var(--display); font-stretch: 78%; color: var(--paper-accent); }
+.stats span { font-size: .9em; color: var(--paper-fg-2); line-height: 1.3; }
+@media (max-width: 760px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.gallery { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; margin-top: clamp(36px, 5vw, 64px); }
+.gallery figure { display: grid; gap: 8px; min-width: 0; }
+.gallery img { border-radius: 8px; border: 1px solid var(--paper-line); background: var(--paper-2); width: 100%; height: auto; }
+.gallery figcaption { font-size: .86em; color: var(--paper-fg-2); line-height: 1.35; }
+.g-a { grid-column: span 7; } .g-b { grid-column: span 5; } .g-c { grid-column: span 12; }
+@media (max-width: 760px) { .g-a, .g-b { grid-column: span 12; } }
+.features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px clamp(20px, 3vw, 44px); margin-top: clamp(40px, 5vw, 72px); }
+.features h3 { font: 700 1.5rem/1.05 var(--display); font-stretch: 85%; margin-bottom: 6px; }
+.features p { color: var(--paper-fg-2); font-size: .95em; line-height: 1.45; }
+@media (max-width: 960px) { .features { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .features { grid-template-columns: minmax(0, 1fr); } }
+
+/* Receipt */
+.receipt { background: var(--fg); color: var(--ink); border-radius: 4px; padding: clamp(22px, 3vw, 38px); font: 400 .93rem/1.4 var(--mono); min-width: 0; }
+.receipt h3 { font: 700 1rem/1.2 var(--mono); padding-bottom: 12px; border-bottom: 2px dashed var(--ink); margin-bottom: 8px; }
+.receipt dl { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.receipt dt, .receipt dd { margin: 0; padding-block: 7px; border-bottom: 1px dotted #6d8585; }
+.receipt dd { text-align: right; font-weight: 500; padding-left: 14px; font-variant-numeric: tabular-nums; }
+.receipt .sum { font-weight: 700; font-size: 1.28em; border-bottom: 0; padding-top: 14px; }
+.receipt p { margin-top: 12px; font-size: .84em; line-height: 1.45; color: #2c4950; }
+
+/* Left to do */
+.road { margin-top: clamp(36px, 5vw, 64px); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-top: 4px solid var(--ink-3); }
+.road > div { position: relative; padding: 24px clamp(14px, 2vw, 28px) 0 0; min-width: 0; }
+.road > div::before { content: ""; position: absolute; top: -9px; left: 0; width: 14px; height: 14px; border-radius: 2px; background: var(--ink-3); border: 2px solid var(--fg-3); }
+.road .done::before { background: var(--keep); border-color: var(--keep); }
+.road .here::before { background: var(--zoom); border-color: var(--zoom); box-shadow: 0 0 14px var(--zoom); }
+.road small { font: 400 .7rem/1 var(--mono); color: var(--fg-3); display: block; margin-bottom: 8px; }
+.road h3 { font: 700 clamp(1.45rem, 2.2vw, 2rem)/1.04 var(--display); font-stretch: 85%; margin-bottom: 12px; }
+.road ul { display: grid; gap: 8px; color: var(--fg-2); font-size: .94em; line-height: 1.38; }
+@media (max-width: 960px) { .road { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 28px; border-top: 0; } .road > div { border-top: 4px solid var(--ink-3); } .road > div::before { top: -9px; } }
+@media (max-width: 560px) { .road { grid-template-columns: minmax(0, 1fr); } }
+
+/* Close */
+.close { padding-bottom: clamp(56px, 7vw, 100px); }
+.close h2 { font-size: clamp(3.4rem, 12vw, 12.5rem); line-height: .88; }
+.close h2 em { font-style: normal; color: var(--keep); }
+.sources { border-top: 1px solid var(--line); padding-block: 36px 60px; font-size: .84rem; color: var(--fg-3); }
+.sources h3 { color: var(--fg-2); margin-bottom: 4px; font-size: 1rem; }
+.sources > .inner > p { max-width: 62em; margin-bottom: 16px; }
+.sources ol { columns: 2 380px; column-gap: 40px; counter-reset: s; }
+.sources li { counter-increment: s; break-inside: avoid; padding: 0 0 8px 26px; position: relative; line-height: 1.4; scroll-margin-top: 80px; }
+.sources li::before { content: counter(s); position: absolute; left: 0; font-family: var(--mono); color: var(--fg-2); }
+.sources li:target { color: var(--fg); }
+.sources a { color: var(--fg-2); overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<nav class="ruler wrap" aria-label="Chapters">
+  <a class="brand" href="#open"><img src="assets/aeroedits-icon.svg" alt=""><span>AeroEdits</span></a>
+  <div class="strip" id="strip">
+    <a href="#open" style="--w:2">Cold open</a>
+    <a href="#market" style="--w:3">The market</a>
+    <a href="#race" style="--w:3">The race</a>
+    <a href="#layers" style="--w:3">Two layers</a>
+    <a href="#built" style="--w:3">What we built</a>
+    <a href="#receipt" style="--w:2">The receipt</a>
+    <a href="#left" style="--w:2">What's left</a>
+    <a href="#join" style="--w:1">Join</a>
+    <div class="playhead" id="playhead"></div>
+  </div>
+  <span class="time" id="time" aria-hidden="true">00:00</span>
+  <a class="star" href="https://github.com/CreaperLost/Automated-Editor">GitHub</a>
+</nav>
+
+<main>
+
+<section class="hero wrap" id="open" data-ch="0">
+  <div class="inner">
+    <h1>We're making video editing <span class="gone">free.</span><span class="tag" aria-hidden="true">$59.99/mo</span></h1>
+    <div class="hero-foot">
+      <p class="lede">And open source. Your own AI agent does the cuts, the cleanup and the motion graphics. AeroEdits gives it a real timeline to work on, and you keep the last word.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/CreaperLost/Automated-Editor">Star it on GitHub</a>
+        <a class="btn" href="#layers">How it replaces both layers</a>
+      </div>
+    </div>
+
+    <figure class="replay" id="replay" aria-label="Replay of a measured agent edit of a seven minute tutorial">
+      <div class="replay-head">
+        <span><b>Agent edit</b>, recorded tutorial</span>
+        <div class="readouts">
+          <span>length <b id="r-len">07:10</b></span>
+          <span>tool calls <b id="r-calls">0</b></span>
+          <span>agent cost <b id="r-cost">$0.000</b></span>
+          <button class="again" id="again" type="button">Replay</button>
+        </div>
+      </div>
+      <div class="replay-body">
+        <ol class="console" id="console"></ol>
+        <div class="tracks">
+          <div class="scale" id="scale"></div>
+          <div class="track-row"><i>Chapters</i><div class="lane thin" id="l-ch"></div></div>
+          <div class="track-row"><i>Graphics</i><div class="lane thin" id="l-gfx"></div></div>
+          <div class="track-row"><i>Zooms</i><div class="lane thin" id="l-zoom"></div></div>
+          <div class="track-row"><i>Screen</i><div class="lane screen" id="l-screen"></div></div>
+          <div class="track-row"><i>Camera</i><div class="lane cam" id="l-cam"></div></div>
+          <div class="track-row"><i>Mic</i><div class="lane mic tall" id="l-mic"></div></div>
+        </div>
+      </div>
+      <figcaption class="replay-note">The numbers come from one logged test run on 24 Oct: 13 tool calls for the edit, 5 more for six text cards.<sup><a href="#s1">1</a></sup> The drawing is illustrative and the steps are simplified. Cost is the agent only, so it leaves out transcription.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="wrap" id="market" data-ch="1" style="background:var(--ink-2)">
+  <div class="inner split">
+    <div class="sec-head" style="grid-column:1/-1">
+      <p class="tc">The market</p>
+      <h2>People pay about this much a year to cut video.</h2>
+    </div>
+    <div style="grid-column:1/-1">
+      <p class="big-num">$3.75B</p>
+      <p class="prose" style="margin-top:18px">That's Mordor Intelligence's figure for 2026, heading to $4.99B by 2031.<sup><a href="#s2">2</a></sup> Adobe, Apple, Blackmagic and Avid hold the top of the list. It's the high end of the estimates, because nobody agrees on where the category stops.</p>
+    </div>
+
+    <div class="chart c5" id="est">
+      <h3>Four estimates of one market</h3>
+      <p class="sub">Annual software revenue, $ billions. Definitions differ.<sup><a href="#s2">2</a></sup><sup><a href="#s3">3</a></sup></p>
+      <div class="bars" id="est-bars"></div>
+    </div>
+
+    <div class="chart c7" id="scale-chart">
+      <h3>The software is the small part</h3>
+      <p class="sub">Same axis, $ billions. Hover a bar for the source.<sup><a href="#s20">20</a></sup></p>
+      <div class="bars" id="scale-bars"></div>
+      <p class="prose" style="margin-top:20px"><strong>US film and video editors earn about as much in wages as the whole world spends on the software.</strong> That's 39,400 editors at a $75,420 median, around $3B, before you count a single freelancer.<sup><a href="#s4">4</a></sup> AI agents go after that labour line, and that's why this shift is bigger than one more app.</p>
+    </div>
+
+    <div style="grid-column:1/-1;margin-top:clamp(16px,3vw,40px)">
+      <h3 style="font:700 clamp(1.8rem,3.6vw,3.4rem)/1 var(--display);font-stretch:80%;margin-bottom:20px">What the toll looks like today</h3>
+      <div class="scroll-x">
+        <table class="tolls">
+          <thead><tr><th scope="col">Tool</th><th scope="col">Listed price</th><th scope="col">What you get, what you don't</th></tr></thead>
+          <tbody>
+            <tr><td>Adobe Creative Cloud, all apps</td><td class="n">$720/yr</td><td>$59.99 a month. Premiere and After Effects together.<sup><a href="#s5">5</a></sup></td></tr>
+            <tr><td>CapCut Pro</td><td class="n">€349/yr</td><td>Or €34.99 a month.<sup><a href="#s6">6</a></sup></td></tr>
+            <tr><td>DaVinci Resolve Studio</td><td class="n">$295</td><td>Paid once. The free edition is excellent, but the AI assistant server is reported as Studio only.<sup><a href="#s7">7</a></sup><sup><a href="#s8">8</a></sup></td></tr>
+            <tr><td>Descript Creator</td><td class="n">$288/yr</td><td>$24 a month on the yearly plan, with 800 AI credits a month.<sup><a href="#s9">9</a></sup></td></tr>
+            <tr><td>Premiere Pro alone</td><td class="n">$276/yr</td><td>$22.99 a month on an annual plan, with no After Effects.<sup><a href="#s5">5</a></sup></td></tr>
+            <tr class="us"><td>AeroEdits</td><td class="n">$0</td><td>No subscription and no credits. Bring your own agent, and pay for its usage if your plan charges for it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" id="race" data-ch="2">
+  <div class="inner">
+    <div class="sec-head">
+      <p class="tc">The race</p>
+      <h2>Everyone is putting an agent on the edit. They're starting from different places.</h2>
+      <p class="lede">2026 is the year this stopped being a demo. Adobe and Blackmagic both opened their editors to AI assistants, and developers are starring open-source editing tools by the tens of thousands.</p>
+    </div>
+    <div class="lanes">
+      <article class="race">
+        <h3>Generate the footage</h3>
+        <div class="who"><small>Who</small>Runway at a reported $5.3B valuation, Synthesia at $4B, Higgsfield above $1.3B.<sup><a href="#s10">10</a></sup><sup><a href="#s11">11</a></sup></div>
+        <div class="limit"><small>The catch</small>This is where the money is, but it's a different job. They make shots from prompts. Your recording still needs an edit.</div>
+      </article>
+      <article class="race">
+        <h3>AI inside a closed editor</h3>
+        <div class="who"><small>Who</small>Descript's Underlord, Adobe's Firefly AI Assistant, Mirage (Captions) with $75M in new financing.<sup><a href="#s9">9</a></sup><sup><a href="#s12">12</a></sup><sup><a href="#s13">13</a></sup></div>
+        <div class="limit"><small>The catch</small>The agent belongs to the vendor, and it's metered in plans and credits. When the price changes, your workflow pays it.</div>
+      </article>
+      <article class="race">
+        <h3>MCP bolted onto the old editor</h3>
+        <div class="who"><small>Who</small>Resolve 21.1's built-in MCP server, the Adobe for Creativity connector for Claude, community Premiere and After Effects servers.<sup><a href="#s7">7</a></sup><sup><a href="#s12">12</a></sup><sup><a href="#s14">14</a></sup></div>
+        <div class="limit"><small>The catch</small>You get decades of pro power, on interfaces designed around a mouse. You keep the licence too, and community servers depend on extension APIs that can change with any update.</div>
+      </article>
+      <article class="race">
+        <h3>Skills and code</h3>
+        <div class="who"><small>Who</small>video-use (30.4k stars), HyperFrames (77.7k), Remotion (70.1k).<sup><a href="#s15">15</a></sup><sup><a href="#s16">16</a></sup><sup><a href="#s17">17</a></sup></div>
+        <div class="limit"><small>The catch</small>These were built for agents and they're cheap to run. But they're tools and renderers, so you don't get an editor to open when you want to fix one cut by hand. Remotion also needs a company licence in some cases.</div>
+      </article>
+      <article class="race">
+        <h3>Open-source timelines</h3>
+        <div class="who"><small>Who</small>OpenCut (97.2k stars), OpenChatCut (AGPL, MCP agents on a multitrack timeline).<sup><a href="#s18">18</a></sup><sup><a href="#s19">19</a></sup></div>
+        <div class="limit"><small>The catch</small>This is our closest neighbourhood. OpenCut is mid-rewrite, with its MCP server listed as coming. OpenChatCut shares the bet on a real timeline for agents, and we'd rather have company than not.</div>
+      </article>
+      <article class="race ours">
+        <h3>AeroEdits</h3>
+        <div class="who"><small>Our bet</small>An open timeline, a skill that teaches the craft, HyperFrames for motion, and a recorder that captures every click, window and shortcut.</div>
+        <div class="limit"><small>Why that matters</small>The agent reads the edit as words and telemetry instead of guessing from pixels. So zooms land on the real click, and a run of 13 tool calls stays cheap enough to measure in cents.</div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" id="layers" data-ch="3" style="background:var(--ink-2)">
+  <div class="inner">
+    <div class="sec-head">
+      <p class="tc">Two layers</p>
+      <h2>Video has always been two apps. We're replacing both.</h2>
+      <p class="lede">Premiere or Resolve does the cut. After Effects does the motion. Each one takes years to learn, and that skill was the real price of a good video. Now skills and MCP can carry the know-how, so the old apps aren't the only way in.</p>
+    </div>
+
+    <div class="stack-tabs" role="tablist" aria-label="Compare editing stacks">
+      <button role="tab" id="t-old" type="button" aria-selected="false" aria-controls="stack">The old stack</button>
+      <button role="tab" id="t-bolt" type="button" aria-selected="false" aria-controls="stack">Agent bolted on</button>
+      <button role="tab" id="t-new" type="button" aria-selected="true" aria-controls="stack">AeroEdits</button>
+    </div>
+    <div class="stack" id="stack" role="tabpanel" aria-live="polite"></div>
+
+    <div class="two">
+      <div>
+        <h3>The Premiere layer</h3>
+        <ul class="ticks-list">
+          <li>Non-destructive picture and sound tracks, ripple edits, clip speed with pitch kept</li>
+          <li>Cuts for silence, gaps, fillers and retakes, anchored to the words you said</li>
+          <li>Zooms from recorded clicks, layouts, window crop, shortcut badges</li>
+          <li>Denoise, ducking, -14 LUFS loudness, mouth noise cleanup</li>
+          <li>Captions, chapters, shorts, H.264 export up to 4K60</li>
+          <li class="no">Colour grading and LUTs</li>
+          <li class="no">Multi-user collaboration, cloud rendering</li>
+          <li class="no">Long narrative or multicam work. We start with screen tutorials on purpose.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>The After Effects layer</h3>
+        <ul class="ticks-list">
+          <li>Every graphic is an editable HyperFrames composition: HTML, GSAP, rendered to video</li>
+          <li>One style dresses graphics, captions and frame across a video</li>
+          <li>Templates for steps, counters, before and after, app clicks, prompt and reply</li>
+          <li>Checks for fonts, reading time, and graphics covering a face or captions</li>
+          <li>A sample clip in context first, so you approve the look before a full set</li>
+          <li class="no">Rotoscoping, tracking, keying, 3D compositing</li>
+          <li class="no">Background removal on camera. It's planned but not built.</li>
+          <li class="no">A drag-and-drop keyframe editor. You describe the change and the agent writes it.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="legend-key"><span><i></i>Works today</span><span><i class="no"></i>Not yet, or not the goal</span></div>
+  </div>
+</section>
+
+<section class="paper wrap" id="built" data-ch="4">
+  <div class="inner">
+    <div class="sec-head">
+      <p class="tc">What we built</p>
+      <h2>A real editor, in 51 days.</h2>
+      <p class="lede">It's a native desktop app with a timeline you can open and fix by hand. The agent uses the same actions you do, and everything it does can be undone.</p>
+    </div>
+    <div class="stats">
+      <div><b>117k</b><span>lines of Rust</span></div>
+      <div><b>26k</b><span>lines of TypeScript and CSS</span></div>
+      <div><b>59</b><span>MCP tools</span></div>
+      <div><b>779</b><span>backend tests</span></div>
+      <div><b>284</b><span>commits since 12 Sep</span></div>
+    </div>
+    <div class="gallery">
+      <figure class="g-a"><img src="assets/calm-look-in-app.png" alt="Four rendered graphics in AeroEdits' light style: a part title, step three of five, a key point card, and a recap list." width="1280" height="720" loading="lazy"><figcaption>Graphics rendered by the app, in its default light style.</figcaption></figure>
+      <figure class="g-b"><img src="assets/shorts-modes-in-app.png" alt="Four vertical short frames: face above a step card, a key point panel over the face, face above screen footage, and a full-frame title." width="904" height="402" loading="lazy"><figcaption>Shorts: a graphic goes split, over the face or full frame, and renders once for its slot.</figcaption></figure>
+      <figure class="g-c"><img src="assets/templates-app-9x16.png" alt="A strip of seven vertical templates: part title, step, shortcut keys, key point, recap, thanks for watching and a plain title." width="2520" height="640" loading="lazy"><figcaption>The same templates in portrait.</figcaption></figure>
+    </div>
+    <div class="features">
+      <div><h3>Your agent, your choice</h3><p>Claude Code, Codex or the Claude app connect through MCP or the <code>aeroedits do</code> command. The app has no chat box of its own.</p></div>
+      <div><h3>Undo that survives</h3><p>History stays on disk after you close the app. A whole agent run undoes as one step, and a checkpoint saves before every run.</p></div>
+      <div><h3>Telemetry from AeroShoot</h3><p>Our recorder captures screen, camera, mic, system sound, mouse, windows and shortcuts. It never records what you typed, only that you typed.</p></div>
+      <div><h3>Local where it can be</h3><p>Local English transcription and a local filler review model. Online steps only run when you allow them. No network port is open.</p></div>
+      <div><h3>Presets that remember</h3><p>A preset holds the method and your rules for a kind of video. Approve one real edit and it becomes a saved workflow.</p></div>
+      <div><h3>It stops and asks</h3><p>Built-in passes are one undo step each, judgement cuts wait for approval, and nothing exports until you say go.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" id="receipt" data-ch="5">
+  <div class="inner split">
+    <div class="sec-head c6" style="align-content:start">
+      <p class="tc">The receipt</p>
+      <h2>Under a dollar for the agent.</h2>
+      <p class="prose">We test this with a script: real recordings, a fresh project and a headless Claude Code run. Then we log the calls, tokens and dollars, so we can tell whether a change really made it better.<sup><a href="#s1">1</a></sup></p>
+      <p class="prose"><strong>What that price leaves out:</strong> transcription and review API costs, and your time watching the result. It's two runs on my recordings with a simulated user, so treat it as a test result and not a guarantee. The later run cost more because it did more: four of its six graphics illustrated the content instead of naming it.</p>
+    </div>
+    <div class="c6" style="display:grid;gap:18px;min-width:0">
+      <div class="receipt">
+        <h3>EVAL-1, RUN 5 · 1 NOV 2026</h3>
+        <dl>
+          <dt>Tutorial, 7:10 in, 5:49 out</dt><dd>$0.237</dd>
+          <dt>Six graphics</dt><dd>$0.161</dd>
+          <dt>Short from a 1:40 take, 31.5 s out</dt><dd>$0.293</dd>
+          <dt>57 tool calls</dt><dd></dd>
+          <dt class="sum">Agent total</dt><dd class="sum">$0.691</dd>
+        </dl>
+        <p>Run 4, 24 Oct: 31 calls, $0.393, with simpler text cards. 114 mouth noises muted, 70.3 s of pauses removed, 12 zooms, 5 chapters.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" id="left" data-ch="6" style="background:var(--ink-2)">
+  <div class="inner">
+    <div class="sec-head">
+      <p class="tc">What's left</p>
+      <h2>It isn't finished, and here's exactly how.</h2>
+      <p class="lede">The first customer is my own English and Greek channel. It only moves forward when I'd keep the result.</p>
+    </div>
+    <div class="road">
+      <div class="done">
+        <small>Working now</small>
+        <h3>Long-form tutorials</h3>
+        <ul>
+          <li>Full edit by agent or by hand</li>
+          <li>Graphics, zooms, chapters, sound</li>
+          <li>Check before export, and history</li>
+          <li>Windows first</li>
+        </ul>
+      </div>
+      <div class="here">
+        <small>The playhead is here</small>
+        <h3>Tutorial shorts</h3>
+        <ul>
+          <li>Shorts and clips work today</li>
+          <li>Finish the portrait graphics style</li>
+          <li>Solve panels that hide the mouth or sit under platform bars</li>
+          <li>Keep sharpening retake detection</li>
+        </ul>
+      </div>
+      <div>
+        <small>Next in the queue</small>
+        <h3>Depth</h3>
+        <ul>
+          <li>Learning from your accepted and rejected edits, always with your OK</li>
+          <li>Selects and B-roll from your own footage</li>
+          <li>Real 16:9 to 9:16 reformat</li>
+          <li>Camera background removal</li>
+          <li>Handoff to other editors</li>
+          <li>macOS verified end to end</li>
+        </ul>
+      </div>
+      <div>
+        <small>The last milestone</small>
+        <h3>Gaming</h3>
+        <ul>
+          <li>Comes after tutorials and shorts are good</li>
+          <li>Re-voicing and lip sync are paused until a local, licensable stack is good enough</li>
+          <li>Colour and LUTs are parked until the channel needs them</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="close wrap" id="join" data-ch="7">
+  <div class="inner sec-head">
+    <p class="tc">Join</p>
+    <h2>The repo has <em>one</em> star. Fix that.</h2>
+    <p class="lede">The code is public and you can build it today. Star it, try it on a recording, and open an issue when it gets something wrong. That's how a free editor gets good.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/CreaperLost/Automated-Editor">Star AeroEdits on GitHub</a>
+      <a class="btn" href="https://github.com/CreaperLost/Automated-Editor#readme">Build it from source</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="sources wrap">
+  <div class="inner">
+    <h3>Sources</h3>
+    <p>Checked 2 November 2026. Market reports define the category differently, and several figures below come from press or trackers instead of the company itself, so check the source before quoting one elsewhere. Star counts and prices change.</p>
+    <ol>
+      <li id="s1">AeroEdits' own evaluation log, <a href="https://github.com/CreaperLost/Automated-Editor/blob/AI-Automation/docs/verification.md">docs/verification.md</a>. Code counts from the repo on 2 Nov.</li>
+      <li id="s2"><a href="https://www.mordorintelligence.com/industry-reports/video-editing-market">Mordor Intelligence, Video Editing Market</a>: $3.75B in 2026, $4.99B by 2031, 5.88% CAGR.</li>
+      <li id="s3">Other estimates: <a href="https://www.giiresearch.com/report/tbrc1983534-video-editing-software-global-market-report.html">The Business Research Company</a> ($2.68B, 2026), <a href="https://pdf.marketpublishers.com/diresearch/video-editing-software-research-report-dir.pdf">DIResearch</a> ($802.5M, 2026), Market Reports World via <a href="https://vidpros.com/video-editing-software-statistics/">Vidpros</a> ($635M, 2025).</li>
+      <li id="s4"><a href="https://www.bls.gov/ooh/media-and-communication/film-and-video-editors-and-camera-operators.htm">US Bureau of Labor Statistics</a>: 39,400 film and video editors, $75,420 median (May 2025). The $2.97B is our multiplication of those two numbers, so it's a rough size and not a BLS figure.</li>
+      <li id="s5"><a href="https://toolradar.com/tools/premiere-pro/pricing">Toolradar, Premiere Pro pricing</a>, verified Oct 2026. Third-party data. Adobe's own page showed no prices to our reader, and other trackers list a $69.99 Creative Cloud Pro tier.</li>
+      <li id="s6"><a href="https://www.capcut.com/pricing">CapCut pricing</a>. Euro prices, shown by CapCut as for reference only.</li>
+      <li id="s7"><a href="https://www.cgchannel.com/2026/09/blackmagic-design-releases-resolve-21-1/">CG Channel on Resolve 21.1</a>, 8 Sep 2026: MCP server for tools like Claude and Codex; Studio is $295.</li>
+      <li id="s8"><a href="https://cutsio.com/blog/davinci-resolve-21-1-free-vs-studio">Cutsio, Resolve 21.1 free vs Studio</a>. A vendor blog, unconfirmed against Blackmagic's notes.</li>
+      <li id="s9"><a href="https://www.descript.com/pricing">Descript pricing</a>: Underlord, credits, API and MCP.</li>
+      <li id="s10"><a href="https://bridgemena.com/news/runway-raises-315m-boosting-valuation-to-5-3b">Bridge Middle East on Runway</a>: $315M at $5.3B.</li>
+      <li id="s11"><a href="https://blog.mean.ceo/?p=4578">Mean CEO on Synthesia and Mirage</a>; <a href="https://siliconangle.com/?p=727938">SiliconANGLE on Higgsfield</a>.</li>
+      <li id="s12"><a href="https://petapixel.com/2026/04/28/claude-ai-can-orchestrate-creative-workflows-across-adobe-apps/">PetaPixel on Claude and Adobe</a>, 28 Apr 2026, and <a href="https://app.sentisense.ai/stories/adobe-integrates-ai-agents-into-creative-cloud-apps-06192026">SentiSense on Firefly AI Assistant</a>, Jun 2026. Coverage disagrees on how deep the connector reaches into desktop Premiere.</li>
+      <li id="s13"><a href="https://delimiter.online/blog/wp-json/wp/v2/posts/4186">Delimiter on Mirage's $75M</a>, Mar 2026, growth financing with no valuation disclosed.</li>
+      <li id="s14">Community servers: <a href="https://glama.ai/mcp/servers/hetpatel-11/Adobe_Premiere_Pro_MCP">Adobe Premiere Pro MCP</a>, <a href="https://mcpservers.org/servers/github-com-samuelgursky-davinci-resolve-mcp">DaVinci Resolve MCP</a>.</li>
+      <li id="s15"><a href="https://github.com/browser-use/video-use">browser-use/video-use</a>, MIT.</li>
+      <li id="s16"><a href="https://github.com/heygen-com/hyperframes">heygen-com/hyperframes</a>, Apache-2.0. AeroEdits renders graphics with it.</li>
+      <li id="s17"><a href="https://github.com/remotion-dev/remotion">remotion-dev/remotion</a>, special licence.</li>
+      <li id="s18"><a href="https://github.com/OpenCut-app/OpenCut">OpenCut-app/OpenCut</a>, MIT.</li>
+      <li id="s19"><a href="https://www.hunted.space/dashboard/openchatcut">OpenChatCut launch page</a>, AGPL, Jul 2026.</li>
+      <li id="s20"><a href="https://www.goldmansachs.com/insights/articles/the-creator-economy-could-approach-half-a-trillion-dollars-by-2027">Goldman Sachs Research</a>: about $480B by 2027. Read through secondary coverage.</li>
+    </ol>
+  </div>
+</footer>
+
+<div class="tip" id="tip" role="status"></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- Ruler: playhead, timecode, current chapter ---------- */
+  var strip = $('strip'), head = $('playhead'), timeEl = $('time');
+  var links = Array.prototype.slice.call(strip.querySelectorAll('a'));
+  var secs = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+  var LENGTH = 346; /* the edited video's 5:46 */
+  function mmss(s) { s = Math.max(0, Math.round(s)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+  var queued = false;
+  function onScroll() {
+    queued = false;
+    var y = window.scrollY + 120, cur = 0;
+    secs.forEach(function (sec, i) { if (sec && sec.offsetTop <= y) cur = i; });
+    var sec = secs[cur], next = secs[cur + 1];
+    var end = next ? next.offsetTop : document.documentElement.scrollHeight;
+    var within = Math.min(1, Math.max(0, (y - sec.offsetTop) / Math.max(1, end - sec.offsetTop)));
+    var a = links[cur];
+    var x = a.offsetLeft + a.offsetWidth * within;
+    head.style.transform = 'translateX(' + x + 'px)';
+    var whole = (window.scrollY) / Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    timeEl.textContent = mmss(whole * LENGTH);
+    links.forEach(function (l, i) { l.classList.toggle('on', i === cur); });
+  }
+  function ask() { if (!queued) { queued = true; requestAnimationFrame(onScroll); } }
+  addEventListener('scroll', ask, { passive: true });
+  addEventListener('resize', ask);
+  onScroll();
+
+  /* ---------- Charts: one scale per chart, drawn from the data ---------- */
+  var tip = $('tip');
+  function drawBars(el, rows, max, ticks, unit) {
+    rows.forEach(function (r) {
+      var row = document.createElement('div');
+      row.className = 'bar-row' + (r.mute ? ' mute' : '');
+      row.innerHTML = '<div class="bar-label"><span>' + r.name + '</span><b>' + r.label + '</b></div>' +
+        '<div class="bar-track"><i style="width:' + (r.v / max * 100) + '%"></i></div>';
+      function show(e) {
+        tip.textContent = r.tip; tip.classList.add('show');
+        var x = Math.min(innerWidth - 300, (e.clientX || 20) + 14);
+        tip.style.left = x + 'px'; tip.style.top = ((e.clientY || 80) + 16) + 'px';
+      }
+      row.addEventListener('mousemove', show);
+      row.addEventListener('mouseleave', function () { tip.classList.remove('show'); });
+      el.appendChild(row);
+    });
+    var ax = document.createElement('div'); ax.className = 'axis';
+    ticks.forEach(function (t) { var s = document.createElement('span'); s.textContent = unit + t; ax.appendChild(s); });
+    el.appendChild(ax);
+  }
+  drawBars($('est-bars'), [
+    { name: 'Mordor Intelligence, 2026', v: 3.75, label: '$3.75B', tip: 'Mordor Intelligence: $3.75B in 2026, $4.99B by 2031.' },
+    { name: 'The Business Research Co., 2026', v: 2.68, label: '$2.68B', mute: true, tip: 'The Business Research Company: $2.68B in 2026.' },
+    { name: 'DIResearch, 2026', v: 0.8025, label: '$0.80B', mute: true, tip: 'DIResearch: $802.5M in 2026.' },
+    { name: 'Market Reports World, 2025', v: 0.635, label: '$0.64B', mute: true, tip: 'Market Reports World, via Vidpros: $635M in 2025.' }
+  ], 4, [0, 1, 2, 3, 4], '$');
+  drawBars($('scale-bars'), [
+    { name: 'Editing software, worldwide, 2026', v: 3.75, label: '$3.75B', tip: 'Mordor Intelligence estimate for 2026.' },
+    { name: 'US film and video editor wages, 2025', v: 2.97, label: '≈ $2.97B', mute: true, tip: '39,400 editors × $75,420 median, BLS. Our multiplication.' },
+    { name: 'Creator economy, Goldman Sachs projection for 2027', v: 480, label: '$480B', mute: true, tip: 'Goldman Sachs Research: about $480B by 2027, from about $250B.' }
+  ], 480, [0, 120, 240, 360, 480], '$');
+
+  /* ---------- Layer stack tabs ---------- */
+  var STACKS = {
+    old: [
+      ['band', 'Who decides', 'You', 'Every cut, by hand, on every video.'],
+      ['band', 'The know-how', 'Years of practice', 'It lives in your head, or in a course you bought.'],
+      ['band', 'How it reaches the app', 'Mouse and keyboard', 'One click at a time.'],
+      ['band old', 'Cut layer', 'Premiere or Resolve', 'Subscription or licence.'],
+      ['band old motion', 'Motion layer', 'After Effects', 'A second app and a second learning curve.']
+    ],
+    bolt: [
+      ['band', 'Who decides', 'You and an agent', 'The agent is often the vendor\'s, metered in credits.'],
+      ['band', 'The know-how', 'A prompt', 'General advice, with little knowledge of your channel.'],
+      ['band', 'How it reaches the app', 'MCP over a scripting API', 'A new door into an app built for human hands.'],
+      ['band old', 'Cut layer', 'Premiere or Resolve', 'You keep paying, and Resolve\'s server is reported as Studio only.'],
+      ['band old motion', 'Motion layer', 'After Effects', 'Through community servers, and they can break on an update.']
+    ],
+    fresh: [
+      ['band', 'Who decides', 'You, with your own agent', 'Claude Code, Codex, whichever you already pay for or run. You approve the export.'],
+      ['band new', 'The know-how', 'Skills and presets', 'The rules, steps and saved choices for tutorials, shorts and clips, in plain text you can read and change.'],
+      ['band new', 'How it reaches the app', 'MCP and aeroedits do', '59 typed tools, local only. Each pass is one undo step.'],
+      ['band new', 'Cut layer', 'AeroEdits timeline', 'Free and open source. Deterministic passes on your words and telemetry.'],
+      ['band new motion', 'Motion layer', 'HyperFrames', 'Apache-2.0. Graphics are HTML the agent can write and you can revise.']
+    ]
+  };
+  var stack = $('stack');
+  var tabs = { 't-old': 'old', 't-bolt': 'bolt', 't-new': 'fresh' };
+  function showStack(id) {
+    Object.keys(tabs).forEach(function (t) { $(t).setAttribute('aria-selected', t === id ? 'true' : 'false'); });
+    stack.innerHTML = '';
+    STACKS[tabs[id]].forEach(function (r) {
+      var d = document.createElement('div'); d.className = r[0];
+      d.innerHTML = '<span class="role"></span><strong></strong><p></p>';
+      d.children[0].textContent = r[1]; d.children[1].textContent = r[2]; d.children[2].textContent = r[3];
+      stack.appendChild(d);
+    });
+  }
+  Object.keys(tabs).forEach(function (t) { $(t).addEventListener('click', function () { showStack(t); }); });
+  showStack('t-new');
+
+  /* ---------- The replay ---------- */
+  var TOTAL = 430, PAUSES = 70.3, OTHER = 13.7, FINAL = TOTAL - PAUSES - OTHER;
+  var seed = 7; function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+  var plan = [], i;
+  var pauseN = 34, otherN = 6;
+  var cuts = [];
+  for (i = 0; i < pauseN; i++) cuts.push({ kind: 'pause', w: 0.5 + rnd() });
+  for (i = 0; i < otherN; i++) cuts.push({ kind: 'other', w: 0.5 + rnd() });
+  for (i = cuts.length - 1; i > 0; i--) { var j = Math.floor(rnd() * (i + 1)), t = cuts[i]; cuts[i] = cuts[j]; cuts[j] = t; }
+  var sumP = 0, sumO = 0;
+  cuts.forEach(function (c) { if (c.kind === 'pause') sumP += c.w; else sumO += c.w; });
+  cuts.forEach(function (c) { c.d = c.kind === 'pause' ? c.w / sumP * PAUSES : c.w / sumO * OTHER; });
+  var keptW = [], sumK = 0;
+  for (i = 0; i <= cuts.length; i++) { var w = 0.4 + rnd() * 1.4; keptW.push(w); sumK += w; }
+  for (i = 0; i <= cuts.length; i++) {
+    plan.push({ kind: 'keep', d: keptW[i] / sumK * FINAL });
+    if (cuts[i]) plan.push(cuts[i]);
+  }
+  /* 114 noises, placed in proportion to kept length */
+  var noiseLeft = 114;
+  plan.forEach(function (s, idx) {
+    if (s.kind !== 'keep') return;
+    var n = idx === plan.length - 1 ? noiseLeft : Math.min(noiseLeft, Math.round(s.d / FINAL * 114));
+    s.ticks = n; noiseLeft -= n;
+  });
+
+  function wave(seg, keep) {
+    var n = Math.max(3, Math.round(seg.d * 2)), top = '', bot = '';
+    for (var k = 0; k <= n; k++) {
+      var x = k / n * 100;
+      var a = keep ? (0.25 + rnd() * rnd() * 2.2) : 0.05 + rnd() * .08;
+      a = Math.min(1, a) * 46;
+      top += (k ? 'L' : 'M') + x.toFixed(1) + ' ' + (50 - a).toFixed(1);
+      bot = 'L' + x.toFixed(1) + ' ' + (50 + a).toFixed(1) + bot;
+    }
+    return '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="' + top + bot + 'Z"/></svg>';
+  }
+  var laneScreen = $('l-screen'), laneCam = $('l-cam'), laneMic = $('l-mic');
+  [laneScreen, laneCam, laneMic].forEach(function (lane) {
+    plan.forEach(function (s) {
+      var d = document.createElement('div');
+      d.className = 'seg ' + (s.kind === 'keep' ? 'keep' : 'gap ' + s.kind);
+      d.style.setProperty('--d', s.d.toFixed(3));
+      if (lane === laneMic) {
+        var inner = wave(s, s.kind === 'keep');
+        if (s.ticks) for (var q = 0; q < s.ticks; q++) inner += '<span class="tick" style="left:' + (rnd() * 96).toFixed(1) + '%"></span>';
+        d.innerHTML = inner;
+      }
+      lane.appendChild(d);
+    });
+    var spare = document.createElement('div'); spare.className = 'spare'; lane.appendChild(spare);
+  });
+  var scale = $('scale');
+  ['00:00', '01:47', '03:35', '05:22', '07:10'].forEach(function (t) { var s = document.createElement('span'); s.textContent = t; scale.appendChild(s); });
+
+  /* Zooms, graphics and chapters sit on the edited length, which is FINAL/TOTAL of the lane */
+  var f = FINAL / TOTAL * 100;
+  var zoomLane = $('l-zoom'), gfxLane = $('l-gfx'), chLane = $('l-ch');
+  [4, 12, 19, 27, 34, 42, 49, 56, 63, 72, 81, 90].forEach(function (p) {
+    var b = document.createElement('i'); b.className = 'block z';
+    b.style.left = (p / 100 * f) + '%'; b.style.width = (3.4 / 100 * f) + '%'; zoomLane.appendChild(b);
+  });
+  [1, 17, 37, 54, 71, 92].forEach(function (p) {
+    var b = document.createElement('i'); b.className = 'block g';
+    b.style.left = (p / 100 * f) + '%'; b.style.width = (4.6 / 100 * f) + '%'; gfxLane.appendChild(b);
+  });
+  [0, 20, 44, 66, 86].forEach(function (p) {
+    var b = document.createElement('i'); b.className = 'flag';
+    b.style.left = (p / 100 * f) + '%'; chLane.appendChild(b);
+  });
+
+  var STEPS = [
+    { code: 'preset tutorial', say: 'Rules, steps and saved choices read', ms: 1100 },
+    { code: 'transcribe', say: '7:10 is now words and telemetry', ms: 1300 },
+    { code: 'mouth_noises', say: '114 noises muted', ms: 1800, run: function () {
+      laneMic.classList.add('ticks');
+      later(function () { laneMic.classList.add('muted'); }, 900);
+    } },
+    { code: 'silence', say: '70.3 s of pauses removed', ms: 2300, run: function () { cut('pause', PAUSES, 700); } },
+    { code: 'more cuts', say: '13.7 s more removed. Now 5:46', ms: 2100, run: function () { cut('other', OTHER, 600); } },
+    { code: 'zooms', say: '12 zooms placed on recorded clicks', ms: 1500, run: function () { stagger(zoomLane); } },
+    { code: 'chapters', say: '5 chapters', ms: 1200, run: function () {
+      stagger(chLane); $('r-calls').textContent = '13'; $('r-cost').textContent = '$0.191';
+    } },
+    { code: 'graphic_add', say: '6 text cards', ms: 1500, run: function () {
+      stagger(gfxLane); $('r-calls').textContent = '18'; $('r-cost').textContent = '$0.271';
+    } },
+    { code: 'stop', say: 'Export waits for your go', ms: 0, stop: true }
+  ];
+  var con = $('console');
+  STEPS.forEach(function (s) {
+    var li = document.createElement('li'); if (s.stop) li.className = 'stop';
+    li.innerHTML = '<code></code><span></span>';
+    li.children[0].textContent = s.code; li.children[1].textContent = s.say;
+    con.appendChild(li);
+  });
+
+  var timers = [], instant = false;
+  function later(fn, ms) { if (instant) return fn(); timers.push(setTimeout(fn, ms)); }
+  var removed = 0, lenTimer = null;
+  function setSpare() {
+    [laneScreen, laneCam, laneMic].forEach(function (l) { l.lastChild.style.setProperty('--saved', removed.toFixed(2)); });
+  }
+  function animLen(from, to) {
+    if (instant || reduce) { $('r-len').textContent = mmss(to); return; }
+    var t0 = performance.now();
+    cancelAnimationFrame(lenTimer);
+    (function step(now) {
+      var k = Math.min(1, (now - t0) / 900);
+      $('r-len').textContent = mmss(from + (to - from) * k);
+      if (k < 1) lenTimer = requestAnimationFrame(step);
+    })(t0);
+  }
+  function cut(kind, amount, wait) {
+    [laneScreen, laneCam, laneMic].forEach(function (l) {
+      l.querySelectorAll('.' + kind).forEach(function (s) { s.classList.add('mark'); });
+    });
+    later(function () {
+      [laneScreen, laneCam, laneMic].forEach(function (l) {
+        l.querySelectorAll('.' + kind).forEach(function (s) {
+          s.classList.add('gone');
+          var p = s.previousElementSibling; if (p) p.classList.add('kept');
+        });
+      });
+      var before = TOTAL - removed;
+      removed += amount; setSpare();
+      animLen(before, TOTAL - removed);
+    }, wait);
+  }
+  function stagger(lane) {
+    Array.prototype.forEach.call(lane.children, function (b, n) {
+      later(function () { b.classList.add('show'); }, n * 70);
+    });
+  }
+  function reset() {
+    timers.forEach(clearTimeout); timers = [];
+    removed = 0; setSpare();
+    laneMic.classList.remove('ticks', 'muted');
+    document.querySelectorAll('#replay .seg').forEach(function (s) { s.classList.remove('mark', 'gone', 'kept'); });
+    document.querySelectorAll('#replay .block, #replay .flag').forEach(function (b) { b.classList.remove('show'); });
+    Array.prototype.forEach.call(con.children, function (li) { li.classList.remove('seen', 'now'); });
+    $('r-len').textContent = '07:10'; $('r-calls').textContent = '0'; $('r-cost').textContent = '$0.000';
+  }
+  function play() {
+    reset();
+    var at = 500;
+    STEPS.forEach(function (s, n) {
+      later(function () {
+        if (n) { con.children[n - 1].classList.remove('now'); con.children[n - 1].classList.add('seen'); }
+        con.children[n].classList.add('now');
+        if (s.run) s.run();
+      }, at);
+      at += s.ms;
+    });
+  }
+  function finish() {
+    instant = true;
+    reset();
+    STEPS.forEach(function (s, n) { if (s.run) s.run(); con.children[n].classList.add('seen'); });
+    con.children[STEPS.length - 1].classList.add('now');
+    instant = false;
+  }
+  $('again').addEventListener('click', function () { if (reduce) finish(); else play(); });
+  if (reduce) { finish(); }
+  else if ('IntersectionObserver' in window) {
+    var started = false;
+    new IntersectionObserver(function (es, ob) {
+      if (es[0].isIntersecting && !started) { started = true; ob.disconnect(); play(); }
+    }, { threshold: .25 }).observe($('replay'));
+  } else { finish(); }
+})();
+</script>
+</body>
+</html>
