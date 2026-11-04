@@ -1,6 +1,7 @@
 //! Where presets are kept: the built-in ones in code, the user's one folder each in
 //! `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). The user's
-//! can be renamed: projects store a preset's name, so `renamed.json` leads old names to it.
+//! can be renamed: projects store a preset's name, so `renamed.json` leads old names to it. Each
+//! save that changes one keeps what it replaced in `versions/<n>/`, the same three files.
 use super::{builtin, is_builtin, Preset};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,9 @@ pub const RULES: &str = "rules.md";
 const MAX_PRESETS: usize = 100;
 const RENAMES_FILE: &str = "renamed.json";
 const MAX_RENAME_HOPS: usize = 16;
+const VERSIONS: &str = "versions";
+/// Versions kept of a preset; older ones go.
+const MAX_VERSIONS: usize = 50;
 
 /// The app's presets folder (`AEROEDITS_PRESETS_DIR` overrides it).
 pub fn dir() -> PathBuf {
@@ -41,11 +45,23 @@ pub fn load_in(presets: &Path, name: &str) -> Result<Preset, String> {
     check_name(wanted).map_err(|_| no_preset(presets, wanted))?;
     let folder = folder_named(presets, &current_name(presets, wanted))
         .ok_or_else(|| no_preset(presets, wanted))?;
-    let at = presets.join(&folder);
-    let text = std::fs::read_to_string(at.join(FILE)).map_err(|_| no_preset(presets, wanted))?;
-    let mut preset: Preset =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", at.join(FILE).display()))?;
-    preset.name = folder;
+    read_files(&presets.join(&folder), &folder).map_err(|e| match e {
+        Unreadable::Missing => no_preset(presets, wanted),
+        Unreadable::Invalid(why) => why,
+    })
+}
+
+enum Unreadable {
+    Missing,
+    Invalid(String),
+}
+
+/// The preset whose files are in `at` (its folder, or one of its versions).
+fn read_files(at: &Path, name: &str) -> Result<Preset, Unreadable> {
+    let text = std::fs::read_to_string(at.join(FILE)).map_err(|_| Unreadable::Missing)?;
+    let mut preset: Preset = serde_json::from_str(&text)
+        .map_err(|e| Unreadable::Invalid(format!("{}: {e}", at.join(FILE).display())))?;
+    preset.name = name.to_string();
     preset.method = std::fs::read_to_string(at.join(METHOD))
         .unwrap_or_default()
         .replace("\r\n", "\n");
@@ -220,17 +236,145 @@ pub fn save_in(presets: &Path, input: &PresetInput) -> Result<Preset, String> {
         record_rename(presets, old, &name)?;
     }
     std::fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+    // What this replaces is kept when anything changed; a save that changes nothing is no new
+    // version. A preset saved before versions were counted is its first.
+    let replaced = read_files(&target, &name).ok();
+    let same = |old: &Preset| {
+        let mut was = old.clone();
+        was.version = preset.version;
+        was.saved_at.clone_from(&preset.saved_at);
+        was == preset
+    };
+    match &replaced {
+        Some(old) if same(old) => {
+            preset.version = old.version.max(1);
+            preset.saved_at.clone_from(&old.saved_at);
+        }
+        Some(old) => {
+            keep_version(&target, old)?;
+            preset.version = old.version.max(1) + 1;
+            preset.saved_at = saved_now();
+        }
+        None => {
+            preset.version = 1;
+            preset.saved_at = saved_now();
+        }
+    }
+    write_files(&target, &preset)?;
+    Ok(preset)
+}
+
+fn saved_now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Writes a preset's three files into `at`, each whole or not at all.
+fn write_files(at: &Path, preset: &Preset) -> Result<(), String> {
+    std::fs::create_dir_all(at).map_err(|e| format!("{}: {e}", at.display()))?;
     let write = |file: &str, text: &str| {
-        let path = target.join(file);
-        let temp = target.join(format!(".{file}.tmp"));
+        let path = at.join(file);
+        let temp = at.join(format!(".{file}.tmp"));
         std::fs::write(&temp, text).map_err(|e| format!("{}: {e}", path.display()))?;
         std::fs::rename(&temp, &path).map_err(|e| format!("{}: {e}", path.display()))
     };
-    let json = serde_json::to_string_pretty(&preset).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(preset).map_err(|e| e.to_string())?;
     write(FILE, &(json + "\n"))?;
     write(METHOD, &preset.method)?;
-    write(RULES, &preset.rules)?;
-    Ok(preset)
+    write(RULES, &preset.rules)
+}
+
+/// The numbers of the versions kept in preset folder `at`, oldest first.
+fn kept_versions(at: &Path) -> Vec<u32> {
+    let mut kept: Vec<u32> = std::fs::read_dir(at.join(VERSIONS))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_string_lossy().parse().ok())
+        .collect();
+    kept.sort_unstable();
+    kept
+}
+
+/// Keeps `old` as a version in preset folder `at`, dropping the oldest past the limit.
+fn keep_version(at: &Path, old: &Preset) -> Result<(), String> {
+    let number = old.version.max(1);
+    let mut kept = old.clone();
+    kept.version = number;
+    write_files(&at.join(VERSIONS).join(number.to_string()), &kept)?;
+    let all = kept_versions(at);
+    for gone in all.iter().take(all.len().saturating_sub(MAX_VERSIONS)) {
+        let _ = std::fs::remove_dir_all(at.join(VERSIONS).join(gone.to_string()));
+    }
+    Ok(())
+}
+
+/// One save of a preset, as the list of them shows it.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionView {
+    pub version: u32,
+    pub saved_at: String,
+    pub current: bool,
+    pub summary: String,
+}
+
+/// Every save kept of preset `name`, the current one first.
+pub fn versions_in(presets: &Path, name: &str) -> Result<Vec<VersionView>, String> {
+    let current = load_in(presets, name)?;
+    let view = |preset: &Preset, current: bool| VersionView {
+        version: preset.version.max(1),
+        saved_at: preset.saved_at.clone(),
+        current,
+        summary: super::workflow::summary(preset),
+    };
+    let mut out = vec![view(&current, true)];
+    if is_builtin(&current.name) {
+        return Ok(out);
+    }
+    let at = presets.join(&current.name);
+    for number in kept_versions(&at).into_iter().rev() {
+        let folder = at.join(VERSIONS).join(number.to_string());
+        if let Ok(old) = read_files(&folder, &current.name) {
+            out.push(view(&old, false));
+        }
+    }
+    Ok(out)
+}
+
+/// Makes version `version` of preset `name` the current one, as a new version: what it replaces
+/// stays in the list.
+pub fn restore_in(presets: &Path, name: &str, version: u32) -> Result<Preset, String> {
+    let current = load_in(presets, name)?;
+    if is_builtin(&current.name) {
+        return Err(format!("{} is built in and has no versions", current.name));
+    }
+    if version == current.version.max(1) {
+        return Err(format!("{} is at version {version} already", current.name));
+    }
+    let folder = presets
+        .join(&current.name)
+        .join(VERSIONS)
+        .join(version.to_string());
+    let old = read_files(&folder, &current.name)
+        .map_err(|_| format!("{} has no version {version}", current.name))?;
+    save_in(
+        presets,
+        &PresetInput {
+            name: current.name.clone(),
+            previous: Some(current.name),
+            method: old.method.clone(),
+            rules: old.rules.clone(),
+            preset: old,
+        },
+    )
+}
+
+pub fn versions(name: &str) -> Result<Vec<VersionView>, String> {
+    versions_in(&dir(), name)
+}
+
+pub fn restore(name: &str, version: u32) -> Result<Preset, String> {
+    restore_in(&dir(), name, version)
 }
 
 pub fn save(input: &PresetInput) -> Result<Preset, String> {
@@ -275,6 +419,87 @@ mod tests {
             method: "# Steps\n".into(),
             rules: "Never cut the intro.\n".into(),
         }
+    }
+
+    #[test]
+    fn each_change_is_a_version_that_can_be_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let presets = dir.path();
+        let saved = save_in(presets, &input("Mine")).unwrap();
+        assert_eq!(saved.version, 1);
+        assert!(!saved.saved_at.is_empty());
+
+        // Saved again unchanged: no new version.
+        let mut again = input("Mine");
+        again.previous = Some("Mine".into());
+        assert_eq!(save_in(presets, &again).unwrap().version, 1);
+        assert_eq!(versions_in(presets, "Mine").unwrap().len(), 1);
+
+        // A change: the old one is kept, whichever part changed.
+        let mut changed = again.clone();
+        changed.preset.checks = vec!["The intro is under 20 s".into()];
+        changed.rules = "Keep the intro.\n".into();
+        assert_eq!(save_in(presets, &changed).unwrap().version, 2);
+        let listed = versions_in(presets, "Mine").unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|v| (v.version, v.current))
+                .collect::<Vec<_>>(),
+            [(2, true), (1, false)]
+        );
+        assert!(
+            listed[0].summary.contains("The intro is under 20 s"),
+            "{}",
+            listed[0].summary
+        );
+
+        // Restored: version 1's content, as version 3, with version 2 still there.
+        let back = restore_in(presets, "Mine", 1).unwrap();
+        assert_eq!(back.version, 3);
+        assert_eq!(back.rules, "Never cut the intro.\n");
+        assert!(back.checks.is_empty());
+        assert_eq!(load_in(presets, "Mine").unwrap().version, 3);
+        assert_eq!(
+            versions_in(presets, "Mine")
+                .unwrap()
+                .iter()
+                .map(|v| v.version)
+                .collect::<Vec<_>>(),
+            [3, 2, 1]
+        );
+        assert!(restore_in(presets, "Mine", 3)
+            .unwrap_err()
+            .contains("already"));
+        assert!(restore_in(presets, "Mine", 9)
+            .unwrap_err()
+            .contains("no version"));
+        assert!(restore_in(presets, "Tutorial", 1).is_err());
+
+        // A rename takes its versions along; a preset's versions aren't presets of their own.
+        let mut renamed = changed.clone();
+        renamed.name = "Ours".into();
+        renamed.previous = Some("Mine".into());
+        assert_eq!(save_in(presets, &renamed).unwrap().version, 4);
+        assert_eq!(versions_in(presets, "Ours").unwrap().len(), 4);
+        assert_eq!(list_in(presets).len(), builtin().len() + 1);
+    }
+
+    #[test]
+    fn only_so_many_versions_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let presets = dir.path();
+        save_in(presets, &input("Mine")).unwrap();
+        for n in 0..MAX_VERSIONS + 5 {
+            let mut next = input("Mine");
+            next.previous = Some("Mine".into());
+            next.rules = format!("Rule {n}\n");
+            save_in(presets, &next).unwrap();
+        }
+        let listed = versions_in(presets, "Mine").unwrap();
+        // The current one, and the limit of those before it.
+        assert_eq!(listed.len(), MAX_VERSIONS + 1);
+        assert_eq!(listed[0].version as usize, MAX_VERSIONS + 6);
     }
 
     #[test]

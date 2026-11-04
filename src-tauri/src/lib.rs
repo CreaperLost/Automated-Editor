@@ -1338,8 +1338,26 @@ fn project_chapters_set(
 fn project_check(
     state: State<'_, AppState>,
     project_handle: String,
+    short_id: Option<String>,
 ) -> Result<check::CheckReport, String> {
-    commands::project_check_impl(&state, project_handle)
+    commands::project_check_of(&state, project_handle, short_id.as_deref())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_check_frames(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<Vec<check::Finding>, String> {
+    blocking(move || {
+        commands::project_check_frames_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            short_id.as_deref(),
+        )
+    })
+    .await
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2442,8 +2460,31 @@ fn preset_save_from_project(
     project_handle: String,
     expected_revision: u64,
     name: Option<String>,
+    workflow: Option<preset::workflow::Workflow>,
 ) -> Result<project::OpenedProject, String> {
-    commands::preset::preset_save_from_project_impl(&state, project_handle, expected_revision, name)
+    commands::preset::preset_save_from_project_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        name,
+        workflow,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_versions(name: String) -> Result<Vec<preset::store::VersionView>, String> {
+    preset::store::versions(&name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_restore(
+    state: State<'_, AppState>,
+    name: String,
+    version: u32,
+) -> Result<preset::PresetView, String> {
+    commands::preset::preset_restore_impl(&state, name, version)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2995,6 +3036,8 @@ pub fn run() {
             preset_save,
             preset_remove,
             preset_rename,
+            preset_versions,
+            preset_restore,
             project_cleanup_set,
             project_export_set,
             styles,
@@ -3132,6 +3175,7 @@ pub fn run() {
             transcript_ai_suggest,
             project_chapters_set,
             project_check,
+            project_check_frames,
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,

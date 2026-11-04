@@ -1008,6 +1008,30 @@ export interface Preset {
   short: Record<string, unknown>;
   /** The choices the agent's method asks about (cleanup, review depth, graphics, export). */
   choices: Record<string, unknown>;
+  /** Which save of it this is; built-ins have none. */
+  version?: number;
+  savedAt?: string;
+  /** When the usual steps don't apply, in the user's words. */
+  exceptions?: string[];
+  /** What must hold before export, in the user's words. */
+  checks?: string[];
+  /** The edit the user approved it on. */
+  approved?: { from: string; on: string; note?: string };
+}
+
+/** What the user adds when saving an edit as a workflow; what is left out stays as it was. */
+export interface PresetWorkflow {
+  exceptions?: string[];
+  checks?: string[];
+  note?: string;
+}
+
+/** One save of a preset (`preset::store::VersionView`). */
+export interface PresetVersion {
+  version: number;
+  savedAt: string;
+  current: boolean;
+  summary: string;
 }
 
 export interface PresetView {
@@ -1019,6 +1043,8 @@ export interface PresetView {
   /** The user's own rules for this kind of video (Markdown). */
   rules: string;
   folder: string | null;
+  /** All of it in a few readable lines. */
+  summary: string;
 }
 
 /** A setting's part of the edit, as presets name them. */
@@ -1773,7 +1799,7 @@ export interface ModelDownloadProgress {
   bytesTotal: number | null;
 }
 
-export type CutKind = "filler" | "retake" | "cut";
+export type CutKind = "filler" | "retake" | "drink" | "cut";
 
 export interface TranscriptCutSuggestion {
   id: string;

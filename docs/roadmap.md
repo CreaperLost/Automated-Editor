@@ -49,10 +49,10 @@ are evidence to reproduce, not newly verified defects.
 | Direct actions check the project handle before acquiring the command lock | Recheck project switching under concurrent calls; proposals already validate under the lock. AGT-1 follow-up. |
 | Stopping long analysis is supported; resuming is not | Add only for a job that proves expensive to restart. |
 | No in-app time/provider-spend report | EVAL-1 measures agent spend; do not report that as the total cost of a video. |
-| Thorough review has no matched real-recording baseline | Compare it with fast review before changing the long-form default. |
-| Frame-level graphic checks are separate from `check` | Sample face/caption/platform conflicts with `frame_render`; the Agent panel does not embed the sample clip. |
+| One run each favours fast review over thorough on four recordings ([Verification](verification.md#fast-against-thorough)) | Repeat before changing the long-form default or the method's advice; one model, 33 labelled spans. |
+| `check` reads a graphic's frames at 3 to 6 moments and the Agent panel does not embed the sample clip | A brief overlap between moments can pass. Sample suspect graphics with `frame_render`. Whether a 9:16 graphic reads at phone size is still judged by eye: the check finds words under the platform's bars, not words too small. |
 | Over-face layouts can hide captions or mouth or enter platform bands | Resolve in the STY-2 sample; a transparent composition root is not proof the face is visible. |
-| Review candidate windows can miss single-word repeats, cut-off words and reworded restarts | Reproduce with labelled cases before changing rules; guard deliberate repetition and meaningful connective words. |
+| A restart reworded with no shared opening words has no flag ("what you need to do is" → "you need to go"), so only a thorough review reads it | Add a labelled case first; guard deliberate repetition and meaningful connective words. A word repeat the reviewer is shown can still be kept wrongly. |
 | Some settings lack “changed here” chips (layouts and short settings) | Address with the relevant panel work. |
 | Graphic rerenders can take 20–40 s; orphaned unplaced graphic folders can remain after undo | Keep old renders playing; establish a real need before adding draft rendering or cleanup. |
 
@@ -63,7 +63,6 @@ None supersedes the shorts style or George's next real edit.
 
 | ID | Work and acceptance boundary | Size |
 |---|---|---|
-| <a id="auto-3"></a>AUTO-3 | Save an approved workflow as named/versioned instructions, defaults, exceptions and checks; show a readable summary and prove reuse on a second tutorial. | M |
 | <a id="loop-1"></a>LOOP-1 | Use accepted/rejected proposals, restored cuts and redone graphics to propose improvements to methods, styles and templates. User accepts each change; no hidden learning. | L |
 | <a id="snd-2"></a>SND-2 | Opt-in cues at graphic events: event markers, sound-peak offsets, density limits and ducking, using the style's sound set. Improve the sounds before scaling. | M/L |
 | <a id="ftg-2"></a>FTG-2 | Saved selects and B-roll from own footage: reviewed batch, video-only streams, free overlay track, narration untouched, word anchors. Not urgent (1 Nov). | M |

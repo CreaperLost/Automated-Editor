@@ -4,7 +4,8 @@
 //! positions in the kept words, as the full pages number them, so cuts are saved the same way.
 use super::fillers::chunk_prompt;
 use crate::transcript::edit::{
-    can_end_sentence, ends_clause, is_filler_sound, is_punctuation, normalize, same_word,
+    can_end_sentence, ends_clause, is_emphasis_word, is_filler_sound, is_punctuation, normalize,
+    opens_with, same_word,
 };
 use crate::transcript::TranscriptWord;
 use std::ops::Range;
@@ -71,6 +72,13 @@ const GR_KNOW_MEANT_BEFORE: &str = "τι πως οτι να αν που ποιο
     την τη πολλα ποσο ποσα";
 /// "εντάξει" or "οκ" opening a sentence is a filler; inside one ("είναι εντάξει") a word.
 const GR_OKAY: &str = "ενταξει οκ οκει";
+
+/// A word said wrong and corrected ("see set", "they there") sounds much like the next one:
+/// this close in spelling, opening alike, with a beat this long between or a filler sound.
+const SLIP_MIN_CHARS: usize = 3;
+const SLIP_MAX_DISTANCE: usize = 2;
+const SLIP_OPENING_CHARS: usize = 2;
+const SLIP_PAUSE_US: u64 = 100_000;
 
 /// `word` is one of the space-separated words in `list`.
 fn among(list: &str, word: &str) -> bool {
@@ -182,7 +190,13 @@ pub fn find(words: &[&TranscriptWord]) -> Vec<Candidate> {
         (after_stop, after_halt) = halts(&word.text);
     }
     out.extend(fillers(words, &spoken));
-    out.extend(retakes(words, &spoken));
+    let retaken = retakes(words, &spoken);
+    let slipped: Vec<Candidate> = slips(words, &spoken)
+        .into_iter()
+        .filter(|c| !retaken.iter().any(|r| c.from <= r.to && r.from <= c.to))
+        .collect();
+    out.extend(retaken);
+    out.extend(slipped);
     out.sort_by_key(|c| (c.from, c.to));
     out
 }
@@ -359,6 +373,72 @@ fn retakes(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
     out
 }
 
+/// Letters to change, add or remove to turn `a` into `b`.
+fn distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.chars().enumerate() {
+        let mut next = vec![i + 1];
+        for (j, y) in b.iter().enumerate() {
+            let swapped = row[j] + usize::from(x != *y);
+            next.push(swapped.min(row[j + 1] + 1).min(next[j] + 1));
+        }
+        row = next;
+    }
+    row[b.len()]
+}
+
+/// One word gone wrong, which a phrase said again doesn't catch: said twice, given up on before
+/// the same word whole, or said wrong and corrected. Only flags, so a slip that was meant costs
+/// a look: the words around it say whether it is one. Emphasis ("very very") never counts, and
+/// nor does a word ending its sentence.
+fn slips(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    for k in 0..s.len().saturating_sub(1) {
+        let (a, b) = (&s[k], &s[k + 1]);
+        if b.after_stop {
+            continue;
+        }
+        let (first, then) = (words[a.at], words[b.at]);
+        let note = if same_word(&a.norm, &b.norm) {
+            let in_a_run = s.get(k + 2).is_some_and(|w| w.norm == a.norm)
+                || (k > 0 && s[k - 1].norm == a.norm);
+            if is_emphasis_word(&a.norm) || in_a_run {
+                continue;
+            }
+            format!("\"{}\" said twice (slip?)", first.text)
+        } else if a.norm.chars().count() >= 2 && opens_with(&b.norm, &a.norm) && b.after_break {
+            format!("\"{}\", then \"{}\" (given up on?)", first.text, then.text)
+        } else {
+            let beat = then.source_start_us.saturating_sub(first.source_end_us) >= SLIP_PAUSE_US;
+            let sound = words[a.at + 1..b.at]
+                .iter()
+                .any(|w| is_filler_sound(&normalize(&w.text)));
+            let opening = |w: &str| w.chars().take(SLIP_OPENING_CHARS).collect::<String>();
+            if a.norm.chars().count() < SLIP_MIN_CHARS
+                || b.norm.chars().count() < SLIP_MIN_CHARS
+                || opening(&a.norm) != opening(&b.norm)
+                || distance(&a.norm, &b.norm) > SLIP_MAX_DISTANCE
+                || ends_clause(&first.text)
+                || !(beat || sound)
+            {
+                continue;
+            }
+            format!(
+                "\"{}\", then \"{}\" (said wrong and corrected?)",
+                first.text, then.text
+            )
+        };
+        out.push(Candidate {
+            flag: Flag::Retake,
+            from: a.at,
+            to: a.at,
+            note,
+        });
+    }
+    out
+}
+
 /// The words `from..=to` as said.
 fn said(words: &[&TranscriptWord], from: usize, to: usize) -> String {
     words[from..=to]
@@ -482,15 +562,17 @@ mod tests {
     use super::*;
     use crate::transcript::WordKind;
 
-    /// Words 300 ms apart, each 250 ms long; "|" before a word puts a one-second pause there.
+    /// Words 300 ms apart, each 250 ms long; "|" before a word puts a one-second pause there,
+    /// "~" a beat of 150 ms.
     fn words(text: &str) -> Vec<TranscriptWord> {
         let mut at = 0u64;
         text.split_whitespace()
             .enumerate()
             .map(|(i, token)| {
-                let (pause, text) = match token.strip_prefix('|') {
-                    Some(rest) => (1_000_000, rest),
-                    None => (0, token),
+                let (pause, text) = match (token.strip_prefix('|'), token.strip_prefix('~')) {
+                    (Some(rest), _) => (1_000_000, rest),
+                    (_, Some(rest)) => (150_000, rest),
+                    _ => (0, token),
                 };
                 at += pause;
                 let word = TranscriptWord {
@@ -649,6 +731,67 @@ mod tests {
              the video and |add a clip"
         )
         .is_empty());
+    }
+
+    /// Every slip the review windows used to skip, from the labelled recordings
+    /// (`docs/plans/review-eval`), and the deliberate words next to them that must stay unflagged.
+    #[test]
+    fn one_word_gone_wrong_is_flagged_and_what_is_meant_is_not() {
+        let retake = |from, to| (Flag::Retake, from, to);
+        // Said twice (EN-B, EN-D), with a comma or without.
+        assert_eq!(
+            flags("in terms of volume |volume it's on the spot"),
+            vec![retake(3, 3)]
+        );
+        assert_eq!(
+            flags("and it's insanely, insanely fast"),
+            vec![retake(2, 2)]
+        );
+        // Given up on before the same word whole (EN-C), past a filler sound too.
+        assert_eq!(
+            flags("that could have comp um |Complementary skills"),
+            vec![retake(3, 3), (Flag::Sound, 4, 4)]
+        );
+        // Said wrong and corrected (EN-C "see set", EN-B "they there").
+        assert_eq!(
+            flags("you can see ~set exactly which skills"),
+            vec![retake(2, 2)]
+        );
+        assert_eq!(
+            flags("uh they ~there is an extra cost"),
+            vec![(Flag::Sound, 0, 0), retake(1, 1)]
+        );
+        // Meant: for weight, run together, the end of a sentence, a small word before a longer
+        // one with no break, words alike with no beat between.
+        for meant in [
+            "it is very very good",
+            "really, really nice work",
+            "no no no that is wrong",
+            "we saved the file. File names stay",
+            "put it in into the box",
+            "you can see set exactly which",
+            "they there is more",
+            "a cat, cart and box",
+        ] {
+            let found = flags(meant);
+            assert!(found.is_empty(), "{meant}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_slip_inside_a_retake_is_not_flagged_again() {
+        assert_eq!(
+            flags("we want want to |we want to add a clip"),
+            vec![(Flag::Retake, 0, 3)]
+        );
+    }
+
+    #[test]
+    fn distance_counts_letters() {
+        assert_eq!(distance("see", "set"), 1);
+        assert_eq!(distance("they", "there"), 2);
+        assert_eq!(distance("", "abc"), 3);
+        assert_eq!(distance("abc", "abc"), 0);
     }
 
     #[test]

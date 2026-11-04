@@ -125,7 +125,57 @@ rules improved; the defining-repeat error was fixed 26 Oct. EL-B (26 Oct) is a r
 Greek sample with one retake: cloud found it, and rules found it after drawn-out-word matching.
 It is too short to replace EL-A. Gemma testing was explicitly skipped, not pending implementation.
 
+### Retakes on the labelled recordings (2 Nov)
+
+`rules` and `flags` engines, no model. Must-cut spans across EN-A to EN-D: 33, of them 16 retakes.
+A label was corrected first: EN-D's "what is, what is" named the words across the comma, so the
+rule that cuts "what is," scored as a miss; it now has that span as an `alt`.
+
+| Rules | Missed | Missed retakes | Wrong spans |
+|---|---|---|---|
+| Before (with the label as it was) | 12 | 7 | 0 |
+| After | 9 | 4 | 0 |
+
+The rules now cut "volume volume" and "comp... um... Complementary". Across all 19 transcripts on
+this computer (34,207 words), a prototype of the two new rules fires 3 times: those two, and "high high leverage".
+Of the 4 retakes they still miss, 3 are flagged for a reviewer ("they there", "see set", "to the
+lower pairs to the lower perpetuals"); on "we j-" the rules cut "j-" and leave "we". All the
+remaining filler misses are flagged. The new flags add 5 across 4,444 words. These were tuned on
+these same recordings, so a recording they haven't seen is the real test.
+
+<a id="fast-against-thorough"></a>
+### Fast against thorough (2 Nov)
+
+The same OpenRouter model from settings, once each on EN-A to EN-D, merged with the rules, after
+the changes above. `cloud` reads every word, as a thorough review does; `cloud-fast` reads the
+candidate windows, as a fast review does. An agent reviewing in-house was not measured.
+
+| Review | Words read | Time | Missed (of 33) | Wrong spans |
+|---|---|---|---|---|
+| Thorough | 4,444 | 139 s | 5 | 4 |
+| Fast | 2,484 | 129 s | 2 | 3 |
+
+One run each on a small sample, so this does not show fast is better; it does show that reading
+every word did not catch more here. Both still make wrong cuts, thorough on "pretty" said for weight
+and "kind of", fast on two restarts it misread ("you can select purple", "So the capabilities,"),
+which is why retakes stay reviewable. The 25 Oct wrong 12-word retake did not recur.
+
 ## Verified behavior and remaining limits
+
+On 2 Nov, with a dev build on copies of real projects: `check` of the 25 Oct short took about 4 s
+with renders in place and found words under the bottom band on all 4 graphics and captions hidden
+on 2; a frame at 22 s bore out what it said of "Proof". A 9-minute video with 13 graphics took 18 to
+26 s and was clean. With no renderer installed, it says the frames weren't checked. The export
+dialog and Shorts tab show the same findings. The face finding has only unit tests on these
+projects: no graphic there covered a face.
+
+A saved workflow was proved on a second tutorial (AUTO-3): saved on a copy of `Agent test` with one
+exception (no chapters) and one check (no zoom in the first 5 s), then followed from a copy of
+`Untitled 29 Oct 2026` by a headless agent given only "edit the open tutorial automatically with
+its preset", $0.16. It left chapters alone, reported them as open and verified the zoom rule. The
+first attempt ignored both, as the agent asked for `tutorial` by name and got the built-in, which
+is what `meant` fixes. That project was already part-edited, so no full edit from a raw recording
+has followed a workflow yet.
 
 Recorded Windows checks cover MCP/CLI create-to-export, proposals/accept/undo, history across
 restarts and agent-run undo, checkpoints, layouts, graphic install/render/library lifecycle,

@@ -14,7 +14,7 @@ mod clips;
 mod effects;
 pub mod first_steps;
 pub(crate) mod frames;
-mod graphic_checks;
+pub(crate) mod graphic_checks;
 pub mod ipc;
 mod layouts;
 mod library;

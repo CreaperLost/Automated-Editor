@@ -356,8 +356,22 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
   adding. `frame_render` with `sample: true` writes an in-context clip with sound for the user,
   alongside the agent's sheet. Sampled frame checks flag face coverage, caption conflicts,
   portrait platform bands and long static holds; unavailable face tracks are “not checked”.
-  These checks live in `mcp/graphic_checks.rs`, separate from `check`'s font/reading-time checks.
+  These checks live in `mcp/graphic_checks.rs`. `findings` runs the conflicts across every
+  graphic for `check`: 3 to 6 frames each, after up to 3 minutes for renders and face tracks, past
+  which the report says what wasn't looked at. `check.rs` stays free of decoding, so `project_check`
+  answers at once and `project_check_frames` follows in the panel; agents get both as one report.
   Wait for the current render before claiming a graphic fix is visible.
+- **Retakes:** `transcript/edit.rs` cuts only what is nearly always a slip (a word said again after
+  a 0.3 s pause with no comma, a word given up on before the same word whole). `ai/candidates.rs`
+  flags more for a reviewer (`slips`: said twice, given up on, said wrong and corrected); a flag
+  costs a look at its words, a wrong rule costs a word of the video. Words said for weight are
+  `EMPHASIS_WORDS`.
+- **Saved workflows (AUTO-3):** a preset with `exceptions`, `checks` and `approved`
+  (`preset/workflow.rs`), not a second kind of thing. `preset/store.rs` counts a `version` on each
+  save that changes something and keeps what it replaced in `versions/<n>/` (at most 50); restoring
+  is a new version. The agent's guide carries the exceptions and checks. Agents ask for a guide by
+  kind before they read `status`, so `preset` with a built-in's name gives the user's preset that the
+  open project follows for that kind (`mcp/skill.rs` `meant`), saying so.
 - **Seek-safe graphics:** all visible changes must follow deterministic timeline state. Avoid
   callback-driven text updates or measurements before HyperFrames sets the root height.
   Use transform-based movement; inspect the actual render and short-duration placements.

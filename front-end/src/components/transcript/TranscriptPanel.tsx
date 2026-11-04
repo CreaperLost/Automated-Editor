@@ -157,7 +157,7 @@ const TranscriptLineRow = React.memo(function TranscriptLineRow({
             cut ? "line-through decoration-danger/70 text-studio-500" : "hover:bg-studio-800",
             selected && !cut ? "bg-accent/30 text-white shadow-[0_0_0_1px_rgb(var(--accent-hover)/0.6)]" : "",
             i === active && !selected ? "bg-studio-700 text-white" : "",
-            kind === "filler" && !cut ? "underline decoration-suggest decoration-2" : "",
+            (kind === "filler" || kind === "drink") && !cut ? "underline decoration-suggest decoration-2" : "",
             kind === "retake" && !cut ? "underline decoration-studio-400 decoration-2" : "",
             // An agent's proposed cut: striped, as it waits in the Agent panel.
             kind === "cut" && !cut ? "underline decoration-danger/70 decoration-wavy" : "",
@@ -182,6 +182,8 @@ const TranscriptLineRow = React.memo(function TranscriptLineRow({
                     ? "Filler sound"
                     : kind === "retake"
                       ? "Abandoned take"
+                      : kind === "drink"
+                        ? "Drinking"
                       : kind === "cut"
                         ? "An agent proposes cutting this"
                         : w.captionHidden
@@ -898,8 +900,8 @@ export const TranscriptPanel: React.FC = () => {
                 onClick={() => focusSuggestion(s)}
               >
                 <div className="flex items-center gap-1.5">
-                  <Badge tone={s.kind === "filler" ? "suggest" : s.kind === "cut" ? "danger" : "neutral"}>
-                    {s.kind === "filler" ? "Filler" : s.kind === "retake" ? "Retake" : "Cut"}
+                  <Badge tone={s.kind === "filler" || s.kind === "drink" ? "suggest" : s.kind === "cut" ? "danger" : "neutral"}>
+                    {s.kind === "filler" ? "Filler" : s.kind === "retake" ? "Retake" : s.kind === "drink" ? "Drink" : "Cut"}
                   </Badge>
                   {s.source === "ai" &&
                     (s.reviewer?.startsWith("in-house") ? (
@@ -945,7 +947,7 @@ export const TranscriptPanel: React.FC = () => {
                           onClick={() =>
                             void (s.proposal
                               ? decideAgentItem(s, "cut")
-                              : cutWords(s.wordIds, `Cut ${s.kind === "filler" ? "filler" : "retake"} "${s.text}"`))
+                              : cutWords(s.wordIds, `Cut ${s.kind === "cut" ? "suggestion" : s.kind} "${s.text}"`))
                           }
                           className="h-7 w-7 inline-flex items-center justify-center rounded-control text-danger-fg hover:bg-danger/15"
                         >

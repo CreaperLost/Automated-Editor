@@ -125,9 +125,9 @@ pub static ACTIONS: [ToolDef; 36] = [
     },
     ToolDef {
         name: "fillers",
-        description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) in the \
-            transcript, one undo step: the app's rules plus an AI review. By default (`review: \
-            auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
+        description: "Cuts filler words (um, uh, ...), retakes (a sentence restarted) and \
+            drinking sounds in the transcript, one undo step: the app's rules plus an AI \
+            review. By default (`review: auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
             else its built-in local model when downloaded, and otherwise uses the review you \
             saved with `fillers_review` (in-house: you read the transcript). `review: \
             in-house`, `openrouter` or `local` forces one. `apply: false` only lists. `auto` \
@@ -264,9 +264,10 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "The check before export, the one the export dialog shows: black frames, \
             blips and words cut partway, zooms that flash by, captions \
             over the webcam, chapters YouTube would drop, loudness, missing files, proposals \
-            waiting. Each finding has an id, a time and maybe a safe fix; `fix` applies those \
-            ids' fixes (or [\"all\"]), each one undo step. Run it after the last edit, fix, \
-            then ask about export.",
+            waiting, graphics over a face or the captions, words under a platform's bars (it \
+            renders each graphic and looks at its frames). Each finding has an id, a time and \
+            maybe a safe fix; `fix` applies those ids' fixes (or [\"all\"]), each one undo \
+            step. Run it after the last edit, fix, then ask about export.",
         schema: schema::<CheckArgs>,
         read_only: false,
         run: check,
@@ -2197,7 +2198,8 @@ pub struct FillerArgs {
     /// Sound key of a transcript. Default: the transcribed speech.
     #[serde(default)]
     pub stream: Option<String>,
-    /// Which to cut: `filler`, `retake`. Default both.
+    /// Which to cut: `filler`, `retake`, `drink` (a drinking sound the transcriber tagged; online
+    /// transcripts only). Default all three.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
     /// Whose review adds to the rules (see the tool's description). `local` and `in-house` send
@@ -2458,6 +2460,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         vec![
             TranscriptSuggestionKind::Filler,
             TranscriptSuggestionKind::Retake,
+            TranscriptSuggestionKind::Drink,
         ]
     });
     // Rules and AI together by default: the rules alone miss most fillers and retakes.
@@ -2564,8 +2567,12 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         .or(saved.as_deref())
         .map(describe)
         .unwrap_or_else(|| "the review".into());
+    let drinks = match count(TranscriptSuggestionKind::Drink) {
+        0 => String::new(),
+        n => format!(", {}", plural(n, "drinking sound")),
+    };
     let mut lines = vec![format!(
-        "Found {} and {} in {key}{}.",
+        "Found {} and {}{drinks} in {key}{}.",
         plural(filler_count, "filler"),
         plural(retake_count, "retake"),
         if use_ai {
@@ -3989,17 +3996,18 @@ fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             );
         }
         let short = short_named(ctx, wanted)?;
-        let report = commands::project_check_of(ctx.state, before.handle, Some(&short.id))?;
+        let report = commands::project_check_whole(ctx.state, before.handle, Some(&short.id))?;
         return text(format!(
             "\"{}\": {}",
             short.title,
             crate::check::report_text(&report)
         ));
     }
-    let report = commands::project_check_impl(ctx.state, before.handle.clone())?;
     let Some(ids) = args.fix.filter(|ids| !ids.is_empty()) else {
+        let report = commands::project_check_whole(ctx.state, before.handle, None)?;
         return text(crate::check::report_text(&report));
     };
+    let report = commands::project_check_impl(ctx.state, before.handle.clone())?;
     let all = ids.iter().any(|id| id == "all");
     let fixed: Vec<String> = report
         .findings
@@ -4012,7 +4020,7 @@ fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         })
         .collect();
     commands::project_check_fix_impl(ctx.state, before.handle.clone(), before.revision, ids)?;
-    let after = commands::project_check_impl(ctx.state, before.handle.clone())?;
+    let after = commands::project_check_whole(ctx.state, before.handle.clone(), None)?;
     let mut lines = vec![format!(
         "Fixed {}, each its own undo step: {}.",
         plural(fixed.len(), "finding"),

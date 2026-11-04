@@ -40,12 +40,17 @@ pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             pretty(&json!({
                 "name": preset.name,
                 "builtIn": crate::preset::is_builtin(&preset.name),
+                "summary": crate::preset::workflow::summary(&preset),
                 "description": preset.description,
                 "style": preset.style,
                 "values": preset.values,
                 "short": preset.short,
                 "choices": preset.choices,
                 "rules": preset.rules,
+                "exceptions": preset.exceptions,
+                "checks": preset.checks,
+                "approved": preset.approved,
+                "version": preset.version,
                 "method": format!("{} characters (the `preset` tool gives it)", preset.method.len()),
             }))
         }
@@ -101,22 +106,56 @@ pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
         }
         Op::Save => {
             let before = opened(ctx)?;
+            let workflow = (args.exceptions.is_some()
+                || args.checks.is_some()
+                || args.note.is_some())
+            .then(|| crate::preset::workflow::Workflow {
+                exceptions: args.exceptions.clone(),
+                checks: args.checks.clone(),
+                note: args.note.clone(),
+            });
+            let approved = workflow.is_some();
             commands::preset::preset_save_from_project_impl(
                 ctx.state,
                 before.handle.clone(),
                 before.revision,
                 args.save_as.clone(),
+                workflow,
             )?;
             let now = with_reader(ctx.state, |r| Ok(r.document().preset.clone()))?;
-            text(applied(
-                ctx,
-                "library",
-                &before,
-                vec![format!(
-                    "The project's settings are preset {now}'s now, for every project that \
-                     follows it."
-                )],
-            )?)
+            let mut lines = vec![format!(
+                "The project's settings are preset {now}'s now, for every project that follows it."
+            )];
+            if approved {
+                lines.push(format!(
+                    "Saved as a workflow:\n{}",
+                    crate::preset::workflow::summary(&store::load(&now)?)
+                ));
+            }
+            text(applied(ctx, "library", &before, lines)?)
+        }
+        Op::Versions => {
+            let listed = store::versions(&named())?;
+            pretty(&json!({
+                "preset": named(),
+                "versions": listed.iter().map(|v| json!({
+                    "version": v.version,
+                    "savedAt": v.saved_at,
+                    "current": v.current,
+                    "summary": v.summary,
+                })).collect::<Vec<_>>(),
+            }))
+        }
+        Op::Restore => {
+            let version = args
+                .version
+                .ok_or("Give the `version` (`versions` lists them)")?;
+            let restored = commands::preset::preset_restore_impl(ctx.state, named(), version)?;
+            text(format!(
+                "Preset {} is back at what version {version} held, as version {}; what it \
+                 replaced is still in `versions`.",
+                restored.name, restored.preset.version
+            ))
         }
         Op::Reset => {
             let before = opened(ctx)?;
@@ -173,6 +212,10 @@ pub fn library(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                  autopilot); once accepted it is in {preset}'s rules for every project."
             ))
         }
-        _ => Err("Presets take list, show, use, set, save, reset, remove or propose_rule".into()),
+        _ => Err(
+            "Presets take list, show, use, set, save, versions, restore, reset, remove or \
+             propose_rule"
+                .into(),
+        ),
     }
 }

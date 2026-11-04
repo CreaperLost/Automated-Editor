@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { BookOpen, Check, Circle, AlertCircle, Copy, FolderOpen, Loader2, Pencil, Play, RotateCcw, Save, Smartphone, Trash2 } from "lucide-react";
+import { BadgeCheck, BookOpen, Check, Circle, AlertCircle, Copy, FolderOpen, History, Loader2, Pencil, Play, RotateCcw, Save, Smartphone, Trash2 } from "lucide-react";
 import { api } from "../../lib/ipc";
-import type { OpenedProject, PresetRunEvent, PresetRunPlan, PresetView } from "../../lib/types";
+import type { OpenedProject, PresetRunEvent, PresetRunPlan, PresetVersion, PresetView } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import { Button, Menu, MenuButton, type MenuEntry, DialogBackdrop } from "../ui";
 import { presetsChanged, usePresets } from "./usePresets";
@@ -19,6 +19,8 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
   const [renaming, setRenaming] = useState(false);
   const [editing, setEditing] = useState<PresetView>();
   const [runOpen, setRunOpen] = useState(false);
+  const [workflowOpen, setWorkflowOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const [notice, setNotice] = useState<string>();
 
   useEffect(() => {
@@ -97,6 +99,12 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
     },
     { label: "Save as a new preset…", icon: Copy, onSelect: () => setNaming(true) },
     {
+      label: "Save this edit as a workflow…",
+      icon: BadgeCheck,
+      hint: "This edit's settings, with your exceptions and checks, for the next video of this kind",
+      onSelect: () => setWorkflowOpen(true),
+    },
+    {
       label: "Take every change back",
       icon: RotateCcw,
       disabled: view.changed === 0,
@@ -104,6 +112,7 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
       onSelect: () => run("Back to the preset", (h, r) => api.projectPresetReset(h, r)),
     },
     { kind: "separator" },
+    { label: `What ${view.projectPreset} does…`, icon: History, hint: "A summary, and earlier versions to go back to", onSelect: () => setSummaryOpen(true) },
     { label: "Method and rules…", icon: BookOpen, onSelect: () => current && setEditing(current) },
     { label: "Open the presets folder", icon: FolderOpen, onSelect: () => void api.showInFinder(view.folder) },
     ...(current && !current.builtin
@@ -185,6 +194,29 @@ export const PresetMenu: React.FC<{ onError: (message: string) => void }> = ({ o
         />
       )}
       {runOpen && <RunDialog onClose={() => setRunOpen(false)} onError={onError} />}
+      {workflowOpen && current && (
+        <WorkflowDialog
+          current={current}
+          taken={view.presets.map((p) => p.name)}
+          onClose={() => setWorkflowOpen(false)}
+          onSave={(name, workflow) => {
+            setWorkflowOpen(false);
+            run(`Saved workflow ${name ?? current.name}`, (h, r) => api.presetSaveFromProject(h, r, name, workflow));
+          }}
+        />
+      )}
+      {summaryOpen && current && (
+        <SummaryDialog
+          current={current}
+          onClose={() => setSummaryOpen(false)}
+          onRestored={(version) => {
+            setSummaryOpen(false);
+            presetsChanged();
+            setNotice(`Back to version ${version}`);
+          }}
+          onError={onError}
+        />
+      )}
       {editing && (
         <MethodDialog
           preset={editing}
@@ -263,6 +295,145 @@ const NameDialog: React.FC<{
         </Button>
         <Button type="submit" variant="primary" disabled={!trimmed || clash}>
           Save
+        </Button>
+      </div>
+    </Dialog>
+  );
+};
+
+const lines = (text: string) =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+/** This edit's settings saved with the user's exceptions and checks, for the next video of its kind. */
+const WorkflowDialog: React.FC<{
+  current: PresetView;
+  taken: string[];
+  onClose: () => void;
+  onSave: (name: string | undefined, workflow: { exceptions: string[]; checks: string[]; note: string }) => void;
+}> = ({ current, taken, onClose, onSave }) => {
+  const [name, setName] = useState(current.builtin ? "" : current.name);
+  const [exceptions, setExceptions] = useState((current.preset.exceptions ?? []).join("\n"));
+  const [checks, setChecks] = useState((current.preset.checks ?? []).join("\n"));
+  const [note, setNote] = useState("");
+  const trimmed = name.trim();
+  const updating = !current.builtin && trimmed.toLowerCase() === current.name.toLowerCase();
+  const clash = !updating && taken.some((t) => t.toLowerCase() === trimmed.toLowerCase());
+  const ready = !!trimmed && !clash;
+  return (
+    <Dialog
+      label="Save this edit as a workflow"
+      onClose={onClose}
+      onSubmit={() => {
+        if (ready) onSave(updating ? undefined : trimmed, { exceptions: lines(exceptions), checks: lines(checks), note });
+      }}
+    >
+      <h2 className="text-body font-semibold text-studio-100">Save this edit as a workflow</h2>
+      <p className="text-label text-studio-400 leading-relaxed">
+        This video&apos;s settings, plus {current.name}&apos;s steps and your rules, for the next video of this kind. Your agent follows
+        the exceptions and goes through the checks before it asks about export.
+        {updating ? " It becomes a new version; the one before it stays in the list." : ""}
+      </p>
+      <input
+        autoFocus
+        aria-label="Workflow name"
+        placeholder="Name, e.g. My tutorials"
+        maxLength={40}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="ui-field"
+      />
+      {clash && <p className="text-meta text-danger-fg">There is already a preset of that name.</p>}
+      <textarea
+        aria-label="Exceptions, one a line"
+        placeholder={"Exceptions, one a line, e.g.\nA take under a minute gets no chapters"}
+        value={exceptions}
+        onChange={(e) => setExceptions(e.target.value)}
+        className="ui-field h-20 resize-none"
+      />
+      <textarea
+        aria-label="Checks before export, one a line"
+        placeholder={"Checks before export, one a line, e.g.\nThe intro is under 20 s"}
+        value={checks}
+        onChange={(e) => setChecks(e.target.value)}
+        className="ui-field h-20 resize-none"
+      />
+      <input
+        aria-label="What you approved"
+        placeholder="What you approved, in a line (optional)"
+        maxLength={200}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        className="ui-field"
+      />
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" variant="primary" disabled={!ready}>
+          Save
+        </Button>
+      </div>
+    </Dialog>
+  );
+};
+
+/** What a preset does, in a few lines, with its earlier versions to read and go back to. */
+const SummaryDialog: React.FC<{
+  current: PresetView;
+  onClose: () => void;
+  onRestored: (version: number) => void;
+  onError: (message: string) => void;
+}> = ({ current, onClose, onRestored, onError }) => {
+  const [versions, setVersions] = useState<PresetVersion[]>();
+  const [showing, setShowing] = useState<PresetVersion>();
+  useEffect(() => {
+    void api
+      .presetVersions(current.name)
+      .then(setVersions)
+      .catch((err) => onError(String(err)));
+  }, [current.name, onError]);
+  const restore = (version: number) => {
+    void api
+      .presetRestore(current.name, version)
+      .then(() => onRestored(version))
+      .catch((err) => onError(String(err)));
+  };
+  const earlier = (versions ?? []).filter((v) => !v.current);
+  return (
+    <Dialog label={`What ${current.name} does`} wide onClose={onClose} onSubmit={onClose}>
+      <h2 className="text-body font-semibold text-studio-100">What {current.name} does</h2>
+      <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-control border border-studio-800 bg-studio-850 p-3 text-label text-studio-200 select-text font-sans">
+        {showing ? showing.summary : current.summary}
+      </pre>
+      {earlier.length > 0 && (
+        <ul className="max-h-32 overflow-y-auto flex flex-col gap-1" aria-label="Earlier versions">
+          {earlier.map((version) => (
+            <li key={version.version} className="flex items-center gap-2 text-label text-studio-300">
+              <span className="flex-1">
+                Version {version.version}
+                {version.savedAt ? `, ${version.savedAt.slice(0, 10)}` : ""}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowing(showing?.version === version.version ? undefined : version)}
+              >
+                {showing?.version === version.version ? "Show current" : "Read"}
+              </Button>
+              <Button type="button" size="sm" variant="secondary" onClick={() => restore(version.version)} title="Becomes a new version; the current one stays in this list">
+                Go back to it
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex justify-end">
+        <Button type="submit" variant="primary">
+          Done
         </Button>
       </div>
     </Dialog>

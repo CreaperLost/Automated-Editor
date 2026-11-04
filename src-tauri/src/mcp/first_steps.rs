@@ -183,7 +183,7 @@ pub fn plan(preset: &str, choices: &Map<String, Value>, ready: Ready) -> Plan {
         };
         match review {
             Some((who, online, review)) => {
-                let mut args = json!({ "kinds": ["filler"], "guard": true });
+                let mut args = json!({ "kinds": ["filler", "drink"], "guard": true });
                 if let Some(review) = review {
                     args["review"] = json!(review);
                 }
@@ -379,7 +379,7 @@ mod tests {
         assert!(free.steps.iter().all(|s| !s.online));
         assert_eq!(free.steps[1].args["provider"], "parakeet");
         assert_eq!(free.steps[4].args["review"], "local");
-        assert_eq!(free.steps[4].args["kinds"], json!(["filler"]));
+        assert_eq!(free.steps[4].args["kinds"], json!(["filler", "drink"]));
         assert!(free.steps[2..5].iter().all(|s| s.args["guard"] == true));
         assert!(free.left.iter().any(|l| l.starts_with("Retakes")));
         assert!(free.left.iter().any(|l| l.contains("export")));

@@ -17,19 +17,32 @@ function clock(us: number): string {
 }
 
 interface CheckPanelProps {
-  /** Shows a moment on the timeline (the dialog closes so it can be seen). */
-  onShow: (timeUs: number) => void;
+  /** Shows a moment on the timeline (the dialog closes so it can be seen). Without it, times are only read. */
+  onShow?: (timeUs: number) => void;
   disabled?: boolean;
+  /** Checks this short as its export plays it; its findings are fixed on its own timeline, so no fixes here. */
+  shortId?: string;
+}
+
+const SEVERITY_ORDER: CheckSeverity[] = ["error", "warning", "info"];
+
+/** Errors first, then warnings, then notes; each in timeline order, as the report sorts them. */
+function sorted(findings: CheckFinding[]): CheckFinding[] {
+  const rank = (f: CheckFinding) => SEVERITY_ORDER.indexOf(f.severity);
+  const placed = (f: CheckFinding) => (f.startUs === undefined ? 0 : 1);
+  return [...findings].sort((a, b) => rank(a) - rank(b) || placed(a) - placed(b) || (a.startUs ?? 0) - (b.startUs ?? 0));
 }
 
 /**
  * The check before export (`check.rs`): problems a viewer would notice, each with where it is
- * and, when one is safe, a fix. Agents read the same findings from the `check` action.
+ * and, when one is safe, a fix. Agents read the same findings from the `check` action. What the
+ * graphics' frames show comes after, as drawing them takes longer (`graphic_checks.rs`).
  */
-export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
+export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled, shortId }) => {
   const handle = useProjectStore((s) => s.openedProject?.projectHandle);
   const revision = useProjectStore((s) => s.openedProject?.revision);
   const [report, setReport] = useState<CheckReport>();
+  const [frameFindings, setFrameFindings] = useState<CheckFinding[]>();
   const [error, setError] = useState<string>();
   const [fixing, setFixing] = useState<string>();
 
@@ -39,13 +52,30 @@ export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
     let current = true;
     setError(undefined);
     api
-      .projectCheck(handle)
+      .projectCheck(handle, shortId)
       .then((next) => current && setReport(next))
       .catch((err) => current && setError(String(err)));
+    setFrameFindings(undefined);
+    api
+      .projectCheckFrames(handle, shortId)
+      .then((next) => current && setFrameFindings(next))
+      .catch((err) => {
+        if (current) {
+          setFrameFindings([
+            {
+              id: "graphic_frames_not_checked-failed",
+              kind: "graphic_frames_not_checked",
+              severity: "info",
+              title: "Graphics' frames not checked",
+              detail: String(err),
+            },
+          ]);
+        }
+      });
     return () => {
       current = false;
     };
-  }, [handle, revision]);
+  }, [handle, revision, shortId]);
 
   const fix = useCallback(
     async (ids: string[], key: string) => {
@@ -64,8 +94,9 @@ export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
     [handle, report],
   );
 
-  const findings = report?.findings ?? [];
-  const fixable = findings.filter((f) => f.fixLabel);
+  const findings = sorted([...(report?.findings ?? []), ...(frameFindings ?? [])]);
+  const checkingFrames = frameFindings === undefined;
+  const fixable = shortId ? [] : findings.filter((f) => f.fixLabel);
   const blips = fixable.filter((f) => f.kind === "fragment");
   const counts = (["error", "warning", "info"] as const)
     .map((severity) => {
@@ -83,13 +114,19 @@ export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
         </h3>
         <span className="text-label text-studio-400 flex items-center gap-1.5">
           {!report && !error && <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />}
-          {report && findings.length === 0 && (
+          {report && !checkingFrames && findings.length === 0 && (
             <>
               <CheckCircle2 className="w-4 h-4 text-success" aria-hidden />
               No problems found
             </>
           )}
           {counts}
+          {report && checkingFrames && (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+              Checking the graphics&apos; frames…
+            </>
+          )}
         </span>
         <span className="flex-1" />
         {blips.length > 0 && (
@@ -131,6 +168,7 @@ export const CheckPanel: React.FC<CheckPanelProps> = ({ onShow, disabled }) => {
               busy={fixing === finding.id}
               disabled={disabled || fixing !== undefined}
               onShow={onShow}
+              canFix={!shortId}
               onFix={() => void fix([finding.id], finding.id)}
             />
           ))}
@@ -144,9 +182,10 @@ const FindingRow: React.FC<{
   finding: CheckFinding;
   busy: boolean;
   disabled?: boolean;
-  onShow: (timeUs: number) => void;
+  canFix: boolean;
+  onShow?: (timeUs: number) => void;
   onFix: () => void;
-}> = ({ finding, busy, disabled, onShow, onFix }) => {
+}> = ({ finding, busy, disabled, canFix, onShow, onFix }) => {
   const { icon: Icon, className } = SEVERITY[finding.severity];
   return (
     <li className="flex items-start gap-2.5 px-3 py-2 bg-studio-850">
@@ -154,15 +193,18 @@ const FindingRow: React.FC<{
       <div className="flex-1 min-w-0">
         <p className="text-label font-medium text-studio-100">{finding.title}</p>
         <p className="text-meta text-studio-400 select-text">{finding.detail}</p>
-        {finding.fixLabel && <p className="text-meta text-accent-fg">Fix: {finding.fixLabel}</p>}
+        {canFix && finding.fixLabel && <p className="text-meta text-accent-fg">Fix: {finding.fixLabel}</p>}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
-        {finding.startUs !== undefined && (
-          <Button size="sm" variant="ghost" className="font-mono tabular-nums" onClick={() => onShow(finding.startUs!)} title="Show it on the timeline">
-            {clock(finding.startUs)}
-          </Button>
-        )}
-        {finding.fixLabel && (
+        {finding.startUs !== undefined &&
+          (onShow ? (
+            <Button size="sm" variant="ghost" className="font-mono tabular-nums" onClick={() => onShow(finding.startUs!)} title="Show it on the timeline">
+              {clock(finding.startUs)}
+            </Button>
+          ) : (
+            <span className="text-meta font-mono tabular-nums text-studio-400">{clock(finding.startUs)}</span>
+          ))}
+        {canFix && finding.fixLabel && (
           <Button size="sm" variant="secondary" disabled={disabled} onClick={onFix} title="One undo step">
             {busy ? "Fixing…" : "Fix"}
           </Button>

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Check, ChevronDown, ChevronUp, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Trash2, Video, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ClipboardCheck, Download, FolderOpen, Loader2, Pencil, Plus, Sparkles, Trash2, Video, X } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { focusShortPlayback } from "../../lib/playbackControl";
 import { switchStage, switchStarted } from "../../lib/switchTiming";
@@ -18,9 +18,10 @@ import {
   useSelectedShort,
   useShortsStore,
 } from "../../stores/shortsStore";
-import { Button, IconButton, Notice } from "../ui";
+import { Button, DialogBackdrop, IconButton, Notice } from "../ui";
 import type { Short } from "../../lib/types";
 import { TakeForm } from "./TakeForm";
+import { CheckPanel } from "../export/CheckPanel";
 import { formatTime } from "../../lib/format";
 
 /// A gathered clip's pieces, in the order they play: each can move up or down or go (its
@@ -61,6 +62,7 @@ export const ShortsListPanel: React.FC = () => {
   const { busy, error, notice, checked, exports, renaming, kind } = useShortsStore();
   const hasMain = useShortsStore((s) => !!s.main);
   const [takeOpen, setTakeOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
   if (!project) return null;
 
   const shorts = (project.shorts ?? []).filter((s) => ofKind(s, kind));
@@ -125,7 +127,40 @@ export const ShortsListPanel: React.FC = () => {
             Export {shorts.some((s) => checked.has(s.id)) ? `${toExport.length} selected` : `all ${shorts.length}`}
           </Button>
         )}
+        {selected && ofKind(selected, kind) && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={ClipboardCheck}
+            className="w-full"
+            onClick={() => setChecking(true)}
+            title="Problems a viewer would notice in this one, as its export plays it, such as a graphic over the face or under Shorts' and TikTok's bars"
+          >
+            Check &quot;{selected.title}&quot;
+          </Button>
+        )}
       </div>
+      {checking && selected && ofKind(selected, kind) && (
+        <DialogBackdrop onClose={() => setChecking(false)} selectable>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Check of ${selected.title}`}
+            className="w-full max-w-2xl flex flex-col gap-3 rounded-panel border border-studio-700 bg-studio-900 shadow-dialog p-4"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setChecking(false);
+            }}
+          >
+            <h2 className="text-body font-semibold text-studio-100">{selected.title}</h2>
+            <CheckPanel key={selected.id} shortId={selected.id} />
+            <div className="flex justify-end">
+              <Button variant="primary" onClick={() => setChecking(false)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        </DialogBackdrop>
+      )}
 
       {error && (
         <Notice tone="danger" onDismiss={() => setShortsError(undefined)}>
