@@ -57,10 +57,24 @@ function hostTriple() {
   return line.slice("host:".length).trim();
 }
 
-async function download(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
-  return Buffer.from(await response.arrayBuffer());
+// GitHub's release downloads sometimes answer 5xx (a 504 failed CI on 8 Nov) or drop the
+// connection, so those are retried with a growing wait. A 4xx is final.
+async function download(url, attempts = 5) {
+  for (let attempt = 1; ; attempt++) {
+    let failure;
+    try {
+      const response = await fetch(url);
+      if (response.ok) return Buffer.from(await response.arrayBuffer());
+      failure = `Download failed (${response.status}): ${url}`;
+      if (response.status < 500 && response.status !== 429) attempt = attempts;
+    } catch (error) {
+      failure = `Download failed (${error.cause?.code ?? error.message}): ${url}`;
+    }
+    if (attempt >= attempts) throw new Error(failure);
+    const wait = 5 * attempt;
+    console.log(`${failure}; retrying in ${wait} s (attempt ${attempt + 1} of ${attempts})`);
+    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+  }
 }
 
 function findFile(dir, name) {
