@@ -3,12 +3,16 @@ name: Cloud check
 # Proves that a fresh Ubuntu VM set up only by scripts/cloud-setup.sh passes
 # scripts/test-all.sh: the exact path a Claude Code cloud session follows (see AGENTS.md).
 # ci.yml keeps its narrower, path-filtered jobs (Windows, macOS, Tauri shell, Parakeet).
+# Also on pushes to claude/** branches, so a cloud session's work is checked before its PR
+# exists (and its PR's run reuses the warm cache).
 on:
   pull_request:
+  push:
+    branches: ["claude/**"]
   workflow_dispatch:
 
 concurrency:
-  group: cloud-check-${{ github.event.pull_request.number || github.ref }}
+  group: cloud-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
