@@ -153,6 +153,8 @@ jobs:
       # FFmpeg.
       - name: Fetch the bundled FFmpeg and check its H.264 encoders
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           node scripts/fetch-ffmpeg.mjs
           binaries/ffprobe-x86_64-pc-windows-msvc.exe -hide_banner -version
@@ -233,6 +235,8 @@ jobs:
       - name: Fetch the bundled FFmpeg
         working-directory: src-tauri
         run: node scripts/fetch-ffmpeg.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Check the app with the Tauri feature
         working-directory: src-tauri
         run: |

@@ -66,6 +66,8 @@ jobs:
         if: matrix.config != ''
         working-directory: src-tauri
         run: node scripts/fetch-ffmpeg.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Build installer
         working-directory: src-tauri
         run: npx --yes @tauri-apps/cli@^2 build --ci --features tauri-app --bundles ${{ matrix.bundles }} ${{ matrix.config }}

@@ -4,11 +4,11 @@
 //
 //   node scripts/fetch-ffmpeg.mjs [--target <triple>] [--lgpl] [--force]
 //
-// Builds come from one pinned BtbN/FFmpeg-Builds release (release branch 8.1), checked against
+// Builds come from one pinned FFmpeg-Builds/FFmpeg-Builds (formerly BtbN) release (release branch 8.1), checked against
 // the SHA-256 sums written below, so every build bundles the same FFmpeg. To move to a newer
 // FFmpeg, follow the review in docs/verification.md#dependency-review: pick a month-end `autobuild-*` release
 // (BtbN prunes the daily ones after about two weeks), copy its asset names and sums from its
-// checksums.sha256, and update RELEASE, VERSION and SHA256. The default GPL build includes
+// checksums.sha256, and update TAG, VERSION and SHA256. The default GPL build includes
 // libx264 and the NVENC, AMF and Quick Sync GPU encoders; it is a separate program the app
 // runs, shipped with its license under the GPL's terms. `--lgpl` fetches the LGPL build (same
 // GPU encoders, no libx264). macOS has no BtbN build: on a Mac the Swift bridges are the default backend and
@@ -20,8 +20,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RELEASE =
-  "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08";
+// BtbN/FFmpeg-Builds moved to this name; the old one only redirects.
+const REPO = "FFmpeg-Builds/FFmpeg-Builds";
+const TAG = "autobuild-2026-09-30-13-08";
+const RELEASE = `https://github.com/${REPO}/releases/download/${TAG}`;
 const BRANCH = "8.1";
 const VERSION = "n8.1.3-9-g29e619e767";
 // From that release's checksums.sha256.
@@ -57,22 +59,63 @@ function hostTriple() {
   return line.slice("host:".length).trim();
 }
 
-// GitHub's release downloads sometimes answer 5xx (a 504 failed CI on 8 Nov) or drop the
-// connection, so those are retried with a growing wait. A 4xx is final.
-async function download(url, attempts = 5) {
+// The release-download link can answer 504 for hours (8 Nov: every asset of this repo, while
+// the API's asset endpoint served the same file), so each attempt tries the link, then the
+// API. 5xx and dropped connections are retried with a growing wait; any other 4xx is final.
+// GITHUB_TOKEN, when set, lifts the API's limit of 60 unauthenticated calls an hour.
+function apiHeaders(accept) {
+  const headers = { Accept: accept, "User-Agent": "aeroedits-fetch-ffmpeg" };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return headers;
+}
+
+async function apiAssetUrl(asset) {
+  const url = `https://api.github.com/repos/${REPO}/releases/tags/${TAG}`;
+  const response = await fetch(url, { headers: apiHeaders("application/vnd.github+json") });
+  if (!response.ok) return { status: response.status, url };
+  const release = await response.json();
+  const found = release.assets?.find((a) => a.name === asset);
+  if (!found) return { status: 404, url: `${url} (no asset ${asset})` };
+  return { url: found.url };
+}
+
+async function tryFetch(url, headers) {
+  try {
+    const response = await fetch(url, { headers });
+    if (response.ok) return { data: Buffer.from(await response.arrayBuffer()) };
+    return { status: response.status, failure: `Download failed (${response.status}): ${url}` };
+  } catch (error) {
+    return { failure: `Download failed (${error.cause?.code ?? error.message}): ${url}` };
+  }
+}
+
+const retryable = (status) => status === undefined || status >= 500 || status === 429;
+
+async function download(asset, attempts = 5) {
+  let apiUrl;
   for (let attempt = 1; ; attempt++) {
-    let failure;
-    try {
-      const response = await fetch(url);
-      if (response.ok) return Buffer.from(await response.arrayBuffer());
-      failure = `Download failed (${response.status}): ${url}`;
-      if (response.status < 500 && response.status !== 429) attempt = attempts;
-    } catch (error) {
-      failure = `Download failed (${error.cause?.code ?? error.message}): ${url}`;
+    const direct = await tryFetch(`${RELEASE}/${asset}`);
+    if (direct.data) return direct.data;
+    console.log(`${direct.failure}; trying the GitHub API`);
+    let result = direct;
+    if (!apiUrl) {
+      const lookup = await apiAssetUrl(asset);
+      if (lookup.status) {
+        result = {
+          status: lookup.status,
+          failure: `Asset lookup failed (${lookup.status}): ${lookup.url}`,
+        };
+      } else apiUrl = lookup.url;
     }
-    if (attempt >= attempts) throw new Error(failure);
+    if (apiUrl) {
+      result = await tryFetch(apiUrl, apiHeaders("application/octet-stream"));
+      if (result.data) return result.data;
+    }
+    if (attempt >= attempts || !(retryable(direct.status) && retryable(result.status))) {
+      throw new Error(result.failure);
+    }
     const wait = 5 * attempt;
-    console.log(`${failure}; retrying in ${wait} s (attempt ${attempt + 1} of ${attempts})`);
+    console.log(`${result.failure}; retrying in ${wait} s (attempt ${attempt + 1} of ${attempts})`);
     await new Promise((resolve) => setTimeout(resolve, wait * 1000));
   }
 }
@@ -122,7 +165,7 @@ async function main() {
   console.log(`Downloading ${asset}`);
   const expected = SHA256[`${platform.build}-${license}`];
   if (!expected) throw new Error(`No pinned checksum for ${asset}.`);
-  const archive = await download(`${RELEASE}/${asset}`);
+  const archive = await download(asset);
   const actual = createHash("sha256").update(archive).digest("hex");
   if (actual !== expected) {
     throw new Error(`Checksum mismatch for ${asset}: expected ${expected}, got ${actual}.`);
