@@ -4,10 +4,15 @@ Five documents for the work ahead. Consolidated 1 November 2026 from the working
 including that day's uncommitted updates. Implementation status is separate from verification;
 these notes do not claim a new test run.
 
+**Start with [HANDOFF.md](HANDOFF.md)** (8 Nov 2026): current state, decisions carried over from
+the old machine, the headless test setup for cloud sessions and open questions for George.
+
 | Document | Owns |
 |---|---|
+| [Handoff](HANDOFF.md) | State as of 8 Nov 2026, standing decisions and preferences, cloud-session setup, questions for George |
 | [Product](product.md) | Purpose, current capabilities, settled decisions and acceptance criteria |
-| [Roadmap](roadmap.md) | Next work, unresolved issues, dependencies and deferred work |
+| [Roadmap](ROADMAP.md) | Next work (cloud-sized tasks first), unresolved issues, dependencies and deferred work |
+| [Code review, 8 Nov](gap.md) | Open findings GAP-002..028 in the faceless/publish work, to fix before merging it |
 | [Architecture](architecture.md) | Implementation invariants, working practices and recorder contracts |
 | [Verification](verification.md) | Repeatable evaluation, measured baselines, validation gaps and dependency review |
 
@@ -27,13 +32,14 @@ The shipped agent instructions remain in `src-tauri/src/mcp/skill/` and
 - Keep evaluation scripts and labelled data in [plans/eval](plans/eval/) and
   [plans/review-eval](plans/review-eval/). Their paths stay stable for existing runners;
   these folders contain test support, not additional plans.
-- Check links after changes: `.venv\Scripts\python.exe scripts/check_doc_links.py --all`.
+- Check links after changes: `python3 scripts/check_doc_links.py --all` (on Windows:
+  `.venv\Scripts\python.exe scripts/check_doc_links.py --all`).
 
 ## Older material
 
 Completed plans, dated audits, research transcripts, competitor inventories and the shipped-work
 log were removed after extracting the decisions and remaining work. Use Git history when the
 original investigation matters: `git log --all -- docs/<old-path>`, then
-`git show <commit>:docs/<old-path>`. A recovery ZIP outside the repository preserves the prior documentation content, including
-uncommitted changes reconstructed from the initial diff (line endings normalized):
-`C:/Users/George/.codex/visualizations/2026/11/01/01a19913-c032-7df3-b15d-45d2d0663e16/docs-before-cleanup.zip`.
+`git show <commit>:docs/<old-path>`. A recovery ZIP of the pre-cleanup docs exists only on the
+old Windows machine (`C:/Users/George/.codex/visualizations/2026/11/01/.../docs-before-cleanup.zip`);
+cloud sessions cannot reach it, so use Git history.

@@ -1,7 +1,7 @@
 # Verification and maintenance
 
 Consolidated 1 November 2026 from existing logs. These are recorded results, not tests rerun
-as part of the docs cleanup. [Roadmap](roadmap.md) owns follow-up work.
+as part of the docs cleanup. [Roadmap](ROADMAP.md) owns follow-up work.
 
 ## Working safely
 
@@ -314,7 +314,7 @@ run the gate on every bundled template and compare rerenders; for review models,
 cases. A major migration is explicit work, never a side effect. Keep changes only with evidence
 of compatibility and worthwhile benefit. Recheck licences, including GSAP redistribution
 terms before bundling it differently. Candidate reviews include the Tailwind major
-([DEP-3](roadmap.md#dep-3)), ONNX Runtime leaving release candidates ([DEP-4](roadmap.md#dep-4))
+([DEP-3](ROADMAP.md#dep-3)), ONNX Runtime leaving release candidates ([DEP-4](ROADMAP.md#dep-4))
 and newer HyperFrames; their existence is not a reason to upgrade during unrelated work.
 
 **1 Nov 2026 round:**

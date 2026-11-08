@@ -53,6 +53,11 @@ if ((quick)); then
 else
   step "front-end build"   bash -c 'cd front-end && npm run --silent build'
 fi
+if command -v python3 >/dev/null 2>&1; then
+  step "doc links"         python3 scripts/check_doc_links.py --all
+else
+  skip "doc links" "no python3"
+fi
 # Reported only.
 if (cd src-tauri && cargo clippy --version >/dev/null 2>&1) && ((!quick)); then
   printf '\n==> clippy (not gating)\n'

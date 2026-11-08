@@ -1,4 +1,4 @@
-//! Faceless videos (FCL, docs/roadmap.md#fcl). A production is an empty project whose picture
+//! Faceless videos (FCL, docs/ROADMAP.md#fcl). A production is an empty project whose picture
 //! is graphics and whose sound is generated narration, long (16:9) or short (9:16). What it is
 //! and how far it got lives beside the edit in `faceless/production.json`, outside the undo
 //! history: undoing a cut never forgets a script.

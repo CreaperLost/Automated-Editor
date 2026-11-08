@@ -1,6 +1,6 @@
 # Product and direction
 
-Status consolidated 1 November 2026. [Roadmap](roadmap.md) owns unfinished work;
+Status consolidated 1 November 2026. [Roadmap](ROADMAP.md) owns unfinished work;
 [Verification](verification.md) distinguishes built behavior from measured results.
 
 ## Purpose and success

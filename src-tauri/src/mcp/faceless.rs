@@ -1,4 +1,4 @@
-//! `faceless`: faceless videos (FCL, docs/roadmap.md#fcl). A production is a project whose
+//! `faceless`: faceless videos (FCL, docs/ROADMAP.md#fcl). A production is a project whose
 //! picture is graphics and whose sound is generated narration, long (16:9) or short (9:16).
 //! Find stories (discover, ideas, setAside), make a production (create), say where it stands.
 use super::tools::{params, schema, text, Ctx, Output, ToolDef};

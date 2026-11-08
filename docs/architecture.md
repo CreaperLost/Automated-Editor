@@ -111,7 +111,7 @@ mounted at `recordings/<asset id>/`.
   arrangements for moves. One drawing path for the video and shorts in
   `export::SceneEvaluator::scene_at`. `pick` rules: rest (camera while the mouse rests and you
   talk), busy (screen while clicks/typing come fast), hook (camera on a short's opening line),
-  no-footage (take shorts). Plan and follow-ups: [roadmap](roadmap.md#lay-3).
+  no-footage (take shorts). Plan and follow-ups: [roadmap](ROADMAP.md#lay-3).
 - **Zooms** from clicks, dwell, click clusters and typing (`zoom/`), eased in recording time.
 - **Telemetry** (`telemetry/`): `events.jsonl` + `geometry.jsonl` (mouse), `keys.jsonl`
   ([contract](#keyboard-telemetry)), `windows.jsonl`
