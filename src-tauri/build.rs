@@ -19,8 +19,46 @@ fn main() {
         println!("cargo:rustc-link-lib=delayimp");
     }
 
+    embed_images();
+
     #[cfg(feature = "tauri-app")]
     tauri_build::build();
+}
+
+/// Lists every picture of the image library (`assets/images`, beside its `catalog.json`) for
+/// `image_library` to build in, as `(path in the library, bytes)`.
+fn embed_images() {
+    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("assets/images");
+    println!("cargo:rerun-if-changed={}", root.display());
+    let mut files = Vec::new();
+    let mut dirs = vec![root.clone()];
+    while let Some(dir) = dirs.pop() {
+        println!("cargo:rerun-if-changed={}", dir.display());
+        for entry in std::fs::read_dir(&dir).expect("assets/images") {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "webp" || e == "svg") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut code = format!("pub static FILES: [(&str, &[u8]); {}] = [\n", files.len());
+    for path in &files {
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        code.push_str(&format!(
+            "    ({rel:?}, include_bytes!({:?})),\n",
+            path.to_string_lossy()
+        ));
+    }
+    code.push_str("];\n");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("image_files.rs");
+    std::fs::write(out, code).expect("image_files.rs");
 }
 
 fn build_macos_editor_bridge() {

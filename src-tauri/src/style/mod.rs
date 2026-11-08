@@ -219,6 +219,15 @@ pub struct Fonts {
     pub title: Font,
     /// Everything else; an empty family takes the title's.
     pub body: Font,
+    /// Labels, numbers and attribution (a monospace, say); an empty family takes the body's.
+    #[serde(skip_serializing_if = "Font::is_empty")]
+    pub data: Font,
+}
+
+impl Font {
+    pub fn is_empty(&self) -> bool {
+        self.family.is_empty() && self.file.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -457,7 +466,110 @@ pub fn builtin() -> Vec<Style> {
         },
         ..Style::default()
     };
-    vec![light, dark]
+    vec![light, dark, broadsheet()]
+}
+
+/// The name of the faceless channel's style.
+pub const BROADSHEET: &str = "Broadsheet";
+
+/// The explainer's one style (its `style/frame.md`): a printed newspaper that moves. Paper,
+/// ink and one vermilion; Newsreader for what is said, IBM Plex Mono for data (both shipped);
+/// square corners, ink rules, no shadows; things land hard and never bounce.
+fn broadsheet() -> Style {
+    let kind = |name: &str, when: &str| GraphicKind {
+        name: name.into(),
+        when: when.into(),
+        shorts: None,
+    };
+    let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    Style {
+        name: BROADSHEET.into(),
+        brand: Brand {
+            colors: Colors {
+                background: "#F0E9DA".into(),
+                text: "#1C1A16".into(),
+                accent: "#C8321F".into(),
+                muted: "#5F584C".into(),
+            },
+            fonts: Fonts {
+                title: Font {
+                    family: "Newsreader".into(),
+                    file: None,
+                },
+                body: Font::default(),
+                data: Font {
+                    family: "IBM Plex Mono".into(),
+                    file: None,
+                },
+            },
+            logo: None,
+        },
+        graphics: Look {
+            preset: "bold".into(),
+            roundness: 0.0,
+            tokens: [
+                ("title-weight", "700"),
+                ("title-tracking", "-0.01em"),
+                ("leading", "1.08"),
+                ("ease", "cubic-bezier(0.2, 0.8, 0.2, 1)"),
+                ("gsap-ease", "power3.out"),
+                ("distance", "1.2vmin"),
+                ("entry", "rise"),
+                ("shadow-mix", "0%"),
+                ("wash-mix", "0%"),
+                ("line-mix", "85%"),
+                ("tint-mix", "12%"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+            ..Look::default()
+        },
+        frame: Frame {
+            background: Background {
+                kind: "solid".into(),
+                color_start: "#F0E9DA".into(),
+                color_end: "#F0E9DA".into(),
+                ..Background::default()
+            },
+            ..Frame::default()
+        },
+        motion: lines(&[
+            "Never slides: things land hard, get struck out, fall away. Text never bounces or floats.",
+            "Every cue lands on a spoken word: a part enters on its entry word and acts on its action word (its `cue`).",
+            "Hold still while the viewer reads; a slow drift between reading holds never counts as a beat.",
+            "A meaningful visual change every 5 to 8 seconds, never more than 12 seconds without one.",
+        ]),
+        kinds: vec![
+            kind("headline", "The opening and each turn of the story: what happened in one line, one word in red italic (template headline)."),
+            kind("source", "A report's own words, the key clause marked and a margin note on what it means (template quote)."),
+            kind("claim", "A claim the story tests: its evidence, then the verdict stamp on the spoken word (template verdict)."),
+            kind("comparison", "Numbers side by side, bars growing on the spoken word (template bars)."),
+            kind("number", "One number the narration gives, counted up with its unit and source (template count-up)."),
+            kind("sequence", "Events in order or a process, each step joined as it is said (template steps-link)."),
+            kind("stack", "Things that add up, landing one on another (template items-stack)."),
+            kind("change", "One object in a new state: before and after (template before-after)."),
+            kind("picture", "A Broadsheet illustration, or a sourced logo, flag, map or portrait, from the image library (look broadsheet) in a graphic of your own."),
+            kind("consequence", "The ending: the consequence or the open question, worth repeating (template key-point)."),
+        ],
+        rules: lines(&[
+            "Paper ground always, ink for text; vermilion is the only accent, for the one thing that matters in a frame, never decoration.",
+            "Newsreader for what is said, one word in red italic for emphasis; IBM Plex Mono for data, labels and attribution. No other fonts.",
+            "Square corners, ink rules, no shadows, no gradients.",
+            "A source tag only where a specific claim, number or quote is on screen; scenes that only explain carry none.",
+            "Real material wherever possible: real logos, screenshots and product shapes. Every name and number comes from a checked fact.",
+            "A card shows what the sentence says, never merely names the topic; with the text removed, the motion still says something.",
+            "Allow about three words a second of reading time.",
+            "Neighbouring graphics use different kinds unless the same kind explains better; a long video uses at least six kinds.",
+        ]),
+        sound: StyleSound {
+            policy: "Quiet and in the background: a subtle opening whoosh or pop and one slow \
+                     tech beat well under the voice. No sounds on graphics."
+                .into(),
+            cues: Vec::new(),
+        },
+        ..Style::default()
+    }
 }
 
 pub fn is_builtin(name: &str) -> bool {
@@ -515,6 +627,7 @@ impl Style {
         for file in [
             &self.brand.fonts.title.file,
             &self.brand.fonts.body.file,
+            &self.brand.fonts.data.file,
             &self.brand.logo,
         ]
         .into_iter()
@@ -541,6 +654,7 @@ impl Style {
         }
         family("title", &self.brand.fonts.title.family)?;
         family("body", &self.brand.fonts.body.family)?;
+        family("data", &self.brand.fonts.data.family)?;
         self.graphics.validate()?;
         let (lo, hi) = crate::graphics::look::SHORTS_RANGE;
         let p = &self.portrait.graphics;
@@ -642,6 +756,7 @@ impl Style {
         }
         self.brand.fonts.title.family = self.brand.fonts.title.family.trim().into();
         self.brand.fonts.body.family = self.brand.fonts.body.family.trim().into();
+        self.brand.fonts.data.family = self.brand.fonts.data.family.trim().into();
         self
     }
 
@@ -678,6 +793,7 @@ impl Style {
         [
             &mut fonts.title.file,
             &mut fonts.body.file,
+            &mut fonts.data.file,
             &mut self.brand.logo,
         ]
         .into_iter()

@@ -1,0 +1,102 @@
+{
+  "name": "Aero AI news",
+  "about": "Major AI releases, famous harness and tool updates, new findings, viral repositories and papers, exploits. Not the builder side: tutorials, making money, agencies.",
+  "subjectTerms": "ai|a\\.i\\.|artificial intelligence|chatgpt|openai|anthropic|claude|gemini|gpt[- ]?\\d*|llms?|deepfakes?|chatbots?|nvidia|copilot|grok|xai|deepseek|kimi|qwen|mistral|machine learning|neural|agi|superintelligence|humanoids?|robotaxis?|waymo|hugging face|agentic|data centers?|altman|perplexity|midjourney|sora|llama|claude code|codex|mcp|prompt injection|vibe coding|openclaw",
+  "repoTerms": "agents?|skills?|prompts?|rag|gpt|embeddings?|transformers?|inference",
+  "hooks": [
+    { "name": "exploit", "weight": 1.0, "pattern": "exploit\\w*|jailbreak\\w*|prompt injection|vulnerabilit\\w*|cve-\\d+(?:-\\d+)?|zero.day|rce|sandbox escape|backdoor\\w*|malicious|malware|poison\\w*" },
+    { "name": "release", "weight": 0.9, "pattern": "(?:openai|anthropic|google|deepmind|meta|xai|microsoft|nvidia|deepseek|mistral|qwen|kimi|alibaba)\\b.{0,40}\\b(?:releas\\w*|launch\\w*|announc\\w*|unveil\\w*|ships?|drops?|rolls? out)|gpt.?\\d[\\w.]*|opus|sonnet|haiku|fable|mythos|gemini \\d[\\w.]*|grok \\d[\\w.]*|deepseek|kimi|qwen|llama|claude code|codex|gemini cli|cursor|openclaw" },
+    { "name": "discovery", "weight": 0.9, "pattern": "discover\\w*|solved?|proves?|proof|paper|researchers?|cracked|outperforms?" },
+    { "name": "viral", "weight": 0.8, "pattern": "viral|github|repo\\w*" },
+    { "name": "scandal", "weight": 1.0, "pattern": "leak\\w*|secretly|silently|caught|exposed|lied|fake\\w*|scam\\w*|fraud|hack\\w*|breach\\w*|stolen|cover.?up" },
+    { "name": "conflict", "weight": 0.5, "pattern": "sues?|sued|suing|lawsuit|court|judge|bans?|banned|backlash|ftc|probe|investigat\\w+|fined?|regulators?|senate|congress|attorneys? general|feud|war" },
+    { "name": "jobs", "weight": 0.4, "pattern": "layoffs?|laid off|fired|replac\\w+|jobs?|workers?|unemployment|hiring|workforce|entry.level" },
+    { "name": "fear", "weight": 0.8, "pattern": "danger\\w*|warns?|warning|threat\\w*|kill\\w*|deaths?|died|suicide|harm\\w*|crisis|collapse|bubble|deepfakes?|nude\\w*|children|teens?" },
+    { "name": "privacy", "weight": 0.7, "pattern": "privacy|spying|surveillance|trains? on|training data|your data|chat history" },
+    { "name": "wow", "weight": 0.7, "pattern": "first|record|beats?|breakthrough|shock\\w*|free|open.source|open.weights?|cheaper|never|impossible|humanoid|superintelligence" },
+    { "name": "money", "weight": 0.5, "pattern": "\\$\\d[\\d.,]*\\s?\\w*|billion|trillion|valuation|ipo|acquir\\w+|acquisition|profit\\w*|revenue" },
+    { "name": "people", "weight": 0.5, "pattern": "altman|musk|zuckerberg|nadella|amodei|hassabis|huang|bezos|pichai|trump|cook" },
+    { "name": "everyday", "weight": 0.3, "pattern": "chatgpt|iphone|siri|netflix|google search|schools?|kids|students|teachers|doctors|hospital\\w*|dating|uber" },
+    { "name": "mainstream", "weight": -0.5, "pattern": "ipo|valuation|valued|funding|raises?|raised|stocks?|shares|selloff|market cap|investors?|earnings|revenue|lawsuits?|sues?|sued|court|judge|schools?|students|teachers|congress|senate|election" }
+  ],
+  "lowValue": "\\bhow to\\b|\\bbest\\b.*\\b(tools|apps|stocks)\\b|\\breview\\b|% off|\\bwebinar\\b|\\bsummit\\b|\\bpodcast\\b|\\bnewsletter\\b|\\bgguf\\b|\\bquants?\\b|\\bshow hn\\b|\\bask hn\\b|\\bstocks?\\b|\\bshares\\b|\\bearnings\\b|\\bv?\\d+\\.\\d+\\.\\d+\\b|^trending on|\\bmake money\\b|\\bside hustle\\b|\\bagency\\b|\\bcourse\\b|\\btutorial\\b|\\bstep.by.step\\b",
+  "stopwords": "a an and are as at be but by can could for from has have how in into is it its just more new no not now of on or our out over says say said so than that the their this to up was what when who why will with you your after about ai artificial intelligence",
+  "syndicators": ["Yahoo Finance", "Yahoo Finance UK", "BigGo Finance", "FourWeekMBA", "TradingView", "24/7 Wall St.", "The Motley Fool", "Benzinga", "marketscreener.com", "www.tokenpost.com"],
+  "primarySources": ["openai.com", "deepmind.google", "blog.google", "huggingface.co", "cursor.com", "blogs.nvidia.com"],
+  "primaryDomains": ["openai.com", "anthropic.com", "deepmind.google", "blog.google", "ai.google.dev", "ai.meta.com", "mistral.ai", "x.ai", "deepseek.com", "qwen.ai", "z.ai", "nvidia.com", "microsoft.com", "github.com", "huggingface.co", "openrouter.ai", "arxiv.org"],
+  "sources": {
+    "hackernews": {
+      "enabled": true,
+      "minPoints": 50,
+      "lookbackHours": 36,
+      "queries": ["AI", "artificial intelligence", "OpenAI", "ChatGPT", "Anthropic", "Claude", "GPT", "Gemini", "Grok", "Nvidia", "DeepSeek", "Llama", "LLM", "deepfake", "AI agent", "Claude Code", "Codex", "Cursor", "Altman"]
+    },
+    "openrouterModels": { "enabled": true, "lookbackHours": 72 },
+    "githubReleases": {
+      "enabled": true,
+      "lookbackHours": 48,
+      "repos": ["anthropics/claude-code", "openai/codex", "google-gemini/gemini-cli", "anomalyco/opencode", "cline/cline", "ollama/ollama", "openclaw/openclaw", "NousResearch/hermes-agent", "QwenLM/qwen-code"]
+    },
+    "feeds": {
+      "enabled": true,
+      "lookbackHours": 48,
+      "urls": ["https://news.google.com/rss/search?q=ChatGPT+OR+OpenAI+OR+Altman+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=Anthropic+OR+Claude+AI+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=Google+Gemini+OR+DeepMind+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=Grok+OR+xAI+OR+Musk+AI+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=Nvidia+AI+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=Meta+AI+Zuckerberg+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=deepfake+OR+%22AI+scam%22+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=AI+safety+OR+AI+danger+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=AI+data+leak+OR+AI+hack+when:1d&hl=en-US&gl=US&ceid=US:en","https://news.google.com/rss/search?q=humanoid+robot+OR+robotaxi+when:1d&hl=en-US&gl=US&ceid=US:en","https://www.techmeme.com/feed.xml","https://the-decoder.com/feed/","https://www.technologyreview.com/topic/artificial-intelligence/feed","https://www.wired.com/feed/tag/ai/latest/rss","https://futurism.com/categories/ai-artificial-intelligence/feed","https://www.theguardian.com/technology/artificialintelligenceai/rss","https://www.404media.co/rss/","https://gizmodo.com/tag/artificial-intelligence/rss","https://www.engadget.com/rss.xml","https://techcrunch.com/category/artificial-intelligence/feed/","https://www.theverge.com/rss/ai-artificial-intelligence/index.xml","https://arstechnica.com/ai/feed/","https://openai.com/news/rss.xml","https://deepmind.google/blog/rss.xml","https://blog.google/technology/ai/rss/","https://huggingface.co/blog/feed.xml","https://simonwillison.net/atom/everything/","https://www.latent.space/feed","https://www.producthunt.com/feed","https://blogs.nvidia.com/feed/","https://www.microsoft.com/en-us/research/feed/","https://cursor.com/changelog/rss.xml","https://www.nature.com/subjects/machine-learning.rss","https://metr.org/feed.xml","https://epochai.substack.com/feed","https://feeds.bloomberg.com/technology/news.rss","https://www.ft.com/artificial-intelligence?format=rss","https://www.cnbc.com/id/19854910/device/rss/rss.html","https://www.theinformation.com/feed","https://www.theregister.com/software/ai_ml/headlines.atom","https://importai.substack.com/feed","https://thezvi.substack.com/feed","https://www.transformernews.ai/feed","https://www.interconnects.ai/feed","https://newsletter.semianalysis.com/feed","https://thehackernews.com/feeds/posts/default","https://embracethered.com/blog/index.xml","https://blog.trailofbits.com/feed/","https://portswigger.net/research/rss","https://therecord.media/feed","https://www.schneier.com/feed/atom/","https://krebsonsecurity.com/feed/","https://simonwillison.net/tags/prompt-injection.atom"],
+      "subjectOnlyHosts": ["the-decoder.com", "technologyreview.com", "metr.org", "embracethered.com"]
+    },
+    "huggingface": { "enabled": true, "lookbackDays": 14, "limit": 20 },
+    "githubViral": {
+      "enabled": true,
+      "lookbackDays": 14,
+      "minStars": 300,
+      "limit": 50,
+      "nonEnglishMinStars": 5000,
+      "trendingFeeds": ["https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml", "https://mshibanami.github.io/GitHubTrendingRSS/daily/python.xml", "https://mshibanami.github.io/GitHubTrendingRSS/daily/typescript.xml"],
+      "maxStarLookups": 15
+    },
+    "papers": { "enabled": true, "lookbackDays": 30, "minUpvotes": 30, "limit": 50 },
+    "treg": {
+      "enabled": true,
+      "lookbackHours": 36,
+      "xSearches": [
+        "(\"prompt injection\" OR jailbreak OR exploit OR CVE OR vulnerability) (Claude OR ChatGPT OR Copilot OR Cursor OR Codex OR Gemini OR MCP OR LLM) min_faves:200 -filter:retweets lang:en",
+        "github.com (AI OR LLM OR agent OR \"Claude Code\" OR MCP OR skills) min_faves:300 -filter:retweets lang:en",
+        "arxiv.org (AI OR LLM OR model OR agents) min_faves:200 -filter:retweets lang:en"
+      ],
+      "minFollowers": 5000,
+      "subreddits": ["ClaudeCode", "ClaudeAI", "OpenAI", "ChatGPT", "GeminiAI", "LocalLLaMA", "singularity", "artificial"],
+      "subredditTop": 5,
+      "maxCostPerSearch": 0.10,
+      "watch": [
+        { "group": "labs", "minLikes": 100, "primary": true, "handles": ["OpenAI", "AnthropicAI", "claudeai", "GoogleDeepMind", "GeminiApp", "xai", "deepseek_ai", "Alibaba_Qwen", "Kimi_Moonshot", "MistralAI"] },
+        { "group": "leaders", "minLikes": 300, "handles": ["sama", "DarioAmodei", "demishassabis", "elonmusk", "karpathy", "AravSrinivas", "OfficialLoganK", "sundarpichai", "satyanadella", "ylecun", "AndrewYNg", "fchollet", "DrJimFan"] },
+        { "group": "research", "minLikes": 200, "handles": ["GaryMarcus", "emollick", "goodside", "simonw"] },
+        { "group": "news", "minLikes": 100, "relative": true, "handles": ["testingcatalog", "rowancheung", "_akhaliq", "btibor91", "kimmonismus", "AlphaSignalAI", "swyx"] },
+        { "group": "security", "minLikes": 100, "handles": ["wunderwuzzi23", "elder_plinius"] },
+        { "group": "creators", "minLikes": 200, "relative": true, "handles": ["MatthewBerman", "WesRoth", "mreflow", "DaveShapi", "AIExplainedYT", "twominutepapers", "fireship_dev", "theo", "ykilcher", "Sam_Witteveen", "minchoi", "LinusEkenstam", "bilawalsidhu", "heyBarsee", "mattshumer_", "bindureddy", "NickADobos", "TheAIGRID"] }
+      ],
+      "youtubeChannels": [
+        { "handle": "@Fireship", "name": "Fireship", "followers": 4330000 },
+        { "handle": "@TwoMinutePapers", "name": "Two Minute Papers", "followers": 1840000 },
+        { "handle": "@mreflow", "name": "Matt Wolfe", "followers": 1030000 },
+        { "handle": "@matthew_berman", "name": "Matthew Berman", "followers": 644000 },
+        { "handle": "@AIRevolutionX", "name": "AI Revolution", "followers": 577000 },
+        { "handle": "@t3dotgg", "name": "Theo - t3.gg", "followers": 577000 },
+        { "handle": "@aiadvantage", "name": "The AI Advantage", "followers": 493000 },
+        { "handle": "@aiexplained-official", "name": "AI Explained", "followers": 458000 },
+        { "handle": "@TheAiGrid", "name": "TheAIGRID", "followers": 404000 },
+        { "handle": "@WesRoth", "name": "Wes Roth", "followers": 335000 },
+        { "handle": "@YannicKilcher", "name": "Yannic Kilcher", "followers": 333000 },
+        { "handle": "@intheworldofai", "name": "WorldofAI", "followers": 253000 },
+        { "handle": "@ColeMedin", "name": "Cole Medin", "followers": 231000 },
+        { "handle": "@samwitteveenai", "name": "Sam Witteveen", "followers": 140000 }
+      ]
+    },
+    "sitemaps": {
+      "enabled": true,
+      "sites": [
+        { "name": "Anthropic", "url": "https://www.anthropic.com/sitemap.xml", "include": ["/news/", "/research/", "/engineering/"] },
+        { "name": "DeepSeek", "url": "https://www.deepseek.com/sitemap.xml", "include": ["/en/news/"] }
+      ]
+    }
+  }
+}

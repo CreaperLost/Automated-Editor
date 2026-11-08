@@ -26,6 +26,9 @@ pub const DEFAULT: &str = "Tutorial";
 pub const SHORTS: &str = "Shorts";
 /// The preset a project's clips (cut from the video) follow unless it picks another.
 pub const CLIPS: &str = "Clips";
+/// The presets a faceless production follows (FCL-3).
+pub const FACELESS_LONG: &str = "Faceless long";
+pub const FACELESS_SHORT: &str = "Faceless short";
 
 /// The parts of the edit document a preset sets, by their names in it. Everything else (media,
 /// the edit, chapters, shorts, graphics...) is the project's own.
@@ -177,6 +180,40 @@ pub fn builtin() -> Vec<Preset> {
                 "export": { "resolution": "1080p", "quality": "high" }
             })),
             method: include_str!("methods/clips.md").replace("\r\n", "\n"),
+            rules: String::new(),
+            ..Preset::default()
+        },
+        Preset {
+            name: FACELESS_LONG.into(),
+            description: "A faceless long video (16:9, 5 to 8 minutes) made from one story: \
+                checked research, a reviewed script, generated narration and graphics."
+                .into(),
+            style: crate::style::BROADSHEET.into(),
+            values: object(serde_json::json!({ "audio": { "normalize": true } })),
+            short: Map::new(),
+            choices: object(serde_json::json!({
+                "export": { "resolution": "1080p", "quality": "high" }
+            })),
+            method: include_str!("methods/faceless-long.md").replace("\r\n", "\n"),
+            rules: String::new(),
+            ..Preset::default()
+        },
+        Preset {
+            name: FACELESS_SHORT.into(),
+            description: "A faceless short (9:16, 30 to 58 seconds): one surprising idea from \
+                checked research, generated narration, graphics and captions."
+                .into(),
+            style: crate::style::BROADSHEET.into(),
+            values: object(serde_json::json!({
+                "layout": { "aspectRatio": "9:16" },
+                "captions": { "enabled": true, "maxWords": 3 },
+                "audio": { "normalize": true }
+            })),
+            short: Map::new(),
+            choices: object(serde_json::json!({
+                "export": { "resolution": "1080p", "quality": "high" }
+            })),
+            method: include_str!("methods/faceless-short.md").replace("\r\n", "\n"),
             rules: String::new(),
             ..Preset::default()
         },

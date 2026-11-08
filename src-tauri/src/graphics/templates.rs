@@ -127,6 +127,36 @@ static TEMPLATES: &[Template] = &[
          stack, with a line under it. For \"on top of that, you also get\"."
     ),
     template!(
+        "headline",
+        "News headline",
+        6000,
+        "What happened, set as a front page: a kicker, a heavy rule, the headline with one \
+         word (`emphasis`) in the accent's italic, a deck and a source tag; on `cue` a rule \
+         strikes under that word. For the opening and each new turn of a story."
+    ),
+    template!(
+        "quote",
+        "Quote from a source",
+        6000,
+        "A report's or statement's own words with who wrote them; on `cue` a marker sweeps \
+         behind the words that matter (`highlight`) and a note lands beside them. For \"the \
+         report says\"."
+    ),
+    template!(
+        "verdict",
+        "Claim and verdict",
+        6000,
+        "A claim with up to three lines of evidence (split by |); on `cue` a stamp lands \
+         across it with the verdict (Confirmed, False, Unproven). For a claim the story tests."
+    ),
+    template!(
+        "bars",
+        "Comparison bars",
+        6000,
+        "Up to five rows (\"Label: value\" split by |) whose bars grow to scale on `cue`, one \
+         row (`highlight`) in the accent, a unit beside each value. For numbers compared."
+    ),
+    template!(
         "blank",
         "Blank",
         4000,

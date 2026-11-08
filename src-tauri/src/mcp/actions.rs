@@ -308,7 +308,8 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "Adds graphics, all `items` in one call and one undo step: each from a \
             template or a copy of a library item (`library`), at `atUs` on the edited timeline \
             or at `atWord` (an id from transcript_get), on a Graphics track over the video, for \
-            `lengthUs` (default its own). They render in the background; `graphic_render` \
+            `lengthUs` (default its own); `actionWord` sets its `cue` to when that word is said. \
+            They render in the background; `graphic_render` \
             waits. `blank` starts an empty composition for graphic_write_file. Graphics under a \
             take go in `short_footage` items.",
         schema: schema::<GraphicAddArgs>,
@@ -4537,6 +4538,10 @@ pub struct GraphicItem {
     /// Or: the transcript word it starts at (an id from transcript_get).
     #[serde(default)]
     pub at_word: Option<String>,
+    /// The word its action lands on (an id from transcript_get): sets its `cue` to that word's
+    /// time into the graphic.
+    #[serde(default)]
+    pub action_word: Option<String>,
     /// How long it plays; default the template's.
     #[serde(default)]
     pub length_us: Option<u64>,
@@ -4605,6 +4610,11 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word).map_err(at)?,
             _ => return Err(at("give one of `atUs` or `atWord`".into())),
         };
+        let mut variables = item.variables;
+        if let Some(word) = &item.action_word {
+            let action = word_edited_us(ctx, args.stream.clone(), word).map_err(at)?;
+            variables.insert("cue".into(), cue_value(at_us, action).map_err(at)?);
+        }
         let from = match (item.template, item.library) {
             (Some(template), None) => commands::graphics::ShortGraphicFrom::Template { template },
             (None, Some(id)) => commands::graphics::ShortGraphicFrom::Library { id },
@@ -4615,7 +4625,7 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             at_us,
             length_us: item.length_us,
             name: item.name,
-            variables: item.variables,
+            variables,
         });
     }
     let starts: Vec<u64> = graphics.iter().map(|g| g.at_us).collect();
@@ -4646,6 +4656,15 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         "The renderer is not installed, so they show as placeholders: ask the user, then graphics_install.".into()
     });
     text(applied(ctx, "graphic_add", &before, lines)?)
+}
+
+/// A graphic's `cue`: when its action lands (`action_us`), in seconds after it starts.
+fn cue_value(start_us: u64, action_us: u64) -> Result<Value, String> {
+    if action_us < start_us {
+        return Err("its `actionWord` is said before it starts".into());
+    }
+    let seconds = ((action_us - start_us) as f64 / 10_000.0).round() / 100.0;
+    Ok(serde_json::json!(seconds))
 }
 
 /// The plan table for `items`, checked as `graphic_add` checks them but adding nothing: a row

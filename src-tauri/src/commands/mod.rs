@@ -15,12 +15,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod effects;
+pub mod faceless;
 pub mod graphics;
 pub mod history;
 pub mod music;
 pub mod noises;
 pub mod preset;
 pub mod proposals;
+pub mod publish;
 pub mod sounds;
 pub mod style;
 pub mod thumbs;

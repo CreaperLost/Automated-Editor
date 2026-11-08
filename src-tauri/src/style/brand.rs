@@ -36,18 +36,86 @@ pub fn fill_variables(
     out
 }
 
+/// A font face the app ships, for a style that names its family without a file of its own.
+pub struct Face {
+    pub file: &'static str,
+    pub family: &'static str,
+    pub weight: u16,
+    pub italic: bool,
+    pub bytes: &'static [u8],
+}
+
+macro_rules! face {
+    ($file:literal, $family:literal, $weight:literal, $italic:literal) => {
+        Face {
+            file: $file,
+            family: $family,
+            weight: $weight,
+            italic: $italic,
+            bytes: include_bytes!(concat!("../../assets/fonts/", $file)),
+        }
+    };
+}
+
+/// Newsreader and IBM Plex Mono (SIL Open Font License, `assets/fonts/LICENSE-*.txt`): the
+/// Broadsheet style's type, from the explainer.
+static SHIPPED: [Face; 5] = [
+    face!("newsreader-400-normal.woff2", "Newsreader", 400, false),
+    face!("newsreader-400-italic.woff2", "Newsreader", 400, true),
+    face!("newsreader-700-normal.woff2", "Newsreader", 700, false),
+    face!("IBMPlexMono-Regular.woff2", "IBM Plex Mono", 400, false),
+    face!("IBMPlexMono-Bold.woff2", "IBM Plex Mono", 700, false),
+];
+
+/// The faces the app ships for `family` (none for most).
+pub fn shipped(family: &str) -> Vec<&'static Face> {
+    SHIPPED
+        .iter()
+        .filter(|f| f.family.eq_ignore_ascii_case(family.trim()))
+        .collect()
+}
+
+/// The shipped faces `style` uses: its fonts that name a shipped family and no file.
+fn shipped_faces(style: &Style) -> Vec<&'static Face> {
+    let f = &style.brand.fonts;
+    let mut out: Vec<&'static Face> = Vec::new();
+    for font in [&f.title, &f.body, &f.data] {
+        if font.file.is_none() {
+            for face in shipped(&font.family) {
+                if !out.iter().any(|o| std::ptr::eq(*o, face)) {
+                    out.push(face);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The `<style>` a render adds for `style`. `own_colors` is whether the graphic set its own
 /// text or background, when the brand's muted colour would not fit them (the look mixes one).
 pub fn css(style: &Style, own_colors: bool) -> String {
     let fonts = &style.brand.fonts;
     let mut css = String::new();
-    for (font, which) in [(&fonts.title, "title"), (&fonts.body, "body")] {
+    for (font, which) in [
+        (&fonts.title, "title"),
+        (&fonts.body, "body"),
+        (&fonts.data, "data"),
+    ] {
         if let (Some(file), false) = (&font.file, font.family.is_empty()) {
             css.push_str(&format!(
                 "@font-face {{ font-family: \"{}\"; src: url(\"{STAGE_DIR}/{file}\"); }} /* {which} */\n",
                 font.family
             ));
         }
+    }
+    for face in shipped_faces(style) {
+        css.push_str(&format!(
+            "@font-face {{ font-family: \"{}\"; src: url(\"{STAGE_DIR}/{}\"); font-weight: {}; font-style: {}; }}\n",
+            face.family,
+            face.file,
+            face.weight,
+            if face.italic { "italic" } else { "normal" }
+        ));
     }
     let c = &style.brand.colors;
     css.push_str(&format!(
@@ -60,6 +128,9 @@ pub fn css(style: &Style, own_colors: bool) -> String {
     let body = (!fonts.body.family.is_empty()).then_some(&fonts.body.family);
     if let Some(body) = body {
         css.push_str(&format!(" --brand-body-font: \"{body}\";"));
+    }
+    if !fonts.data.family.is_empty() {
+        css.push_str(&format!(" --brand-data-font: \"{}\";", fonts.data.family));
     }
     if let Some(logo) = &style.brand.logo {
         css.push_str(&format!(" --brand-logo: url(\"{STAGE_DIR}/{logo}\");"));
@@ -103,20 +174,24 @@ pub(crate) fn inject_style(html: &str, id: &str, css: &str) -> String {
 
 fn files(style: &Style) -> impl Iterator<Item = &String> {
     let f = &style.brand.fonts;
-    [&f.title.file, &f.body.file, &style.brand.logo]
+    [&f.title.file, &f.body.file, &f.data.file, &style.brand.logo]
         .into_iter()
         .flatten()
 }
 
 /// Copies the style's files into a render's staged composition and adds its style block.
 pub fn stage(style: &Style, stage: &Path, own_colors: bool) -> Result<(), String> {
+    let to = stage.join(STAGE_DIR);
     if let Some(from) = super::store::folder_of(style) {
-        let to = stage.join(STAGE_DIR);
         for file in files(style) {
             std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
             std::fs::copy(from.join(file), to.join(file))
                 .map_err(|e| format!("Style \"{}\": {file}: {e}", style.name))?;
         }
+    }
+    for face in shipped_faces(style) {
+        std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+        std::fs::write(to.join(face.file), face.bytes).map_err(|e| e.to_string())?;
     }
     let entry = stage.join(crate::graphics::ENTRY);
     let html = std::fs::read_to_string(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;

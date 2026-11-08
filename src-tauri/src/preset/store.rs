@@ -523,7 +523,17 @@ mod tests {
         renamed.previous = Some("Gaming".into());
         save_in(presets, &renamed).unwrap();
         let names: Vec<String> = list_in(presets).into_iter().map(|p| p.name).collect();
-        assert_eq!(names, ["Tutorial", "Shorts", "Clips", "Gaming long"]);
+        assert_eq!(
+            names,
+            [
+                "Tutorial",
+                "Shorts",
+                "Clips",
+                "Faceless long",
+                "Faceless short",
+                "Gaming long"
+            ]
+        );
         // Projects that stored the old name still find it.
         assert_eq!(load_in(presets, "gaming").unwrap().name, "Gaming long");
         for bad in ["", "../x", "Tutorial", "clips"] {

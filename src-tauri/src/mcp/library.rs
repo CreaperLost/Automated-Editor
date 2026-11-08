@@ -16,6 +16,7 @@ pub enum Kind {
     Layout,
     Sound,
     Music,
+    Image,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq)]
@@ -41,7 +42,7 @@ pub enum Op {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryArgs {
-    /// style, preset, layout, sound or music.
+    /// style, preset, layout, sound, music or image.
     pub kind: Kind,
     /// list (default), show, use (in this project), set, remove; each kind's others are in
     /// the tool's description.
@@ -102,6 +103,13 @@ pub struct LibraryArgs {
     pub at_word: Option<String>,
     #[serde(default)]
     pub until_us: Option<u64>,
+    /// Images, use: the graphic (id) the picture goes into.
+    #[serde(default)]
+    pub graphic: Option<String>,
+    /// Images, list: broadsheet, light, dark, editorial, neon or all; default the project
+    /// style's.
+    #[serde(default)]
+    pub look: Option<String>,
 }
 
 pub static TOOLS: [ToolDef; 1] = [ToolDef {
@@ -124,7 +132,12 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         version), reset (the project's changes back), propose_rule (`rule`, `example`: the \
         user accepts it in the Agent panel). Sounds (CC0 whooshes, risers, hits, clicks, \
         pops; the user's own): list (`query`), use (`name` = id, at `atUs`/`atWord`). Music \
-        (CC0 beds by mood): the same, until `untilUs` or the end, kept under the speech.",
+        (CC0 beds by mood): the same, until `untilUs` or the end, kept under the speech. \
+        Images (still pictures for graphics, one set per look so a video keeps one; sourced \
+        flags, maps, wordmarks and portraits with every look): list (the project style's look \
+        unless `look`; no `query`: its groups; `query`: what the beat shows), show (`name` = \
+        a picture or a group: a board of them), use (`name` into `graphic`: copied into its \
+        folder as one undo step).",
     schema: schema::<LibraryArgs>,
     read_only: false,
     run: library,
@@ -138,6 +151,193 @@ fn library(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         Kind::Layout => layout(args),
         Kind::Sound => sound(ctx, args),
         Kind::Music => music(ctx, args),
+        Kind::Image => image(ctx, args),
+    }
+}
+
+/// One picture as a line: id, size, what it depicts, where it goes; * when its licence asks
+/// for credit or isn't known.
+fn image_line(image: &crate::image_library::Image) -> String {
+    let size = match (image.width, image.height) {
+        (Some(w), Some(h)) => format!("{w}x{h}"),
+        _ => "svg".into(),
+    };
+    format!(
+        "{}{} {size}: {}. {}",
+        image.id,
+        if image.free() { "" } else { "*" },
+        image.depicts.trim_end_matches('.'),
+        image.placement
+    )
+}
+
+const UNFREE_NOTE: &str = "* real material from elsewhere whose licence asks for credit or a \
+    check (its `rights` in show): not without the user's word, and credit as it says.";
+
+/// The looks `list` shows, and why: `look` (or `all`), else the project style's, else all.
+fn image_looks(ctx: &Ctx, look: Option<&str>) -> Result<(Vec<String>, String), String> {
+    use crate::image_library as images;
+    let all = || {
+        images::catalog()
+            .looks
+            .iter()
+            .map(|l| l.id.clone())
+            .collect::<Vec<_>>()
+    };
+    match look.map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) if l.eq_ignore_ascii_case("all") => Ok((all(), "every look".into())),
+        Some(l) => {
+            let found = images::look(l).ok_or_else(|| {
+                format!("No look {l}; the looks are {} (or all)", all().join(", "))
+            })?;
+            Ok((vec![found.id.clone()], format!("look {}", found.id)))
+        }
+        None => match project_style(ctx) {
+            Some(name) => {
+                let style = crate::style::store::resolve(&name);
+                let found = images::look_for(&style);
+                Ok((
+                    vec![found.id.clone()],
+                    format!(
+                        "look {} (style {}'s; `look` for another, all for every one)",
+                        found.id, style.name
+                    ),
+                ))
+            }
+            None => Ok((all(), "every look (no project open)".into())),
+        },
+    }
+}
+
+fn image(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
+    use crate::image_library as images;
+    match args.op {
+        Op::List => {
+            let (looks, why) = image_looks(ctx, args.look.as_deref())?;
+            let wanted: Vec<&str> = looks.iter().map(String::as_str).collect();
+            let query = args.query.as_deref().unwrap_or_default();
+            if query.trim().is_empty() {
+                let shown = |look: &str| wanted.contains(&look) || look == images::SOURCED;
+                let mut lines = vec![format!(
+                    "Pictures of {why}, in groups (group, count, matched on; `query` finds \
+                     pictures, `show` a group shows them):"
+                )];
+                for look in images::catalog().looks.iter().filter(|l| shown(&l.id)) {
+                    lines.push(format!("{}: {}", look.id, look.description));
+                    for topic in images::catalog()
+                        .topics
+                        .iter()
+                        .filter(|t| t.look == look.id)
+                    {
+                        if topic.id != look.id {
+                            lines.push(format!(" {}: {}", topic.id, topic.description));
+                        }
+                        lines.extend(topic.groups.iter().map(|g| {
+                            format!(
+                                "  {}/{} {}{}: {}",
+                                topic.id,
+                                g.id,
+                                g.count,
+                                if g.sourced { "*" } else { "" },
+                                if g.terms.is_empty() {
+                                    g.description.clone()
+                                } else {
+                                    g.terms.join(", ")
+                                }
+                            )
+                        }));
+                    }
+                }
+                lines.push(UNFREE_NOTE.into());
+                return text(lines.join("\n"));
+            }
+            let found = images::search(query, Some(&wanted));
+            if found.is_empty() {
+                return text(format!(
+                    "No picture of {why} matches \"{query}\". `list` with no query shows its \
+                     groups."
+                ));
+            }
+            let mut lines = vec![format!(
+                "{} of {why} for \"{query}\", best first{}:",
+                plural(found.len(), "picture"),
+                if found.len() > images::MAX_FOUND {
+                    format!(" (the first {})", images::MAX_FOUND)
+                } else {
+                    String::new()
+                }
+            )];
+            lines.extend(found.iter().take(images::MAX_FOUND).map(|i| image_line(i)));
+            if found.iter().any(|i| !i.free()) {
+                lines.push(UNFREE_NOTE.into());
+            }
+            text(lines.join("\n"))
+        }
+        Op::Show => {
+            let name = args
+                .name
+                .ok_or("Give a picture's id or a group's (as `list` names them) as `name`")?;
+            let shown: Vec<&images::Image> = match images::group(&name) {
+                Some((_, _, found)) => found,
+                None => vec![images::find(&name)?],
+            };
+            let mut lines: Vec<String> = shown.iter().map(|i| image_line(i)).collect();
+            for image in shown.iter().filter(|i| !i.free()) {
+                lines.push(format!(
+                    "{}: {} ({}).",
+                    image.id,
+                    image.rights.as_deref().unwrap_or("its licence isn't known"),
+                    image.licence.source.as_deref().unwrap_or("no source")
+                ));
+            }
+            let board = images::board(&shown)?;
+            Ok(vec![Output::Text(lines.join("\n")), Output::Jpeg(board)])
+        }
+        Op::Use => {
+            let image = images::find(
+                args.name
+                    .as_deref()
+                    .ok_or("Give the picture's id as `name`")?,
+            )?;
+            let graphic = args
+                .graphic
+                .ok_or("Give the `graphic` (id) the picture goes into")?;
+            let before = opened(ctx)?;
+            commands::graphics::project_graphic_write_file_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                graphic.clone(),
+                &image.src(),
+                image.bytes(),
+            )?;
+            let mut lines = vec![format!(
+                "Copied {} into graphic {graphic}: use it as src=\"{}\"{}.",
+                image.id,
+                image.src(),
+                match (image.width, image.height) {
+                    (Some(w), Some(h)) => format!(" ({w}x{h})"),
+                    _ => String::new(),
+                }
+            )];
+            if !image.free() {
+                lines.push(format!(
+                    "Its licence asks: {}. Only with the user's word; `check` flags it.",
+                    image.rights.as_deref().unwrap_or("its licence isn't known")
+                ));
+            }
+            let (ours, _) = image_looks(ctx, None)?;
+            if image.look != images::SOURCED && !ours.contains(&image.look) {
+                lines.push(format!(
+                    "It is drawn for the {} look, not this project's ({}): a video keeps one \
+                     look, so `check` flags it.",
+                    image.look,
+                    ours.join(", ")
+                ));
+            }
+            text(applied(ctx, "library", &before, lines)?)
+        }
+        _ => Err("Images take `op` list, show or use".into()),
     }
 }
 
@@ -855,6 +1055,100 @@ mod tests {
             "{placed}"
         );
         assert!(library(&ctx, json!({ "kind": "sound", "op": "use", "name": "pop" })).is_err());
+    }
+
+    #[test]
+    fn an_agent_finds_a_picture_and_copies_it_into_a_graphic() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let ctx = Ctx::new(&host, "agent", false);
+        // The lesson wears Light, so it sees the light look and the sourced pictures.
+        let groups = said(library(&ctx, json!({ "kind": "image" })).unwrap());
+        assert!(groups.contains("look light (style Light's"), "{groups}");
+        assert!(groups.contains("\n  light/devices 6: "), "{groups}");
+        assert!(groups.contains("\n  sourced/people 4*: "), "{groups}");
+        assert!(!groups.contains("broadsheet/"), "{groups}");
+        let laptop = said(library(&ctx, json!({ "kind": "image", "query": "a laptop" })).unwrap());
+        assert!(
+            laptop.contains("\nlight/devices/laptop 1024x768: "),
+            "{laptop}"
+        );
+        assert!(!laptop.contains("neon/"), "{laptop}");
+        let found = said(
+            library(
+                &ctx,
+                json!({ "kind": "image", "query": "server cooling fan", "look": "broadsheet" }),
+            )
+            .unwrap(),
+        );
+        assert!(
+            found.contains("\nbroadsheet/ai-assets/compute/server-cooling-fan 1024x768: "),
+            "{found}"
+        );
+        assert!(library(&ctx, json!({ "kind": "image", "look": "pastel" })).is_err());
+        let shown = library(
+            &ctx,
+            json!({ "kind": "image", "op": "show", "name": "broadsheet/ai-assets/compute" }),
+        )
+        .unwrap();
+        assert!(matches!(&shown[1], Output::Jpeg(j) if j.starts_with(&[0xFF, 0xD8])));
+        let tool = crate::mcp::tools::find("graphic_add").unwrap();
+        (tool.run)(
+            &ctx,
+            json!({ "template": "blank", "atUs": 0, "lengthUs": 1_000_000 }),
+        )
+        .unwrap();
+        let graphic = with_reader(ctx.state, |r| {
+            Ok(r.document()
+                .assets
+                .iter()
+                .find(|a| a.is_graphic())
+                .unwrap()
+                .id
+                .clone())
+        })
+        .unwrap();
+        let used = said(
+            library(
+                &ctx,
+                json!({ "kind": "image", "op": "use", "name": "sam-altman", "graphic": graphic }),
+            )
+            .unwrap(),
+        );
+        assert!(
+            used.contains("use it as src=\"images/sourced-sam-altman.webp\""),
+            "{used}"
+        );
+        assert!(used.contains("CC BY-SA 4.0"), "{used}");
+        assert!(!used.contains("look"), "{used}");
+        let stranger = said(
+            library(
+                &ctx,
+                json!({ "kind": "image", "op": "use", "name": "server-rack-open", "graphic": graphic }),
+            )
+            .unwrap(),
+        );
+        assert!(
+            stranger.contains("drawn for the broadsheet look, not this project's (light)"),
+            "{stranger}"
+        );
+        let report = with_reader(ctx.state, |r| {
+            Ok(crate::check::run(r.root(), r.document(), &[]))
+        })
+        .unwrap();
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.kind == crate::check::Kind::ImageLicence
+                && f.detail.contains("sourced-sam-altman.webp")));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.kind == crate::check::Kind::ImageLook
+                && f.detail.contains("broadsheet-server-rack-open.webp")));
     }
 
     #[test]

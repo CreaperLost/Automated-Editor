@@ -284,6 +284,13 @@ pub fn save_in(styles: &Path, input: &StyleInput) -> Result<Style, String> {
             "body-font",
             FONT_EXTENSIONS,
         )?;
+        style.brand.fonts.data.file = take_file(
+            input.style.brand.fonts.data.file.as_deref(),
+            src,
+            &stage,
+            "data-font",
+            FONT_EXTENSIONS,
+        )?;
         let text = serde_json::to_string_pretty(&style).map_err(|e| e.to_string())?;
         std::fs::write(stage.join(FILE), text + "\n").map_err(|e| e.to_string())
     })();
@@ -478,7 +485,7 @@ mod tests {
         assert!(!styles.join("Acme").exists());
         assert_eq!(load_in(styles, "Acme").unwrap().name, "Acme Dark");
         let names: Vec<String> = list_in(styles).into_iter().map(|s| s.name).collect();
-        assert_eq!(names, ["Light", "Dark", "Acme Dark"]);
+        assert_eq!(names, ["Light", "Dark", "Broadsheet", "Acme Dark"]);
         for bad in ["", "../x", "a/b", "Light", "dark"] {
             assert!(save_in(styles, &input(bad)).is_err(), "{bad:?}");
         }

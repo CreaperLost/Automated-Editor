@@ -63,6 +63,8 @@ pub enum Kind {
     Loudness,
     ProposalsPending,
     MusicLicence,
+    ImageLicence,
+    ImageLook,
     OutOfSync,
     PastMediaEnd,
     GraphicFont,
@@ -212,6 +214,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     }
     proposals(&mut out, root);
     music_licences(&mut out, document);
+    image_licences(&mut out, root, document);
     linked_sync(&mut out, document);
     past_media_end(&mut out, document);
     graphic_fonts(&mut out, root, document);
@@ -849,6 +852,77 @@ fn music_licences(out: &mut Builder, document: &EditDocument) {
             )
             .at(clip.start_us, clip.end_us());
         }
+    }
+}
+
+/// Graphics on the timeline carrying a library picture whose licence asks for credit or a
+/// check (a portrait, a wordmark, a flag): once per graphic, naming what each asks.
+fn image_licences(out: &mut Builder, root: &Path, document: &EditDocument) {
+    let mut seen: Vec<&str> = Vec::new();
+    for clip in document.sequence.video_tracks().flat_map(|t| &t.clips) {
+        let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
+            continue;
+        };
+        if seen.contains(&asset.id.as_str()) {
+            continue;
+        }
+        seen.push(&asset.id);
+        let dir = crate::graphics::folder(root, &asset.id);
+        // One look per video (GFX-5): pictures drawn for another look than the graphic's style.
+        let style_name = crate::graphics::read_source(&dir)
+            .ok()
+            .and_then(|s| s.style)
+            .unwrap_or_else(|| document.style.clone());
+        let style = crate::style::store::resolve(&style_name);
+        let look = crate::image_library::look_for(&style);
+        let strangers = crate::image_library::other_looks_in(&dir, &look.id);
+        if !strangers.is_empty() {
+            let names: Vec<String> = strangers.iter().map(|i| i.file_name()).collect();
+            out.push(
+                Kind::ImageLook,
+                Severity::Warning,
+                format!("\"{}\" mixes in another look's pictures", asset.name),
+                format!(
+                    "{} {} drawn for another look than style {}'s ({}). Swap {} for the {} \
+                     look's.",
+                    names.join(", "),
+                    if names.len() == 1 { "is" } else { "are" },
+                    style.name,
+                    look.id,
+                    if names.len() == 1 { "it" } else { "them" },
+                    look.id
+                ),
+            )
+            .at(clip.start_us, clip.end_us());
+        }
+        let unfree = crate::image_library::unfree_in(&dir);
+        if unfree.is_empty() {
+            continue;
+        }
+        let asks: Vec<String> = unfree
+            .iter()
+            .map(|i| {
+                format!(
+                    "{}: {}",
+                    i.file_name(),
+                    i.rights.as_deref().unwrap_or("its licence isn't known")
+                )
+            })
+            .collect();
+        out.push(
+            Kind::ImageLicence,
+            Severity::Warning,
+            format!(
+                "\"{}\" shows pictures that need credit or a check",
+                asset.name
+            ),
+            format!(
+                "{}. Use them only with the user's word, credited as asked (in the \
+                 description), or swap them for a library illustration.",
+                asks.join("; ")
+            ),
+        )
+        .at(clip.start_us, clip.end_us());
     }
 }
 

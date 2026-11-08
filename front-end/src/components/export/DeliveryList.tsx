@@ -1,9 +1,14 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Clock, FolderOpen, Loader2, RotateCw, Trash2, XCircle } from "lucide-react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
+import { CheckCircle2, Clock, FolderOpen, Loader2, RotateCw, Trash2, Upload, XCircle } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { FILE_MANAGER } from "../../lib/projectActions";
 import type { DeliveryView } from "../../lib/types";
 import { IconButton } from "../ui";
+
+const PublishDialog = React.lazy(() => import("./PublishDialog").then((m) => ({ default: m.PublishDialog })));
+const AccountsDialog = React.lazy(() =>
+  import("../settings/AccountsDialog").then((m) => ({ default: m.AccountsDialog })),
+);
 
 /// The project's exports (DLV-2): what waits its turn, what runs, and what went out, each with
 /// the revision it was made from. An output older than the edit, or one that failed, can be made
@@ -15,6 +20,8 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
 }) => {
   const [rows, setRows] = useState<DeliveryView[]>([]);
   const [error, setError] = useState<string>();
+  const [publishing, setPublishing] = useState<{ target: string; label: string; file: string } | null>(null);
+  const [accountsOpen, setAccountsOpen] = useState(false);
 
   const load = useCallback(() => {
     void api
@@ -80,6 +87,20 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
                   onClick={() => run(api.exportCancel(row.jobId))}
                 />
               )}
+              {row.state === "completed" && row.outputPath && !row.missing && !row.request.file && (
+                <IconButton
+                  icon={Upload}
+                  size="sm"
+                  label="Publish: title, description, thumbnail and upload to YouTube"
+                  onClick={() =>
+                    setPublishing({
+                      target: row.request.shortId ?? "video",
+                      label: row.label,
+                      file: row.outputPath!,
+                    })
+                  }
+                />
+              )}
               {row.state === "completed" && row.outputPath && !row.missing && (
                 <IconButton
                   icon={FolderOpen}
@@ -112,6 +133,16 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
           );
         })}
       </ul>
+      <Suspense fallback={null}>
+        {publishing && !accountsOpen && (
+          <PublishDialog
+            {...publishing}
+            onClose={() => setPublishing(null)}
+            onOpenAccounts={() => setAccountsOpen(true)}
+          />
+        )}
+        {accountsOpen && <AccountsDialog onClose={() => setAccountsOpen(false)} />}
+      </Suspense>
     </div>
   );
 };

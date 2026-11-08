@@ -1353,6 +1353,350 @@ export interface ExportPreferences {
   mbps: number;
 }
 
+/** The Zernio connection that uploads to YouTube. */
+export interface PublishAccounts {
+  connected: boolean;
+  keySource?: string;
+  channels: { id: string; name: string; active: boolean }[];
+  channel?: string;
+  error?: string;
+  dashboard: string;
+}
+
+/** What a video is published with. */
+export interface PublishPackage {
+  title: string;
+  description: string;
+  tags: string[];
+  thumbnail?: string;
+  aiDisclosure: boolean;
+  categoryId?: string;
+}
+
+export type PublishRelease = { kind: "private" } | { kind: "scheduled"; at: string } | { kind: "draft" };
+
+export interface PublishUpload {
+  id: string;
+  target: string;
+  file: string;
+  title: string;
+  channel: string;
+  release: PublishRelease;
+  attemptedAt: string;
+  status: string;
+  postId?: string;
+  youtubeId?: string;
+  visibility?: string;
+  error?: string;
+}
+
+export interface PublishPackageView {
+  target: string;
+  package: PublishPackage;
+  thumbnailData?: string;
+  thumbnailSize?: [number, number];
+  problem?: string;
+  uploads: PublishUpload[];
+  /** The video's chapters as YouTube reads them in a description. */
+  chapters?: string;
+}
+
+/** A faceless video's shape: long is 5 to 8 minutes at 16:9, short 30 to 58 seconds at 9:16. */
+export type FacelessFormat = "long" | "short";
+
+export type FacelessStageId = "research" | "script" | "review" | "voice" | "visuals" | "package" | "publish";
+
+/** Todo: not done yet. Stale: done, but something before it changed since. */
+export type FacelessStageState = "todo" | "done" | "stale";
+
+export interface FacelessStage {
+  id: FacelessStageId;
+  label: string;
+  state: FacelessStageState;
+}
+
+/** A faceless production: a project made from a topic, with generated narration and graphics. */
+export interface FacelessProduction {
+  /** The project folder. */
+  path: string;
+  name: string;
+  format: FacelessFormat;
+  topic: string;
+  createdAt: string;
+  stages: FacelessStage[];
+  /** The first stage not done; absent when all are. */
+  next?: FacelessStageId;
+}
+
+/** A video already made, so no story is made twice. */
+export interface FacelessMade {
+  topic: string;
+  link?: string;
+  format: FacelessFormat;
+  project: string;
+  kind: "test" | "private" | "public";
+  youtube?: string;
+  at: string;
+}
+
+/** What one story source did in a search: ok, no matches, partial or error, and why. */
+export interface FacelessFunnel {
+  name: string;
+  requests: number;
+  parsed: number;
+  found: number;
+  accepted: number;
+  newStories: number;
+  lastSuccess?: string;
+  issues: string[];
+  skipped?: string;
+  /** What its paid calls (Treg) cost, in micro-dollars. */
+  costMicro: number;
+}
+
+export interface FacelessDiscovered {
+  funnels: FacelessFunnel[];
+  stories: number;
+  newStories: number;
+  costMicro: number;
+}
+
+/** An editor's read of a story (the agent's or yours), blended into the ranking. */
+export interface FacelessEditorial {
+  importance: number;
+  longFit: number;
+  shortFit: number;
+  angle: string;
+  reason: string;
+  by: string;
+}
+
+export interface TregVideo {
+  id: string;
+  title: string;
+  channel: string;
+  views: number;
+  hours?: number;
+  url: string;
+}
+
+export interface TregReel {
+  caption: string;
+  views: number;
+  likes: number;
+  hours?: number;
+  url: string;
+  author: string;
+  authorFollowers: number;
+}
+
+export interface TregKeyword {
+  keyword: string;
+  volume: number;
+  cpc?: number;
+  difficulty?: number;
+  /** The last three months against the three before (1.5 = up half). */
+  trend?: number;
+}
+
+/** Who watches and searches for a story, from the last demand check. */
+export interface FacelessDemand {
+  checkedAt: string;
+  query: string;
+  videos: TregVideo[];
+  recentVideos: number;
+  viewsPerHour: number;
+  subject?: TregKeyword;
+  reels: TregReel[];
+  watched: { channel: string; title: string; views: number; usual: number; ratio: number; url: string }[];
+  audience: number;
+  interest: number;
+  saturation: number;
+  score: number;
+  costMicro: number;
+}
+
+/** One account on the research watchlist. */
+export interface FacelessWatched {
+  platform: "x" | "youtube" | "tiktok" | "instagram";
+  handle: string;
+  group?: string;
+  name?: string;
+  followers: number;
+  kept: number;
+  top10: number;
+  usual?: number;
+}
+
+/** A proposed account: followed by tracked ones (X) or posting watched videos (TikTok, Instagram). */
+export interface FacelessCandidate {
+  platform: string;
+  handle: string;
+  name: string;
+  followers: number;
+  bio?: string;
+  followedBy?: string[];
+  posts: number;
+  views: number;
+  example?: string;
+}
+
+/** Why an idea scores what it does, each part from 0 to 1. */
+export interface FacelessScoreParts {
+  coverage: number;
+  attention: number;
+  fit: number;
+  freshness: number;
+  primary: boolean;
+  lowValue: boolean;
+  code: number;
+  editorial?: number;
+  demand?: number;
+  saturation?: number;
+}
+
+/** One story as many reports of it, ranked with no model. */
+export interface FacelessIdea {
+  id: number;
+  title: string;
+  lane: "stories" | "repositories" | "papers";
+  /** In the ranking asked for (long or short). */
+  score: number;
+  longScore: number;
+  shortScore: number;
+  parts: FacelessScoreParts;
+  rank: number;
+  previousRank?: number;
+  new: boolean;
+  editorial?: FacelessEditorial;
+  demand?: FacelessDemand;
+  pinned: boolean;
+  /** Passes the filters: what the agent sees. */
+  shortlisted: boolean;
+  leftOut?: string;
+  eventAt: string;
+  outlets: string[];
+  hooks: string[];
+  urls: string[];
+  titles: string[];
+  ids: number[];
+  attention: number;
+  growth: number;
+  summary?: string;
+  made: boolean;
+}
+
+export interface FacelessIdeas {
+  profile: string;
+  about: string;
+  lastDiscoverAt?: string;
+  stories: number;
+  ideas: FacelessIdea[];
+}
+
+export interface FacelessSource {
+  url: string;
+  status: "fetched" | "unreadable" | "paywalled";
+  reason?: string;
+  fetchedAt: string;
+  publishedOn?: string;
+  notices?: string[];
+  chars: number;
+}
+
+export interface FacelessFact {
+  id: string;
+  statement: string;
+  quote: string;
+  url: string;
+  kind?: string;
+  scope?: string;
+  uncertainty?: string;
+  counterpoint?: string;
+  numberContext?: string;
+  domain: string;
+  primary: boolean;
+  sourceDate?: string;
+}
+
+/** A production's research: sources the app read and the facts it checked word for word. */
+export interface FacelessDossier {
+  topic: string;
+  sources: FacelessSource[];
+  facts: FacelessFact[];
+  rejected: { statement: string; url: string; reason: string }[];
+  brief: {
+    viewerQuestion: string;
+    whyItMatters: string;
+    beats: string[];
+    counterpoints: string[];
+    openQuestions: string[];
+    visualIdeas: string[];
+    formatFit: string;
+  };
+  origins: string[][];
+  corroboration: Record<string, number>;
+  grade: "ready" | "thin" | "empty";
+}
+
+/** A production's narration (`faceless/voice.json`). */
+export interface FacelessVoice {
+  model: string;
+  voice: string;
+  speed: number;
+  narration: string;
+  durationUs: number;
+  scenes: { startUs: number; endUs: number }[];
+  generated: number;
+  costUsd?: number;
+  assetId?: string;
+  sound?: string;
+  heardWords: number;
+  issues: { scene: number; kind: string; expected: string }[];
+  accepted: boolean;
+  lengthProblem?: string;
+  at: string;
+}
+
+/** A production's graphics as the visuals check saw them (`faceless/beats.json`). */
+export interface FacelessVisuals {
+  beats: {
+    assetId: string;
+    clipId: string;
+    name: string;
+    template?: string;
+    startUs: number;
+    endUs: number;
+    cueUs?: number;
+    words: number;
+    said: string;
+  }[];
+  durationUs: number;
+  errors: string[];
+  notes: string[];
+  at: string;
+}
+
+export interface FacelessVisualsResult {
+  visuals: FacelessVisuals;
+  filled: number;
+  done: boolean;
+  opened?: OpenedProject;
+}
+
+export interface FacelessVoiceResult {
+  voice: FacelessVoice;
+  done: boolean;
+  diagnostics: string[];
+  opened?: OpenedProject;
+}
+
+export interface FacelessCreated {
+  opened: OpenedProject;
+  production: FacelessProduction;
+  alreadyMade?: FacelessMade;
+}
+
 export interface OpenedProject {
   projectHandle: string;
   revision: number;

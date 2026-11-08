@@ -232,6 +232,27 @@ can tell a later agent what already ran.
   first/last-frame coverage, variable changes visible) in parallel headless Chromes, ~26–30 s, cached
   by source hash; pass → "template", fail → only "as is" at the user's word.
 
+### Image library
+
+Still pictures for graphics, built into the app (`src-tauri/src/image_library.rs`).
+
+- **Files:** `src-tauri/assets/images/<look>/...` as WebP (SVG for flags, maps, wordmarks), and
+  one `catalog.json`: the looks, topics and groups (with the words a beat matches on), and per
+  picture its look, what it depicts, where it goes, size and licence. `build.rs` embeds every
+  file. The repo is the only copy; `LICENSES.md` says where each set came from.
+- **Looks:** one set per look, because a video keeps one look (GFX-5): `broadsheet` (faceless
+  explainers, 245), `light`, `dark`, `editorial`, `neon` (the same 60 subjects each), and
+  `sourced` (real flags, maps, wordmarks, portraits; shown with every look, marked `*`). A style
+  takes the look whose `styles` list names it, else the nearest by background and accent colour.
+- **Agent:** `library` `kind: image`: `list` (the project style's look unless `look`; `query`
+  matches words), `show` (a board of a picture or a group), `use` (copies the picture into a
+  graphic as `images/<look>-<name>`, one undo step).
+- **Check:** flags a graphic carrying a picture that needs credit or a rights check
+  (`ImageLicence`) or one from another look than its style's (`ImageLook`).
+- **Adding a set:** made in Flova from the rules and approved tile in
+  `src-tauri/assets/image-looks/README.md`, then `python scripts/add_images.py <look>=<folder>`
+  (WebP quality 80, transparency 70, objects ≤ 1024 px, figures' feet at y=950).
+
 ## Check, storyboard, export
 
 - **Exports** (`export/deliveries.rs`, DLV-2): one worker runs the queued exports in order; a

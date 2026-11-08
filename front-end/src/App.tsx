@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import React, { Suspense, useEffect, useState } from "react";
 import { listenForProjects, listenForCaptionChanges } from "./lib/windowSync";
 import { startAgentSync } from "./stores/agentStore";
-import { ChevronRight, Clock, FilePlus2, Film, Folder, FolderOpen, X } from "lucide-react";
+import { ChevronRight, Clapperboard, Clock, FilePlus2, Film, Folder, FolderOpen, X } from "lucide-react";
 import { EditorTopBar } from "./components/navigation/EditorTopBar";
 import { StatusBar } from "./components/navigation/StatusBar";
 import { Button, Notice } from "./components/ui";
@@ -10,11 +10,16 @@ import { useProjectStore } from "./stores/projectStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWindowTitle } from "./hooks/useWindowTitle";
 import { api } from "./lib/ipc";
-import { ExportSettings, ExportStatus, OpenedProject } from "./lib/types";
+import { ExportSettings, ExportStatus, FacelessCreated, OpenedProject } from "./lib/types";
 import { listenTo } from "./lib/windowSync";
+import { useFacelessStore } from "./stores/facelessStore";
+import { useWorkspaceStore } from "./stores/workspaceStore";
 
 // The start screen needs none of the editor: it and the dialogs load when first needed (the
 // editor in the background once the start screen is up, so opening a project does not wait).
+const FacelessHome = React.lazy(() =>
+  import("./components/faceless/FacelessHome").then((m) => ({ default: m.FacelessHome })),
+);
 const loadWorkspace = () => import("./components/layout/DockWorkspace");
 const DockWorkspace = React.lazy(() => loadWorkspace().then((m) => ({ default: m.DockWorkspace })));
 const ExportDialog = React.lazy(() => import("./components/export/ExportDialog").then((m) => ({ default: m.ExportDialog })));
@@ -75,6 +80,9 @@ export const App: React.FC = () => {
   const [newProject, setNewProject] = useState<null | { withRecording?: boolean }>(null);
   const [exportDestination, setExportDestination] = useState("");
   const [exportJob, setExportJob] = useState<ExportStatus>();
+  // The start screen shows the Faceless page instead of the welcome.
+  const [facelessHome, setFacelessHome] = useState(false);
+  const [notice, setNotice] = useState<string>();
 
   // Edits made by connected agents (in Shorts, the store turns them into the short's view).
   useEffect(
@@ -227,6 +235,33 @@ export const App: React.FC = () => {
 
   const defaultExportPath = getDefaultExportPath(path, project?.name);
 
+  // A faceless production opens on its Faceless tab; any other project never shows one.
+  const refreshFaceless = useFacelessStore((s) => s.refresh);
+  useEffect(() => {
+    let active = true;
+    void refreshFaceless(path ?? null).then(() => {
+      if (!active) return;
+      const { production } = useFacelessStore.getState();
+      const { workspace, setWorkspace } = useWorkspaceStore.getState();
+      if (production) setWorkspace("faceless");
+      else if (workspace === "faceless") setWorkspace("edit");
+    });
+    return () => {
+      active = false;
+    };
+  }, [path, refreshFaceless]);
+
+  const onFacelessCreated = (created: FacelessCreated) => {
+    loadOpenedProject(created.opened, created.production.path);
+    setExportDestination("");
+    setFacelessHome(false);
+    if (created.alreadyMade) {
+      setNotice(
+        `A ${created.alreadyMade.format} video on "${created.alreadyMade.topic}" was already made (${created.alreadyMade.kind}). Make sure this one is a new story.`,
+      );
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-studio-950 text-studio-100 select-none">
       <EditorTopBar
@@ -246,6 +281,11 @@ export const App: React.FC = () => {
           {error}
         </Notice>
       )}
+      {notice && (
+        <Notice tone="accent" onDismiss={() => setNotice(undefined)}>
+          {notice}
+        </Notice>
+      )}
 
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         {project ? (
@@ -254,9 +294,20 @@ export const App: React.FC = () => {
               <DockWorkspace />
             </Suspense>
           </div>
+        ) : facelessHome ? (
+          <Suspense fallback={null}>
+            <FacelessHome
+              busy={busy}
+              onBack={() => setFacelessHome(false)}
+              onOpen={(target) => void openPath(target).then(() => setFacelessHome(false))}
+              onCreated={onFacelessCreated}
+              onError={setError}
+            />
+          </Suspense>
         ) : (
           <Welcome
             busy={busy}
+            onFaceless={() => setFacelessHome(true)}
             recentProjects={recentProjects}
             onEditRecording={() => setNewProject({ withRecording: true })}
             onStartEmpty={() => setNewProject({ withRecording: false })}
@@ -312,11 +363,12 @@ const Welcome: React.FC<{
   recentProjects: string[];
   onEditRecording: () => void;
   onStartEmpty: () => void;
+  onFaceless: () => void;
   onOpenFolder: () => void;
   onOpenRecent: (path: string) => void;
   onRemoveRecent: (path: string) => void;
   onClearRecent: () => void;
-}> = ({ busy, recentProjects, onEditRecording, onStartEmpty, onOpenFolder, onOpenRecent, onRemoveRecent, onClearRecent }) => (
+}> = ({ busy, recentProjects, onEditRecording, onStartEmpty, onFaceless, onOpenFolder, onOpenRecent, onRemoveRecent, onClearRecent }) => (
   <div className="flex-1 overflow-y-auto bg-studio-950">
     <div className="mx-auto w-full max-w-3xl px-6 py-14">
       <div className="flex items-center gap-3">
@@ -341,6 +393,13 @@ const Welcome: React.FC<{
           title="Start an empty project"
           detail="Build a video from imported clips, images and audio."
           onClick={onStartEmpty}
+          disabled={busy}
+        />
+        <StartCard
+          icon={Clapperboard}
+          title="Faceless video"
+          detail="Long or short, made from a topic: research, script, narration and graphics, no camera."
+          onClick={onFaceless}
           disabled={busy}
         />
       </div>
