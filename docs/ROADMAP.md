@@ -9,17 +9,18 @@ Keep existing IDs. A task listed in two tables below is one task, not two implem
 <a id="cloud-sessions-start-here"></a>
 ## Cloud sessions: start here
 
-Suggested order: the five P1s, persistence/export correctness, then cloud tooling and features.
+Suggested order: persistence/export correctness (the P1s, CL-1..CL-4, are fixed), then cloud tooling
+and features.
 George's priority and branch-policy questions remain in [HANDOFF](HANDOFF.md#questions-for-george).
 For implementation PRs, run the touched checks and `scripts/test-all.sh` where supported;
 mock paid services.
 
 | ID | Task / canonical detail | Acceptance or dependency |
 |---|---|---|
-| <a id="cl-1"></a>CL-1 | Publish project binding: [GAP-011](gap.md#gap-011) | Reject A→B stale package/thumbnail/upload actions; no writes to B; coordinate with CL-2. |
-| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Latest draft persists to its owner; Upload awaits successful validation/save; mounted parent/child tests via CL-15. |
-| <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
-| <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Restore independently offset audio/video source clocks from either track without substituting source time. |
+| <a id="cl-1"></a>CL-1 | Publish project binding: [GAP-011](gap.md#gap-011) | Done 8 Nov. Reject A→B stale package/thumbnail/upload actions; no writes to B. |
+| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Done 8 Nov (save queue tests; mounted dialog tests still wait on CL-15). Latest draft persists to its owner; Upload awaits successful validation/save. |
+| <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Done 8 Nov, with GAP-037's one-job guard. Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
+| <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Done 8 Nov. Restore independently offset audio/video source clocks from either track without substituting source time. |
 | <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | GAP-005/006 checks are complete; do not repeat their old fixes. Split remaining GAP-002/003/010/012 into focused changes; all other open findings stay in gap.md. |
 | <a id="cl-6"></a>CL-6 | Remove lib clippy warnings, then gate | Mechanical changes only; `cargo clippy --lib -- -D warnings` and relevant tests pass. Historical ~60 is not a fresh warning count. |
 | <a id="cl-7"></a>CL-7 | Broaden `src-tauri/src/smoke.rs` | Caption pixels, portrait export, output −14 LUFS ±1, mouth-noise mute; fixture-only, under 20 s each on lavapipe. Existing smoke covers silence/cut/export. |

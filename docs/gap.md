@@ -5,8 +5,8 @@ The working tree was clean, including untracked files, before this documentation
 No application fixes were made. This is the canonical detailed issue report;
 [Roadmap](ROADMAP.md) owns feature work and scheduling, not a second bug list.
 
-**34 findings remain open: 6 P1, 25 P2, 3 P3.** GAP-001/014 are superseded;
-GAP-005/006 are closed after current focused checks. Four older follow-ups are retained as
+**27 findings remain open: 0 P1, 24 P2, 3 P3.** GAP-001/014 are superseded;
+GAP-005/006 are closed after current focused checks; the six P1s and GAP-015 are fixed. Four older follow-ups are retained as
 GAP-029..032 below (2 P2, 2 P3); their evidence labels distinguish traced limitations from
 investigations awaiting reproduction. The deeper review adds GAP-033 onward. Overlapping
 IDs created during concurrent documentation work were reconciled; each ID below is unique.
@@ -19,26 +19,24 @@ Scratch paths under `src-tauri/target/` in those records are local evidence, not
 Performance work counts are not measured desktop latency. Test scope and fresh results are in
 [Verification](verification.md#documentation-reconciliation-8-november-2026).
 
-Fix the six P1s first: narration identity, script binding and concurrent generation (GAP-004/008/037), publish project
-ownership (GAP-011), upload/save synchronization (GAP-016), linked-cut restoration (GAP-017).
-Then address persistence/retry races and export input consistency. Browser regression coverage
+The six P1s (GAP-004/008/011/016/017/037) and GAP-015 are fixed; their records stay in place
+for their anchors. Next: persistence/retry races and export input consistency. Browser regression coverage
 (GAP-024) should accompany lifecycle and keyboard fixes.
 
 ## Open findings
 
 | Area | Finding IDs |
 |---|---|
-| Voice and stage identity | [004](#gap-004), [008](#gap-008), [027](#gap-027) |
-| Publish and package persistence | [002](#gap-002), [011](#gap-011), [015](#gap-015), [016](#gap-016) |
+| Voice and stage identity | [027](#gap-027) |
+| Publish and package persistence | [002](#gap-002) |
 | Export history, input capture and cost | [007](#gap-007), [009](#gap-009), [012](#gap-012), [018](#gap-018), [021](#gap-021) |
-| Sequence and captions | [017](#gap-017), [022](#gap-022), [023](#gap-023) |
+| Sequence and captions | [022](#gap-022), [023](#gap-023) |
 | Async UI and mixer state | [003](#gap-003), [010](#gap-010), [020](#gap-020), [025](#gap-025) |
 | Research validation | [013](#gap-013), [026](#gap-026) |
 | Keyboard and test coverage | [019](#gap-019), [024](#gap-024), [028](#gap-028) |
 | Retained ownership and review follow-ups | [029](#gap-029), [030](#gap-030), [031](#gap-031), [032](#gap-032) |
 | Evidence refresh and import workflow | [033](#gap-033), [034](#gap-034) |
 | Durable metadata, chapter drafts and thumbnails | [035](#gap-035), [036](#gap-036), [038](#gap-038) |
-| Concurrent voice generation | [037](#gap-037) |
 
 <a id="gap-002"></a>
 ### GAP-002 — P2: Release changes are silently treated as retries of the old upload
@@ -79,7 +77,9 @@ Then address persistence/retry races and export input consistency. Browser regre
 **Questions for the fix:** No product decision is needed for rejecting stale responses. Decide whether a refresh error should preserve the last known state with an error indicator instead of looking like an ordinary non-faceless project.
 
 <a id="gap-004"></a>
-### GAP-004 — P1: Regenerating a voice take can keep the old audio and transcript on the timeline
+### GAP-004 — Fixed: Regenerating a voice take can keep the old audio and transcript on the timeline
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** The joined narration is now named by the takes' audio bytes (with pace and gaps), not the requested words, so a redo that returns different audio is a new narration: new asset, new transcript, acceptance cleared. Exact reuse still pays for nothing and old files stay for undo. Later graphics are not retimed: the visuals stage goes stale through the stage chain. Test: `voice::tests::a_take_voiced_again_is_a_new_narration`. The record below is the original finding.
 
 **Location:** `src-tauri/src/faceless/voice.rs`, `fingerprint` and `make`; `src-tauri/src/commands/faceless.rs`, `faceless_voice_impl` (`same_file` branch).
 
@@ -117,7 +117,9 @@ Then address persistence/retry races and export input consistency. Browser regre
 **Questions for the fix:** Should export freshness also account for transcript/caption/graphic files that change outside the edit revision? That affects cache keys and freshness semantics.
 
 <a id="gap-008"></a>
-### GAP-008 — P1: Accepting an old narration can incorrectly certify it against a newly reviewed script
+### GAP-008 — Fixed: Accepting an old narration can incorrectly certify it against a newly reviewed script
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** `voice.json` records the voice stage's inputs (the reviewed script's fingerprint) captured when generation starts. Completion records the stage only if those inputs are still current (`faceless::record_stage_for`); acceptance refuses narration made from an older script and, from the app, a take other than the one the user heard. The button is disabled while the voice stage is out of date. Test: `commands::faceless::tests::old_narration_cannot_certify_a_newer_script`. The record below is the original finding.
 
 **Location:** `src-tauri/src/commands/faceless.rs`, `faceless_voice_accept_impl` and `finish_voice`; `src-tauri/src/faceless/mod.rs`, `record_stage`; `front-end/src/components/faceless/VoiceView.tsx`, “It sounds right” handler.
 
@@ -170,7 +172,9 @@ Then address persistence/retry races and export input consistency. Browser regre
 **Questions for the fix:** Should a failed save leave the controls showing the unsaved value with a Retry action, or restore the last saved value with a clear notice?
 
 <a id="gap-011"></a>
-### GAP-011 — P1: Publish commands are not bound to the project whose export the dialog shows
+### GAP-011 — Fixed: Publish commands are not bound to the project whose export the dialog shows
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** Every project-specific publish command takes the project handle and is refused once another project is open; package and thumbnail writes happen with the project held. An upload already started finishes for the project it began in. The agent's `publish` tool fixes the open project at the start of each call. The dialog closes and resets on a project change. Test: `commands::publish::tests::publish_calls_for_another_project_are_refused`. The record below is the original finding.
 
 **Location:** `src-tauri/src/commands/publish.rs`, `project_root` and package/thumbnail/upload commands; `front-end/src/lib/ipc.ts`, publish API methods; `front-end/src/components/export/DeliveryList.tsx`, `publishing` state; `front-end/src/components/export/PublishDialog.tsx`, initialization and upload sequence.
 
@@ -221,7 +225,9 @@ Then address persistence/retry races and export input consistency. Browser regre
 **Questions for the fix:** Are corporate HTTP proxies supported? A proxy may perform DNS resolution itself, so the intended local-network isolation policy must specify that case.
 
 <a id="gap-015"></a>
-### GAP-015 — P2: Closing the new package editor cancels the last unsaved keystrokes
+### GAP-015 — Fixed: Closing the new package editor cancels the last unsaved keystrokes
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** Package saves belong to a project/target save queue (`front-end/src/lib/packageSaver.ts`), not to the editor. Closing the editor or opening Accounts sends the last change to its own project; a failed draft is kept and shown again. A save cut off by an agent opening another project is refused (GAP-011) and its draft stays in memory only. Test: `front-end/tests/packageSaver.test.ts`. The record below is the original finding.
 
 **Location:** `front-end/src/components/export/PackageEditor.tsx`, `change` and unmount cleanup; `front-end/src/components/export/DeliveryList.tsx`, switching from Publish to Accounts.
 
@@ -240,7 +246,9 @@ Then address persistence/retry races and export input consistency. Browser regre
 **Questions for the fix:** Should closing wait for autosave, or should the save continue with a visible global status/retry indicator?
 
 <a id="gap-016"></a>
-### GAP-016 — P1: Upload can publish old metadata because it does not await or validate autosave
+### GAP-016 — Fixed: Upload can publish old metadata because it does not await or validate autosave
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** Upload locks the fields, flushes and awaits every queued save (saves run one after another), re-reads the saved package and stops on a failed save or a package problem. No fixed wait remains. Test: `front-end/tests/packageSaver.test.ts`. The record below is the original finding.
 
 **Location:** `front-end/src/components/export/PublishDialog.tsx`, `upload`; `front-end/src/components/export/PackageEditor.tsx`, `change`.
 
@@ -259,7 +267,9 @@ Then address persistence/retry races and export input consistency. Browser regre
 **Questions for the fix:** Should fields be locked during submission preparation, or should edits made after clicking Upload become a draft for a later update? Either policy needs an explicit snapshot boundary.
 
 <a id="gap-017"></a>
-### GAP-017 — P1: Restoring a cut can insert the wrong source audio into manually linked clips
+### GAP-017 — Fixed: Restoring a cut can insert the wrong source audio into manually linked clips
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** Each linked partner ending at the cut restores its own removed source range. A partner cut differently (no cut, other pauses, another length or speed) makes the restore refuse with a message saying to unlink it, rather than guessing source time. Tests: `sequence::edit::tests::restoring_a_cut_keeps_each_linked_sources_own_clock`, `restoring_refuses_a_partner_cut_differently`. The record below is the original finding.
 
 **Location:** `src-tauri/src/sequence/edit.rs`, `SequenceEdit::Link`, `cut_after`, and `restore_cuts` (around lines 784 and 887–1001).
 
@@ -580,6 +590,10 @@ may remove them. A source file being absent from today's timeline is insufficien
 
 ## Closed or superseded IDs
 
+Fixed on 8 Nov, with their records left where they were: [GAP-004](#gap-004),
+[GAP-008](#gap-008), [GAP-011](#gap-011), [GAP-015](#gap-015), [GAP-016](#gap-016),
+[GAP-017](#gap-017), [GAP-037](#gap-037).
+
 <a id="gap-001"></a>
 ### GAP-001 — Superseded: thumbnail responses reset unsaved package fields
 
@@ -686,7 +700,9 @@ remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of e
 **Questions for the fix:** Should a conflicting external chapter rename preserve the user's draft with a warning or require choosing a version? Should title edits autosave after an idle interval or continue saving on blur?
 
 <a id="gap-037"></a>
-### GAP-037 — P1: Overlapping voice jobs share scratch files and can attach another job's audio to a script
+### GAP-037 — Fixed: Overlapping voice jobs share scratch files and can attach another job's audio to a script
+
+**Fixed (8 Nov, branch `claude/project-thread-sc2z5d`):** `voice::make` holds a per-production job guard before deciding what to voice; a second job for the same production is refused before any paid request. Test: `voice::tests::one_voice_job_at_a_time_per_production`. The record below is the original finding.
 
 **Location:** `src-tauri/src/faceless/voice.rs`, `make`; `src-tauri/src/commands/faceless.rs`, `faceless_voice_impl`; desktop `faceless_voice` and MCP voice dispatch.
 
