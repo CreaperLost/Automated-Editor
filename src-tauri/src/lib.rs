@@ -34,6 +34,8 @@ pub mod render;
 pub mod secrets;
 pub mod sequence;
 pub mod shorts;
+#[cfg(test)]
+mod smoke;
 pub mod sound_effects;
 pub mod sound_library;
 pub mod source_search;
