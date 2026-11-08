@@ -8,6 +8,13 @@
    You can't hear the cuts: `joins` `find`, plus `add` for any cut you doubt, then ask the user
    to listen in the Joins panel. Read the marks back (`joins`) and fix those marked FIX first.
    Skip it only when the user says so.
+   Then the YouTube package, for every kind of video: `publish` (`target` the short's or
+   clip's id for one of those); when its title, description or tags are empty or out of date,
+   `set` them from the edit (the subject named early the way people search it, `keywords` for
+   the wording; the description says what the video covers, with the chapters from `status`
+   when there are three or more; names and spelling variants as tags), and for a video a
+   `thumbnail` from a strong frame (`atUs`). Show the user the title; they see and change it all
+   on the Export page.
 1. Ask first: "Export now?" with the choices, default first:
    - Resolution: 1080p (default), 720p, 1440p, 4K. The canvas shape in `status` sets the
      orientation: 1080p is 1920x1080 for 16:9, 1080x1920 for 9:16, 1080x1080 for 1:1,

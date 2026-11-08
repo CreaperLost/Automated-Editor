@@ -10,10 +10,12 @@ pub mod dsp;
 pub mod effects;
 pub mod export;
 pub mod face;
+pub mod faceless;
 pub mod files;
 pub mod fixtures;
 pub mod graphics;
 pub mod ids;
+pub mod image_library;
 pub mod joins;
 pub mod layouts;
 pub mod mcp;
@@ -26,11 +28,14 @@ pub mod playback;
 pub mod preset;
 pub mod project;
 pub mod proposals;
+pub mod publish;
 pub mod ranges;
 pub mod render;
 pub mod secrets;
 pub mod sequence;
 pub mod shorts;
+#[cfg(test)]
+mod smoke;
 pub mod sound_effects;
 pub mod sound_library;
 pub mod source_search;
@@ -145,6 +150,405 @@ async fn project_create(
     .await
     .map_err(|e| e.to_string())??;
     open_project(app, folder.to_string_lossy().into_owned()).await
+}
+
+/// The faceless productions in the Faceless folder, newest first.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_list() -> Result<Vec<faceless::ProductionSummary>, String> {
+    tauri::async_runtime::spawn_blocking(commands::faceless::faceless_list_impl)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The videos already made, so no story is made twice.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_made() -> Vec<faceless::Made> {
+    commands::faceless::faceless_made_impl()
+}
+
+/// Makes a faceless production for `topic` and opens it.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_create(
+    app: tauri::AppHandle,
+    topic: String,
+    format: faceless::Format,
+    links: Option<Vec<String>>,
+) -> Result<commands::faceless::FacelessCreated, String> {
+    let app_handle = app.clone();
+    let created = tauri::async_runtime::spawn_blocking(move || {
+        commands::faceless::faceless_create_impl(
+            &app_handle.state::<AppState>(),
+            topic,
+            format,
+            links.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if let Some(window) = app.get_webview_window("main") {
+        let title = commands::window_title_for_project(Some(&created.opened.name));
+        let _ = window.set_title(&title);
+    }
+    Ok(created)
+}
+
+/// Searches the web for stories with the channel profile (about a minute).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_discover() -> Result<commands::faceless::DiscoverResult, String> {
+    tauri::async_runtime::spawn_blocking(|| commands::faceless::faceless_discover_impl(&|_, _| {}))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The stories found so far, grouped and ranked.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_ideas(
+    days: Option<i64>,
+    limit: Option<usize>,
+    format: Option<faceless::Format>,
+) -> Result<commands::faceless::IdeasView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::faceless::faceless_ideas_impl(days, limit, format.unwrap_or_default())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Sets stories aside so they leave the ideas (or brings them back).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_set_aside(ids: Vec<u64>, aside: bool) -> Result<(), String> {
+    commands::faceless::faceless_set_aside_impl(&ids, aside)
+}
+
+/// The user's own read of a story (importance, fit), blended into the ranking.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_triage(reads: Vec<commands::faceless::Triage>) -> Result<usize, String> {
+    commands::faceless::faceless_triage_impl(reads, "you")
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_pin(id: u64, pinned: bool) -> Result<(), String> {
+    commands::faceless::faceless_pin_impl(id, pinned)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_separate(id: u64, separate: bool) -> Result<(), String> {
+    commands::faceless::faceless_separate_impl(id, separate)
+}
+
+/// Checks demand for the top of a ranking through Treg (a few cents for ten stories).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_demand(
+    format: faceless::Format,
+    top: Option<usize>,
+) -> Result<commands::faceless::DemandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::faceless::faceless_demand_impl(format, top.unwrap_or(10))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Keywords around a seed with their Google volume and trend (Treg, under a cent).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn keyword_suggestions(seed: String) -> Result<Vec<faceless::treg::Keyword>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::faceless::keyword_suggestions_impl(&seed).map(|(k, _)| k)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The watchlist: tracked X accounts, YouTube channels, TikTok and Instagram creators.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_watchlist() -> Result<Vec<faceless::watch::Watched>, String> {
+    commands::faceless::faceless_watchlist_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_watch_add(
+    platform: String,
+    handle: String,
+    group: Option<String>,
+    name: Option<String>,
+    followers: Option<f64>,
+) -> Result<(), String> {
+    commands::faceless::faceless_watch_add_impl(
+        &platform,
+        &handle,
+        group.as_deref(),
+        name.as_deref().unwrap_or_default(),
+        followers.unwrap_or(0.0),
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_watch_remove(platform: String, handle: String) -> Result<(), String> {
+    commands::faceless::faceless_watch_remove_impl(&platform, &handle)
+}
+
+/// X accounts the tracked ones follow, as suggestions (Treg, about half a cent).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_suggest_x() -> Result<Vec<faceless::watch::Candidate>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        commands::faceless::faceless_suggest_x_impl().map(|(c, _)| c)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// TikTok or Instagram creators on the channel's topics, as suggestions (Treg, about a cent).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_find_creators(
+    platform: String,
+) -> Result<Vec<faceless::watch::Candidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::faceless::faceless_find_creators_impl(&platform, None).map(|(c, _)| c)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Joins stories into another story's group (one event worded differently).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_join(ids: Vec<u64>, to: u64) -> Result<(), String> {
+    commands::faceless::faceless_join_impl(&ids, to)
+}
+
+/// The open production's research, or nothing yet.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_dossier(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<faceless::evidence::Dossier>, String> {
+    commands::faceless::faceless_dossier_impl(&state)
+}
+
+/// Voices the open production's script, puts it on the timeline and transcribes it.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_voice(
+    app: tauri::AppHandle,
+    redo: Option<Vec<usize>>,
+) -> Result<commands::faceless::VoiceResult, String> {
+    use tauri::Emitter;
+    blocking(move || {
+        let emitter = app.clone();
+        commands::faceless::faceless_voice_impl(
+            &app.state::<AppState>(),
+            &app.state::<commands::transcript::TranscriptState>(),
+            &redo.unwrap_or_default(),
+            &mut |fraction, message| {
+                let _ = emitter.emit(
+                    "faceless-voice-progress",
+                    serde_json::json!({ "fraction": fraction, "message": message }),
+                );
+            },
+        )
+    })
+    .await
+}
+
+/// The open production's narration, if voiced.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_voice_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<faceless::voice::Voice>, String> {
+    commands::faceless::faceless_voice_get_impl(&state)
+}
+
+/// Checks the open production's graphics (and with `fill`, stretches each to meet the next).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn faceless_visuals(
+    app: tauri::AppHandle,
+    fill: Option<bool>,
+) -> Result<commands::faceless::VisualsResult, String> {
+    blocking(move || {
+        commands::faceless::faceless_visuals_impl(&app.state::<AppState>(), fill.unwrap_or(false))
+    })
+    .await
+}
+
+/// The open production's last visuals check.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_visuals_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<faceless::visuals::Visuals>, String> {
+    commands::faceless::faceless_visuals_get_impl(&state)
+}
+
+/// The user listened and the narration is right.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_voice_accept(
+    state: tauri::State<'_, AppState>,
+) -> Result<commands::faceless::VoiceResult, String> {
+    commands::faceless::faceless_voice_accept_impl(&state)
+}
+
+/// The Zernio connection and its YouTube channels (reads them from Zernio).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_accounts() -> Result<commands::publish::Accounts, String> {
+    tauri::async_runtime::spawn_blocking(commands::publish::publish_accounts_impl)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_set_key(key: String) -> Result<commands::publish::Accounts, String> {
+    tauri::async_runtime::spawn_blocking(move || commands::publish::publish_set_key_impl(key))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Saves the Treg key (research: X, Reddit, web search, PDFs) in the keychain.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn treg_set_key(key: String) -> Result<Option<String>, String> {
+    commands::faceless::treg_set_key_impl(key)?;
+    Ok(commands::faceless::treg_key_source_impl())
+}
+
+/// Where the Treg key comes from (`keychain`, `environment`), or nothing when none is set.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn treg_key_source() -> Option<String> {
+    commands::faceless::treg_key_source_impl()
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn publish_set_channel(channel: String) -> Result<(), String> {
+    commands::publish::publish_set_channel_impl(channel)
+}
+
+/// A video's title, description, tags and thumbnail, and its uploads.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn publish_package(
+    state: tauri::State<'_, AppState>,
+    target: String,
+) -> Result<commands::publish::PackageView, String> {
+    commands::publish::publish_package_impl(&state, target)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn publish_package_save(
+    state: tauri::State<'_, AppState>,
+    target: String,
+    package: publish::Package,
+) -> Result<commands::publish::PackageView, String> {
+    commands::publish::publish_package_save_impl(&state, target, package)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_thumbnail_file(
+    app: tauri::AppHandle,
+    target: String,
+    path: String,
+) -> Result<commands::publish::PackageView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::publish::publish_thumbnail_file_impl(&app.state::<AppState>(), target, path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_thumbnail_frame(
+    app: tauri::AppHandle,
+    target: String,
+    file: String,
+    at_us: u64,
+) -> Result<commands::publish::PackageView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::publish::publish_thumbnail_frame_impl(
+            &app.state::<AppState>(),
+            target,
+            file,
+            at_us,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The thumbnail from a frame of the edit as it is now.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_thumbnail_edit(
+    app: tauri::AppHandle,
+    target: String,
+    at_us: u64,
+) -> Result<commands::publish::PackageView, String> {
+    blocking(move || {
+        commands::publish::publish_thumbnail_edit_impl(&app.state::<AppState>(), target, at_us)
+    })
+    .await
+}
+
+/// Uploads a finished export to YouTube through Zernio (takes as long as the upload).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_upload(
+    app: tauri::AppHandle,
+    target: String,
+    file: String,
+    release: publish::Release,
+) -> Result<publish::Upload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::publish::publish_upload_impl(
+            &app.state::<AppState>(),
+            target,
+            file,
+            release,
+            &|_| {},
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_refresh(app: tauri::AppHandle, id: String) -> Result<publish::Upload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        commands::publish::publish_refresh_impl(&app.state::<AppState>(), id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The open project's production, or nothing for an ordinary project.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_status(state: tauri::State<'_, AppState>) -> Option<faceless::ProductionSummary> {
+    commands::faceless::faceless_status_impl(&state)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1338,8 +1742,26 @@ fn project_chapters_set(
 fn project_check(
     state: State<'_, AppState>,
     project_handle: String,
+    short_id: Option<String>,
 ) -> Result<check::CheckReport, String> {
-    commands::project_check_impl(&state, project_handle)
+    commands::project_check_of(&state, project_handle, short_id.as_deref())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_check_frames(
+    app: tauri::AppHandle,
+    project_handle: String,
+    short_id: Option<String>,
+) -> Result<Vec<check::Finding>, String> {
+    blocking(move || {
+        commands::project_check_frames_impl(
+            &app.state::<AppState>(),
+            project_handle,
+            short_id.as_deref(),
+        )
+    })
+    .await
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2442,8 +2864,31 @@ fn preset_save_from_project(
     project_handle: String,
     expected_revision: u64,
     name: Option<String>,
+    workflow: Option<preset::workflow::Workflow>,
 ) -> Result<project::OpenedProject, String> {
-    commands::preset::preset_save_from_project_impl(&state, project_handle, expected_revision, name)
+    commands::preset::preset_save_from_project_impl(
+        &state,
+        project_handle,
+        expected_revision,
+        name,
+        workflow,
+    )
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_versions(name: String) -> Result<Vec<preset::store::VersionView>, String> {
+    preset::store::versions(&name)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn preset_restore(
+    state: State<'_, AppState>,
+    name: String,
+    version: u32,
+) -> Result<preset::PresetView, String> {
+    commands::preset::preset_restore_impl(&state, name, version)
 }
 
 #[cfg(feature = "tauri-app")]
@@ -2946,6 +3391,42 @@ fn show_in_finder(path: String) -> Result<(), String> {
     commands::show_in_finder_impl(path)
 }
 
+/// Opens a Zernio or YouTube page in the user's browser (PUB-2: making a key, connecting a
+/// channel, checking a video in Studio). Other addresses are refused.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(&url).map_err(|_| "Not a web address".to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+    let allowed = [
+        "zernio.com",
+        "youtube.com",
+        "studio.youtube.com",
+        "youtu.be",
+        "treg.to",
+    ];
+    if parsed.scheme() != "https"
+        || !allowed
+            .iter()
+            .any(|a| host == *a || host.ends_with(&format!(".{a}")))
+    {
+        return Err("Only Zernio and YouTube pages open from here".into());
+    }
+    #[cfg(windows)]
+    let result = std::process::Command::new("explorer")
+        .arg(parsed.as_str())
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg(parsed.as_str())
+        .spawn();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open")
+        .arg(parsed.as_str())
+        .spawn();
+    result.map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg(feature = "tauri-app")]
 pub fn run() {
     tauri::Builder::default()
@@ -2995,6 +3476,8 @@ pub fn run() {
             preset_save,
             preset_remove,
             preset_rename,
+            preset_versions,
+            preset_restore,
             project_cleanup_set,
             project_export_set,
             styles,
@@ -3132,6 +3615,7 @@ pub fn run() {
             transcript_ai_suggest,
             project_chapters_set,
             project_check,
+            project_check_frames,
             project_check_fix,
             project_chapters_generate,
             project_shorts_set,
@@ -3158,6 +3642,43 @@ pub fn run() {
             pick_recording_folder,
             pick_project_location,
             project_create,
+            faceless_list,
+            faceless_made,
+            faceless_create,
+            faceless_status,
+            faceless_discover,
+            faceless_ideas,
+            faceless_set_aside,
+            faceless_triage,
+            faceless_pin,
+            faceless_separate,
+            faceless_join,
+            faceless_demand,
+            keyword_suggestions,
+            faceless_watchlist,
+            faceless_watch_add,
+            faceless_watch_remove,
+            faceless_suggest_x,
+            faceless_find_creators,
+            faceless_dossier,
+            faceless_voice,
+            faceless_voice_get,
+            faceless_voice_accept,
+            faceless_visuals,
+            faceless_visuals_get,
+            publish_accounts,
+            publish_set_key,
+            publish_set_channel,
+            treg_set_key,
+            treg_key_source,
+            publish_package,
+            publish_package_save,
+            publish_thumbnail_file,
+            publish_thumbnail_frame,
+            publish_thumbnail_edit,
+            publish_upload,
+            publish_refresh,
+            open_url,
             pick_export_destination,
             pick_wallpaper_source,
             set_window_title,

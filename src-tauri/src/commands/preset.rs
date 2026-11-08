@@ -236,8 +236,9 @@ pub fn preset_save_from_project_impl(
     project_handle: String,
     expected_revision: u64,
     name: Option<String>,
+    workflow: Option<preset::workflow::Workflow>,
 ) -> Result<OpenedProject, String> {
-    let (current, values, style) = {
+    let (current, values, style, project_name) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
@@ -246,6 +247,7 @@ pub fn preset_save_from_project_impl(
             preset::of(document),
             preset::captured(document),
             document.style.clone(),
+            reader.summary.name.clone(),
         )
     };
     let target = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -263,6 +265,9 @@ pub fn preset_save_from_project_impl(
     next.values = values;
     if fresh {
         next.style = style;
+    }
+    if let Some(workflow) = workflow {
+        workflow.apply_to(&mut next, &project_name);
     }
     store::save(&store::PresetInput {
         name: target.clone(),
@@ -286,6 +291,19 @@ pub fn preset_save_impl(state: &AppState, input: store::PresetInput) -> Result<P
     let saved = store::save(&input)?;
     follow(state, before);
     Ok(preset::view(&saved))
+}
+
+/// Makes an earlier version of preset `name` the current one, as a new version. Projects
+/// following it follow; the open one redraws.
+pub fn preset_restore_impl(
+    state: &AppState,
+    name: String,
+    version: u32,
+) -> Result<PresetView, String> {
+    let before = changes_before(state, &name);
+    let restored = store::restore(&name, version)?;
+    follow(state, before);
+    Ok(preset::view(&restored))
 }
 
 pub fn preset_remove_impl(state: &AppState, name: String) -> Result<(), String> {

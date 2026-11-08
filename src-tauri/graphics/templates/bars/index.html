@@ -1,0 +1,457 @@
+<!doctype html>
+<!--
+  Comparison bars: an AeroEdits graphic (a HyperFrames composition), built like count-up. Up to
+  five rows (`rows`: "Label: value" split by "|"), each a bar that grows to its value on `cue`,
+  longest to scale, with the row named in `highlight` in the accent and the others in ink. A
+  unit (`unit`) follows each value. For numbers the story compares: prices, scores, sizes.
+  Every change is a tween or a set on a paused GSAP timeline, so any seek draws the same frame.
+-->
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id": "label", "type": "string", "label": "Title", "default": "Price per million tokens"},
+    {"id": "rows", "type": "string", "label": "Rows (Label: value, split by |)", "default": "New model: 0.80|Last year\u2019s: 3|Rival A: 2.50|Rival B: 15"},
+    {"id": "unit", "type": "string", "label": "Unit before or after", "default": "$"},
+    {"id": "highlight", "type": "string", "label": "Row in the accent", "default": "New model"},
+    {"id": "source", "type": "string", "label": "Source tag", "default": "Source: price pages, 7 Nov"},
+    {"id": "cue", "type": "number", "label": "Bars grow at (s)", "default": 1, "min": 0, "max": 60},
+    {"id": "background", "type": "color", "label": "Background", "default": "#FFFFFF"},
+    {"id": "text", "type": "color", "label": "Text", "default": "#1D1D1F"},
+    {"id": "accent", "type": "color", "label": "Accent", "default": "#0071E3"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Comparison bars</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+      /* The look: AeroEdits sets these for the whole video after this block (the defaults here
+         are its "App" look). Sizes, corners, gaps and motion come from them, colours from the
+         background, text and accent variables (the brand kit's). */
+      [data-composition-id] {
+        --look-font: var(--brand-font, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif);
+        --look-align: center;
+        --look-body: 3.8vmin;
+        --look-border: 0.12vmin;
+        --look-distance: 1.8vmin;
+        --look-duration: 700;
+        --look-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --look-entry: rise;
+        --look-gap: 2.2vmin;
+        --look-gsap-ease: expo.out;
+        --look-heading: 5.2vmin;
+        --look-label: 3vmin;
+        --look-label-case: none;
+        --look-label-tracking: 0em;
+        --look-leading: 1.15;
+        --look-line-mix: 8%;
+        --look-margin: 8vw;
+        --look-muted-mix: 62%;
+        --look-out: 350;
+        --look-pad: 2.6vmin;
+        --look-radius: 2.6vmin;
+        --look-radius-small: 1.4vmin;
+        --look-shadow-mix: 5%;
+        --look-stagger: 90;
+        --look-tint-mix: 10%;
+        --look-title: 8vmin;
+        --look-title-tracking: -0.035em;
+        --look-title-weight: 650;
+        --look-wash-mix: 5%;
+        --look-muted: color-mix(in srgb, var(--text, #1D1D1F) var(--look-muted-mix), var(--background, #FFFFFF));
+        --look-line: color-mix(in srgb, var(--text, #1D1D1F) var(--look-line-mix), var(--background, #FFFFFF));
+        --look-tint: color-mix(in srgb, var(--accent, #0071E3) var(--look-tint-mix), var(--background, #FFFFFF));
+        --look-wash: color-mix(in srgb, var(--accent, #0071E3) var(--look-wash-mix), transparent);
+        --look-shadow: 0 1vmin 3vmin color-mix(in srgb, var(--text, #1D1D1F) var(--look-shadow-mix), transparent);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #1d1d1f);
+        font-family: var(--look-font);
+        -webkit-font-smoothing: antialiased;
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #ffffff);
+      }
+      #card-back::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 15% 90%, var(--look-wash), transparent 60%),
+          radial-gradient(ellipse at 90% 5%, var(--look-wash), transparent 55%);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: var(--look-gap);
+        padding: 0 var(--look-margin);
+        text-align: center;
+      }
+      [data-align="left"] .layout {
+        align-items: flex-start;
+        text-align: left;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 1vmin;
+        padding: 0.7vmin 1.8vmin;
+        border-radius: 99vmin;
+        background: var(--look-tint);
+        color: var(--accent, #0071e3);
+        font-size: var(--look-label);
+        font-weight: 600;
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
+      }
+      .pill:empty {
+        display: none;
+      }
+      .title {
+        margin: 0;
+        font-size: var(--look-title);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: var(--look-leading);
+        max-width: 80vw;
+        max-height: calc(var(--look-title) * var(--look-leading) * 3);
+        overflow-wrap: anywhere;
+      }
+      .muted {
+        margin: 0;
+        font-size: var(--look-body);
+        line-height: 1.35;
+        color: var(--look-muted);
+        max-width: 70vw;
+        max-height: calc(var(--look-body) * 1.35 * 2);
+        overflow-wrap: anywhere;
+      }
+      .muted:empty {
+        display: none;
+      }
+      .card {
+        box-sizing: border-box;
+        background: var(--background, #ffffff);
+        border: var(--look-border) solid var(--look-line);
+        border-radius: var(--look-radius);
+        box-shadow: var(--look-shadow);
+      }
+      /* Over a picture that shows through (over the face in a short, data-mode="over"): no
+         background of its own; the content sits on a panel in the lower part of the frame. */
+      [data-mode="over"] #card-back {
+        display: none;
+      }
+      [data-mode="over"] .layout {
+        inset: auto 6% 8% 6%;
+        padding: calc(var(--look-pad) * 1.6) calc(var(--look-pad) * 1.8);
+        border-radius: calc(var(--look-radius) * 1.3);
+        background: var(--background, #ffffff);
+        box-shadow: var(--look-shadow), 0 2vmin 6vmin color-mix(in srgb, var(--text, #1d1d1f) 22%, transparent);
+      }
+      [data-mode="over"] .layout > * {
+        zoom: 0.8;
+      }
+      [data-mode="over"] .layout .card {
+        border: none;
+        box-shadow: none;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding: 0 calc(var(--look-margin) * 0.8);
+          gap: calc(var(--look-gap) * 1.2);
+        }
+        .pill {
+          font-size: calc(var(--look-label) * 1.35);
+          padding: 1vmin 2.4vmin;
+        }
+        .title {
+          font-size: calc(var(--look-title) * 1.35);
+          max-width: none;
+          max-height: calc(var(--look-title) * 1.35 * var(--look-leading) * 4);
+        }
+        .muted {
+          font-size: calc(var(--look-body) * 1.4);
+          max-width: none;
+          max-height: calc(var(--look-body) * 1.4 * 1.35 * 3);
+        }
+      }
+
+      /* A source tag: where a claim, number or quote on screen comes from. */
+      .tag {
+        position: absolute;
+        left: var(--look-margin);
+        bottom: calc(var(--look-margin) * 0.55);
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: calc(var(--look-label) * 0.8);
+        letter-spacing: 0.04em;
+        color: var(--look-muted);
+        line-height: 1.3;
+        max-width: 70vw;
+        max-height: calc(var(--look-label) * 0.8 * 1.3 * 2);
+        overflow-wrap: anywhere;
+      }
+      .tag:empty {
+        display: none;
+      }
+      .kicker {
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: var(--look-label);
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
+        color: var(--accent, #0071E3);
+        max-width: 80vw;
+        overflow-wrap: anywhere;
+      }
+      .kicker:empty {
+        display: none;
+      }
+      @media (orientation: portrait) {
+        .tag {
+          bottom: 14vh;
+          font-size: calc(var(--look-label) * 1.05);
+          max-width: 80vw;
+        }
+        .kicker {
+          font-size: calc(var(--look-label) * 1.3);
+        }
+      }
+
+      .chart {
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--look-gap) * 0.9);
+        width: min(80vw, 150vmin);
+        text-align: left;
+      }
+      .chart .heading {
+        margin: 0;
+        font-size: var(--look-heading);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: 1.15;
+        max-height: calc(var(--look-heading) * 1.15 * 2);
+        overflow-wrap: anywhere;
+      }
+      .rows {
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--look-gap) * 0.7);
+        padding-top: calc(var(--look-gap) * 0.7);
+        border-top: calc(var(--look-border) * 3) solid var(--text, #1D1D1F);
+      }
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 0.32fr) minmax(0, 1fr);
+        align-items: center;
+        gap: var(--look-gap);
+      }
+      .name {
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: var(--look-body);
+        line-height: 1.2;
+        max-height: calc(var(--look-body) * 1.2 * 2);
+        overflow-wrap: anywhere;
+        min-width: 0;
+      }
+      .track {
+        display: flex;
+        align-items: center;
+        gap: calc(var(--look-gap) * 0.5);
+        min-width: 0;
+      }
+      .bar {
+        flex: none;
+        height: calc(var(--look-body) * 1.15);
+        background: var(--text, #1D1D1F);
+        transform-origin: left center;
+      }
+      .value {
+        flex: 1 1 0;
+        min-width: 0;
+        line-height: 1.2;
+        max-height: calc(var(--look-body) * 1.2 * 2);
+        overflow-wrap: anywhere;
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: var(--look-body);
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .row.on .bar {
+        background: var(--accent, #0071E3);
+      }
+      .row.on .name,
+      .row.on .value {
+        color: var(--accent, #0071E3);
+      }
+      @media (orientation: portrait) {
+        .chart {
+          width: 100%;
+          gap: calc(var(--look-gap) * 1.2);
+        }
+        .chart .heading {
+          font-size: calc(var(--look-heading) * 1.3);
+          max-height: calc(var(--look-heading) * 1.3 * 1.15 * 3);
+        }
+        .row {
+          grid-template-columns: minmax(0, 1fr);
+          gap: calc(var(--look-gap) * 0.4);
+        }
+        .name,
+        .value {
+          font-size: calc(var(--look-body) * 1.35);
+          max-height: calc(var(--look-body) * 1.35 * 1.2 * 2);
+        }
+        .bar {
+          height: calc(var(--look-body) * 1.4);
+        }
+      }
+    </style>
+    <script src="gsap.min.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <div class="chart" id="chart">
+          <h2 class="heading" id="label" data-var-text="label">Price per million tokens</h2>
+          <div class="rows" id="rows"></div>
+        </div>
+      </div>
+      <span class="tag" id="source" data-var-text="source">Source: price pages, 7 Nov</span>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const length = parseFloat(root.dataset.duration) || 5;
+      const vars = window.__hyperframes?.getVariables?.() || {};
+      document.querySelectorAll("[data-var-text]").forEach((el) => {
+        const value = vars[el.dataset.varText];
+        if (value != null) el.textContent = String(value);
+      });
+      const num = (id, fallback) => {
+        const value = parseFloat(vars[id]);
+        return Number.isFinite(value) ? value : fallback;
+      };
+      const text = (id, fallback = "") => String(vars[id] ?? fallback);
+      // The video's look: durations, easing and travel for every tween.
+      const style = getComputedStyle(root);
+      const token = (name, fallback) => style.getPropertyValue(`--look-${name}`).trim() || fallback;
+      const seconds = parseFloat(token("duration", "700")) / 1000;
+      const out = parseFloat(token("out", "350")) / 1000;
+      const stagger = parseFloat(token("stagger", "90")) / 1000;
+      const rise = token("distance", "1.8vmin");
+      gsap.defaults({ duration: seconds, ease: token("gsap-ease", "expo.out") });
+      root.dataset.align = token("align", "center");
+      // Text a long value would push out of its box gets smaller until it fits (see count-up).
+      function fit(el, wide = false) {
+        const unit = Math.min(innerWidth, innerHeight) / 100;
+        let size = parseFloat(getComputedStyle(el).fontSize);
+        const over = () =>
+          el.scrollHeight - el.clientHeight > size * 0.5 ||
+          (wide && el.scrollWidth > el.clientWidth + 1);
+        for (let n = 0; n < 45 && over(); n++) {
+          size *= 0.93;
+          el.style.fontSize = `${size / unit}vmin`;
+        }
+        if (el.scrollHeight > el.clientHeight + 1) el.style.maxHeight = `${el.scrollHeight}px`;
+      }
+      // `whole` with the first `part` of it wrapped in a span of `cls` (none when not found).
+      function mark(el, whole, part, cls) {
+        el.textContent = "";
+        const at = part ? whole.toLowerCase().indexOf(part.toLowerCase()) : -1;
+        if (at < 0) {
+          el.textContent = whole;
+          return null;
+        }
+        el.append(whole.slice(0, at));
+        const span = document.createElement("span");
+        span.className = cls;
+        span.textContent = whole.slice(at, at + part.length);
+        el.append(span, whole.slice(at + part.length));
+        return span;
+      }
+      // When the action happens: the cue, kept inside the clip.
+      const cue = Math.min(Math.max(num("cue", 1), 0.3), Math.max(0.3, length - 1.2));
+      const tl = gsap.timeline({ paused: true });
+      const unit = text("unit", "$").trim();
+      const before = unit && Array.from(unit).length <= 2 && !/^%$/.test(unit);
+      const wanted = text("highlight", "New model").trim().toLowerCase();
+      const rows = text("rows", "New model: 0.80|Last year's: 3|Rival A: 2.50|Rival B: 15")
+        .split("|")
+        .map((r) => {
+          const at = r.lastIndexOf(":");
+          const name = (at < 0 ? r : r.slice(0, at)).trim();
+          const shown = (at < 0 ? "" : r.slice(at + 1)).trim();
+          const value = parseFloat(shown.replace(/[^0-9.\-]/g, ""));
+          return { name, shown, value: Number.isFinite(value) ? Math.max(0, value) : 0 };
+        })
+        .filter((r) => r.name)
+        .slice(0, 5);
+      const most = Math.max(...rows.map((r) => r.value), 1e-9);
+      const holder = document.getElementById("rows");
+      const bars = [];
+      // The longest bar takes most of its row, leaving room for its value beside it.
+      const room = 68;
+      rows.forEach((r) => {
+        const row = document.createElement("div");
+        row.className = "row" + (wanted && r.name.toLowerCase() === wanted ? " on" : "");
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = r.name;
+        const track = document.createElement("div");
+        track.className = "track";
+        const bar = document.createElement("div");
+        bar.className = "bar";
+        bar.style.width = `${Math.max(1, (r.value / most) * room)}%`;
+        const value = document.createElement("span");
+        value.className = "value";
+        value.textContent = r.shown ? (before ? `${unit}${r.shown}` : unit ? `${r.shown} ${unit}` : r.shown) : "";
+        track.append(bar, value);
+        row.append(name, track);
+        holder.appendChild(row);
+        bars.push({ bar, value });
+      });
+      document.querySelectorAll(".name, .value").forEach((el) => fit(el));
+      fit(document.getElementById("label"));
+      tl.from("#label", { y: rise, opacity: 0 }, 0.1);
+      tl.from("#rows", { opacity: 0 }, 0.15);
+      tl.from("#source", { opacity: 0 }, 0.3);
+      bars.forEach((b, i) => {
+        tl.fromTo(b.bar, { scaleX: 0.02 }, { scaleX: 1, duration: Math.max(seconds * 1.4, 0.8), ease: "power3.out" }, cue + i * stagger);
+        tl.from(b.value, { opacity: 0, duration: 0.3 }, cue + i * stagger + 0.5);
+      });
+      fit(document.getElementById("source"));
+      // Full screen: cut in and out unless AeroEdits asks for an ease.
+      if (root.dataset.entrance === "ease") {
+        tl.from(["#card-back", "#layout"], { opacity: 0, duration: 0.3, ease: "power1.out" }, 0);
+        tl.to(["#card-back", "#layout"], { opacity: 0, duration: out, ease: "power1.in" }, Math.max(1.2, length - out));
+      }
+      // One paused timeline, exactly as long as the clip; HyperFrames seeks it.
+      tl.set({}, {}, length);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["graphic"] = tl;
+    </script>
+  </body>
+</html>

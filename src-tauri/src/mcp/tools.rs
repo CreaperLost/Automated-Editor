@@ -215,6 +215,8 @@ pub fn all() -> &'static [ToolDef] {
             .chain(super::review::TOOLS.iter())
             .chain(super::search::TOOLS.iter())
             .chain(super::plan::TOOLS.iter())
+            .chain(super::faceless::TOOLS.iter())
+            .chain(super::publish::TOOLS.iter())
             .copied()
             .collect()
     })
@@ -257,6 +259,13 @@ pub const MORE: &[&str] = &[
     "library_save",
     "library_remove",
     "plan",
+    // FCL-0 (7 Nov): faceless videos, not part of a tutorial edit.
+    "faceless",
+    "faceless_research",
+    "faceless_script",
+    "faceless_sources",
+    // PUB-1/2 (7 Nov) put `publish` here; on 8 Nov it went to the main list: every video
+    // is packaged at export (George: "app wide").
 ];
 
 #[derive(Deserialize, JsonSchema)]
@@ -375,7 +384,14 @@ static TOOLS: [ToolDef; 14] = [
             (take back your batch); \
             graphics_install (the graphics renderer, \
             ask first); graphic_write_file, graphic_templatize, graphic_check, library_save, \
-            library_remove (writing a graphic of your own and keeping it in the library).",
+            library_remove (writing a graphic of your own and keeping it in the library). \
+            faceless (videos made from a topic with narration and graphics, no camera: \
+            stories found on the web, productions, their stages, videos already made); \
+            faceless_research (the open production's sources and checked facts); \
+            faceless_script (its script and reviews, checked against the facts); \
+            faceless_sources (the research watchlist: X accounts, YouTube, TikTok, Instagram). \
+            publish (a \
+            video's YouTube title, description, tags and thumbnail; upload only on the user's go).",
         schema: schema::<MoreArgs>,
         read_only: false,
         // Runs through `call`, which hands the call to the tool named.
@@ -1302,7 +1318,8 @@ mod tests {
                 "transcript_fix" => json!({ "fixes": [{ "word": "w-0", "text": "x" }] }),
                 "source_search" => json!({ "query": "x" }),
                 "open" | "create" | "status" | "export_status" | "preset" | "graphics"
-                | "graphics_install" | "library_remove" | "more" => continue,
+                | "graphics_install" | "library_remove" | "more" | "faceless"
+                | "faceless_sources" => continue,
                 _ => json!({}),
             };
             let error = (tool.run)(&ctx, args).unwrap_err();

@@ -1,39 +1,47 @@
-# AeroEdits docs
+# AeroEdits documentation
 
-Five documents for the work ahead. Consolidated 1 November 2026 from the working tree,
-including that day's uncommitted updates. Implementation status is separate from verification;
-these notes do not claim a new test run.
+Reconciled 8 November 2026 against `be7179c`, starting from a clean working tree. Start with
+[HANDOFF](HANDOFF.md) for machine context and standing decisions, then [Roadmap](ROADMAP.md)
+for the next task. This consolidation changes documentation only and leaves it uncommitted.
 
 | Document | Owns |
 |---|---|
-| [Product](product.md) | Purpose, current capabilities, settled decisions and acceptance criteria |
-| [Roadmap](roadmap.md) | Next work, unresolved issues, dependencies and deferred work |
-| [Architecture](architecture.md) | Implementation invariants, working practices and recorder contracts |
-| [Verification](verification.md) | Repeatable evaluation, measured baselines, validation gaps and dependency review |
+| [Handoff](HANDOFF.md) | Current inspected state, machine-only context, cloud access, standing decisions, questions for George |
+| [Product](product.md) | Purpose, capabilities, settled scope and acceptance principles |
+| [Roadmap](ROADMAP.md) | Remaining features, work order, acceptance boundaries and dependencies; existing CL/FCL/PUB IDs stay stable |
+| [Bugs and performance gaps](gap.md) | Canonical detailed issue report: priorities, paths, evidence, impact, solutions, validation and fix questions; existing GAP IDs stay stable |
+| [Architecture](architecture.md) | Current implementation, invariants and their known exceptions, operational/recorder contracts |
+| [Verification](verification.md) | Fresh checks, dated measurements, retained audit outcomes, procedures and acceptance still missing |
 
-Build, setup and repository layout remain in the [root README](../README.md).
-The shipped agent instructions remain in `src-tauri/src/mcp/skill/` and
-`src-tauri/src/preset/methods/`; tool schemas and lockfiles are authoritative for arguments and versions.
+Build/setup remains in the [root README](../README.md#development) and [AGENTS.md](../AGENTS.md).
+The shipped editing instructions live in `src-tauri/src/mcp/skill/` and `preset/methods/`;
+schemas, source and lockfiles own arguments, settings and versions.
 
-## Keeping this small
+## Maintenance
 
-- Update the document that owns the fact. Do not add parallel gaps, requirements, decisions,
-  shipped-work logs, per-feature plans or research dossiers.
-- Keep a short design and acceptance test with the active roadmap item. When it ships,
-  remove the item and retain only lasting behavior in Product or Architecture and useful
-  measurement in Verification. Keep existing work IDs stable.
-- Distinguish code inspection, measured results and user judgement. Competitor claims are
-  not proof of our quality or feature gaps.
-- Keep evaluation scripts and labelled data in [plans/eval](plans/eval/) and
-  [plans/review-eval](plans/review-eval/). Their paths stay stable for existing runners;
-  these folders contain test support, not additional plans.
-- Check links after changes: `.venv\Scripts\python.exe scripts/check_doc_links.py --all`.
+- Update the owner above. Cross-link related material; do not create another issue catalogue,
+  feature plan, shipped-work log or provider/version inventory.
+- Keep remaining work actionable. Move lasting shipped behavior to Product/Architecture and
+  useful checks to Verification. Preserve stable IDs for remaining findings and leave short
+  closure notes when their prior status would otherwise be ambiguous.
+- Label current code inspection, newly executed tests, historical probes, missing checks and
+  human judgement separately. Neither age nor lack of a reproduction closes an issue.
+- Preserve [plans/eval](plans/eval/) and [plans/review-eval](plans/review-eval/): these are used
+  evaluation runners/labelled data, not abandoned plans. English cases still reference private
+  transcripts; the Greek transcripts are included. Do not delete them as backlog cleanup.
+- Run `python scripts/check_doc_links.py --all` (`python3` on Linux). It checks file targets,
+  not anchors, case portability or external URLs; inspect changed fragments and exact path case.
 
-## Older material
+## Removed material
 
-Completed plans, dated audits, research transcripts, competitor inventories and the shipped-work
-log were removed after extracting the decisions and remaining work. Use Git history when the
-original investigation matters: `git log --all -- docs/<old-path>`, then
-`git show <commit>:docs/<old-path>`. A recovery ZIP outside the repository preserves the prior documentation content, including
-uncommitted changes reconstructed from the initial diff (line endings normalized):
-`C:/Users/George/.codex/visualizations/2026/11/01/01a19913-c032-7df3-b15d-45d2d0663e16/docs-before-cleanup.zip`.
+`audit.md`'s completed AUD-001..008 narratives were consolidated into
+[Architecture](architecture.md#cache-and-save-ownership-contracts) and
+[Verification](verification.md#retired-audit-material); current regression tests remain.
+`cloud-prep-pr.md`'s stale PR body/checklist was consolidated into Handoff and Verification.
+Roadmap's shipped faceless/publish implementation history and old Python inventory were
+replaced by the current Architecture section and remaining work. GAP-001/014 retain short
+superseded notes; GAP-005/006 retain evidence-backed closure notes in gap.md.
+
+Older completed plans/research dossiers were already removed in the 1 Nov cleanup. Recover
+originals from Git history (`git log --all -- docs/<old-path>`, then
+`git show <commit>:docs/<old-path>`); a private recovery ZIP is not a build dependency.

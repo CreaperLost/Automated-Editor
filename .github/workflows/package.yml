@@ -10,6 +10,8 @@ on:
       - src-tauri/tauri.conf.json
       - src-tauri/tauri.ffmpeg.conf.json
       - src-tauri/scripts/fetch-ffmpeg.mjs
+      - src-tauri/scripts/fetch-nsis.mjs
+      - src-tauri/scripts/github-release.mjs
       - src-tauri/Cargo.toml
       - src-tauri/build.rs
       - src-tauri/icons/**
@@ -66,9 +68,19 @@ jobs:
         if: matrix.config != ''
         working-directory: src-tauri
         run: node scripts/fetch-ffmpeg.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # The bundler would download NSIS itself, from links with no retry. The CLI version is
+      # pinned because fetch-nsis.mjs mirrors that version's NSIS files and sums.
+      - name: Fetch the NSIS toolset
+        if: matrix.bundles == 'nsis'
+        working-directory: src-tauri
+        run: node scripts/fetch-nsis.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Build installer
         working-directory: src-tauri
-        run: npx --yes @tauri-apps/cli@^2 build --ci --features tauri-app --bundles ${{ matrix.bundles }} ${{ matrix.config }}
+        run: npx --yes @tauri-apps/cli@2.12.4 build --ci --features tauri-app --bundles ${{ matrix.bundles }} ${{ matrix.config }}
       - uses: actions/upload-artifact@v4
         with:
           name: AeroEdits-${{ matrix.name }}

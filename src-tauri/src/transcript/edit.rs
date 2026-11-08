@@ -28,6 +28,40 @@ pub(crate) fn is_filler_sound(normalized: &str) -> bool {
         || (DRAWN_OUT.contains(&folded.as_str()) && normalized.chars().count() >= 2)
 }
 
+/// Words in a transcriber's sound tag that say the speaker is drinking ("[drinking]", "(sips
+/// water)"), as `normalize` gives them. Only the online transcriber writes such tags. Things
+/// near a drink but not one ("[bottle spritzing]") are left out: those tags can span a minute.
+const DRINKING: &[&str] = &[
+    "drink",
+    "drinks",
+    "drinking",
+    "sip",
+    "sips",
+    "sipping",
+    "gulp",
+    "gulps",
+    "gulping",
+    "swig",
+    "swigs",
+    "slurp",
+    "slurps",
+    "slurping",
+    "swallow",
+    "swallows",
+    "swallowing",
+    "πινει",
+    "πινοντας",
+    "γουλια",
+    "γουλιες",
+    "καταπινει",
+];
+
+/// A sound tag for the speaker drinking.
+fn is_drinking_tag(text: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric())
+        .any(|word| DRINKING.contains(&normalize(word).as_str()))
+}
+
 /// Gaps at least this long end a phrase for retake detection.
 const PHRASE_PAUSE_US: u64 = 400_000;
 /// A restart is preceded by at least this much pause, or by punctuation.
@@ -173,6 +207,34 @@ const STUTTER_WORDS: &[&str] = &[
     "ειναι",
 ];
 
+/// Words people say twice for weight or by habit ("very very", "no no", "bye bye"): said twice
+/// they are meant, not a slip, whatever comes between. Written as `normalize` gives them.
+const EMPHASIS_WORDS: &[&str] = &[
+    "very", "really", "pretty", "super", "so", "too", "much", "many", "more", "no", "yes", "yeah",
+    "okay", "ok", "right", "bye", "hello", "hey", "ha", "haha", "wow", "again", "far", "long",
+    "way", "big", "little", "always", "never", "please", "thanks", "thank", "well", "now", "come",
+    "go", "πολυ", "ναι", "οχι", "ελα",
+];
+
+/// `normalized` said twice is meant, not a slip.
+pub(crate) fn is_emphasis_word(normalized: &str) -> bool {
+    EMPHASIS_WORDS.contains(&normalized)
+}
+
+/// A word said again alone counts as a slip when this long a pause splits the two: read as
+/// said twice for weight, the two run together.
+const SAID_AGAIN_PAUSE_US: u64 = 300_000;
+/// A word given up on and said whole a moment later ("comp... Complementary") is at least this
+/// long, and this long a pause (or a filler sound) follows it. A shorter pause can be a sentence
+/// going on ("you can farm, Farmondo...").
+const CUT_OFF_MIN_CHARS: usize = 3;
+const CUT_OFF_PAUSE_US: u64 = 500_000;
+
+/// `whole` is `start` said whole: it opens with it and goes on by at least two letters.
+pub(crate) fn opens_with(whole: &str, start: &str) -> bool {
+    whole.starts_with(start) && whole.chars().count() >= start.chars().count() + 2
+}
+
 /// The sentence ends after `text` (". ? !"), not just a clause.
 fn ends_sentence(text: &str) -> bool {
     text.trim_end()
@@ -233,6 +295,8 @@ pub struct TranscriptView {
 pub enum TranscriptSuggestionKind {
     Filler,
     Retake,
+    /// The speaker drinking, from a sound tag the transcriber wrote.
+    Drink,
     /// Anything else an agent suggests cutting (a tangent, a mistake, dead air).
     Cut,
 }
@@ -556,8 +620,10 @@ pub fn suggestions(
         }
     }
 
-    // Stutters: a small word said twice in a row ("we we used", "it's a it's a"), and a word
-    // broken off and said whole ("j- just"). The first go is cut.
+    // Stutters: a small word said twice in a row ("we we used", "it's a it's a"), a word broken
+    // off and said whole ("j- just"), any word said again after a pause ("volume... volume it's
+    // on"), and a word given up on before the same word whole ("comp... um... Complementary").
+    // The first go is cut.
     let mut stutters: Vec<(usize, usize)> = Vec::new();
     let mut k = 0;
     while k + 1 < live.len() {
@@ -571,6 +637,35 @@ pub fn suggestions(
                 .and_then(|next| next.strip_prefix(normalized[k].as_str()))
                 .is_some_and(|rest| rest.starts_with('\'') && rest.len() > 1)
         };
+        let pause_after = |k: usize, next: usize| {
+            live[next]
+                .source_start_us
+                .saturating_sub(live[k].source_end_us)
+        };
+        // Any other word said again, with a pause between and no comma ("insanely, insanely"
+        // is for weight): the next said word is itself, and it isn't one of three in a row.
+        let said_again = |k: usize| {
+            !small(k)
+                && !ends[k]
+                && !is_emphasis_word(&normalized[k])
+                && !is_filler_sound(&normalized[k])
+                && same(k, k + 1)
+                && pause_after(k, k + 1) >= SAID_AGAIN_PAUSE_US
+                && !same(k, k + 2)
+                && !(k > 0 && normalized[k - 1] == normalized[k])
+        };
+        // The next word said, past filler sounds, is this word whole.
+        let given_up = |k: usize| {
+            let Some(next) = (k + 1..live.len()).find(|&n| !is_filler_sound(&normalized[n])) else {
+                return false;
+            };
+            !small(k)
+                && !ends[k]
+                && !is_filler_sound(&normalized[k])
+                && normalized[k].chars().count() >= CUT_OFF_MIN_CHARS
+                && opens_with(&normalized[next], &normalized[k])
+                && (next > k + 1 || pause_after(k, next) >= CUT_OFF_PAUSE_US)
+        };
         // Two words count only if both are small: "one by one by one" is meant.
         let span = if small(k) && !stops[k] && (same(k, k + 1) || contracted(k)) {
             Some((k, k))
@@ -582,7 +677,10 @@ pub fn suggestions(
             && same(k + 1, k + 3)
         {
             Some((k, k + 1))
-        } else if broken_off(&live[k].text, &normalized[k], &normalized[k + 1]) {
+        } else if broken_off(&live[k].text, &normalized[k], &normalized[k + 1])
+            || said_again(k)
+            || given_up(k)
+        {
             Some((k, k))
         } else {
             None
@@ -653,6 +751,21 @@ pub fn suggestions(
         }
     }
 
+    // Drinking: a sound tag, not a said word, so it is none of the above.
+    for tag in transcript
+        .words
+        .iter()
+        .filter(|w| w.kind == WordKind::AudioEvent && is_drinking_tag(&w.text) && kept(w, mapper))
+    {
+        push_suggestion(
+            &mut out,
+            TranscriptSuggestionKind::Drink,
+            &[tag],
+            transcript,
+            mapper,
+        );
+    }
+
     out.sort_by_key(|s| s.edited_start_us);
     for s in out.iter_mut() {
         s.id = format!(
@@ -660,6 +773,7 @@ pub fn suggestions(
             match s.kind {
                 TranscriptSuggestionKind::Filler => "filler",
                 TranscriptSuggestionKind::Retake => "retake",
+                TranscriptSuggestionKind::Drink => "drink",
                 TranscriptSuggestionKind::Cut => "cut",
             },
             s.word_ids.first().map(String::as_str).unwrap_or(""),
@@ -708,6 +822,112 @@ pub(crate) mod tests {
     use super::*;
     use crate::timeline::SourceInterval;
     use crate::transcript::{test_word, ProviderKind};
+
+    /// Words of the labelled recordings, as said, where a slip is cut and where words are meant.
+    /// The cases are `docs/plans/review-eval`'s; the times are the recordings'.
+    #[test]
+    fn a_word_said_again_or_given_up_on_is_cut_from_real_recordings() {
+        const MS: u64 = 1_000;
+        let cut = |words: &[(&str, u64, u64)]| -> Vec<String> {
+            let t = transcript(words);
+            let mapper =
+                TimelineMapper::new(vec![SourceInterval::new("all".into(), 0, 600_000 * MS)]);
+            suggestions(&t, &mapper)
+                .into_iter()
+                .filter(|s| s.kind == TranscriptSuggestionKind::Retake)
+                .map(|s| s.text)
+                .collect()
+        };
+        // EN-B: "in terms of volume... volume it's on the 10th spot".
+        assert_eq!(
+            cut(&[
+                ("of", 1000, 1120),
+                ("volume", 1120, 1470),
+                ("volume", 2080, 2620),
+                ("it's", 2650, 2920),
+            ]),
+            ["volume"]
+        );
+        // EN-C: "could have comp... um... Complementary skills".
+        assert_eq!(
+            cut(&[
+                ("have", 1000, 1210),
+                ("comp", 1360, 1620),
+                ("um", 2370, 2600),
+                ("Complementary", 5830, 7060),
+                ("skills", 7240, 7990),
+            ]),
+            ["comp"]
+        );
+        // A word for weight, or with a comma between, stays. So do three in a row, and a word
+        // said again as it runs on.
+        for meant in [
+            vec![
+                ("very", 1000, 1200),
+                ("very", 1800, 2000),
+                ("good", 2000, 2200),
+            ],
+            vec![
+                ("insanely,", 1000, 1500),
+                ("insanely", 1900, 2400),
+                ("well", 2400, 2600),
+            ],
+            vec![
+                ("run", 1000, 1200),
+                ("run", 1250, 1450),
+                ("fast", 1450, 1600),
+            ],
+            vec![
+                ("run", 1000, 1200),
+                ("run", 1600, 1800),
+                ("run", 2200, 2400),
+                ("fast", 2400, 2600),
+            ],
+            // Short of the pause: a sentence going on past a word that opens the next one.
+            vec![
+                ("can", 1000, 1200),
+                ("farm", 1200, 1500),
+                ("Farmondo", 1750, 2300),
+            ],
+            // A small word before a longer one is ordinary speech, whatever the pause.
+            vec![("the", 1000, 1200), ("these", 2000, 2300)],
+        ] {
+            assert!(cut(&meant).is_empty(), "{meant:?}");
+        }
+    }
+
+    /// The tag and times are the 3 Nov recording's: "list." [drinking] "But".
+    #[test]
+    fn a_drinking_tag_is_suggested_and_cuts_only_the_drink() {
+        let mut t = transcript(&[
+            ("list.", 105_520, 105_900),
+            ("[drinking]", 105_900, 116_880),
+            ("But", 117_000, 117_180),
+            ("[keyboard clacking]", 118_000, 119_000),
+            ("(Sips water)", 120_000, 121_000),
+            ("drinking", 122_000, 122_400),
+        ]);
+        for i in [1, 3, 4] {
+            t.words[i].kind = WordKind::AudioEvent;
+        }
+        let m = mapper(&[(0, 200_000)]);
+        let found: Vec<_> = suggestions(&t, &m)
+            .into_iter()
+            .filter(|s| s.kind == TranscriptSuggestionKind::Drink)
+            .collect();
+        // Not the keyboard, and not the word "drinking" said aloud.
+        let texts: Vec<&str> = found.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["[drinking]", "(Sips water)"]);
+        assert_eq!(found[0].id, format!("drink-{0}-{0}", t.words[1].id));
+        assert_eq!(
+            word_cuts(&t, &found[0].word_ids, &m).unwrap(),
+            [(105_900_000, 116_940_000)]
+        );
+
+        // Already cut: nothing left to suggest.
+        let m = mapper(&[(0, 105_900), (116_880, 200_000)]);
+        assert!(suggestions(&t, &m).iter().all(|s| s.text != "[drinking]"));
+    }
 
     pub(crate) fn transcript(words: &[(&str, u64, u64)]) -> Transcript {
         Transcript::new(

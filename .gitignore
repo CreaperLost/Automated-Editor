@@ -34,6 +34,8 @@ audit/
 .env
 .env.*
 *.tsbuildinfo
+# The documented template is committed (no real values).
+!.env.example
 
 # Bundled FFmpeg sidecars (fetched by src-tauri/scripts/fetch-ffmpeg.mjs)
 src-tauri/binaries/

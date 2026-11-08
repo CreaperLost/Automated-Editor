@@ -18,6 +18,7 @@ export const DOCK_PANELS = {
   shorts: { title: "Shorts", minimumWidth: 220, minimumHeight: 120 },
   shortLook: { title: "Look", minimumWidth: 240, minimumHeight: 160 },
   shortStyle: { title: "Style", minimumWidth: 240, minimumHeight: 160 },
+  faceless: { title: "Production", minimumWidth: 260, minimumHeight: 200 },
   timeline: { title: "Timeline", minimumWidth: 360, minimumHeight: 140 },
 } as const;
 
@@ -40,6 +41,7 @@ export const WORKSPACES = {
   cleanup: { label: "Cleanup", preset: "transcript" as LayoutPreset },
   shorts: { label: "Shorts", preset: null },
   clips: { label: "Clips", preset: null },
+  faceless: { label: "Faceless", preset: null },
 } as const;
 
 export type Workspace = keyof typeof WORKSPACES;
@@ -64,10 +66,28 @@ const SHORTS_PANELS: readonly DockPanelId[] = [
   "agent",
 ];
 
+/** Faceless (a video made from a topic): its production beside the editor's panels. */
+const FACELESS_PANELS: readonly DockPanelId[] = [
+  "faceless",
+  "preview",
+  "timeline",
+  "transcript",
+  "chapters",
+  "search",
+  "inspector",
+  "media",
+  "sounds",
+  "music",
+  "agent",
+];
+
 /** The panels `workspace` shows. */
 export function workspacePanels(workspace: Workspace): DockPanelId[] {
   const all = Object.keys(DOCK_PANELS) as DockPanelId[];
-  return isShortsWorkspace(workspace) ? [...SHORTS_PANELS] : all.filter((id) => !SHORTS_ONLY.includes(id));
+  if (workspace === "faceless") return [...FACELESS_PANELS];
+  return isShortsWorkspace(workspace)
+    ? [...SHORTS_PANELS]
+    : all.filter((id) => !SHORTS_ONLY.includes(id) && id !== "faceless");
 }
 
 /** Edit keeps the key layouts were always saved under. */
@@ -148,10 +168,30 @@ function applyShortsLayout(api: DockviewApi) {
   api.getPanel("preview")?.api.setActive();
 }
 
+/// Faceless: the production's stages on the left over the narration's transcript, the preview,
+/// the inspector on the right (media, libraries and the agent behind it), the timeline below.
+function applyFacelessLayout(api: DockviewApi) {
+  api.clear();
+  api.addPanel(panel("preview"));
+  api.addPanel({ ...panel("faceless"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 360 });
+  api.addPanel({ ...panel("transcript"), position: { referencePanel: "faceless", direction: "below" }, initialHeight: 300 });
+  addChapters(api);
+  api.addPanel({ ...panel("inspector"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
+  api.addPanel({ ...panel("media"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+  addLibraries(api, "inspector");
+  api.addPanel({ ...panel("agent"), position: { referencePanel: "inspector", direction: "within" }, inactive: true });
+  api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 240 });
+  api.getPanel("transcript")?.api.setActive();
+  api.getPanel("inspector")?.api.setActive();
+  api.getPanel("faceless")?.api.setActive();
+  api.getPanel("preview")?.api.setActive();
+}
+
 /// Puts `workspace` in its own default arrangement.
 function applyWorkspaceDefault(api: DockviewApi, workspace: Workspace) {
   const { preset } = WORKSPACES[workspace];
   if (preset) applyPreset(api, preset);
+  else if (workspace === "faceless") applyFacelessLayout(api);
   else applyShortsLayout(api);
 }
 
@@ -201,9 +241,9 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
       api.fromJSON(JSON.parse(stored));
       const ids = new Set(api.panels.map((p) => p.id));
       const wanted = workspacePanels(workspace);
-      if (isShortsWorkspace(workspace)) {
+      if (isShortsWorkspace(workspace) || workspace === "faceless") {
         if (wanted.every((id) => ids.has(id)) && ids.size === wanted.length) return;
-        throw new Error("Shorts layout without its panels");
+        throw new Error("Workspace layout without its panels");
       }
       // Layouts saved before the media bin existed keep their arrangement and gain it.
       if (!ids.has("media") && ids.has("inspector")) {
@@ -245,7 +285,7 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
         ids.add("jumpCuts");
         ids.add("noises");
       }
-      if (wanted.every((id) => ids.has(id)) && !SHORTS_ONLY.some((id) => ids.has(id))) return;
+      if (wanted.every((id) => ids.has(id)) && !SHORTS_ONLY.some((id) => ids.has(id)) && !ids.has("faceless")) return;
     }
   } catch {
     // Unreadable storage or an old layout format: start from the default.

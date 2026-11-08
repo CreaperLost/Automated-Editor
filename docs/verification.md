@@ -1,7 +1,87 @@
 # Verification and maintenance
 
-Consolidated 1 November 2026 from existing logs. These are recorded results, not tests rerun
-as part of the docs cleanup. [Roadmap](roadmap.md) owns follow-up work.
+Historical measurements consolidated 1 November; documentation reconciled 8 November 2026.
+The fresh focused checks below are separate from retained historical logs.
+[Roadmap](ROADMAP.md) owns feature work; [gap.md](gap.md) owns detailed open defects.
+
+## Documentation reconciliation, 8 November 2026
+
+Snapshot: `be7179c`, `claude/cloud-prep`, clean tracked/untracked tree before documentation
+edits. Entire `docs/` inventory retained or consolidated, including runners and labelled JSON.
+Source inspection covered current callers/tests for GAP-002..028 and the retained follow-ups;
+it was targeted, not a new exhaustive code audit. No source or user media was changed.
+
+| Fresh check | Result and limit |
+|---|---|
+| `cargo test --lib --offline styles_are_saved_listed_renamed_and_removed -- --nocapture` | 1 passed after workspace TEMP/TMP override; closes GAP-005. First default-temp attempt failed on access before the catalog assertion. |
+| `cargo test --lib --offline the_tool_list_stays_small -- --nocapture` | 1 passed; current budget <51,000 UTF-8 bytes. Closes GAP-006's old-budget failure; no client token/latency measurement. |
+| `cargo test --lib --offline faceless::tests -- --nocapture` | 6 passed, 1 ignored (`live_voice`). Includes package-stage wiring, narration placement and visual gap fill; does not cover same-text redo or stale acceptance. |
+| `cargo test --lib --offline publish::tests -- --nocapture` | 6 passed, including fake-service lost-reply retry, request modes and thumbnail validation. Does not cover release changes, concurrent UI saves, wrong-project dialogs or a real upload. |
+| `npm run test:cleanup` in `front-end` | 52 passed, zero failed/skipped. Includes AUD thumbnail/layout/search regression checks. Node hook harness only; GAP-024 remains open. |
+
+The Rust runs emitted existing private-interface/dead-code warnings and incremental hard-link
+fallback. No full Rust suite, clippy count, native UI, listening, GPU/runtime gate, new render,
+Linux/macOS run, live provider call or paid-service acceptance was performed. Prior GAP probes
+and historical suite/build/CI results below are not fresh runs. Documentation checks passed:
+`python scripts/check_doc_links.py --all` (zero broken file targets), a supplemental check of
+local Markdown fragments/exact path case (zero errors), all 32 stable GAP IDs and required issue
+fields, evaluation JSON parsing/ranges, and `git diff --check`. Only Markdown files changed.
+
+### Retired audit material
+
+`audit.md` contained only fixed AUD-001..008 narratives and earlier test counts. Its useful
+contracts are now in Architecture; tests remain in `front-end/tests/auditFixes.test.ts`,
+`auditRecovery.test.ts`, `src-tauri/src/source_search.rs`, `commands/thumbs.rs` and
+`transcript/store.rs`. Current frontend tests pass; this is not a new native walkthrough.
+
+| Stable IDs | Retained fix / remaining verification |
+|---|---|
+| AUD-001/006/008 | Wanted thumbnail entries are protected; transient failures retry with bounded backoff; released demand prunes unused entries. Regression checks pass in the Node suite. |
+| AUD-002 | Edit-point memo depends on sequence identity. Current source retains this; no dedicated automated test or fresh equal-revision desktop-switch check. |
+| AUD-003/007 | Debounced settings capture project/short ownership; layout saves serialize/rebase, preserve pending drafts and invalidate stale replies. Node regressions pass. Other save paths still have GAP-010/015/016. |
+| AUD-004 | Search clear/short query invalidates pending responses. Node regression passes. |
+| AUD-005 | UI search snapshots the document then runs on a blocking worker; transcript cache invalidates on saves and file stamps; results are bounded. Existing Rust checks/timing are historical, not rerun in this pass. MCP search still uses its locked synchronous path. |
+
+The old 100k-word search timing (121 ms cold, 1.0–1.2 ms warm) was synthetic, not a desktop
+benchmark. Original investigations remain in Git history; their already-fixed defect text
+must not become a new backlog. The audit's still-useful lifecycle, thumbnail-load and
+relinked/imported-media cache investigations remain [open coverage below](#verified-behavior-and-remaining-limits)
+and [GAP-032](gap.md#gap-032).
+
+### Historical cloud-prep evidence
+
+The earlier handoff recorded Windows `cargo test` 787 passed / 0 failed / 54 ignored and
+frontend 52/52 on 8 Nov. It also recorded Cloud check run **42442268439** green on fresh
+Ubuntu 24.04: format, Rust, lavapipe GPU, smoke, frontend typecheck/tests/build and doc links.
+That remote result was not fetched or revalidated here. Workflows are in
+[cloud-check.yml](../.github/workflows/cloud-check.yml) and [ci.yml](../.github/workflows/ci.yml).
+
+Recorded smoke summary: **6.000 s recording → cut 1.890 s of silence → 4.133 s, 124 frames**,
+H.264 320×180 plus AAC. The prior six-frame inspection saw clock values 0.367, 1.033, 1.733,
+4.300, 4.567, 5.667 in a padded screen over green wallpaper. This is retained observation,
+not a newly viewed output. `src-tauri/src/smoke.rs` skips missing FFmpeg/adapter unless
+`AEROEDITS_REQUIRE_FFMPEG` / `AEROEDITS_REQUIRE_GPU` is set; CI sets them for the cloud run.
+
+## Faceless and publish acceptance
+
+Implementation present is not production acceptance. No live calls were made in this pass.
+
+| Work | Evidence already recorded | Still required |
+|---|---|---|
+| FCL-0/1/2 | Prior dev-app production creation at 9:16; 7 Nov discovery 712 stories/25 s, 8/8 funnels; one real quote accepted and a planted number refused | Rebuild a complete research dossier on a new story; labelled grouping calibration. GAP-013/026 limit address/quantity assurances. |
+| FCL-3 | Script/review validation and MCP exist; no Script panel | Full new-story script/review by an agent; UI is CL-13. Hash integrity remains GAP-027. |
+| FCL-4 | One historical speech call checked model/voice, plus unit/fixture tests | After GAP-004/008/027, voice a real script, regenerate a changed take, check new asset/transcript/cues and have George listen. No current paid pricing guarantee. |
+| FCL-5 | Earlier notes report four Broadsheet templates passing 16:9, 9:16 and split gate; 509-image catalogue built in | Finish dedicated parts/browser and inspect a phone-size contact sheet. Full current Linux gate remains CL-9. Assets and licences remain in their catalogue/LICENSES notes. |
+| FCL-6 | Word/action cues and visuals gap-fill tests | One complete agent-built film: verify coverage, pacing, word starts, reading holds, variety and render frames. Phone clearance limits are GAP-030. |
+| FCL-7 | General music, ducking and normalization exist | Faceless preset bed/cues and measured −14 LUFS export with bed ≥15 dB below narration, plus listening. |
+| FCL-8/PUB-1 | Shared package editor, thumbnail constraints and current package-stage test | Fix save/ownership races; generation from a brief is CL-14. |
+| PUB-2/FCL-9 | Mocked lost-reply upload test passes; package/upload stage hooks exist; old handoff recorded Zernio channel connection | Approved private upload by George, real visibility/status/Studio check; source/time-word checks at release and made-list behavior, including failed/uncertain replies. GAP-002/011/016/027 remain. |
+| FCL-10 | MCP methods/operations exist | Long and short idea→approved private upload EVAL-1 with corrections, app/provider/agent costs and elapsed time. Do not report the old Python pipeline as required runtime. |
+
+Historical Treg measurements from 8 Nov (not rerun): discovery with X/Reddit $0.0099 in one
+run; later filtered search $0.015, demand for ten stories including first channel refresh
+$0.040, X suggestions $0.0036. These are example invoices, not a price promise or a total-video
+budget. Current per-call/search guards live in source. No own-channel outcome calibration exists.
 
 ## Working safely
 
@@ -13,7 +93,10 @@ against `cargo tauri dev` in the same target directory.
 For a code change, run the relevant behavior/regression tests. Front-end store tests live in
 `front-end/tests/` (`npm run test:cleanup`); backend tests run from `src-tauri`. For changes to
 media or rendering, include the appropriate real-recording probe and preview/export parity.
-For docs, run `.venv\Scripts\python.exe scripts/check_doc_links.py --all`.
+For docs, run `python scripts/check_doc_links.py --all` (or `python3` on Linux).
+That checker validates local file targets, not fragments or remote URLs; inspect changed
+anchors too. On this Windows sandbox, redirect TEMP/TMP to a writable workspace folder
+for persistence tests; the default sandbox temp path denied an atomic folder operation.
 
 ## Agent edit evaluation (EVAL-1)
 
@@ -125,7 +208,57 @@ rules improved; the defining-repeat error was fixed 26 Oct. EL-B (26 Oct) is a r
 Greek sample with one retake: cloud found it, and rules found it after drawn-out-word matching.
 It is too short to replace EL-A. Gemma testing was explicitly skipped, not pending implementation.
 
+### Retakes on the labelled recordings (2 Nov)
+
+`rules` and `flags` engines, no model. Must-cut spans across EN-A to EN-D: 33, of them 16 retakes.
+A label was corrected first: EN-D's "what is, what is" named the words across the comma, so the
+rule that cuts "what is," scored as a miss; it now has that span as an `alt`.
+
+| Rules | Missed | Missed retakes | Wrong spans |
+|---|---|---|---|
+| Before (with the label as it was) | 12 | 7 | 0 |
+| After | 9 | 4 | 0 |
+
+The rules now cut "volume volume" and "comp... um... Complementary". Across all 19 transcripts on
+this computer (34,207 words), a prototype of the two new rules fires 3 times: those two, and "high high leverage".
+Of the 4 retakes they still miss, 3 are flagged for a reviewer ("they there", "see set", "to the
+lower pairs to the lower perpetuals"); on "we j-" the rules cut "j-" and leave "we". All the
+remaining filler misses are flagged. The new flags add 5 across 4,444 words. These were tuned on
+these same recordings, so a recording they haven't seen is the real test.
+
+<a id="fast-against-thorough"></a>
+### Fast against thorough (2 Nov)
+
+The same OpenRouter model from settings, once each on EN-A to EN-D, merged with the rules, after
+the changes above. `cloud` reads every word, as a thorough review does; `cloud-fast` reads the
+candidate windows, as a fast review does. An agent reviewing in-house was not measured.
+
+| Review | Words read | Time | Missed (of 33) | Wrong spans |
+|---|---|---|---|---|
+| Thorough | 4,444 | 139 s | 5 | 4 |
+| Fast | 2,484 | 129 s | 2 | 3 |
+
+One run each on a small sample, so this does not show fast is better; it does show that reading
+every word did not catch more here. Both still make wrong cuts, thorough on "pretty" said for weight
+and "kind of", fast on two restarts it misread ("you can select purple", "So the capabilities,"),
+which is why retakes stay reviewable. The 25 Oct wrong 12-word retake did not recur.
+
 ## Verified behavior and remaining limits
+
+On 2 Nov, with a dev build on copies of real projects: `check` of the 25 Oct short took about 4 s
+with renders in place and found words under the bottom band on all 4 graphics and captions hidden
+on 2; a frame at 22 s bore out what it said of "Proof". A 9-minute video with 13 graphics took 18 to
+26 s and was clean. With no renderer installed, it says the frames weren't checked. The export
+dialog and Shorts tab show the same findings. The face finding has only unit tests on these
+projects: no graphic there covered a face.
+
+A saved workflow was proved on a second tutorial (AUTO-3): saved on a copy of `Agent test` with one
+exception (no chapters) and one check (no zoom in the first 5 s), then followed from a copy of
+`Untitled 29 Oct 2026` by a headless agent given only "edit the open tutorial automatically with
+its preset", $0.16. It left chapters alone, reported them as open and verified the zoom rule. The
+first attempt ignored both, as the agent asked for `tutorial` by name and got the built-in, which
+is what `meant` fixes. That project was already part-edited, so no full edit from a raw recording
+has followed a workflow yet.
 
 Recorded Windows checks cover MCP/CLI create-to-export, proposals/accept/undo, history across
 restarts and agent-run undo, checkpoints, layouts, graphic install/render/library lifecycle,
@@ -142,6 +275,12 @@ text on disk, in the Inspector and in a rendered frame (SAFE-3). SND-4's sampled
 quiet floor around -87 dBFS. These checks do not replace listening to real joins.
 
 Still unverified or narrow:
+
+- Pending-save flush/ownership while closing projects, switching workspaces or undoing;
+  thumbnail queue cancellation/cold dense-timeline loading and notification redraw cost;
+  relinked/repeated-import preview/export cache invalidation and long-session memory. These
+  are retained investigation targets, not confirmed new bugs. Reproduce on a scratch project,
+  measure work/retained bytes, and add a gap.md finding only when evidence identifies a fault.
 
 - Preset Run with online steps; FIX-9 transcription consent in a real Codex session.
 - Most MCP/graphics paths on macOS; local transcription is not in that build.
@@ -264,7 +403,7 @@ run the gate on every bundled template and compare rerenders; for review models,
 cases. A major migration is explicit work, never a side effect. Keep changes only with evidence
 of compatibility and worthwhile benefit. Recheck licences, including GSAP redistribution
 terms before bundling it differently. Candidate reviews include the Tailwind major
-([DEP-3](roadmap.md#dep-3)), ONNX Runtime leaving release candidates ([DEP-4](roadmap.md#dep-4))
+([DEP-3](ROADMAP.md#dep-3)), ONNX Runtime leaving release candidates ([DEP-4](ROADMAP.md#dep-4))
 and newer HyperFrames; their existence is not a reason to upgrade during unrelated work.
 
 **1 Nov 2026 round:**

@@ -12,15 +12,17 @@ pub mod cli;
 pub mod clients;
 mod clips;
 mod effects;
+mod faceless;
 pub mod first_steps;
 pub(crate) mod frames;
-mod graphic_checks;
+pub(crate) mod graphic_checks;
 pub mod ipc;
 mod layouts;
 mod library;
 mod plan;
 mod presets;
 mod propose;
+mod publish;
 mod review;
 mod search;
 pub mod skill;
@@ -1517,7 +1519,10 @@ mod tests {
         // behind `more`) and `library` `kind: music`, 46,549; the budget moved to 47,000.
         // 31 Oct (STY-2, GFX-8): `library` `op: propose` with `references` and `brief`, and
         // `frame_render` `sample` (the sample clip in place), 47,127; the budget moved to 47,500.
+        // 8 Nov (FCL-6): `graphic_add` `actionWord` (a part acts on the spoken word), 47,697;
+        // the budget moved to 48,000. Then `publish` came out of `more` (every video is packaged
+        // at export, George: "app wide"), 50,741; the budget moved to 51,000.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 47_500, "the tool list grew to {size} characters");
+        assert!(size < 51_000, "the tool list grew to {size} characters");
     }
 }

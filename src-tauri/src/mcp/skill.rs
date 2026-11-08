@@ -114,6 +114,7 @@ fn compose(name: &str, auto: bool, export: bool) -> Result<String, String> {
             preset.rules.trim()
         )
     };
+    let own_rules = format!("{own_rules}{}", preset::workflow::for_the_guide(&preset));
     let export = if export {
         format!("{}\n\n---\n\n", EXPORT.trim())
     } else {
@@ -202,6 +203,38 @@ fn for_mode(text: &str, auto: bool, thorough: bool, has_choices: bool) -> String
 }
 
 // ---------------------------------------------------------------------------------------
+/// What an open project follows, for each of the built-ins' kinds of video.
+struct Following {
+    video: String,
+    shorts: String,
+    clips: String,
+}
+
+/// The preset to give for `asked`: an agent asks for a kind of video by its built-in's name
+/// ("tutorial") before it knows what this project follows, and would then miss the user's own
+/// method, rules, exceptions and checks. So a built-in's name leads to the user's preset this
+/// project follows for that kind. Any other name is meant as said.
+fn meant(asked: &str, following: Option<&Following>) -> Option<String> {
+    let current = preset::store::resolve(followed(asked, following?)?).name;
+    (!preset::is_builtin(&current)).then_some(current)
+}
+
+/// What the project follows for the kind of video the built-in called `asked` is for.
+fn followed<'a>(asked: &str, following: &'a Following) -> Option<&'a str> {
+    let asked = asked.trim().to_lowercase();
+    match preset::builtin()
+        .iter()
+        .find(|p| p.name.to_lowercase() == asked)?
+        .name
+        .as_str()
+    {
+        preset::DEFAULT => Some(&following.video),
+        preset::SHORTS => Some(&following.shorts),
+        preset::CLIPS => Some(&following.clips),
+        _ => None,
+    }
+}
+
 // Tools.
 
 pub static TOOLS: [ToolDef; 1] = [ToolDef {
@@ -210,7 +243,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         steps, what to ask the user, the defaults; the user's own rules for it; its saved \
         choices) and the general rules. Call it first when the user asks for an edit, with \
         `auto: true` when they want it done automatically; `part: export` gives the export \
-        steps. Without `name`, the list (the open project's preset first).",
+        steps. Without `name`, the list (the open project's preset first). When the project \
+        follows the user's own preset, a built-in's name gives that one.",
     schema: schema::<PresetArgs>,
     read_only: true,
     run: preset_tool,
@@ -233,16 +267,30 @@ pub struct PresetArgs {
 fn preset_tool(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: PresetArgs = params(args)?;
     // A workflow begins: what the agent changes from here is a new run, undone on its own.
-    let ours = match ctx.state.opened_project.lock().as_mut() {
+    let following = match ctx.state.opened_project.lock().as_mut() {
         Some(reader) => {
             reader.end_agent_run();
-            Some(reader.document().preset.clone())
+            let document = reader.document();
+            Some(Following {
+                video: document.preset.clone(),
+                shorts: document.shorts_preset.clone(),
+                clips: document.clips_preset.clone(),
+            })
         }
         None => None,
     };
+    let ours = following.as_ref().map(|f| f.video.clone());
     match args.name.filter(|n| !n.trim().is_empty()) {
         Some(name) => match args.part.as_deref().map(str::trim) {
-            None | Some("") => text(compose(&name, args.auto, false)?),
+            None | Some("") => match meant(&name, following.as_ref()) {
+                Some(own) => text(format!(
+                    "This project follows the user's preset {own}, so this is its guide, not \
+                     {}'s.\n\n{}",
+                    name.trim(),
+                    compose(&own, args.auto, false)?
+                )),
+                None => text(compose(&name, args.auto, false)?),
+            },
             Some("export") => {
                 find(&name)?;
                 text(EXPORT.trim().replace("\r\n", "\n"))
@@ -526,6 +574,28 @@ mod tests {
         pub fn is_err(result: Result<String, String>) -> bool {
             result.is_err_and(|e| e.contains("There is no preset"))
         }
+    }
+
+    #[test]
+    fn a_kind_of_video_leads_to_what_the_project_follows_for_it() {
+        let following = Following {
+            video: "My tutorials".into(),
+            shorts: "My shorts".into(),
+            clips: "Clips".into(),
+        };
+        assert_eq!(followed("tutorial", &following), Some("My tutorials"));
+        assert_eq!(followed(" Shorts ", &following), Some("My shorts"));
+        assert_eq!(followed("clips", &following), Some("Clips"));
+        // A name of the user's own is meant as said.
+        assert_eq!(followed("My shorts", &following), None);
+        // No project, or a project on the built-ins: the guide asked for.
+        assert_eq!(meant("tutorial", None), None);
+        let builtins = Following {
+            video: "Tutorial".into(),
+            shorts: "Shorts".into(),
+            clips: "Clips".into(),
+        };
+        assert_eq!(meant("tutorial", Some(&builtins)), None);
     }
 
     #[test]

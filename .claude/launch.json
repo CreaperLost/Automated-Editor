@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "front-end", "run", "dev", "--", "--port", "1421", "--strictPort"],
       "port": 1421
+    },
+    {
+      "name": "website",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "4173", "--bind", "127.0.0.1", "--directory", "website"],
+      "port": 4173
     }
   ]
 }

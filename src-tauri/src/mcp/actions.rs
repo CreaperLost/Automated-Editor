@@ -125,9 +125,9 @@ pub static ACTIONS: [ToolDef; 36] = [
     },
     ToolDef {
         name: "fillers",
-        description: "Cuts filler words (um, uh, ...) and retakes (a sentence restarted) in the \
-            transcript, one undo step: the app's rules plus an AI review. By default (`review: \
-            auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
+        description: "Cuts filler words (um, uh, ...), retakes (a sentence restarted) and \
+            drinking sounds in the transcript, one undo step: the app's rules plus an AI \
+            review. By default (`review: auto`) the app runs its OpenRouter/OpenAI review now when the user has a key set, \
             else its built-in local model when downloaded, and otherwise uses the review you \
             saved with `fillers_review` (in-house: you read the transcript). `review: \
             in-house`, `openrouter` or `local` forces one. `apply: false` only lists. `auto` \
@@ -264,9 +264,10 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "The check before export, the one the export dialog shows: black frames, \
             blips and words cut partway, zooms that flash by, captions \
             over the webcam, chapters YouTube would drop, loudness, missing files, proposals \
-            waiting. Each finding has an id, a time and maybe a safe fix; `fix` applies those \
-            ids' fixes (or [\"all\"]), each one undo step. Run it after the last edit, fix, \
-            then ask about export.",
+            waiting, graphics over a face or the captions, words under a platform's bars (it \
+            renders each graphic and looks at its frames). Each finding has an id, a time and \
+            maybe a safe fix; `fix` applies those ids' fixes (or [\"all\"]), each one undo \
+            step. Run it after the last edit, fix, then ask about export.",
         schema: schema::<CheckArgs>,
         read_only: false,
         run: check,
@@ -307,7 +308,8 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "Adds graphics, all `items` in one call and one undo step: each from a \
             template or a copy of a library item (`library`), at `atUs` on the edited timeline \
             or at `atWord` (an id from transcript_get), on a Graphics track over the video, for \
-            `lengthUs` (default its own). They render in the background; `graphic_render` \
+            `lengthUs` (default its own); `actionWord` sets its `cue` to when that word is said. \
+            They render in the background; `graphic_render` \
             waits. `blank` starts an empty composition for graphic_write_file. Graphics under a \
             take go in `short_footage` items.",
         schema: schema::<GraphicAddArgs>,
@@ -2197,7 +2199,8 @@ pub struct FillerArgs {
     /// Sound key of a transcript. Default: the transcribed speech.
     #[serde(default)]
     pub stream: Option<String>,
-    /// Which to cut: `filler`, `retake`. Default both.
+    /// Which to cut: `filler`, `retake`, `drink` (a drinking sound the transcriber tagged; online
+    /// transcripts only). Default all three.
     #[serde(default)]
     pub kinds: Option<Vec<TranscriptSuggestionKind>>,
     /// Whose review adds to the rules (see the tool's description). `local` and `in-house` send
@@ -2458,6 +2461,7 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         vec![
             TranscriptSuggestionKind::Filler,
             TranscriptSuggestionKind::Retake,
+            TranscriptSuggestionKind::Drink,
         ]
     });
     // Rules and AI together by default: the rules alone miss most fillers and retakes.
@@ -2564,8 +2568,12 @@ fn run_fillers(ctx: &Ctx, args: FillerArgs) -> Result<String, String> {
         .or(saved.as_deref())
         .map(describe)
         .unwrap_or_else(|| "the review".into());
+    let drinks = match count(TranscriptSuggestionKind::Drink) {
+        0 => String::new(),
+        n => format!(", {}", plural(n, "drinking sound")),
+    };
     let mut lines = vec![format!(
-        "Found {} and {} in {key}{}.",
+        "Found {} and {}{drinks} in {key}{}.",
         plural(filler_count, "filler"),
         plural(retake_count, "retake"),
         if use_ai {
@@ -3989,17 +3997,18 @@ fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             );
         }
         let short = short_named(ctx, wanted)?;
-        let report = commands::project_check_of(ctx.state, before.handle, Some(&short.id))?;
+        let report = commands::project_check_whole(ctx.state, before.handle, Some(&short.id))?;
         return text(format!(
             "\"{}\": {}",
             short.title,
             crate::check::report_text(&report)
         ));
     }
-    let report = commands::project_check_impl(ctx.state, before.handle.clone())?;
     let Some(ids) = args.fix.filter(|ids| !ids.is_empty()) else {
+        let report = commands::project_check_whole(ctx.state, before.handle, None)?;
         return text(crate::check::report_text(&report));
     };
+    let report = commands::project_check_impl(ctx.state, before.handle.clone())?;
     let all = ids.iter().any(|id| id == "all");
     let fixed: Vec<String> = report
         .findings
@@ -4012,7 +4021,7 @@ fn check(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         })
         .collect();
     commands::project_check_fix_impl(ctx.state, before.handle.clone(), before.revision, ids)?;
-    let after = commands::project_check_impl(ctx.state, before.handle.clone())?;
+    let after = commands::project_check_whole(ctx.state, before.handle.clone(), None)?;
     let mut lines = vec![format!(
         "Fixed {}, each its own undo step: {}.",
         plural(fixed.len(), "finding"),
@@ -4529,6 +4538,10 @@ pub struct GraphicItem {
     /// Or: the transcript word it starts at (an id from transcript_get).
     #[serde(default)]
     pub at_word: Option<String>,
+    /// The word its action lands on (an id from transcript_get): sets its `cue` to that word's
+    /// time into the graphic.
+    #[serde(default)]
+    pub action_word: Option<String>,
     /// How long it plays; default the template's.
     #[serde(default)]
     pub length_us: Option<u64>,
@@ -4597,6 +4610,11 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             (None, Some(word)) => word_edited_us(ctx, args.stream.clone(), word).map_err(at)?,
             _ => return Err(at("give one of `atUs` or `atWord`".into())),
         };
+        let mut variables = item.variables;
+        if let Some(word) = &item.action_word {
+            let action = word_edited_us(ctx, args.stream.clone(), word).map_err(at)?;
+            variables.insert("cue".into(), cue_value(at_us, action).map_err(at)?);
+        }
         let from = match (item.template, item.library) {
             (Some(template), None) => commands::graphics::ShortGraphicFrom::Template { template },
             (None, Some(id)) => commands::graphics::ShortGraphicFrom::Library { id },
@@ -4607,7 +4625,7 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             at_us,
             length_us: item.length_us,
             name: item.name,
-            variables: item.variables,
+            variables,
         });
     }
     let starts: Vec<u64> = graphics.iter().map(|g| g.at_us).collect();
@@ -4638,6 +4656,15 @@ fn graphic_add(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         "The renderer is not installed, so they show as placeholders: ask the user, then graphics_install.".into()
     });
     text(applied(ctx, "graphic_add", &before, lines)?)
+}
+
+/// A graphic's `cue`: when its action lands (`action_us`), in seconds after it starts.
+fn cue_value(start_us: u64, action_us: u64) -> Result<Value, String> {
+    if action_us < start_us {
+        return Err("its `actionWord` is said before it starts".into());
+    }
+    let seconds = ((action_us - start_us) as f64 / 10_000.0).round() / 100.0;
+    Ok(serde_json::json!(seconds))
 }
 
 /// The plan table for `items`, checked as `graphic_add` checks them but adding nothing: a row

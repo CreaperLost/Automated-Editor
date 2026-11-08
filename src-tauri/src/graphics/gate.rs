@@ -1585,7 +1585,7 @@ fn run_cli(
 
 /// The tiles side by side over a checkerboard (so see-through parts show), each 270 px high
 /// with its label above.
-fn contact_sheet(tiles: &[(&str, Option<&RgbaImage>)]) -> RgbaImage {
+pub(crate) fn contact_sheet(tiles: &[(&str, Option<&RgbaImage>)]) -> RgbaImage {
     const HEIGHT: u32 = 270;
     const GAP: u32 = 12;
     const LABEL: u32 = 26;
@@ -1904,8 +1904,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let cancel = AtomicBool::new(false);
         let mut quiet = |_: f64, _: &str| {};
+        // `GATE_ONLY=headline,quote` checks only those.
+        let only = std::env::var("GATE_ONLY").unwrap_or_default();
         for template in super::super::templates::all() {
-            if template.name == "blank" {
+            if template.name == "blank"
+                || (!only.is_empty() && !only.split(',').any(|n| n.trim() == template.name))
+            {
                 continue;
             }
             let asset =

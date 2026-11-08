@@ -1,7 +1,9 @@
 //! Measures the filler and retake review against hand labels, the way `apply: true` would cut:
 //! the rules' suggestions plus each engine's spans, merged by `edit::suggestions`. Engines:
-//! `rules` (no model), `local` (the built-in model over the candidate windows) and `cloud`
-//! (the OpenRouter or OpenAI review in settings, over every word).
+//! `rules` (no model), `flags` (no model: what the candidate windows flag and show, which is what
+//! a fast review can reach), `local` (the built-in model over the candidate windows), `cloud`
+//! (the OpenRouter or OpenAI review in settings, over every word: a thorough review) and
+//! `cloud-fast` (the same model over the candidate windows: a fast review).
 //!
 //! A case is a JSON file: `{"transcript": "<path to transcripts/*.json>", "language": "en",
 //! "words": 1200, "gold": [{"from": 12, "to": 12, "type": "filler", "note": "so"}]}`.
@@ -162,6 +164,15 @@ impl JsonModel for Timed<'_> {
     }
 }
 
+/// The review model in settings, or `AEROEDITS_REVIEW_CLOUD_MODEL`.
+fn cloud_client() -> super::client::ChatClient {
+    let dir = crate::transcript::settings::config_dir();
+    let settings = super::load_settings(&dir);
+    let (key, _) = crate::secrets::get(&dir, settings.provider.key_spec()).expect("no AI key set");
+    let model = std::env::var("AEROEDITS_REVIEW_CLOUD_MODEL").unwrap_or_else(|_| settings.model());
+    super::client::ChatClient::new(settings.provider, key, model).unwrap()
+}
+
 /// Runs one engine; returns its spans and what to record about the run.
 fn review(
     engine: &str,
@@ -172,6 +183,51 @@ fn review(
     let words = kept(t);
     match engine {
         "rules" => (Vec::new(), json!({})),
+        "flags" => {
+            let plan = candidates::plan(&words, &settled(t, mapper, &words));
+            (
+                Vec::new(),
+                json!({
+                    "windows": plan.windows.len(),
+                    "shownWords": plan.shown_words(),
+                    "shown": plan.windows.iter().map(|w| (w.words.start, w.words.end - 1)).collect::<Vec<_>>(),
+                    "flags": plan.windows.iter().flat_map(|w| &w.flags)
+                        .map(|c| json!([c.from, c.to, format!("{:?}", c.flag), c.note])).collect::<Vec<_>>(),
+                }),
+            )
+        }
+        "cloud-fast" => {
+            let plan = candidates::plan(&words, &settled(t, mapper, &words));
+            let mut client = cloud_client();
+            let mut timed = Timed {
+                inner: &mut client,
+                pages: Vec::new(),
+            };
+            let started = Instant::now();
+            let spans = fillers::detect_candidates(
+                &mut timed,
+                language,
+                &words,
+                &plan,
+                &mut |_| {},
+                &|| true,
+            )
+            .unwrap();
+            let info = json!({
+                "model": timed.describe(),
+                "perPage": timed.pages,
+                "device": "remote",
+                "pages": plan.pages.len(),
+                "windows": plan.windows.len(),
+                "shownWords": plan.shown_words(),
+                "loadS": 0.0,
+                "reviewS": started.elapsed().as_secs_f64(),
+                "shown": plan.windows.iter().map(|w| (w.words.start, w.words.end - 1)).collect::<Vec<_>>(),
+                "flags": plan.windows.iter().flat_map(|w| &w.flags)
+                    .map(|c| json!([c.from, c.to, format!("{:?}", c.flag), c.note])).collect::<Vec<_>>(),
+            });
+            (spans, info)
+        }
         "local" => {
             let plan = candidates::plan(&words, &settled(t, mapper, &words));
             let started = Instant::now();
@@ -208,13 +264,7 @@ fn review(
             (spans, info)
         }
         "cloud" => {
-            let dir = crate::transcript::settings::config_dir();
-            let settings = super::load_settings(&dir);
-            let (key, _) =
-                crate::secrets::get(&dir, settings.provider.key_spec()).expect("no AI key set");
-            let model =
-                std::env::var("AEROEDITS_REVIEW_CLOUD_MODEL").unwrap_or_else(|_| settings.model());
-            let mut client = super::client::ChatClient::new(settings.provider, key, model).unwrap();
+            let mut client = cloud_client();
             let mut timed = Timed {
                 inner: &mut client,
                 pages: Vec::new(),

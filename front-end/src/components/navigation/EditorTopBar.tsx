@@ -16,11 +16,13 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Undo2,
+  Upload,
   X,
 } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSaveStatusStore } from "../../stores/saveStatusStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
+import { useFacelessStore } from "../../stores/facelessStore";
 import { useHotkeyStore, formatBinding } from "../../stores/hotkeyStore";
 import { useUiMode } from "../../stores/uiModeStore";
 import { api } from "../../lib/ipc";
@@ -41,6 +43,7 @@ import { Button, IconButton, Menu, MenuButton, Tabs, cn, type MenuEntry } from "
 
 // Loaded when first opened.
 const AgentsDialog = React.lazy(() => import("../settings/AgentsDialog").then((m) => ({ default: m.AgentsDialog })));
+const AccountsDialog = React.lazy(() => import("../settings/AccountsDialog").then((m) => ({ default: m.AccountsDialog })));
 const HotkeysDialog = React.lazy(() => import("../settings/HotkeysDialog").then((m) => ({ default: m.HotkeysDialog })));
 
 interface EditorTopBarProps {
@@ -82,12 +85,15 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
   );
   const workspace = useWorkspaceStore((s) => s.workspace);
   const setWorkspace = useWorkspaceStore((s) => s.setWorkspace);
+  // Faceless is a tab only for a faceless production.
+  const faceless = useFacelessStore((s) => s.production);
   const bindings = useHotkeyStore((s) => s.bindings);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const advancedSettings = useUiMode((s) => s.advanced);
   const setAdvancedSettings = useUiMode((s) => s.setAdvanced);
   // The Agent panel opens it too.
   const agentsOpen = useAgentStore((s) => s.dialogOpen);
+  const [accountsOpen, setAccountsOpen] = useState(false);
   const setAgentsOpen = useAgentStore((s) => s.setDialogOpen);
 
   const shortcut = (action: "undo" | "redo") => (bindings[action][0] ? formatBinding(bindings[action][0]) : undefined);
@@ -124,8 +130,8 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     { label: "Close project", icon: X, onSelect: onCloseProject, disabled: !project || busy },
     { kind: "separator" },
     { kind: "heading", label: `Layout · ${WORKSPACES[workspace].label}` },
-    // Shorts has one arrangement of its own: only Reset applies there.
-    ...(isShortsWorkspace(workspace) ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
+    // Shorts and Faceless have one arrangement of their own: only Reset applies there.
+    ...(isShortsWorkspace(workspace) || workspace === "faceless" ? [] : (Object.keys(LAYOUT_PRESETS) as LayoutPreset[])).map(
       (preset): MenuEntry => ({
         label: LAYOUT_PRESETS[preset].label,
         icon: LayoutGrid,
@@ -143,6 +149,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
     },
     { label: "Keyboard shortcuts…", icon: Keyboard, onSelect: () => setHotkeysOpen(true) },
     { label: "AI agents…", icon: Bot, onSelect: () => setAgentsOpen(true) },
+    { label: "Accounts…", icon: Upload, onSelect: () => setAccountsOpen(true) },
   ];
 
   return (
@@ -205,6 +212,15 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
               { value: "cleanup", label: "Cleanup", title: "Clean up: jump cuts, mouth noises and the transcript beside the preview and the timeline" },
               { value: "shorts", label: "Shorts", title: "Shorts from a take: your camera and voice, with footage and graphics from this video under it" },
               { value: "clips", label: "Clips", title: "Clips: the best moments cut out of this video, each with its own timeline and look" },
+              ...(faceless
+                ? [
+                    {
+                      value: "faceless" as const,
+                      label: "Faceless",
+                      title: "This faceless video's stages: research, script, review, voice, visuals, package, publish",
+                    },
+                  ]
+                : []),
             ]}
           />
         )}
@@ -239,6 +255,7 @@ export const EditorTopBar: React.FC<EditorTopBarProps> = ({
       <Suspense fallback={null}>
         {hotkeysOpen && <HotkeysDialog onClose={() => setHotkeysOpen(false)} />}
         {agentsOpen && <AgentsDialog onClose={() => setAgentsOpen(false)} />}
+        {accountsOpen && <AccountsDialog onClose={() => setAccountsOpen(false)} />}
       </Suspense>
     </header>
   );

@@ -1,0 +1,66 @@
+name: Cloud check
+
+# Proves that a fresh Ubuntu VM set up only by scripts/cloud-setup.sh passes
+# scripts/test-all.sh: the exact path a Claude Code cloud session follows (see AGENTS.md).
+# ci.yml keeps its narrower, path-filtered jobs (Windows, macOS, Tauri shell, Parakeet).
+# Also on pushes to claude/** branches, so a cloud session's work is checked before its PR
+# exists (and its PR's run reuses the warm cache).
+on:
+  pull_request:
+  push:
+    branches: ["claude/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: cloud-check-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # No debug info: smaller caches and faster compiles and links.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  setup-and-test:
+    name: cloud-setup.sh + test-all.sh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      # Node from .nvmrc with the npm cache; cloud-setup.sh then finds the right version.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-cloud-check
+      - name: Set up the VM (scripts/cloud-setup.sh)
+        run: bash scripts/cloud-setup.sh
+      - name: Check the environment (scripts/check-env.sh --quick)
+        run: bash scripts/check-env.sh --quick
+      - name: Run every check (scripts/test-all.sh)
+        run: bash scripts/test-all.sh
+        env:
+          AEROEDITS_REQUIRE_FFMPEG: "1"
+          AEROEDITS_REQUIRE_GPU: "1"
+          AEROEDITS_SMOKE_OUT: ${{ runner.temp }}/smoke/smoke.mp4
+      - name: Frame snapshots of the smoke export
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/smoke/smoke.mp4" ]; then
+            bash scripts/snapshot-frames.sh "$RUNNER_TEMP/smoke/smoke.mp4" 6 "$RUNNER_TEMP/smoke/frames"
+          fi
+      - name: Upload the smoke export and its frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output
+          path: ${{ runner.temp }}/smoke/
+          if-no-files-found: ignore
+          retention-days: 14

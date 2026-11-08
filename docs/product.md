@@ -1,6 +1,6 @@
 # Product and direction
 
-Status consolidated 1 November 2026. [Roadmap](roadmap.md) owns unfinished work;
+Status reconciled 8 November 2026; built does not mean accepted on a real production. [Roadmap](ROADMAP.md) owns unfinished work;
 [Verification](verification.md) distinguishes built behavior from measured results.
 
 ## Purpose and success
@@ -9,6 +9,12 @@ AeroEdits is a free, open-source desktop editor for screen-recorded tutorials, W
 macOS second. It opens AeroShoot `.aero` recordings with screen, camera, microphone, system
 sound and mouse/keyboard/window telemetry. George's English and Greek channel is the first
 customer. The milestones stay in order: a great long-form tutorial, tutorial shorts, then gaming.
+
+Faceless explainers and app-wide YouTube packaging/publishing were added to scope on 7 Nov.
+A faceless video is a researched story told through generated narration and editable graphics:
+5–8 min at 16:9 or 30–58 s at 9:16. The user's agent writes/reviews/storyboards; the app fetches,
+validates, generates paid media on request, renders and uploads with the user's approval.
+The Rust port replaces the old unattended Python explainer; there is no timer or reserve queue.
 
 The user's own agent edits through MCP or `aeroedits do`; AeroEdits owns the timeline,
 deterministic editing and rendering. Existing in-app transcription and review models remain.
@@ -23,11 +29,24 @@ cost per accepted video, including rendering, corrections and human review.
 | Speech | Online Scribe through ElevenLabs/OpenRouter with fallback; local English Parakeet. Noise muting, mouth-click repair, silence/gap cuts, filler and retake review. Muted noises use the recording's quiet room tone when available (SND-4). Key terms can correct nearby one-word mishearings while protecting common words (LNG-6). |
 | Picture | Telemetry zooms, layouts, window crop, shortcut badges, bubble hiding, face centring, screen blur/redaction, spotlight, magnifier and dim/blur behind graphics. Optional jump-cut push-ins in shorts. |
 | Sound | Clip gain/fades, track mix, denoise, ducking, loudness normalisation and take matching; extensible SFX/music libraries with licence checks. Graphics themselves are picture-only; sounds are separate assets. |
-| Direction | Presets hold method, choices and rules; styles hold the look, motion rules, kinds, examples, references, sound policy and portrait variant. Reference intake and preview exist. `plan` keeps a word-referenced `plan.md` inside the editing project. |
+| Direction | Presets hold method, choices and rules; one approved on a real edit is a saved workflow, with the user's exceptions and checks, a readable summary and restorable versions. Styles hold the look, motion rules, kinds, examples, references, sound policy and portrait variant. Reference intake and preview exist. `plan` keeps a word-referenced `plan.md` inside the editing project. |
 | Graphics | Editable HyperFrames compositions, shared style, library reuse, font/reading-time checks, sampled composite checks, in-context sample clips and reversible versions. Templates include timeline cuts, prompt/reply, counters, before/after, app clicks, linked steps and stacks. GFX-8 was kept by George on 1 Nov. |
 | Shorts and clips | Shorts start from a separate take, cleaned normally, with chosen footage and graphics beneath it. Clips select ideas from the main video's kept words, including gathered pieces with their own timeline and resync. Captions support emphasis and corrections. |
-| Review and delivery | `check` for the video or a selected short, storyboard and graphic sheets; H.264/AAC video, subtitle/transcript/audio files, optional export queue and delivery history. Default-path repeat exports choose an unused numbered filename (FIX-11); explicit destinations keep their chosen path. |
+| Review and delivery | `check` for the video or a selected short, including graphics over a face or the captions and words under a platform's bars, storyboard and graphic sheets; H.264/AAC video, subtitle/transcript/audio files, optional export queue and delivery history. Default-path repeat exports choose an unused numbered filename (FIX-11); explicit destinations keep their chosen path. |
 | Preset Run | The app runs initial scan/transcription/cleanup steps on request, guarded, with local steps by default and online steps only when allowed for the run. It stops where the method asks or the agent takes over; it does not start an agent session. |
+
+Faceless production, research/watchlist/demand, script/review validation, narration, Broadsheet
+style/image library and visual coverage checks are implemented. App-wide packages include
+title, description, tags, disclosure, chapters and image/frame thumbnails; Zernio requests
+private, scheduled or draft uploads with a retry journal. Generated thumbnails, Script/image-
+library panels, faceless sound/automation completion and release checks remain in
+[Roadmap](ROADMAP.md#fcl). Architecture owns the [implementation](architecture.md#faceless-productions-and-publishing).
+No full new-story production or live upload is certified by this documentation pass.
+
+Known correctness limits (including narration identity, cross-project publishing, autosave,
+linked restores and captions) are in [gap.md](gap.md). Quote/digit checks do not establish
+truth, magnitude or units; sampled graphic checks do not establish continuous clearance or
+phone readability. See [acceptance still required](verification.md#faceless-and-publish-acceptance).
 
 ## Editing contract
 
@@ -75,6 +94,7 @@ These are product decisions, not invitations to reopen old proposals.
   sounds on graphic events are opt-in. Better sound placement matters more than a bigger library.
 - Cloud filler review is preferred when a key exists; local Qwen is the fallback without one.
   Online fillers apply directly; retakes and local-model suggestions are listed for review.
+  Drinking sounds Scribe tagged (`[drinking]`) are listed too, and agents cut them with the fillers.
   Greek transcription remains online-only. Provider selection alone is not upload consent.
 - Bundled music must permit monetised use without attribution; unknown or incompatible licences
   are refused or flagged on user imports. Every sound carries its licence. New bundled models

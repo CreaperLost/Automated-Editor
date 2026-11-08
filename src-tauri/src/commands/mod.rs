@@ -15,12 +15,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub mod effects;
+pub mod faceless;
 pub mod graphics;
 pub mod history;
 pub mod music;
 pub mod noises;
 pub mod preset;
 pub mod proposals;
+pub mod publish;
 pub mod sounds;
 pub mod style;
 pub mod thumbs;
@@ -1792,6 +1794,40 @@ pub fn project_check_of(
         }
     };
     Ok(crate::check::run(reader.root(), document, &missing))
+}
+
+/// What the graphics' frames show, for the check of the video or of `short_id`: apart, as it
+/// draws them and waits for their renders.
+pub fn project_check_frames_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<&str>,
+) -> Result<Vec<crate::check::Finding>, String> {
+    {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+    }
+    crate::mcp::graphic_checks::findings(state, short_id)
+}
+
+/// The check an agent reads: the edit, then the graphics' frames (a failure to draw them is a
+/// note in it, not a failed check).
+pub fn project_check_whole(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<&str>,
+) -> Result<crate::check::CheckReport, String> {
+    let report = project_check_of(state, project_handle.clone(), short_id)?;
+    let frames = project_check_frames_impl(state, project_handle, short_id).unwrap_or_else(|why| {
+        vec![crate::check::Finding::new(
+            crate::check::Kind::GraphicFramesNotChecked,
+            crate::check::Severity::Info,
+            "Graphics' frames not checked".into(),
+            why,
+        )]
+    });
+    Ok(crate::check::with_frames(report, frames))
 }
 
 /// Applies the fixes of the findings `ids` of the check at `expected_revision`, each as its

@@ -287,6 +287,9 @@ pub fn availability(
             Err(format!("{family}'s file {file} is missing from the style"))
         };
     }
+    if !crate::style::brand::shipped(family).is_empty() {
+        return Ok(format!("{family}, built into AeroEdits"));
+    }
     let faces = installed_faces(family);
     if faces.is_empty() {
         let like = similar_installed(family);

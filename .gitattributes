@@ -1,0 +1,5 @@
+# Shell scripts run on Linux (cloud sessions, CI): always LF, even in a Windows checkout.
+*.sh text eol=lf
+# Test media is binary.
+*.mp4 binary
+*.wav binary

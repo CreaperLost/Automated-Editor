@@ -1,7 +1,30 @@
 import { useSaveStatusStore } from "../stores/saveStatusStore";
 import {
+  CheckFinding,
   CheckReport,
+  PresetVersion,
+  PresetWorkflow,
   OpenedProject,
+  PublishAccounts,
+  PublishPackage,
+  PublishPackageView,
+  PublishRelease,
+  PublishUpload,
+  FacelessCreated,
+  FacelessDiscovered,
+  FacelessDossier,
+  FacelessVoice,
+  FacelessVoiceResult,
+  FacelessVisuals,
+  FacelessVisualsResult,
+  FacelessEditorial,
+  FacelessCandidate,
+  FacelessWatched,
+  TregKeyword,
+  FacelessFormat,
+  FacelessIdeas,
+  FacelessMade,
+  FacelessProduction,
   SegmentPage,
   WaveformOverview,
   FaceTrackStatus,
@@ -484,6 +507,66 @@ export const api = {
       location: location || null,
       recording: recording || null,
     }),
+  facelessList: () => invokeTauri<FacelessProduction[]>("faceless_list"),
+  facelessMade: () => invokeTauri<FacelessMade[]>("faceless_made"),
+  facelessCreate: (topic: string, format: FacelessFormat, links?: string[]) =>
+    invokeTauri<FacelessCreated>("faceless_create", { topic, format, links: links ?? null }),
+  /** Searches the web for stories (about half a minute). */
+  facelessDiscover: () => invokeTauri<FacelessDiscovered>("faceless_discover"),
+  facelessIdeas: (format: FacelessFormat, days?: number, limit?: number) =>
+    invokeTauri<FacelessIdeas>("faceless_ideas", { days: days ?? null, limit: limit ?? null, format }),
+  facelessSetAside: (ids: number[], aside = true) => invokeTauri<void>("faceless_set_aside", { ids, aside }),
+  /** Your read of a story; it counts for 40% of its score. */
+  facelessTriage: (read: { id: number; verdict?: "keep" | "reject" } & Omit<FacelessEditorial, "by">) =>
+    invokeTauri<number>("faceless_triage", { reads: [read] }),
+  facelessPin: (id: number, pinned: boolean) => invokeTauri<void>("faceless_pin", { id, pinned }),
+  facelessSeparate: (id: number, separate: boolean) => invokeTauri<void>("faceless_separate", { id, separate }),
+  facelessJoin: (ids: number[], to: number) => invokeTauri<void>("faceless_join", { ids, to }),
+  /** YouTube, Google searches (and reels and TikTok for shorts) for the top of a ranking; a few cents. */
+  facelessDemand: (format: FacelessFormat, top = 10) =>
+    invokeTauri<{ checked: number; problems: string[]; costMicro: number }>("faceless_demand", { format, top }),
+  keywordSuggestions: (seed: string) => invokeTauri<TregKeyword[]>("keyword_suggestions", { seed }),
+  facelessWatchlist: () => invokeTauri<FacelessWatched[]>("faceless_watchlist"),
+  facelessWatchAdd: (platform: string, handle: string, group?: string, name?: string, followers?: number) =>
+    invokeTauri<void>("faceless_watch_add", { platform, handle, group: group ?? null, name: name ?? null, followers: followers ?? null }),
+  facelessWatchRemove: (platform: string, handle: string) => invokeTauri<void>("faceless_watch_remove", { platform, handle }),
+  facelessSuggestX: () => invokeTauri<FacelessCandidate[]>("faceless_suggest_x"),
+  facelessFindCreators: (platform: "tiktok" | "instagram") =>
+    invokeTauri<FacelessCandidate[]>("faceless_find_creators", { platform }),
+  publishAccounts: () => invokeTauri<PublishAccounts>("publish_accounts"),
+  publishSetKey: (key: string) => invokeTauri<PublishAccounts>("publish_set_key", { key }),
+  publishSetChannel: (channel: string) => invokeTauri<void>("publish_set_channel", { channel }),
+  /** Saves the Treg key (research); answers where the key now comes from. */
+  tregSetKey: (key: string) => invokeTauri<string | null>("treg_set_key", { key }),
+  tregKeySource: () => invokeTauri<string | null>("treg_key_source"),
+  publishPackage: (target: string) => invokeTauri<PublishPackageView>("publish_package", { target }),
+  publishPackageSave: (target: string, pkg: PublishPackage) =>
+    invokeTauri<PublishPackageView>("publish_package_save", { target, package: pkg }),
+  publishThumbnailFile: (target: string, path: string) =>
+    invokeTauri<PublishPackageView>("publish_thumbnail_file", { target, path }),
+  publishThumbnailFrame: (target: string, file: string, atUs: number) =>
+    invokeTauri<PublishPackageView>("publish_thumbnail_frame", { target, file, atUs }),
+  /** The thumbnail from a frame of the edit as it is now (no export needed). */
+  publishThumbnailEdit: (target: string, atUs: number) =>
+    invokeTauri<PublishPackageView>("publish_thumbnail_edit", { target, atUs }),
+  /** Uploads a finished export to YouTube through Zernio. Never public without the user's click. */
+  publishUpload: (target: string, file: string, release: PublishRelease) =>
+    invokeTauri<PublishUpload>("publish_upload", { target, file, release }),
+  publishRefresh: (id: string) => invokeTauri<PublishUpload>("publish_refresh", { id }),
+  /** Opens a Zernio or YouTube page in the browser. */
+  openUrl: (url: string) => invokeTauri<void>("open_url", { url }),
+  /** The open production's research, or null before any. */
+  facelessDossier: () => invokeTauri<FacelessDossier | null>("faceless_dossier"),
+  /** Voices the reviewed script (OpenRouter), puts it on the timeline and transcribes it. */
+  facelessVoice: (redo?: number[]) => invokeTauri<FacelessVoiceResult>("faceless_voice", { redo: redo ?? null }),
+  facelessVoiceGet: () => invokeTauri<FacelessVoice | null>("faceless_voice_get"),
+  /** Checks the production's graphics; `fill` first stretches each to meet the next. */
+  facelessVisuals: (fill = false) => invokeTauri<FacelessVisualsResult>("faceless_visuals", { fill }),
+  facelessVisualsGet: () => invokeTauri<FacelessVisuals | null>("faceless_visuals_get"),
+  /** The user listened: what the transcription heard differently is right. */
+  facelessVoiceAccept: () => invokeTauri<FacelessVoiceResult>("faceless_voice_accept"),
+  /** The open project's production, or null for an ordinary project. */
+  facelessStatus: () => invokeTauri<FacelessProduction | null>("faceless_status"),
   pickExportDestination: (projectHandle?: string) =>
     invokeTauri<string | null>("pick_export_destination", { projectHandle: projectHandle ?? null }),
   pickWallpaperSource: () => invokeTauri<string | null>("pick_wallpaper_source"),
@@ -586,8 +669,12 @@ export const api = {
       field: field ?? null,
     }),
   /** The project's settings into its preset, or a new one called `name` it then follows. */
-  presetSaveFromProject: (projectHandle: string, expectedRevision: number, name?: string) =>
-    invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null }),
+  presetSaveFromProject: (projectHandle: string, expectedRevision: number, name?: string, workflow?: PresetWorkflow) =>
+    invokeTauri<OpenedProject>("preset_save_from_project", { projectHandle, expectedRevision, name: name ?? null, workflow: workflow ?? null }),
+  /** Every save kept of a preset, the current one first. */
+  presetVersions: (name: string) => invokeTauri<PresetVersion[]>("preset_versions", { name }),
+  /** Makes an earlier version the current one, as a new version. */
+  presetRestore: (name: string, version: number) => invokeTauri<PresetView>("preset_restore", { name, version }),
   presetSave: (input: PresetInput) => invokeTauri<PresetView>("preset_save", { input }),
   presetRemove: (name: string) => invokeTauri<void>("preset_remove", { name }),
   /** What running the open project's preset would do: its first steps (online ones only when `online`). */
@@ -767,8 +854,11 @@ export const api = {
   /** Asks the AI provider for chapters from a track's transcript. */
   projectChaptersGenerate: (projectHandle: string, trackId: string) =>
     invokeTauri<OpenedProject>("project_chapters_generate", { projectHandle, trackId }),
-  /** The check before export, of the edit as it is now. */
-  projectCheck: (projectHandle: string) => invokeTauri<CheckReport>("project_check", { projectHandle }),
+  /** The check before export, of the edit as it is now (or of a short, as its export plays it). */
+  projectCheck: (projectHandle: string, shortId?: string) => invokeTauri<CheckReport>("project_check", { projectHandle, shortId }),
+  /** What the graphics' frames show: slower than the check, as it draws them (and waits for their renders). */
+  projectCheckFrames: (projectHandle: string, shortId?: string) =>
+    invokeTauri<CheckFinding[]>("project_check_frames", { projectHandle, shortId }),
   /** Applies the fixes of these findings (or `["all"]`), each as its own undo step. */
   projectCheckFix: (projectHandle: string, expectedRevision: number, ids: string[]) =>
     invokeTauri<OpenedProject>("project_check_fix", { projectHandle, expectedRevision, ids }),

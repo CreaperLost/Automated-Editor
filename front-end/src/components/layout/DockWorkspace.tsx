@@ -58,6 +58,7 @@ const MusicPage = React.lazy(() => import("../media/MusicPage").then((m) => ({ d
 const StylePanel = React.lazy(() => import("../style/StylePanel").then((m) => ({ default: m.StylePanel })));
 const JoinsPanel = React.lazy(() => import("../review/JoinsPanel").then((m) => ({ default: m.JoinsPanel })));
 const SearchPanel = React.lazy(() => import("../review/SearchPanel").then((m) => ({ default: m.SearchPanel })));
+const FacelessPanel = React.lazy(() => import("../faceless/FacelessPanel").then((m) => ({ default: m.FacelessPanel })));
 
 const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProps>> = {
   preview: () => fill(<StagePanel />),
@@ -77,6 +78,7 @@ const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProp
   shorts: () => fill(<ShortsListPanel />),
   shortLook: () => fill(<ShortLookPanel />),
   shortStyle: () => fill(<div className="h-full overflow-y-auto"><StylePanel /></div>),
+  faceless: () => fill(<FacelessPanel />),
 };
 
 /// A library page as a panel of its own.

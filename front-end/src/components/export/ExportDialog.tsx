@@ -7,6 +7,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { CheckPanel } from "./CheckPanel";
 import { DeliveryList } from "./DeliveryList";
+import { PackageEditor, packageGaps } from "./PackageEditor";
 import { ExportLog } from "./ExportLog";
 import { Button, IconButton, Segmented, cn, DialogBackdrop } from "../ui";
 import type {
@@ -16,6 +17,7 @@ import type {
   ExportSettings,
   ExportStatus,
   OpenedProject,
+  PublishPackageView,
 } from "../../lib/types";
 import { PresetMarks } from "../presets/PresetMarks";
 import { useUiMode } from "../../stores/uiModeStore";
@@ -56,6 +58,35 @@ const TIERS = [
 
 const tierOf = (p: ExportPreferences) =>
   TIERS.find((t) => t.prefs.resolution === p.resolution && t.prefs.fps === p.fps && t.prefs.quality === p.quality);
+
+/** The video's YouTube package on the export page: what it is published with, for any video,
+ * written here or by the agent (`publish`), and used by Upload on each finished export. */
+const PackageSection: React.FC = () => {
+  const [view, setView] = useState<PublishPackageView | null>(null);
+  const [open, setOpen] = useState(false);
+  const gaps = packageGaps(view);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <div className="mx-6 mb-6 rounded-control border border-studio-800">
+      <button
+        type="button"
+        className="w-full flex items-center gap-2 px-3 py-2.5 text-left"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Chevron className="w-4 h-4 text-studio-400" aria-hidden />
+        <span className="text-label font-medium text-studio-200">Title, description and thumbnail</span>
+        <span className={cn("ml-auto text-meta truncate", gaps.length ? "text-studio-500" : "text-success-fg")}>
+          {!view ? "" : gaps.length ? `Still needs ${gaps.join(", ")}` : `Ready for YouTube · ${view.package.title}`}
+        </span>
+      </button>
+      {/* Mounted while closed too, so the summary reads the saved package. */}
+      <div className={cn("px-3 pb-3", !open && "hidden")}>
+        <PackageEditor target="video" onChange={setView} refreshKey={open} />
+      </div>
+    </div>
+  );
+};
 
 /** Keeps the choices as `project`'s export settings (its preset's unless changed here). */
 function savePreferences(project: OpenedProject, preferences: ExportPreferences) {
@@ -389,6 +420,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             </fieldset>
             </div>
           </div>
+
+          <PackageSection />
 
           <div className="px-6 pb-6">
             <CheckPanel

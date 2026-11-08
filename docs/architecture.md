@@ -1,16 +1,18 @@
 # Architecture: how AeroEdits is built
 
-Implementation invariants and recorder contracts, consolidated 1 November 2026.
+Implementation and recorder contracts, reconciled 8 November 2026. These describe code and
+intended invariants; open exceptions are explicit in [gap.md](gap.md).
 Build and setup: [root README](../README.md). Product constraints: [Product](product.md).
 Measured checks and dependency policy: [Verification](verification.md).
 
 ## Stack
 
 - **Front end:** React + Vite + TypeScript + Tailwind, zustand stores, dockview workspaces
-  (Edit, Cleanup, Shorts). `front-end/src/lib/ipc.ts` wraps every backend command.
+  (Edit, Cleanup, Shorts, Clips, Faceless). `front-end/src/lib/ipc.ts` wraps every backend command.
 - **Back end:** Tauri v2, Rust. Every Tauri command is a thin wrapper over
   `commands::*_impl(&AppState, …)`; the MCP server calls the same `_impl` functions under the same
-  locks (`command_lock`, then `opened_project`), so revision checks and undo behave identically.
+  locks (`command_lock`, then `opened_project`), to share revision/undo behavior. This is an invariant, not universal proof of ownership:
+  publish commands lack handle binding (GAP-011), and checkpoint save has GAP-029's recheck gap.
 - **Media:** FFmpeg (bundled sidecar on Windows/Linux) behind `media/ffmpeg.rs`; Swift
   AVFoundation bridges on macOS (`native/macos/`). Compositing in wgpu (`render/composite.wgsl`),
   with a CPU path kept at parity by tests.
@@ -49,8 +51,9 @@ mounted at `recordings/<asset id>/`.
 - **Clocks: one mapping primitive.** `sequence/clock.rs` builds, from the clips that play a stream
   or asset, a map between source time and timeline time (a moment can appear twice; the earlier
   clip owns it). Transcripts, captions, word cuts, silence suggestions, zooms, layout sections,
-  chapters and shorts all live in **source time** and are mapped through a clock on read, so cuts,
-  reorders and undo never move them off their content.
+  chapters and shorts all live in **source time** and are mapped through a clock on read, so they follow cuts,
+  reorders and undo. The first-occurrence rule loses captions on repeated footage (GAP-023),
+  and automatic captions currently include muted tracks (GAP-022).
 - **Revisions and undo.** Every edit bumps `revision`; edits pass `expected_revision` and a
   mismatch is refused ("Stale edit revision").
 - **History on disk** (`project/history.rs`, SAFE-2). Each edit state is saved gzip-compressed
@@ -102,6 +105,33 @@ mounted at `recordings/<asset id>/`.
   every word in 300-word chunks, or local Qwen reads only the candidate windows under a JSON
   grammar, greedy. Probe: `ai/review_probe.rs`, labelled cases in [plans/review-eval](plans/review-eval/).
 
+### Cleanup and sound operations
+
+Retained operational details from the root feature list; settings and schemas remain authoritative.
+Each pass can run independently; the preset's normal order is mouth noises, silence, gaps,
+fillers/retakes, then graphics and chapters. Reanalyse after edits; stale suggestions are invalidated.
+
+- Silence (`project/silence.rs`, `dsp/silence.rs`) measures quiet audio, optionally protecting
+  transcript words. Balanced defaults are −42 dB, 250 ms minimum and 40 ms margins
+  (`preset/settings.rs`); adaptive thresholds are optional. Aggressive settings can cut soft
+  untranscribed speech. Two-source analysis protects either selected voice.
+- Gaps without words (`commands/transcript_pauses.rs`, `transcript/pauses.rs`) uses the primary
+  speech transcript. With mic + PC sound, PC activity vetoes cuts and has at least 80 ms
+  protection even when mic padding is smaller; PC-only quiet footage does not introduce cuts.
+  The PC transcript is optional. Tagged sounds can be kept explicitly; noises inside recognized
+  words remain protected. Optional quiet-edge refinement trims at most 200 ms per word edge
+  without changing saved word/caption times. Review gap suggestions because ASR can omit speech.
+- Audio → Reduce mouth clicks (`media/polish.rs`, FFmpeg `adeclick`) is timing-preserving repair
+  on speech tracks, with strength, undo and cached preparation shared by preview/export. It is
+  separate from classifying/muting detected noises. Strong repair can soften consonants; long
+  recordings may need minutes of preparation. FFmpeg with `adeclick` is required on macOS too.
+- New projects target −14 LUFS. Polish levels loud 100 ms blocks before normalization/limiting;
+  the limiter caps at −1 dBFS. Adjacent clips with spare sound crossfade around the cut; otherwise
+  edge fades apply. Room-tone noise mutes are described below. Listening remains required.
+- Synthesized click/whoosh telemetry cues (`sound_effects.rs`) are opt-in in audio settings,
+  ducked under speech, density-limited and omitted inside graphics or removed time. Library
+  sounds/music are separately imported assets with licence checks; they are not graphic audio.
+
 ## Picture: layouts, zooms, telemetry
 
 - **Layouts** (`layouts/`): a timeline has a base layout and sections
@@ -111,7 +141,7 @@ mounted at `recordings/<asset id>/`.
   arrangements for moves. One drawing path for the video and shorts in
   `export::SceneEvaluator::scene_at`. `pick` rules: rest (camera while the mouse rests and you
   talk), busy (screen while clicks/typing come fast), hook (camera on a short's opening line),
-  no-footage (take shorts). Plan and follow-ups: [roadmap](roadmap.md#lay-3).
+  no-footage (take shorts). Plan and follow-ups: [roadmap](ROADMAP.md#lay-3).
 - **Zooms** from clicks, dwell, click clusters and typing (`zoom/`), eased in recording time.
 - **Telemetry** (`telemetry/`): `events.jsonl` + `geometry.jsonl` (mouse), `keys.jsonl`
   ([contract](#keyboard-telemetry)), `windows.jsonl`
@@ -147,7 +177,8 @@ can tell a later agent what already ran.
   by `rmcp`. Off by default (`mcp.json`). Debug builds: `AEROEDITS_MCP_DEV=<name>` suffixes the
   pipe so a dev copy runs beside the installed app.
 - **Two doors, one set of tools.** `aeroedits do <tool>` (`cli.rs`) speaks MCP over the same pipe;
-  `tools/list` drives both, so every tool has a CLI form.
+  `tools/list` drives both. Hidden tools run as `do more --tool X --args '{…}'`.
+  Neither entry is a standalone render CLI; both need the running app for project actions.
 - **Proposals** (`proposals.rs`, `mcp/propose.rs`): batches of `Cuts` (word spans or edited ranges)
   or `Edits` (`SequenceEdit`s), checked on a copy when proposed, stored in
   `<project>/agent/proposals.json` (no revision used, survives restart). Accepting is one undo
@@ -205,7 +236,7 @@ can tell a later agent what already ran.
   graphic's export render is queued in the background behind the preview's
   (`render::request_export`; 2 Chrome workers, below-normal priority, fast capture), so an
   export of unchanged graphics starts writing frames at once (GFX-7). An export pins the renders
-  it starts with (`render::pin`, hard links in a `.export-*` folder) and fails rather than play a
+  it resolves during preparation (`render::pin`, hard links in a `.export-*` folder) and fails rather than play a
   placeholder. Renders stage in `<runtime>/work/<hash12>/` (long project paths broke Windows'
   260-char limit). An 8 s graphic at 1080p60 takes about 40 s on an RTX 3060.
 - **The look** (`look.rs`): a style's graphics look (preset, five global controls, hand-set
@@ -213,14 +244,14 @@ can tell a later agent what already ran.
   properties on `[data-composition-id]`, where HyperFrames puts the colour variables the roles
   mix from; part of the render hash. Find the root by `graphics::root_at` (the attribute with a
   value), never the first `data-composition-id` in the file: the look's selector comes first.
-- **Styles** (`src-tauri/src/style/`): built in (Light, Dark) or app-level
+- **Styles** (`src-tauri/src/style/`): built in (Light, Dark, Broadsheet) or app-level
   `<config>/AeroEdits/styles/<name>/style.json` (+ font and logo files). The brand becomes a
   `<style id="aeroedits-brand">` with `--brand-*` variables at render time (`style/brand.rs`);
   `style::dress` puts the frame and caption look onto a document as it is drawn (the
   `#[serde(skip)]` fields of `EditLayout` and `CaptionSettings`: never stored). Projects and
   graphics store a style's **name**, so a rename is recorded in `styles/renamed.json` and every
   lookup follows it. A save builds the new folder beside the old one and swaps it in.
-- **Presets** (`src-tauri/src/preset/`): built in (Tutorial, Shorts, Clips) or app-level
+- **Presets** (`src-tauri/src/preset/`): built in (Tutorial, Shorts, Clips, Faceless long, Faceless short) or app-level
   `<config>/AeroEdits/presets/<name>/` (`preset.json`, `method.md`, `rules.md`). A document is
   stored with `preset::stored` (the parts a preset sets written as `presetChanges`, a JSON merge
   patch over the preset's values) and read with `preset::read`, in `project.json` and in history
@@ -232,12 +263,115 @@ can tell a later agent what already ran.
   first/last-frame coverage, variable changes visible) in parallel headless Chromes, ~26–30 s, cached
   by source hash; pass → "template", fail → only "as is" at the user's word.
 
+### Image library
+
+Still pictures for graphics, built into the app (`src-tauri/src/image_library.rs`).
+
+- **Files:** `src-tauri/assets/images/<look>/...` as WebP (SVG for flags, maps, wordmarks), and
+  one `catalog.json`: the looks, topics and groups (with the words a beat matches on), and per
+  picture its look, what it depicts, where it goes, size and licence. `build.rs` embeds every
+  file. The repo is the only copy; `LICENSES.md` says where each set came from.
+- **Looks:** one set per look, because a video keeps one look (GFX-5): `broadsheet` (faceless
+  explainers, 245), `light`, `dark`, `editorial`, `neon` (the same 60 subjects each), and
+  `sourced` (real flags, maps, wordmarks, portraits; shown with every look, marked `*`). A style
+  takes the look whose `styles` list names it, else the nearest by background and accent colour.
+- **Agent:** `library` `kind: image`: `list` (the project style's look unless `look`; `query`
+  matches words), `show` (a board of a picture or a group), `use` (copies the picture into a
+  graphic as `images/<look>-<name>`, one undo step).
+- **Check:** flags a graphic carrying a picture that needs credit or a rights check
+  (`ImageLicence`) or one from another look than its style's (`ImageLook`).
+- **Adding a set:** made in Flova from the rules and approved tile in
+  `src-tauri/assets/image-looks/README.md`, then `python scripts/add_images.py <look>=<folder>`
+  (WebP quality 80, transparency 70, objects ≤ 1024 px, figures' feet at y=950).
+
+## Faceless productions and publishing
+
+FCL-0..6/8 and PUB-1/2 have implementation in this commit. Remaining features and acceptance
+are in [Roadmap](ROADMAP.md#fcl) and [Verification](verification.md#faceless-and-publish-acceptance).
+The Python Explainer repository informed the port; AeroEdits does not run it or its VPS timer.
+
+- **Production** (`faceless/mod.rs`): an ordinary project, usually under
+  `Documents/AeroEdits/Faceless`, with `faceless/production.json` outside edit undo. Seven
+  stages: research, script, review, voice, visuals, package, publish. Each records input/output
+  hashes and a timestamp; changed upstream input makes downstream stages stale. Current
+  status does not compare the stage's own output digest (GAP-027), and voice acceptance lacks
+  a script binding (GAP-008). A stage label is not content proof.
+- **Stories/profile** (`faceless/{discover,ideas,profile,stories,watch,demand}.rs`): on-request
+  discovery from feeds, HN, releases, viral repos/papers and lab sources, plus Treg X/Reddit.
+  `<config>/AeroEdits/faceless/stories.json` keeps a week; `profile.json` replaces the built-in
+  `aero-ai-news.json`. Grouping uses rare headline words/numbers, stemming and lead/half-group
+  checks. Long/short ranks expose components; agent triage contributes 40%, with pin/join/
+  separate controls and ranking movement. Similar events can still split; manual repair exists.
+- **Research network** (`faceless/{evidence,treg}.rs`): explicit requests only. Page fetches
+  cap bodies at 3 MB, check each redirect, detect paywall/consent failures and identify the app
+  honestly. Public-address checks are separate from connection resolution (GAP-013), so this
+  is not an enforced DNS-rebinding boundary. Treg can read PDFs, Google News links and
+  script-built pages; refusing sites stay unreadable. Dossier text/quotes are stored locally.
+  Quote presence and numeric digit matching are deterministic checks, not factual entailment
+  or reliable unit/magnitude validation (GAP-026). Research readiness counts facts/origins.
+- **Watchlist/demand:** profile-owned X groups with likes floors and YouTube channels;
+  TikTok/Instagram creators for shorts. No connected Google/YouTube account in Treg.
+  Batched X searches use the prior-search boundary; filters/shortlists precede agent review.
+  Demand considers matching videos/views per hour, watched-channel baseline, search volume/
+  trend and short-platform signals. Scores are heuristics until actual outcome calibration.
+  Source editing/suggestions live in `SourcesPanel`; keyword suggestions are in PackageEditor.
+  Treg requests use a per-call ceiling, discovery a $0.10 guard; exact routes/cost handling
+  belong to `treg.rs` and command code, not a duplicate provider inventory.
+- **Writing/review** (`faceless/script.rs`, `mcp/faceless.rs`): the user's agent writes and
+  reviews through MCP; the app validates cited facts/analysis, numbers, repeats and length.
+  The Faceless methods own the detailed writing/review rules. Long: 5–8 min at 16:9;
+  short: 30–58 s at 9:16 with captions. Faceless projects use their respective built-in presets
+  and Broadsheet style. Open blockers hold review. There is no dedicated Script panel yet.
+- **Voice** (`faceless/voice.rs`, `commands/faceless.rs`): OpenRouter TTS per scene on the user's
+  key; profile holds model/voice/speed (built-in Will, `elevenlabs/eleven-v4-turbo`, 1.2x).
+  Fingerprints avoid repaying unchanged scenes; explicit redo forces a new request. FFmpeg
+  retimes to WAV, adds a 0.25 s lead and 0.45 s scene spacing, joins, imports as speech and
+  replaces prior narration in one undo step, then uses app transcription. QA lists misheard
+  names/numbers and length problems. Same-text redo wrongly reuses narration identity
+  (GAP-004); the normal replacement test does not cover it. Acceptance is by listening.
+- **Visuals** (`faceless/visuals.rs`): graphics stay separate timeline assets. `graphic_add`
+  `actionWord` resolves the action cue against narration words. Visual checks block uncovered
+  time, note >12 s without change, reading load >3 words/s, repeated kinds/templates and
+  starts between words; `fill` stretches graphics to meet the next in one undo step. Results
+  go to `faceless/beats.json`. General media import supports images/screenshots; integrated
+  image generation/intake remains FCL-6. The built-in image catalogue has no dedicated browser.
+- **Broadsheet:** paper/ink/vermilion, Newsreader and IBM Plex Mono, square corners and restrained
+  motion; four dedicated parts (`headline`, `quote`, `verdict`, `bars`) plus existing templates
+  or agent-authored parts. Image look follows the style. Other dedicated parts remain FCL-5;
+  twelve conceptual kinds in the old explainer are not twelve finished new templates here.
+
+**Publishing is app-wide** (`publish/{mod,zernio}.rs`, `commands/publish.rs`,
+`components/export/PackageEditor.tsx`, `PublishDialog.tsx`). Each project stores target-keyed
+packages in `publish/package.json`, outside undo: main `video` or a short/clip ID. Metadata,
+chapter insertion, disclosure (default on for new faceless packages), image/export-frame/edit-
+playhead thumbnails, constraints and 160 px preview share one editor in Export and Publish.
+Ordinary upload can omit a thumbnail; a completed faceless package requires one and tags.
+Generated thumbnails are still PUB-1. Autosave currently waits 600 ms and does not flush on
+unmount or synchronize Upload (GAP-015/016); “saved as you type” is intent, not a durable-save
+guarantee. Commands resolve the open root without a handle (GAP-011).
+
+File → Accounts stores Zernio's key like other service keys and chooses the only active
+YouTube channel automatically. Upload requests private, scheduled (>5 minutes ahead) or draft,
+with `madeForKids: false`, category and disclosure; no immediate-public mode. A scheduled
+request is a request for future public release and still needs the user's go. The journal
+(`publish/uploads.json`) records before posting, uses an idempotency key and looks up a lost
+reply. Identity is file digest/channel/title; changed release/metadata can be ignored (GAP-002).
+Status reads YouTube ID/visibility and links to Studio; monetization remains a Studio action.
+
+`faceless::sync_package` mirrors a package plus thumbnail digest to `faceless/package.json`,
+records it after visuals when complete; `record_upload` writes `faceless/publish.json` when a
+video upload has a YouTube ID. Upload/refresh call these hooks. Faceless uploads update the
+app-level `faceless/made.json` (test/private/public) to warn on repeating a topic/link. Wiring
+exists (GAP-014 superseded); full status/release semantics and made-list failure handling still
+need acceptance. Release-time source/time-word rechecks are FCL-9, not built guarantees.
+
 ## Check, storyboard, export
 
 - **Exports** (`export/deliveries.rs`, DLV-2): one worker runs the queued exports in order; a
   busy owner refuses an export unless it is queued; every export that ends is recorded in the
   project's `exports.json` with a fingerprint of the document it was made from, so the list
-  can tell what is older than the edit by content, not revision.
+  compares document content rather than revision alone. External transcript/graphic inputs are
+  not fully captured: GAP-009/018; repeated hashing/history persistence have GAP-007/012.
 - **`check`** (`check.rs`) reads the selected video or short edit only (no decode, no model, ~3 ms): missing media, black
   frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
   bubble, chapter rules, loudness not normalised, pending proposals. Safe
@@ -321,7 +455,8 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
   `Page.captureScreenshot`.
 - The local-LLM build needs a short `CARGO_TARGET_DIR` (`C:\aeb`), the Vulkan SDK, LLVM and Ninja;
   `scripts/build-windows.ps1` sets it up.
-- After any docs change, run `.venv\Scripts\python.exe scripts/check_doc_links.py`.
+- After docs changes, run `python scripts/check_doc_links.py --all` (`python3` on Linux)
+  and check changed fragment targets; the script does not validate anchors or remote URLs.
 - Shared helpers to reach for before writing one (QUAL-1): `ids::free_id` / `free_name` for a
   new id or name beside the ones in use (`base`, `base-2`...), `ids::is_plain_id` to check one;
   `shorts::video_sequence` for what a clip plays of the video now (its stretch or its pieces);
@@ -336,6 +471,26 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
 - Front-end behaviour tests are `front-end/tests/*.test.ts` (`npm run test:cleanup`, also run by
   CI): stores with a mocked `api`, no browser. A change of a store's async flow (queued saves,
   late replies) gets a test there.
+
+## Cache and save ownership contracts
+
+Retained from the completed AUD-001..008 audit; [Verification](verification.md#retired-audit-material)
+records coverage and limits. Do not repeat the old defect narratives as open bugs.
+
+- `ClipThumbs.tsx` protects wanted entries even above the 2,000-entry retention target, prunes
+  unused entries when demand falls, distinguishes genuine absence from transient errors,
+  and retries wanted failures after 500 ms and 2 s, then stops until remount/new demand.
+- `useDebouncedSave` captures both project and short identity. Pending changes flush on a
+  short/view switch while the owner is still loaded; they drop when ownership is already
+  different. Layout saves serialize with the latest acknowledged revision, coalesce adjacent
+  compatible snapshots and ignore late responses after ownership changes. This contract
+  does not automatically apply to independent audio/package save code (GAP-010/015/016).
+- `SearchPanel` invalidates in-flight replies even when clearing/shortening a query. UI source
+  search snapshots root/document under the lock, searches via `spawn_blocking`, caches
+  normalized transcripts with explicit save/delete and file-stamp invalidation, counts all
+  hits but formats only the kept results. MCP's synchronous search still holds its read lock.
+- Timeline edit-point memoization follows the sequence object, including equal-revision
+  project switches. The dedicated desktop navigation check remains outstanding (AUD-002).
 
 ## Recent implementation details
 
@@ -356,8 +511,22 @@ command. Windows then reports the app as not responding and closes it (`AppHangB
   adding. `frame_render` with `sample: true` writes an in-context clip with sound for the user,
   alongside the agent's sheet. Sampled frame checks flag face coverage, caption conflicts,
   portrait platform bands and long static holds; unavailable face tracks are “not checked”.
-  These checks live in `mcp/graphic_checks.rs`, separate from `check`'s font/reading-time checks.
+  These checks live in `mcp/graphic_checks.rs`. `findings` runs the conflicts across every
+  graphic for `check`: 3 to 6 frames each, after up to 3 minutes for renders and face tracks, past
+  which the report says what wasn't looked at. `check.rs` stays free of decoding, so `project_check`
+  answers at once and `project_check_frames` follows in the panel; agents get both as one report.
   Wait for the current render before claiming a graphic fix is visible.
+- **Retakes:** `transcript/edit.rs` cuts only what is nearly always a slip (a word said again after
+  a 0.3 s pause with no comma, a word given up on before the same word whole). `ai/candidates.rs`
+  flags more for a reviewer (`slips`: said twice, given up on, said wrong and corrected); a flag
+  costs a look at its words, a wrong rule costs a word of the video. Words said for weight are
+  `EMPHASIS_WORDS`.
+- **Saved workflows (AUTO-3):** a preset with `exceptions`, `checks` and `approved`
+  (`preset/workflow.rs`), not a second kind of thing. `preset/store.rs` counts a `version` on each
+  save that changes something and keeps what it replaced in `versions/<n>/` (at most 50); restoring
+  is a new version. The agent's guide carries the exceptions and checks. Agents ask for a guide by
+  kind before they read `status`, so `preset` with a built-in's name gives the user's preset that the
+  open project follows for that kind (`mcp/skill.rs` `meant`), saying so.
 - **Seek-safe graphics:** all visible changes must follow deterministic timeline state. Avoid
   callback-driven text updates or measurements before HyperFrames sets the root height.
   Use transform-based movement; inspect the actual render and short-duration placements.

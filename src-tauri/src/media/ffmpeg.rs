@@ -387,6 +387,21 @@ pub fn extract_audio_wav(source: &Path, stream: usize, target: &Path) -> Result<
     run(cmd, log, "Extracting the audio failed").map(|_| ())
 }
 
+/// Decodes `source`'s sound to 48 kHz stereo 16-bit WAV at `target`, played `speed` times as
+/// fast without changing its pitch (FFmpeg's atempo): generated narration at the channel's pace.
+pub fn retime_audio_wav(source: &Path, speed: f64, target: &Path) -> Result<(), String> {
+    if !(0.5..=2.0).contains(&speed) {
+        return Err(format!("A speed of {speed} is outside 0.5 to 2"));
+    }
+    let (mut cmd, log) = command(ffmpeg_path()?)?;
+    cmd.args(["-nostdin", "-y", "-i"])
+        .arg(file_arg(source))
+        .args(["-vn", "-sn", "-filter:a", &format!("atempo={speed}")])
+        .args(["-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav"])
+        .arg(file_arg(target));
+    run(cmd, log, "Changing the narration's pace failed").map(|_| ())
+}
+
 /// One picture of the video every `every_s` seconds from its start, scaled to `w` x `h` and
 /// packed BGR, handed to `each` in order (with their index) until it returns false. Only
 /// keyframes are decoded, the picture nearest each moment standing in for it: a whole file
@@ -1368,6 +1383,27 @@ pub fn thumbnail_jpeg(path: &Path, time_us: u64, height: u32) -> Result<Vec<u8>,
     Ok(output.stdout)
 }
 
+/// A video's frame at `time_us` as a sharp JPEG `width` pixels wide, for a YouTube thumbnail
+/// (PUB-1). Seeks exactly, so the frame is the one chosen.
+pub fn frame_jpeg(path: &Path, time_us: u64, width: u32) -> Result<Vec<u8>, String> {
+    let (mut cmd, mut log) = command(ffmpeg_path()?)?;
+    cmd.arg("-ss")
+        .arg(format!("{:.3}", time_us as f64 / 1e6))
+        .arg("-i")
+        .arg(file_arg(path))
+        .args(["-map", "0:v:0", "-frames:v", "1", "-an", "-vf"])
+        .arg(format!("scale={}:-2", width.clamp(320, 3840) & !1))
+        .args(["-q:v", "2", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
+        .stdout(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg did not start: {e}"))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(failure("No frame", &mut log));
+    }
+    Ok(output.stdout)
+}
+
 /// An image file (or a video's first frame) as a JPEG no wider or taller than `long_side`.
 pub fn still_jpeg(path: &Path, long_side: u32) -> Result<Vec<u8>, String> {
     let side = long_side.clamp(64, 2048);
@@ -1379,6 +1415,24 @@ pub fn still_jpeg(path: &Path, long_side: u32) -> Result<Vec<u8>, String> {
             "scale='min({side},iw)':'min({side},ih)':force_original_aspect_ratio=decrease"
         ))
         .args(["-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
+        .stdout(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("FFmpeg did not start: {e}"))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(failure("Could not read the image", &mut log));
+    }
+    Ok(output.stdout)
+}
+
+/// An image file as a PNG `height` pixels high, keeping its transparency.
+pub fn still_png(path: &Path, height: u32) -> Result<Vec<u8>, String> {
+    let (mut cmd, mut log) = command(ffmpeg_path()?)?;
+    cmd.arg("-i")
+        .arg(file_arg(path))
+        .args(["-map", "0:v:0", "-frames:v", "1", "-an", "-vf"])
+        .arg(format!("scale=-2:{},format=rgba", height.clamp(16, 2048)))
+        .args(["-f", "image2pipe", "-c:v", "png", "pipe:1"])
         .stdout(Stdio::piped());
     let output = cmd
         .output()

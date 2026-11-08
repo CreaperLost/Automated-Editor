@@ -4,11 +4,11 @@
 //
 //   node scripts/fetch-ffmpeg.mjs [--target <triple>] [--lgpl] [--force]
 //
-// Builds come from one pinned BtbN/FFmpeg-Builds release (release branch 8.1), checked against
+// Builds come from one pinned FFmpeg-Builds/FFmpeg-Builds (formerly BtbN) release (release branch 8.1), checked against
 // the SHA-256 sums written below, so every build bundles the same FFmpeg. To move to a newer
 // FFmpeg, follow the review in docs/verification.md#dependency-review: pick a month-end `autobuild-*` release
 // (BtbN prunes the daily ones after about two weeks), copy its asset names and sums from its
-// checksums.sha256, and update RELEASE, VERSION and SHA256. The default GPL build includes
+// checksums.sha256, and update TAG, VERSION and SHA256. The default GPL build includes
 // libx264 and the NVENC, AMF and Quick Sync GPU encoders; it is a separate program the app
 // runs, shipped with its license under the GPL's terms. `--lgpl` fetches the LGPL build (same
 // GPU encoders, no libx264). macOS has no BtbN build: on a Mac the Swift bridges are the default backend and
@@ -19,9 +19,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { downloadReleaseAsset } from "./github-release.mjs";
 
-const RELEASE =
-  "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08";
+// BtbN/FFmpeg-Builds moved to this name; the old one only redirects.
+const REPO = "FFmpeg-Builds/FFmpeg-Builds";
+const TAG = "autobuild-2026-09-30-13-08";
+const RELEASE = `https://github.com/${REPO}/releases/download/${TAG}`;
 const BRANCH = "8.1";
 const VERSION = "n8.1.3-9-g29e619e767";
 // From that release's checksums.sha256.
@@ -55,12 +58,6 @@ function hostTriple() {
   const line = info.split(/\r?\n/).find((l) => l.startsWith("host:"));
   if (!line) throw new Error("Could not read the host target from `rustc -vV`.");
   return line.slice("host:".length).trim();
-}
-
-async function download(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
-  return Buffer.from(await response.arrayBuffer());
 }
 
 function findFile(dir, name) {
@@ -108,7 +105,7 @@ async function main() {
   console.log(`Downloading ${asset}`);
   const expected = SHA256[`${platform.build}-${license}`];
   if (!expected) throw new Error(`No pinned checksum for ${asset}.`);
-  const archive = await download(`${RELEASE}/${asset}`);
+  const archive = await downloadReleaseAsset(REPO, TAG, asset);
   const actual = createHash("sha256").update(archive).digest("hex");
   if (actual !== expected) {
     throw new Error(`Checksum mismatch for ${asset}: expected ${expected}, got ${actual}.`);

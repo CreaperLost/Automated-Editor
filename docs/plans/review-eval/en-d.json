@@ -67,7 +67,13 @@
    "from": 1028,
    "to": 1029,
    "type": "retake",
-   "note": "what is, what is"
+   "note": "what is, what is",
+   "alt": [
+    [
+     1027,
+     1028
+    ]
+   ]
   },
   {
    "from": 1059,

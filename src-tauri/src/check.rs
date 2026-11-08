@@ -1,7 +1,9 @@
 //! Check before export: problems a viewer would notice, found from the edit itself (nothing is
 //! decoded, no model runs), each with where it is on the timeline and, when one is safe, a fix
 //! that applies as one undo step. The export dialog lists them; agents get them from the
-//! `check` action and fix them before asking to export.
+//! `check` action and fix them before asking to export. What only a graphic's drawn frames show
+//! (a face covered, words under a platform's bars) is measured apart, as it decodes and waits
+//! for renders (`mcp::graphic_checks::findings`), and joins the report with [`with_frames`].
 use crate::project::revision::EditDocument;
 use crate::sequence::{Asset, Role};
 use crate::timeline::TimelineMapper;
@@ -61,10 +63,17 @@ pub enum Kind {
     Loudness,
     ProposalsPending,
     MusicLicence,
+    ImageLicence,
+    ImageLook,
     OutOfSync,
     PastMediaEnd,
     GraphicFont,
     GraphicReadingTime,
+    GraphicCoversFace,
+    GraphicHidesCaptions,
+    CaptionsCrossSplit,
+    GraphicUnderPlatformUi,
+    GraphicFramesNotChecked,
 }
 
 impl Kind {
@@ -140,7 +149,16 @@ impl Builder {
         title: String,
         detail: String,
     ) -> &mut Finding {
-        self.findings.push(Finding {
+        self.findings
+            .push(Finding::new(kind, severity, title, detail));
+        self.findings.last_mut().unwrap()
+    }
+}
+
+impl Finding {
+    /// A finding with no moment or fix yet, and no id until [`finished`] gives it one.
+    pub(crate) fn new(kind: Kind, severity: Severity, title: String, detail: String) -> Self {
+        Self {
             id: String::new(),
             kind,
             severity,
@@ -150,13 +168,10 @@ impl Builder {
             end_us: None,
             fix_label: None,
             fix: None,
-        });
-        self.findings.last_mut().unwrap()
+        }
     }
-}
 
-impl Finding {
-    fn at(&mut self, start_us: u64, end_us: u64) -> &mut Self {
+    pub(crate) fn at(&mut self, start_us: u64, end_us: u64) -> &mut Self {
         self.start_us = Some(start_us);
         self.end_us = Some(end_us.max(start_us));
         self
@@ -199,12 +214,28 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     }
     proposals(&mut out, root);
     music_licences(&mut out, document);
+    image_licences(&mut out, root, document);
     linked_sync(&mut out, document);
     past_media_end(&mut out, document);
     graphic_fonts(&mut out, root, document);
     graphic_reading_time(&mut out, root, document);
+    CheckReport {
+        revision: document.revision,
+        duration_us: document.duration_us(),
+        findings: finished(out.findings),
+    }
+}
 
-    let mut findings = cap(out.findings);
+/// `report` with what the graphics' frames showed.
+pub fn with_frames(mut report: CheckReport, frames: Vec<Finding>) -> CheckReport {
+    report.findings.extend(frames);
+    report.findings = finished(report.findings);
+    report
+}
+
+/// Capped, in report order (errors first, each severity in timeline order), each with its id.
+pub(crate) fn finished(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut findings = cap(findings);
     findings.sort_by(|a, b| {
         (a.severity, a.start_us.is_some(), a.start_us).cmp(&(
             b.severity,
@@ -227,11 +258,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
         taken.insert(id.clone());
         finding.id = id;
     }
-    CheckReport {
-        revision: document.revision,
-        duration_us: document.duration_us(),
-        findings,
-    }
+    findings
 }
 
 /// At most [`MAX_PER_KIND`] findings of each kind; the last one says how many more there are.
@@ -825,6 +852,77 @@ fn music_licences(out: &mut Builder, document: &EditDocument) {
             )
             .at(clip.start_us, clip.end_us());
         }
+    }
+}
+
+/// Graphics on the timeline carrying a library picture whose licence asks for credit or a
+/// check (a portrait, a wordmark, a flag): once per graphic, naming what each asks.
+fn image_licences(out: &mut Builder, root: &Path, document: &EditDocument) {
+    let mut seen: Vec<&str> = Vec::new();
+    for clip in document.sequence.video_tracks().flat_map(|t| &t.clips) {
+        let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
+            continue;
+        };
+        if seen.contains(&asset.id.as_str()) {
+            continue;
+        }
+        seen.push(&asset.id);
+        let dir = crate::graphics::folder(root, &asset.id);
+        // One look per video (GFX-5): pictures drawn for another look than the graphic's style.
+        let style_name = crate::graphics::read_source(&dir)
+            .ok()
+            .and_then(|s| s.style)
+            .unwrap_or_else(|| document.style.clone());
+        let style = crate::style::store::resolve(&style_name);
+        let look = crate::image_library::look_for(&style);
+        let strangers = crate::image_library::other_looks_in(&dir, &look.id);
+        if !strangers.is_empty() {
+            let names: Vec<String> = strangers.iter().map(|i| i.file_name()).collect();
+            out.push(
+                Kind::ImageLook,
+                Severity::Warning,
+                format!("\"{}\" mixes in another look's pictures", asset.name),
+                format!(
+                    "{} {} drawn for another look than style {}'s ({}). Swap {} for the {} \
+                     look's.",
+                    names.join(", "),
+                    if names.len() == 1 { "is" } else { "are" },
+                    style.name,
+                    look.id,
+                    if names.len() == 1 { "it" } else { "them" },
+                    look.id
+                ),
+            )
+            .at(clip.start_us, clip.end_us());
+        }
+        let unfree = crate::image_library::unfree_in(&dir);
+        if unfree.is_empty() {
+            continue;
+        }
+        let asks: Vec<String> = unfree
+            .iter()
+            .map(|i| {
+                format!(
+                    "{}: {}",
+                    i.file_name(),
+                    i.rights.as_deref().unwrap_or("its licence isn't known")
+                )
+            })
+            .collect();
+        out.push(
+            Kind::ImageLicence,
+            Severity::Warning,
+            format!(
+                "\"{}\" shows pictures that need credit or a check",
+                asset.name
+            ),
+            format!(
+                "{}. Use them only with the user's word, credited as asked (in the \
+                 description), or swap them for a library illustration.",
+                asks.join("; ")
+            ),
+        )
+        .at(clip.start_us, clip.end_us());
     }
 }
 
